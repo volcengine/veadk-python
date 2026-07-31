@@ -304,6 +304,7 @@ export const LTM_BACKENDS: BackendOption[] = [
       { key: "DATABASE_MEM0_API_KEY", required: true },
       { key: "DATABASE_MEM0_BASE_URL", required: false },
     ],
+    pipExtra: "database",
   },
 ];
 

@@ -140,6 +140,17 @@ test("collects every component parameter and enables selected tracing exporters"
   }
 });
 
+test("declares the Mem0 runtime configuration and database dependency", () => {
+  const mem0 = LTM_BACKENDS.find((option) => option.id === "mem0");
+
+  assert.ok(mem0);
+  assert.equal(mem0.pipExtra, "database");
+  assert.deepEqual(
+    mem0.env.map((env) => env.key),
+    ["DATABASE_MEM0_API_KEY", "DATABASE_MEM0_BASE_URL"],
+  );
+});
+
 test("does not request auto-resolved credentials per component", () => {
   const envKeys = [
     ...BUILTIN_TOOLS,
