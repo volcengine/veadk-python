@@ -125,6 +125,7 @@ import {
 } from "./ui/new-chat-modes/taskTools";
 import {
   sandboxClient,
+  type SandboxAgentKind,
   type SandboxApproval,
   type SandboxApprovalDecision,
   type SandboxPermissions,
@@ -809,6 +810,8 @@ export default function App() {
   const [sandboxLaunchOpen, setSandboxLaunchOpen] = useState(false);
   const [sandboxLaunchState, setSandboxLaunchState] =
     useState<SandboxLaunchState>("confirm");
+  const [sandboxLaunchKind, setSandboxLaunchKind] =
+    useState<"codex" | SandboxAgentKind>("codex");
   const [sandboxLaunchError, setSandboxLaunchError] = useState("");
   const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
@@ -2111,9 +2114,10 @@ export default function App() {
     }
   }
 
-  function openSandboxLaunch() {
+  function openSandboxLaunch(kind: "codex" | SandboxAgentKind = "codex") {
     if (sandboxSession) return;
-    setAgentDirectoryType("codex");
+    setAgentDirectoryType(kind);
+    setSandboxLaunchKind(kind);
     setError("");
     setSandboxLaunchError("");
     setSandboxLaunchState("confirm");
@@ -2138,12 +2142,17 @@ export default function App() {
     setSandboxLaunchState("loading");
     setSandboxLaunchError("");
     try {
-      const nextSession = await sandboxClient.startSession({
-        displayName,
-        signal: controller.signal,
-      });
+      const nextSession = sandboxLaunchKind === "codex"
+        ? await sandboxClient.startSession({
+            displayName,
+            signal: controller.signal,
+          })
+        : await sandboxClient.startAgentSession(sandboxLaunchKind, {
+            displayName,
+            signal: controller.signal,
+          });
       if (sandboxLaunchAbortRef.current !== controller) return;
-      setAgentDirectoryType("codex");
+      setAgentDirectoryType(sandboxLaunchKind);
       setCodexSessionsRefreshKey((key) => key + 1);
       setMyAgents(true);
       setSandboxLaunchOpen(false);
@@ -2152,7 +2161,7 @@ export default function App() {
         `已创建 ${
           nextSession.displayName ||
           nextSession.userSessionId ||
-          `Codex 智能体 ${nextSession.id.slice(0, 8)}`
+          `${sandboxLaunchKind === "codex" ? "Codex" : sandboxLaunchKind === "openclaw" ? "OpenClaw" : "Hermes"} 智能体 ${nextSession.id.slice(0, 8)}`
         }`,
       );
     } catch (launchError) {
@@ -4192,7 +4201,7 @@ export default function App() {
                 activeType={agentDirectoryType}
                 onActiveTypeChange={setAgentDirectoryType}
                 onCreateAgent={openAgentCreateFromMyAgents}
-                onCreateCodexAgent={openSandboxLaunch}
+                onCreateSandboxAgent={openSandboxLaunch}
                 onOpenCodexSession={connectSandboxSession}
                 onUseAgent={connectMyAgent}
                 onViewAgentDetails={openMyAgentDetails}
@@ -4752,6 +4761,7 @@ export default function App() {
       <SandboxLaunchDialog
         open={sandboxLaunchOpen}
         state={sandboxLaunchState}
+        agentKind={sandboxLaunchKind}
         error={sandboxLaunchError}
         onCancel={cancelSandboxLaunch}
         onConfirm={(displayName) => void launchSandboxSession(displayName)}

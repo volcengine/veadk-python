@@ -92,10 +92,11 @@ test("new-chat built-in agent mode opens the AgentKit sandbox creator", () => {
 
 test("sandbox launch dialog covers confirmation loading failure and retry", () => {
   assert.match(dialogSource, /role="dialog"/);
-  assert.match(dialogSource, /创建 Codex 智能体/);
-  assert.match(dialogSource, /创建一个可重复进入的 AgentKit 沙箱/);
+  assert.match(dialogSource, /agentKind === "openclaw" \? "OpenClaw" : "Hermes"/);
+  assert.match(dialogSource, /`创建 \$\{agentLabel\} 智能体`/);
+  assert.match(dialogSource, /创建一个可重复进入的 AgentKit Session/);
   assert.match(dialogSource, /DEFAULT_SANDBOX_DISPLAY_NAME = "我的智能体"/);
-  assert.match(dialogSource, /useState\(DEFAULT_SANDBOX_DISPLAY_NAME\)/);
+  assert.match(dialogSource, /useState\(defaultDisplayName\)/);
   assert.match(
     dialogSource,
     /maxLength=\{SANDBOX_DISPLAY_NAME_MAX_LENGTH\}/,
@@ -139,8 +140,9 @@ test("creating a sandbox refreshes the list while opening an item connects it", 
   assert.ok(launchStart >= 0 && connectStart > launchStart);
   assert.match(
     launchSource,
-    /const nextSession = await sandboxClient\.startSession\(\{[\s\S]*?displayName[\s\S]*?setCodexSessionsRefreshKey/,
+    /const nextSession = sandboxLaunchKind === "codex"[\s\S]*?sandboxClient\.startSession\(\{[\s\S]*?sandboxClient\.startAgentSession\(sandboxLaunchKind,[\s\S]*?setCodexSessionsRefreshKey/,
   );
+  assert.match(sandboxClientSource, /\/web\/\$\{kind\}\/sessions/);
   assert.match(sandboxClientSource, /body: JSON\.stringify\(\{ displayName:/);
   assert.match(
     sandboxClientSource,

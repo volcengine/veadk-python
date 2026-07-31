@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { SANDBOX_DISPLAY_NAME_MAX_LENGTH } from "../adk/sandbox";
+import {
+  SANDBOX_DISPLAY_NAME_MAX_LENGTH,
+  type SandboxAgentKind,
+} from "../adk/sandbox";
 import { InsightIcon } from "./icons/InsightIcon";
 
 export type SandboxLaunchState = "confirm" | "loading" | "error";
@@ -9,6 +12,7 @@ const DEFAULT_SANDBOX_DISPLAY_NAME = "我的智能体";
 export interface SandboxLaunchDialogProps {
   open: boolean;
   state: SandboxLaunchState;
+  agentKind?: "codex" | SandboxAgentKind;
   error?: string;
   onCancel: () => void;
   onConfirm: (displayName: string) => void;
@@ -17,21 +21,28 @@ export interface SandboxLaunchDialogProps {
 export function SandboxLaunchDialog({
   open,
   state,
+  agentKind = "codex",
   error,
   onCancel,
   onConfirm,
 }: SandboxLaunchDialogProps) {
+  const agentLabel = agentKind === "codex"
+    ? "Codex"
+    : agentKind === "openclaw" ? "OpenClaw" : "Hermes";
+  const defaultDisplayName = agentKind === "codex"
+    ? DEFAULT_SANDBOX_DISPLAY_NAME
+    : `我的 ${agentLabel}`;
   const dialogRef = useRef<HTMLFormElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const composingRef = useRef(false);
   const onCancelRef = useRef(onCancel);
-  const [displayName, setDisplayName] = useState(DEFAULT_SANDBOX_DISPLAY_NAME);
+  const [displayName, setDisplayName] = useState(defaultDisplayName);
   onCancelRef.current = onCancel;
 
   useEffect(() => {
     if (!open) return;
-    setDisplayName(DEFAULT_SANDBOX_DISPLAY_NAME);
+    setDisplayName(defaultDisplayName);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const focusFrame = window.requestAnimationFrame(() => {
@@ -65,7 +76,7 @@ export function SandboxLaunchDialog({
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open]);
+  }, [defaultDisplayName, open]);
 
   if (!open) return null;
 
@@ -74,7 +85,7 @@ export function SandboxLaunchDialog({
     ? "正在创建沙箱"
     : state === "error"
       ? "启动失败"
-      : "创建 Codex 智能体";
+      : `创建 ${agentLabel} 智能体`;
 
   return createPortal(
     <div
@@ -113,7 +124,7 @@ export function SandboxLaunchDialog({
             </p>
           ) : (
             <p id="sandbox-dialog-description">
-              创建一个可重复进入的 AgentKit 沙箱，并将它作为 Codex 智能体显示在列表中。
+              创建一个可重复进入的 AgentKit Session，并将它作为 {agentLabel} 智能体显示在列表中。
             </p>
           )}
           <label className="sandbox-dialog-field">
@@ -129,7 +140,7 @@ export function SandboxLaunchDialog({
               value={displayName}
               maxLength={SANDBOX_DISPLAY_NAME_MAX_LENGTH}
               disabled={loading}
-              placeholder={DEFAULT_SANDBOX_DISPLAY_NAME}
+              placeholder={defaultDisplayName}
               autoComplete="off"
               onChange={(event) => setDisplayName(event.target.value)}
               onCompositionStart={() => {

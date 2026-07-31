@@ -36,6 +36,8 @@ from veadk.integrations.ve_identity.identity_client import IdentityClient
 
 @pytest.fixture(autouse=True)
 def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SANDBOX_CHAT_CODEX", raising=False)
+    monkeypatch.delenv("SANDBOX_SKILL_CREATOR", raising=False)
     monkeypatch.setattr(
         "veadk.cli.studio_deploy_serverless_iam.ensure_serverless_application_role",
         lambda *_: None,
@@ -43,6 +45,14 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
         lambda **kwargs: f"auto-{kwargs['name']}",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_agent_tool",
+        lambda **kwargs: f"auto-{kwargs['name']}",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_agent_model_credential",
+        lambda **_: None,
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
@@ -329,6 +339,8 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     monkeypatch.delenv("SANDBOX_SKILL_CREATOR", raising=False)
     created_names: list[str] = []
     credential_tool_ids: list[str] = []
+    agent_tool_kinds: list[str] = []
+    agent_credential_kinds: list[str] = []
     creation_barrier = threading.Barrier(2)
     created_names_lock = threading.Lock()
 
@@ -359,6 +371,16 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     )
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool", _ensure_tool
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_agent_tool",
+        lambda **kwargs: (
+            agent_tool_kinds.append(str(kwargs["kind"])) or f"{kwargs['kind']}-tool"
+        ),
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_agent_model_credential",
+        lambda **kwargs: agent_credential_kinds.append(str(kwargs["kind"])),
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
@@ -393,6 +415,10 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-tool"
     assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "skill-tool"
     assert credential_tool_ids == ["chat-tool", "skill-tool"]
+    assert agent_tool_kinds == ["openclaw", "hermes"]
+    assert agent_credential_kinds == ["openclaw", "hermes"]
+    assert veadk_environments["SANDBOX_OPENCLAW_TOOL"] == "openclaw-tool"
+    assert veadk_environments["SANDBOX_HERMES_TOOL"] == "hermes-tool"
 
 
 @pytest.mark.parametrize(

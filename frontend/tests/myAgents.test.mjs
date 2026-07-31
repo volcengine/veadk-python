@@ -67,7 +67,7 @@ test("offers the existing create action for the active agent type", () => {
   assert.match(pageSource, /canCreate: boolean/);
   assert.match(pageSource, /\{canCreate && \(/);
   assert.match(pageSource, /activeType === "general"[\s\S]*?onCreateAgent/);
-  assert.match(pageSource, /activeType === "codex" \? onCreateCodexAgent : undefined/);
+  assert.match(pageSource, /onCreateSandboxAgent\(activeType\)/);
   assert.match(pageSource, /className="my-agent-add"/);
   assert.match(pageSource, /createLabel: "添加通用智能体"/);
   assert.match(pageSource, /createLabel: "添加 Codex 智能体"/);
@@ -168,7 +168,7 @@ test("hides deleted Runtime cards and invalidates stale Runtime pages", () => {
 test("loads configured Codex Sessions as reusable agents", () => {
   assert.match(
     pageSource,
-    /import \{ sandboxClient, type SandboxSession \} from "\.\.\/adk\/sandbox"/,
+    /sandboxClient,[\s\S]*?type SandboxAgentKind,[\s\S]*?type SandboxSession/,
   );
   assert.match(pageSource, /sandboxClient\s*\.listSessions/);
   assert.match(pageSource, /activeType !== "codex"/);
@@ -190,7 +190,7 @@ test("loads configured Codex Sessions as reusable agents", () => {
   assert.match(pageSource, /进入对话/);
   assert.match(pageSource, /await onOpenCodexSession\(session\)/);
   assert.match(pageSource, /重新加载/);
-  assert.match(pageSource, /正在加载 Codex 智能体/);
+  assert.match(pageSource, /`正在加载 \$\{activeLabel\}`/);
   assert.match(
     pageSource,
     /\[session\.displayName, session\.userSessionId, session\.status\]/,
@@ -296,14 +296,16 @@ test("wires card details and connect actions into App navigation", () => {
 });
 
 test("keeps all requested type filters without nested category sections", () => {
-  assert.match(pageSource, /onCreateCodexAgent: \(\) => void/);
+  assert.match(pageSource, /onCreateSandboxAgent: \(type: "codex" \| SandboxAgentKind\) => void/);
   assert.match(pageSource, /AGENT_TYPES\.map/);
   assert.match(pageSource, /label: "Codex 智能体"/);
   assert.match(pageSource, /label: "OpenClaw 智能体"/);
   assert.match(pageSource, /label: "Hermes 智能体"/);
   assert.doesNotMatch(pageSource, /AgentSection|my-agents-section|comingSoon/);
   assert.match(pageSource, /\$\{activeLabel\}暂无内容/);
-  assert.match(pageSource, /activeType === "openclaw" \|\| activeType === "hermes"[\s\S]*?"暂未开放"/);
+  assert.match(pageSource, /listAgentSessions\(kind/);
+  assert.match(pageSource, /agentType=\{activeType\}/);
+  assert.doesNotMatch(pageSource, /暂未开放/);
   assert.doesNotMatch(pageStyles, /\.my-agent-empty\s*\{[^}]*border:/);
   assert.doesNotMatch(pageStyles, /\.my-agent-empty\s*\{[^}]*background:/);
   assert.match(

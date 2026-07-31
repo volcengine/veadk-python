@@ -71,6 +71,10 @@ STUDIO_SANDBOX_TTL_SECONDS = 28_800
 STUDIO_SANDBOX_MAX_ACTIVE = 20
 STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH = SESSION_DISPLAY_NAME_MAX_LENGTH
 _SANDBOX_CHAT_TOOL_ENV = "SANDBOX_CHAT_CODEX"
+_SANDBOX_AGENT_TOOL_ENVS = {
+    "openclaw": "SANDBOX_OPENCLAW_TOOL",
+    "hermes": "SANDBOX_HERMES_TOOL",
+}
 _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 _SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
 _SENSITIVE_PATTERN = re.compile(
@@ -1159,6 +1163,146 @@ class SandboxConversationService:
                 return_exceptions=True,
             )
         await self._gateway.drain()
+
+
+class SandboxAgentSessionService:
+    """List and create managed Hermes/OpenClaw Sessions without opening them."""
+
+    def __init__(
+        self,
+        gateway: SandboxCloudGateway,
+        *,
+        kind: str,
+        tool_id: str | None = None,
+    ) -> None:
+        if kind not in _SANDBOX_AGENT_TOOL_ENVS:
+            raise ValueError(f"Unsupported Studio sandbox agent kind: {kind}")
+        self._gateway = gateway
+        self.kind = kind
+        self._configured_tool_id = (tool_id or "").strip()
+
+    def _tool_id(self, *, required: bool = True) -> str:
+        tool_id = (
+            self._configured_tool_id
+            or (os.getenv(_SANDBOX_AGENT_TOOL_ENVS[self.kind]) or "").strip()
+        )
+        if required and not tool_id:
+            raise SandboxConfigurationError("管理员未配置")
+        return tool_id
+
+    def capabilities(self) -> dict[str, object]:
+        enabled = bool(self._tool_id(required=False))
+        return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
+
+    async def list_sessions(self, owner_id: str) -> list[SandboxCloudSession]:
+        del owner_id
+        return await self._gateway.list_sessions(self._tool_id())
+
+    async def create(
+        self,
+        owner_id: str,
+        display_name: object = "",
+    ) -> SandboxCloudSession:
+        del owner_id
+        if not isinstance(display_name, str):
+            raise SandboxValidationError("智能体名称必须是文本。")
+        display_name = display_name.strip()
+        if len(display_name) > STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH:
+            raise SandboxValidationError(
+                f"智能体名称不能超过 {STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH} 个字符。"
+            )
+        return await self._gateway.create_session(self._tool_id(), display_name)
+
+
+def mount_sandbox_agent_routes(
+    app: Any,
+    services: dict[str, SandboxAgentSessionService],
+    owner_resolver: Callable[[Any], str],
+) -> None:
+    """Mount list/create routes for managed agent Sessions."""
+    from fastapi import HTTPException
+
+    def _service(kind: str) -> SandboxAgentSessionService:
+        service = services.get(kind)
+        if service is None:
+            raise HTTPException(status_code=404, detail="未知的沙箱智能体类型。")
+        return service
+
+    def _http_error(error: SandboxError) -> HTTPException:
+        status_code = 500
+        if isinstance(error, SandboxConfigurationError):
+            status_code = 503
+        elif isinstance(error, SandboxValidationError):
+            status_code = 422
+        elif isinstance(error, SandboxProvisioningError):
+            status_code = 502
+        return HTTPException(
+            status_code=status_code,
+            detail={
+                "code": error.code,
+                "message": str(error),
+                "retryable": error.retryable,
+            },
+        )
+
+    def _public_session(session: SandboxCloudSession, kind: str) -> dict[str, str]:
+        return {
+            "sessionId": session.instance_id,
+            "userSessionId": session.user_session_id,
+            "status": session.status,
+            "createdAt": session.created_at,
+            "expireAt": session.expire_at,
+            "toolType": session.tool_type,
+            "region": session.region,
+            "displayName": session.display_name,
+            "toolName": kind,
+        }
+
+    @app.get("/web/{kind}/capabilities")
+    async def _sandbox_agent_capabilities(
+        kind: str,
+        request: Request,
+    ) -> dict[str, object]:
+        owner_resolver(request)
+        return _service(kind).capabilities()
+
+    @app.get("/web/{kind}/sessions")
+    async def _list_sandbox_agent_sessions(
+        kind: str,
+        request: Request,
+    ) -> dict[str, object]:
+        try:
+            sessions = await _service(kind).list_sessions(owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"sessions": [_public_session(session, kind) for session in sessions]}
+
+    @app.post("/web/{kind}/sessions")
+    async def _create_sandbox_agent_session(
+        kind: str,
+        request: Request,
+    ) -> dict[str, str]:
+        owner_id = owner_resolver(request)
+        try:
+            body = await request.body()
+            if body:
+                try:
+                    data = json.loads(body)
+                except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                    raise SandboxValidationError(
+                        "创建智能体的请求不是有效 JSON。"
+                    ) from error
+                if not isinstance(data, dict):
+                    raise SandboxValidationError("创建智能体的请求格式无效。")
+            else:
+                data = {}
+            session = await _service(kind).create(
+                owner_id,
+                data.get("displayName", ""),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return _public_session(session, kind)
 
 
 def mount_sandbox_routes(

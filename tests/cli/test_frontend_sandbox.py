@@ -41,11 +41,13 @@ from veadk.cli.codex_app_server import (
 from veadk.cli.frontend_sandbox import (
     STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH,
     AgentkitSandboxGateway,
+    SandboxAgentSessionService,
     SandboxCloudSession,
     SandboxConfigurationError,
     SandboxConversationService,
     SandboxProvisioningError,
     SandboxSessionNotFoundError,
+    mount_sandbox_agent_routes,
     mount_sandbox_routes,
 )
 
@@ -332,6 +334,65 @@ def _app(gateway: _FakeGateway, tool_id: str | None = "tool-studio") -> FastAPI:
 
     mount_sandbox_routes(app, service, _owner)
     return app
+
+
+def _agent_app(gateway: _FakeGateway) -> FastAPI:
+    app = FastAPI()
+
+    def _owner(request: Request) -> str:
+        owner = request.headers.get("X-Test-User", "")
+        if not owner:
+            raise HTTPException(status_code=401, detail="identity required")
+        return owner
+
+    mount_sandbox_agent_routes(
+        app,
+        {
+            "openclaw": SandboxAgentSessionService(
+                gateway,
+                kind="openclaw",
+                tool_id="tool-openclaw",
+            ),
+            "hermes": SandboxAgentSessionService(
+                gateway,
+                kind="hermes",
+                tool_id="tool-hermes",
+            ),
+        },
+        _owner,
+    )
+    return app
+
+
+@pytest.mark.parametrize(
+    ("kind", "tool_id"),
+    [("openclaw", "tool-openclaw"), ("hermes", "tool-hermes")],
+)
+def test_managed_agent_routes_create_session_and_return_card_data(
+    kind: str,
+    tool_id: str,
+) -> None:
+    gateway = _FakeGateway()
+    with TestClient(_agent_app(gateway)) as client:
+        created = client.post(
+            f"/web/{kind}/sessions",
+            headers={"X-Test-User": "alice"},
+            json={"displayName": f"我的 {kind}"},
+        )
+        listed = client.get(
+            f"/web/{kind}/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert created.status_code == 200
+    assert created.json()["toolName"] == kind
+    assert created.json()["displayName"] == f"我的 {kind}"
+    assert "endpoint" not in created.json()
+    assert gateway.tool_ids == [tool_id, tool_id]
+    assert listed.status_code == 200
+    assert [item["sessionId"] for item in listed.json()["sessions"]] == [
+        created.json()["sessionId"]
+    ]
 
 
 def test_sandbox_routes_list_create_connect_and_disconnect() -> None:

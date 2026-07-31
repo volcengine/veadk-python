@@ -13,6 +13,7 @@ const SETTINGS_TIMEOUT_MS = 60_000;
 const UPLOAD_TIMEOUT_MS = 330_000;
 
 export const SANDBOX_DISPLAY_NAME_MAX_LENGTH = 40;
+export type SandboxAgentKind = "openclaw" | "hermes";
 
 export type SandboxApprovalPolicy = "untrusted" | "on-request" | "never";
 export type SandboxApprovalsReviewer = "user" | "auto_review";
@@ -152,7 +153,7 @@ export interface SandboxStartOptions extends SandboxRequestOptions {
 
 export interface SandboxSession {
   id: string;
-  toolName: "codex";
+  toolName: "codex" | SandboxAgentKind;
   userSessionId: string;
   displayName: string;
   status: string;
@@ -183,6 +184,14 @@ export interface SandboxReply {
 export interface AgentKitSandboxClient {
   listSessions(options?: SandboxRequestOptions): Promise<SandboxSession[]>;
   startSession(options?: SandboxStartOptions): Promise<SandboxSession>;
+  listAgentSessions(
+    kind: SandboxAgentKind,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxSession[]>;
+  startAgentSession(
+    kind: SandboxAgentKind,
+    options?: SandboxStartOptions,
+  ): Promise<SandboxSession>;
   connectSession(
     sessionId: string,
     options?: SandboxRequestOptions,
@@ -360,13 +369,16 @@ async function responseError(response: Response, fallback: string): Promise<Erro
   return new Error(typeof detail === "string" && detail ? detail : fallback);
 }
 
-function parseSession(data: SessionResponse): SandboxSession {
+function parseSession(
+  data: SessionResponse,
+  toolName: SandboxSession["toolName"] = "codex",
+): SandboxSession {
   if (!data.sessionId || !data.status) {
     throw new Error("AgentKit 沙箱返回了无效的 Session 信息。");
   }
   return {
     id: data.sessionId,
-    toolName: "codex",
+    toolName,
     userSessionId: data.userSessionId ?? "",
     displayName: data.displayName ?? "",
     status: data.status,
@@ -772,7 +784,7 @@ export const sandboxClient: AgentKitSandboxClient = {
     if (!Array.isArray(data.sessions)) {
       throw new Error("AgentKit 沙箱返回了无效的 Session 列表。");
     }
-    return data.sessions.map(parseSession);
+    return data.sessions.map((session) => parseSession(session));
   },
 
   async startSession(options = {}) {
@@ -786,6 +798,35 @@ export const sandboxClient: AgentKitSandboxClient = {
       throw await responseError(response, "无法启动 AgentKit 沙箱，请稍后重试。");
     }
     return parseSession((await response.json()) as SessionResponse);
+  },
+
+  async listAgentSessions(kind, options = {}) {
+    const response = await fetch(withAuth(`/web/${kind}/sessions`), {
+      method: "GET",
+      headers: sandboxHeaders(),
+      signal: requestSignal(options.signal, LIST_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      throw await responseError(response, `无法读取 ${kind} 智能体，请稍后重试。`);
+    }
+    const data = (await response.json()) as ListSessionsResponse;
+    if (!Array.isArray(data.sessions)) {
+      throw new Error(`AgentKit 返回了无效的 ${kind} Session 列表。`);
+    }
+    return data.sessions.map((session) => parseSession(session, kind));
+  },
+
+  async startAgentSession(kind, options = {}) {
+    const response = await fetch(withAuth(`/web/${kind}/sessions`), {
+      method: "POST",
+      headers: sandboxHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ displayName: options.displayName?.trim() ?? "" }),
+      signal: requestSignal(options.signal, START_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      throw await responseError(response, `无法创建 ${kind} 智能体，请稍后重试。`);
+    }
+    return parseSession((await response.json()) as SessionResponse, kind);
   },
 
   async connectSession(sessionId, options = {}) {

@@ -1081,13 +1081,15 @@ def _run_frontend_server(
         _require_studio_admin,
     )
 
+    from veadk.cli.agentkit_sandbox_region import sandbox_region_candidates
     from veadk.cli.frontend_sandbox import (
         AgentkitSandboxGateway,
+        SandboxAgentSessionService,
         SandboxConfigurationError,
         SandboxConversationService,
+        mount_sandbox_agent_routes,
         mount_sandbox_routes,
     )
-    from veadk.cli.agentkit_sandbox_region import sandbox_region_candidates
 
     def _sandbox_client(region: str):
         from agentkit.sdk.tools.client import AgentkitToolsClient
@@ -1109,16 +1111,30 @@ def _run_frontend_server(
             raise HTTPException(status_code=401, detail="Studio identity is required")
         return principal.owner_id
 
+    sandbox_gateway = AgentkitSandboxGateway(
+        _sandbox_client,
+        region_candidates=sandbox_region_candidates(
+            os.getenv("AGENTKIT_SANDBOX_REGION")
+        ),
+    )
     mount_sandbox_routes(
         app,
-        SandboxConversationService(
-            AgentkitSandboxGateway(
-                _sandbox_client,
-                region_candidates=sandbox_region_candidates(
-                    os.getenv("AGENTKIT_SANDBOX_REGION")
-                ),
+        SandboxConversationService(sandbox_gateway),
+        _sandbox_owner,
+    )
+    mount_sandbox_agent_routes(
+        app,
+        {
+            kind: SandboxAgentSessionService(
+                sandbox_gateway,
+                kind=kind,
+                tool_id=os.getenv(env_name),
             )
-        ),
+            for kind, env_name in {
+                "openclaw": "SANDBOX_OPENCLAW_TOOL",
+                "hermes": "SANDBOX_HERMES_TOOL",
+            }.items()
+        },
         _sandbox_owner,
     )
 
@@ -5770,6 +5786,9 @@ def frontend_deploy(
         "skill": sandbox_skill_creator_tool_id,
     }
     from veadk.cli.studio_sandbox_tools import (
+        STUDIO_SANDBOX_AGENT_MODEL_NAME,
+        ensure_studio_agent_model_credential,
+        ensure_studio_agent_tool,
         ensure_studio_code_env_tool,
         studio_sandbox_tool_name,
     )
@@ -5838,6 +5857,41 @@ def frontend_deploy(
             ) from error
         click.echo(f"AgentKit {purpose} model credential is ready.")
 
+    sandbox_agent_tool_ids: dict[str, str] = {}
+    for kind in ("openclaw", "hermes"):
+        tool_name = studio_sandbox_tool_name(vefaas_app_name, kind)
+        click.echo(f"Ensuring AgentKit {kind} Tool '{tool_name}'…")
+        try:
+            tool_id = ensure_studio_agent_tool(
+                name=tool_name,
+                kind=kind,
+                model_name=STUDIO_SANDBOX_AGENT_MODEL_NAME,
+                region=region,
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token or "",
+            )
+            ensure_studio_agent_model_credential(
+                tool_id=tool_id,
+                kind=kind,
+                model_name=STUDIO_SANDBOX_AGENT_MODEL_NAME,
+                region=region,
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token,
+            )
+        except Exception as error:
+            detail = _safe_exception_detail(
+                error,
+                secrets=(ak, sk, session_token),
+            )
+            raise click.ClickException(
+                f"Failed to provision the AgentKit {kind} Tool. "
+                f"Underlying error:\n{detail}"
+            ) from error
+        sandbox_agent_tool_ids[kind] = tool_id
+        click.echo(f"AgentKit {kind} Tool and model credential are ready.")
+
     chat_codex_tool_id = sandbox_tool_ids["chat"]
     skill_creator_tool_id = sandbox_tool_ids["skill"]
     if not chat_codex_tool_id or not skill_creator_tool_id:
@@ -5868,6 +5922,8 @@ def frontend_deploy(
         veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
     veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
+    veadk_environments["SANDBOX_OPENCLAW_TOOL"] = sandbox_agent_tool_ids["openclaw"]
+    veadk_environments["SANDBOX_HERMES_TOOL"] = sandbox_agent_tool_ids["hermes"]
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
     veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
     veadk_environments["VEADK_STUDIO_UPDATE_REGION"] = studio_update_region or region
