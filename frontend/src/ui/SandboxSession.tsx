@@ -1,3 +1,4 @@
+import type { TurnActivity } from "../blocks";
 import { InsightIcon } from "./icons/InsightIcon";
 import "./SandboxSession.css";
 
@@ -37,5 +38,40 @@ export function SandboxSessionWarning({ onExit }: { onExit: () => void }) {
         返回智能体列表
       </button>
     </div>
+  );
+}
+
+export function SandboxActivityRecord({
+  activity,
+  time,
+}: {
+  activity: TurnActivity;
+  time?: string;
+}) {
+  return (
+    <aside
+      className="sandbox-activity-record"
+      role="status"
+      aria-label="Sandbox 操作记录"
+    >
+      <div className="sandbox-activity-summary">
+        <span className="sandbox-activity-dot" aria-hidden="true" />
+        <span className="sandbox-activity-label">操作记录</span>
+        <strong>{activity.title}</strong>
+        {time ? <time>{time}</time> : null}
+      </div>
+      {activity.details?.length ? (
+        <dl className="sandbox-activity-details">
+          {activity.details.map((detail) => (
+            <div key={`${detail.label}:${detail.value}`}>
+              <dt>{detail.label}</dt>
+              <dd title={detail.value}>
+                {detail.code ? <code>{detail.value}</code> : detail.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+    </aside>
   );
 }

@@ -987,6 +987,11 @@ body {
   color: hsl(var(--foreground));
 }
 .menu-item:hover { background: hsl(var(--accent)); }
+.menu-item:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.menu-item:disabled:hover { background: transparent; }
 .menu-item--danger { color: hsl(var(--destructive)); }
 .menu-item .icon { width: 15px; height: 15px; }
 
@@ -2732,6 +2737,11 @@ body {
   border: 1px solid hsl(var(--border));
   border-radius: 12px;
   box-shadow: 0 6px 20px hsl(var(--foreground) / 0.12);
+}
+.composer-menu-separator {
+  height: 1px;
+  margin: 4px 7px;
+  background: hsl(var(--border));
 }
 
 /* ---------- multimodal media (compact cards + focused viewer) ---------- */

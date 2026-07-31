@@ -109,7 +109,13 @@ CodeEnv Tool. The Codex directory lists that Tool's Sessions, creates new
 Sessions from the add action, and connects Ready items to the conversation
 workspace without exposing their Endpoints. Returning to the directory only
 disconnects the local bridge; the cloud Session remains available until its TTL
-ends.
+ends. In a connected Session, the existing file-upload menu also provides
+Terminal and Browser access; adjacent controls manage Session-wide Codex
+permissions and select the working directory before the first turn. Successful
+uploads, permission or workspace changes, and approval decisions appear as
+local operation records in the conversation without being added to prompts sent
+to Codex. Terminal and Browser each keep a single embedded connection, without
+reload or new-window actions that could create a competing WebSocket.
 When configuring skills, Studio can also browse account-scoped AgentKit Skill
 Spaces and their paginated skill lists by region and project. These requests are
 signed on the server, so browser clients never receive Volcengine credentials.

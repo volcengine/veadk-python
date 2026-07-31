@@ -110,6 +110,94 @@
   color: hsl(var(--foreground));
 }
 
+.turn--system {
+  width: 100%;
+  align-items: stretch;
+  margin-bottom: 16px;
+}
+
+.sandbox-activity-record {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background) / 0.72);
+  color: hsl(var(--muted-foreground));
+}
+
+.sandbox-activity-summary {
+  display: grid;
+  grid-template-columns: 7px auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sandbox-activity-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: hsl(var(--muted-foreground) / 0.68);
+}
+
+.sandbox-activity-label {
+  padding-right: 7px;
+  border-right: 1px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.sandbox-activity-summary strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: hsl(var(--foreground));
+  font-weight: 560;
+}
+
+.sandbox-activity-summary time {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.sandbox-activity-details {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0 21px;
+}
+
+.sandbox-activity-details > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.sandbox-activity-details dt,
+.sandbox-activity-details dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.sandbox-activity-details dt {
+  color: hsl(var(--muted-foreground));
+}
+
+.sandbox-activity-details dd {
+  overflow-wrap: anywhere;
+  color: hsl(var(--foreground));
+}
+
+.sandbox-activity-details code {
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+}
+
 .sandbox-composer-wrap .composer-box {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -130,10 +218,46 @@
   padding: 8px 10px 4px;
 }
 
-.sandbox-composer-wrap .composer-menu-wrap {
+.sandbox-composer-wrap .composer-left-controls {
   grid-row: 2;
   grid-column: 1;
   justify-self: start;
+}
+
+.composer-left-controls {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+}
+
+.sandbox-composer-control {
+  width: 32px;
+  height: 32px;
+}
+
+.sandbox-composer-control svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sandbox-composer-control.is-locked {
+  color: hsl(var(--muted-foreground) / 0.56);
+}
+
+@media (max-width: 700px) {
+  .sandbox-activity-summary {
+    grid-template-columns: 7px auto minmax(0, 1fr);
+  }
+
+  .sandbox-activity-summary time {
+    grid-column: 3;
+  }
+
+  .sandbox-activity-details > div {
+    grid-template-columns: 1fr;
+    gap: 1px;
+  }
 }
 
 .sandbox-composer-wrap .comp-send {

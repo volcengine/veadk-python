@@ -30,6 +30,12 @@ import type { NewChatMode, NewChatTask } from "./new-chat-modes/types";
 import { NEW_CHAT_TASK_TOOLS } from "./new-chat-modes/taskTools";
 import { SKILL_MODELS } from "./skill-create/types";
 import { VideoGenerateIcon } from "./builtin-tools/icons";
+import {
+  SandboxBrowserIcon,
+  SandboxPermissionsIcon,
+  SandboxTerminalIcon,
+  SandboxWorkspaceIcon,
+} from "./icons/SandboxControlIcons";
 
 function SkillCreateIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -170,6 +176,17 @@ export interface ComposerProps {
   skillCreateEnabled?: boolean;
   harnessEnabled?: boolean;
   builtinTools?: readonly string[];
+  sandboxActions?: SandboxComposerActions;
+}
+
+export interface SandboxComposerActions {
+  onOpenTerminal: () => void;
+  onOpenBrowser: () => void;
+  onOpenPermissions: () => void;
+  onOpenWorkspace: () => void;
+  workspaceLocked: boolean;
+  settingsBusy?: boolean;
+  uploadBusy?: boolean;
 }
 
 export function Composer({
@@ -202,6 +219,7 @@ export function Composer({
   skillCreateEnabled,
   harnessEnabled = false,
   builtinTools = [],
+  sandboxActions,
 }: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
@@ -371,6 +389,91 @@ export function Composer({
     e.target.value = ""; // allow re-picking the same file
   }
 
+  const addMenu = !skillMode ? (
+    <div className="composer-menu-wrap">
+      <button
+        type="button"
+        className="comp-icon"
+        title="添加"
+        aria-label="添加"
+        disabled={disabled || (!allowAttachments && !sandboxActions)}
+        onClick={() => {
+          setTrigger(null);
+          setMenuOpen((open) => !open);
+        }}
+      >
+        <Plus className="icon" />
+      </button>
+      {menuOpen && (
+        <>
+          <div className="menu-scrim" onClick={() => setMenuOpen(false)} />
+          <div className="composer-menu" role="menu">
+            {allowAttachments ? (
+              <>
+                <button
+                  type="button"
+                  className="menu-item"
+                  disabled={sandboxActions?.uploadBusy}
+                  onClick={() => pick(imageInput)}
+                >
+                  <ImageIcon className="icon" />
+                  上传图片
+                </button>
+                <button
+                  type="button"
+                  className="menu-item"
+                  disabled={sandboxActions?.uploadBusy}
+                  onClick={() => pick(documentInput)}
+                >
+                  <FileText className="icon" />
+                  上传文档或 PDF
+                </button>
+                <button
+                  type="button"
+                  className="menu-item"
+                  disabled={sandboxActions?.uploadBusy}
+                  onClick={() => pick(videoInput)}
+                >
+                  <FileVideo2 className="icon" />
+                  上传视频
+                </button>
+              </>
+            ) : null}
+            {allowAttachments && sandboxActions ? (
+              <div className="composer-menu-separator" role="separator" />
+            ) : null}
+            {sandboxActions ? (
+              <>
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    sandboxActions.onOpenTerminal();
+                  }}
+                >
+                  <SandboxTerminalIcon className="icon" />
+                  Terminal
+                </button>
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    sandboxActions.onOpenBrowser();
+                  }}
+                >
+                  <SandboxBrowserIcon className="icon" />
+                  Browser
+                </button>
+              </>
+            ) : null}
+          </div>
+        </>
+      )}
+    </div>
+  ) : null;
+
   return (
     <div className={`composer${newChatLayout ? " composer--new-chat" : ""}${skillMode ? " composer--skill-mode" : ""}${selectedTask ? ` composer--has-task composer--task-${selectedTask.value}` : ""}`}>
       {!skillMode ? (
@@ -435,52 +538,40 @@ export function Composer({
             )}
           </div>
         ) : null}
-        {!skillMode ? <div className="composer-menu-wrap">
-          <button
-            type="button"
-            className="comp-icon"
-            title="添加"
-            aria-label="添加"
-            disabled={disabled || !allowAttachments}
-            onClick={() => {
-              setTrigger(null);
-              setMenuOpen((o) => !o);
-            }}
-          >
-            <Plus className="icon" />
-          </button>
-          {menuOpen && (
-            <>
-              <div className="menu-scrim" onClick={() => setMenuOpen(false)} />
-              <div className="composer-menu" role="menu">
-                <button
-                  type="button"
-                  className="menu-item"
-                  onClick={() => pick(imageInput)}
-                >
-                  <ImageIcon className="icon" />
-                  上传图片
-                </button>
-                <button
-                  type="button"
-                  className="menu-item"
-                  onClick={() => pick(documentInput)}
-                >
-                  <FileText className="icon" />
-                  上传文档或 PDF
-                </button>
-                <button
-                  type="button"
-                  className="menu-item"
-                  onClick={() => pick(videoInput)}
-                >
-                  <FileVideo2 className="icon" />
-                  上传视频
-                </button>
-              </div>
-            </>
-          )}
-        </div> : null}
+        {sandboxActions && !skillMode ? (
+          <div className="composer-left-controls">
+            {addMenu}
+            <button
+              type="button"
+              className="comp-icon sandbox-composer-control"
+              title="Codex 权限"
+              aria-label="Codex 权限"
+              disabled={sandboxActions.settingsBusy || busy}
+              onClick={sandboxActions.onOpenPermissions}
+            >
+              <SandboxPermissionsIcon />
+            </button>
+            <button
+              type="button"
+              className={`comp-icon sandbox-composer-control${
+                sandboxActions.workspaceLocked ? " is-locked" : ""
+              }`}
+              title={
+                sandboxActions.workspaceLocked
+                  ? "对话已开始，工作空间已锁定"
+                  : "选择工作空间"
+              }
+              aria-label="Codex 工作空间"
+              disabled={
+                sandboxActions.settingsBusy ||
+                busy
+              }
+              onClick={sandboxActions.onOpenWorkspace}
+            >
+              <SandboxWorkspaceIcon />
+            </button>
+          </div>
+        ) : addMenu}
 
         {showModeSelector && onModeChange ? (
           <NewChatModeSelector

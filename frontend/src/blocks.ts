@@ -77,6 +77,7 @@ export interface Acc {
 
 export interface TurnMeta {
   author?: string;
+  localId?: string;
   tokens?: number;
   ts?: number; // epoch seconds
   eventId?: string;
@@ -84,10 +85,23 @@ export interface TurnMeta {
   feedback?: MessageFeedbackState;
 }
 
+export interface TurnActivityDetail {
+  label: string;
+  value: string;
+  code?: boolean;
+}
+
+export interface TurnActivity {
+  id: string;
+  title: string;
+  details?: TurnActivityDetail[];
+}
+
 export interface Turn {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   blocks: Block[];
   meta?: TurnMeta;
+  activity?: TurnActivity;
 }
 
 export function emptyAcc(): Acc {

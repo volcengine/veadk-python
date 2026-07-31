@@ -18,6 +18,22 @@ const sandboxSessionSource = readFileSync(
   new URL("../src/ui/SandboxSession.tsx", import.meta.url),
   "utf8",
 );
+const composerSource = readFileSync(
+  new URL("../src/ui/Composer.tsx", import.meta.url),
+  "utf8",
+);
+const controlsSource = readFileSync(
+  new URL("../src/ui/SandboxControls.tsx", import.meta.url),
+  "utf8",
+);
+const controlsStylesSource = readFileSync(
+  new URL("../src/ui/SandboxControls.css", import.meta.url),
+  "utf8",
+);
+const controlIconSource = readFileSync(
+  new URL("../src/ui/icons/SandboxControlIcons.tsx", import.meta.url),
+  "utf8",
+);
 const myAgentsSource = readFileSync(
   new URL("../src/ui/MyAgents.tsx", import.meta.url),
   "utf8",
@@ -179,4 +195,94 @@ test("sandbox visuals use repository-owned icons and reduced motion", () => {
   assert.match(iconSource, /viewBox="0 0 24 24"/);
   assert.doesNotMatch(iconSource, /lucide-react|<img|data:image/);
   assert.match(stylesSource, /@media \(prefers-reduced-motion: reduce\)/);
+});
+
+test("sandbox composer keeps every upload and adds Terminal and Browser", () => {
+  assert.match(composerSource, /上传图片/);
+  assert.match(composerSource, /上传文档或 PDF/);
+  assert.match(composerSource, /上传视频/);
+  assert.match(
+    composerSource,
+    /SandboxTerminalIcon[\s\S]*?Terminal[\s\S]*?SandboxBrowserIcon[\s\S]*?Browser/,
+  );
+  assert.match(appSource, /onAddFiles=\{sandboxSession \? addSandboxFiles : addFiles\}/);
+  assert.match(appSource, /sandboxClient\.uploadFile/);
+  assert.match(sandboxClientSource, /\/files/);
+  assert.match(appSource, /if \(!leavingSandbox\) discardDraftAttachments\(attachments\)/);
+  assert.match(
+    appSource,
+    /sandboxUploadRunRef\.current === uploadRun[\s\S]*releaseAttachmentPreviews/,
+  );
+});
+
+test("permission and workspace controls extend the existing composer grid", () => {
+  assert.match(composerSource, /className="composer-left-controls"/);
+  assert.match(composerSource, /SandboxPermissionsIcon/);
+  assert.match(composerSource, /SandboxWorkspaceIcon/);
+  assert.match(
+    stylesSource,
+    /\.sandbox-composer-wrap \.composer-left-controls[\s\S]*grid-row:\s*2[\s\S]*grid-column:\s*1/,
+  );
+  assert.match(stylesSource, /\.sandbox-composer-wrap \.comp-send[\s\S]*grid-column:\s*2/);
+  assert.match(controlsSource, /当前对话已经开始，工作空间已锁定/);
+  assert.match(appSource, /workspaceLocked:\s*true/);
+});
+
+test("sandbox permissions are Session-wide and approvals stay interactive", () => {
+  assert.match(controlsSource, /同步到其中的所有 Thread/);
+  assert.match(sandboxClientSource, /updatePermissions\(/);
+  assert.match(sandboxClientSource, /updateWorkspace\(/);
+  assert.match(sandboxClientSource, /event === "approval"/);
+  assert.match(sandboxClientSource, /event === "approval_resolved"/);
+  assert.match(appSource, /onApproval: \(approval\) =>/);
+  assert.match(appSource, /sandboxClient\.resolveApproval/);
+  assert.match(controlsSource, /仅本次允许/);
+  assert.match(controlsSource, /本会话允许/);
+});
+
+test("sandbox tools use restrained dialogs and repository-owned product icons", () => {
+  assert.match(controlsSource, /SandboxToolDialog/);
+  assert.match(controlsSource, /<iframe/);
+  assert.doesNotMatch(controlsSource, /RotateCw|ExternalLink|新窗口/);
+  assert.doesNotMatch(
+    controlsSource,
+    /sandbox-tool-toolbar[\s\S]*?>\s*刷新\s*</,
+  );
+  assert.match(
+    controlsSource,
+    /sandbox-control-state is-error[\s\S]*onClick=\{onReload\}[\s\S]*重试/,
+  );
+  assert.match(controlsStylesSource, /\.sandbox-tool-dialog/);
+  assert.match(controlsStylesSource, /\.sandbox-settings-dialog/);
+  assert.match(controlIconSource, /export function SandboxTerminalIcon/);
+  assert.match(controlIconSource, /export function SandboxBrowserIcon/);
+  assert.match(controlIconSource, /export function SandboxPermissionsIcon/);
+  assert.match(controlIconSource, /export function SandboxWorkspaceIcon/);
+  assert.doesNotMatch(controlIconSource, /lucide-react|<img|data:image/);
+});
+
+test("sandbox actions render as local system records without entering Codex prompts", () => {
+  assert.match(sandboxSessionSource, /SandboxActivityRecord/);
+  assert.match(sandboxSessionSource, /操作记录/);
+  assert.match(stylesSource, /\.sandbox-activity-record/);
+  assert.match(appSource, /role:\s*"system"/);
+  assert.match(appSource, /appendSandboxActivity/);
+  assert.match(appSource, /已上传文件到 Sandbox|已上传 \$\{uploadedFiles\.length\} 个文件到 Sandbox/);
+  assert.match(appSource, /已更新当前 Sandbox Session 的 Codex 权限/);
+  assert.match(appSource, /已更新工作空间/);
+  assert.match(appSource, /approvalActivityTitle/);
+  assert.match(
+    appSource,
+    /const beforeIndex = current\.findIndex[\s\S]*sandboxActiveAssistantTurnIdRef\.current/,
+  );
+
+  const sendStart = appSource.indexOf("async function sendSandboxMessage");
+  const nextFunction = appSource.indexOf("\n  function ", sendStart + 1);
+  const sendSource = appSource.slice(
+    sendStart,
+    nextFunction === -1 ? appSource.length : nextFunction,
+  );
+  assert.ok(sendStart >= 0);
+  assert.match(sendSource, /const prompt = uploadedPaths\.length > 0/);
+  assert.doesNotMatch(sendSource, /appendSandboxActivity|activity\.title/);
 });
