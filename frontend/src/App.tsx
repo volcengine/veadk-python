@@ -126,6 +126,7 @@ import {
 import {
   sandboxClient,
   type SandboxAgentKind,
+  type SandboxAgentWorkspace as SandboxAgentWorkspaceInfo,
   type SandboxApproval,
   type SandboxApprovalDecision,
   type SandboxPermissions,
@@ -153,6 +154,7 @@ import {
   SandboxToolDialog,
   SandboxWorkspaceDialog,
 } from "./ui/SandboxControls";
+import { SandboxAgentWorkspace } from "./ui/SandboxAgentWorkspace";
 import { SandboxComposer } from "./ui/SandboxComposer";
 import { sandboxSnapshotTurns } from "./ui/sandboxCommands";
 import { useSandboxCodexCommands } from "./ui/useSandboxCodexCommands";
@@ -790,6 +792,8 @@ export default function App() {
   const [pendingTurns, setPendingTurns] = useState<Turn[]>([]);
   const [sandboxSession, setSandboxSession] =
     useState<SandboxSessionInfo | null>(null);
+  const [sandboxAgentWorkspace, setSandboxAgentWorkspace] =
+    useState<SandboxAgentWorkspaceInfo | null>(null);
   const [sandboxTurns, setSandboxTurns] = useState<Turn[]>([]);
   const [sandboxBusy, setSandboxBusy] = useState(false);
   const [sandboxSettingsBusy, setSandboxSettingsBusy] = useState(false);
@@ -1966,7 +1970,14 @@ export default function App() {
     let cancelled = false;
     setSessionCapabilities(null);
     setSessionBuiltinTools([]);
-    if (myAgents || agentDetailTarget || !appName || !userId || !sessionId) {
+    if (
+      myAgents ||
+      sandboxAgentWorkspace ||
+      agentDetailTarget ||
+      !appName ||
+      !userId ||
+      !sessionId
+    ) {
       setSessionCapabilitiesLoading(false);
       return;
     }
@@ -1992,12 +2003,25 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [agentDetailTarget, appName, myAgents, userId, sessionId]);
+  }, [
+    agentDetailTarget,
+    appName,
+    myAgents,
+    sandboxAgentWorkspace,
+    userId,
+    sessionId,
+  ]);
   useEffect(() => {
     let cancelled = false;
     setAgentInfo(null);
     setInvocation(emptyInvocation());
-    if (authStatus !== "authenticated" || myAgents || agentDetailTarget || !appName) {
+    if (
+      authStatus !== "authenticated" ||
+      myAgents ||
+      sandboxAgentWorkspace ||
+      agentDetailTarget ||
+      !appName
+    ) {
       setCapabilitiesLoading(false);
       return;
     }
@@ -2015,7 +2039,14 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [agentDetailTarget, appName, agentInfoRefreshKey, authStatus, myAgents]);
+  }, [
+    agentDetailTarget,
+    appName,
+    agentInfoRefreshKey,
+    authStatus,
+    myAgents,
+    sandboxAgentWorkspace,
+  ]);
   useEffect(() => {
     if (!access) return;
     localStorage.setItem(
@@ -2052,7 +2083,14 @@ export default function App() {
   // very first resolve, restore the previously-open session (if it still
   // exists and we weren't on a create view); otherwise start a fresh chat.
   useEffect(() => {
-    if (myAgents || agentDetailTarget || sandboxSession || !appName || !userId) {
+    if (
+      myAgents ||
+      sandboxAgentWorkspace ||
+      agentDetailTarget ||
+      sandboxSession ||
+      !appName ||
+      !userId
+    ) {
       return;
     }
     let cancelled = false;
@@ -2073,7 +2111,14 @@ export default function App() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentDetailTarget, appName, myAgents, sandboxSession, userId]);
+  }, [
+    agentDetailTarget,
+    appName,
+    myAgents,
+    sandboxAgentWorkspace,
+    sandboxSession,
+    userId,
+  ]);
 
   // After switching agent from a search result, open the target session (runs
   // after the agent-switch effect above, so it wins over its startNewChat()).
@@ -2217,6 +2262,30 @@ export default function App() {
     setManageAgents(false);
     setAgentDetailTarget(null);
     setMyAgents(false);
+    setError("");
+  }
+
+  async function openSandboxAgentSession(session: SandboxSessionInfo) {
+    if (session.toolName !== "openclaw" && session.toolName !== "hermes") {
+      throw new Error("该 Session 不是 OpenClaw 或 Hermes 智能体。");
+    }
+    const workspace = await sandboxClient.openAgentSession(
+      session.toolName,
+      session.id,
+    );
+    viewSidRef.current = "";
+    setSessionId("");
+    setAgentDirectoryType(session.toolName);
+    setSandboxAgentWorkspace(workspace);
+    setMyAgents(false);
+    setError("");
+  }
+
+  function returnToSandboxAgentList() {
+    const kind = sandboxAgentWorkspace?.kind;
+    setSandboxAgentWorkspace(null);
+    if (kind) setAgentDirectoryType(kind);
+    setMyAgents(true);
     setError("");
   }
 
@@ -2744,6 +2813,7 @@ export default function App() {
   // lazily on the first message (see send()). A background stream (if any)
   // keeps running and persisting — its writes are suppressed here by viewSidRef.
   function startNewChat() {
+    setSandboxAgentWorkspace(null);
     const leavingSandbox = sandboxSession !== null;
     if (leavingSandbox) exitSandboxSession();
     setError("");
@@ -3743,6 +3813,7 @@ export default function App() {
 
   const openMyAgentsPage = () => {
     if (sandboxSession) exitSandboxSession();
+    setSandboxAgentWorkspace(null);
     viewSidRef.current = "";
     setSessionId("");
     setCreateView(null);
@@ -3821,6 +3892,7 @@ export default function App() {
         streamingSids={streamingSids}
         onNewChat={openNewChat}
         onSearch={() => {
+          setSandboxAgentWorkspace(null);
           if (sandboxSession) exitSandboxSession();
           setCreateView(null);
           setSkillCenter(false);
@@ -3837,6 +3909,7 @@ export default function App() {
             setError("当前账号没有添加 Agent 的权限。");
             return;
           }
+          setSandboxAgentWorkspace(null);
           if (sandboxSession) exitSandboxSession();
           // "添加 Agent" — open the two-card chooser. Drop any selected session.
           viewSidRef.current = "";
@@ -3854,6 +3927,7 @@ export default function App() {
           setError("");
         }}
         onSkillCenter={() => {
+          setSandboxAgentWorkspace(null);
           if (sandboxSession) exitSandboxSession();
           setCreateView(null);
           setAddAgent(false);
@@ -3870,6 +3944,7 @@ export default function App() {
             setError("当前账号没有添加 Agent 的权限。");
             return;
           }
+          setSandboxAgentWorkspace(null);
           if (sandboxSession) exitSandboxSession();
           viewSidRef.current = "";
           setCreateView(null);
@@ -3885,6 +3960,7 @@ export default function App() {
         }}
         onMyAgents={openMyAgentsPage}
         onPickSession={(id) => {
+          setSandboxAgentWorkspace(null);
           setCreateView(null);
           setSkillCenter(false);
           setAddAgent(false);
@@ -4194,7 +4270,18 @@ export default function App() {
                 </div>
               )}
 
-            {myAgents ? (
+            {sandboxAgentWorkspace ? (
+              <SandboxAgentWorkspace
+                workspace={sandboxAgentWorkspace}
+                onBack={returnToSandboxAgentList}
+                onRequestTerminal={() =>
+                  sandboxClient.launchAgentTerminal(
+                    sandboxAgentWorkspace.kind,
+                    sandboxAgentWorkspace.session.id,
+                  )
+                }
+              />
+            ) : myAgents ? (
               <MyAgents
                 canCreate={canCreateAgents}
                 runtimeScope={access.capabilities.runtimeScope}
@@ -4203,6 +4290,7 @@ export default function App() {
                 onCreateAgent={openAgentCreateFromMyAgents}
                 onCreateSandboxAgent={openSandboxLaunch}
                 onOpenCodexSession={connectSandboxSession}
+                onOpenSandboxAgentSession={openSandboxAgentSession}
                 onUseAgent={connectMyAgent}
                 onViewAgentDetails={openMyAgentDetails}
                 connectedRuntimeId={connectedRuntimeId}

@@ -259,7 +259,7 @@ test("defers conversation data-plane requests until leaving the Agent list", () 
   );
   assert.match(
     appSource,
-    /if \(myAgents \|\| agentDetailTarget \|\| !appName \|\| !userId \|\| !sessionId\)[\s\S]*?getSessionCapabilities/,
+    /myAgents \|\|[\s\S]*?sandboxAgentWorkspace \|\|[\s\S]*?agentDetailTarget \|\|[\s\S]*?!sessionId[\s\S]*?getSessionCapabilities/,
   );
   assert.match(
     appSource,
@@ -267,7 +267,7 @@ test("defers conversation data-plane requests until leaving the Agent list", () 
   );
   assert.match(
     appSource,
-    /if \(myAgents \|\| agentDetailTarget \|\| sandboxSession \|\| !appName \|\| !userId\)[\s\S]*?return;[\s\S]*?refreshSessions/,
+    /myAgents \|\|[\s\S]*?sandboxAgentWorkspace \|\|[\s\S]*?agentDetailTarget \|\|[\s\S]*?sandboxSession[\s\S]*?return;[\s\S]*?refreshSessions/,
   );
   assert.match(
     appSource,

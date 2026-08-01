@@ -286,27 +286,21 @@ function CodexSessionCard({
       <span className="codex-session-enter">
         {agentType === "codex"
           ? connecting ? "连接中" : ready ? "进入对话" : "等待就绪"
-          : ready ? "已创建" : "等待就绪"}
+          : connecting ? "打开中" : ready ? "进入沙箱" : "等待就绪"}
       </span>
     </>
   );
-  if (agentType !== "codex") {
-    return (
-      <article
-        className="my-agent-card codex-session-card"
-        aria-label={`${name} 当前状态 ${session.status}`}
-      >
-        {content}
-      </article>
-    );
-  }
   return (
     <button
       type="button"
       className="my-agent-card codex-session-card"
       disabled={!ready || connecting}
       aria-busy={connecting || undefined}
-      aria-label={ready ? `进入 ${name} 对话` : `${name} 当前状态 ${session.status}`}
+      aria-label={
+        ready
+          ? `进入 ${name}${agentType === "codex" ? " 对话" : " 沙箱"}`
+          : `${name} 当前状态 ${session.status}`
+      }
       onClick={() => void onOpen?.(session)}
     >
       {content}
@@ -322,6 +316,7 @@ export interface MyAgentsProps {
   onCreateAgent: (region: RuntimeRegion) => void;
   onCreateSandboxAgent: (type: "codex" | SandboxAgentKind) => void;
   onOpenCodexSession: (session: SandboxSession) => Promise<void>;
+  onOpenSandboxAgentSession: (session: SandboxSession) => Promise<void>;
   onUseAgent: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails: (agent: MyAgentCardData) => void;
   connectedRuntimeId?: string;
@@ -337,6 +332,7 @@ export function MyAgents({
   onCreateAgent,
   onCreateSandboxAgent,
   onOpenCodexSession,
+  onOpenSandboxAgentSession,
   onUseAgent,
   onViewAgentDetails,
   connectedRuntimeId = "",
@@ -365,6 +361,7 @@ export function MyAgents({
   const [agentSessions, setAgentSessions] = useState<SandboxSession[]>([]);
   const [agentSessionsLoading, setAgentSessionsLoading] = useState(false);
   const [agentSessionsError, setAgentSessionsError] = useState("");
+  const [openingAgentSessionId, setOpeningAgentSessionId] = useState("");
 
   const fetchRuntimePage = useCallback((token: string, reset: boolean) => {
     const requestId = ++runtimeRequestRef.current;
@@ -542,6 +539,19 @@ export function MyAgents({
       setConnectingCodexSessionId("");
     }
   }, [connectingCodexSessionId, onOpenCodexSession]);
+
+  const openAgentSession = useCallback(async (session: SandboxSession) => {
+    if (openingAgentSessionId || session.status.toLowerCase() !== "ready") return;
+    setOpeningAgentSessionId(session.id);
+    setAgentSessionsError("");
+    try {
+      await onOpenSandboxAgentSession(session);
+    } catch (cause) {
+      setAgentSessionsError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setOpeningAgentSessionId("");
+    }
+  }, [onOpenSandboxAgentSession, openingAgentSessionId]);
 
   const visibleAgents = useMemo(() => {
     if (activeType !== "general") return [];
@@ -815,8 +825,9 @@ export function MyAgents({
                     <CodexSessionCard
                       key={session.id}
                       session={session}
-                      connecting={false}
+                      connecting={session.id === openingAgentSessionId}
                       agentType={activeType}
+                      onOpen={openAgentSession}
                     />
                   ))}
             </div>

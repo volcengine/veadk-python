@@ -1166,7 +1166,7 @@ class SandboxConversationService:
 
 
 class SandboxAgentSessionService:
-    """List and create managed Hermes/OpenClaw Sessions without opening them."""
+    """List, create, and securely open managed Hermes/OpenClaw Sessions."""
 
     def __init__(
         self,
@@ -1180,6 +1180,9 @@ class SandboxAgentSessionService:
         self._gateway = gateway
         self.kind = kind
         self._configured_tool_id = (tool_id or "").strip()
+        self._workspaces: dict[
+            tuple[str, str], tuple[SandboxCloudSession, str, float]
+        ] = {}
 
     def _tool_id(self, *, required: bool = True) -> str:
         tool_id = (
@@ -1213,14 +1216,96 @@ class SandboxAgentSessionService:
             )
         return await self._gateway.create_session(self._tool_id(), display_name)
 
+    async def open(
+        self,
+        session_id: str,
+        owner_id: str,
+    ) -> tuple[SandboxCloudSession, str]:
+        """Resolve one ready Session and issue an opaque WebUI capability."""
+        self._cleanup_expired()
+        cloud = await self._gateway.get_session(self._tool_id(), session_id)
+        if cloud.status.lower() != "ready" or not cloud.endpoint:
+            status = cloud.status or "Unknown"
+            raise SandboxSessionUnavailableError(
+                f"AgentKit Session 尚未就绪，当前状态：{status}。"
+            )
+        token = secrets.token_urlsafe(32)
+        self._workspaces[(owner_id, session_id)] = (
+            cloud,
+            token,
+            time.monotonic() + STUDIO_SANDBOX_TTL_SECONDS,
+        )
+        return cloud, token
+
+    async def launch_terminal(
+        self,
+        session_id: str,
+        owner_id: str,
+    ) -> tuple[str, str, str]:
+        """Create a shell for an opened branded Session."""
+        cloud, token, _expires_at = self._workspace(session_id, owner_id)
+        try:
+            url, shell_session_id = await terminal_launch_url(
+                cloud.endpoint,
+                session_id,
+            )
+        except (RuntimeError, TypeError, ValueError) as error:
+            raise SandboxInvocationError(_safe_error_message(error)) from error
+        return url, shell_session_id, token
+
+    def resolve_proxy_target(
+        self,
+        session_id: str,
+        token: str,
+    ) -> SandboxProxyTarget:
+        """Resolve an opaque capability for WebUI or Terminal proxying."""
+        self._cleanup_expired()
+        found = False
+        for cloud, candidate, _expires_at in self._workspaces.values():
+            if cloud.instance_id != session_id:
+                continue
+            found = True
+            if token and secrets.compare_digest(token, candidate):
+                return SandboxProxyTarget(endpoint=cloud.endpoint)
+        if found:
+            raise PermissionError("invalid managed agent proxy capability")
+        raise KeyError(session_id)
+
+    def _workspace(
+        self,
+        session_id: str,
+        owner_id: str,
+    ) -> tuple[SandboxCloudSession, str, float]:
+        self._cleanup_expired()
+        workspace = self._workspaces.get((owner_id, session_id))
+        if workspace is None:
+            raise SandboxSessionNotFoundError(
+                "智能体 Session 尚未打开，请返回列表后重新进入。"
+            )
+        return workspace
+
+    def _cleanup_expired(self) -> None:
+        now = time.monotonic()
+        self._workspaces = {
+            key: workspace
+            for key, workspace in self._workspaces.items()
+            if workspace[2] > now
+        }
+
 
 def mount_sandbox_agent_routes(
     app: Any,
     services: dict[str, SandboxAgentSessionService],
     owner_resolver: Callable[[Any], str],
 ) -> None:
-    """Mount list/create routes for managed agent Sessions."""
+    """Mount list/create/open routes for managed agent Sessions."""
     from fastapi import HTTPException
+    from fastapi.responses import JSONResponse
+
+    from veadk.cli.frontend_agent_proxy import (
+        agent_surface_prefix,
+        mount_agent_surface_proxy_routes,
+    )
 
     def _service(kind: str) -> SandboxAgentSessionService:
         service = services.get(kind)
@@ -1234,6 +1319,10 @@ def mount_sandbox_agent_routes(
             status_code = 503
         elif isinstance(error, SandboxValidationError):
             status_code = 422
+        elif isinstance(error, SandboxSessionNotFoundError):
+            status_code = 404
+        elif isinstance(error, SandboxSessionUnavailableError):
+            status_code = 409
         elif isinstance(error, SandboxProvisioningError):
             status_code = 502
         return HTTPException(
@@ -1304,11 +1393,70 @@ def mount_sandbox_agent_routes(
             raise _http_error(error) from error
         return _public_session(session, kind)
 
+    @app.post("/web/{kind}/sessions/{session_id}/open")
+    async def _open_sandbox_agent_session(
+        kind: str,
+        session_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        service = _service(kind)
+        try:
+            session, token = await service.open(
+                session_id,
+                owner_resolver(request),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        prefix = agent_surface_prefix(kind, session_id, token)
+        return {
+            **_public_session(session, kind),
+            "webuiUrl": f"{prefix}/{kind}/",
+        }
+
+    @app.post("/web/{kind}/sessions/{session_id}/terminal")
+    async def _open_sandbox_agent_terminal(
+        kind: str,
+        session_id: str,
+        request: Request,
+    ) -> JSONResponse:
+        try:
+            url, shell_session_id, token = await _service(kind).launch_terminal(
+                session_id,
+                owner_resolver(request),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        response = JSONResponse({"url": url, "shellSessionId": shell_session_id})
+        response.headers["Cache-Control"] = "no-store"
+        forwarded_protocol = (
+            request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+        )
+        response.set_cookie(
+            proxy_cookie_name(session_id),
+            token,
+            max_age=STUDIO_SANDBOX_TTL_SECONDS,
+            httponly=True,
+            secure=(request.url.scheme == "https" or forwarded_protocol == "https"),
+            samesite="strict",
+            path=proxy_prefix(session_id, "terminal").rsplit("/", 1)[0],
+        )
+        return response
+
+    def _surface_target(
+        kind: str,
+        session_id: str,
+        token: str,
+    ) -> SandboxProxyTarget:
+        return _service(kind).resolve_proxy_target(session_id, token)
+
+    mount_agent_surface_proxy_routes(app, _surface_target)
+
 
 def mount_sandbox_routes(
     app: Any,
     service: SandboxConversationService,
     owner_resolver: Callable[[Any], str],
+    proxy_target_resolver: Callable[[str, str], SandboxProxyTarget] | None = None,
 ) -> None:
     """Mount Studio HTTP routes for reusable Sandbox Sessions."""
     from fastapi import HTTPException
@@ -1814,7 +1962,10 @@ def mount_sandbox_routes(
             raise _http_error(error) from error
         return {"disconnected": True}
 
-    mount_sandbox_proxy_routes(app, service.resolve_proxy_target)
+    mount_sandbox_proxy_routes(
+        app,
+        proxy_target_resolver or service.resolve_proxy_target,
+    )
 
     cleanup_task: asyncio.Task[None] | None = None
 

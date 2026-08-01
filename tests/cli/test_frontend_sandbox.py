@@ -371,8 +371,24 @@ def _agent_app(gateway: _FakeGateway) -> FastAPI:
 def test_managed_agent_routes_create_session_and_return_card_data(
     kind: str,
     tool_id: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = _FakeGateway()
+
+    async def _terminal_url(
+        endpoint: str,
+        session_id: str,
+    ) -> tuple[str, str]:
+        assert "Authorization=secret" in endpoint
+        return (
+            f"/web/sandbox/proxy/{session_id}/terminal/terminal?session_id=shell-1",
+            "shell-1",
+        )
+
+    monkeypatch.setattr(
+        "veadk.cli.frontend_sandbox.terminal_launch_url",
+        _terminal_url,
+    )
     with TestClient(_agent_app(gateway)) as client:
         created = client.post(
             f"/web/{kind}/sessions",
@@ -383,16 +399,34 @@ def test_managed_agent_routes_create_session_and_return_card_data(
             f"/web/{kind}/sessions",
             headers={"X-Test-User": "alice"},
         )
+        session_id = created.json()["sessionId"]
+        opened = client.post(
+            f"/web/{kind}/sessions/{session_id}/open",
+            headers={"X-Test-User": "alice"},
+        )
+        terminal = client.post(
+            f"/web/{kind}/sessions/{session_id}/terminal",
+            headers={"X-Test-User": "alice"},
+        )
 
     assert created.status_code == 200
     assert created.json()["toolName"] == kind
     assert created.json()["displayName"] == f"我的 {kind}"
     assert "endpoint" not in created.json()
-    assert gateway.tool_ids == [tool_id, tool_id]
+    assert gateway.tool_ids == [tool_id, tool_id, tool_id]
     assert listed.status_code == 200
     assert [item["sessionId"] for item in listed.json()["sessions"]] == [
         created.json()["sessionId"]
     ]
+    assert opened.status_code == 200
+    assert opened.json()["webuiUrl"].startswith(
+        f"/web/{kind}/sessions/{session_id}/surface/"
+    )
+    assert "Authorization" not in opened.text
+    assert "secret" not in opened.text
+    assert terminal.status_code == 200
+    assert terminal.json()["shellSessionId"] == "shell-1"
+    assert "Authorization" not in terminal.text
 
 
 def test_sandbox_routes_list_create_connect_and_disconnect() -> None:

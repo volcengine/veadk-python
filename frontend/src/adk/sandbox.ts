@@ -169,6 +169,12 @@ export interface SandboxSession {
   permissions: SandboxPermissions;
 }
 
+export interface SandboxAgentWorkspace {
+  session: SandboxSession;
+  kind: SandboxAgentKind;
+  webuiUrl: string;
+}
+
 export interface SandboxMessage {
   sessionId: string;
   text: string;
@@ -192,6 +198,16 @@ export interface AgentKitSandboxClient {
     kind: SandboxAgentKind,
     options?: SandboxStartOptions,
   ): Promise<SandboxSession>;
+  openAgentSession(
+    kind: SandboxAgentKind,
+    sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxAgentWorkspace>;
+  launchAgentTerminal(
+    kind: SandboxAgentKind,
+    sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxToolLaunch>;
   connectSession(
     sessionId: string,
     options?: SandboxRequestOptions,
@@ -827,6 +843,60 @@ export const sandboxClient: AgentKitSandboxClient = {
       throw await responseError(response, `无法创建 ${kind} 智能体，请稍后重试。`);
     }
     return parseSession((await response.json()) as SessionResponse, kind);
+  },
+
+  async openAgentSession(kind, sessionId, options = {}) {
+    if (!sessionId) throw new Error("缺少要打开的 AgentKit Session。");
+    const response = await fetch(
+      withAuth(`/web/${kind}/sessions/${encodeURIComponent(sessionId)}/open`),
+      {
+        method: "POST",
+        headers: sandboxHeaders(),
+        signal: requestSignal(options.signal, SETTINGS_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok) {
+      throw await responseError(response, `无法打开 ${kind} 智能体。`);
+    }
+    const value = (await response.json()) as SessionResponse & {
+      webuiUrl?: unknown;
+    };
+    if (typeof value.webuiUrl !== "string" || !value.webuiUrl.startsWith("/")) {
+      throw new Error(`${kind} 智能体返回了无效的主页面地址。`);
+    }
+    return {
+      session: parseSession(value, kind),
+      kind,
+      webuiUrl: withAuth(value.webuiUrl),
+    };
+  },
+
+  async launchAgentTerminal(kind, sessionId, options = {}) {
+    if (!sessionId) throw new Error("缺少要打开 Terminal 的 AgentKit Session。");
+    const response = await fetch(
+      withAuth(`/web/${kind}/sessions/${encodeURIComponent(sessionId)}/terminal`),
+      {
+        method: "POST",
+        headers: sandboxHeaders(),
+        signal: requestSignal(options.signal, SETTINGS_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok) {
+      throw await responseError(response, `无法打开 ${kind} Terminal。`);
+    }
+    const value = (await response.json()) as {
+      url?: unknown;
+      shellSessionId?: unknown;
+    };
+    if (typeof value.url !== "string" || !value.url.startsWith("/")) {
+      throw new Error(`${kind} Terminal 返回了无效地址。`);
+    }
+    return {
+      url: withAuth(value.url),
+      ...(typeof value.shellSessionId === "string"
+        ? { shellSessionId: value.shellSessionId }
+        : {}),
+    };
   },
 
   async connectSession(sessionId, options = {}) {

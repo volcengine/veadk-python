@@ -163,7 +163,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(appSource, /const finishDeployment = useCallback/);
   assert.match(appSource, /await connectRuntime\([\s\S]*?result\.runtimeId[\s\S]*?result\.version/);
   assert.match(appSource, /const \[agentInfoRefreshKey, setAgentInfoRefreshKey\] = useState\(0\)/);
-  assert.match(appSource, /}, \[agentDetailTarget, appName, agentInfoRefreshKey, authStatus, myAgents\]\);/);
+  assert.match(appSource, /}, \[[\s\S]*?agentInfoRefreshKey,[\s\S]*?sandboxAgentWorkspace,[\s\S]*?\]\);/);
   assert.match(
     appSource,
     /const finishDeployment = useCallback[\s\S]*?setConnections\(loadConnections\(\)\);[\s\S]*?setAgentInfoRefreshKey\(\(key\) => key \+ 1\)/,

@@ -1087,6 +1087,7 @@ def _run_frontend_server(
         SandboxAgentSessionService,
         SandboxConfigurationError,
         SandboxConversationService,
+        SandboxProxyTarget,
         mount_sandbox_agent_routes,
         mount_sandbox_routes,
     )
@@ -1117,24 +1118,48 @@ def _run_frontend_server(
             os.getenv("AGENTKIT_SANDBOX_REGION")
         ),
     )
+    sandbox_service = SandboxConversationService(sandbox_gateway)
+    sandbox_agent_services = {
+        kind: SandboxAgentSessionService(
+            sandbox_gateway,
+            kind=kind,
+            tool_id=os.getenv(env_name),
+        )
+        for kind, env_name in {
+            "openclaw": "SANDBOX_OPENCLAW_TOOL",
+            "hermes": "SANDBOX_HERMES_TOOL",
+        }.items()
+    }
+
+    def _sandbox_proxy_target(session_id: str, token: str) -> SandboxProxyTarget:
+        resolvers = (
+            sandbox_service.resolve_proxy_target,
+            *(
+                service.resolve_proxy_target
+                for service in sandbox_agent_services.values()
+            ),
+        )
+        found = False
+        for resolver in resolvers:
+            try:
+                return resolver(session_id, token)
+            except PermissionError:
+                found = True
+            except KeyError:
+                continue
+        if found:
+            raise PermissionError("invalid Sandbox proxy capability")
+        raise KeyError(session_id)
+
     mount_sandbox_routes(
         app,
-        SandboxConversationService(sandbox_gateway),
+        sandbox_service,
         _sandbox_owner,
+        _sandbox_proxy_target,
     )
     mount_sandbox_agent_routes(
         app,
-        {
-            kind: SandboxAgentSessionService(
-                sandbox_gateway,
-                kind=kind,
-                tool_id=os.getenv(env_name),
-            )
-            for kind, env_name in {
-                "openclaw": "SANDBOX_OPENCLAW_TOOL",
-                "hermes": "SANDBOX_HERMES_TOOL",
-            }.items()
-        },
+        sandbox_agent_services,
         _sandbox_owner,
     )
 

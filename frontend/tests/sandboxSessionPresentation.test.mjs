@@ -18,6 +18,10 @@ const sandboxSessionSource = readFileSync(
   new URL("../src/ui/SandboxSession.tsx", import.meta.url),
   "utf8",
 );
+const sandboxAgentWorkspaceSource = readFileSync(
+  new URL("../src/ui/SandboxAgentWorkspace.tsx", import.meta.url),
+  "utf8",
+);
 const composerSource = readFileSync(
   new URL("../src/ui/SandboxComposer.tsx", import.meta.url),
   "utf8",
@@ -178,6 +182,18 @@ test("creating a sandbox refreshes the list while opening an item connects it", 
   );
 });
 
+test("managed OpenClaw and Hermes Sessions open a WebUI and Terminal workspace", () => {
+  assert.match(sandboxClientSource, /async openAgentSession\(kind, sessionId/);
+  assert.match(sandboxClientSource, /\/web\/\$\{kind\}\/sessions\/\$\{encodeURIComponent\(sessionId\)\}\/open/);
+  assert.match(sandboxClientSource, /async launchAgentTerminal\(kind, sessionId/);
+  assert.match(appSource, /async function openSandboxAgentSession/);
+  assert.match(appSource, /<SandboxAgentWorkspace[\s\S]*?onRequestTerminal=/);
+  assert.match(sandboxAgentWorkspaceSource, /主页面/);
+  assert.match(sandboxAgentWorkspaceSource, /Terminal/);
+  assert.match(sandboxAgentWorkspaceSource, /<iframe/);
+  assert.match(sandboxAgentWorkspaceSource, /返回列表/);
+});
+
 test("active sandbox conversation does not wait for normal Agent capabilities", () => {
   assert.match(
     appSource,
@@ -188,7 +204,7 @@ test("active sandbox conversation does not wait for normal Agent capabilities", 
 test("normal session refresh cannot close a newly launched sandbox session", () => {
   assert.match(
     appSource,
-    /if \(myAgents \|\| agentDetailTarget \|\| sandboxSession \|\| !appName \|\| !userId\)/,
+    /myAgents \|\|[\s\S]*?sandboxAgentWorkspace \|\|[\s\S]*?agentDetailTarget \|\|[\s\S]*?sandboxSession/,
   );
   assert.match(
     appSource,
@@ -196,7 +212,7 @@ test("normal session refresh cannot close a newly launched sandbox session", () 
   );
   assert.match(
     appSource,
-    /\[agentDetailTarget, appName, myAgents, sandboxSession, userId\]/,
+    /\[[\s\S]*?agentDetailTarget,[\s\S]*?sandboxAgentWorkspace,[\s\S]*?sandboxSession,[\s\S]*?userId,[\s\S]*?\]/,
   );
 });
 
