@@ -145,6 +145,10 @@ def mount_agent_surface_proxy_routes(
                 "user-agent",
             }
         }
+        if kind == "hermes":
+            session_token = request.headers.get("x-hermes-session-token", "").strip()
+            if session_token:
+                headers["x-hermes-session-token"] = session_token
         headers["origin"] = f"{parsed.scheme}://{parsed.netloc}"
         try:
             async with httpx.AsyncClient(

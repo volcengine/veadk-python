@@ -101,3 +101,52 @@ def test_agent_surface_proxy_keeps_endpoint_auth_server_side(
     assert 'const base64 = "/"' in response.text
     assert 'const api = "/api/status"' in response.text
     assert "server-secret" not in response.text
+
+
+def test_hermes_proxy_forwards_the_session_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    forwarded_headers: list[dict[str, str]] = []
+
+    class _Client:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def request(
+            self,
+            _method: str,
+            _url: str,
+            **kwargs: object,
+        ) -> httpx.Response:
+            forwarded_headers.append(dict(kwargs["headers"]))  # type: ignore[arg-type]
+            return httpx.Response(
+                200,
+                json={"authenticated": True},
+                headers={"content-type": "application/json"},
+            )
+
+    monkeypatch.setattr("veadk.cli.frontend_agent_proxy.httpx.AsyncClient", _Client)
+    app = FastAPI()
+
+    def _target(kind: str, session_id: str, token: str) -> SandboxProxyTarget:
+        assert (kind, session_id, token) == ("hermes", "session-1", "proxy-1")
+        return SandboxProxyTarget(
+            endpoint="https://sandbox.example/?Authorization=secret"
+        )
+
+    mount_agent_surface_proxy_routes(app, _target)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/hermes/sessions/session-1/surface/proxy-1/hermes/api/auth/me",
+            headers={"X-Hermes-Session-Token": "hermes-session-token"},
+        )
+
+    assert response.status_code == 200
+    assert forwarded_headers[0]["x-hermes-session-token"] == "hermes-session-token"
