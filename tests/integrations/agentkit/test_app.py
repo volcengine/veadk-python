@@ -23,16 +23,22 @@ from fastapi.testclient import TestClient
 from google.adk.agents.base_agent import BaseAgent
 
 import veadk
-from veadk.cli.frontend_invocation import FrontendInvocationPlugin
 import veadk.integrations.agentkit.app as agentkit_app
+from veadk.cli.frontend_invocation import FrontendInvocationPlugin
 
 
 class _FakeAgentServer:
     instances: list[_FakeAgentServer] = []
 
-    def __init__(self, agent: BaseAgent, short_term_memory: object) -> None:
+    def __init__(
+        self,
+        agent: BaseAgent,
+        short_term_memory: object,
+        identity: object | None = None,
+    ) -> None:
         self.agent = agent
         self.short_term_memory = short_term_memory
+        self.identity = identity
         self.app = FastAPI()
         self.run_kwargs: dict[str, Any] | None = None
         self.instances.append(self)
@@ -129,6 +135,15 @@ def test_create_agentkit_app_preserves_platform_route_contract() -> None:
     }
     assert client.get("/web/agent-info/unknown").status_code == 404
     assert client.get("/web/agent-graph").json()["graph"] == info.json()["graph"]
+
+
+def test_create_agentkit_app_passes_runtime_identity_to_agentkit() -> None:
+    identity = object()
+
+    agentkit_app.create_agentkit_app(_root_agent(), identity=identity)
+
+    server = _FakeAgentServer.instances[-1]
+    assert server.identity is identity
 
 
 def test_agent_info_exposes_sanitized_builder_draft() -> None:

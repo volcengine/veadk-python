@@ -56,6 +56,8 @@ from veadk.integrations.agentkit.session_capabilities import (
 from veadk.memory.short_term_memory import ShortTermMemory
 
 if TYPE_CHECKING:
+    from agentkit.identity import RuntimeIdentity
+
     from veadk.runner import Runner
 
 
@@ -1038,6 +1040,7 @@ def create_agentkit_app(
     *,
     agent_draft: Mapping[str, Any] | None = None,
     enable_feishu: bool = False,
+    identity: RuntimeIdentity | None = None,
 ) -> FastAPI:
     """Create an AgentKit-compatible FastAPI app for ``root_agent``.
 
@@ -1051,6 +1054,9 @@ def create_agentkit_app(
         agent_draft: Optional sanitized builder draft for read-only editing metadata.
         enable_feishu: Whether to start the Feishu channel with credentials from
             ``FEISHU_APP_ID`` and ``FEISHU_APP_SECRET``.
+        identity: Optional AgentKit Runtime identity boundary. When supplied,
+            AgentKit verifies and binds the inbound user identity before VeADK
+            Agent or Tool code runs.
 
     Returns:
         The configured FastAPI application.
@@ -1060,10 +1066,15 @@ def create_agentkit_app(
     if short_term_memory is None:
         short_term_memory = ShortTermMemory(backend="local")
 
-    agent_server = AgentkitAgentServerApp(
-        agent=root_agent,
-        short_term_memory=short_term_memory,
-    )
+    agent_server_kwargs: dict[str, Any] = {
+        "agent": root_agent,
+        "short_term_memory": short_term_memory,
+    }
+    if identity is not None:
+        # Keep VeADK compatible with AgentKit SDK versions that predate Runtime
+        # identity while using the product integration point when it is enabled.
+        agent_server_kwargs["identity"] = identity
+    agent_server = AgentkitAgentServerApp(**agent_server_kwargs)
     app = cast(FastAPI, agent_server.app)
     setattr(app.state, _SERVER_STATE_KEY, agent_server)
     _configure_dynamic_a2a_routes(app, root_agent)
