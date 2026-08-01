@@ -1071,9 +1071,10 @@ def create_agentkit_app(
         "short_term_memory": short_term_memory,
     }
     if identity is not None:
-        # Keep VeADK compatible with AgentKit SDK versions that predate Runtime
-        # identity while using the product integration point when it is enabled.
         agent_server_kwargs["identity"] = identity
+        # VeADK's fixed /ping route returns only {"status": "ok"}. AgentKit
+        # keeps every business and introspection route identity-bound.
+        agent_server_kwargs["identity_health_routes"] = ("/ping",)
     agent_server = AgentkitAgentServerApp(**agent_server_kwargs)
     app = cast(FastAPI, agent_server.app)
     setattr(app.state, _SERVER_STATE_KEY, agent_server)

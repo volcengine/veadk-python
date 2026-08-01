@@ -35,10 +35,12 @@ class _FakeAgentServer:
         agent: BaseAgent,
         short_term_memory: object,
         identity: object | None = None,
+        identity_health_routes: tuple[str, ...] = (),
     ) -> None:
         self.agent = agent
         self.short_term_memory = short_term_memory
         self.identity = identity
+        self.identity_health_routes = identity_health_routes
         self.app = FastAPI()
         self.run_kwargs: dict[str, Any] | None = None
         self.instances.append(self)
@@ -144,6 +146,7 @@ def test_create_agentkit_app_passes_runtime_identity_to_agentkit() -> None:
 
     server = _FakeAgentServer.instances[-1]
     assert server.identity is identity
+    assert server.identity_health_routes == ("/ping",)
 
 
 def test_agent_info_exposes_sanitized_builder_draft() -> None:
