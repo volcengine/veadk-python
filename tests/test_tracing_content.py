@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 from dataclasses import dataclass
 
 from opentelemetry import context as context_api
@@ -26,6 +27,7 @@ from veadk.tracing.telemetry.exporters.apmplus_exporter import MeterUploader
 @dataclass
 class _FakePart:
     text: str | None = None
+    thought: bool | None = None
     function_call: object | None = None
     function_response: object | None = None
     inline_data: object | None = None
@@ -241,6 +243,48 @@ def test_agent_root_span_skips_content_when_env_false(monkeypatch):
         assert "gen_ai.output" not in span.attributes
         assert "gen_ai.user.message" not in _event_names(span)
         assert "gen_ai.choice" not in _event_names(span)
+
+
+def test_agent_output_serializes_reasoning_for_apmplus():
+    response = _FakeLlmResponse()
+    response.content = _FakeContent(
+        "model",
+        [
+            _FakePart(text="thinking", thought=True),
+            _FakePart(text="answer"),
+        ],
+    )
+
+    with _start_test_span("invocation") as span:
+        telemetry._set_agent_output_attribute(span, response)
+
+        assert json.loads(span.attributes["gen_ai.output"]) == {
+            "messages": [
+                {
+                    "role": "model",
+                    "parts": [
+                        {"type": "reasoning", "content": "thinking"},
+                        {"type": "text", "content": "answer"},
+                    ],
+                }
+            ]
+        }
+
+
+def test_agent_output_serializes_plain_text_for_apmplus():
+    with _start_test_span("invocation") as span:
+        telemetry._set_agent_output_attribute(span, _FakeLlmResponse())
+
+        assert json.loads(span.attributes["gen_ai.output"]) == {
+            "messages": [
+                {
+                    "role": "model",
+                    "parts": [
+                        {"type": "text", "content": "assistant secret"},
+                    ],
+                }
+            ]
+        }
 
 
 def test_content_tracing_context_override_allows_content(monkeypatch):
