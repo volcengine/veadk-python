@@ -166,6 +166,63 @@ async def test_terminal_launch_uses_an_opaque_same_origin_url(
 
 
 @pytest.mark.asyncio
+async def test_terminal_launch_can_return_the_native_browser_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native_url = "https://sandbox.example/terminal?session_id=native-shell-1"
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict[str, str]:
+            return {"data": native_url}
+
+    class _Client:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def get(self, _url: str, **_kwargs: object) -> _Response:
+            return _Response()
+
+    monkeypatch.setattr(
+        frontend_sandbox_proxy.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _Client(),
+    )
+
+    url, shell_session_id = await terminal_launch_url(
+        (
+            "https://sandbox.example/root"
+            "?faasInstanceName=instance-1&Authorization=private"
+        ),
+        "cloud-session",
+        direct=True,
+    )
+
+    assert url == (
+        "https://sandbox.example/root/terminal"
+        "?faasInstanceName=instance-1"
+        "&Authorization=private"
+        "&session_id=native-shell-1"
+    )
+    assert shell_session_id == "native-shell-1"
+
+
+def test_browser_launch_can_return_the_native_browser_url() -> None:
+    url = frontend_sandbox_proxy.browser_launch_url(
+        "cloud-session",
+        endpoint="https://sandbox.example/root?Authorization=private",
+        direct=True,
+    )
+
+    assert url == "https://sandbox.example/root/browser-ui?Authorization=private"
+
+
+@pytest.mark.asyncio
 async def test_browser_info_rewrites_cdp_and_removes_private_urls() -> None:
     request = Request(
         {

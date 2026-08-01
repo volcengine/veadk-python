@@ -58,13 +58,28 @@ def proxy_prefix(session_id: str, surface: SandboxSurface) -> str:
     return f"/web/sandbox/proxy/{quote(session_id, safe='')}/{surface}"
 
 
-def browser_launch_url(session_id: str) -> str:
-    """Return the browser UI URL exposed to Studio."""
+def browser_launch_url(
+    session_id: str,
+    *,
+    endpoint: str = "",
+    direct: bool = False,
+) -> str:
+    """Return the proxied or native browser UI URL exposed to Studio."""
+    if direct:
+        parsed = urlsplit(endpoint)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise RuntimeError("Sandbox Browser 返回了无效地址。")
+        return sandbox_service_url(endpoint, "/browser-ui")
     return f"{proxy_prefix(session_id, 'browser')}/browser-ui"
 
 
-async def terminal_launch_url(endpoint: str, session_id: str) -> tuple[str, str]:
-    """Create a remote shell session and return its local proxy URL."""
+async def terminal_launch_url(
+    endpoint: str,
+    session_id: str,
+    *,
+    direct: bool = False,
+) -> tuple[str, str]:
+    """Create a remote shell session and return its browser URL."""
     url = sandbox_service_url(endpoint, "/v1/shell/terminal-url")
     try:
         async with httpx.AsyncClient(
@@ -92,6 +107,17 @@ async def terminal_launch_url(endpoint: str, session_id: str) -> tuple[str, str]
         shell_session_id = candidates[0].strip()
     if not shell_session_id or len(shell_session_id) > 1_000:
         raise RuntimeError("Sandbox Terminal 未返回 Shell Session ID。")
+    if direct:
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise RuntimeError("Sandbox Terminal 返回了无效地址。")
+        return (
+            sandbox_service_url(
+                endpoint,
+                "/terminal",
+                query={"session_id": shell_session_id},
+            ),
+            shell_session_id,
+        )
     local_url = (
         f"{proxy_prefix(session_id, 'terminal')}/terminal"
         f"?session_id={quote(shell_session_id, safe='')}"

@@ -378,10 +378,16 @@ def test_managed_agent_routes_create_session_and_return_card_data(
     async def _terminal_url(
         endpoint: str,
         session_id: str,
+        *,
+        direct: bool = False,
     ) -> tuple[str, str]:
         assert "Authorization=secret" in endpoint
+        assert direct is True
         return (
-            f"/web/sandbox/proxy/{session_id}/terminal/terminal?session_id=shell-1",
+            (
+                "https://sandbox.example/terminal"
+                "?session_id=shell-1&Authorization=terminal-secret"
+            ),
             "shell-1",
         )
 
@@ -426,7 +432,8 @@ def test_managed_agent_routes_create_session_and_return_card_data(
     assert "secret" not in opened.text
     assert terminal.status_code == 200
     assert terminal.json()["shellSessionId"] == "shell-1"
-    assert "Authorization" not in terminal.text
+    assert terminal.json()["url"].startswith("https://sandbox.example/terminal?")
+    assert "Authorization=terminal-secret" in terminal.json()["url"]
 
 
 def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
@@ -635,8 +642,10 @@ def test_sandbox_settings_tools_and_first_turn_workspace_lock() -> None:
         {"name": "project", "path": "/workspace/project"}
     ]
     assert browser.status_code == 200
-    assert browser.json()["url"].endswith("/remote-existing/browser/browser-ui")
-    assert "Authorization" not in browser.text
+    assert browser.json()["url"].startswith(
+        "https://sandbox.example/existing/browser-ui?"
+    )
+    assert "Authorization=secret" in browser.json()["url"]
     assert "veadk_sandbox_" in browser.headers["set-cookie"]
     assert locked.status_code == 409
 

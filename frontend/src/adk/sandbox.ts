@@ -888,11 +888,9 @@ export const sandboxClient: AgentKitSandboxClient = {
       url?: unknown;
       shellSessionId?: unknown;
     };
-    if (typeof value.url !== "string" || !value.url.startsWith("/")) {
-      throw new Error(`${kind} Terminal 返回了无效地址。`);
-    }
+    const terminalUrl = sandboxToolUrl(value.url, `${kind} Terminal`);
     return {
-      url: withAuth(value.url),
+      url: terminalUrl,
       ...(typeof value.shellSessionId === "string"
         ? { shellSessionId: value.shellSessionId }
         : {}),
@@ -1269,13 +1267,30 @@ async function launchSandboxTool(
     url?: unknown;
     shellSessionId?: unknown;
   };
-  if (typeof value.url !== "string" || !value.url.startsWith("/")) {
-    throw new Error("Sandbox 工具返回了无效地址。");
-  }
+  const toolUrl = sandboxToolUrl(value.url, "Sandbox 工具");
   return {
-    url: withAuth(value.url),
+    url: toolUrl,
     ...(typeof value.shellSessionId === "string"
       ? { shellSessionId: value.shellSessionId }
       : {}),
   };
+}
+
+function sandboxToolUrl(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`${label} 返回了无效地址。`);
+  }
+  if (value.startsWith("/")) return withAuth(value);
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${label} 返回了无效地址。`);
+  }
+  const allowsHttp =
+    parsed.protocol === "http:" && window.location.protocol === "http:";
+  if (parsed.protocol !== "https:" && !allowsHttp) {
+    throw new Error(`${label} 返回了不安全的地址。`);
+  }
+  return parsed.toString();
 }

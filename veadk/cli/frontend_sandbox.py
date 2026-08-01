@@ -1079,20 +1079,30 @@ class SandboxConversationService:
     async def launch_terminal(
         self, session_id: str, owner_id: str
     ) -> tuple[str, str, str]:
-        """Create a shell and return its same-origin URL and capability."""
+        """Create a shell and return its native browser URL and capability."""
         session = self._owned(session_id, owner_id)
         try:
             url, shell_session_id = await terminal_launch_url(
-                session.cloud.endpoint, session_id
+                session.cloud.endpoint,
+                session_id,
+                direct=True,
             )
         except (RuntimeError, TypeError, ValueError) as error:
             raise SandboxInvocationError(_safe_error_message(error)) from error
         return url, shell_session_id, session.proxy_token
 
     def launch_browser(self, session_id: str, owner_id: str) -> tuple[str, str]:
-        """Return the Browser UI's same-origin URL and capability."""
+        """Return the Browser UI's native URL and capability."""
         session = self._owned(session_id, owner_id)
-        return browser_launch_url(session_id), session.proxy_token
+        try:
+            url = browser_launch_url(
+                session_id,
+                endpoint=session.cloud.endpoint,
+                direct=True,
+            )
+        except (RuntimeError, TypeError, ValueError) as error:
+            raise SandboxInvocationError(_safe_error_message(error)) from error
+        return url, session.proxy_token
 
     async def upload_file(
         self,
@@ -1248,6 +1258,7 @@ class SandboxAgentSessionService:
             url, shell_session_id = await terminal_launch_url(
                 cloud.endpoint,
                 session_id,
+                direct=True,
             )
         except (RuntimeError, TypeError, ValueError) as error:
             raise SandboxInvocationError(_safe_error_message(error)) from error

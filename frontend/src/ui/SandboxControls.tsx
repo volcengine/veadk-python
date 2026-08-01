@@ -150,7 +150,7 @@ export function SandboxToolDialog({
           <div className="sandbox-control-state">
             <Loader2 className="spin" />
             <strong>正在打开 {title}</strong>
-            <span>工具将通过 Studio 的安全代理连接到当前沙箱。</span>
+            <span>工具正在连接当前 AgentKit Session。</span>
           </div>
         ) : error ? (
           <div className="sandbox-control-state is-error">

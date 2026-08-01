@@ -186,6 +186,16 @@ test("managed OpenClaw and Hermes Sessions open a WebUI and Terminal workspace",
   assert.match(sandboxClientSource, /async openAgentSession\(kind, sessionId/);
   assert.match(sandboxClientSource, /\/web\/\$\{kind\}\/sessions\/\$\{encodeURIComponent\(sessionId\)\}\/open/);
   assert.match(sandboxClientSource, /async launchAgentTerminal\(kind, sessionId/);
+  assert.match(
+    sandboxClientSource,
+    /function sandboxToolUrl\(value: unknown, label: string\)/,
+  );
+  assert.match(sandboxClientSource, /parsed = new URL\(value\)/);
+  assert.match(
+    sandboxClientSource,
+    /parsed\.protocol !== "https:" && !allowsHttp/,
+  );
+  assert.match(sandboxClientSource, /url: terminalUrl/);
   assert.match(appSource, /async function openSandboxAgentSession/);
   assert.match(appSource, /<SandboxAgentWorkspace[\s\S]*?onRequestTerminal=/);
   assert.match(sandboxAgentWorkspaceSource, /主页面/);
