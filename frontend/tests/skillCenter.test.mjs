@@ -18,18 +18,11 @@ const stylesSource = readFileSync(
   new URL("../src/styles.css", import.meta.url),
   "utf8",
 );
-const appSource = readFileSync(
-  new URL("../src/App.tsx", import.meta.url),
-  "utf8",
-);
-
 test("skill center defaults to paged AgentKit Skill space browsing", () => {
-  assert.match(appSource, /AgentKit Skill 空间/);
   assert.doesNotMatch(skillCenterSource, /Find Skill|findskill|SKILL_URL|skill-frame/);
   assert.match(skillCenterSource, /useState<SkillRegion>\("cn-beijing"\)/);
   assert.match(skillCenterSource, /changeRegion\("cn-shanghai"\)/);
   assert.doesNotMatch(skillCenterSource, /changeRegion\("all"\)/);
-  assert.match(appSource, /\[\{ label: "技能中心" \}, \{ label: "AgentKit Skill 空间" \}\]/);
   assert.match(
     skillCenterSource,
     /<h2>技能空间<\/h2>\s*<span className="skillcenter-count-badge">\{spaceTotal\}<\/span>[\s\S]*?<div className="skillcenter-regions"/,

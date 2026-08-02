@@ -87,6 +87,15 @@ _CP_PIPELINE_RUN_RE = re.compile(
 _RUNTIME_DESCRIPTION_MAX_BYTES = 255
 
 
+def _runtime_regions(provider: str, requested_region: str) -> list[str]:
+    """Resolve the Runtime control-plane regions for a list request."""
+    if requested_region not in {"all", "", "*"}:
+        return [requested_region]
+    if provider == "byteplus":
+        return [os.getenv("BYTEPLUS_REGION") or "ap-southeast-1"]
+    return ["cn-beijing", "cn-shanghai"]
+
+
 def _normalize_runtime_description(value: object) -> str:
     """Return a conservative AgentKit Runtime description."""
     single_line = re.sub(
@@ -562,6 +571,16 @@ def _serve_options(f):
         click.option("--host", default="127.0.0.1", show_default=True),
         click.option("--port", default=8000, show_default=True, type=int),
         click.option(
+            "--provider",
+            type=click.Choice(["volcengine", "byteplus"]),
+            default="volcengine",
+            show_default=True,
+            help=(
+                "Cloud provider for AgentKit services. BytePlus is used only "
+                "when explicitly selected."
+            ),
+        ),
+        click.option(
             "--dev",
             is_flag=True,
             default=False,
@@ -707,6 +726,7 @@ def frontend(
     site_title: str | None,
     host: str,
     port: int,
+    provider: Literal["volcengine", "byteplus"],
     dev: bool,
     vite: bool,
     oauth2_user_pool: str | None,
@@ -734,6 +754,7 @@ def frontend(
         site_title=site_title,
         host=host,
         port=port,
+        provider=provider,
         dev=dev,
         vite=vite,
         oauth2_user_pool=oauth2_user_pool,
@@ -765,6 +786,7 @@ def studio(
     site_title: str | None,
     host: str,
     port: int,
+    provider: Literal["volcengine", "byteplus"],
     dev: bool,
     vite: bool,
     oauth2_user_pool: str | None,
@@ -797,6 +819,7 @@ def studio(
         site_title=site_title,
         host=host,
         port=port,
+        provider=provider,
         dev=dev,
         vite=vite,
         oauth2_user_pool=oauth2_user_pool,
@@ -841,6 +864,7 @@ def _run_frontend_server(
     studio_admins: str | None = None,
     studio_developers: str | None = None,
     open_browser: bool,
+    provider: Literal["volcengine", "byteplus"] = "volcengine",
     studio: bool = False,
 ) -> None:
     """Launch the A2UI web UI backed by the ADK agent API server."""
@@ -861,6 +885,15 @@ def _run_frontend_server(
         logger.info(f"Loaded .env file from {env_file_path}")
     else:
         logger.warning("No .env file found in current directory or parent directories")
+
+    # The local CLI is Volcengine-first even when a shell or global AgentKit
+    # config previously selected BytePlus. BytePlus requires the explicit
+    # ``--provider byteplus`` opt-in.
+    os.environ["AGENTKIT_CLOUD_PROVIDER"] = provider
+    os.environ["CLOUD_PROVIDER"] = provider
+    from agentkit.platform.context import set_default_cloud_provider
+
+    set_default_cloud_provider(provider)
 
     if sandbox_chat_codex_tool_id:
         os.environ["SANDBOX_CHAT_CODEX"] = sandbox_chat_codex_tool_id
@@ -1026,13 +1059,24 @@ def _run_frontend_server(
         return access_policy.access_payload(principal)
 
     def _resolve_ve_credentials() -> tuple[str, str, str | None]:
-        """Resolve Volcengine creds as (access_key, secret_key, session_token).
+        """Resolve cloud credentials as (access_key, secret_key, session_token).
 
-        Priority: env AK/SK first; else the VeFaaS-injected STS credential file
-        (which carries a session token); else 400. This lets the same `/web/*`
-        endpoints work locally (env creds) and inside a VeFaaS function, where
-        only the function's IAM-role STS credentials are available.
+        BytePlus uses its explicit environment credentials. Volcengine uses
+        environment credentials first, then the VeFaaS-injected STS credential
+        file so the same endpoints work locally and inside a VeFaaS function.
         """
+        if provider == "byteplus":
+            ak = os.getenv("BYTEPLUS_ACCESS_KEY")
+            sk = os.getenv("BYTEPLUS_SECRET_KEY")
+            token = os.getenv("BYTEPLUS_SESSION_TOKEN")
+            if ak and sk:
+                return ak, sk, token or None
+            raise HTTPException(
+                status_code=400,
+                detail="BytePlus credentials not found (set BYTEPLUS_ACCESS_KEY/"
+                "BYTEPLUS_SECRET_KEY)",
+            )
+
         ak = os.getenv("VOLCENGINE_ACCESS_KEY")
         sk = os.getenv("VOLCENGINE_SECRET_KEY")
         if ak and sk:
@@ -3408,9 +3452,7 @@ def _run_frontend_server(
         principal = _current_principal(request)
         role = _request_role(request)
         ak, sk, token = _resolve_ve_credentials()
-        regions = (
-            ["cn-beijing", "cn-shanghai"] if region in {"all", "", "*"} else [region]
-        )
+        regions = _runtime_regions(provider, region)
 
         async def _list_one(reg: str) -> list[dict]:
             from agentkit.sdk.runtime.client import AgentkitRuntimeClient
@@ -3574,9 +3616,7 @@ def _run_frontend_server(
         principal = _current_principal(request)
         role = _request_role(request)
         ak, sk, svc_token = _resolve_ve_credentials()
-        regions = (
-            ["cn-beijing", "cn-shanghai"] if region in {"all", "", "*"} else [region]
-        )
+        regions = _runtime_regions(provider, region)
         page_size = max(1, min(page_size, 100))
         restrict_to_owner = scope == "mine" or role != StudioRole.ADMIN
         principal_key = (
@@ -3627,7 +3667,10 @@ def _run_frontend_server(
                 if current_token:
                     kw["next_token"] = current_token
                 request = _rt.ListRuntimesRequest(**kw)
-                resp = await asyncio.to_thread(client.list_runtimes, request)
+                resp = await asyncio.to_thread(
+                    client.list_runtimes,
+                    request,
+                )
                 for runtime in resp.agent_kit_runtimes or []:
                     tags = _runtime_tags(runtime)
                     is_mine = runtime_belongs_to(tags, principal)
@@ -3644,6 +3687,9 @@ def _run_frontend_server(
                             "runtimeId": runtime.runtime_id,
                             "status": runtime.status,
                             "createdAt": runtime.created_at,
+                            "description": getattr(runtime, "description", "") or "",
+                            "cpuMilli": getattr(runtime, "cpu_milli", None),
+                            "memoryMb": getattr(runtime, "memory_mb", None),
                             "currentVersion": getattr(
                                 runtime, "current_version_number", None
                             ),
@@ -3686,13 +3732,18 @@ def _run_frontend_server(
                 window_end = offset + page_size
                 owned_by_id: dict[str, dict] = {}
                 owned_has_more = False
-                for reg in regions:
-                    items, following_token = await _list_region(
-                        reg,
-                        "",
-                        window_end,
-                        ("veadk:owner", principal.owner_id),
+                owned_results = await asyncio.gather(
+                    *(
+                        _list_region(
+                            reg,
+                            "",
+                            window_end,
+                            ("veadk:owner", principal.owner_id),
+                        )
+                        for reg in regions
                     )
+                )
+                for items, following_token in owned_results:
                     for item in items:
                         owned_by_id[item["runtimeId"]] = item
                     owned_has_more = owned_has_more or bool(following_token)
@@ -3750,17 +3801,30 @@ def _run_frontend_server(
 
             all_runtimes: list[dict] = []
             regional_has_more = False
-            # The AgentKit SDK runtime client shares transport state internally;
-            # concurrent regional ListRuntimes calls can block each other for
-            # tens of seconds. Regions are few, so query them sequentially.
-            for reg in regions:
-                try:
-                    items, has_more = await _list_region_window(reg)
-                except Exception as exc:
-                    logger.warning(f"list runtimes [{reg}] failed: {exc}")
+            regional_results = await asyncio.gather(
+                *(_list_region_window(reg) for reg in regions),
+                return_exceptions=True,
+            )
+            regional_errors: list[str] = []
+            for reg, result in zip(regions, regional_results):
+                if isinstance(result, BaseException):
+                    if isinstance(result, asyncio.CancelledError):
+                        raise result
+                    error_detail = _safe_exception_detail(
+                        result,
+                        secrets=(ak, sk, svc_token),
+                    )
+                    logger.warning("list runtimes [%s] failed: %s", reg, error_detail)
+                    regional_errors.append(f"{reg}: {error_detail}")
                     continue
+                items, has_more = result
                 all_runtimes.extend(items)
                 regional_has_more = regional_has_more or has_more
+            if len(regional_errors) == len(regions):
+                raise RuntimeError(
+                    "all regional runtime requests failed: "
+                    + "; ".join(regional_errors)
+                )
             all_runtimes.sort(
                 key=lambda x: x.get("createdAt") or "",
                 reverse=True,
@@ -3774,7 +3838,10 @@ def _run_frontend_server(
             raise
         except Exception as e:
             logger.error(f"list runtimes failed: {e}", exc_info=True)
-            raise HTTPException(status_code=502, detail=str(e))
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(e, secrets=(ak, sk, svc_token)),
+            )
         finally:
             list_lock.release()
 

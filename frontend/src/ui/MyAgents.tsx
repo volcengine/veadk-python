@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SVGProps } from "react";
+import { Button } from "@openai/apps-sdk-ui/components/Button";
+import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
+import { Explore } from "@openai/apps-sdk-ui/components/Icon";
 
 import {
   getRuntimes,
   type CloudRuntime,
   type RuntimeScope,
 } from "../adk/client";
+import { AgentFaceIcon } from "./AgentFaceIcon";
 import "./MyAgents.css";
 
 export interface MyAgentCardData {
@@ -14,6 +18,7 @@ export interface MyAgentCardData {
   name: string;
   description: string;
   createdAt: string;
+  specification: string;
   isMine?: boolean;
   runtime?: {
     runtimeId: string;
@@ -25,12 +30,13 @@ export interface MyAgentCardData {
 
 type AgentType = "general" | "codex" | "openclaw" | "hermes";
 type RuntimeRegion = "cn-beijing" | "cn-shanghai";
+const DEFAULT_CREATE_REGION: RuntimeRegion = "cn-beijing";
 
-const AGENT_TYPES: Array<{ id: AgentType; label: string; createLabel: string }> = [
-  { id: "general", label: "通用智能体", createLabel: "添加通用智能体" },
-  { id: "codex", label: "Codex 智能体", createLabel: "添加 Codex 智能体" },
-  { id: "openclaw", label: "OpenClaw 智能体", createLabel: "添加 OpenClaw 智能体" },
-  { id: "hermes", label: "Hermes 智能体", createLabel: "添加 Hermes 智能体" },
+const AGENT_TYPES: Array<{ id: AgentType; label: string }> = [
+  { id: "general", label: "通用智能体" },
+  { id: "codex", label: "Codex 智能体" },
+  { id: "openclaw", label: "OpenClaw 智能体" },
+  { id: "hermes", label: "Hermes 智能体" },
 ];
 const RUNTIME_PAGE_SIZE = 24;
 const RUNTIME_PAGE_CACHE_TTL_MS = 30_000;
@@ -77,30 +83,35 @@ function AddIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function ChevronDownIcon(props: SVGProps<SVGSVGElement>) {
+function AgentTypeIcon({ type }: { type: AgentType }) {
+  if (type === "general") return <AgentFaceIcon />;
   return (
-    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
-      <path
-        d="m4.25 6.25 3.75 3.5 3.75-3.5"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function CheckIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
-      <path
-        d="m3.5 8.25 2.75 2.75 6.25-6.25"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {type === "codex" ? (
+        <>
+          <path d="m12 3 7 4v8l-7 4-7-4V7l7-4Z" />
+          <path d="m8 9 4-2.3L16 9v4.5L12 16l-4-2.5V9Z" />
+        </>
+      ) : type === "openclaw" ? (
+        <>
+          <path d="M7 19c-2-2.5-2.5-5.5-.8-8.2M17 19c2-2.5 2.5-5.5.8-8.2" />
+          <path d="m6.2 10.8-2.7-2M17.8 10.8l2.7-2M9.2 8 7.5 4M14.8 8 16.5 4" />
+          <path d="M8.5 18.5h7" />
+        </>
+      ) : (
+        <>
+          <path d="M5 18.5V9l7-4 7 4v9.5" />
+          <path d="M8.5 13h7M9 18.5v-2.8h6v2.8" />
+        </>
+      )}
     </svg>
   );
 }
@@ -116,12 +127,19 @@ function formatCreatedAt(value: string): string {
   }).format(date).replace(/\//g, "-");
 }
 
+function formatRuntimeRegion(region?: string): string {
+  if (region === "cn-shanghai") return "上海";
+  if (region === "cn-beijing") return "北京";
+  return "—";
+}
+
 function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
   return {
     id: runtime.runtimeId,
     name: runtime.name,
-    description: runtime.name,
+    description: runtime.description?.trim() || "暂无描述",
     createdAt: formatCreatedAt(runtime.createdAt ?? ""),
+    specification: formatRuntimeRegion(runtime.region),
     isMine: runtime.isMine,
     runtime: {
       runtimeId: runtime.runtimeId,
@@ -134,11 +152,10 @@ function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
 
 async function loadRuntimeAgents(
   runtimeScope: RuntimeScope,
-  region: RuntimeRegion,
   nextToken: string,
   onList: (agents: MyAgentCardData[]) => void,
 ): Promise<string> {
-  const requestKey = `${runtimeScope}:${region}:${nextToken}`;
+  const requestKey = `${runtimeScope}:all:${nextToken}`;
   const cached = runtimePageCache.get(requestKey);
   if (cached && cached.expiresAt > Date.now()) {
     onList(cached.page.runtimes.map(runtimeToAgent));
@@ -149,7 +166,7 @@ async function loadRuntimeAgents(
   if (!request) {
     request = getRuntimes({
       scope: runtimeScope,
-      region,
+      region: "all",
       pageSize: RUNTIME_PAGE_SIZE,
       nextToken,
     });
@@ -185,39 +202,51 @@ function AgentCard({
 }) {
   return (
     <article className="my-agent-card">
-      <button
-        type="button"
-        className="my-agent-card-main"
-        disabled={!agent.runtime}
-        onClick={() => onViewDetails?.(agent)}
-        aria-label={`查看 ${agent.name} 详情`}
-      >
-        <span className="my-agent-card-copy">
-          <span className="my-agent-card-title">
-            <h3>{agent.name}</h3>
-            {showOwnership && agent.isMine && (
-              <span className="runtime-owner-badge">我创建的</span>
-            )}
-          </span>
-          <dl className="my-agent-meta">
-            <div className="my-agent-created-at">
-              <dt>创建时间</dt>
-              <dd>{agent.createdAt}</dd>
-            </div>
-          </dl>
-        </span>
-      </button>
-      <button
-        type="button"
-        className={`my-agent-connect${connected ? " is-connected" : ""}`}
-        disabled={!agent.runtime || connecting || connected}
-        aria-busy={connecting || undefined}
-        aria-label={connected ? `${agent.name} 已连接` : `连接 ${agent.name}`}
-        title={connected ? "已连接" : "连接智能体"}
-        onClick={() => void onUse?.(agent)}
-      >
-        {connecting ? "连接中" : connected ? "已连接" : "连接"}
-      </button>
+      <div className="my-agent-card-content">
+        <div className="my-agent-card-title">
+          <h3>{agent.name}</h3>
+          {showOwnership && agent.isMine && (
+            <span className="runtime-owner-badge">我创建的</span>
+          )}
+        </div>
+        <p className="my-agent-description">{agent.description}</p>
+        <dl className="my-agent-meta">
+          <div className="my-agent-created-at">
+            <dt>创建时间</dt>
+            <dd>{agent.createdAt}</dd>
+          </div>
+          <div className="my-agent-region">
+            <dt>地域</dt>
+            <dd>{agent.specification}</dd>
+          </div>
+        </dl>
+      </div>
+      <footer className="my-agent-actions">
+        <button
+          type="button"
+          className="my-agent-details"
+          disabled={!agent.runtime}
+          aria-label={`查看 ${agent.name} 详情`}
+          onClick={() => onViewDetails?.(agent)}
+        >
+          查看详情
+        </button>
+        <button
+          type="button"
+          className={`my-agent-use${connected ? " is-connected" : ""}`}
+          disabled={!agent.runtime || connecting || connected}
+          aria-busy={connecting || undefined}
+          aria-label={connected ? `${agent.name} 已连接` : `使用 ${agent.name}`}
+          onClick={() => void onUse?.(agent)}
+        >
+          {connecting ? (
+            <>
+              <span className="my-agent-use-spinner" aria-hidden="true" />
+              <span>连接中</span>
+            </>
+          ) : connected ? "已连接" : "使用"}
+        </button>
+      </footer>
     </article>
   );
 }
@@ -226,7 +255,6 @@ export interface MyAgentsProps {
   canCreate: boolean;
   runtimeScope: RuntimeScope;
   onCreateAgent: (region: RuntimeRegion) => void;
-  onCreateCodexAgent: () => void;
   onUseAgent: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails: (agent: MyAgentCardData) => void;
   connectedRuntimeId?: string;
@@ -237,7 +265,6 @@ export function MyAgents({
   canCreate,
   runtimeScope,
   onCreateAgent,
-  onCreateCodexAgent,
   onUseAgent,
   onViewAgentDetails,
   connectedRuntimeId = "",
@@ -247,8 +274,6 @@ export function MyAgents({
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const runtimeRequestRef = useRef(0);
   const [activeType, setActiveType] = useState<AgentType>("general");
-  const [region, setRegion] = useState<RuntimeRegion>("cn-beijing");
-  const [regionMenuOpen, setRegionMenuOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [runtimeAgents, setRuntimeAgents] = useState<MyAgentCardData[]>([]);
   const [runtimeNextToken, setRuntimeNextToken] = useState("");
@@ -260,7 +285,7 @@ export function MyAgents({
     const requestId = ++runtimeRequestRef.current;
     setLoadingRuntimes(true);
     setRuntimeError("");
-    return loadRuntimeAgents(runtimeScope, region, token, (agents) => {
+    return loadRuntimeAgents(runtimeScope, token, (agents) => {
       if (runtimeRequestRef.current !== requestId) return;
       setRuntimeAgents((current) => reset ? agents : [...current, ...agents]);
     })
@@ -274,7 +299,7 @@ export function MyAgents({
       .finally(() => {
         if (runtimeRequestRef.current === requestId) setLoadingRuntimes(false);
       });
-  }, [region, runtimeScope]);
+  }, [runtimeScope]);
 
   useEffect(() => {
     setRuntimeAgents([]);
@@ -295,7 +320,7 @@ export function MyAgents({
       ([entry]) => {
         if (entry.isIntersecting) void fetchRuntimePage(runtimeNextToken, false);
       },
-      { root, rootMargin: "180px 0px", threshold: 0.01 },
+      { root, rootMargin: "240px 0px", threshold: 0.01 },
     );
     observer.observe(target);
     return () => observer.disconnect();
@@ -338,15 +363,14 @@ export function MyAgents({
 
   const activeTypeInfo = AGENT_TYPES.find((type) => type.id === activeType);
   const activeLabel = activeTypeInfo?.label ?? "智能体";
-  const createLabel = activeTypeInfo?.createLabel ?? "添加智能体";
   const showInitialLoading = activeType === "general" && loadingRuntimes && runtimeAgents.length === 0;
   const showEmpty = !showInitialLoading && visibleAgents.length === 0;
-  const emptyMessage = activeType === "openclaw" || activeType === "hermes"
-    ? "暂未开放"
-    : query.trim() ? "没有匹配的智能体" : `${activeLabel}暂无内容`;
   const createAgent = canCreate && activeType === "general"
-    ? () => onCreateAgent(region)
-    : canCreate && activeType === "codex" ? onCreateCodexAgent : undefined;
+    ? () => onCreateAgent(DEFAULT_CREATE_REGION)
+    : undefined;
+  const createDisabledReason = !canCreate
+    ? "当前账号没有创建智能体权限"
+    : activeType !== "general" ? `${activeLabel}暂未开放` : undefined;
 
   return (
     <div className="my-agents-page">
@@ -354,55 +378,6 @@ export function MyAgents({
         <div className="my-agents-heading">
           <div className="my-agents-title-row">
             <h1>智能体</h1>
-            <div
-              className="my-agents-region-picker"
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setRegionMenuOpen(false);
-              }}
-            >
-              <button
-                type="button"
-                className="my-agents-region"
-                aria-label="Runtime 地域"
-                aria-haspopup="listbox"
-                aria-expanded={regionMenuOpen}
-                onClick={() => setRegionMenuOpen((open) => !open)}
-              >
-                <span>{region === "cn-beijing" ? "北京" : "上海"}</span>
-                <ChevronDownIcon
-                  className={`my-agents-region-chevron${regionMenuOpen ? " is-open" : ""}`}
-                />
-              </button>
-              {regionMenuOpen && (
-                <>
-                  <div className="menu-scrim" onClick={() => setRegionMenuOpen(false)} />
-                  <div className="my-agents-region-menu" role="listbox" aria-label="Runtime 地域">
-                    {[
-                      { value: "cn-beijing", label: "北京" },
-                      { value: "cn-shanghai", label: "上海" },
-                    ].map((item) => {
-                      const selected = item.value === region;
-                      return (
-                        <button
-                          key={item.value}
-                          type="button"
-                          role="option"
-                          aria-selected={selected}
-                          className={`my-agents-region-option${selected ? " is-selected" : ""}`}
-                          onClick={() => {
-                            setRegion(item.value as RuntimeRegion);
-                            setRegionMenuOpen(false);
-                          }}
-                        >
-                          <span>{item.label}</span>
-                          {selected && <CheckIcon />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
-            </div>
           </div>
           <p>
             {runtimeScope === "all"
@@ -436,17 +411,16 @@ export function MyAgents({
             </button>
           ))}
         </nav>
-        {canCreate && (
-          <button
-            type="button"
-            className="my-agent-add"
-            disabled={!createAgent}
-            onClick={() => createAgent?.()}
-          >
-            <AddIcon />
-            {createLabel}
-          </button>
-        )}
+        <button
+          type="button"
+          className="my-agent-create-primary"
+          disabled={!createAgent}
+          title={createDisabledReason}
+          onClick={() => createAgent?.()}
+        >
+          <AddIcon />
+          <span>创建智能体</span>
+        </button>
       </div>
 
       <section
@@ -465,25 +439,51 @@ export function MyAgents({
             <button type="button" onClick={() => void fetchRuntimePage("", true)}>重新加载</button>
           </div>
         ) : showEmpty ? (
-          <div className="my-agent-empty">
-            {!query.trim() && activeType === "general" && canCreate ? (
-              <p>
-                暂无智能体，
-                <button
-                  type="button"
-                  className="my-agent-empty-create"
-                  onClick={() => onCreateAgent(region)}
-                >
-                  点此创建
-                </button>
-              </p>
-            ) : (
-              <p>{emptyMessage}</p>
-            )}
-            {query.trim() && activeType !== "openclaw" && activeType !== "hermes" && (
-              <span>请尝试搜索其他名称</span>
-            )}
-          </div>
+          activeType !== "general" ? (
+            <div className="my-agent-empty-message">
+              <EmptyMessage fill="none">
+                <EmptyMessage.Icon>
+                  <AgentTypeIcon type={activeType} />
+                </EmptyMessage.Icon>
+                <EmptyMessage.Title>{activeLabel}暂未开放</EmptyMessage.Title>
+                <EmptyMessage.Description>敬请期待</EmptyMessage.Description>
+              </EmptyMessage>
+            </div>
+          ) : query.trim() ? (
+            <div className="my-agent-empty-message">
+              <EmptyMessage fill="none">
+                <EmptyMessage.Icon>
+                  <Explore />
+                </EmptyMessage.Icon>
+                <EmptyMessage.Title>没有匹配的智能体</EmptyMessage.Title>
+                <EmptyMessage.Description>请尝试搜索其他名称</EmptyMessage.Description>
+              </EmptyMessage>
+            </div>
+          ) : (
+            <div className="my-agent-empty-message">
+              <EmptyMessage fill="none">
+                <EmptyMessage.Icon>
+                  <AgentFaceIcon />
+                </EmptyMessage.Icon>
+                <EmptyMessage.Title>暂无通用智能体</EmptyMessage.Title>
+                <EmptyMessage.Description>
+                  创建一个通用智能体，开始构建和对话
+                </EmptyMessage.Description>
+                {canCreate ? (
+                  <EmptyMessage.ActionRow>
+                    <Button
+                      color="primary"
+                      size="lg"
+                      onClick={() => onCreateAgent(DEFAULT_CREATE_REGION)}
+                    >
+                      <AddIcon />
+                      创建智能体
+                    </Button>
+                  </EmptyMessage.ActionRow>
+                ) : null}
+              </EmptyMessage>
+            </div>
+          )
         ) : (
           <div className="my-agent-grid">
             {visibleAgents.map((agent) => (
@@ -500,7 +500,8 @@ export function MyAgents({
           </div>
         )}
 
-        {activeType === "general" && visibleAgents.length > 0 && (
+        {activeType === "general" && !runtimeError && !showInitialLoading &&
+          (visibleAgents.length > 0 || Boolean(runtimeNextToken)) && (
           <div className="my-agent-load-more" ref={loadMoreRef} aria-live="polite">
             {loadingRuntimes ? (
               <>
@@ -508,7 +509,7 @@ export function MyAgents({
                 <span>正在加载更多智能体</span>
               </>
             ) : runtimeNextToken ? (
-              <span>继续滚动加载更多</span>
+              <span>继续下滑加载更多</span>
             ) : (
               <span>已加载全部智能体</span>
             )}

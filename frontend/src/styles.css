@@ -1,3 +1,7 @@
+@import "tailwindcss";
+@import "@openai/apps-sdk-ui/css";
+@source "../node_modules/@openai/apps-sdk-ui";
+
 /* ChatGPT / OpenAI-style theme (shadcn palette), adapted from the janus
  * extension. Light, near-black text, system font stack, muted grays. */
 :root {
@@ -17,6 +21,7 @@
   --radius: 0.5rem;
   --canvas: 240 5% 97.3%; /* light neutral-gray window bg; main floats on top (LobeChat-style) */
   --panel: 0 0% 100%; /* the floating main panel */
+  --feature-link: 208 100% 47.45%; /* new-feature entry accent (#0081F2) */
 
   color-scheme: light;
   font-family:
@@ -226,10 +231,7 @@ body {
 .sidebar-agent-face__eye {
   transform-box: fill-box;
   transform-origin: center;
-}
-
-.new-chat--agents:hover .sidebar-agent-face__eye {
-  animation: sidebar-agent-blink 760ms ease-in-out both;
+  animation: sidebar-agent-blink 1s ease-in-out infinite;
 }
 
 @keyframes sidebar-plus-return {
@@ -239,13 +241,13 @@ body {
 }
 
 @keyframes sidebar-agent-blink {
-  0%, 34%, 48%, 62%, 100% { transform: scaleY(1); }
-  41%, 55% { transform: scaleY(0.08); }
+  0%, 42%, 58%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(0.08); }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .new-chat--conversation:hover > .icon,
-  .new-chat--agents:hover .sidebar-agent-face__eye {
+  .sidebar-agent-face__eye {
     animation: none;
   }
 }
@@ -686,35 +688,6 @@ body {
 }
 .agentsel-search .icon { width: 15px; height: 15px; color: hsl(var(--muted-foreground)); }
 .agentsel-search input { flex: 1; border: none; outline: none; background: none; font: inherit; font-size: 13px; color: hsl(var(--foreground)); }
-.agentsel-regions {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 7px;
-  background: hsl(var(--canvas) / 0.55);
-}
-.agentsel-regions button {
-  height: 27px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  font: inherit;
-  font-size: 11.5px;
-  outline: none;
-  cursor: pointer;
-}
-.agentsel-regions button:hover { color: hsl(var(--foreground)); }
-.agentsel-regions button:focus-visible {
-  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.12);
-}
-.agentsel-regions button.active {
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.07);
-}
 .agentsel-mine { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: hsl(var(--muted-foreground)); cursor: pointer; }
 .agentsel-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 /* Stable-height area for the paged list: old items stay put while the next
@@ -998,7 +971,7 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  margin: 0 10px 10px; /* title sits on the canvas; content remains a rounded panel */
+  margin: 10px;
   background: hsl(var(--panel));
   border: 1px solid hsl(var(--border));
   border-radius: 12px;
@@ -1059,8 +1032,146 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 0 16px clamp(96px, 18vh, 152px);
-  gap: 40px;
+  padding: 0 16px clamp(88px, 16vh, 136px);
+  gap: 32px;
+}
+.welcome-primary {
+  position: relative;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.welcome-heading {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 72px;
+  animation: welcome-heading-enter 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.welcome-feature-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+.welcome-feature-divider {
+  width: 1px;
+  height: 16px;
+  background: hsl(var(--border));
+}
+.welcome-feature-link {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: hsl(var(--feature-link));
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+.welcome-feature-link:focus-visible {
+  outline: 2px solid hsl(var(--feature-link) / 0.35);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+.welcome-feature-popover {
+  position: absolute;
+  z-index: 40;
+  top: 50%;
+  left: calc(100% + 12px);
+  width: min(340px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
+  background: hsl(var(--background));
+  box-shadow: 0 14px 36px hsl(var(--foreground) / 0.12);
+  color: hsl(var(--foreground));
+  text-align: left;
+  white-space: normal;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-4px, -50%);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+.welcome-feature-pill:hover .welcome-feature-popover,
+.welcome-feature-pill:focus-within .welcome-feature-popover {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(0, -50%);
+}
+.welcome-feature-popover > strong {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.welcome-feature-popover ul {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.welcome-feature-popover li {
+  display: grid;
+  gap: 3px;
+}
+.welcome-feature-popover li span {
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.welcome-feature-popover p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.55;
+}
+@media (max-width: 900px) {
+  .welcome-feature-popover {
+    top: calc(100% + 10px);
+    left: 50%;
+    transform: translate(-50%, -4px);
+  }
+  .welcome-feature-pill:hover .welcome-feature-popover,
+  .welcome-feature-pill:focus-within .welcome-feature-popover {
+    transform: translate(-50%, 0);
+  }
+}
+.composer--new-chat .comp-input::placeholder {
+  animation: welcome-placeholder-enter 200ms cubic-bezier(0.22, 1, 0.36, 1) 80ms both;
+}
+@keyframes welcome-heading-enter {
+  from { opacity: 0; transform: translateY(8px); filter: blur(4px); }
+  to { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+@keyframes welcome-placeholder-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .welcome-heading,
+  .composer--new-chat .comp-input::placeholder {
+    animation: none;
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+  .welcome-feature-popover { transition: none; }
 }
 .welcome-title {
   margin: 0;
@@ -1196,7 +1307,7 @@ body {
   .subagent-run-label { left: 10px; max-width: calc(100% - 20px); }
 }
 
-.bubble { line-height: 1.65; font-size: 16px; }
+.bubble { line-height: 1.65; font-size: 14.5px; }
 .turn--user .bubble {
   max-width: 85%;
   padding: 10px 16px;
@@ -1206,7 +1317,7 @@ body {
 .turn--assistant .bubble { max-width: 100%; }
 
 /* ---------- markdown (used by both user + assistant message bodies) ---------- */
-.md { font-size: 16px; line-height: 1.65; }
+.md { font-size: 14.5px; line-height: 1.65; }
 /* tight vertical rhythm: no margin on first/last child so bubbles hug content */
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
@@ -4956,7 +5067,7 @@ a.search-result { text-decoration: none; color: inherit; }
   grid-template-rows:
     minmax(124px, 0.95fr)
     minmax(142px, 1.15fr)
-    minmax(106px, 0.75fr);
+    minmax(160px, 0.9fr);
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -5040,7 +5151,6 @@ a.search-result { text-decoration: none; color: inherit; }
 }
 .topo-tools-scroll { max-height: 104px; }
 .topo-skills-scroll { max-height: 152px; }
-.topo-topology-scroll { max-height: 184px; }
 .topo-tool-list {
   display: flex;
   min-width: 0;
@@ -5225,106 +5335,115 @@ a.search-result { text-decoration: none; color: inherit; }
 .topo-topology {
   min-height: 0;
 }
-.topo-tree { display: flex; flex-direction: column; gap: 4px; }
-/* Nested children indent and grow a connector guide-line on the left. */
-.topo-children {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 4px;
-  margin-left: 10px;
-  padding-left: 8px;
-  border-left: 1px solid hsl(var(--border));
-}
-.topo-node {
+.topo-canvas-heading {
   display: flex;
   align-items: center;
-  gap: 6px;
-  min-height: 34px;
-  padding: 6px 7px;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+}
+.topo-canvas-expand,
+.topo-canvas-dialog-header button {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   border: 0;
   border-radius: 8px;
-  background: hsl(var(--muted) / 0.5);
-  font-size: 12px;
-  transition:
-    background 0.15s ease,
-    box-shadow 0.15s ease,
-    opacity 0.15s ease;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
 }
-.topo-icon { width: 14px; height: 14px; flex-shrink: 0; opacity: 0.78; }
-.topo-name {
+.topo-canvas-expand:hover,
+.topo-canvas-dialog-header button:hover {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+.topo-canvas-expand:focus-visible,
+.topo-canvas-dialog-header button:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.5);
+  outline-offset: 2px;
+}
+.topo-canvas-expand svg,
+.topo-canvas-dialog-header button svg {
+  width: 16px;
+  height: 16px;
+}
+.topo-canvas-preview {
+  position: relative;
+  min-height: 120px;
   flex: 1;
-  min-width: 0;
   overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--background));
+}
+.topo-canvas-preview .abc-root,
+.topo-canvas-dialog-body .abc-root {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+}
+.topo-canvas-preview .abc-minimap { display: none; }
+.topo-canvas-dialog {
+  position: fixed;
+  z-index: 1200;
+  inset: 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: hsl(var(--background));
+}
+.topo-canvas-dialog-header {
+  display: flex;
+  min-height: 64px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 24px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.topo-canvas-dialog-header > div {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 10px;
+}
+.topo-canvas-dialog-header strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+.topo-canvas-dialog-header span {
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
-  font-weight: 550;
 }
-.topo-badge {
-  flex-shrink: 0;
-  font-size: 10.5px;
-  padding: 1px 5px;
-  border-radius: 5px;
-  background: hsl(var(--muted));
-  color: hsl(var(--muted-foreground));
-}
-/* Currently-executing agent: dark-gray background fade only. */
-.topo-node.is-active {
-  background: hsl(var(--foreground) / 0.08);
-  animation: topo-active-fade 1.8s ease-in-out infinite;
-}
-.topo-node.is-active .topo-icon { opacity: 1; }
-/* An ancestor on the current delegation chain (handed off, not the leaf). */
-.topo-node.is-onpath {
-  background: hsl(var(--primary) / 0.04);
-  box-shadow: inset 2px 0 0 hsl(var(--primary) / 0.4);
-}
-/* An agent that ran earlier this turn but isn't the current one. */
-.topo-node.is-done { opacity: 0.55; }
-/* "远程执行中…" sub-line under an active A2A node. */
-.topo-remote {
-  margin: 3px 0 2px 22px;
-  font-size: 10.5px;
-  color: hsl(var(--primary));
-  animation: topo-blink 1.2s ease-in-out infinite;
-}
-@keyframes topo-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
-}
-/* Live delegation breadcrumb (root › planner › searcher). */
-.topo-path {
+.topo-canvas-dialog-body {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-  margin-bottom: 9px;
-  padding: 6px 8px;
-  border-radius: 7px;
-  background: hsl(var(--primary) / 0.05);
-  font-size: 11px;
-  line-height: 1.4;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  padding: 16px;
 }
-.topo-path-seg { display: inline-flex; align-items: center; min-width: 0; }
-.topo-path-seg + .topo-path-seg::before {
-  content: "";
-  width: 7px;
-  height: 1px;
-  margin-right: 5px;
+.topo-canvas-dialog-body .abc-canvas {
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 16px;
+}
+@media (max-width: 640px) {
+  .topo-canvas-dialog-header { padding: 0 16px; }
+  .topo-canvas-dialog-body { padding: 8px; }
+}
+/* Keep the fullscreen control visually quiet inside the information rail. */
+.topo-canvas-heading .topo-section-count {
   flex-shrink: 0;
-  background: hsl(var(--border));
-}
-.topo-path-name { color: hsl(var(--muted-foreground)); }
-.topo-path-name.is-current { color: hsl(var(--primary)); font-weight: 600; }
-@keyframes topo-active-fade {
-  0%,
-  100% {
-    background: hsl(var(--foreground) / 0.05);
-  }
-  50% {
-    background: hsl(var(--foreground) / 0.14);
-  }
 }
 @media (min-width: 1280px) {
   .agent-info-trigger { display: none; }
@@ -6155,35 +6274,4 @@ a.search-result { text-decoration: none; color: inherit; }
   .studio-confirm-dialog {
     animation: none;
   }
-}
-
-.app-toast {
-  position: fixed;
-  top: 16px;
-  left: 50%;
-  z-index: 120;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  max-width: min(360px, calc(100vw - 48px));
-  padding: 8px 13px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 10px;
-  background: hsl(var(--panel));
-  color: hsl(var(--foreground));
-  box-shadow: 0 12px 30px hsl(var(--foreground) / 0.12);
-  font-size: 12.5px;
-  font-weight: 500;
-  line-height: 1.45;
-  transform: translateX(-50%);
-}
-
-.app-toast::before {
-  content: "";
-  flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: hsl(var(--primary));
 }

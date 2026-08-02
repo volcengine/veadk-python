@@ -19,29 +19,10 @@ import type {
 import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
+import { AgentFaceIcon } from "./AgentFaceIcon";
 import volcengineLogo from "../assets/volcengine.svg";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
-
-/** A minimal Agent face that stays friendly and legible at sidebar-icon size. */
-function ManageAgentsIcon() {
-  return (
-    <svg
-      className="icon sidebar-agent-face"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <rect x="4.25" y="5.25" width="15.5" height="13.5" rx="4.75" />
-      <path className="sidebar-agent-face__eye sidebar-agent-face__eye--left" d="M8.5 10.7v2" />
-      <path className="sidebar-agent-face__eye sidebar-agent-face__eye--right" d="M15.5 10.7v2" />
-    </svg>
-  );
-}
 
 export interface SidebarProps {
   branding: SiteBranding;
@@ -367,7 +348,7 @@ export function Sidebar({
           aria-label="智能体"
           title="智能体"
         >
-          <ManageAgentsIcon />
+          <AgentFaceIcon />
           <span className="sidebar-nav-label">智能体</span>
         </button>
         {show("search") && <SearchButton onClick={onSearch} />}

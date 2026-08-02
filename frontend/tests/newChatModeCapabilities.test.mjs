@@ -28,17 +28,22 @@ test("loads temporary-session and Skill-creation capabilities independently", ()
   assert.match(appSource, /listSessionBuiltinTools\(agentId\)/);
   assert.match(appSource, /harnessEnabled:\s*harnessResult\.status === "fulfilled"/);
   assert.match(appSource, /newChatCapabilities\.agentId === appName/);
+  assert.match(
+    appSource,
+    /const newChatCapabilitiesReady =\s*!appName \|\|/,
+    "an empty Agent selection must not wait for a capability probe",
+  );
   assert.match(appSource, /ready:\s*true/);
   assert.match(appSource, /正在检查 Agent 能力/);
   assert.match(appSource, /temporaryEnabled/);
   assert.match(appSource, /skillCreateEnabled/);
   assert.match(
     appSource,
-    /const connectMyAgent[\s\S]*?await probeNewChatCapabilities\(agentId\)[\s\S]*?setAppName\(agentId\)/,
+    /const connectMyAgent[\s\S]*?await refreshCurrentAgentAndStartNewChat\(agentId\)/,
   );
   assert.match(
     appSource,
-    /const selectAgent = async[\s\S]*?await probeNewChatCapabilities\(id\)[\s\S]*?setAppName\(id\)/,
+    /const refreshCurrentAgentAndStartNewChat[\s\S]*?await probeNewChatCapabilities\(id\)[\s\S]*?setAppName\(id\)[\s\S]*?startNewChat\(\)/,
   );
   assert.match(appSource, /newChatCapabilitiesCacheRef/);
 });

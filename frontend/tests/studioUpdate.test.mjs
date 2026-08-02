@@ -19,11 +19,8 @@ const controlStyleSource = readFileSync(
   "utf8",
 );
 
-test("only administrators receive the Studio update control", () => {
-  assert.match(
-    appSource,
-    /access\.role === "admin" && <StudioUpdateControl\s*\/>/,
-  );
+test("the global shell no longer mounts the Studio update control", () => {
+  assert.doesNotMatch(appSource, /<StudioUpdateControl\b/);
 });
 
 test("Studio checks the immutable release channel every three minutes", () => {

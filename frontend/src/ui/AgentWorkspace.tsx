@@ -1492,7 +1492,9 @@ export function AgentWorkspace({
         <div
           className="aw-workspace"
           aria-hidden={view === "evaluation" || undefined}
-          ref={(node) => node?.toggleAttribute("inert", view === "evaluation")}
+          ref={(node) => {
+            node?.toggleAttribute("inert", view === "evaluation");
+          }}
         >
         <aside className="aw-sidebar" aria-label={view === "library" ? "智能体列表" : "评测组列表"}>
           <label className="aw-search">

@@ -76,6 +76,10 @@ test("Runtime rows scroll above a permanently pinned pager", () => {
 test("Runtime metadata failures use bounded, actionable Chinese messages", () => {
   assert.match(
     clientSource,
+    /getRuntimes[\s\S]*?httpErrorMessage\(res, "加载 Runtime 失败"\)/,
+  );
+  assert.match(
+    clientSource,
     /httpErrorMessage\(res, "读取 Agent 列表失败"\)/,
   );
   assert.match(
@@ -113,23 +117,16 @@ test("Runtime rows and detail use the custom live-execution mark", () => {
   assert.match(runtimeIconSource, /M6\.85 12h2\.8/);
 });
 
-test("Runtime status and region labels are localized", () => {
+test("Runtime status labels are localized without exposing region controls", () => {
   assert.match(selectorSource, /ready:\s*"就绪"/);
   assert.match(selectorSource, /unreleased:\s*"未发布"/);
   assert.match(selectorSource, /runtimeStatusLabel\(rt\.status\)/);
-  assert.match(selectorSource, /regionLabel\(detail\.region\)/);
-  assert.doesNotMatch(selectorSource, /regionLabel\(rt\.region\)/);
-});
-
-test("Runtime region selection defaults to Beijing without an all-regions query", () => {
+  assert.doesNotMatch(selectorSource, /RegionFilter|REGION_OPTIONS|regionLabel/);
+  assert.doesNotMatch(selectorSource, /按部署地域筛选|\["区域"/);
+  assert.doesNotMatch(stylesSource, /\.agentsel-regions/);
   assert.match(
     selectorSource,
-    /useState<RegionFilter>\("cn-beijing"\)/,
-  );
-  assert.doesNotMatch(selectorSource, /value:\s*"all",\s*label:\s*"全部"/);
-  assert.match(
-    stylesSource,
-    /\.agentsel-regions\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, 1fr\);/,
+    /getRuntimes\(\{[\s\S]*?region:\s*"all",[\s\S]*?scope:\s*"all",/,
   );
 });
 

@@ -1082,7 +1082,9 @@ function AgentBuildCanvasInner({
         return {
           ...node,
           measured:
-            currentNode && currentNode.type === node.type
+            !structureChanged &&
+            currentNode &&
+            currentNode.type === node.type
               ? currentNode.measured
               : undefined,
           position:

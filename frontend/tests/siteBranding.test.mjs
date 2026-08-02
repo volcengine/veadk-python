@@ -109,19 +109,18 @@ test("history header offers a borderless new-session action", () => {
   );
 });
 
-test("sidebar brand row aligns with the main header", () => {
+test("main panel fills the shell with equal outer spacing and no global navbar", () => {
   assert.match(
     stylesSource,
     /\.sidebar-brand-row\s*\{[\s\S]*?height:\s*54px;[\s\S]*?min-height:\s*54px;[\s\S]*?padding:\s*0 0 0 10px;/,
   );
   assert.match(
     stylesSource,
-    /\.navbar\s*\{[\s\S]*?flex:\s*0 0 54px;[\s\S]*?padding:\s*0 10px;/,
+    /\.main\s*\{[\s\S]*?flex:\s*1;[\s\S]*?margin:\s*10px;/,
   );
-  assert.match(
-    stylesSource,
-    /\.agentsel--navbar\s*\{[\s\S]*?top:\s*calc\(100% \+ 7px\);/,
-  );
+  assert.doesNotMatch(appSource, /<Navbar\b/);
+  assert.doesNotMatch(appSource, /<DeploymentTaskStatus\b/);
+  assert.doesNotMatch(appSource, /<StudioUpdateControl\b/);
 });
 
 test("welcome headings share the neutral TextShimmer and stable smoke avatars", () => {

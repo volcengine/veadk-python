@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 from typing import Any
 
@@ -28,6 +29,7 @@ from fastapi.testclient import TestClient
 from veadk.cli.cli_frontend import (
     _build_agentkit_proxy_headers,
     _frontend_allow_origins,
+    _runtime_regions,
     _run_frontend_server,
 )
 
@@ -92,6 +94,22 @@ def test_vite_allows_both_loopback_browser_origins() -> None:
         "http://127.0.0.1:5174",
     ]
     assert _frontend_allow_origins(vite=False) == []
+
+
+def test_runtime_regions_use_both_volcengine_regions() -> None:
+    assert _runtime_regions("volcengine", "all") == [
+        "cn-beijing",
+        "cn-shanghai",
+    ]
+
+
+def test_runtime_regions_use_byteplus_default_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BYTEPLUS_REGION", raising=False)
+    assert _runtime_regions("byteplus", "all") == ["ap-southeast-1"]
+    monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-2")
+    assert _runtime_regions("byteplus", "all") == ["ap-southeast-2"]
 
 
 def test_ui_config_serves_custom_branding(
@@ -161,6 +179,9 @@ def test_runtime_list_paginates_across_regions(
                         runtime_id=f"runtime-{name}",
                         status="Ready",
                         created_at=created_at,
+                        description=f"Description for {name}",
+                        cpu_milli=1000,
+                        memory_mb=2048,
                         tags=[],
                     )
                     for name, created_at in page
@@ -200,6 +221,11 @@ def test_runtime_list_paginates_across_regions(
         "shanghai-new",
         "beijing-new",
     ]
+    assert first.json()["runtimes"][0]["description"] == (
+        "Description for shanghai-new"
+    )
+    assert first.json()["runtimes"][0]["cpuMilli"] == 1000
+    assert first.json()["runtimes"][0]["memoryMb"] == 2048
     assert sorted(first_calls) == [
         ("cn-beijing", "0", 2),
         ("cn-shanghai", "0", 2),
@@ -214,6 +240,126 @@ def test_runtime_list_paginates_across_regions(
     assert second.json()["nextToken"] == "all:4"
     assert [item["name"] for item in third.json()["runtimes"]] == ["beijing-old"]
     assert third.json()["nextToken"] == ""
+
+
+@pytest.mark.parametrize("scope", ["all", "mine"])
+def test_runtime_list_fetches_regions_concurrently(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scope: str
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    regional_requests = Barrier(2)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def list_runtimes(self, _request: Any) -> SimpleNamespace:
+            regional_requests.wait(timeout=2)
+            return SimpleNamespace(
+                agent_kit_runtimes=[
+                    SimpleNamespace(
+                        name=self.region,
+                        runtime_id=f"runtime-{self.region}",
+                        status="Ready",
+                        created_at="2026-07-21T05:00:00Z",
+                        tags=[SimpleNamespace(key="veadk:owner", value="developer")],
+                    )
+                ],
+                next_token="",
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtimes",
+            params={"region": "all", "page_size": 2, "scope": scope},
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert response.status_code == 200
+    assert {item["name"] for item in response.json()["runtimes"]} == {
+        "cn-beijing",
+        "cn-shanghai",
+    }
+
+
+def test_runtime_list_surfaces_redacted_error_chain(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    access_key = "runtime-access-key-123456"
+    secret_key = "runtime-secret-key-123456"
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", access_key)
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", secret_key)
+
+    class _FailingRuntimeClient:
+        def __init__(self, **_: Any) -> None:
+            pass
+
+        def list_runtimes(self, request: Any) -> SimpleNamespace:
+            try:
+                raise OSError(
+                    "DNS lookup failed for agentkit.cn-beijing.example; "
+                    f"secret_key={secret_key}"
+                )
+            except OSError as cause:
+                raise RuntimeError(
+                    f"Failed to ListRuntimes: network error; access_key={access_key}"
+                ) from cause
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FailingRuntimeClient,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/web/runtimes", params={"region": "cn-beijing"})
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert "Failed to ListRuntimes: network error" in detail
+    assert "DNS lookup failed for agentkit.cn-beijing.example" in detail
+    assert "Caused by:" in detail
+    assert access_key not in detail
+    assert secret_key not in detail
+    assert "access_key=***" in detail
+    assert "secret_key=***" in detail
+
+
+def test_runtime_list_surfaces_all_regional_failures(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FailingRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def list_runtimes(self, _request: Any) -> SimpleNamespace:
+            try:
+                raise OSError(f"{self.region} DNS lookup failed")
+            except OSError as cause:
+                raise RuntimeError(
+                    f"{self.region} control plane unavailable"
+                ) from cause
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FailingRuntimeClient,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/web/runtimes", params={"region": "all"})
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert "cn-beijing control plane unavailable" in detail
+    assert "cn-shanghai control plane unavailable" in detail
+    assert "cn-beijing DNS lookup failed" in detail
+    assert "cn-shanghai DNS lookup failed" in detail
 
 
 @pytest.mark.parametrize(

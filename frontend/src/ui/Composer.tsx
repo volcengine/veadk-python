@@ -20,12 +20,15 @@ import type {
   AgentSkill,
   AgentTarget,
   Attachment,
+  CloudRuntime,
   FrontendInvocation,
+  RuntimeScope,
 } from "../adk/client";
 import { InvocationChips } from "./InvocationChips";
 import { MediaGroup } from "./Media";
 import { isImeCompositionEvent } from "./composerKeyboard";
 import { NewChatModeSelector } from "./new-chat-modes/NewChatModeSelector";
+import { NewChatAgentPicker } from "./new-chat-modes/NewChatAgentPicker";
 import type { NewChatMode, NewChatTask } from "./new-chat-modes/types";
 import { NEW_CHAT_TASK_TOOLS } from "./new-chat-modes/taskTools";
 import { SKILL_MODELS } from "./skill-create/types";
@@ -170,6 +173,11 @@ export interface ComposerProps {
   skillCreateEnabled?: boolean;
   harnessEnabled?: boolean;
   builtinTools?: readonly string[];
+  showAgentPicker?: boolean;
+  agentPickerDisabled?: boolean;
+  selectedRuntimeId?: string;
+  runtimeScope?: RuntimeScope;
+  onSelectRuntime?: (runtime: CloudRuntime) => Promise<void>;
 }
 
 export function Composer({
@@ -202,6 +210,11 @@ export function Composer({
   skillCreateEnabled,
   harnessEnabled = false,
   builtinTools = [],
+  showAgentPicker = false,
+  agentPickerDisabled = false,
+  selectedRuntimeId = "",
+  runtimeScope = "mine",
+  onSelectRuntime,
 }: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
@@ -482,6 +495,16 @@ export function Composer({
           )}
         </div> : null}
 
+        {showAgentPicker && onSelectRuntime ? (
+          <NewChatAgentPicker
+            selectedAgentName={appName ? agentName : ""}
+            selectedRuntimeId={selectedRuntimeId}
+            runtimeScope={runtimeScope}
+            disabled={agentPickerDisabled}
+            onSelectRuntime={onSelectRuntime}
+          />
+        ) : null}
+
         {showModeSelector && onModeChange ? (
           <NewChatModeSelector
             value={newChatMode}
@@ -533,7 +556,7 @@ export function Composer({
             disabled={disabled}
             placeholder={skillMode
               ? `描述你想创建的 Skill，将使用 ${SKILL_MODELS.join(" 和 ")} 并行创建…`
-              : disabled ? "请在页面左上角选择智能体" : `向 ${agentName} 发消息…`}
+              : disabled ? "请先选择智能体" : `向 ${agentName} 发消息…`}
             aria-expanded={Boolean(trigger)}
             onChange={(e) => {
               onChange(e.target.value);
