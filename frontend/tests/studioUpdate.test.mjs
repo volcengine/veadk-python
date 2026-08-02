@@ -18,9 +18,25 @@ const controlStyleSource = readFileSync(
   new URL("../src/ui/StudioUpdateControl.css", import.meta.url),
   "utf8",
 );
+const featureNoticeSource = readFileSync(
+  new URL("../src/ui/new-chat-modes/NewChatFeatureNotice.tsx", import.meta.url),
+  "utf8",
+);
 
-test("the global shell no longer mounts the Studio update control", () => {
-  assert.doesNotMatch(appSource, /<StudioUpdateControl\b/);
+test("only administrators see an available Studio update as an immediate action", () => {
+  assert.match(
+    appSource,
+    /<NewChatFeatureNotice canUpdate=\{access\.role === "admin"\} \/>/,
+  );
+  assert.match(featureNoticeSource, /canUpdate\?: boolean/);
+  assert.match(
+    featureNoticeSource,
+    /canUpdate[\s\S]*?<StudioUpdateControl[\s\S]*?variant="feature-link"/,
+  );
+  assert.match(
+    controlSource,
+    /variant === "feature-link"[\s\S]*?<span>立即更新<\/span>/,
+  );
 });
 
 test("Studio checks the immutable release channel every three minutes", () => {

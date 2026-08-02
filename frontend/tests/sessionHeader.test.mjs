@@ -11,6 +11,10 @@ const stylesSource = readFileSync(
   new URL("../src/styles.css", import.meta.url),
   "utf8",
 );
+const clientSource = readFileSync(
+  new URL("../src/adk/client.ts", import.meta.url),
+  "utf8",
+);
 
 test("keeps Agent selection state without a global conversation header", () => {
   assert.doesNotMatch(appSource, /function activeSessionTitle|conversationTitle/);
@@ -18,8 +22,10 @@ test("keeps Agent selection state without a global conversation header", () => {
   assert.match(appSource, /void refreshAgentLibrary\(\)/);
   assert.match(
     appSource,
-    /if \(agentsSource === "cloud"\) \{[\s\S]*?remoteSelectionIds\(connections\)[\s\S]*?if \(saved && remoteIds\.includes\(saved\)\) return saved;[\s\S]*?return "";/,
+    /if \(agentsSource === "cloud"\) \{[\s\S]*?remoteSelectionIds\(connections\)[\s\S]*?if \(current && remoteIds\.includes\(current\)\) return current;[\s\S]*?return "";/,
   );
+  assert.doesNotMatch(appSource, /if \(saved && remoteIds\.includes\(saved\)\) return saved/);
+  assert.doesNotMatch(appSource, /setAppName\(valid \? saved : fallback \|\| ""\)/);
   assert.doesNotMatch(appSource, /remoteIds\[0\] \?\? ""/);
   assert.doesNotMatch(appSource, /if \(agentsSource === "cloud"\) \{\s*setAppName\(""\)/);
   assert.match(navbarSource, /appName \? label\(appName\) : "选择 Agent"/);
@@ -73,5 +79,16 @@ test("keeps the Agent trigger visually aligned with the previous title", () => {
   assert.match(
     stylesSource,
     /\.agent-dd-trigger\s*\{[\s\S]*?max-width:\s*100%;/,
+  );
+});
+
+test("uses POST fallbacks for deletes routed through an API gateway", () => {
+  assert.match(
+    clientSource,
+    /runtimeMethodOverride[\s\S]*?method:\s*"POST"[\s\S]*?_method",\s*"DELETE"/,
+  );
+  assert.match(
+    clientSource,
+    /deleteSessionMedia[\s\S]*?\/delete`[\s\S]*?method:\s*"POST"/,
   );
 });

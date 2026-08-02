@@ -651,7 +651,6 @@ export default function App() {
   const [agentsSource, setAgentsSource] = useState<"local" | "cloud">("cloud");
   const [siteBranding, setSiteBranding] = useState<SiteBranding>(DEFAULT_SITE_BRANDING);
   const [version, setVersion] = useState("");
-  const [defaultView, setDefaultView] = useState<"chat" | "addAgent">("chat");
   const [uiConfigLoaded, setUiConfigLoaded] = useState(false);
   const [localMode, setLocalMode] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
@@ -869,7 +868,6 @@ export default function App() {
   const [confirmLeave, setConfirmLeave] = useState(false);
   // Restore the previously-open session only once, after apps/user resolve.
   const restoredRef = useRef(false);
-  const defaultViewAppliedRef = useRef(false);
   const agentSelectionClearedRef = useRef(false);
 
   const saveWorkspaceDraft = useCallback(
@@ -1287,13 +1285,17 @@ export default function App() {
         setLocalMode(!!id.local);
         setAuthStatus(id.status);
         if (id.status === "authenticated") {
+          restoredRef.current = true;
+          agentSelectionClearedRef.current = true;
+          localStorage.removeItem(LS.app);
+          setAppName("");
           setCreateView(null);
           setSkillCenter(false);
           setAddAgent(false);
           setAddMenu(false);
           setSearchView(false);
           setManageAgents(false);
-          setMyAgents(true);
+          setMyAgents(false);
         }
       })
       .catch((error) => {
@@ -1404,31 +1406,17 @@ export default function App() {
     };
   }, [authStatus, userId]);
 
-  // Load per-module feature gates. The configured landing page is applied only
-  // after role resolution so an ordinary user never sees a privileged view.
+  // Load per-module feature gates. Authenticated users always enter a fresh
+  // chat; privileged pages remain explicit navigation destinations.
   useEffect(() => {
     getUiConfig().then((cfg) => {
       setFeatures(cfg.features);
       setAgentsSource(cfg.agentsSource);
       setSiteBranding(cfg.branding);
       setVersion(cfg.version);
-      setDefaultView(cfg.defaultView);
       setUiConfigLoaded(true);
     });
   }, []);
-
-  useEffect(() => {
-    if (!access || !uiConfigLoaded || defaultViewAppliedRef.current || myAgents) return;
-    defaultViewAppliedRef.current = true;
-    if (defaultView === "addAgent" && access.capabilities.createAgents) {
-      setCreateView(null);
-      setSkillCenter(false);
-      setSearchView(false);
-      setManageAgents(false);
-      setAddAgent(false);
-      setAddMenu(true);
-    }
-  }, [access, defaultView, myAgents, uiConfigLoaded]);
 
   useEffect(() => {
     if (!access) return;
@@ -1484,7 +1472,8 @@ export default function App() {
     // A completed login is a fresh entry into the app. Do not reveal a create
     // or management view that was persisted before the login page appeared.
     restoredRef.current = true;
-    defaultViewAppliedRef.current = false;
+    agentSelectionClearedRef.current = true;
+    localStorage.removeItem(LS.app);
     setAccess(null);
     setCreateView(null);
     setImportedDraft(null);
@@ -1494,7 +1483,8 @@ export default function App() {
     setSearchView(false);
     setManageAgents(false);
     startNewChat();
-    setMyAgents(true);
+    setAppName("");
+    setMyAgents(false);
     setUserId(name);
     setUserInfo({ name });
     setLocalMode(true);
@@ -1502,7 +1492,6 @@ export default function App() {
   }
 
   function onLogout() {
-    defaultViewAppliedRef.current = false;
     setAccess(null);
     if (localMode) {
       clearLocalUser();
@@ -1517,7 +1506,6 @@ export default function App() {
   useEffect(() => {
     if (authStatus !== "authenticated") return;
     if (agentsSource === "cloud") {
-      const saved = localStorage.getItem(LS.app);
       const remoteIds = remoteSelectionIds(connections);
       setAppName((current) => {
         if (current && remoteIds.includes(current)) return current;
@@ -1526,8 +1514,6 @@ export default function App() {
           localStorage.removeItem(LS.app);
           return "";
         }
-        if (agentSelectionClearedRef.current) return "";
-        if (saved && remoteIds.includes(saved)) return saved;
         return "";
       });
       return;
@@ -1535,20 +1521,17 @@ export default function App() {
     listApps()
       .then((list) => {
         setApps(list);
-        // Restore the last-used agent; otherwise land on a known-good default
-        // (prefer a servable, conversational agent — numbered examples like
-        // 01_quickstart are standalone scripts with no root_agent and can't load).
-        // Local mode: restore the last-used agent, else a known-good default
-        // (prefer a servable, conversational agent — numbered examples like
-        // 01_quickstart are standalone scripts with no root_agent and can't load).
-        const saved = localStorage.getItem(LS.app);
         const remoteIds = remoteSelectionIds(connections);
-        const valid = saved && (list.includes(saved) || remoteIds.includes(saved));
-        const fallback =
-          ["web_search_agent", "web_demo"].find((a) => list.includes(a)) ??
-          list.find((a) => !/^\d/.test(a)) ??
-          list[0];
-        setAppName(valid ? saved : fallback || "");
+        setAppName((current) => {
+          if (current && (list.includes(current) || remoteIds.includes(current))) {
+            return current;
+          }
+          if (current) {
+            agentSelectionClearedRef.current = true;
+            localStorage.removeItem(LS.app);
+          }
+          return "";
+        });
       })
       .catch((e) => setError(String(e)));
   }, [authStatus, agentsSource, connections]);
@@ -3479,7 +3462,7 @@ export default function App() {
               >
                 <div className="welcome-primary">
                   <div className="welcome-heading">
-                    <NewChatFeatureNotice />
+                    <NewChatFeatureNotice canUpdate={access.role === "admin"} />
                     <TextShimmer as="h1" className="welcome-title" duration={4.8} spread={22}>
                       {sandboxSession
                         ? "让灵感在临时空间里自由生长"

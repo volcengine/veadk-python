@@ -1087,6 +1087,10 @@ body {
   outline-offset: 3px;
   border-radius: 3px;
 }
+.welcome-feature-pill:has(.studio-update-trigger--feature)
+  > .welcome-feature-link:not(.studio-update-trigger--feature) {
+  display: none;
+}
 .welcome-feature-popover {
   position: absolute;
   z-index: 40;
@@ -1214,7 +1218,7 @@ body {
   position: relative;
   width: 100%;
   max-width: 768px;
-  margin-top: 34px;
+  margin-top: 42px;
   margin-bottom: 48px;
   padding: 30px 16px 14px;
   gap: 10px;

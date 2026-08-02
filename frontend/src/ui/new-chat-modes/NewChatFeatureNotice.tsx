@@ -1,3 +1,5 @@
+import { StudioUpdateControl } from "../StudioUpdateControl";
+
 const FEATURES = [
   {
     title: "多地域智能体",
@@ -13,7 +15,7 @@ const FEATURES = [
   },
 ] as const;
 
-export function NewChatFeatureNotice() {
+export function NewChatFeatureNotice({ canUpdate = false }: { canUpdate?: boolean }) {
   return (
     <div className="welcome-feature-pill">
       <span>焕然一新</span>
@@ -25,6 +27,7 @@ export function NewChatFeatureNotice() {
       >
         查看新特性
       </button>
+      {canUpdate && <StudioUpdateControl variant="feature-link" />}
       <section
         id="welcome-feature-popover"
         className="welcome-feature-popover"

@@ -361,8 +361,14 @@ test("uses connected Runtime state only for the card action", () => {
   assert.match(appSource, /connectedRuntimeId=\{connectedRuntimeId\}/);
 });
 
-test("authenticated users land on the Agent page by default", () => {
-  assert.match(appSource, /if \(id\.status === "authenticated"\)[\s\S]*?setMyAgents\(true\)/);
-  assert.match(appSource, /function onUsername[\s\S]*?startNewChat\(\);[\s\S]*?setMyAgents\(true\)/);
-  assert.match(appSource, /defaultViewAppliedRef\.current \|\| myAgents/);
+test("authenticated users land on a new chat without a selected Agent", () => {
+  assert.match(
+    appSource,
+    /if \(id\.status === "authenticated"\)[\s\S]*?setAppName\(""\)[\s\S]*?setMyAgents\(false\)/,
+  );
+  assert.match(
+    appSource,
+    /function onUsername[\s\S]*?startNewChat\(\);[\s\S]*?setAppName\(""\)[\s\S]*?setMyAgents\(false\)/,
+  );
+  assert.doesNotMatch(appSource, /defaultViewAppliedRef/);
 });
