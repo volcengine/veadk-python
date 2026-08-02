@@ -559,7 +559,8 @@ export default function App() {
     new Map<string, NewChatCapabilitiesState>(),
   );
   const newChatCapabilitiesReady =
-    newChatCapabilities.ready === true && newChatCapabilities.agentId === appName;
+    !appName ||
+    (newChatCapabilities.ready === true && newChatCapabilities.agentId === appName);
   const [skillJob, setSkillJob] = useState<SkillCreationJob | null>(null);
   const [skillCreating, setSkillCreating] = useState(false);
   const skillCreationRunRef = useRef(0);
