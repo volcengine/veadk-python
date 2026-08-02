@@ -70,10 +70,12 @@ test("description remains a plain text field", () => {
   );
 });
 
-test("compact component descriptions omit terminal periods", () => {
+test("configuration controls omit redundant component descriptions", () => {
   assert.match(displayTextSource, /replace\(\/\[。\.\]\+\$\//);
-  assert.match(createSource, /displayDescription\(it\.desc\)/);
-  assert.match(createSource, /displayDescription\(desc\)/);
+  assert.doesNotMatch(createSource, /className="cw-check-desc"/);
+  assert.doesNotMatch(createSource, /className="cw-seg-desc"/);
+  assert.doesNotMatch(createSource, /className="cw-toggle-desc"/);
+  assert.doesNotMatch(createSource, /<small>\{t\.desc\}<\/small>/);
 });
 
 test("long form content scrolls inside bounded editors", () => {
@@ -108,40 +110,116 @@ test("application shell contains scrolling within the viewport", () => {
   );
 });
 
-test("form step rail aligns to the right edge of the detail area", () => {
-  assert.match(
-    createStyles,
-    /\.cw-rail\s*\{[\s\S]*?width:\s*32px;[\s\S]*?margin-left:\s*auto;/,
-  );
+test("configuration form omits the redundant right-side step rail", () => {
+  assert.doesNotMatch(createSource, /className="cw-rail"/);
+  assert.doesNotMatch(createStyles, /\.cw-rail\s*\{/);
 });
 
-test("workspace title follows the original named agent inside an anonymous root sequence", () => {
+test("workspace uses one architecture title and a bottom three-stage lifecycle", () => {
+  const headerRule = createStyles.match(/\.cw-workspace-header\s*\{[^}]*\}/)?.[0] ?? "";
+  assert.match(createSource, /mode === "validate"[\s\S]*?"调试您的智能体"/);
+  assert.match(createSource, /mode === "publish"[\s\S]*?"准备好部署您的智能体"/);
+  assert.match(createSource, /"个性化您的智能体架构";[\s\S]*?<h1>\{title\}<\/h1>/);
+  assert.doesNotMatch(createSource, /agentName=\{workspaceAgentName\(draft\)\}/);
+  assert.match(headerRule, /display:\s*flex/);
+  assert.match(headerRule, /justify-content:\s*center/);
+  assert.match(headerRule, /align-items:\s*center/);
+  assert.match(headerRule, /background:\s*transparent/);
+  assert.doesNotMatch(createSource, />放弃编辑</);
+  assert.match(createSource, /\{ id: "build", label: "架构" \}/);
+  assert.match(createSource, /\{ id: "validate", label: "调试" \}/);
+  assert.match(createSource, /\{ id: "publish", label: "发布" \}/);
+  assert.match(createSource, /function WorkspaceLifecycleFooter/);
+  assert.match(createSource, /className="cw-workspace-footer"/);
+  assert.match(createSource, /className=\{`cw-workspace-nav-actions\$\{assistant/);
+  assert.match(createSource, /className="cw-workspace-progress" aria-label="Agent 创建进度"/);
+  assert.match(createSource, /mode === "build" \? " is-placeholder" : ""/);
+  assert.match(createSource, /id="cw-publish-primary-action"/);
+  assert.match(
+    createStyles,
+    /\.cw-workspace-footer\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?padding:/,
+  );
+  assert.match(createStyles, /\.cw-workspace-nav-button\.is-placeholder\s*\{[\s\S]*?visibility:\s*hidden/);
+  assert.match(createStyles, /\.cw-workspace-progress\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/);
+});
+
+test("build workspace uses a narrow 60-percent canvas and grouped configuration cards", () => {
+  const rootRule = createStyles.match(/\.cw-root\s*\{[^}]*\}/)?.[0] ?? "";
+  const mainRule = createStyles.match(/\.cw-workspace-main\s*\{[^}]*\}/)?.[0] ?? "";
+  const headerRule = createStyles.match(/\.cw-workspace-header\s*\{[^}]*\}/)?.[0] ?? "";
+  const footerRule = createStyles.match(/\.cw-workspace-footer\s*\{[^}]*\}/)?.[0] ?? "";
+  const sectionRule = createStyles.match(/\.cw-section\s*\{[^}]*\}/)?.[0] ?? "";
+  const sectionHeadRule = createStyles.match(/\.cw-sec-head\s*\{[^}]*\}/)?.[0] ?? "";
+  const fieldRule = createStyles.match(/\.cw-field\s*\{[^}]*\}/)?.[0] ?? "";
+  const toggleRule = createStyles.match(/(?:^|\n)\.cw-toggle\s*\{[^}]*\}/)?.[0] ?? "";
+
+  assert.match(rootRule, /--cw-workspace-width:\s*60%/);
+  assert.match(rootRule, /background:\s*hsl\(var\(--background\)\)/);
+  assert.match(mainRule, /width:\s*var\(--cw-workspace-width\)/);
+  assert.match(headerRule, /background:\s*transparent/);
+  assert.match(footerRule, /background:\s*transparent/);
+  assert.match(sectionRule, /border:\s*1px solid hsl\(var\(--border\) \/ 0\.72\)/);
+  assert.match(sectionRule, /border-radius:\s*18px/);
+  assert.match(sectionRule, /background:\s*hsl\(var\(--panel\)\)/);
+  assert.match(sectionHeadRule, /background:\s*hsl\(var\(--muted\) \/ 0\.34\);/);
+  assert.match(sectionHeadRule, /border-bottom:\s*1px solid hsl\(var\(--border\) \/ 0\.68\);/);
+  assert.match(createSource, /<div className="cw-sec-body">\{children\}<\/div>/);
+  assert.match(createStyles, /\.cw-form > \.cw-field \+ \.cw-field,[\s\S]*?border-top:\s*1px dashed/);
+  assert.match(fieldRule, /grid-template-columns:\s*minmax\(124px, 0\.34fr\) minmax\(0, 1fr\)/);
+  assert.match(
+    createStyles,
+    /\.cw-field > \.cw-label,[\s\S]*?align-self:\s*start;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-field:has\(> \.cw-input\) > \.cw-label\s*\{[\s\S]*?align-self:\s*center;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-label\s*\{[\s\S]*?font-weight:\s*400;/,
+  );
+  assert.match(toggleRule, /grid-template-columns:\s*minmax\(124px, 0\.34fr\) minmax\(0, 1fr\)/);
+  assert.doesNotMatch(fieldRule, /border-bottom:/);
+  assert.doesNotMatch(toggleRule, /border-bottom:/);
+});
+
+test("build-stage intelligent generation sits before next in the footer", () => {
+  assert.match(createSource, /assistant\?: React\.ReactNode/);
   assert.match(
     createSource,
-    /function workspaceAgentName\(draft: AgentDraft\): string \{[\s\S]*?if \(rootName\) return rootName;[\s\S]*?draft\.agentType !== "sequential"[\s\S]*?draft\.subAgents\.find\(\(agent\) => agent\.name\.trim\(\)\)/,
+    /<div className="cw-workspace-ai-slot">\{assistant\}<\/div>[\s\S]*?下一步/,
   );
-  assert.match(createSource, /agentName=\{workspaceAgentName\(draft\)\}/);
-});
-
-test("workspace lifecycle header is one rounded glass bar with text-only step sliders", () => {
-  const headerRule = createStyles.match(/\.cw-workspace-header\s*\{[^}]*\}/)?.[0] ?? "";
-  const stepperRule = createStyles.match(/\.cw-workspace-stepper\s*\{[^}]*\}/)?.[0] ?? "";
-  assert.match(headerRule, /min-height:\s*56px/);
-  assert.match(headerRule, /border-radius:\s*16px/);
-  assert.match(headerRule, /background:\s*rgba\(246, 246, 248, 0\.82\)/);
-  assert.match(headerRule, /backdrop-filter:\s*blur\(7px\)/);
-  assert.match(headerRule, /border:\s*0/);
-  assert.match(headerRule, /box-shadow:\s*none/);
-  assert.match(stepperRule, /display:\s*flex/);
-  assert.match(stepperRule, /gap:\s*12px/);
-  assert.doesNotMatch(stepperRule, /background:/);
+  assert.match(
+    createSource,
+    /assistant=\{workspaceMode === "build" \? aiComposer : undefined\}/,
+  );
+  assert.doesNotMatch(
+    createSource,
+    /<div className="cw-detail">\s*<section[\s\S]*?aria-label="AI 自动填写 Agent 配置"/,
+  );
   assert.match(
     createStyles,
-    /\.cw-workspace-stepper button\s*\{[\s\S]*?min-width:\s*124px;[\s\S]*?border-radius:\s*10px;[\s\S]*?background:\s*rgba\(237, 237, 241, 0\.78\)/,
+    /\.cw-workspace-nav-actions\.has-assistant\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) auto;[\s\S]*?grid-template-areas:\s*"assistant next"/,
   );
-  assert.match(createStyles, /\.cw-workspace-stepper button\.is-active\s*\{[\s\S]*?background:\s*rgba\(218, 218, 224, 0\.86\);[\s\S]*?box-shadow:\s*none/);
-  assert.match(createStyles, /\.cw-workspace-stepper button > strong\s*\{[\s\S]*?font-size:\s*14px/);
-  assert.doesNotMatch(createSource, /cw-workspace-step-marker/);
+  const aiRule = createStyles.match(/\.cw-ai-compose-form\s*\{[^}]*\}/)?.[0] ?? "";
+  assert.match(aiRule, /background:\s*hsl\(var\(--panel\)\)/);
+  assert.doesNotMatch(aiRule, /#[0-9a-f]{3,8}|rgba?\(/i);
+  assert.match(
+    createStyles,
+    /\.cw-ai-compose-form:has\(input:focus-visible\)\s*\{[\s\S]*?box-shadow:/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-ai-compose-form input:focus,[\s\S]*?\.cw-ai-compose-form input:focus-visible\s*\{[\s\S]*?outline:\s*none;[\s\S]*?box-shadow:\s*none;/,
+  );
+  assert.doesNotMatch(
+    createStyles,
+    /\.cw-ai-compose-form input:focus-visible,\s*\n\.cw-ai-compose-form button:focus-visible/,
+  );
+  assert.match(
+    createStyles,
+    /@media \(max-width:\s*1280px\)[\s\S]*?--cw-workspace-width:\s*calc\(100% - 48px\)/,
+  );
 });
 
 test("debug comparison configuration explains duplicate disabled actions", () => {
@@ -219,11 +297,11 @@ test("debug streaming applies each event outside the React state updater", () =>
 test("debug comparison highlights the test configuration entry", () => {
   assert.match(
     createStyles,
-    /\.cw-ab-config-trigger\s*\{[\s\S]*?background:\s*hsl\(45 92% 90%\);[\s\S]*?color:\s*hsl\(37 70% 30%\)/,
+    /\.cw-ab-config-trigger\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?color:\s*hsl\(var\(--muted-foreground\)\)/,
   );
   assert.match(
     createStyles,
-    /\.cw-ab-config-trigger:hover:not\(:disabled\)\s*\{[\s\S]*?background:\s*hsl\(44 88% 84%\)/,
+    /\.cw-ab-config-trigger:hover:not\(:disabled\)\s*\{[\s\S]*?background:\s*hsl\(var\(--secondary\) \/ 0\.58\)/,
   );
 });
 
@@ -257,12 +335,37 @@ test("agent type is a form section with radio choices", () => {
   assert.match(createSource, /<Section meta=\{metaOf\("type"\)\}>/);
   assert.match(
     createSource,
-    /role="radiogroup"[\s\S]*?aria-label="Agent 类型"/,
+    /@openai\/apps-sdk-ui\/components\/RadioGroup/,
   );
-  assert.match(createSource, /type="radio"[\s\S]*?className="cw-agent-type-radio"/);
+  assert.match(
+    createSource,
+    /<RadioGroup<AgentType>[\s\S]*?aria-label="Agent 类型"/,
+  );
+  assert.match(createSource, /<RadioGroup\.Item[\s\S]*?className="cw-agent-type-control"/);
+  assert.doesNotMatch(createSource, /type="radio"/);
   assert.match(createStyles, /\.cw-agent-type-options\s*\{[\s\S]*?display:\s*grid/);
   assert.match(createStyles, /\.cw-agent-type-option\.is-on\s*\{/);
+  assert.match(
+    createStyles,
+    /\.cw-agent-type-option > \.flex\s*\{[\s\S]*?align-self:\s*stretch;[\s\S]*?flex:\s*1;/,
+  );
   assert.doesNotMatch(createSource, /cw-typebar|cw-typeradio/);
+});
+
+test("configuration checkboxes use Apps SDK UI controls", () => {
+  assert.match(
+    createSource,
+    /@openai\/apps-sdk-ui\/components\/Checkbox/,
+  );
+  assert.match(
+    createSource,
+    /function Checklist[\s\S]*?<Checkbox[\s\S]*?checked=\{on\}[\s\S]*?onCheckedChange=/,
+  );
+  assert.match(
+    createSource,
+    /className="cw-ab-optimization-checkbox"/,
+  );
+  assert.doesNotMatch(createSource, /type="checkbox"/);
 });
 
 test("build workspace has a validated primary path into debugging", () => {
@@ -272,21 +375,17 @@ test("build workspace has a validated primary path into debugging", () => {
   );
   assert.match(
     createSource,
-    /className="cw-build-next studio-update-action"[\s\S]*?onClick=\{openValidation\}[\s\S]*?>开始调试</,
+    /function WorkspaceLifecycleFooter[\s\S]*?className="cw-workspace-nav-button is-primary"[\s\S]*?>[\s\S]*?下一步/,
   );
   assert.match(
     createStyles,
-    /\.cw-build-next\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?left:\s*50%;[\s\S]*?transform:\s*translateX\(-50%\);/,
+    /\.cw-workspace-nav-actions\s*\{[\s\S]*?grid-template-columns:\s*minmax\(120px, 1fr\) auto minmax\(120px, 1fr\)/,
   );
   assert.match(
     createStyles,
-    /\.cw-build-next\.studio-update-action\s*\{[\s\S]*?background:\s*#111;[\s\S]*?color:\s*#fff;/,
+    /\.cw-workspace-nav-button\.is-primary\s*\{[\s\S]*?background:\s*hsl\(var\(--foreground\)\);[\s\S]*?color:\s*hsl\(var\(--background\)\);/,
   );
-  assert.match(
-    createStyles,
-    /\.cw-build-next\.studio-update-action:not\(:disabled\):hover\s*\{[\s\S]*?background:\s*#29292b;[\s\S]*?box-shadow:\s*0 7px 18px hsl\(0 0% 0% \/ 0\.16\);[\s\S]*?transform:\s*translateX\(-50%\);/,
-  );
-  assert.doesNotMatch(createSource, /下一步：开始调试|<ArrowRight/);
+  assert.doesNotMatch(createSource, /className="cw-build-next/);
 });
 
 test("container agents require child agents before debug or publish", () => {
@@ -366,6 +465,10 @@ test("debug workspace compares multiple configurations behind one shared input",
     createStyles,
     /\.cw-ab-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/,
   );
+  assert.match(
+    createStyles,
+    /\.cw-root\.is-validate\s*\{[\s\S]*?--cw-workspace-width:\s*min\(88%, 1440px\)/,
+  );
   assert.match(createStyles, /\.cw-ab-card-inner\.is-flipped\s*\{[\s\S]*?rotateY\(180deg\)/);
   assert.match(createStyles, /\.cw-ab-config\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);
   assert.match(
@@ -379,14 +482,14 @@ test("debug workspace compares multiple configurations behind one shared input",
   assert.doesNotMatch(createStyles, /\.cw-ab-head|\.cw-ab-overlay/);
 });
 
-test("narrow workbench stacks sections instead of squeezing the form", () => {
+test("narrow workbench keeps the canvas and configuration stacked without page scrolling", () => {
   assert.match(
     appStyles,
     /@media \(max-width:\s*860px\)\s*\{[\s\S]*?\.sidebar\s*\{[\s\S]*?width:\s*204px;/,
   );
   assert.match(
     createStyles,
-    /@media \(max-width:\s*860px\)\s*\{[\s\S]*?\.cw-editor\s*\{[\s\S]*?flex-direction:\s*column;[\s\S]*?\.cw-tree\s*\{[\s\S]*?width:\s*100%;[\s\S]*?\.cw-detail\s*\{[\s\S]*?width:\s*100%;[\s\S]*?height:\s*min\(720px,\s*calc\(100dvh\s*-\s*120px\)\);/,
+    /@media \(max-width:\s*860px\)\s*\{[\s\S]*?\.cw-editor\s*\{[\s\S]*?flex-direction:\s*column;[\s\S]*?overflow-y:\s*hidden;[\s\S]*?\.cw-detail\s*\{[\s\S]*?width:\s*100%;[\s\S]*?height:\s*auto;[\s\S]*?min-height:\s*0;/,
   );
   assert.match(
     createStyles,
@@ -399,6 +502,21 @@ test("narrow workbench stacks sections instead of squeezing the form", () => {
   assert.match(
     createStyles,
     /\.cw-env-field-label\s*\{[\s\S]*?overflow-wrap:\s*anywhere;/,
+  );
+});
+
+test("only the configuration panel scrolls between the fixed canvas and footer", () => {
+  assert.match(
+    createStyles,
+    /\.cw-editor\s*\{[\s\S]*?flex-direction:\s*column;[\s\S]*?overflow:\s*hidden;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-editor > \.abc-root\s*\{[\s\S]*?flex:\s*0 0 200px;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-detail-scroll\s*\{[\s\S]*?flex:\s*1;[\s\S]*?overflow-y:\s*auto;/,
   );
 });
 
@@ -432,9 +550,9 @@ test("built-in tools adapt columns and scroll after six rows", () => {
   );
   assert.match(
     createStyles,
-    /--cw-checklist-row-height:\s*65px;[\s\S]*?grid-auto-rows:\s*minmax\(var\(--cw-checklist-row-height\),\s*auto\);/,
+    /--cw-checklist-row-height:\s*40px;[\s\S]*?grid-auto-rows:\s*minmax\(var\(--cw-checklist-row-height\),\s*auto\);/,
   );
-  assert.match(createSource, /scrollRows \* 65 \+ \(scrollRows - 1\) \* 8/);
+  assert.match(createSource, /scrollRows \* 40 \+ \(scrollRows - 1\) \* 8/);
   assert.match(
     createStyles,
     /@container \(max-width:\s*575px\)\s*\{[\s\S]*?\.cw-checklist-tools\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)/,
@@ -445,17 +563,15 @@ test("built-in tools adapt columns and scroll after six rows", () => {
   );
 });
 
-test("MCP tools live under an accessible more-tool-types disclosure", () => {
-  assert.match(createSource, /aria-expanded=\{moreToolTypesOpen\}/);
-  assert.match(createSource, /aria-controls=\{moreToolTypesId\}/);
-  assert.match(createSource, /<span>更多类型工具<\/span>/);
+test("MCP tools stay directly visible and align with their field label", () => {
+  assert.doesNotMatch(createSource, /moreToolTypesOpen|更多类型工具/);
   assert.match(
     createSource,
-    /\{moreToolTypesOpen && \([\s\S]*?<label className="cw-label">MCP 工具<\/label>/,
+    /className="cw-field cw-mcp-field"[\s\S]*?<label className="cw-label">MCP 工具<\/label>[\s\S]*?<McpToolEditor/,
   );
   assert.match(
-    createSource,
-    /mcpTools\.length > 0[\s\S]*?已配置 \{mcpTools\.length\}/,
+    createStyles,
+    /\.cw-mcp-field\s*\{[\s\S]*?align-items:\s*center/,
   );
 });
 
@@ -556,7 +672,7 @@ test("skill sources open in a fixed-height dialog above a six-row selected list"
   );
   assert.match(
     createStyles,
-    /\.cw-skill-add\s*\{[\s\S]*?justify-content:\s*center;[\s\S]*?min-height:\s*52px;[\s\S]*?padding:\s*9px 10px;[\s\S]*?border:\s*1px dashed[\s\S]*?border-radius:\s*10px;[\s\S]*?background:\s*transparent;/,
+    /\.cw-skill-add\s*\{[\s\S]*?justify-content:\s*center;[\s\S]*?min-height:\s*40px;[\s\S]*?padding:\s*6px 10px;[\s\S]*?border:\s*1px dashed[\s\S]*?border-radius:\s*10px;[\s\S]*?background:\s*transparent;/,
   );
 });
 
@@ -582,16 +698,11 @@ test("local Skill folders and ZIP archives support drag and drop", () => {
   );
 });
 
-test("nested Agent forms omit root-only advanced configuration", () => {
+test("nested Agent forms omit root-only memory configuration", () => {
   assert.match(createSource, /const isRootAgent = safePath\.length === 0;/);
   assert.match(
     createSource,
-    /const rootOnlyStepIds: StepId\[\] = isRootAgent \? \["advanced"\] : \[\];/,
-  );
-  assert.match(createSource, /\.\.\.rootOnlyStepIds/);
-  assert.match(
-    createSource,
-    /\{isRootAgent && \(\s*<section[\s\S]*?data-step-id="advanced"/,
+    /\{isRootAgent && \(\s*<Section meta=\{metaOf\("memory"\)\}>/,
   );
 });
 
@@ -652,21 +763,12 @@ test("remote Agent configures only the AgentKit center", () => {
   assert.doesNotMatch(createSource, /metaOf\("a2aCenter"\)/);
 });
 
-test("advanced configuration only exposes memory settings", () => {
-  assert.match(createSource, /aria-expanded=\{advancedConfigOpen\}/);
+test("memory is a directly visible configuration section", () => {
   assert.match(
     createSource,
-    /className="cw-advanced-disclosure-title">进阶配置/,
+    /<Section meta=\{metaOf\("memory"\)\}>[\s\S]*?title="短期记忆"[\s\S]*?title="长期记忆"/,
   );
-  assert.doesNotMatch(createSource, /cw-advanced-disclosure-desc/);
-  assert.match(
-    createSource,
-    /cw-advanced-disclosure-title">进阶配置<\/span>[\s\S]*?<ChevronRight/,
-  );
-  assert.match(
-    createSource,
-    /\{advancedConfigOpen && \([\s\S]*?<span>记忆<\/span>/,
-  );
+  assert.doesNotMatch(createSource, /advancedConfigOpen|cw-advanced-disclosure/);
   assert.doesNotMatch(createSource, /<span>观测<\/span>/);
   assert.doesNotMatch(createSource, /观测 \/ Tracing/);
   assert.doesNotMatch(createSource, /Tracing 导出器/);
@@ -675,7 +777,7 @@ test("advanced configuration only exposes memory settings", () => {
     createStyles,
     /\.cw-advanced-group \+ \.cw-advanced-group\s*\{[^}]*border-top:/,
   );
-  assert.doesNotMatch(createSource, /metaOf\("memory"\)/);
+  assert.match(createSource, /metaOf\("memory"\)/);
   assert.doesNotMatch(createSource, /metaOf\("tracing"\)/);
   assert.doesNotMatch(createSource, /A2UI|enableA2ui/);
   assert.doesNotMatch(generatedAgentConfigSources, /A2UI|enableA2ui/);

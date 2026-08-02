@@ -23,9 +23,9 @@ const stylesSource = readFileSync(
   "utf8",
 );
 
-test("uses ChatGPT-scale typography for conversation copy", () => {
-  assert.match(stylesSource, /\.bubble\s*\{[^}]*font-size:\s*16px/);
-  assert.match(stylesSource, /\.md\s*\{[^}]*font-size:\s*16px/);
+test("matches conversation copy to thinking status typography", () => {
+  assert.match(stylesSource, /\.bubble\s*\{[^}]*font-size:\s*14\.5px/);
+  assert.match(stylesSource, /\.md\s*\{[^}]*font-size:\s*14\.5px/);
   assert.match(stylesSource, /\.md\s*\{[^}]*line-height:\s*1\.65/);
 });
 
@@ -155,7 +155,7 @@ test("addresses the selected Agent by its display name in the composer", () => {
     /agentName=\{[\s\S]*?sandboxSession[\s\S]*?"AgentKit 沙箱"[\s\S]*?labelOf\(appName\)/,
   );
   assert.match(composerSource, /`向 \$\{agentName\} 发消息…`/);
-  assert.match(composerSource, /请在页面左上角选择智能体/);
+  assert.match(composerSource, /请先选择智能体/);
   assert.doesNotMatch(composerSource, /给智能体发消息/);
 });
 

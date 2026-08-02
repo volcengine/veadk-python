@@ -9,10 +9,6 @@ import {
 import {
   ArrowLeft,
   Check,
-  ChevronDown,
-  CircleAlert,
-  CircleCheck,
-  CircleX,
   Copy,
   CornerDownRight,
   ListTodo,
@@ -20,7 +16,6 @@ import {
 } from "lucide-react";
 import { motion } from "motion/react";
 import {
-  cancelAgentkitDeployment,
   addSessionCapability,
   clearMessageFeedbackCache,
   createSession,
@@ -71,9 +66,7 @@ import {
   type Turn,
 } from "./blocks";
 import { Sidebar } from "./ui/Sidebar";
-import { Navbar } from "./ui/Navbar";
-import { AgentInfoDrawer, AgentInfoPanel } from "./ui/AgentTopology";
-import { AgentIdentityIcon } from "./ui/AgentIdentityIcon";
+import { AgentInfoPanel } from "./ui/AgentTopology";
 import { SkillCenterView } from "./ui/SkillCenter";
 import { AddAgentKitView } from "./ui/AddAgentKit";
 import {
@@ -110,13 +103,12 @@ import { CodePackageCreate } from "./create/CodePackageCreate";
 import { FileArchive } from "lucide-react";
 import type { AgentDraft } from "./create/types";
 import type { DeployResult, DeploymentTaskUpdate } from "./ui/ProjectPreview";
-import { DeploymentErrorMessage } from "./ui/DeploymentErrorMessage";
 import { TextShimmer } from "./ui/text-shimmer/TextShimmer";
-import { StudioUpdateControl } from "./ui/StudioUpdateControl";
 import { createSkillJob, deleteSkillJob } from "./ui/skill-create/api";
 import { SkillCreateWorkspace } from "./ui/skill-create/SkillCreateWorkspace";
 import { SKILL_MODELS, type SkillCreationJob } from "./ui/skill-create/types";
 import type { NewChatMode, NewChatTask } from "./ui/new-chat-modes/types";
+import { NewChatFeatureNotice } from "./ui/new-chat-modes/NewChatFeatureNotice";
 import {
   NEW_CHAT_TASK_OPTIONAL_TOOLS,
   NEW_CHAT_TASK_TOOLS,
@@ -171,17 +163,7 @@ async function probeNewChatCapabilities(
   };
 }
 
-// Breadcrumb root label for the create flow and the per-mode leaf labels.
-const CREATE_ROOT = "创建 Agent";
 type CreateMode = QuickCreateKind | "package";
-
-const MODE_LABEL: Record<CreateMode, string> = {
-  intelligent: "智能模式",
-  custom: "自定义",
-  template: "从模板新建",
-  workflow: "工作流",
-  package: "代码包部署",
-};
 
 type CreateView = "menu" | CreateMode | null;
 
@@ -472,158 +454,6 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function deployRegionLabel(region: string): string {
-  if (region === "cn-beijing") return "华北 2（北京）";
-  if (region === "cn-shanghai") return "华东 2（上海）";
-  return region || "未指定";
-}
-
-function DeploymentTaskStatus({
-  tasks,
-  onCancel,
-}: {
-  tasks: DeploymentTaskUpdate[];
-  onCancel: (task: DeploymentTaskUpdate) => Promise<void>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [cancellingId, setCancellingId] = useState<string | null>(null);
-  const runningCount = tasks.filter((task) => task.status === "running").length;
-  const latest = tasks[0];
-  const summaryStatus = runningCount > 0 ? "running" : latest?.status ?? "idle";
-  const summary =
-    runningCount > 0
-      ? `${runningCount} 个部署任务进行中`
-      : latest?.status === "success"
-        ? "最近部署已完成"
-        : latest?.status === "error"
-          ? "最近部署失败"
-          : latest?.status === "cancelled"
-            ? "最近部署已取消"
-            : "部署任务";
-
-  const cancelTask = (task: DeploymentTaskUpdate) => {
-    setCancellingId(task.id);
-    void onCancel(task).finally(() => setCancellingId(null));
-  };
-
-  return (
-    <div className="global-deploy-center">
-      <button
-        type="button"
-        className={`global-deploy-task is-${summaryStatus}`}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        onClick={() => setOpen((current) => !current)}
-      >
-        {summaryStatus === "running" ? (
-          <Loader2 className="global-deploy-task-icon spin" />
-        ) : summaryStatus === "success" ? (
-          <CircleCheck className="global-deploy-task-icon" />
-        ) : summaryStatus === "error" ? (
-          <CircleAlert className="global-deploy-task-icon" />
-        ) : summaryStatus === "cancelled" ? (
-          <CircleX className="global-deploy-task-icon" />
-        ) : (
-          <ListTodo className="global-deploy-task-icon" />
-        )}
-        <span className="global-deploy-task-detail">{summary}</span>
-        <ChevronDown
-          className={`global-deploy-task-chevron${open ? " is-open" : ""}`}
-        />
-      </button>
-
-      {open && (
-        <>
-          <button
-            type="button"
-            className="global-deploy-task-scrim"
-            aria-label="关闭部署任务"
-            onClick={() => setOpen(false)}
-          />
-          <section
-            className="global-deploy-popover"
-            role="dialog"
-            aria-label="部署任务"
-          >
-            <header className="global-deploy-popover-head">
-              <span>部署任务</span>
-              <span>{tasks.length}</span>
-            </header>
-            <div className="global-deploy-list">
-              {tasks.length === 0 ? (
-                <div className="global-deploy-empty">暂无部署任务</div>
-              ) : tasks.map((task) => {
-                const detail = `${task.label}${
-                  task.status === "running" && typeof task.pct === "number"
-                    ? ` ${Math.round(task.pct)}%`
-                    : ""
-                }`;
-                return (
-                  <article
-                    key={task.id}
-                    className={`global-deploy-item is-${task.status}`}
-                  >
-                    <div className="global-deploy-item-head">
-                      <span className="global-deploy-runtime-name">
-                        {task.runtimeName}
-                      </span>
-                      <span className="global-deploy-status">{detail}</span>
-                    </div>
-                    <dl className="global-deploy-meta">
-                      <div>
-                        <dt>Runtime 名称</dt>
-                        <dd>{task.runtimeName}</dd>
-                      </div>
-                      <div>
-                        <dt>部署地域</dt>
-                        <dd>{deployRegionLabel(task.region)}</dd>
-                      </div>
-                      {task.runtimeId && (
-                        <div>
-                          <dt>Runtime ID</dt>
-                          <dd>{task.runtimeId}</dd>
-                        </div>
-                      )}
-                    </dl>
-                    {task.message && task.status === "error" ? (
-                      <DeploymentErrorMessage
-                        className="global-deploy-error"
-                        message={task.message}
-                        onRetry={task.retry}
-                      />
-                    ) : task.message ? (
-                      <p className="global-deploy-message">{task.message}</p>
-                    ) : null}
-                    {task.status === "running" && (
-                      <>
-                        <div className="global-deploy-progress" aria-hidden>
-                          <span
-                            style={{
-                              width: `${Math.max(6, Math.min(100, task.pct ?? 6))}%`,
-                            }}
-                          />
-                        </div>
-                        <div className="global-deploy-item-actions">
-                          <button
-                            type="button"
-                            disabled={cancellingId === task.id}
-                            onClick={() => cancelTask(task)}
-                          >
-                            {cancellingId === task.id ? "取消中…" : "取消部署"}
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </article>
-                );
-              })}
-            </div>
-          </section>
-        </>
-      )}
-    </div>
-  );
-}
 // Side-effect import: registers all A2UI components under a2ui/components/*.
 import "./a2ui/components";
 
@@ -681,18 +511,6 @@ function runtimeIdForSelection(
         (app) => remoteAppId(connection.id, app) === selectedAppName,
       ),
   )?.runtimeId ?? "";
-}
-
-function hasAgentSelection(
-  selectedAppName: string,
-  localApps: string[],
-  connections: RemoteConnection[],
-) {
-  if (!selectedAppName) return false;
-  return (
-    localApps.includes(selectedAppName) ||
-    remoteSelectionIds(connections).includes(selectedAppName)
-  );
 }
 
 export default function App() {
@@ -801,18 +619,10 @@ export default function App() {
   // banner (per-session transcripts/topology don't need it).
   const viewSidRef = useRef("");
   const [error, setError] = useState("");
-  const [toast, setToast] = useState("");
-  const toastTimerRef = useRef<number | null>(null);
-  useEffect(() => () => {
-    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
-  }, []);
   const [feedbackPendingIds, setFeedbackPendingIds] = useState<Set<string>>(
     () => new Set(),
   );
   const [traceOpen, setTraceOpen] = useState(false);
-  const [agentInfoOpen, setAgentInfoOpen] = useState(false);
-  const agentInfoTriggerRef = useRef<HTMLButtonElement>(null);
-  const closeAgentInfo = useCallback(() => setAgentInfoOpen(false), []);
   const [greeting, setGreeting] = useState(pickGreeting);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [authExpired, setAuthExpired] = useState(false);
@@ -993,35 +803,6 @@ export default function App() {
       return next;
     });
   }, []);
-  const cancelDeploymentTask = useCallback(
-    async (task: DeploymentTaskUpdate) => {
-      try {
-        await cancelAgentkitDeployment(task.id);
-        setDeploymentTasks((current) =>
-          current.map((item) =>
-            item.id === task.id
-              ? {
-                  ...item,
-                  status: "cancelled",
-                  label: "已取消",
-                  message: "部署已取消，相关 Runtime 资源已请求销毁。",
-                }
-              : item,
-          ),
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setDeploymentTasks((current) =>
-          current.map((item) =>
-            item.id === task.id
-              ? { ...item, message: `取消失败：${message}` }
-              : item,
-          ),
-        );
-      }
-    },
-    [],
-  );
   // Whether the server has Volcengine AK/SK. The agent-creation workbench needs
   // them; assume present until the runtime-config check says otherwise (avoids
   // flashing the notice in the common, configured case).
@@ -2091,7 +1872,6 @@ export default function App() {
   function startNewChat() {
     exitSandboxSession();
     setError("");
-    setAgentInfoOpen(false);
     setGreeting(pickGreeting());
     setNewChatMode("agent");
     setNewChatTask(null);
@@ -2123,15 +1903,6 @@ export default function App() {
     setAgentInfo(null);
   }
 
-  function showToast(message: string) {
-    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
-    setToast(message);
-    toastTimerRef.current = window.setTimeout(() => {
-      setToast("");
-      toastTimerRef.current = null;
-    }, 3000);
-  }
-
   function openNewChat() {
     setCreateView(null);
     setSkillCenter(false);
@@ -2140,12 +1911,6 @@ export default function App() {
     setSearchView(false);
     setManageAgents(false);
     setAgentDetailTarget(null);
-    if (!sandboxSession && !hasAgentSelection(appName, apps, connections)) {
-      if (appName) clearSelectedAgentAfterRemoval();
-      setMyAgents(true);
-      showToast("请先选择 Agent 后再开始新会话");
-      return;
-    }
     setMyAgents(false);
     startNewChat();
   }
@@ -2998,6 +2763,8 @@ export default function App() {
       name: displayName,
       description: agentInfo?.description || currentConn.name,
       createdAt: "—",
+      specification:
+        currentConn.region === "cn-shanghai" ? "上海" : "北京",
       runtime: {
         runtimeId: currentConn.runtimeId,
         region: currentConn.region ?? "cn-beijing",
@@ -3019,9 +2786,9 @@ export default function App() {
     setError("");
   };
 
-  // Selecting an agent starts a fresh chat; any
-  // background stream keeps persisting to its own (old) session.
-  const selectAgent = async (id: string) => {
+  // Refresh the selected Agent before leaving the current page, then open a
+  // fresh chat. Background streams keep persisting to their original sessions.
+  const refreshCurrentAgentAndStartNewChat = async (id: string) => {
     setConnections(loadConnections());
     let capabilities = newChatCapabilitiesCacheRef.current.get(id);
     if (!capabilities) {
@@ -3029,11 +2796,23 @@ export default function App() {
       newChatCapabilitiesCacheRef.current.set(id, capabilities);
     }
     setNewChatCapabilities(capabilities);
-    if (id === appName) setAgentInfoRefreshKey((key) => key + 1);
-    viewSidRef.current = "";
-    setSessionId("");
-    setMyAgents(false);
+    setAgentInfoRefreshKey((key) => key + 1);
     setAppName(id);
+    setAgentDetailTarget(null);
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId("");
+    setMyAgents(false);
+    setManageAgents(false);
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    startNewChat();
+  };
+
+  const selectAgent = async (id: string) => {
+    await refreshCurrentAgentAndStartNewChat(id);
   };
 
   const openAgentCreateFromMyAgents = (region: string) => {
@@ -3050,7 +2829,7 @@ export default function App() {
     setError("");
   };
 
-  const connectMyAgent = async (agent: MyAgentCardData) => {
+  const connectMyAgent = async (agent: MyAgentCardData, rethrow = false) => {
     if (!agent.runtime) return;
     try {
       const agentId = await connectRuntime(
@@ -3059,18 +2838,11 @@ export default function App() {
         agent.runtime.region,
         agent.runtime.currentVersion,
       );
-      setConnections(loadConnections());
-      setAgentInfoRefreshKey((key) => key + 1);
-      const capabilities = await probeNewChatCapabilities(agentId);
-      newChatCapabilitiesCacheRef.current.set(agentId, capabilities);
-      setNewChatCapabilities(capabilities);
-      setAgentDetailTarget(null);
-      setMyAgents(false);
-      setManageAgents(false);
-      startNewChat();
-      setAppName(agentId);
+      await refreshCurrentAgentAndStartNewChat(agentId);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setError(message);
+      if (rethrow) throw new Error(message);
     }
   };
 
@@ -3104,10 +2876,6 @@ export default function App() {
   const talkToWorkspaceAgent = async (agent: AgentEntry) => {
     setFeedbackCaseReturnAgentId("");
     setFeedbackTargetEventId("");
-    setFocusedDeploymentTaskId("");
-    setFocusedWorkspaceAgentId("");
-    setAgentDetailTarget(null);
-    setManageAgents(false);
     if (agent.runtimeId && agent.id.startsWith("detail:")) {
       try {
         const agentId = await connectRuntime(
@@ -3116,21 +2884,13 @@ export default function App() {
           agent.region ?? "cn-beijing",
           agent.currentVersion,
         );
-        setConnections(loadConnections());
-        selectAgent(agentId);
+        await refreshCurrentAgentAndStartNewChat(agentId);
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause));
       }
       return;
     }
-    selectAgent(agent.id);
-  };
-
-  const selectWorkspaceAgentFromNavbar = (id: string) => {
-    setFocusedDeploymentTaskId("");
-    setFocusedWorkspaceAgentId(id);
-    setFocusedWorkspaceAgentSection("basic");
-    return selectAgent(id);
+    await refreshCurrentAgentAndStartNewChat(agent.id);
   };
 
   const detailConnection = agentDetailTarget?.runtime
@@ -3358,6 +3118,32 @@ export default function App() {
               newChatMode={sandboxSession ? "agent" : newChatMode}
               newChatTask={sandboxSession ? null : newChatTask}
               newChatLayout={!sandboxSession && turns.length === 0 && skillJob === null}
+              showAgentPicker={
+                !sandboxSession &&
+                turns.length === 0 &&
+                skillJob === null &&
+                newChatMode === "agent"
+              }
+              agentPickerDisabled={!userId || conversationBusy}
+              selectedRuntimeId={currentRuntime?.runtimeId}
+              runtimeScope={access.capabilities.runtimeScope}
+              onSelectRuntime={async (runtime) => {
+                await connectMyAgent({
+                  id: runtime.runtimeId,
+                  name: runtime.name,
+                  description: runtime.description?.trim() || "暂无描述",
+                  createdAt: runtime.createdAt ?? "",
+                  specification:
+                    runtime.region === "cn-shanghai" ? "上海" : "北京",
+                  isMine: runtime.isMine,
+                  runtime: {
+                    runtimeId: runtime.runtimeId,
+                    region: runtime.region,
+                    currentVersion: runtime.currentVersion,
+                    canDelete: runtime.canDelete,
+                  },
+                }, true);
+              }}
               showModeSelector={false}
               temporaryEnabled={newChatCapabilitiesReady && newChatCapabilities.temporaryEnabled}
               skillCreateEnabled={newChatCapabilitiesReady && newChatCapabilities.skillCreateEnabled}
@@ -3400,89 +3186,6 @@ export default function App() {
         );
         return (
           <section className="main-shell">
-            <Navbar
-              appName={appName}
-              onAppChange={showManageAgents ? selectWorkspaceAgentFromNavbar : selectAgent}
-              agentLabel={labelOf}
-              agentsSource={agentsSource}
-              localApps={apps}
-              currentRuntime={currentRuntime}
-              runtimeScope={access.capabilities.runtimeScope}
-              onBrowseAgents={openMyAgentsPage}
-              title={
-                sandboxSession
-                  ? "Codex 智能体"
-                  : myAgents
-                  ? "智能体"
-                  : showAddMenu
-                  ? "添加 Agent"
-                  : showAddAgent
-                    ? "添加 AgentKit 智能体"
-                    : showManageAgents
-                      ? agentDetailTarget
-                        ? agentDetailTarget.name
-                        : focusedWorkspaceAgentId
-                        ? labelOf(focusedWorkspaceAgentId)
-                        : "智能体详情"
-                      : undefined
-              }
-              titleLeading={
-                turns.length > 0 &&
-                !sandboxSession &&
-                newChatMode === "agent" &&
-                !showAddMenu &&
-                !showAddAgent &&
-                !skillCenter &&
-                !searchView &&
-                !showManageAgents &&
-                !myAgents &&
-                visibleCreateView === null &&
-                appName ? (
-                  <button
-                    ref={agentInfoTriggerRef}
-                    type="button"
-                    className="agent-info-trigger"
-                    aria-label="查看 Agent 信息"
-                    title="Agent 信息"
-                    aria-expanded={agentInfoOpen}
-                    onClick={() => setAgentInfoOpen(true)}
-                  >
-                    <AgentIdentityIcon />
-                  </button>
-                ) : undefined
-              }
-              crumbs={
-                skillCenter
-                  ? [{ label: "技能中心" }, { label: "AgentKit Skill 空间" }]
-                  : searchView || showAddAgent || showAddMenu || !visibleCreateView
-                  ? undefined
-                  : visibleCreateView === "menu"
-                    ? [
-                        {
-                          label: CREATE_ROOT,
-                          onClick: () => {
-                            setCreateView(null);
-                            setImportedDraft(null);
-                            setAddMenu(true);
-                          },
-                        },
-                        { label: "从 0 快速创建" },
-                      ]
-                    : [
-                        { label: "从 0 快速创建", onClick: () => setConfirmLeave(true) },
-                        { label: MODE_LABEL[visibleCreateView] },
-                      ]
-              }
-              rightContent={
-                <>
-                  {access.role === "admin" && <StudioUpdateControl />}
-                  <DeploymentTaskStatus
-                    tasks={canCreateAgents ? deploymentTasks : []}
-                    onCancel={cancelDeploymentTask}
-                  />
-                </>
-              }
-            />
             <main className={`main${sandboxSession ? " is-sandbox-session" : ""}`}>
             {error && <div className="error">{error}</div>}
             {loadingSession && (
@@ -3510,7 +3213,6 @@ export default function App() {
                 canCreate={canCreateAgents}
                 runtimeScope={access.capabilities.runtimeScope}
                 onCreateAgent={openAgentCreateFromMyAgents}
-                onCreateCodexAgent={openSandboxLaunch}
                 onUseAgent={connectMyAgent}
                 onViewAgentDetails={openMyAgentDetails}
                 connectedRuntimeId={connectedRuntimeId}
@@ -3770,15 +3472,23 @@ export default function App() {
                 <Loader2 className="icon spin" /> 正在检查 Agent 能力…
               </div>
             ) : turns.length === 0 ? (
-              <div className="welcome">
-                <TextShimmer as="h1" className="welcome-title" duration={4.8} spread={22}>
-                  {sandboxSession
-                    ? "让灵感在临时空间里自由生长"
-                    : newChatMode === "skill-create"
-                      ? "想创建一个什么 Skill？"
-                      : greeting}
-                </TextShimmer>
-                {composer}
+              <div
+                className="welcome"
+                key={`welcome-${newChatCapabilities.agentId ?? appName}`}
+              >
+                <div className="welcome-primary">
+                  <div className="welcome-heading">
+                    <NewChatFeatureNotice />
+                    <TextShimmer as="h1" className="welcome-title" duration={4.8} spread={22}>
+                      {sandboxSession
+                        ? "让灵感在临时空间里自由生长"
+                        : newChatMode === "skill-create"
+                          ? "想创建一个什么 Skill？"
+                          : greeting}
+                    </TextShimmer>
+                  </div>
+                  {composer}
+                </div>
               </div>
             ) : (
               <>
@@ -3861,6 +3571,7 @@ export default function App() {
                 className={[
                   "turn turn--assistant",
                   isSubAgent ? "turn--subagent" : "",
+                  feedbackTargetEventId &&
                   feedbackTargetEventId === feedbackEventId ? "is-feedback-target" : "",
                 ].filter(Boolean).join(" ")}
                 initial={{ opacity: 0, y: 8 }}
@@ -4027,25 +3738,6 @@ export default function App() {
         />
       )}
 
-      {agentInfoOpen && turns.length > 0 && (
-        <AgentInfoDrawer
-          appName={appName}
-          info={agentInfo}
-          loading={capabilitiesLoading}
-          activeAgent={activeAgent}
-          seenAgents={seenAgents}
-          execPath={execPath}
-          capabilities={sessionCapabilities}
-          capabilityLoading={sessionCapabilitiesLoading}
-          capabilityMutating={sessionCapabilityMutating}
-          builtinTools={sessionBuiltinTools}
-          onAddCapability={addCapability}
-          onRemoveCapability={(id) => void removeCapability(id)}
-          onClose={closeAgentInfo}
-          returnFocusRef={agentInfoTriggerRef}
-        />
-      )}
-
       <SandboxLaunchDialog
         open={sandboxLaunchOpen}
         state={sandboxLaunchState}
@@ -4053,12 +3745,6 @@ export default function App() {
         onCancel={cancelSandboxLaunch}
         onConfirm={() => void launchSandboxSession()}
       />
-
-      {toast && (
-        <div className="app-toast" role="status" aria-live="polite">
-          {toast}
-        </div>
-      )}
 
       <AuthExpiredDialog
         open={authExpired}

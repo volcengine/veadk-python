@@ -34,11 +34,11 @@ test("loads temporary-session and Skill-creation capabilities independently", ()
   assert.match(appSource, /skillCreateEnabled/);
   assert.match(
     appSource,
-    /const connectMyAgent[\s\S]*?await probeNewChatCapabilities\(agentId\)[\s\S]*?setAppName\(agentId\)/,
+    /const connectMyAgent[\s\S]*?await refreshCurrentAgentAndStartNewChat\(agentId\)/,
   );
   assert.match(
     appSource,
-    /const selectAgent = async[\s\S]*?await probeNewChatCapabilities\(id\)[\s\S]*?setAppName\(id\)/,
+    /const refreshCurrentAgentAndStartNewChat[\s\S]*?await probeNewChatCapabilities\(id\)[\s\S]*?setAppName\(id\)[\s\S]*?startNewChat\(\)/,
   );
   assert.match(appSource, /newChatCapabilitiesCacheRef/);
 });

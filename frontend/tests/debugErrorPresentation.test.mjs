@@ -18,11 +18,6 @@ const projectPreviewSource = readFileSync(
   new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
   "utf8",
 );
-const appSource = readFileSync(
-  new URL("../src/App.tsx", import.meta.url),
-  "utf8",
-);
-
 test("debug errors show the complete backend detail by default", () => {
   assert.match(
     source,
@@ -65,10 +60,6 @@ test("creation and deployment keep friendly context and the original error", () 
   assert.match(
     projectPreviewSource,
     /<DeploymentErrorMessage[\s\S]*?className="pp-error"[\s\S]*?\$\{deployError\}/,
-  );
-  assert.match(
-    appSource,
-    /<DeploymentErrorMessage[\s\S]*?className="global-deploy-error"[\s\S]*?message=\{task\.message\}/,
   );
 });
 

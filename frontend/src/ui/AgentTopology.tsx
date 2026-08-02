@@ -1,26 +1,20 @@
-import { useEffect, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
+import { Maximize2, X } from "lucide-react";
 import type {
   AddSessionCapability,
   AgentInfo,
   AgentNode,
-  AgentNodeType,
   SessionCapabilities,
 } from "../adk/client";
-import { AgentIdentityIcon } from "./AgentIdentityIcon";
+import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
+import { emptyDraft, type AgentDraft } from "../create/types";
 import {
   sessionToolLabel,
   SkillCapabilityDialog,
   ToolCapabilityDialog,
 } from "./SessionCapabilityDialogs";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
-
-const TYPE_LABELS: Record<AgentNodeType, string> = {
-  llm: "LLM",
-  sequential: "顺序",
-  parallel: "并行",
-  loop: "循环",
-  a2a: "A2A",
-};
 
 function totalNodes(node: AgentNode): number {
   return 1 + node.children.reduce((count, child) => count + totalNodes(child), 0);
@@ -49,9 +43,19 @@ function normalizeLegacyNames(node: AgentNode, isRoot = true): AgentNode {
   };
 }
 
-function collectDisplayNames(node: AgentNode, names: Map<string, string>): void {
-  names.set(nodeId(node), node.name || nodeId(node));
-  node.children.forEach((child) => collectDisplayNames(child, names));
+function graphNodeToCanvasDraft(node: AgentNode): AgentDraft {
+  const fallback = emptyDraft();
+  return {
+    ...fallback,
+    name: node.name,
+    description: node.description,
+    instruction: node.instruction || fallback.instruction,
+    agentType: node.type,
+    modelName: node.model,
+    tools: node.tools ?? [],
+    skills: (node.skills ?? []).map((skill) => skill.name),
+    subAgents: node.children.map(graphNodeToCanvasDraft),
+  };
 }
 
 function uniqueValues(values: string[]): string[] {
@@ -69,57 +73,6 @@ function uniqueSkills(skills: AgentInfo["skills"]): AgentInfo["skills"] {
         ]),
     ).values(),
   ];
-}
-
-interface TopoNodeProps {
-  node: AgentNode;
-  activeAgent: string;
-  seen: Set<string>;
-  /** Names on the current delegation chain (root → … → executing). */
-  path: Set<string>;
-}
-
-function TopoNode({
-  node,
-  activeAgent,
-  seen,
-  path,
-}: TopoNodeProps) {
-  const id = nodeId(node);
-  const active = Boolean(id) && id === activeAgent;
-  const onPath = Boolean(id) && !active && path.has(id);
-  const done = Boolean(id) && !active && !onPath && seen.has(id);
-
-  return (
-    <div className="topo-branch">
-      <div
-        className={`topo-node topo-type-${node.type} ${
-          active ? "is-active" : ""
-        } ${onPath ? "is-onpath" : ""} ${done ? "is-done" : ""}`}
-        title={node.description || node.name}
-      >
-        <AgentIdentityIcon className="topo-icon" />
-        <span className="topo-name">{node.name || "未命名 Agent"}</span>
-        <span className="topo-badge">{TYPE_LABELS[node.type] ?? "Agent"}</span>
-      </div>
-      {active && node.type === "a2a" && (
-        <div className="topo-remote">远程执行中…</div>
-      )}
-      {node.children.length > 0 && (
-        <div className="topo-children">
-          {node.children.map((child) => (
-            <TopoNode
-              key={nodeId(child)}
-              node={child}
-              activeAgent={activeAgent}
-              seen={seen}
-              path={path}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 interface ModuleTitleProps {
@@ -163,9 +116,6 @@ export function AgentInfoPanel({
   appName,
   info,
   loading,
-  activeAgent,
-  seenAgents,
-  execPath = [],
   variant = "rail",
   capabilities = null,
   capabilityLoading = false,
@@ -175,6 +125,25 @@ export function AgentInfoPanel({
   onRemoveCapability,
 }: AgentInfoPanelProps) {
   const [dialog, setDialog] = useState<"tool" | "skill" | null>(null);
+  const [canvasExpanded, setCanvasExpanded] = useState(false);
+  const expandCanvasRef = useRef<HTMLButtonElement>(null);
+  const closeCanvas = () => {
+    setCanvasExpanded(false);
+    window.requestAnimationFrame(() => expandCanvasRef.current?.focus());
+  };
+  useEffect(() => {
+    if (!canvasExpanded) return;
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeCanvas();
+    };
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [canvasExpanded]);
   if (loading && !info) {
     return (
       <aside
@@ -218,11 +187,24 @@ export function AgentInfoPanel({
     custom: false,
   }));
   const canCustomize = Boolean(capabilities && onAddCapability && onRemoveCapability);
-  const pathSet = new Set(execPath);
-  const displayNames = new Map<string, string>();
-  collectDisplayNames(graph, displayNames);
+  const canvasDraft = graphNodeToCanvasDraft(graph);
+  const renderCanvas = (key: string) => (
+    <AgentBuildCanvas
+      key={key}
+      draft={canvasDraft}
+      direction="horizontal"
+      selectedPath={[]}
+      onSelect={() => undefined}
+      onAdd={() => undefined}
+      onInsert={() => undefined}
+      onDelete={() => undefined}
+      readOnly
+      interactivePreview
+    />
+  );
 
   return (
+    <>
     <aside
       className={`topo${variant === "drawer" ? " is-drawer" : ""}`}
       aria-label="Agent 信息与拓扑"
@@ -364,42 +346,22 @@ export function AgentInfoPanel({
           )}
         </section>
 
-        <section className="topo-module-card topo-topology" aria-label="Agent 拓扑">
-          <ModuleTitle
-            title="拓扑"
-            count={totalNodes(graph)}
-          />
-          <div
-            className="topo-module-scroll topo-topology-scroll"
-            role="region"
-            aria-label="Agent 拓扑列表"
-            tabIndex={0}
-          >
-            {execPath.length > 1 && (
-              <div className="topo-path" aria-label="执行路径">
-                {execPath.map((name, index) => (
-                  <span key={`${name}-${index}`} className="topo-path-seg">
-                    <span
-                      className={
-                        index === execPath.length - 1
-                          ? "topo-path-name is-current"
-                          : "topo-path-name"
-                      }
-                    >
-                      {displayNames.get(name) ?? name}
-                    </span>
-                  </span>
-                ))}
-              </div>
-            )}
-            <div className="topo-tree">
-              <TopoNode
-                node={graph}
-                activeAgent={activeAgent}
-                seen={seenAgents}
-                path={pathSet}
-              />
-            </div>
+        <section className="topo-module-card topo-topology" aria-label="Agent 画布">
+          <div className="topo-canvas-heading">
+            <ModuleTitle title="画布" count={totalNodes(graph)} />
+            <button
+              ref={expandCanvasRef}
+              type="button"
+              className="topo-canvas-expand"
+              aria-label="全屏查看 Agent 画布"
+              title="全屏查看"
+              onClick={() => setCanvasExpanded(true)}
+            >
+              <Maximize2 aria-hidden="true" />
+            </button>
+          </div>
+          <div className="topo-canvas-preview" role="region" aria-label="Agent 执行画布">
+            {renderCanvas(`conversation-canvas:${appName}`)}
           </div>
         </section>
       </div>
@@ -424,6 +386,35 @@ export function AgentInfoPanel({
         />
       )}
     </aside>
+    {canvasExpanded && createPortal(
+      <section
+        className="topo-canvas-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="全屏 Agent 执行画布"
+      >
+        <header className="topo-canvas-dialog-header">
+          <div>
+            <strong>Agent 执行画布</strong>
+            <span>{info.name}</span>
+          </div>
+          <button
+            type="button"
+            aria-label="关闭全屏画布"
+            title="关闭"
+            onClick={closeCanvas}
+            autoFocus
+          >
+            <X aria-hidden="true" />
+          </button>
+        </header>
+        <div className="topo-canvas-dialog-body">
+          {renderCanvas(`conversation-canvas-fullscreen:${appName}`)}
+        </div>
+      </section>,
+      document.body,
+    )}
+    </>
   );
 }
 

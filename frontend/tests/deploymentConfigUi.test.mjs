@@ -94,11 +94,16 @@ test("reuses the build canvas as a read-only expandable deployment preview", () 
   assert.doesNotMatch(projectPreviewSource, /<span>放大查看<\/span>/);
   assert.match(
     projectPreviewStyles,
-    /\.pp-release-info\s*\{[\s\S]*?height:\s*100%;[\s\S]*?\.pp-artifact-actions\s*\{[\s\S]*?margin-top:\s*18px;/,
+    /\.pp-release-preview\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)[\s\S]*?\.pp-flow-thumbnail\s*\{[\s\S]*?height:\s*200px;/,
+  );
+  assert.match(projectPreviewSource, /className="pp-release-card-head">Agent 概览/);
+  assert.match(
+    projectPreviewSource,
+    /\{!embedded && \(\s*<div className="pp-release-info">/,
   );
 });
 
-test("lets the whole publish page scroll while keeping deployment settings unboxed", () => {
+test("lets the whole publish page scroll with builder-style deployment cards", () => {
   assert.match(
     projectPreviewStyles,
     /\.pp-root\.is-deploy\s*\{[\s\S]*?overflow-y:\s*auto;/,
@@ -113,6 +118,10 @@ test("lets the whole publish page scroll while keeping deployment settings unbox
   );
   assert.match(
     projectPreviewStyles,
+    /\.pp-config-section\s*\{[\s\S]*?border:\s*1px solid[\s\S]*?border-radius:\s*18px;[\s\S]*?\.pp-config-label\s*\{[\s\S]*?background:\s*hsl\(var\(--muted\) \/ 0\.34\)/,
+  );
+  assert.match(
+    projectPreviewStyles,
     /\.pp-config-actions\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?left:\s*calc\(\(100vw \+ var\(--pp-sidebar-width, 0px\)\) \/ 2\);[\s\S]*?transform:\s*translateX\(-50%\);/,
   );
 });
@@ -121,6 +130,10 @@ test("aligns the publish overview and deployment settings to one restrained cont
   assert.match(
     projectPreviewStyles,
     /--pp-publish-content-width:\s*min\(760px, max\(680px, calc\(100% - 48px\)\)\)/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-root\.is-deploy\.is-embedded\s*\{[\s\S]*?--pp-publish-content-width:\s*100%;/,
   );
   assert.match(
     projectPreviewStyles,
@@ -164,13 +177,15 @@ test("aligns the publish overview and deployment settings to one restrained cont
   );
   assert.match(
     projectPreviewStyles,
-    /@media \(max-width:\s*860px\)[\s\S]*?--pp-publish-content-width:\s*min\(88%, calc\(100% - 36px\)\)[\s\S]*?grid-template-rows:\s*220px auto;/,
+    /@media \(max-width:\s*860px\)[\s\S]*?--pp-publish-content-width:\s*min\(88%, calc\(100% - 36px\)\)/,
   );
   assert.doesNotMatch(projectPreviewSource, /DeployIcon|RotateCcw className="pp-ic"/);
   assert.match(
     projectPreviewSource,
     /className="pp-deploy studio-update-action"/,
   );
+  assert.match(projectPreviewSource, /deploymentActionTargetId/);
+  assert.match(projectPreviewSource, /createPortal\([\s\S]*?deploymentActionTarget/);
   assert.match(
     appStyles,
     /\.studio-update-action\s*\{[\s\S]*?background:\s*#111;[\s\S]*?color:\s*#fff;[\s\S]*?backdrop-filter:\s*blur\(7px\);[\s\S]*?font-size:\s*12\.5px;/,
@@ -283,7 +298,7 @@ test("uses the builder typography hierarchy for deployment configuration", () =>
   );
   assert.match(
     projectPreviewStyles,
-    /\.pp-config-label\s*\{[\s\S]*?font-size:\s*15px;[\s\S]*?font-weight:\s*650;/,
+    /\.pp-config-label\s*\{[\s\S]*?font-size:\s*14px;[\s\S]*?font-weight:\s*620;/,
   );
   assert.match(
     projectPreviewStyles,

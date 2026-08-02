@@ -11,13 +11,13 @@
   flex-direction: column;
   overflow: hidden;
   border-right: 0;
-  background: #fff;
+  background: hsl(var(--background));
 }
 
 .abc-canvas {
   flex: 1;
   min-height: 0;
-  background: #fff;
+  background: hsl(var(--background));
 }
 
 .abc-canvas .react-flow__pane {
@@ -40,7 +40,7 @@
   align-items: center;
   gap: 9px;
   padding: 12px 14px;
-  border: 1px solid hsl(var(--abc-type-border));
+  border: 0.5px solid hsl(var(--abc-type-border) / 0.62);
   border-radius: 13px;
   background: hsl(var(--panel));
   box-shadow: 0 10px 30px hsl(var(--foreground) / 0.055);
@@ -49,14 +49,14 @@
 }
 
 .abc-node:hover {
-  border-color: hsl(var(--abc-type-tone) / 0.48);
+  border-color: hsl(var(--abc-type-tone) / 0.36);
   box-shadow: 0 13px 34px hsl(var(--foreground) / 0.08);
 }
 
 .abc-node.is-selected {
-  border-color: hsl(var(--abc-type-tone) / 0.86);
+  border-color: hsl(var(--abc-type-tone) / 0.62);
   box-shadow:
-    0 0 0 3px hsl(var(--abc-type-tone) / 0.1),
+    0 0 0 1px hsl(var(--abc-type-tone) / 0.06),
     0 14px 38px hsl(var(--foreground) / 0.09);
 }
 
@@ -89,7 +89,7 @@
   height: 100%;
   box-sizing: border-box;
   overflow: hidden;
-  border: 1.5px solid hsl(var(--abc-type-border) / 0.72);
+  border: 0.5px solid hsl(var(--abc-type-border) / 0.5);
   border-radius: 18px;
   background:
     linear-gradient(180deg, hsl(var(--abc-type-soft) / 0.88), transparent 88px),
@@ -99,9 +99,9 @@
 }
 
 .abc-group.is-selected {
-  border-color: hsl(var(--abc-type-tone) / 0.86);
+  border-color: hsl(var(--abc-type-tone) / 0.62);
   box-shadow:
-    0 0 0 4px hsl(var(--abc-type-tone) / 0.1),
+    0 0 0 1px hsl(var(--abc-type-tone) / 0.06),
     0 16px 46px hsl(var(--foreground) / 0.08);
 }
 
@@ -422,7 +422,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid hsl(var(--border) / 0.82);
+  border: 0.5px solid hsl(var(--border) / 0.68);
   border-radius: 999px;
   background: hsl(var(--secondary) / 0.68);
   box-shadow: none;
@@ -435,8 +435,10 @@
 .abc-handle {
   width: 7px !important;
   height: 7px !important;
-  border: 2px solid hsl(var(--background)) !important;
-  background: hsl(220 9% 38%) !important;
+  border: 0 !important;
+  background: transparent !important;
+  opacity: 0 !important;
+  pointer-events: none;
 }
 
 .abc-group.is-sequential > .abc-handle {
