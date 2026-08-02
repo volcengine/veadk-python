@@ -149,6 +149,39 @@ def test_create_agentkit_app_passes_runtime_identity_to_agentkit() -> None:
     assert server.identity_health_routes == ("/ping",)
 
 
+def test_create_agentkit_app_keeps_legacy_agentkit_compatible_without_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LegacyAgentServer:
+        def __init__(self, agent: BaseAgent, short_term_memory: object) -> None:
+            self.agent = agent
+            self.short_term_memory = short_term_memory
+            self.app = FastAPI()
+
+    monkeypatch.setattr(agentkit_app, "AgentkitAgentServerApp", LegacyAgentServer)
+
+    app = agentkit_app.create_agentkit_app(_root_agent())
+
+    assert isinstance(app, FastAPI)
+
+
+def test_create_agentkit_app_requires_new_agentkit_only_when_identity_is_used(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LegacyAgentServer:
+        def __init__(self, agent: BaseAgent, short_term_memory: object) -> None:
+            self.agent = agent
+            self.short_term_memory = short_term_memory
+            self.app = FastAPI()
+
+    monkeypatch.setattr(agentkit_app, "AgentkitAgentServerApp", LegacyAgentServer)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        agentkit_app.create_agentkit_app(_root_agent(), identity=object())
+
+    assert str(exc_info.value) == agentkit_app._RUNTIME_IDENTITY_REQUIREMENT
+
+
 def test_agent_info_exposes_sanitized_builder_draft() -> None:
     draft = {"name": "agent", "instruction": "Answer with the configured prompt."}
     client = TestClient(

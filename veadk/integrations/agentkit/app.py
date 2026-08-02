@@ -80,6 +80,19 @@ _ADK_SERVER_STATE_KEY = "_veadk_adk_server"
 _DYNAMIC_A2A_ROUTES_ENABLED_STATE_KEY = "_veadk_dynamic_a2a_routes_enabled"
 _SESSION_CAPABILITY_SERVICE_STATE_KEY = "_veadk_session_capability_service"
 _REGISTRY_CONFIG_ATTR = "_veadk_a2a_registry_config"
+_RUNTIME_IDENTITY_REQUIREMENT = (
+    "Runtime identity requires agentkit-sdk-python>=0.8.2; "
+    "upgrade AgentKit SDK before passing identity."
+)
+
+
+def _agentkit_supports_runtime_identity() -> bool:
+    """Return whether the installed AgentKit server exposes identity binding."""
+    try:
+        parameters = inspect.signature(AgentkitAgentServerApp).parameters
+    except (TypeError, ValueError):
+        return False
+    return "identity" in parameters and "identity_health_routes" in parameters
 
 
 def _agent_type(agent: object) -> str:
@@ -1071,6 +1084,8 @@ def create_agentkit_app(
         "short_term_memory": short_term_memory,
     }
     if identity is not None:
+        if not _agentkit_supports_runtime_identity():
+            raise RuntimeError(_RUNTIME_IDENTITY_REQUIREMENT)
         agent_server_kwargs["identity"] = identity
         # VeADK's fixed /ping route returns only {"status": "ok"}. AgentKit
         # keeps every business and introspection route identity-bound.
