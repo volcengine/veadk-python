@@ -9,11 +9,12 @@ import {
   useState,
 } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { Checkbox } from "@openai/apps-sdk-ui/components/Checkbox";
+import { RadioGroup } from "@openai/apps-sdk-ui/components/RadioGroup";
 import {
   ArrowUp,
   Bot,
   Boxes,
-  Check,
   ChevronRight,
   Cpu,
   Database,
@@ -183,7 +184,7 @@ type StepId =
   | "tools"
   | "skills"
   | "knowledge"
-  | "advanced"
+  | "memory"
   | "subagents"
   | "review";
 
@@ -214,7 +215,7 @@ const STEPS: StepMeta[] = [
   { id: "tools", label: "工具", hint: "可调用的能力", icon: Wrench },
   { id: "skills", label: "技能", hint: "声明式技能", icon: Sparkles },
   { id: "knowledge", label: "知识库", hint: "外部知识检索", icon: Database },
-  { id: "advanced", label: "进阶配置", hint: "记忆", icon: Layers },
+  { id: "memory", label: "记忆", hint: "短期与长期记忆", icon: Layers },
   { id: "subagents", label: "子 Agent", hint: "嵌套协作", icon: Boxes },
   { id: "review", label: "完成", hint: "预览并创建", icon: Rocket },
 ];
@@ -298,26 +299,14 @@ function A2aRefreshIcon({ className }: { className?: string }) {
   );
 }
 
-const AGENT_TYPE_BAR_LABELS: Record<
-  NonNullable<AgentDraft["agentType"]>,
-  string
-> = {
+type AgentType = NonNullable<AgentDraft["agentType"]>;
+
+const AGENT_TYPE_BAR_LABELS: Record<AgentType, string> = {
   llm: "智能体",
   sequential: "分步协作",
   parallel: "同时处理",
   loop: "循环执行",
   a2a: "远程智能体",
-};
-
-const AGENT_TYPE_DESCRIPTIONS: Record<
-  NonNullable<AgentDraft["agentType"]>,
-  string
-> = {
-  llm: "理解任务并完成一个具体工作",
-  sequential: "内部步骤按照顺序依次执行",
-  parallel: "内部步骤同时工作，完成后统一汇总",
-  loop: "重复执行内部步骤，直到满足停止条件",
-  a2a: "调用已经存在的远程 Agent",
 };
 
 const A2A_REGISTRY_ENV_TO_FIELD = {
@@ -382,7 +371,7 @@ function Checklist({
       style={
         scrollRows
           ? ({
-              "--cw-checklist-max-height": `${scrollRows * 65 + (scrollRows - 1) * 8}px`,
+              "--cw-checklist-max-height": `${scrollRows * 40 + (scrollRows - 1) * 8}px`,
             } as CSSProperties)
           : undefined
       }
@@ -390,23 +379,20 @@ function Checklist({
       {items.map((it) => {
         const on = selected.includes(it.id);
         return (
-          <button
+          <Checkbox
             key={it.id}
-            type="button"
+            id={`cw-check-${it.id}`}
             className={`cw-check ${on ? "is-on" : ""}`}
-            onClick={() => onToggle(it.id)}
-            aria-pressed={on}
-          >
-            <span className="cw-check-box" aria-hidden>
-              {on && <Check className="cw-i cw-i-sm" />}
-            </span>
-            <span className="cw-check-text">
-              <span className="cw-check-title">{it.label}</span>
-              <span className="cw-check-desc">
-                {displayDescription(it.desc)}
+            checked={on}
+            onCheckedChange={(next) => {
+              if (next !== on) onToggle(it.id);
+            }}
+            label={
+              <span className="cw-check-text">
+                <span className="cw-check-title">{it.label}</span>
               </span>
-            </span>
-          </button>
+            }
+          />
         );
       })}
     </div>
@@ -437,10 +423,8 @@ function BackendSelect({
             className={`cw-seg ${on ? "is-on" : ""}`}
             onClick={() => onChange(o.id)}
             aria-pressed={on}
-            title={displayDescription(o.desc)}
           >
             <span className="cw-seg-title">{o.label}</span>
-            <span className="cw-seg-desc">{displayDescription(o.desc)}</span>
           </button>
         );
       })}
@@ -800,6 +784,15 @@ function VikingKnowledgebaseSelect({
     setOpen(false);
   };
 
+  if (loading && items.length === 0) {
+    return (
+      <span className="cw-viking-kb-inline-status" role="status">
+        <Loader2 className="cw-i cw-i-sm cw-spin" />
+        正在加载…
+      </span>
+    );
+  }
+
   return (
     <div className="cw-a2a-space-picker cw-viking-kb-picker" ref={pickerRef}>
       <div className="cw-a2a-space-row">
@@ -899,11 +892,6 @@ function VikingKnowledgebaseSelect({
           <Info className="cw-i" />
           <span>{error}</span>
         </div>
-      ) : loading ? (
-        <span className="cw-help cw-a2a-space-status">
-          <Loader2 className="cw-i cw-i-sm cw-spin" />
-          正在加载 VikingDB 知识库…
-        </span>
       ) : items.length === 0 ? (
         <span className="cw-help">此账号下暂无 VikingDB 知识库。</span>
       ) : (
@@ -1291,8 +1279,6 @@ function Toggle({
   checked,
   onChange,
   title,
-  desc,
-  icon: Icon,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
@@ -1307,12 +1293,8 @@ function Toggle({
       onClick={() => onChange(!checked)}
       aria-pressed={checked}
     >
-      <span className="cw-toggle-icon">
-        <Icon className="cw-i" />
-      </span>
       <span className="cw-toggle-text">
         <span className="cw-toggle-title">{title}</span>
-        <span className="cw-toggle-desc">{displayDescription(desc)}</span>
       </span>
       <span className="cw-switch" aria-hidden>
         <motion.span
@@ -1774,13 +1756,6 @@ function codegenDraft(draft: AgentDraft): AgentDraft {
   };
 }
 
-function workspaceAgentName(draft: AgentDraft): string {
-  const rootName = draft.name.trim();
-  if (rootName) return rootName;
-  if (draft.agentType !== "sequential") return "";
-  return draft.subAgents.find((agent) => agent.name.trim())?.name.trim() ?? "";
-}
-
 function defaultDebugModelName(draft: AgentDraft): string {
   const modelName = draft.modelName?.trim();
   if (modelName) return modelName;
@@ -2167,14 +2142,13 @@ function DebugComparisonWorkspace({
                           </legend>
                           <div className="cw-ab-optimization-list">
                             {DEBUG_OPTIMIZATIONS.map((item) => (
-                              <label key={item.id}>
-                                <input
-                                  type="checkbox"
-                                  checked={variant.optimizations.includes(item.id)}
-                                  disabled
-                                />
-                                <span>{item.label}</span>
-                              </label>
+                              <Checkbox
+                                key={item.id}
+                                checked={variant.optimizations.includes(item.id)}
+                                disabled
+                                label={item.label}
+                                className="cw-ab-optimization-checkbox"
+                              />
                             ))}
                           </div>
                         </fieldset>
@@ -2241,7 +2215,7 @@ const WORKSPACE_MODES: Array<{
   id: WorkspaceMode;
   label: string;
 }> = [
-  { id: "build", label: "构建" },
+  { id: "build", label: "架构" },
   { id: "validate", label: "调试" },
   { id: "publish", label: "发布" },
 ];
@@ -2269,57 +2243,88 @@ const DEBUG_OPTIMIZATIONS = [
   },
 ] as const;
 
-function WorkspaceHeader({
-  mode,
-  agentName,
-  busy,
-  onChange,
-  onDiscard,
-}: {
-  mode: WorkspaceMode;
-  agentName: string;
-  busy: boolean;
-  onChange: (mode: WorkspaceMode) => void;
-  onDiscard?: () => void;
-}) {
-  const activeIndex = WORKSPACE_MODES.findIndex((item) => item.id === mode);
+function WorkspaceHeader({ mode }: { mode: WorkspaceMode }) {
+  const title =
+    mode === "validate"
+      ? "调试您的智能体"
+      : mode === "publish"
+        ? "准备好部署您的智能体"
+        : "个性化您的智能体架构";
   return (
     <header className="cw-workspace-header">
-      <div className="cw-workspace-identity">
-        <strong title={agentName}>{agentName || "未命名 Agent"}</strong>
+      <h1>{title}</h1>
+    </header>
+  );
+}
+
+function WorkspaceLifecycleFooter({
+  mode,
+  busy,
+  onChange,
+  assistant,
+}: {
+  mode: WorkspaceMode;
+  busy: boolean;
+  onChange: (mode: WorkspaceMode) => void;
+  assistant?: React.ReactNode;
+}) {
+  const activeIndex = WORKSPACE_MODES.findIndex((item) => item.id === mode);
+  const previousMode = WORKSPACE_MODES[activeIndex - 1];
+  const nextMode = WORKSPACE_MODES[activeIndex + 1];
+  return (
+    <footer className="cw-workspace-footer">
+      <div
+        className={`cw-workspace-nav-actions${assistant ? " has-assistant" : ""}`}
+      >
+        <button
+          type="button"
+          className={`cw-workspace-nav-button${mode === "build" ? " is-placeholder" : ""}`}
+          aria-hidden={mode === "build" || undefined}
+          tabIndex={mode === "build" ? -1 : 0}
+          disabled={!previousMode || busy}
+          onClick={() => previousMode && onChange(previousMode.id)}
+        >
+          上一步
+        </button>
+        <span aria-hidden="true" />
+        {assistant ? (
+          <div className="cw-workspace-ai-slot">{assistant}</div>
+        ) : null}
+        {mode === "publish" ? (
+          <div
+            id="cw-publish-primary-action"
+            className="cw-publish-action-slot"
+          />
+        ) : (
+          <button
+            type="button"
+            className="cw-workspace-nav-button is-primary"
+            disabled={!nextMode || busy}
+            onClick={() => nextMode && onChange(nextMode.id)}
+          >
+            下一步
+          </button>
+        )}
       </div>
-      <nav className="cw-workspace-stepper" aria-label="Agent 创建步骤">
+      <nav className="cw-workspace-progress" aria-label="Agent 创建进度">
         {WORKSPACE_MODES.map((item, index) => {
           const active = item.id === mode;
-          const complete = index < activeIndex;
-          const pending = item.id === "publish" && busy;
           return (
             <button
               key={item.id}
               type="button"
-              className={`${active ? "is-active" : ""}${complete ? " is-complete" : ""}`}
+              className={`${active ? "is-active" : ""}${index < activeIndex ? " is-complete" : ""}`}
               aria-current={active ? "step" : undefined}
-              disabled={pending}
+              aria-label={item.label}
+              disabled={busy}
               onClick={() => onChange(item.id)}
             >
-              <strong>{item.label}</strong>
+              <span aria-hidden="true" />
             </button>
           );
         })}
       </nav>
-      {onDiscard && (
-        <div className="cw-workspace-actions">
-          <button
-            type="button"
-            className="cw-discard-edit"
-            disabled={busy}
-            onClick={onDiscard}
-          >
-            放弃编辑
-          </button>
-        </div>
-      )}
-    </header>
+    </footer>
   );
 }
 
@@ -2368,6 +2373,7 @@ export function CustomCreate({
 }: CustomCreateProps) {
   void onCreate; // outcome is the in-pane project preview, not a navigation
   void onBack; // no footer nav in the single-scroll layout; back lives in app chrome
+  void onDiscard; // the discard action is intentionally hidden in this flow
   const [draft, setDraft] = useState<AgentDraft>(
     () => initialDraft ?? emptyDraft(),
   );
@@ -2389,7 +2395,6 @@ export function CustomCreate({
     onDraftChangeRef.current?.(draft, draftDirty);
   }, [draft, draftDirty, draftSnapshot]);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("build");
-  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
   const [validationPulse, setValidationPulse] = useState(0);
   const [project, setProject] = useState<AgentProject | null>(null);
@@ -2430,15 +2435,10 @@ export function CustomCreate({
   const [debugLeaveCleaning, setDebugLeaveCleaning] = useState(false);
   const debugLeaveConfirmResolverRef =
     useRef<((confirmed: boolean) => void) | null>(null);
-  // The section nearest the top of the scroll container (scroll-spy) — drives
-  // the right-hand step nav highlight.
-  const [activeId, setActiveId] = useState<StepId>("basic");
   const [buildErr, setBuildErr] = useState("");
   const [modelAdvancedOpen, setModelAdvancedOpen] = useState(false);
   const [a2aRegistryAdvancedOpen, setA2aRegistryAdvancedOpen] =
     useState(false);
-  const [moreToolTypesOpen, setMoreToolTypesOpen] = useState(false);
-  const [advancedConfigOpen, setAdvancedConfigOpen] = useState(false);
 
   // Which tree node is being edited ([] = root). The detail pane and per-node
   // inline errors are driven by this selection.
@@ -2506,12 +2506,9 @@ export function CustomCreate({
         className="cw-section"
       >
         <header className="cw-sec-head">
-          <h2 className="cw-sec-title">
-            {meta.label}
-            {meta.required && <span className="cw-sec-required">必填</span>}
-          </h2>
+          <h2 className="cw-sec-title">{meta.label}</h2>
         </header>
-        {children}
+        <div className="cw-sec-body">{children}</div>
       </section>
     );
   }
@@ -2525,8 +2522,6 @@ export function CustomCreate({
   const a2aRegistryAdvancedId = `cw-a2a-registry-advanced-${
     safePath.join("-") || "root"
   }`;
-  const moreToolTypesId = `cw-more-tool-types-${safePath.join("-") || "root"}`;
-  const advancedConfigId = `cw-advanced-config-${safePath.join("-") || "root"}`;
   const patch = (p: Partial<AgentDraft>) =>
     setDraft((d) => updateNode(d, safePath, (n) => ({ ...n, ...p })));
 
@@ -2658,7 +2653,6 @@ export function CustomCreate({
     setDraft(emptyDraft());
     setSelectedPath([]);
     setShowErrors(false);
-    setAdvancedConfigOpen(false);
   };
 
   const deleteCanvasStep = (path: NodePath) => {
@@ -2673,11 +2667,6 @@ export function CustomCreate({
   const builtinTools = node.builtinTools ?? [];
   const mcpTools = node.mcpTools ?? [];
   const selectedSkills = node.selectedSkills ?? [];
-  const advancedEnabledCount = [
-    node.memory.shortTerm,
-    node.memory.longTerm,
-  ].filter(Boolean).length;
-
   const toggleBuiltin = (id: string) =>
     patch({
       builtinTools: builtinTools.includes(id)
@@ -2722,103 +2711,13 @@ export function CustomCreate({
     debugVariants[0];
   const deploymentEnv = useMemo(() => collectDeploymentEnv(draft), [draft]);
 
-  // Per-step completion, for the nav's done-checkmarks + progress fill.
-  const completion = useMemo<Record<StepId, boolean>>(
-    () => ({
-      type: true,
-      basic: a2a
-        ? !a2aRegistrySpaceMissing
-        : !nameInvalid && (orchestrator || !instructionMissing),
-      model: Boolean(
-        node.modelName?.trim() ||
-          node.modelProvider?.trim() ||
-          node.modelApiBase?.trim(),
-      ),
-      tools: builtinTools.length > 0 || mcpTools.length > 0,
-      skills: selectedSkills.length > 0,
-      knowledge: node.knowledgebase,
-      advanced: node.memory.shortTerm || node.memory.longTerm,
-      subagents: (node.subAgents?.length ?? 0) > 0,
-      review: canFinish,
-    }),
-    [
-      node,
-      nameInvalid,
-      instructionMissing,
-      orchestrator,
-      a2a,
-      canFinish,
-      builtinTools,
-      mcpTools,
-      selectedSkills,
-    ],
-  );
-
-  // The nav only lists the sections actually rendered for THIS node's type —
-  // orchestrators / A2A leaves have far fewer than an LLM (type lives in the
-  // form; sub-agents live in the left tree and are excluded here).
-  const rootOnlyStepIds: StepId[] = isRootAgent ? ["advanced"] : [];
-  const navStepIds: StepId[] =
-    orchestrator || a2a
-      ? ["type", "basic"]
-      : ["type", "basic", "model", "tools", "skills", "knowledge", ...rootOnlyStepIds];
-  const navSteps = STEPS.filter((s) => navStepIds.includes(s.id));
-  const navStepKey = navStepIds.join("|");
-  const selectedNodeKey = safePath.join(".");
-  const activeIndex = navSteps.findIndex((s) => s.id === activeId);
-
-  // Smooth-scroll a section into view (nav click is a convenience).
+  // Smooth-scroll to the first invalid section during validation.
   const scrollToSection = (id: StepId) => {
     sectionRefs.current[id]?.scrollIntoView({
       behavior: "smooth",
       block: "start",
     });
   };
-
-  // Scroll-spy: follow the section that has crossed the scroll area's top edge.
-  // A passive scroll listener is more reliable here than IntersectionObserver:
-  // tall sections may stay intersecting for a long time, so no observer callback
-  // fires while the user moves through them.
-  useEffect(() => {
-    if (project) return;
-    const root = scrollRef.current;
-    if (!root) return;
-    const ids = navStepKey.split("|") as StepId[];
-    let frame = 0;
-
-    const syncActiveSection = () => {
-      frame = 0;
-      const lastId = ids[ids.length - 1];
-      let nextId = ids[0];
-
-      if (root.scrollTop + root.clientHeight >= root.scrollHeight - 2) {
-        nextId = lastId;
-      } else {
-        const anchor = root.getBoundingClientRect().top + 24;
-        for (const id of ids) {
-          const section = sectionRefs.current[id];
-          if (!section || section.getBoundingClientRect().top > anchor) break;
-          nextId = id;
-        }
-      }
-
-      if (nextId)
-        setActiveId((current) => (current === nextId ? current : nextId));
-    };
-
-    const scheduleSync = () => {
-      if (!frame) frame = window.requestAnimationFrame(syncActiveSection);
-    };
-
-    syncActiveSection();
-    root.addEventListener("scroll", scheduleSync, { passive: true });
-    window.addEventListener("resize", scheduleSync);
-    return () => {
-      root.removeEventListener("scroll", scheduleSync);
-      window.removeEventListener("resize", scheduleSync);
-      if (frame) window.cancelAnimationFrame(frame);
-    };
-  }, [project, navStepKey, selectedNodeKey]);
 
   const requireCompleteDraft = () => {
     if (canFinish) return true;
@@ -3267,20 +3166,85 @@ export function CustomCreate({
 
   const metaOf = (id: StepId) => STEPS.find((s) => s.id === id)!;
 
+  const aiComposer = (
+    <section
+      className={`cw-ai-compose${aiGenerating ? " is-generating" : ""}${aiGenerated ? " is-success" : ""}`}
+      aria-label="AI 自动填写 Agent 配置"
+    >
+      <AnimatePresence initial={false} mode="wait">
+        {aiGenerated ? (
+          <motion.div
+            key="success"
+            className="cw-ai-compose-success"
+            role="status"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <span className="cw-ai-success-check" aria-hidden />
+            <strong>生成成功</strong>
+            <button
+              type="button"
+              className="cw-ai-regenerate"
+              onClick={() => setAiGenerated(false)}
+            >
+              重新生成
+            </button>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="compose"
+            className="cw-ai-compose-entry"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <form
+              className="cw-ai-compose-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleGenerateDraft();
+              }}
+            >
+              <input
+                type="text"
+                value={aiRequirement}
+                maxLength={8000}
+                disabled={aiGenerating}
+                placeholder="输入您的目标"
+                onChange={(event) => setAiRequirement(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void handleGenerateDraft();
+                  }
+                }}
+              />
+              <button
+                type="submit"
+                disabled={aiGenerating || !aiRequirement.trim()}
+                aria-label={aiGenerating ? "正在智能生成" : "智能生成"}
+              >
+                {aiGenerating ? (
+                  <span className="cw-ai-orb" aria-hidden>
+                    <span />
+                  </span>
+                ) : (
+                  "智能生成"
+                )}
+              </button>
+            </form>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </section>
+  );
+
   return (
-    <div className="cw-root">
-      <WorkspaceHeader
-        mode={workspaceMode}
-        agentName={workspaceAgentName(draft)}
-        busy={building}
-        onChange={handleWorkspaceChange}
-        onDiscard={onDiscard
-          ? () => {
-              if (draftDirty) setDiscardConfirmOpen(true);
-              else onDiscard();
-            }
-          : undefined}
-      />
+    <div className={`cw-root is-${workspaceMode}`}>
+      <WorkspaceHeader mode={workspaceMode} />
       {buildErr && (
         <DeploymentErrorMessage
           className="cw-workspace-alert"
@@ -3290,86 +3254,10 @@ export function CustomCreate({
       <main className="cw-workspace-main" id="cw-workspace-main">
       {workspaceMode === "build" && (
         <div className="cw-build-workspace">
-        <section
-          className={`cw-ai-compose${aiGenerating ? " is-generating" : ""}${aiGenerated ? " is-success" : ""}`}
-          aria-label="AI 自动填写 Agent 配置"
-        >
-          <AnimatePresence initial={false} mode="wait">
-            {aiGenerated ? (
-              <motion.div
-                key="success"
-                className="cw-ai-compose-success"
-                role="status"
-                initial={{ opacity: 0, scale: 0.98 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.98 }}
-                transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-              >
-                <span className="cw-ai-success-check" aria-hidden />
-                <strong>生成成功</strong>
-                <button
-                  type="button"
-                  className="cw-ai-regenerate"
-                  onClick={() => setAiGenerated(false)}
-                >
-                  重新生成
-                </button>
-              </motion.div>
-            ) : (
-              <motion.div
-                key="compose"
-                className="cw-ai-compose-entry"
-                initial={{ opacity: 0, scale: 0.98 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.98 }}
-                transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-              >
-                <form
-                  className="cw-ai-compose-form"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void handleGenerateDraft();
-                  }}
-                >
-                  <input
-                    type="text"
-                    value={aiRequirement}
-                    maxLength={8000}
-                    disabled={aiGenerating}
-                    placeholder="输入您的目标"
-                    onChange={(event) => setAiRequirement(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        void handleGenerateDraft();
-                      }
-                    }}
-                  />
-                  <button
-                    type="submit"
-                    disabled={aiGenerating || !aiRequirement.trim()}
-                    aria-label={aiGenerating ? "正在智能生成" : "智能生成"}
-                  >
-                    {aiGenerating ? (
-                      <span className="cw-ai-orb" aria-hidden>
-                        <span />
-                      </span>
-                    ) : (
-                      "智能生成"
-                    )}
-                  </button>
-                </form>
-                <p className="cw-ai-compose-note">
-                  使用 doubao-seed-2-0-lite-260428 模型生成，将会产生 Token 消耗
-                </p>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </section>
         <div className="cw-editor">
         <AgentBuildCanvas
           draft={draft}
-          direction="vertical"
+          direction="horizontal"
           selectedPath={safePath}
           onSelect={setSelectedPath}
           onAdd={addCanvasStep}
@@ -3384,10 +3272,11 @@ export function CustomCreate({
             <div className="cw-lower">
             <div className="cw-form-col">
             <Section meta={metaOf("type")}>
-              <div
+              <RadioGroup<AgentType>
                 className="cw-agent-type-options"
-                role="radiogroup"
                 aria-label="Agent 类型"
+                value={node.agentType ?? "llm"}
+                onChange={selectAgentType}
               >
                 {AGENT_TYPES.map((t) => {
                   const on = (node.agentType ?? "llm") === t.id;
@@ -3396,32 +3285,25 @@ export function CustomCreate({
                     ? "cw-remote-agent-disabled-hint"
                     : undefined;
                   return (
-                    <label
+                    <div
                       key={t.id}
                       data-agent-type={t.id}
                       className={`cw-agent-type-option ${on ? "is-on" : ""} ${
                         remoteTypeDisabled ? "is-disabled" : ""
                       }`}
-                      title={
-                        remoteTypeDisabled
-                          ? undefined
-                          : AGENT_TYPE_DESCRIPTIONS[t.id]
-                      }
                       tabIndex={remoteTypeDisabled ? 0 : undefined}
                       aria-describedby={disabledHintId}
                     >
-                      <input
-                        type="radio"
-                        name="agentType"
-                        className="cw-agent-type-radio"
-                        checked={on}
+                      <RadioGroup.Item
+                        value={t.id}
                         disabled={remoteTypeDisabled}
-                        onChange={() => selectAgentType(t.id)}
-                      />
-                      <span className="cw-agent-type-copy">
-                        <strong>{AGENT_TYPE_BAR_LABELS[t.id]}</strong>
-                        <small>{AGENT_TYPE_DESCRIPTIONS[t.id]}</small>
-                      </span>
+                        block
+                        className="cw-agent-type-control"
+                      >
+                        <span className="cw-agent-type-copy">
+                          <strong>{AGENT_TYPE_BAR_LABELS[t.id]}</strong>
+                        </span>
+                      </RadioGroup.Item>
                       {remoteTypeDisabled && (
                         <span
                           id={disabledHintId}
@@ -3431,10 +3313,10 @@ export function CustomCreate({
                           远程智能体只能作为子步骤使用
                         </span>
                       )}
-                    </label>
+                    </div>
                   );
                 })}
-              </div>
+              </RadioGroup>
               {showErrors && orchestrator && node.subAgents.length === 0 && (
                 <span className="cw-error-text">
                   {validationProblemMessage({
@@ -3458,7 +3340,7 @@ export function CustomCreate({
                       <input
                         className={`cw-input ${invalidClass(nameInvalid)}`}
                         value={node.name}
-                        placeholder="customer_service"
+                        placeholder="assistant"
                         onChange={(e) => patch({ name: e.target.value })}
                       />
                       {showErrors && nameProblem ? (
@@ -3502,7 +3384,7 @@ export function CustomCreate({
                       )}
                     {orchestrator ? (
                       <>
-                        <p className="cw-section-desc">
+                        <p className="cw-section-desc cw-dependency-hint">
                             这是一个协作容器，本身不生成回答。请在左侧画布中
                             添加任务步骤，并通过拖拽调整它们的位置。
                         </p>
@@ -3658,7 +3540,7 @@ export function CustomCreate({
                     </div>
                     <button
                       type="button"
-                      className="cw-more-options"
+                      className="cw-more-options cw-model-more-options"
                       aria-expanded={modelAdvancedOpen}
                       aria-controls={modelAdvancedId}
                             onClick={() =>
@@ -3706,7 +3588,7 @@ export function CustomCreate({
                                 patch({ modelApiBase: e.target.value })
                               }
                             />
-                            <span className="cw-help">
+                            <span className="cw-help cw-dependency-hint">
                                     留空则使用 VeADK 默认模型配置；Ark API Key
                                     会由 Studio 服务端凭据自动获取。其他服务商的
                                     Key 可在部署页添加。
@@ -3762,55 +3644,13 @@ export function CustomCreate({
                         )}
                       </AnimatePresence>
                     </div>
-                    <button
-                      type="button"
-                      className="cw-more-options"
-                      aria-expanded={moreToolTypesOpen}
-                      aria-controls={moreToolTypesId}
-                            onClick={() =>
-                              setMoreToolTypesOpen((open) => !open)
-                            }
-                    >
-                      <span>更多类型工具</span>
-                      {mcpTools.length > 0 && (
-                        <span className="cw-more-options-count">
-                          已配置 {mcpTools.length}
-                        </span>
-                      )}
-                      <ChevronRight
-                        className={`cw-more-options-chevron ${
-                          moreToolTypesOpen ? "is-open" : ""
-                        }`}
-                        aria-hidden
+                    <div className="cw-field cw-mcp-field">
+                      <label className="cw-label">MCP 工具</label>
+                      <McpToolEditor
+                        tools={mcpTools}
+                        onChange={(next) => patch({ mcpTools: next })}
                       />
-                    </button>
-                    <AnimatePresence initial={false}>
-                      {moreToolTypesOpen && (
-                        <motion.div
-                          id={moreToolTypesId}
-                          className="cw-model-advanced"
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: "auto", opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          transition={{ duration: 0.18, ease: "easeOut" }}
-                        >
-                          <div className="cw-field">
-                            <label className="cw-label">MCP 工具</label>
-                            <span className="cw-help">
-                                    连接外部 MCP
-                                    服务，生成时会为每个条目创建对应的
-                                    MCPToolset。
-                            </span>
-                            <McpToolEditor
-                              tools={mcpTools}
-                                    onChange={(next) =>
-                                      patch({ mcpTools: next })
-                                    }
-                            />
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
+                    </div>
                   </div>
             </Section>
 
@@ -3878,50 +3718,7 @@ export function CustomCreate({
             </Section>
 
             {isRootAgent && (
-              <section
-                ref={(el) => {
-                  sectionRefs.current.advanced = el;
-                }}
-                id="cw-sec-advanced"
-                data-step-id="advanced"
-                className="cw-section cw-advanced-section"
-              >
-                <button
-                  type="button"
-                  className="cw-advanced-disclosure"
-                  aria-expanded={advancedConfigOpen}
-                  aria-controls={advancedConfigId}
-                            onClick={() =>
-                              setAdvancedConfigOpen((open) => !open)
-                            }
-                >
-                  <span className="cw-advanced-disclosure-title">进阶配置</span>
-                  <ChevronRight
-                    className={`cw-advanced-disclosure-chevron ${
-                      advancedConfigOpen ? "is-open" : ""
-                    }`}
-                    aria-hidden
-                  />
-                  {advancedEnabledCount > 0 && (
-                    <span className="cw-more-options-count">
-                      已启用 {advancedEnabledCount}
-                    </span>
-                  )}
-                </button>
-                <AnimatePresence initial={false}>
-                  {advancedConfigOpen && (
-                    <motion.div
-                      id={advancedConfigId}
-                      className="cw-advanced-content"
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: "auto", opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.2, ease: "easeOut" }}
-                    >
-                    <div className="cw-advanced-group">
-                      <div className="cw-advanced-group-head">
-                        <span>记忆</span>
-                      </div>
+              <Section meta={metaOf("memory")}>
                       <div className="cw-form cw-toggle-stack">
                         <Toggle
                           checked={node.memory.shortTerm}
@@ -4017,76 +3814,18 @@ export function CustomCreate({
                           </div>
                         )}
                       </div>
-                    </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </section>
+              </Section>
             )}
               </>
             )}
           </div>
 
-            {/* Right rail: scroll-spy step nav (click to jump to a section).
-                Only the sections rendered for this node's type are listed. */}
-            <nav className="cw-rail" aria-label="步骤导航">
-              <ol className="cw-steps">
-                <div className="cw-rail-track" aria-hidden>
-                  <motion.div
-                    className="cw-rail-fill"
-                    animate={{
-                      height: `${(Math.max(activeIndex, 0) / Math.max(navSteps.length - 1, 1)) * 100}%`,
-                    }}
-                        transition={{
-                          type: "spring",
-                          stiffness: 260,
-                          damping: 32,
-                        }}
-                  />
-                </div>
-                {navSteps.map((s) => {
-                  const active = s.id === activeId;
-                  const done = completion[s.id];
-                  return (
-                    <li key={s.id}>
-                      <button
-                        type="button"
-                        className={`cw-step ${active ? "is-active" : ""} ${done ? "is-done" : ""}`}
-                        onClick={() => scrollToSection(s.id)}
-                        aria-current={active ? "step" : undefined}
-                        aria-label={s.label}
-                      >
-                        <span className="cw-step-marker" aria-hidden>
-                          {active ? (
-                            <span className="cw-dot" />
-                          ) : done ? (
-                            <Check className="cw-step-check" />
-                          ) : (
-                            <span className="cw-dot" />
-                          )}
-                        </span>
-                        <span className="cw-step-tooltip" aria-hidden>
-                          {s.label}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ol>
-            </nav>
               </div>
               {/* cw-lower */}
             </div>
             {/* cw-detail-inner */}
           </div>
           {/* cw-detail-scroll */}
-          <button
-            type="button"
-            className="cw-build-next studio-update-action"
-            onClick={openValidation}
-          >
-            <span>开始调试</span>
-          </button>
         </div>
         {/* cw-detail */}
         </div>
@@ -4154,6 +3893,7 @@ export function CustomCreate({
               onAgentAdded={onAgentAdded}
               onDeploymentTaskChange={onDeploymentTaskChange}
               deploymentActionLabel={deploymentTarget ? "更新并发布" : "部署"}
+              deploymentActionTargetId="cw-publish-primary-action"
               deploymentRuntimeId={deploymentTarget?.runtimeId}
               onDeploymentStarted={onDeploymentStarted}
               onDeploymentComplete={onDeploymentComplete}
@@ -4204,6 +3944,12 @@ export function CustomCreate({
         </div>
       )}
       </main>
+      <WorkspaceLifecycleFooter
+        mode={workspaceMode}
+        busy={building}
+        onChange={handleWorkspaceChange}
+        assistant={workspaceMode === "build" ? aiComposer : undefined}
+      />
       {debugTraceTarget && (
         <TraceDrawer
           testRunId={debugTraceTarget.runId}
@@ -4223,39 +3969,6 @@ export function CustomCreate({
           onCancel={cancelDebugLeaveConfirm}
           onConfirm={() => void acceptDebugLeaveConfirm()}
         />
-      )}
-      {discardConfirmOpen && (
-        <div className="confirm-scrim" onClick={() => setDiscardConfirmOpen(false)}>
-          <div
-            className="confirm-box"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="discard-edit-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="confirm-title" id="discard-edit-title">放弃本次编辑？</div>
-            <div className="confirm-text">本次修改将不会保留，智能体会恢复到进入编辑前的状态。</div>
-            <div className="confirm-actions">
-              <button
-                type="button"
-                className="confirm-btn"
-                onClick={() => setDiscardConfirmOpen(false)}
-              >
-                继续编辑
-              </button>
-              <button
-                type="button"
-                className="confirm-btn confirm-btn--danger"
-                onClick={() => {
-                  setDiscardConfirmOpen(false);
-                  onDiscard?.();
-                }}
-              >
-                放弃编辑
-              </button>
-            </div>
-          </div>
-        </div>
       )}
       {aiErrorDialog && (
         <div className="confirm-scrim" onClick={() => setAiErrorDialog(null)}>

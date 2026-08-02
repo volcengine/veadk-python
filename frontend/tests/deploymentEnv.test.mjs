@@ -226,7 +226,7 @@ test("keeps the generated project stable when only deployment channel settings c
 });
 
 test("uses concise placeholders for agent names and custom environment variables", () => {
-  assert.match(customCreateSource, /placeholder="customer_service"/);
+  assert.match(customCreateSource, /placeholder="assistant"/);
   assert.doesNotMatch(customCreateSource, /placeholder="例如：customer_service"/);
   assert.match(projectPreviewSource, /placeholder="名称"/);
   assert.match(projectPreviewSource, /placeholder="值"/);

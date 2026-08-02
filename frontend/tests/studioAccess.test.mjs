@@ -60,8 +60,14 @@ test("runtime selection obeys the server-granted scope", () => {
 
 test("only administrators and developers receive Agent deployment controls", () => {
   assert.match(appSource, /<MyAgents[\s\S]*?canCreate=\{canCreateAgents\}/);
-  assert.match(myAgentsSource, /\{canCreate && \([\s\S]*?className="my-agent-add"/);
-  assert.match(myAgentsSource, /!query\.trim\(\) && activeType === "general" && canCreate/);
+  assert.match(
+    myAgentsSource,
+    /className="my-agent-create-primary"[\s\S]*?disabled=\{!createAgent\}/,
+  );
+  assert.match(
+    myAgentsSource,
+    /\{canCreate \? \([\s\S]*?<EmptyMessage\.ActionRow>[\s\S]*?<Button/,
+  );
 });
 
 test("runtime authorization failures are not reported as unsupported", () => {

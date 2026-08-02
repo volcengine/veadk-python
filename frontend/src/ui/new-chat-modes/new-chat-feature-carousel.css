@@ -1,0 +1,123 @@
+.new-chat-feature-carousel {
+  position: absolute;
+  top: calc(100% + 112px);
+  left: 50%;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 28px;
+  align-items: center;
+  column-gap: 6px;
+  width: 25%;
+  min-width: 176px;
+  max-width: 192px;
+  transform: translateX(-50%);
+}
+
+.new-chat-feature-carousel .ui-carousel__viewport {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+
+.new-chat-feature-carousel .ui-carousel__control {
+  position: static;
+  grid-row: 1;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.new-chat-feature-carousel .ui-carousel__control:hover:not(:disabled) {
+  border: 0;
+  background: transparent;
+}
+
+.new-chat-feature-carousel .ui-carousel__control--previous { grid-column: 1; }
+.new-chat-feature-carousel .ui-carousel__control--next { grid-column: 3; }
+
+.new-chat-feature-card {
+  position: relative;
+  display: flex;
+  aspect-ratio: 16 / 9;
+  align-items: flex-end;
+  overflow: hidden;
+  padding: 12px 28px 12px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+  user-select: none;
+}
+
+.new-chat-feature-card::before,
+.new-chat-feature-card::after {
+  position: absolute;
+  border-radius: 999px;
+  background: hsl(var(--foreground) / 0.045);
+  content: "";
+}
+
+.new-chat-feature-card::before {
+  top: -28%;
+  right: -6%;
+  width: 52%;
+  aspect-ratio: 1;
+}
+
+.new-chat-feature-card::after {
+  top: 18%;
+  right: 22%;
+  width: 18%;
+  aspect-ratio: 1;
+}
+
+.new-chat-feature-card > div {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.new-chat-feature-card strong {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.new-chat-feature-card > div > span {
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.new-chat-feature-card__index {
+  position: absolute;
+  z-index: 1;
+  top: 9px;
+  left: 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+@media (max-width: 720px) {
+  .new-chat-feature-carousel {
+    width: 44%;
+    min-width: 0;
+    column-gap: 4px;
+  }
+}
+
+@media (max-width: 440px) {
+  .new-chat-feature-carousel { width: 50%; }
+}
+
+@media (max-height: 640px) {
+  .new-chat-feature-carousel {
+    top: calc(100% + 48px);
+    width: min(192px, 44%);
+    min-width: 0;
+  }
+}

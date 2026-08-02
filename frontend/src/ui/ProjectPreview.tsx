@@ -340,6 +340,8 @@ export interface ProjectPreviewProps {
   onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
   /** Label for the floating deployment action. */
   deploymentActionLabel?: string;
+  /** Optional external footer slot for the deployment action. */
+  deploymentActionTargetId?: string;
   /** Existing Runtime id when this deployment updates an Agent in place. */
   deploymentRuntimeId?: string;
   /** Opens the persistent Agent detail as soon as deployment starts. */
@@ -474,6 +476,7 @@ export function ProjectPreview({
   onAgentAdded,
   onDeploymentComplete,
   deploymentActionLabel = "部署",
+  deploymentActionTargetId,
   deploymentRuntimeId,
   onDeploymentStarted,
   onDeploymentTaskChange,
@@ -519,7 +522,17 @@ export function ProjectPreview({
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
   const [showEnvValues, setShowEnvValues] = useState(false);
   const [regionMenuOpen, setRegionMenuOpen] = useState(false);
+  const [deploymentActionTarget, setDeploymentActionTarget] =
+    useState<HTMLElement | null>(null);
   const mountedRef = useRef(true);
+
+  useEffect(() => {
+    if (!deploymentActionTargetId) {
+      setDeploymentActionTarget(null);
+      return;
+    }
+    setDeploymentActionTarget(document.getElementById(deploymentActionTargetId));
+  }, [deploymentActionTargetId]);
 
   const deploymentRegionPicker = (showLabel: boolean) => (
     <div
@@ -1133,18 +1146,21 @@ export function ProjectPreview({
                   <Maximize2 aria-hidden />
                 </button>
               </div>
-              <div className="pp-release-info">
-                <div className="pp-release-info-main">
-                  <h2>{agentName || project.name || "未命名 Agent"}</h2>
-                  {agentDraft?.description && (
-                    <p
-                      className="pp-release-description"
-                      title={agentDraft.description}
-                    >
-                      {agentDraft.description}
-                    </p>
-                  )}
-                  <dl className="pp-release-facts">
+              {!embedded && (
+                <div className="pp-release-info">
+                <div className="pp-release-card-head">Agent 概览</div>
+                <div className="pp-release-info-body">
+                  <div className="pp-release-info-main">
+                    <h2>{agentName || project.name || "未命名 Agent"}</h2>
+                    {agentDraft?.description && (
+                      <p
+                        className="pp-release-description"
+                        title={agentDraft.description}
+                      >
+                        {agentDraft.description}
+                      </p>
+                    )}
+                    <dl className="pp-release-facts">
                     <div>
                       <dt>Agent 数量</dt>
                       <dd>{agentCount ?? 1}</dd>
@@ -1177,38 +1193,40 @@ export function ProjectPreview({
                         </div>
                       </>
                     )}
-                  </dl>
+                    </dl>
+                  </div>
+                  <div className="pp-artifact-actions">
+                    {onExportYaml && (
+                      <button
+                        type="button"
+                        className="pp-secondary"
+                        onClick={onExportYaml}
+                      >
+                        <FileDown className="pp-ic" />
+                        导出配置文件
+                      </button>
+                    )}
+                    {editable && onChange && (
+                      <ProjectCodeBrowser
+                        project={project}
+                        onChange={onChange}
+                        className="pp-artifact-source"
+                      />
+                    )}
+                    {project.files.length > 0 && (
+                      <button
+                        type="button"
+                        className="pp-secondary"
+                        onClick={handleDownloadZip}
+                      >
+                        <Download className="pp-ic" />
+                        导出源码
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div className="pp-artifact-actions">
-                  {onExportYaml && (
-                    <button
-                      type="button"
-                      className="pp-secondary"
-                      onClick={onExportYaml}
-                    >
-                      <FileDown className="pp-ic" />
-                      导出配置文件
-                    </button>
-                  )}
-                  {editable && onChange && (
-                    <ProjectCodeBrowser
-                      project={project}
-                      onChange={onChange}
-                      className="pp-artifact-source"
-                    />
-                  )}
-                  {project.files.length > 0 && (
-                    <button
-                      type="button"
-                      className="pp-secondary"
-                      onClick={handleDownloadZip}
-                    >
-                      <Download className="pp-ic" />
-                      导出源码
-                    </button>
-                  )}
                 </div>
-              </div>
+              )}
             </div>
           </section>
         )}
@@ -1714,7 +1732,32 @@ export function ProjectPreview({
                 </section>
               )}
             </div>
-            <div className="pp-config-actions">
+            <div
+              className={`pp-config-actions${deploymentActionTarget ? " is-external" : ""}`}
+            >
+              {deploymentActionTarget
+                ? createPortal(
+                    <button
+                      type="button"
+                      className="pp-deploy studio-update-action"
+                      onClick={requestDeploymentConfirmation}
+                      disabled={
+                        deploying ||
+                        feishuUpdating ||
+                        deployDisabled ||
+                        !!deployDisabledReason
+                      }
+                      title={deployDisabledReason}
+                    >
+                      {deploying
+                        ? `${deploymentActionLabel}中…`
+                        : deployError
+                          ? `重试${deploymentActionLabel}`
+                          : deploymentActionLabel}
+                    </button>,
+                    deploymentActionTarget,
+                  )
+                : (
               <button
                 type="button"
                 className="pp-deploy studio-update-action"
@@ -1728,6 +1771,7 @@ export function ProjectPreview({
                     ? `重试${deploymentActionLabel}`
                     : deploymentActionLabel}
               </button>
+                  )}
             </div>
           </aside>
         )}

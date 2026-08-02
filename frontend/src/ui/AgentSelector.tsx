@@ -64,18 +64,6 @@ export interface AgentSelectorProps {
 
 const PAGE_SIZE = 15;
 const LOAD_TIMEOUT_MS = 10_000;
-type RegionFilter = "cn-beijing" | "cn-shanghai";
-
-const REGION_OPTIONS: { value: RegionFilter; label: string }[] = [
-  { value: "cn-beijing", label: "北京" },
-  { value: "cn-shanghai", label: "上海" },
-];
-
-function regionLabel(region: string): string {
-  if (region === "cn-beijing") return "北京";
-  if (region === "cn-shanghai") return "上海";
-  return region;
-}
 
 function runtimeMetadataErrorMessage(message: string): string {
   const normalized = message.toLowerCase();
@@ -144,7 +132,6 @@ export function AgentSelector({
   // "只看我创建的" — the owner's set is small, so fetch it all at once (no pager).
   const [mineOnly, setMineOnly] = useState(runtimeScope === "mine");
   const [mineList, setMineList] = useState<CloudRuntime[] | null>(null);
-  const [regionFilter, setRegionFilter] = useState<RegionFilter>("cn-beijing");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
@@ -178,7 +165,7 @@ export function AgentSelector({
           getRuntimes({
             nextToken: token,
             pageSize: PAGE_SIZE,
-            region: regionFilter,
+            region: "all",
             scope: "all",
           }),
         );
@@ -199,7 +186,7 @@ export function AgentSelector({
         setLoading(false);
       }
     },
-    [tokens, pageCache, regionFilter],
+    [tokens, pageCache],
   );
 
   const loadMine = useCallback(async () => {
@@ -214,7 +201,7 @@ export function AgentSelector({
             scope: "mine",
             nextToken: token,
             pageSize: 100,
-            region: regionFilter,
+            region: "all",
           }),
         );
         acc.push(...pg.runtimes);
@@ -226,7 +213,7 @@ export function AgentSelector({
     } finally {
       setLoading(false);
     }
-  }, [regionFilter]);
+  }, []);
 
   useEffect(() => {
     setMineOnly(runtimeScope === "mine");
@@ -274,7 +261,7 @@ export function AgentSelector({
         getRuntimes({
           nextToken: "",
           pageSize: PAGE_SIZE,
-          region: regionFilter,
+          region: "all",
           scope: "all",
         }),
       )
@@ -285,17 +272,6 @@ export function AgentSelector({
         .catch((e) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setLoading(false));
     }
-  }
-
-  function changeRegion(nextRegion: RegionFilter) {
-    if (nextRegion === regionFilter) return;
-    setRegionFilter(nextRegion);
-    setPageCache([]);
-    setTokens([""]);
-    setPage(0);
-    setMineList(null);
-    setUnsupported(new Set());
-    loadedOnce.current = false;
   }
 
   const hasNext =
@@ -406,19 +382,6 @@ export function AgentSelector({
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="搜索 Runtime 名称"
                   />
-                </div>
-                <div className="agentsel-regions" aria-label="按部署地域筛选">
-                  {REGION_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      className={regionFilter === option.value ? "active" : ""}
-                      aria-pressed={regionFilter === option.value}
-                      onClick={() => changeRegion(option.value)}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
                 </div>
                 {runtimeScope === "all" && (
                   <label className="agentsel-mine">
@@ -857,7 +820,6 @@ function RuntimeDetailContent({ runtime }: { runtime: SelectedRuntime }) {
     if (detail.model) rows.push(["模型", detail.model]);
     if (detail.description) rows.push(["描述", detail.description]);
     if (detail.status) rows.push(["状态", runtimeStatusLabel(detail.status)]);
-    if (detail.region) rows.push(["区域", regionLabel(detail.region)]);
     const r = detail.resources;
     const res = [
       r.cpuMilli != null ? `CPU ${r.cpuMilli}m` : "",

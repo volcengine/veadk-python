@@ -2055,6 +2055,9 @@ export interface CloudRuntime {
   status: string;
   region: string;
   author: string;
+  description?: string;
+  cpuMilli?: number | null;
+  memoryMb?: number | null;
   createdAt?: string;
   currentVersion?: number | null;
   /** True when this runtime was deployed by the current user (veadk:author). */
@@ -2086,7 +2089,9 @@ export async function getRuntimes(
   });
   if (opts.nextToken) p.set("next_token", opts.nextToken);
   const res = await apiFetch(`/web/runtimes?${p.toString()}`);
-  if (!res.ok) throw new Error(`加载 Runtime 失败 (${res.status})`);
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "加载 Runtime 失败"));
+  }
   const d = (await res.json()) as Partial<RuntimePage>;
   return { runtimes: d.runtimes ?? [], nextToken: d.nextToken ?? "" };
 }

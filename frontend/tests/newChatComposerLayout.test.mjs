@@ -35,6 +35,10 @@ const taskToolsSource = readFileSync(
   new URL("../src/ui/new-chat-modes/taskTools.ts", import.meta.url),
   "utf8",
 );
+const featureNoticeSource = readFileSync(
+  new URL("../src/ui/new-chat-modes/NewChatFeatureNotice.tsx", import.meta.url),
+  "utf8",
+);
 
 test("expands only the new-chat composer into a multiline input", () => {
   assert.match(
@@ -91,11 +95,36 @@ test("keeps alternate chat modes hidden from the new-chat composer", () => {
   assert.match(agentSelectorSource, /variant\?: "drawer" \| "navbar"/);
   assert.doesNotMatch(sidebarSource, /<AgentSelector/);
   assert.doesNotMatch(sidebarSource, /className=\{`agent-row/);
-  assert.match(stylesSource, /\.welcome\s*\{[\s\S]*?gap:\s*40px;/);
+  assert.match(stylesSource, /\.welcome\s*\{[\s\S]*?gap:\s*32px;/);
   assert.match(
     stylesSource,
-    /\.welcome\s*\{[\s\S]*?padding:\s*0 16px clamp\(96px, 18vh, 152px\);/,
+    /\.welcome\s*\{[\s\S]*?padding:\s*0 16px clamp\(88px, 16vh, 136px\);/,
   );
+});
+
+test("reveals the refreshed welcome heading and placeholder after Agent connection", () => {
+  assert.match(
+    appSource,
+    /key=\{`welcome-\$\{newChatCapabilities\.agentId \?\? appName\}`\}/,
+  );
+  assert.match(appSource, /<NewChatFeatureNotice \/>/);
+  assert.match(featureNoticeSource, /className="welcome-feature-pill"[\s\S]*?焕然一新[\s\S]*?查看新特性/);
+  assert.match(stylesSource, /--feature-link:\s*208 100% 47\.45%/);
+  assert.match(stylesSource, /\.welcome-primary\s*\{[\s\S]*?gap:\s*16px;/);
+  assert.match(stylesSource, /\.welcome-heading\s*\{[\s\S]*?gap:\s*72px;[\s\S]*?welcome-heading-enter 220ms/);
+  assert.match(stylesSource, /\.composer--new-chat \.comp-input::placeholder\s*\{[\s\S]*?welcome-placeholder-enter 200ms[\s\S]*?80ms both/);
+  assert.match(stylesSource, /@keyframes welcome-heading-enter[\s\S]*?translateY\(8px\)[\s\S]*?blur\(4px\)/);
+  assert.match(stylesSource, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.welcome-heading,[\s\S]*?\.composer--new-chat \.comp-input::placeholder[\s\S]*?animation:\s*none/);
+});
+
+test("hides the carousel and reveals feature details on hover or keyboard focus", () => {
+  assert.doesNotMatch(appSource, /NewChatFeatureCarousel/);
+  assert.match(featureNoticeSource, /role="tooltip"/);
+  assert.match(featureNoticeSource, /多地域智能体/);
+  assert.match(featureNoticeSource, /会话内切换/);
+  assert.match(featureNoticeSource, /可视化执行画布/);
+  assert.match(stylesSource, /\.welcome-feature-pill:hover \.welcome-feature-popover/);
+  assert.match(stylesSource, /\.welcome-feature-pill:focus-within \.welcome-feature-popover/);
 });
 
 test("shows task capsules for Harness agents and restores starter prompts otherwise", () => {

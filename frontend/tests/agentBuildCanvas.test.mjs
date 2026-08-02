@@ -50,8 +50,8 @@ test("defines canvas workspace variables without relying on the create page shel
   assert.match(rootRule, /--cw-workspace-accent: 162 44% 32%;/);
   assert.match(rootRule, /--cw-workspace-warm: 42 28% 96%;/);
   assert.match(rootRule, /border-right:\s*0;/);
-  assert.match(rootRule, /background:\s*#fff;/);
-  assert.match(canvasRule, /background:\s*#fff;/);
+  assert.match(rootRule, /background:\s*hsl\(var\(--background\)\);/);
+  assert.match(canvasRule, /background:\s*hsl\(var\(--background\)\);/);
   assert.doesNotMatch(canvasRule, /radial-gradient|#fbfbfc/);
   assert.match(
     cssSource,
@@ -142,9 +142,9 @@ test("uses distinct restrained type colors and removes the LLM node icon", () =>
   assert.match(customCreateSource, /<Section meta=\{metaOf\("type"\)\}>/);
   assert.match(
     customCreateSource,
-    /role="radiogroup"[\s\S]*?aria-label="Agent 类型"/,
+    /<RadioGroup<AgentType>[\s\S]*?aria-label="Agent 类型"/,
   );
-  assert.match(customCreateSource, /className="cw-agent-type-radio"/);
+  assert.match(customCreateSource, /<RadioGroup\.Item/);
   assert.match(customCreateSource, /data-agent-type=\{t\.id\}/);
 });
 
@@ -174,25 +174,46 @@ test("collapses empty agent groups to their information header in read-only prev
   );
 });
 
-test("lays out creation vertically while keeping detail and deployment previews horizontal", () => {
+test("lays out creation, detail, and deployment previews horizontally", () => {
   assert.match(source, /direction\?: CanvasDirection/);
   assert.match(source, /rankdir: direction === "vertical" \? "TB" : "LR"/);
   assert.match(source, /direction === "vertical" \? Position\.Top : Position\.Left/);
   assert.match(source, /direction === "vertical" \? Position\.Bottom : Position\.Right/);
-  assert.match(customCreateSource, /<AgentBuildCanvas[\s\S]*?direction="vertical"/);
+  assert.match(customCreateSource, /<AgentBuildCanvas[\s\S]*?direction="horizontal"/);
   assert.match(agentWorkspaceSource, /<AgentBuildCanvas[\s\S]*?direction="horizontal"/);
   assert.match(projectPreviewSource, /<AgentBuildCanvas[\s\S]*?direction="horizontal"/);
   assert.match(
     customCreateStyles,
-    /\.cw-editor > \.abc-root\s*\{[\s\S]*?flex-basis:\s*42%;[\s\S]*?min-width:\s*380px;/,
+    /\.cw-editor > \.abc-root\s*\{[\s\S]*?flex:\s*0 0 200px;[\s\S]*?width:\s*100%;[\s\S]*?min-height:\s*200px;/,
   );
   assert.match(
     customCreateStyles,
-    /\.cw-detail\s*\{[\s\S]*?flex:\s*1 1 58%;[\s\S]*?max-width:\s*780px;/,
+    /\.cw-detail\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?width:\s*100%;[\s\S]*?max-width:\s*none;/,
   );
   assert.match(
     customCreateStyles,
     /@media \(max-width: 860px\)[\s\S]*?\.cw-detail\s*\{[\s\S]*?width:\s*100%;[\s\S]*?max-width:\s*none;/,
+  );
+});
+
+test("keeps edge anchors functional without showing connector dots and uses hairline node borders", () => {
+  assert.match(source, /<Handle type="target"[\s\S]*?className="abc-handle"/);
+  assert.match(source, /<Handle type="source"[\s\S]*?className="abc-handle"/);
+  assert.match(
+    cssSource,
+    /\.abc-handle\s*\{[\s\S]*?opacity:\s*0\s*!important;[\s\S]*?pointer-events:\s*none;/,
+  );
+  assert.match(
+    cssSource,
+    /\.abc-node\s*\{[\s\S]*?border:\s*0\.5px solid hsl\(var\(--abc-type-border\) \/ 0\.62\);/,
+  );
+  assert.match(
+    cssSource,
+    /\.abc-group\s*\{[\s\S]*?border:\s*0\.5px solid hsl\(var\(--abc-type-border\) \/ 0\.5\);/,
+  );
+  assert.match(
+    cssSource,
+    /\.abc-terminal\s*\{[\s\S]*?border:\s*0\.5px solid hsl\(var\(--border\) \/ 0\.68\);/,
   );
 });
 
@@ -214,13 +235,13 @@ test("refits the graph after React Flow finishes measuring its nodes", () => {
   assert.match(source, /if \(!nodesInitialized\) return;[\s\S]*?fitAfterLayout\(\)/);
 });
 
-test("preserves measured node dimensions while synchronizing graph state", () => {
+test("preserves measured dimensions only while the graph structure is stable", () => {
   assert.match(
     source,
     /const currentNodes = new Map\([\s\S]*?current\.map\(\(node\) => \[node\.id, node\] as const\)/,
   );
   assert.match(
     source,
-    /measured:\s*currentNode && currentNode\.type === node\.type[\s\S]*?\? currentNode\.measured[\s\S]*?: undefined/,
+    /measured:\s*!structureChanged &&[\s\S]*?currentNode &&[\s\S]*?currentNode\.type === node\.type[\s\S]*?\? currentNode\.measured[\s\S]*?: undefined/,
   );
 });

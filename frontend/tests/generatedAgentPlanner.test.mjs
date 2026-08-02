@@ -58,12 +58,11 @@ test("allows Agent generation to outlive the default request timeout", () => {
   );
 });
 
-test("dims the input and animates the smoke while generation is active", () => {
+test("dims the input and shows a spinner while generation is active", () => {
   assert.match(
     createStyles,
-    /\.cw-ai-compose\.is-generating \.cw-ai-compose-form\s*\{[\s\S]*?background: rgba\(235, 235, 240, 0\.9\)/,
+    /\.cw-ai-compose\.is-generating \.cw-ai-compose-form\s*\{[\s\S]*?background: hsl\(var\(--muted\) \/ 0\.7\)/,
   );
-  assert.match(createStyles, /\.cw-ai-compose\.is-generating::before/);
-  assert.match(createStyles, /animation: cw-ai-banner-smoke-a 7s/);
-  assert.match(createStyles, /animation: cw-ai-banner-smoke-b 8\.5s/);
+  assert.match(createStyles, /\.cw-ai-orb\s*\{[\s\S]*?animation: cw-ai-orb-spin 720ms linear infinite/);
+  assert.match(createStyles, /@keyframes cw-ai-orb-spin/);
 });

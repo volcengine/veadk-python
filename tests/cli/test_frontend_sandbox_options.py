@@ -14,6 +14,7 @@
 
 """Tests for shared local Sandbox serve options."""
 
+import os
 from typing import Any
 
 import pytest
@@ -21,6 +22,24 @@ from click import Command
 from click.testing import CliRunner
 
 from veadk.cli.cli_frontend import frontend, studio
+from veadk.cli.cli import _bootstrap_serve_provider
+
+
+def test_serve_provider_is_bootstrapped_before_command_modules_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+
+    _bootstrap_serve_provider(["frontend"])
+
+    assert os.environ["AGENTKIT_CLOUD_PROVIDER"] == "volcengine"
+    assert os.environ["CLOUD_PROVIDER"] == "volcengine"
+
+    _bootstrap_serve_provider(["studio", "--provider", "byteplus"])
+
+    assert os.environ["AGENTKIT_CLOUD_PROVIDER"] == "byteplus"
+    assert os.environ["CLOUD_PROVIDER"] == "byteplus"
 
 
 @pytest.mark.parametrize("command", [frontend, studio])
@@ -67,3 +86,38 @@ def test_local_sandbox_tool_options_fall_back_to_environment(
     assert result.exit_code == 0, result.output
     assert captured["sandbox_chat_codex_tool_id"] == "chat-from-env"
     assert captured["sandbox_skill_creator_tool_id"] == "skill-from-env"
+
+
+@pytest.mark.parametrize("command", [frontend, studio])
+def test_local_serve_commands_default_to_volcengine(
+    monkeypatch: pytest.MonkeyPatch,
+    command: Command,
+) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._run_frontend_server",
+        lambda **kwargs: captured.update(kwargs),
+    )
+
+    result = CliRunner().invoke(command)
+
+    assert result.exit_code == 0, result.output
+    assert captured["provider"] == "volcengine"
+
+
+@pytest.mark.parametrize("command", [frontend, studio])
+def test_local_serve_commands_accept_explicit_byteplus_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    command: Command,
+) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._run_frontend_server",
+        lambda **kwargs: captured.update(kwargs),
+    )
+
+    result = CliRunner().invoke(command, ["--provider", "byteplus"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["provider"] == "byteplus"

@@ -42,12 +42,7 @@ test("Agent navigation opens the PR 748 workspace with creation and evaluation",
     appSource,
     /<AgentWorkspace[\s\S]*?agents=\{detailAgentEntry \? \[detailAgentEntry\] : orderedWorkspaceAgentEntries\}/,
   );
-  assert.match(appSource, /const selectWorkspaceAgentFromNavbar = \(id: string\) => \{/);
-  assert.match(
-    appSource,
-    /setFocusedWorkspaceAgentId\(id\)[\s\S]*?setFocusedWorkspaceAgentSection\("basic"\)[\s\S]*?selectAgent\(id\)/,
-  );
-  assert.match(appSource, /onAppChange=\{showManageAgents \? selectWorkspaceAgentFromNavbar : selectAgent\}/);
+  assert.doesNotMatch(appSource, /<Navbar\b/);
   assert.doesNotMatch(appSource, /showManageAgents\s*\?\s*"智能体"/);
   assert.match(workspaceSource, /智能体库/);
   assert.match(workspaceSource, /评测/);
@@ -264,16 +259,20 @@ test("runtime update deployments stay on the existing agent row", () => {
   assert.match(workspaceStyles, /\.aw-draft-badge\.is-deploying/);
 });
 
-test("deployed agent detail can jump directly to chat", () => {
+test("deployed agent detail connects, refreshes the current Agent, then opens a new chat", () => {
   assert.match(workspaceSource, /onTalkAgent\?: \(agent: AgentEntry\) => void/);
   assert.match(workspaceSource, /className="aw-talk studio-update-action"[\s\S]*?去对话/);
   assert.match(workspaceSource, /onClick=\{\(\) => onTalkAgent\?\.\(selectedAgent\)\}/);
   assert.match(appSource, /const talkToWorkspaceAgent = async \(agent: AgentEntry\) => \{/);
   assert.match(
     appSource,
-    /agent\.id\.startsWith\("detail:"\)[\s\S]*?connectRuntime\([\s\S]*?agent\.runtimeId[\s\S]*?selectAgent\(agentId\)/,
+    /agent\.id\.startsWith\("detail:"\)[\s\S]*?connectRuntime\([\s\S]*?agent\.runtimeId[\s\S]*?await refreshCurrentAgentAndStartNewChat\(agentId\)/,
   );
-  assert.match(appSource, /setManageAgents\(false\)[\s\S]*?selectAgent\(agent\.id\)/);
+  assert.match(
+    appSource,
+    /const refreshCurrentAgentAndStartNewChat[\s\S]*?setConnections\(loadConnections\(\)\)[\s\S]*?setAgentInfoRefreshKey[\s\S]*?setAppName\(id\)[\s\S]*?startNewChat\(\)/,
+  );
+  assert.match(appSource, /await refreshCurrentAgentAndStartNewChat\(agent\.id\)/);
   assert.match(appSource, /onTalkAgent=\{talkToWorkspaceAgent\}/);
   assert.match(workspaceStyles, /\.aw-talk svg/);
   assert.match(
@@ -496,7 +495,10 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(appSource, /onFeedbackCasesDeleted=\{clearDeletedFeedbackCases\}/);
   assert.match(appSource, /onOpenFeedbackCase=\{\(item\) => void openFeedbackCaseInStudio\(item\)\}/);
   assert.match(appSource, /turnNodeRefs/);
-  assert.match(appSource, /is-feedback-target/);
+  assert.match(
+    appSource,
+    /feedbackTargetEventId &&\s*feedbackTargetEventId === feedbackEventId\s*\? "is-feedback-target"/,
+  );
   assert.match(workspaceSource, /feedbackSetFor\(feedbackSets, kind\)/);
   assert.match(workspaceSource, /cases\.filter\(\(item\) => item\.kind === kind\)\.length/);
   assert.match(workspaceSource, /const count = previewCase \? localCount : set\?\.itemCount \?\? localCount/);

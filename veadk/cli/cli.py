@@ -12,8 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Provider bootstrap must run before importing CLI command modules.
+# ruff: noqa: E402
+
+import os
+import sys
 
 import click
+
+
+def _bootstrap_serve_provider(argv: list[str] | None = None) -> None:
+    """Select the serve provider before command modules load configuration."""
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args or args[0] not in {"frontend", "studio"}:
+        return
+
+    provider = "volcengine"
+    for index, argument in enumerate(args[1:]):
+        if argument.startswith("--provider="):
+            provider = argument.partition("=")[2]
+            break
+        if argument == "--provider" and index + 2 < len(args):
+            provider = args[index + 2]
+            break
+    if provider not in {"volcengine", "byteplus"}:
+        return
+    os.environ["AGENTKIT_CLOUD_PROVIDER"] = provider
+    os.environ["CLOUD_PROVIDER"] = provider
+
+
+_bootstrap_serve_provider()
 
 from veadk.cli.cli_agentkit import agentkit
 from veadk.cli.cli_clean import clean

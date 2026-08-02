@@ -12,10 +12,9 @@ const stylesSource = readFileSync(
   "utf8",
 );
 
-test("uses the selected Agent in new-chat, search, and conversation headers", () => {
+test("keeps Agent selection state without a global conversation header", () => {
   assert.doesNotMatch(appSource, /function activeSessionTitle|conversationTitle/);
-  assert.match(appSource, /agentLabel=\{labelOf\}/);
-  assert.match(appSource, /agentsSource=\{agentsSource\}/);
+  assert.doesNotMatch(appSource, /<Navbar\b/);
   assert.match(appSource, /void refreshAgentLibrary\(\)/);
   assert.match(
     appSource,
@@ -26,33 +25,27 @@ test("uses the selected Agent in new-chat, search, and conversation headers", ()
   assert.match(navbarSource, /appName \? label\(appName\) : "选择 Agent"/);
   assert.match(navbarSource, /agentsSource === "cloud"[\s\S]*?aria-label="切换智能体"/);
   assert.match(navbarSource, /<ArrowLeftRight aria-hidden="true"/);
-  assert.match(appSource, /onBrowseAgents=\{openMyAgentsPage\}/);
 });
 
-test("shows the Codex identity instead of the Agent picker in sandbox sessions", () => {
-  assert.match(
-    appSource,
-    /title=\{[\s\S]*?sandboxSession[\s\S]*?\? "Codex 智能体"[\s\S]*?: myAgents/,
-  );
+test("does not add a sandbox title row above the main content", () => {
+  assert.doesNotMatch(appSource, /<Navbar\b/);
+  assert.match(appSource, /<section className="main-shell">\s*<main className=/);
 });
 
-test("redirects new chat to Agent selection when no Agent is active", () => {
-  assert.match(
-    appSource,
-    /function openNewChat\(\)[\s\S]*?!hasAgentSelection\(appName, apps, connections\)[\s\S]*?setMyAgents\(true\)[\s\S]*?showToast\("请先选择 Agent 后再开始新会话"\)[\s\S]*?return;/,
-  );
-  assert.match(appSource, /if \(appName\) clearSelectedAgentAfterRemoval\(\)/);
+test("opens new chat even when no Agent is active", () => {
+  const handler = appSource.match(
+    /function openNewChat\(\) \{([\s\S]*?)\n  \}\n\n  async function removeSession/,
+  )?.[1] ?? "";
+  assert.match(handler, /setMyAgents\(false\)/);
+  assert.match(handler, /startNewChat\(\)/);
+  assert.doesNotMatch(handler, /hasAgentSelection|showToast|setMyAgents\(true\)/);
   assert.match(appSource, /onNewChat=\{openNewChat\}/);
-  assert.match(appSource, /className="app-toast" role="status" aria-live="polite"/);
-  assert.match(stylesSource, /\.app-toast\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?border:\s*1px solid hsl\(var\(--border\)\);[\s\S]*?background:\s*hsl\(var\(--panel\)\);/);
-  assert.match(stylesSource, /\.app-toast::before\s*\{[\s\S]*?background:\s*hsl\(var\(--primary\)\);/);
-  assert.doesNotMatch(stylesSource, /\.app-toast\s*\{[\s\S]*?background:\s*hsl\(var\(--foreground\)\);/);
 });
 
 test("only using an Agent selects it for the main conversation", () => {
   assert.match(
     appSource,
-    /const connectMyAgent[\s\S]*?connectRuntime[\s\S]*?setAppName\(agentId\)/,
+    /const connectMyAgent[\s\S]*?connectRuntime[\s\S]*?await refreshCurrentAgentAndStartNewChat\(agentId\)/,
   );
   const detailHandlerStart = appSource.indexOf("const openMyAgentDetails");
   const detailHandlerEnd = appSource.indexOf("\n  };", detailHandlerStart);

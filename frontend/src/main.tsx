@@ -1,10 +1,11 @@
+import "./styles.css";
+
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { MotionConfig } from "motion/react";
 import { PhotoProvider } from "react-photo-view";
 import App from "./App";
 import "react-photo-view/dist/react-photo-view.css";
-import "./styles.css";
 
 const PRELOAD_RECOVERY_KEY = "veadk.preloadRecoveryAt";
 
