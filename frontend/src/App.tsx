@@ -64,7 +64,7 @@ import {
   type Block,
   type Turn,
 } from "./blocks";
-import { Sidebar } from "./ui/Sidebar";
+import { Sidebar, type SidebarPage } from "./ui/Sidebar";
 import { AgentInfoPanel } from "./ui/AgentTopology";
 import { SkillCenterView } from "./ui/SkillCenter";
 import { AddAgentKitView } from "./ui/AddAgentKit";
@@ -2923,6 +2923,14 @@ export default function App() {
       }
     : null;
 
+  const sidebarActivePage: SidebarPage = searchView
+    ? "search"
+    : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
+      ? "agents"
+      : sessionId || createView || skillCenter || addAgent || addMenu
+        ? null
+        : "new-chat";
+
   return (
     <div className="layout">
       <Sidebar
@@ -2931,6 +2939,7 @@ export default function App() {
         features={features}
         sessions={sessions}
         currentSessionId={sessionId}
+        activePage={sidebarActivePage}
         streamingSids={streamingSids}
         onNewChat={openNewChat}
         onSearch={() => {

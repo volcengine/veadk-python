@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import arkClawLogo from "../../assets/builtin-agents/arkclaw.png";
-import codexLogo from "../../assets/builtin-agents/codex.png";
-import hermesLogo from "../../assets/builtin-agents/hermes.png";
 import { AgentIdentityIcon } from "../AgentIdentityIcon";
+import {
+  SandboxAgentIcon,
+  type SandboxAgentIconKind,
+} from "../icons/SandboxAgentIcons";
 import type { NewChatMode } from "./types";
 import "./new-chat-modes.css";
 
@@ -31,9 +32,12 @@ const MODES: ModeOption[] = [
 ];
 
 const UNAVAILABLE_BUILTIN_AGENTS = [
-  { label: "ArkClaw", logo: arkClawLogo },
-  { label: "Hermes 智能体", logo: hermesLogo },
-];
+  { label: "ArkClaw", kind: "openclaw" },
+  { label: "Hermes 智能体", kind: "hermes" },
+] satisfies Array<{
+  label: string;
+  kind: SandboxAgentIconKind;
+}>;
 
 export interface NewChatModeSelectorProps {
   value: NewChatMode;
@@ -252,15 +256,15 @@ export function NewChatModeSelector({
             className="new-chat-mode__submenu-option"
             onClick={chooseBuiltinAgent}
           >
-            <img className="new-chat-mode__builtin-icon" src={codexLogo} alt="" aria-hidden="true" />
+            <SandboxAgentIcon kind="codex" className="new-chat-mode__builtin-icon" />
             <span className="new-chat-mode__copy">
               <span className="new-chat-mode__label">Codex 智能体</span>
               <span>在沙箱中执行任务</span>
             </span>
           </button>
-          {UNAVAILABLE_BUILTIN_AGENTS.map(({ label, logo }) => (
+          {UNAVAILABLE_BUILTIN_AGENTS.map(({ label, kind }) => (
             <button key={label} type="button" role="menuitem" className="new-chat-mode__submenu-option" disabled>
-              <img className="new-chat-mode__builtin-icon" src={logo} alt="" aria-hidden="true" />
+              <SandboxAgentIcon kind={kind} className="new-chat-mode__builtin-icon" />
               <span className="new-chat-mode__copy">
                 <span className="new-chat-mode__label">{label}</span>
                 <span>暂不可用</span>

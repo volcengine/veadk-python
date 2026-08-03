@@ -12,6 +12,7 @@ import {
   type SandboxSession,
 } from "../../adk/sandbox";
 import { AgentFaceIcon } from "../AgentFaceIcon";
+import { SandboxAgentIcon } from "../icons/SandboxAgentIcons";
 import "./new-chat-agent-picker.css";
 
 type AgentType = "general" | "codex" | "openclaw" | "hermes";
@@ -80,36 +81,7 @@ function AgentTypeIcon({
   if (type === "general") {
     return <AgentFaceIcon className={className} />;
   }
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {type === "codex" ? (
-        <>
-          <path d="m12 3 7 4v8l-7 4-7-4V7l7-4Z" />
-          <path d="m8 9 4-2.3L16 9v4.5L12 16l-4-2.5V9Z" />
-        </>
-      ) : type === "openclaw" ? (
-        <>
-          <path d="M7 19c-2-2.5-2.5-5.5-.8-8.2M17 19c2-2.5 2.5-5.5.8-8.2" />
-          <path d="m6.2 10.8-2.7-2M17.8 10.8l2.7-2M9.2 8 7.5 4M14.8 8 16.5 4" />
-          <path d="M8.5 18.5h7" />
-        </>
-      ) : (
-        <>
-          <path d="M5 18.5V9l7-4 7 4v9.5" />
-          <path d="M8.5 13h7M9 18.5v-2.8h6v2.8" />
-        </>
-      )}
-    </svg>
-  );
+  return <SandboxAgentIcon kind={type} className={className} />;
 }
 
 export function NewChatAgentPicker({

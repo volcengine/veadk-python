@@ -233,6 +233,36 @@
   min-width: 0;
 }
 
+.my-agent-card-badges {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.my-agent-region-badge {
+  min-height: 22px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.my-agent-card-badges .runtime-owner-badge {
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  line-height: 1;
+}
+
 .my-agent-session-id {
   display: block;
   margin-top: 3px;

@@ -150,7 +150,7 @@ test("metadata remains compact without adding data-plane requests", () => {
   assert.doesNotMatch(pageSource, /appName: info\.appName/);
 });
 
-test("loads all Runtime regions and shows the creator on each card", () => {
+test("loads all Runtime regions and shows the creator in card metadata", () => {
   assert.match(pageSource, /getRuntimes/);
   assert.match(pageSource, /runtimeScope: RuntimeScope/);
   assert.match(pageSource, /scope: runtimeScope/);
@@ -161,7 +161,6 @@ test("loads all Runtime regions and shows the creator on each card", () => {
   assert.match(pageSource, /description: runtime\.description\?\.trim\(\) \|\| "暂无描述"/);
   assert.match(pageSource, /specificationLabel: "创建人"/);
   assert.match(pageSource, /specification: runtime\.author \|\| "—"/);
-  assert.doesNotMatch(pageSource, /formatRuntimeRegion/);
   assert.match(pageSource, /runtimeId: runtime\.runtimeId/);
   assert.match(pageSource, /region: runtime\.region/);
   assert.match(pageSource, /<AgentCard[\s\S]*?key=\{agent\.id\}/);
@@ -188,6 +187,25 @@ test("marks runtimes created by the administrator", () => {
   assert.match(pageSource, /showOwnership && agent\.isMine/);
   assert.match(pageSource, /className="runtime-owner-badge"[\s\S]*?>我创建的</);
   assert.match(appSource, /canCreate=\{canCreateAgents\}/);
+});
+
+test("shows the Runtime region before the ownership badge in the card title", () => {
+  assert.match(
+    pageSource,
+    /function formatRuntimeRegion\(region: string\): string \{[\s\S]*?cn-shanghai[\s\S]*?上海[\s\S]*?cn-beijing[\s\S]*?北京/,
+  );
+  assert.match(
+    pageSource,
+    /className="my-agent-card-badges"[\s\S]*?className="my-agent-region-badge"[\s\S]*?formatRuntimeRegion\(agent\.runtime\.region\)[\s\S]*?className="runtime-owner-badge"[\s\S]*?>我创建的</,
+  );
+  assert.match(
+    pageStyles,
+    /\.my-agent-card-badges\s*\{[\s\S]*?display: flex;[\s\S]*?gap: 6px/,
+  );
+  assert.match(
+    pageStyles,
+    /\.my-agent-region-badge\s*\{[\s\S]*?display: inline-flex;[\s\S]*?border-radius: 999px/,
+  );
 });
 
 test("hides deleted Runtime cards and invalidates stale Runtime pages", () => {
@@ -316,8 +334,8 @@ test("keeps all requested type filters without nested category sections", () => 
   assert.doesNotMatch(pageStyles, /\.my-agent-empty\s*\{[^}]*background:/);
   assert.match(pageSource, /<EmptyMessage[\s\S]*?<EmptyMessage\.Icon/);
   assert.match(pageSource, /<AgentTypeIcon type=\{activeType\} \/>/);
-  assert.match(pageSource, /type === "codex"[\s\S]*?type === "openclaw"/);
   assert.match(pageSource, /type === "general"\) return <AgentFaceIcon \/>/);
+  assert.match(pageSource, /return <SandboxAgentIcon kind=\{type\} \/>/);
   assert.doesNotMatch(pageSource, /开始使用 AgentKit Session/);
   assert.match(pageSource, /onClick=\{\(\) => onCreateSandboxAgent\(activeType\)\}/);
 });

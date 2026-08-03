@@ -214,7 +214,8 @@ body {
   transition: background 0.12s;
 }
 .new-chat .icon { width: 18px; height: 18px; }
-.new-chat:hover { background: hsl(var(--foreground) / 0.05); }
+.new-chat:hover,
+.new-chat.is-active { background: hsl(var(--foreground) / 0.05); }
 
 .new-chat--conversation > .icon {
   transform-origin: center;

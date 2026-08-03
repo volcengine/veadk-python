@@ -16,6 +16,7 @@ import {
   type SandboxSession,
 } from "../adk/sandbox";
 import { AgentFaceIcon } from "./AgentFaceIcon";
+import { SandboxAgentIcon } from "./icons/SandboxAgentIcons";
 import "./MyAgents.css";
 
 export interface MyAgentCardData {
@@ -93,35 +94,7 @@ function AddIcon(props: SVGProps<SVGSVGElement>) {
 
 function AgentTypeIcon({ type }: { type: AgentType }) {
   if (type === "general") return <AgentFaceIcon />;
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {type === "codex" ? (
-        <>
-          <path d="m12 3 7 4v8l-7 4-7-4V7l7-4Z" />
-          <path d="m8 9 4-2.3L16 9v4.5L12 16l-4-2.5V9Z" />
-        </>
-      ) : type === "openclaw" ? (
-        <>
-          <path d="M7 19c-2-2.5-2.5-5.5-.8-8.2M17 19c2-2.5 2.5-5.5.8-8.2" />
-          <path d="m6.2 10.8-2.7-2M17.8 10.8l2.7-2M9.2 8 7.5 4M14.8 8 16.5 4" />
-          <path d="M8.5 18.5h7" />
-        </>
-      ) : (
-        <>
-          <path d="M5 18.5V9l7-4 7 4v9.5" />
-          <path d="M8.5 13h7M9 18.5v-2.8h6v2.8" />
-        </>
-      )}
-    </svg>
-  );
+  return <SandboxAgentIcon kind={type} />;
 }
 
 function formatCreatedAt(value: string): string {
@@ -137,6 +110,12 @@ function formatCreatedAt(value: string): string {
     second: "2-digit",
     hour12: false,
   }).format(date).replace(/\//g, "-");
+}
+
+function formatRuntimeRegion(region: string): string {
+  if (region === "cn-shanghai") return "上海";
+  if (region === "cn-beijing") return "北京";
+  return region || "—";
 }
 
 function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
@@ -239,8 +218,15 @@ function AgentCard({
             >
               {agent.description}
             </span>
-          ) : showOwnership && agent.isMine ? (
-            <span className="runtime-owner-badge">我创建的</span>
+          ) : agent.runtime ? (
+            <div className="my-agent-card-badges">
+              <span className="my-agent-region-badge">
+                {formatRuntimeRegion(agent.runtime.region)}
+              </span>
+              {showOwnership && agent.isMine ? (
+                <span className="runtime-owner-badge">我创建的</span>
+              ) : null}
+            </div>
           ) : null}
         </div>
         {!agent.sandbox ? (
