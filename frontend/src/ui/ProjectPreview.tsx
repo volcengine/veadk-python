@@ -273,8 +273,50 @@ const CODE_PACKAGE_DEPLOY_STEPS: { phase: string; label: string }[] = [
   { phase: "publish", label: "发布服务" },
 ];
 
+const INSTANCE_UPDATE_STEP = {
+  phase: "update",
+  label: "更新实例配置",
+} as const;
+
+function usesInMemorySession(agentDraft?: AgentDraft): boolean {
+  if (!agentDraft) return false;
+  return (
+    !agentDraft.memory.shortTerm ||
+    (agentDraft.shortTermBackend || "local") === "local"
+  );
+}
+
+type RuntimeInstanceRangeValidation =
+  | { valid: true; min: number; max: number }
+  | { valid: false; error: string };
+
+function validateRuntimeInstanceRange(
+  minValue: string,
+  maxValue: string,
+): RuntimeInstanceRangeValidation {
+  const min = Number(minValue);
+  const max = Number(maxValue);
+  if (
+    !minValue.trim() ||
+    !maxValue.trim() ||
+    !Number.isSafeInteger(min) ||
+    !Number.isSafeInteger(max) ||
+    min < 1 ||
+    max < 1
+  ) {
+    return { valid: false, error: "实例数必须为大于 0 的整数。" };
+  }
+  if (min > max) {
+    return { valid: false, error: "最小实例数不能大于最大实例数。" };
+  }
+  return { valid: true, min, max };
+}
+
 export interface DeployOptions {
   taskId?: string;
+  sessionStorage?: "in-memory" | "persistent";
+  minInstance?: number;
+  maxInstance?: number;
   im?: {
     feishu?: {
       enabled: boolean;
@@ -300,6 +342,8 @@ export interface DeploymentTaskUpdate {
   message?: string;
   pct?: number;
   buildLog?: DeployBuildLogSnapshot;
+  /** Instance range applied through UpdateRuntime after creation. */
+  instanceRange?: { min: number; max: number };
   /** Draft used to render the Agent detail while its Runtime is still publishing. */
   agentDraft?: AgentDraft;
   /** Re-runs the same project/config as a new deployment task. */
@@ -497,9 +541,7 @@ export function ProjectPreview({
 }: ProjectPreviewProps) {
   const editable = typeof onChange === "function";
   const isRuntimeUpdate = deploymentActionLabel.includes("更新");
-  const deploymentSteps = deploymentPrimaryPane
-    ? CODE_PACKAGE_DEPLOY_STEPS
-    : DEPLOY_STEPS;
+  const inMemorySession = usesInMemorySession(agentDraft);
 
   // Initialize all hooks BEFORE any conditional returns (React hooks rule)
   const [selected, setSelected] = useState<string | null>(
@@ -522,9 +564,24 @@ export function ProjectPreview({
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
   const [showEnvValues, setShowEnvValues] = useState(false);
   const [regionMenuOpen, setRegionMenuOpen] = useState(false);
+  const [minInstance, setMinInstance] = useState("1");
+  const [maxInstance, setMaxInstance] = useState(
+    inMemorySession ? "1" : "5",
+  );
   const [deploymentActionTarget, setDeploymentActionTarget] =
     useState<HTMLElement | null>(null);
   const mountedRef = useRef(true);
+  const instanceRange = validateRuntimeInstanceRange(minInstance, maxInstance);
+  const needsInstanceUpdate =
+    !isRuntimeUpdate &&
+    instanceRange.valid &&
+    (instanceRange.min !== 1 || instanceRange.max !== 5);
+  const baseDeploymentSteps = deploymentPrimaryPane
+    ? CODE_PACKAGE_DEPLOY_STEPS
+    : DEPLOY_STEPS;
+  const deploymentSteps = needsInstanceUpdate
+    ? [...baseDeploymentSteps, INSTANCE_UPDATE_STEP]
+    : baseDeploymentSteps;
 
   useEffect(() => {
     if (!deploymentActionTargetId) {
@@ -596,6 +653,11 @@ export function ProjectPreview({
       mountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    setMinInstance("1");
+    setMaxInstance(inMemorySession ? "1" : "5");
+  }, [inMemorySession]);
 
   useEffect(() => {
     if (!flowPreviewOpen) return;
@@ -748,6 +810,10 @@ export function ProjectPreview({
 
   async function requestDeploymentConfirmation() {
     if (!onDeploy || deploying || deployDisabled) return;
+    if (!instanceRange.valid) {
+      setDeployError(instanceRange.error);
+      return;
+    }
     if (networkMode !== "public" && !network?.vpcId?.trim()) {
       setDeployError("使用 VPC 网络时，请填写 VPC ID。");
       return;
@@ -777,6 +843,11 @@ export function ProjectPreview({
 
   async function performDeployment() {
     if (!onDeploy || deploying) return;
+    if (!instanceRange.valid) {
+      setDeployConfirmOpen(false);
+      setDeployError(instanceRange.error);
+      return;
+    }
     setDeployConfirmOpen(false);
     const envs = deployEnvVars();
     if (mountedRef.current) {
@@ -799,6 +870,9 @@ export function ProjectPreview({
       phase: "prepare",
       label: "准备部署",
       agentDraft,
+      instanceRange: needsInstanceUpdate
+        ? { min: instanceRange.min, max: instanceRange.max }
+        : undefined,
     };
     onDeploymentTaskChange?.(initialTask);
     onDeploymentStarted?.(initialTask);
@@ -874,17 +948,22 @@ export function ProjectPreview({
             ...(latestBuildLog ? { buildLog: latestBuildLog } : {}),
           });
         },
-        feishuEnabled
-          ? {
-              taskId,
-              im: {
-                feishu: {
-                  enabled: true,
+        {
+          taskId,
+          sessionStorage: inMemorySession ? "in-memory" : "persistent",
+          minInstance: instanceRange.min,
+          maxInstance: instanceRange.max,
+          ...(feishuEnabled
+            ? {
+                im: {
+                  feishu: {
+                    enabled: true,
+                  },
                 },
-              },
-              envs,
-            }
-          : { taskId, envs },
+              }
+            : {}),
+          envs,
+        },
       );
       if (mountedRef.current) {
         setDeployResult(result);
@@ -1432,6 +1511,52 @@ export function ProjectPreview({
                   </div>
                 </div>
               </section>
+              )}
+
+              {!isRuntimeUpdate && (
+                <section className="pp-config-section">
+                  <div className="pp-config-label">实例设置</div>
+                  <div className="pp-instance-fields">
+                    <label htmlFor="runtime-min-instance">
+                      <span>最小实例数</span>
+                      <input
+                        id="runtime-min-instance"
+                        type="number"
+                        min="1"
+                        step="1"
+                        inputMode="numeric"
+                        value={minInstance}
+                        disabled={deploying}
+                        aria-invalid={!instanceRange.valid}
+                        onChange={(event) => setMinInstance(event.currentTarget.value)}
+                      />
+                    </label>
+                    <label htmlFor="runtime-max-instance">
+                      <span>最大实例数</span>
+                      <input
+                        id="runtime-max-instance"
+                        type="number"
+                        min="1"
+                        step="1"
+                        inputMode="numeric"
+                        value={maxInstance}
+                        disabled={deploying}
+                        aria-invalid={!instanceRange.valid}
+                        onChange={(event) => setMaxInstance(event.currentTarget.value)}
+                      />
+                    </label>
+                  </div>
+                  {inMemorySession && (
+                    <p className="pp-instance-note" role="note">
+                      为避免多实例间会话丢失，推荐将 Runtime 固定为 1～1
+                    </p>
+                  )}
+                  {!instanceRange.valid && (
+                    <p className="pp-instance-error" role="alert">
+                      {instanceRange.error}
+                    </p>
+                  )}
+                </section>
               )}
 
               <section className="pp-config-section">

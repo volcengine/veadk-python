@@ -1,0 +1,93 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+const projectPreviewSource = readFileSync(
+  new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
+  "utf8",
+);
+const projectPreviewStyles = readFileSync(
+  new URL("../src/ui/ProjectPreview.css", import.meta.url),
+  "utf8",
+);
+const workspaceSource = readFileSync(
+  new URL("../src/ui/AgentWorkspace.tsx", import.meta.url),
+  "utf8",
+);
+const clientSource = readFileSync(
+  new URL("../src/adk/client.ts", import.meta.url),
+  "utf8",
+);
+
+test("deployment sends the selected Runtime instance range", () => {
+  assert.match(
+    projectPreviewSource,
+    /!agentDraft\.memory\.shortTerm[\s\S]*?agentDraft\.shortTermBackend \|\| "local"[\s\S]*?=== "local"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /sessionStorage: inMemorySession \? "in-memory" : "persistent"/,
+  );
+  assert.match(projectPreviewSource, /minInstance: instanceRange\.min/);
+  assert.match(projectPreviewSource, /maxInstance: instanceRange\.max/);
+  assert.match(clientSource, /sessionStorage: opts\?\.sessionStorage/);
+  assert.match(clientSource, /minInstance: opts\?\.minInstance/);
+  assert.match(clientSource, /maxInstance: opts\?\.maxInstance/);
+});
+
+test("renders editable Runtime instance inputs with memory-aware defaults", () => {
+  assert.match(
+    projectPreviewSource,
+    /useState\([\s\S]*?inMemorySession \? "1" : "5"[\s\S]*?\)/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /id="runtime-min-instance"[\s\S]*?type="number"[\s\S]*?value=\{minInstance\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /id="runtime-max-instance"[\s\S]*?type="number"[\s\S]*?value=\{maxInstance\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /inMemorySession && \([\s\S]*?className="pp-instance-note"[\s\S]*?为避免多实例间会话丢失，推荐将 Runtime 固定为 1～1/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-instance-note\s*\{[\s\S]*?color:\s*hsl\(42 96% 43%\);[\s\S]*?font-size:\s*12px/,
+  );
+});
+
+test("renders the Runtime update progress step conditionally", () => {
+  assert.match(
+    projectPreviewSource,
+    /needsInstanceUpdate[\s\S]*?\[\.\.\.baseDeploymentSteps, INSTANCE_UPDATE_STEP\][\s\S]*?: baseDeploymentSteps/,
+  );
+  assert.match(
+    workspaceSource,
+    /task\.instanceRange[\s\S]*?instanceUpdateStep\(task\.instanceRange\)[\s\S]*?: DEPLOYMENT_STEPS/,
+  );
+  assert.match(
+    workspaceSource,
+    /phase: "update"[\s\S]*?label: "更新实例配置"[\s\S]*?将 Runtime 实例数调整为 \$\{range\.min\}～\$\{range\.max\}/,
+  );
+});
+
+test("draws complete native radio and checkbox states after the global reset", () => {
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-network-option input\s*\{[\s\S]*?appearance:\s*none;[\s\S]*?border-radius:\s*50%/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-network-option input:checked::before\s*\{[\s\S]*?transform:\s*scale\(1\)/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-network-check input\s*\{[\s\S]*?appearance:\s*none;[\s\S]*?border-radius:\s*4px/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-network-check input:checked::before\s*\{[\s\S]*?rotate\(45deg\)/,
+  );
+});

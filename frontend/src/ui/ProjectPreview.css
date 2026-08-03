@@ -852,8 +852,38 @@
   line-height: 1.5;
 }
 
+.pp-instance-note {
+  margin: 10px 0 0;
+  color: hsl(42 96% 43%);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pp-instance-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.pp-instance-fields label {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12.5px;
+}
+
+.pp-instance-error {
+  margin: 8px 0 0;
+  color: hsl(var(--destructive));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .pp-config-select,
 .pp-channel-fields input,
+.pp-instance-fields input,
 .pp-network-fields input,
 .pp-env-row input {
   width: 100%;
@@ -881,6 +911,7 @@
 
 .pp-config-select:focus,
 .pp-channel-fields input:focus,
+.pp-instance-fields input:focus,
 .pp-network-fields input:focus,
 .pp-env-row input:focus {
   border-color: hsl(var(--ring) / 0.55);
@@ -889,6 +920,7 @@
 
 .pp-config-select:disabled,
 .pp-channel-fields input:disabled,
+.pp-instance-fields input:disabled,
 .pp-network-fields input:disabled,
 .pp-env-row input:disabled {
   opacity: 0.55;
@@ -1206,8 +1238,40 @@
 .pp-network-option input {
   width: 15px;
   height: 15px;
+  flex: 0 0 15px;
+  display: grid;
+  place-items: center;
   margin: 0;
-  accent-color: hsl(var(--foreground));
+  appearance: none;
+  border: 1px solid hsl(var(--border));
+  border-radius: 50%;
+  background: hsl(var(--background));
+  cursor: inherit;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.pp-network-option input::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: hsl(var(--primary));
+  content: "";
+  transform: scale(0);
+  transition: transform 120ms ease-out;
+}
+
+.pp-network-option input:checked {
+  border-color: hsl(var(--primary));
+}
+
+.pp-network-option input:checked::before {
+  transform: scale(1);
+}
+
+.pp-network-option input:focus-visible,
+.pp-network-check input:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.55);
+  outline-offset: 2px;
 }
 
 .pp-network-fields {
@@ -1240,9 +1304,41 @@
 }
 
 .pp-network-check input {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  display: grid;
+  place-items: center;
   margin: 0;
+  padding: 0;
+  appearance: none;
+  border: 1px solid hsl(var(--border));
+  border-radius: 4px;
+  background: hsl(var(--background));
+  cursor: inherit;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.pp-network-check input::before {
+  width: 4px;
+  height: 8px;
+  border: solid hsl(var(--primary-foreground));
+  border-width: 0 2px 2px 0;
+  content: "";
+  transform: translateY(-1px) rotate(45deg) scale(0);
+  transition: transform 120ms ease-out;
+}
+
+.pp-network-check input:checked {
+  border-color: hsl(var(--primary));
+  background: hsl(var(--primary));
+}
+
+.pp-network-check input:checked::before {
+  transform: translateY(-1px) rotate(45deg) scale(1);
 }
 
 .pp-env-section {

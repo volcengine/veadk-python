@@ -13,19 +13,26 @@ const { outputText } = ts.transpileModule(source, {
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
 const { formatRunSseError } = await import(moduleUrl);
 
-test("adds persistent-memory guidance to run_sse 404 variants", () => {
-  for (const error of [
-    "Error:run_sse failed:404",
-    "Error: run_sse failed: 404",
-    "RUN_SSE FAILED : 404",
-  ]) {
-    const formatted = formatRunSseError(error);
-    assert.ok(formatted.startsWith(error));
-    assert.match(formatted, /多实例部署/);
-    assert.match(formatted, /in-memory/);
-    assert.match(formatted, /SQLite/);
-    assert.match(formatted, /基于数据库的持久化短期记忆/);
-  }
+test("adds memory guidance only when the response says the session is missing", () => {
+  const error = "run_sse failed: 404：Session not found: session-1";
+  const formatted = formatRunSseError(error);
+  assert.ok(formatted.startsWith(error));
+  assert.match(formatted, /in-memory/);
+  assert.match(formatted, /进程重启/);
+  assert.match(formatted, /基于数据库的持久化短期记忆/);
+});
+
+test("identifies an unsupported harness route without blaming memory", () => {
+  const formatted = formatRunSseError("run_sse failed: 404：Not Found");
+  assert.match(formatted, /Runtime 未提供会话能力运行接口/);
+  assert.doesNotMatch(formatted, /in-memory/);
+});
+
+test("does not guess at the cause of an unexplained 404", () => {
+  assert.equal(
+    formatRunSseError("run_sse failed: 404：upstream error"),
+    "run_sse failed: 404：upstream error",
+  );
 });
 
 test("leaves unrelated errors unchanged", () => {
@@ -35,13 +42,15 @@ test("leaves unrelated errors unchanged", () => {
 });
 
 test("does not append the guidance twice", () => {
-  const formatted = formatRunSseError("run_sse failed: 404");
+  const formatted = formatRunSseError(
+    "run_sse failed: 404：Session not found: session-1",
+  );
   assert.equal(formatRunSseError(formatted), formatted);
 });
 
-test("translates malformed tool arguments into an actionable message", () => {
-  assert.equal(
-    formatRunSseError("Expecting ',' delimiter: line 1 column 169 (char 168)"),
-    "模型生成的工具参数格式不完整，请重新发送一次。",
-  );
+test("preserves malformed tool argument details and adds an actionable message", () => {
+  const error = "Expecting ',' delimiter: line 1 column 169 (char 168)";
+  const formatted = formatRunSseError(error);
+  assert.ok(formatted.startsWith(error));
+  assert.match(formatted, /模型生成的工具参数格式不完整/);
 });

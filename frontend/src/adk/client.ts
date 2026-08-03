@@ -583,11 +583,14 @@ export async function getSession(
 ): Promise<AdkSession> {
   const { app, ep } = resolve(appName);
   const res = await apiFetch(
-    `/apps/${app}/users/${encodeURIComponent(userId)}/sessions/${sessionId}`,
+    `/apps/${app}/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}`,
     {},
     ep,
   );
-  if (!res.ok) throw new Error(`get session failed: ${res.status}`);
+  if (!res.ok) {
+    const detail = await httpErrorMessage(res, "读取会话失败");
+    throw new Error(`get session failed: ${res.status}：${detail}`);
+  }
   const session = (await res.json()) as AdkSession;
   if (ep.runtimeId) {
     const scope = feedbackCacheScope(ep.runtimeId, app, userId, sessionId);
@@ -1635,7 +1638,12 @@ export async function* runSSE({
     ep,
     0,
   );
-  if (!res.ok) throw new Error(formatRunSseError(`run_sse failed: ${res.status}`));
+  if (!res.ok) {
+    const detail = await httpErrorMessage(res, "运行会话失败");
+    throw new Error(
+      formatRunSseError(`run_sse failed: ${res.status}：${detail}`),
+    );
+  }
   for await (const evt of parseSSE(res)) {
     const event = evt as AdkEvent;
     if (typeof event.error === "string") event.error = formatRunSseError(event.error);
@@ -1721,6 +1729,9 @@ export async function deployAgentkitProject(
     taskId?: string;
     runtimeId?: string;
     appName?: string;
+    sessionStorage?: "in-memory" | "persistent";
+    minInstance?: number;
+    maxInstance?: number;
     description?: string;
     onStage?: (s: DeployStage) => void;
     im?: {
@@ -1761,6 +1772,9 @@ export async function deployAgentkitProject(
           taskId,
           runtimeId: opts?.runtimeId,
           appName: opts?.appName,
+          sessionStorage: opts?.sessionStorage,
+          minInstance: opts?.minInstance,
+          maxInstance: opts?.maxInstance,
           description: normalizeRuntimeDescription(opts?.description ?? ""),
           im: opts?.im,
           envs: opts?.envs,
