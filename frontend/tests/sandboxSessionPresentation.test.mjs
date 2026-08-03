@@ -22,6 +22,10 @@ const workspaceSource = readFileSync(
   new URL("../src/ui/SandboxAgentWorkspace.tsx", import.meta.url),
   "utf8",
 );
+const workspaceStyles = readFileSync(
+  new URL("../src/ui/SandboxAgentWorkspace.css", import.meta.url),
+  "utf8",
+);
 const sandboxSessionSource = readFileSync(
   new URL("../src/ui/SandboxSession.tsx", import.meta.url),
   "utf8",
@@ -70,8 +74,10 @@ test("sandbox launch dialog covers confirmation loading failure and retry", () =
   assert.match(dialogSource, /role="dialog"/);
   assert.match(dialogSource, /`创建 \$\{agentLabel\} 智能体`/);
   assert.doesNotMatch(dialogSource, /创建一个可重复进入的 AgentKit Session/);
-  assert.match(dialogSource, /智能体名称（可选）/);
-  assert.match(dialogSource, /正在创建沙箱/);
+  assert.match(dialogSource, /<span>智能体名称<\/span>/);
+  assert.match(dialogSource, /type="text"[\s\S]*?required/);
+  assert.match(dialogSource, /`正在创建 \$\{agentLabel\} 智能体`/);
+  assert.match(dialogSource, /正在创建并等待 \{agentLabel\} 智能体就绪，这通常需要半分钟/);
   assert.match(dialogSource, /启动失败/);
   assert.match(dialogSource, /重新尝试/);
   assert.match(dialogSource, /确认创建/);
@@ -80,8 +86,9 @@ test("sandbox launch dialog covers confirmation loading failure and retry", () =
   assert.match(appSource, /sandboxLaunchAbortRef\.current\?\.abort\(\)/);
 });
 
-test("active sandbox conversation is visibly temporary and never uses normal sessions", () => {
-  assert.match(sandboxSessionSource, /当前为 Codex 智能体会话，退出后对话内容消失/);
+test("active sandbox conversation identifies the selected agent and never uses normal sessions", () => {
+  assert.match(sandboxSessionSource, /当前您在使用 \{agentName\} 智能体/);
+  assert.doesNotMatch(sandboxSessionSource, /退出后对话内容消失/);
   assert.match(sandboxSessionSource, /退出内置智能体/);
   assert.match(appSource, /sandboxClient\.sendMessage/);
   assert.doesNotMatch(sandboxClientSource, /runSSE/);
@@ -109,8 +116,13 @@ test("sandbox agents expose detail deletion and reusable workspaces", () => {
   assert.match(appSource, /sandboxClient\.deleteSession\(session\.id\)/);
   assert.match(appSource, /sandboxClient\.deleteAgentSession\(session\.toolName, session\.id\)/);
   assert.match(workspaceSource, /主界面/);
-  assert.match(workspaceSource, /Terminal/);
+  assert.match(workspaceSource, /终端/);
   assert.match(workspaceSource, /sandboxClient\.launchAgentTerminal/);
+  assert.match(workspaceSource, /size="lg"/);
+  assert.match(workspaceSource, /gutterSize="lg"/);
+  assert.match(workspaceSource, /block/);
+  assert.match(workspaceStyles, /\.sandbox-agent-workspace-tabs\s*\{[\s\S]*?width: 200px/);
+  assert.match(workspaceStyles, /@media \(max-width: 720px\)[\s\S]*?\.sandbox-agent-workspace-tabs\s*\{[\s\S]*?width: 100%/);
 });
 
 test("disconnecting Codex keeps the agent while deletion removes it", () => {

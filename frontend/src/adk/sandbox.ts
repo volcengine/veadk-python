@@ -15,6 +15,35 @@ const UPLOAD_TIMEOUT_MS = 330_000;
 export const SANDBOX_DISPLAY_NAME_MAX_LENGTH = 40;
 export type SandboxAgentKind = "openclaw" | "hermes";
 
+export function sandboxStatusLabel(status: string): string {
+  switch (status.trim().toLowerCase()) {
+    case "ready":
+      return "就绪";
+    case "creating":
+      return "创建中";
+    case "starting":
+    case "initializing":
+      return "启动中";
+    case "pending":
+      return "等待中";
+    case "running":
+      return "运行中";
+    case "failed":
+    case "error":
+      return "异常";
+    case "stopped":
+      return "已停止";
+    case "expired":
+      return "已过期";
+    case "deleting":
+      return "删除中";
+    case "deleted":
+      return "已删除";
+    default:
+      return "未知状态";
+  }
+}
+
 export type SandboxApprovalPolicy = "untrusted" | "on-request" | "never";
 export type SandboxApprovalsReviewer = "user" | "auto_review";
 export type SandboxMode =
@@ -160,7 +189,7 @@ export interface SandboxSession {
   createdAt: string;
   expireAt: string;
   toolType: string;
-  region: string;
+  createdBy: string;
   threadId: string;
   cwd: string;
   workspaceLocked: boolean;
@@ -331,7 +360,7 @@ interface SessionResponse {
   createdAt?: string;
   expireAt?: string;
   toolType?: string;
-  region?: string;
+  createdBy?: string;
   threadId?: string;
   cwd?: string;
   workspaceLocked?: boolean;
@@ -410,7 +439,7 @@ function parseSession(
     createdAt: data.createdAt ?? "",
     expireAt: data.expireAt ?? "",
     toolType: data.toolType ?? "",
-    region: data.region ?? "",
+    createdBy: data.createdBy ?? "",
     threadId: data.threadId ?? "",
     cwd: data.cwd ?? "",
     workspaceLocked: data.workspaceLocked === true,

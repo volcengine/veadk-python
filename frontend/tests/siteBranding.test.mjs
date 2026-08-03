@@ -123,10 +123,11 @@ test("main panel fills the shell with equal outer spacing and no global navbar",
   assert.doesNotMatch(appSource, /<StudioUpdateControl\b/);
 });
 
-test("welcome headings share the neutral TextShimmer and stable smoke avatars", () => {
+test("welcome heading uses the synchronized reveal while login keeps TextShimmer", () => {
   assert.match(sidebarSource, /function smokeAvatarStyle/);
   assert.match(sidebarSource, /style=\{avatarStyle\}/);
-  assert.match(appSource, /<TextShimmer as="h1" className="welcome-title"/);
+  assert.match(appSource, /<h1 className="welcome-title">/);
+  assert.doesNotMatch(appSource, /<TextShimmer as="h1" className="welcome-title"/);
   assert.match(loginSource, /<TextShimmer as="h1" className="login-title"/);
   assert.match(textShimmerSource, /hsl\(var\(--muted-foreground\)\)/);
   assert.match(textShimmerSource, /hsl\(var\(--foreground\)\) 50%/);

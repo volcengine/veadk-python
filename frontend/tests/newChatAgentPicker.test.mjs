@@ -56,8 +56,12 @@ test("renders a two-level Agent type and runtime menu", () => {
   assert.match(pickerSource, /aria-label=\{`\$\{activeTypeLabel\}列表`\}/);
   assert.match(pickerSource, /getRuntimes\(\{[\s\S]*?region: "all"[\s\S]*?pageSize: PAGE_SIZE/);
   assert.match(pickerSource, /onSelectRuntime\(runtime\)/);
+  assert.match(pickerSource, /sandboxClient\.listSessions/);
+  assert.match(pickerSource, /sandboxClient\.listAgentSessions/);
+  assert.match(pickerSource, /onSelectSandboxSession\(session\)/);
   assert.match(appSource, /onSelectRuntime=\{async \(runtime\) => \{[\s\S]*?connectMyAgent/);
-  assert.match(pickerSource, /暂未开放/);
+  assert.match(appSource, /onSelectSandboxSession=\{openSandboxAgent\}/);
+  assert.doesNotMatch(pickerSource, /暂未开放/);
   assert.match(pickerSource, /disabled/);
   assert.match(pickerStyles, /\.new-chat-agent-picker__submenu/);
 });
@@ -92,10 +96,8 @@ test("uses compact official empty states without fake actions", () => {
     pickerSource,
     /runtimes\.length === 0[\s\S]*?className="new-chat-agent-picker__empty"[\s\S]*?<EmptyMessage\.Icon[\s\S]*?size="sm"[\s\S]*?<AgentFaceIcon[\s\S]*?<EmptyMessage\.Title[^>]*>[\s\S]*?暂无通用智能体[\s\S]*?<\/EmptyMessage\.Title>/,
   );
-  assert.match(
-    pickerSource,
-    /activeType !== "general"[\s\S]*?className="new-chat-agent-picker__empty"[\s\S]*?<AgentTypeIcon[\s\S]*?type=\{activeType\}[\s\S]*?<EmptyMessage\.Title[^>]*>[\s\S]*?\{activeTypeLabel\}[\s\S]*?<\/EmptyMessage\.Title>[\s\S]*?<EmptyMessage\.Description[^>]*>[\s\S]*?暂未开放[\s\S]*?<\/EmptyMessage\.Description>/,
-  );
+  assert.match(pickerSource, /sandboxSessions\.length === 0[\s\S]*?暂无 \{activeTypeLabel\}[\s\S]*?请前往智能体页创建/);
+  assert.match(pickerSource, /sandboxSessions\.map\(\(session, index\) =>/);
   assert.doesNotMatch(pickerSource, /new-chat-agent-picker__empty[\s\S]*?<Button/);
   assert.match(pickerStyles, /\.new-chat-agent-picker__empty\s*\{[\s\S]*?min-height: 116px/);
 });

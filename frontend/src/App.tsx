@@ -102,7 +102,6 @@ import { CodePackageCreate } from "./create/CodePackageCreate";
 import { FileArchive } from "lucide-react";
 import type { AgentDraft } from "./create/types";
 import type { DeployResult, DeploymentTaskUpdate } from "./ui/ProjectPreview";
-import { TextShimmer } from "./ui/text-shimmer/TextShimmer";
 import { createSkillJob, deleteSkillJob } from "./ui/skill-create/api";
 import { SkillCreateWorkspace } from "./ui/skill-create/SkillCreateWorkspace";
 import { SKILL_MODELS, type SkillCreationJob } from "./ui/skill-create/types";
@@ -3032,7 +3031,16 @@ export default function App() {
             className={`composer-slot${sandboxSession ? " sandbox-composer-wrap" : ""}`}
           >
             {sandboxSession && (
-              <SandboxSessionWarning onExit={startNewChat} />
+              <SandboxSessionWarning
+                agentName={
+                  sandboxSession.toolName === "codex"
+                    ? "Codex"
+                    : sandboxSession.toolName === "openclaw"
+                      ? "OpenClaw"
+                      : "Hermes"
+                }
+                onExit={startNewChat}
+              />
             )}
             <Composer
               sessionId={sandboxSession ? sandboxSession.id : sessionId}
@@ -3154,6 +3162,7 @@ export default function App() {
                   name: runtime.name,
                   description: runtime.description?.trim() || "暂无描述",
                   createdAt: runtime.createdAt ?? "",
+                  specificationLabel: "地域",
                   specification:
                     runtime.region === "cn-shanghai" ? "上海" : "北京",
                   isMine: runtime.isMine,
@@ -3165,6 +3174,7 @@ export default function App() {
                   },
                 }, true);
               }}
+              onSelectSandboxSession={openSandboxAgent}
               showModeSelector={false}
               temporaryEnabled={newChatCapabilitiesReady && newChatCapabilities.temporaryEnabled}
               skillCreateEnabled={newChatCapabilitiesReady && newChatCapabilities.skillCreateEnabled}
@@ -3525,13 +3535,13 @@ export default function App() {
                 <div className="welcome-primary">
                   <div className="welcome-heading">
                     <NewChatFeatureNotice canUpdate={access.role === "admin"} />
-                    <TextShimmer as="h1" className="welcome-title" duration={4.8} spread={22}>
+                    <h1 className="welcome-title">
                       {sandboxSession
-                        ? "让灵感在临时空间里自由生长"
+                        ? "让灵感自由生长"
                         : newChatMode === "skill-create"
                           ? "想创建一个什么 Skill？"
                           : greeting}
-                    </TextShimmer>
+                    </h1>
                   </div>
                   {composer}
                 </div>

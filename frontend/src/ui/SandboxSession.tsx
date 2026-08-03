@@ -26,12 +26,18 @@ export function SandboxEntryButton({
   );
 }
 
-export function SandboxSessionWarning({ onExit }: { onExit: () => void }) {
+export function SandboxSessionWarning({
+  agentName,
+  onExit,
+}: {
+  agentName: string;
+  onExit: () => void;
+}) {
   return (
     <div className="sandbox-session-warning" role="status">
       <span className="sandbox-session-warning-dot" aria-hidden="true" />
       <span className="sandbox-session-warning-copy">
-        当前为 Codex 智能体会话，退出后对话内容消失
+        当前您在使用 {agentName} 智能体
       </span>
       <button type="button" onClick={onExit}>
         退出内置智能体

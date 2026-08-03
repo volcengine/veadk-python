@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { SegmentedControl } from "@openai/apps-sdk-ui/components/SegmentedControl";
 import {
   sandboxClient,
+  sandboxStatusLabel,
   type SandboxAgentWorkspace as SandboxAgentWorkspaceData,
 } from "../adk/sandbox";
 import "./SandboxAgentWorkspace.css";
@@ -60,27 +62,39 @@ export function SandboxAgentWorkspace({
           </button>
           <div>
             <h1>{workspace.session.displayName || `${label} 智能体`}</h1>
-            <p>{workspace.session.region || "未知地域"} · {workspace.session.status}</p>
+            <p>
+              <span>创建人 {workspace.session.createdBy || "未知"}</span>
+              <span
+                className="sandbox-agent-workspace-status"
+                data-ready={
+                  workspace.session.status.toLowerCase() === "ready" || undefined
+                }
+              >
+                {sandboxStatusLabel(workspace.session.status)}
+              </span>
+            </p>
           </div>
         </div>
-        <nav aria-label="智能体工作区">
-          <button
-            type="button"
-            className={surface === "main" ? "is-active" : ""}
-            aria-pressed={surface === "main"}
-            onClick={() => setSurface("main")}
-          >
+        <SegmentedControl
+          className="sandbox-agent-workspace-tabs"
+          value={surface}
+          size="lg"
+          gutterSize="lg"
+          block
+          pill={false}
+          aria-label="智能体工作区"
+          onChange={(nextSurface) => {
+            if (nextSurface === "terminal") void openTerminal();
+            else setSurface("main");
+          }}
+        >
+          <SegmentedControl.Option value="main">
             主界面
-          </button>
-          <button
-            type="button"
-            className={surface === "terminal" ? "is-active" : ""}
-            aria-pressed={surface === "terminal"}
-            onClick={() => void openTerminal()}
-          >
-            Terminal
-          </button>
-        </nav>
+          </SegmentedControl.Option>
+          <SegmentedControl.Option value="terminal">
+            终端
+          </SegmentedControl.Option>
+        </SegmentedControl>
       </header>
 
       <div className="sandbox-agent-workspace-surface">
@@ -92,7 +106,7 @@ export function SandboxAgentWorkspace({
           />
         ) : terminalLoading ? (
           <div className="sandbox-agent-workspace-state" role="status">
-            正在打开 Terminal…
+            正在打开终端…
           </div>
         ) : terminalError ? (
           <div className="sandbox-agent-workspace-state is-error" role="alert">
@@ -100,7 +114,7 @@ export function SandboxAgentWorkspace({
             <button type="button" onClick={() => void openTerminal()}>重新尝试</button>
           </div>
         ) : terminalUrl ? (
-          <iframe src={terminalUrl} title={`${label} Terminal`} />
+          <iframe src={terminalUrl} title={`${label} 终端`} />
         ) : null}
       </div>
     </section>

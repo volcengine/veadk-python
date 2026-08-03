@@ -81,8 +81,9 @@ export function SandboxLaunchDialog({
   if (!open) return null;
 
   const loading = state === "loading";
+  const validDisplayName = displayName.trim();
   const title = loading
-    ? "正在创建沙箱"
+    ? `正在创建 ${agentLabel} 智能体`
     : state === "error"
       ? "启动失败"
       : `创建 ${agentLabel} 智能体`;
@@ -103,7 +104,9 @@ export function SandboxLaunchDialog({
         aria-describedby={state === "confirm" ? undefined : "sandbox-dialog-description"}
         onSubmit={(event) => {
           event.preventDefault();
-          if (!loading && !composingRef.current) onConfirm(displayName.trim());
+          if (!loading && !composingRef.current && validDisplayName) {
+            onConfirm(validDisplayName);
+          }
         }}
       >
         <div className="sandbox-dialog-visual" aria-hidden="true">
@@ -120,12 +123,12 @@ export function SandboxLaunchDialog({
             </p>
           ) : loading ? (
             <p id="sandbox-dialog-description" aria-live="polite">
-              正在创建 AgentKit Session 并等待沙箱就绪，通常需要一点时间。
+              正在创建并等待 {agentLabel} 智能体就绪，这通常需要半分钟
             </p>
           ) : null}
           <label className="sandbox-dialog-field">
             <span className="sandbox-dialog-field-label">
-              <span>智能体名称（可选）</span>
+              <span>智能体名称</span>
               <span aria-hidden="true">
                 {displayName.length}/{SANDBOX_DISPLAY_NAME_MAX_LENGTH}
               </span>
@@ -133,6 +136,7 @@ export function SandboxLaunchDialog({
             <input
               ref={nameInputRef}
               type="text"
+              required
               value={displayName}
               maxLength={SANDBOX_DISPLAY_NAME_MAX_LENGTH}
               disabled={loading}
@@ -164,7 +168,7 @@ export function SandboxLaunchDialog({
             {loading ? "取消创建" : "取消"}
           </button>
           {!loading && (
-            <button type="submit" className="is-primary">
+            <button type="submit" className="is-primary" disabled={!validDisplayName}>
               {state === "error" ? "重新尝试" : "确认创建"}
             </button>
           )}

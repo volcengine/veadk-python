@@ -329,6 +329,7 @@ class CodexAppServerSession:
         self._workspace_locked = False
         self._agent_message_delta_ids: set[str] = set()
         self._received_unidentified_agent_delta = False
+        self._reasoning_delta_text: dict[str, str] = {}
         self._skills_by_id: dict[str, _CodexPrivateSkill] = {}
         self._skills_cwd = ""
         self._skills_loaded = False
@@ -464,6 +465,7 @@ class CodexAppServerSession:
         self._active_turn_id = ""
         self._agent_message_delta_ids.clear()
         self._received_unidentified_agent_delta = False
+        self._reasoning_delta_text.clear()
         try:
             result = await self.request(
                 "turn/start",
@@ -971,6 +973,29 @@ class CodexAppServerSession:
                 else:
                     self._received_unidentified_agent_delta = True
                 self._emit(CodexAppServerEvent(kind="text", text=delta))
+            return
+        if method in {
+            "item/reasoning/summaryTextDelta",
+            "item/reasoning/textDelta",
+        }:
+            delta = params.get("delta")
+            item_id = params.get("itemId")
+            if (
+                isinstance(delta, str)
+                and delta
+                and isinstance(item_id, str)
+                and item_id
+            ):
+                text = self._reasoning_delta_text.get(item_id, "") + delta
+                self._reasoning_delta_text[item_id] = text
+                self._emit(
+                    CodexAppServerEvent(
+                        kind="thinking",
+                        item_id=item_id,
+                        status="running",
+                        text=text,
+                    )
+                )
             return
         if method in {"item/started", "item/completed"}:
             item = params.get("item")

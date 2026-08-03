@@ -205,6 +205,26 @@ class _FakeWebSocket:
                     )
                 )
             else:
+                if prompt == "reasoning-delta":
+                    await self._notification(
+                        "item/reasoning/summaryTextDelta",
+                        {"itemId": "reasoning-1", "delta": "分"},
+                    )
+                    await self._notification(
+                        "item/reasoning/textDelta",
+                        {"itemId": "reasoning-1", "delta": "析"},
+                    )
+                    await self._notification(
+                        "item/completed",
+                        {
+                            "item": {
+                                "id": "reasoning-1",
+                                "type": "reasoning",
+                                "summary": ["分析"],
+                                "status": "completed",
+                            }
+                        },
+                    )
                 await self._notification(
                     "item/agentMessage/delta",
                     {"itemId": "message-1", "delta": "完成"},
@@ -329,6 +349,23 @@ async def test_permissions_persist_and_apply_to_every_turn() -> None:
     assert session.workspace_locked is True
     with pytest.raises(CodexAppServerError, match="不能再修改"):
         await session.update_workspace("/other")
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_reasoning_deltas_stream_as_accumulated_thinking() -> None:
+    websocket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    events = [event async for event in session.stream_turn("reasoning-delta")]
+    thinking = [event for event in events if event.kind == "thinking"]
+
+    assert [event.text for event in thinking] == ["分", "分析", "分析"]
+    assert [event.status for event in thinking] == ["running", "running", "done"]
     await session.close()
 
 

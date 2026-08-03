@@ -34,8 +34,10 @@ from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.agentkit_session_metadata import (
     SESSION_DISPLAY_NAME_MAX_LENGTH,
     build_create_session_request,
+    build_list_sessions_request,
     call_session_client,
     session_display_name,
+    session_username,
 )
 from veadk.cli.codex_app_server import (
     ApprovalDecision,
@@ -136,6 +138,16 @@ class SandboxCapacityError(SandboxError):
     retryable = True
 
 
+def _require_session_access(
+    session: SandboxCloudSession,
+    owner_id: str,
+    *,
+    is_admin: bool,
+) -> None:
+    if not is_admin and session.created_by != owner_id:
+        raise SandboxSessionNotFoundError("智能体 Session 不存在或不属于当前用户。")
+
+
 def _safe_error_message(error: object) -> str:
     """Return a bounded credential-safe diagnostic message."""
     message = _redact_public_text(str(error).strip(), maximum=1_000)
@@ -212,6 +224,7 @@ class SandboxCloudSession:
     expire_at: str = ""
     tool_type: str = ""
     display_name: str = ""
+    created_by: str = ""
 
 
 @dataclass
@@ -358,8 +371,10 @@ class SandboxCodexConnection(Protocol):
 class SandboxCloudGateway(Protocol):
     """AgentKit operations needed by the Studio Session service."""
 
-    async def list_sessions(self, tool_id: str) -> list[SandboxCloudSession]:
-        """List every Session belonging to the configured Tool."""
+    async def list_sessions(
+        self, tool_id: str, username: str | None = None
+    ) -> list[SandboxCloudSession]:
+        """List Sessions, optionally filtered by Username metadata."""
         raise NotImplementedError
 
     async def get_session(self, tool_id: str, session_id: str) -> SandboxCloudSession:
@@ -367,7 +382,7 @@ class SandboxCloudGateway(Protocol):
         raise NotImplementedError
 
     async def create_session(
-        self, tool_id: str, display_name: str = ""
+        self, tool_id: str, display_name: str = "", username: str = ""
     ) -> SandboxCloudSession:
         """Create a fresh remote Sandbox session."""
         raise NotImplementedError
@@ -480,11 +495,12 @@ class AgentkitSandboxGateway:
             expire_at=str(getattr(value, "expire_at", "") or "").strip(),
             tool_type=str(getattr(value, "tool_type", "") or "").strip(),
             display_name=session_display_name(value),
+            created_by=session_username(value),
         )
 
-    async def list_sessions(self, tool_id: str) -> list[SandboxCloudSession]:
-        from agentkit.sdk.tools import types as tools_types
-
+    async def list_sessions(
+        self, tool_id: str, username: str | None = None
+    ) -> list[SandboxCloudSession]:
         regions = self._region_candidates or ("",)
         for index, region in enumerate(regions):
             sessions: dict[str, SandboxCloudSession] = {}
@@ -494,10 +510,11 @@ class AgentkitSandboxGateway:
                 for _page in range(100):
                     response = await self._call(
                         "list_sessions",
-                        tools_types.ListSessionsRequest(
-                            ToolId=tool_id,
-                            MaxResults=100,
-                            NextToken=next_token,
+                        build_list_sessions_request(
+                            tool_id=tool_id,
+                            max_results=100,
+                            next_token=next_token,
+                            username=username,
                         ),
                         region=region,
                     )
@@ -561,7 +578,7 @@ class AgentkitSandboxGateway:
         raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
 
     async def create_session(
-        self, tool_id: str, display_name: str = ""
+        self, tool_id: str, display_name: str = "", username: str = ""
     ) -> SandboxCloudSession:
         user_session_id = f"studio-{uuid.uuid4()}"
         regions = self._region_candidates or ("",)
@@ -571,6 +588,7 @@ class AgentkitSandboxGateway:
                 ttl_seconds=STUDIO_SANDBOX_TTL_SECONDS,
                 user_session_id=user_session_id,
                 display_name=display_name,
+                username=username,
             )
             create_task = asyncio.create_task(
                 self._call("create_session", request, region=region)
@@ -615,6 +633,7 @@ class AgentkitSandboxGateway:
                 region=region,
                 status="Ready" if endpoint else "Creating",
                 display_name=display_name,
+                created_by=username,
             )
         raise SandboxProvisioningError("无法在支持的地域创建 AgentKit 沙箱会话。")
 
@@ -720,16 +739,19 @@ class SandboxConversationService:
             raise SandboxConfigurationError("管理员未配置")
         return tool_id
 
-    async def list_sessions(self, owner_id: str) -> list[SandboxCloudSession]:
+    async def list_sessions(
+        self, owner_id: str, *, is_admin: bool = False
+    ) -> list[SandboxCloudSession]:
         """List the configured account's Sessions without exposing Endpoints."""
-        del owner_id
-        return await self._gateway.list_sessions(self._tool_id())
+        return await self._gateway.list_sessions(
+            self._tool_id(),
+            None if is_admin else owner_id,
+        )
 
     async def create(
         self, owner_id: str, display_name: object = ""
     ) -> SandboxCloudSession:
         """Create a cloud Session without opening a conversation connection."""
-        del owner_id
         if not isinstance(display_name, str):
             raise SandboxValidationError("智能体名称必须是文本。")
         display_name = display_name.strip()
@@ -746,12 +768,18 @@ class SandboxConversationService:
                 raise SandboxCapacityError("Sandbox 创建或连接数已达上限，请稍后重试。")
             self._sessions_starting += 1
         try:
-            return await self._gateway.create_session(tool_id, display_name)
+            return await self._gateway.create_session(tool_id, display_name, owner_id)
         finally:
             async with self._registry_lock:
                 self._sessions_starting -= 1
 
-    async def connect(self, session_id: str, owner_id: str) -> SandboxConversation:
+    async def connect(
+        self,
+        session_id: str,
+        owner_id: str,
+        *,
+        is_admin: bool = False,
+    ) -> SandboxConversation:
         """Attach an existing Ready cloud Session to the conversation bridge."""
         key = (owner_id, session_id)
         existing = self._sessions.get(key)
@@ -769,6 +797,7 @@ class SandboxConversationService:
             self._sessions_starting += 1
         try:
             cloud = await self._gateway.get_session(self._tool_id(), session_id)
+            _require_session_access(cloud, owner_id, is_admin=is_admin)
             if cloud.status.lower() != "ready" or not cloud.endpoint:
                 status = cloud.status or "Unknown"
                 raise SandboxSessionUnavailableError(
@@ -1145,10 +1174,16 @@ class SandboxConversationService:
             self._sessions.pop((owner_id, session_id), None)
             await session.codex.close()
 
-    async def delete(self, session_id: str, owner_id: str) -> None:
+    async def delete(
+        self,
+        session_id: str,
+        owner_id: str,
+        *,
+        is_admin: bool = False,
+    ) -> None:
         """Delete a cloud Session and close its local bridge when connected."""
         key = (owner_id, session_id)
-        if any(
+        if not is_admin and any(
             candidate_id == session_id and candidate_owner != owner_id
             for candidate_owner, candidate_id in self._sessions
         ):
@@ -1156,10 +1191,21 @@ class SandboxConversationService:
         session = self._sessions.pop(key, None)
         if session is None:
             cloud = await self._gateway.get_session(self._tool_id(), session_id)
+            _require_session_access(cloud, owner_id, is_admin=is_admin)
         else:
             cloud = session.cloud
             async with session.lock:
                 await session.codex.close()
+        if is_admin:
+            other_sessions = [
+                candidate
+                for (candidate_owner, candidate_id), candidate in self._sessions.items()
+                if candidate_id == session_id and candidate_owner != owner_id
+            ]
+            for candidate in other_sessions:
+                self._sessions.pop((candidate.owner_id, candidate.session_id), None)
+                async with candidate.lock:
+                    await candidate.codex.close()
         await self._gateway.delete_session(cloud)
 
     async def cleanup_expired(self) -> None:
@@ -1230,16 +1276,19 @@ class SandboxAgentSessionService:
         enabled = bool(self._tool_id(required=False))
         return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
 
-    async def list_sessions(self, owner_id: str) -> list[SandboxCloudSession]:
-        del owner_id
-        return await self._gateway.list_sessions(self._tool_id())
+    async def list_sessions(
+        self, owner_id: str, *, is_admin: bool = False
+    ) -> list[SandboxCloudSession]:
+        return await self._gateway.list_sessions(
+            self._tool_id(),
+            None if is_admin else owner_id,
+        )
 
     async def create(
         self,
         owner_id: str,
         display_name: object = "",
     ) -> SandboxCloudSession:
-        del owner_id
         if not isinstance(display_name, str):
             raise SandboxValidationError("智能体名称必须是文本。")
         display_name = display_name.strip()
@@ -1247,16 +1296,21 @@ class SandboxAgentSessionService:
             raise SandboxValidationError(
                 f"智能体名称不能超过 {STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH} 个字符。"
             )
-        return await self._gateway.create_session(self._tool_id(), display_name)
+        return await self._gateway.create_session(
+            self._tool_id(), display_name, owner_id
+        )
 
     async def open(
         self,
         session_id: str,
         owner_id: str,
+        *,
+        is_admin: bool = False,
     ) -> tuple[SandboxCloudSession, str]:
         """Resolve one ready Session and issue an opaque WebUI capability."""
         self._cleanup_expired()
         cloud = await self._gateway.get_session(self._tool_id(), session_id)
+        _require_session_access(cloud, owner_id, is_admin=is_admin)
         if cloud.status.lower() != "ready" or not cloud.endpoint:
             status = cloud.status or "Unknown"
             raise SandboxSessionUnavailableError(
@@ -1270,15 +1324,26 @@ class SandboxAgentSessionService:
         )
         return cloud, token
 
-    async def delete(self, session_id: str, owner_id: str) -> None:
+    async def delete(
+        self,
+        session_id: str,
+        owner_id: str,
+        *,
+        is_admin: bool = False,
+    ) -> None:
         """Delete one managed cloud Session and revoke its local workspace."""
-        if any(
+        if not is_admin and any(
             candidate_id == session_id and candidate_owner != owner_id
             for candidate_owner, candidate_id in self._workspaces
         ):
             raise SandboxSessionNotFoundError("智能体 Session 不存在或不属于当前用户。")
         cloud = await self._gateway.get_session(self._tool_id(), session_id)
-        self._workspaces.pop((owner_id, session_id), None)
+        _require_session_access(cloud, owner_id, is_admin=is_admin)
+        self._workspaces = {
+            key: workspace
+            for key, workspace in self._workspaces.items()
+            if key[1] != session_id or (not is_admin and key[0] != owner_id)
+        }
         await self._gateway.delete_session(cloud)
 
     async def launch_terminal(
@@ -1342,6 +1407,7 @@ def mount_sandbox_agent_routes(
     app: Any,
     services: dict[str, SandboxAgentSessionService],
     owner_resolver: Callable[[Any], str],
+    admin_resolver: Callable[[Any], bool] | None = None,
 ) -> None:
     """Mount list/create/open routes for managed agent Sessions."""
     from fastapi import HTTPException
@@ -1357,6 +1423,9 @@ def mount_sandbox_agent_routes(
         if service is None:
             raise HTTPException(status_code=404, detail="未知的沙箱智能体类型。")
         return service
+
+    def _is_admin(request: Request) -> bool:
+        return bool(admin_resolver and admin_resolver(request))
 
     def _http_error(error: SandboxError) -> HTTPException:
         status_code = 500
@@ -1387,7 +1456,7 @@ def mount_sandbox_agent_routes(
             "createdAt": session.created_at,
             "expireAt": session.expire_at,
             "toolType": session.tool_type,
-            "region": session.region,
+            "createdBy": session.created_by,
             "displayName": session.display_name,
             "toolName": kind,
         }
@@ -1406,7 +1475,10 @@ def mount_sandbox_agent_routes(
         request: Request,
     ) -> dict[str, object]:
         try:
-            sessions = await _service(kind).list_sessions(owner_resolver(request))
+            sessions = await _service(kind).list_sessions(
+                owner_resolver(request),
+                is_admin=_is_admin(request),
+            )
         except SandboxError as error:
             raise _http_error(error) from error
         return {"sessions": [_public_session(session, kind) for session in sessions]}
@@ -1449,6 +1521,7 @@ def mount_sandbox_agent_routes(
             session, token = await service.open(
                 session_id,
                 owner_resolver(request),
+                is_admin=_is_admin(request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -1465,7 +1538,11 @@ def mount_sandbox_agent_routes(
         request: Request,
     ) -> dict[str, bool]:
         try:
-            await _service(kind).delete(session_id, owner_resolver(request))
+            await _service(kind).delete(
+                session_id,
+                owner_resolver(request),
+                is_admin=_is_admin(request),
+            )
         except SandboxError as error:
             raise _http_error(error) from error
         return {"deleted": True}
@@ -1514,6 +1591,7 @@ def mount_sandbox_routes(
     service: SandboxConversationService,
     owner_resolver: Callable[[Any], str],
     proxy_target_resolver: Callable[[str, str], SandboxProxyTarget] | None = None,
+    admin_resolver: Callable[[Any], bool] | None = None,
 ) -> None:
     """Mount Studio HTTP routes for reusable Sandbox Sessions."""
     from fastapi import HTTPException
@@ -1542,6 +1620,9 @@ def mount_sandbox_routes(
             },
         )
 
+    def _is_admin(request: Request) -> bool:
+        return bool(admin_resolver and admin_resolver(request))
+
     def _public_session(session: SandboxCloudSession) -> dict[str, str]:
         return {
             "sessionId": session.instance_id,
@@ -1550,7 +1631,7 @@ def mount_sandbox_routes(
             "createdAt": session.created_at,
             "expireAt": session.expire_at,
             "toolType": session.tool_type,
-            "region": session.region,
+            "createdBy": session.created_by,
             "displayName": session.display_name,
         }
 
@@ -1599,7 +1680,10 @@ def mount_sandbox_routes(
     @app.get("/web/sandbox/sessions")
     async def _list_sandbox_sessions(request: Request) -> dict[str, object]:
         try:
-            sessions = await service.list_sessions(owner_resolver(request))
+            sessions = await service.list_sessions(
+                owner_resolver(request),
+                is_admin=_is_admin(request),
+            )
         except SandboxError as error:
             raise _http_error(error) from error
         return {"sessions": [_public_session(session) for session in sessions]}
@@ -1633,7 +1717,11 @@ def mount_sandbox_routes(
         session_id: str, request: Request
     ) -> dict[str, object]:
         try:
-            session = await service.connect(session_id, owner_resolver(request))
+            session = await service.connect(
+                session_id,
+                owner_resolver(request),
+                is_admin=_is_admin(request),
+            )
         except SandboxError as error:
             raise _http_error(error) from error
         return {
@@ -2024,7 +2112,11 @@ def mount_sandbox_routes(
         session_id: str, request: Request
     ) -> dict[str, bool]:
         try:
-            await service.delete(session_id, owner_resolver(request))
+            await service.delete(
+                session_id,
+                owner_resolver(request),
+                is_admin=_is_admin(request),
+            )
         except SandboxError as error:
             raise _http_error(error) from error
         return {"deleted": True}

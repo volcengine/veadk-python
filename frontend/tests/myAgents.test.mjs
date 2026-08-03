@@ -82,7 +82,9 @@ test("keeps a primary create action visible above the scrolling results", () => 
 test("agent cards show the archived metadata hierarchy and two-action footer", () => {
   assert.match(pageSource, /<h3>\{agent\.name\}<\/h3>/);
   assert.match(pageSource, /<dt>创建时间<\/dt>/);
-  assert.match(pageSource, /<dt>地域<\/dt>[\s\S]*?<dd>\{agent\.specification\}<\/dd>/);
+  assert.match(pageSource, /<dt>\{agent\.specificationLabel\}<\/dt>[\s\S]*?<dd>\{agent\.specification\}<\/dd>/);
+  assert.match(pageSource, /Session ID：\{agent\.sandbox\.id\}/);
+  assert.match(pageSource, /className="my-agent-status-label"[\s\S]*?\{agent\.description\}/);
   assert.doesNotMatch(pageSource, /<dt>工具<\/dt>|<dt>技能<\/dt>/);
   assert.match(pageSource, /className="my-agent-description">\{agent\.description\}/);
   assert.match(pageSource, /className="my-agent-actions"/);
@@ -95,19 +97,26 @@ test("agent cards show the archived metadata hierarchy and two-action footer", (
   assert.doesNotMatch(pageStyles, /font-family/);
 });
 
-test("uses the archived two-layer card layout", () => {
+test("uses a responsive two-layer card layout without an empty fixed-height gap", () => {
   assert.match(
     pageStyles,
-    /\.my-agent-grid\s*\{[\s\S]*?grid-template-columns: repeat\(auto-fit, minmax\(min\(204px, 100%\), 1fr\)\);[\s\S]*?gap: 12px;/,
+    /\.my-agent-grid\s*\{[\s\S]*?grid-template-columns: repeat\(auto-fill, minmax\(min\(280px, 100%\), 1fr\)\);[\s\S]*?align-items: start;[\s\S]*?gap: 12px;/,
   );
   assert.match(
     pageStyles,
-    /\.my-agent-card\s*\{[\s\S]*?height: 204px;[\s\S]*?background: transparent;/,
+    /\.my-agent-card\s*\{[\s\S]*?height: auto;[\s\S]*?background: hsl\(var\(--secondary\) \/ 0\.82\)/,
   );
   assert.match(pageStyles, /\.my-agent-card-content\s*\{[\s\S]*?background: hsl\(var\(--panel\)\);/);
   assert.match(pageStyles, /\.my-agent-description\s*\{[\s\S]*?-webkit-line-clamp: 2/);
   assert.match(pageStyles, /\.my-agent-actions\s*\{[\s\S]*?gap: 8px;[\s\S]*?padding: 6px 8px 7px;[\s\S]*?background: hsl\(var\(--secondary\) \/ 0\.82\)/);
   assert.match(pageStyles, /\.my-agent-actions button\s*\{[\s\S]*?background: transparent/);
+});
+
+test("aligns sandbox names with status and formats creation time to seconds", () => {
+  assert.match(pageStyles, /\.my-agent-card-title\s*\{[\s\S]*?justify-content: space-between/);
+  assert.match(pageStyles, /\.my-agent-session-id\s*\{/);
+  assert.match(pageSource, /hour: "2-digit"[\s\S]*?minute: "2-digit"[\s\S]*?second: "2-digit"/);
+  assert.match(pageSource, /agent\.sandbox \? \([\s\S]*?Session ID：\{agent\.sandbox\.id\}/);
 });
 
 test("metadata remains compact without adding data-plane requests", () => {

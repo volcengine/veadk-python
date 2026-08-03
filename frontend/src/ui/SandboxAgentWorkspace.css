@@ -28,19 +28,19 @@
 
 .sandbox-agent-workspace-title > button {
   display: inline-grid;
-  width: 32px;
+  width: 24px;
   height: 32px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid hsl(var(--border));
-  border-radius: 8px;
-  background: hsl(var(--panel));
-  color: hsl(var(--foreground));
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
   cursor: pointer;
 }
 
 .sandbox-agent-workspace-title > button:hover {
-  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
 }
 
 .sandbox-agent-workspace-title svg {
@@ -63,39 +63,37 @@
 }
 
 .sandbox-agent-workspace-title p {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   margin: 3px 0 0;
   color: hsl(var(--muted-foreground));
   font-size: 11.5px;
 }
 
-.sandbox-agent-workspace nav {
+.sandbox-agent-workspace-status {
   display: inline-flex;
-  flex: 0 0 auto;
-  gap: 4px;
-  padding: 4px;
+  min-height: 18px;
+  align-items: center;
+  padding: 0 6px;
   border: 1px solid hsl(var(--border));
-  border-radius: 10px;
-  background: hsl(var(--secondary));
-}
-
-.sandbox-agent-workspace nav button {
-  min-width: 82px;
-  height: 34px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
+  border-radius: 999px;
+  background: hsl(var(--muted));
   color: hsl(var(--muted-foreground));
-  font: inherit;
-  font-size: 12px;
-  font-weight: 560;
-  cursor: pointer;
+  font-size: 10.5px;
+  font-weight: 550;
+  line-height: 1;
 }
 
-.sandbox-agent-workspace nav button.is-active {
-  border: 1px solid hsl(var(--border));
-  background: hsl(var(--panel));
-  color: hsl(var(--foreground));
+.sandbox-agent-workspace-status[data-ready] {
+  border-color: hsl(142 35% 40% / 0.22);
+  background: hsl(142 42% 94%);
+  color: hsl(142 55% 28%);
+}
+
+.sandbox-agent-workspace-tabs {
+  width: 200px;
+  flex: 0 0 auto;
 }
 
 .sandbox-agent-workspace button:focus-visible {
@@ -106,14 +104,14 @@
 .sandbox-agent-workspace-surface {
   min-width: 0;
   min-height: 0;
-  padding: 12px;
+  overflow: hidden;
 }
 
 .sandbox-agent-workspace-surface iframe {
+  display: block;
   width: 100%;
   height: 100%;
-  border: 1px solid hsl(var(--border));
-  border-radius: 12px;
+  border: 0;
   background: hsl(var(--panel));
 }
 
@@ -154,11 +152,7 @@
     flex-direction: column;
   }
 
-  .sandbox-agent-workspace nav {
+  .sandbox-agent-workspace-tabs {
     width: 100%;
-  }
-
-  .sandbox-agent-workspace nav button {
-    flex: 1;
   }
 }

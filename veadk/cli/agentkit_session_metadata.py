@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Compatibility helpers for AgentKit Session display-name metadata."""
+"""Compatibility helpers for AgentKit Session metadata."""
 
 from __future__ import annotations
 
@@ -23,15 +23,20 @@ from pydantic import Field
 
 SESSION_DISPLAY_NAME_MAX_LENGTH = 40
 SESSION_DISPLAY_NAME_METADATA_KEY = "veadk_display_name"
+SESSION_USERNAME_METADATA_KEY = "Username"
 
 
 class _SessionMetadata(tools_types.ToolsBaseModel):
     key: str = Field(alias="Key")
-    type: str = Field(default="String", alias="Type")
+    type: str | None = Field(default=None, alias="Type")
     value: str = Field(alias="Value")
 
 
 class _CreateSessionRequestCompat(tools_types.CreateSessionRequest):
+    metadata: list[_SessionMetadata] | None = Field(default=None, alias="Metadata")
+
+
+class _ListSessionsRequestCompat(tools_types.ListSessionsRequest):
     metadata: list[_SessionMetadata] | None = Field(default=None, alias="Metadata")
 
 
@@ -70,10 +75,28 @@ def build_create_session_request(
     ttl_seconds: int,
     user_session_id: str,
     display_name: str,
+    username: str = "",
 ) -> Any:
     """Build a native or compatibility CreateSession request."""
+    metadata = []
+    if display_name:
+        metadata.append(
+            _SessionMetadata(
+                Key=SESSION_DISPLAY_NAME_METADATA_KEY,
+                Type="String",
+                Value=display_name,
+            )
+        )
+    if username:
+        metadata.append(
+            _SessionMetadata(
+                Key=SESSION_USERNAME_METADATA_KEY,
+                Type="String",
+                Value=username,
+            )
+        )
     request_type: Any = tools_types.CreateSessionRequest
-    if display_name and not _model_supports_alias(request_type, "Metadata"):
+    if metadata and not _model_supports_alias(request_type, "Metadata"):
         request_type = _CreateSessionRequestCompat
     request_data: dict[str, Any] = {
         "ToolId": tool_id,
@@ -81,12 +104,32 @@ def build_create_session_request(
         "TtlUnit": "second",
         "UserSessionId": user_session_id,
     }
-    if display_name:
+    if metadata:
+        request_data["Metadata"] = metadata
+    return request_type(**request_data)
+
+
+def build_list_sessions_request(
+    *,
+    tool_id: str,
+    max_results: int,
+    next_token: str | None = None,
+    username: str | None = None,
+) -> Any:
+    """Build ListSessions with an optional Username metadata filter."""
+    request_type: Any = tools_types.ListSessionsRequest
+    if username is not None and not _model_supports_alias(request_type, "Metadata"):
+        request_type = _ListSessionsRequestCompat
+    request_data: dict[str, Any] = {
+        "ToolId": tool_id,
+        "MaxResults": max_results,
+        "NextToken": next_token,
+    }
+    if username is not None:
         request_data["Metadata"] = [
             _SessionMetadata(
-                Key=SESSION_DISPLAY_NAME_METADATA_KEY,
-                Type="String",
-                Value=display_name,
+                Key=SESSION_USERNAME_METADATA_KEY,
+                Value=username,
             )
         ]
     return request_type(**request_data)
@@ -138,4 +181,21 @@ def session_display_name(value: Any) -> str:
         normalized = name.strip()
         if 0 < len(normalized) <= SESSION_DISPLAY_NAME_MAX_LENGTH:
             return normalized
+    return ""
+
+
+def session_username(value: Any) -> str:
+    """Extract the Username owner metadata from one Session response."""
+    metadata = getattr(value, "metadata", None)
+    if not isinstance(metadata, (list, tuple)):
+        return ""
+    for item in metadata:
+        if isinstance(item, dict):
+            key = item.get("key") or item.get("Key")
+            username = item.get("value") or item.get("Value")
+        else:
+            key = getattr(item, "key", "")
+            username = getattr(item, "value", "")
+        if key == SESSION_USERNAME_METADATA_KEY and isinstance(username, str):
+            return username.strip()
     return ""

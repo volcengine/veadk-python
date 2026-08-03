@@ -258,6 +258,7 @@ class _FakeGateway:
         self.created = 0
         self.tool_ids: list[str] = []
         self.display_names: list[str] = []
+        self.usernames: list[str | None] = []
         self.deleted: list[SandboxCloudSession] = []
         self.thread_ids: list[str] = []
         self.connections: list[_FakeCodex] = []
@@ -272,13 +273,20 @@ class _FakeGateway:
                 created_at="2026-07-30T08:00:00Z",
                 expire_at="2026-07-30T16:00:00Z",
                 tool_type="CodeEnv",
+                created_by="alice",
             )
         }
 
-    async def list_sessions(self, tool_id: str) -> list[SandboxCloudSession]:
+    async def list_sessions(
+        self, tool_id: str, username: str | None = None
+    ) -> list[SandboxCloudSession]:
         self.tool_ids.append(tool_id)
+        self.usernames.append(username)
         return [
-            session for session in self.sessions.values() if session.tool_id == tool_id
+            session
+            for session in self.sessions.values()
+            if session.tool_id == tool_id
+            and (username is None or session.created_by == username)
         ]
 
     async def get_session(self, tool_id: str, session_id: str) -> SandboxCloudSession:
@@ -289,7 +297,7 @@ class _FakeGateway:
         return session
 
     async def create_session(
-        self, tool_id: str, display_name: str = ""
+        self, tool_id: str, display_name: str = "", username: str = ""
     ) -> SandboxCloudSession:
         self.created += 1
         self.tool_ids.append(tool_id)
@@ -305,6 +313,7 @@ class _FakeGateway:
             expire_at="2026-07-30T17:00:00Z",
             tool_type="CodeEnv",
             display_name=display_name,
+            created_by=username,
         )
         self.sessions[session.instance_id] = session
         return session
@@ -333,7 +342,10 @@ def _app(gateway: _FakeGateway, tool_id: str | None = "tool-studio") -> FastAPI:
             raise HTTPException(status_code=401, detail="identity required")
         return owner
 
-    mount_sandbox_routes(app, service, _owner)
+    def _admin(request: Request) -> bool:
+        return request.headers.get("X-Test-Role") == "admin"
+
+    mount_sandbox_routes(app, service, _owner, admin_resolver=_admin)
     return app
 
 
@@ -345,6 +357,9 @@ def _agent_app(gateway: _FakeGateway) -> FastAPI:
         if not owner:
             raise HTTPException(status_code=401, detail="identity required")
         return owner
+
+    def _admin(request: Request) -> bool:
+        return request.headers.get("X-Test-Role") == "admin"
 
     mount_sandbox_agent_routes(
         app,
@@ -361,6 +376,7 @@ def _agent_app(gateway: _FakeGateway) -> FastAPI:
             ),
         },
         _owner,
+        _admin,
     )
     return app
 
@@ -449,6 +465,40 @@ def test_managed_agent_routes_create_session_and_return_card_data(
     assert [session.instance_id for session in gateway.deleted] == [session_id]
 
 
+def test_managed_agent_routes_enforce_username_scope() -> None:
+    gateway = _FakeGateway()
+    with TestClient(_agent_app(gateway)) as client:
+        alice = client.post(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "alice"},
+        ).json()
+        bob = client.post(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "bob"},
+        ).json()
+        alice_list = client.get(
+            "/web/openclaw/sessions", headers={"X-Test-User": "alice"}
+        )
+        admin_list = client.get(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
+        )
+        denied = client.delete(
+            f"/web/openclaw/sessions/{alice['sessionId']}",
+            headers={"X-Test-User": "bob"},
+        )
+
+    assert [item["sessionId"] for item in alice_list.json()["sessions"]] == [
+        alice["sessionId"]
+    ]
+    assert {item["sessionId"] for item in admin_list.json()["sessions"]} == {
+        alice["sessionId"],
+        bob["sessionId"],
+    }
+    assert all(item["createdBy"] for item in admin_list.json()["sessions"])
+    assert denied.status_code == 404
+
+
 def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
     gateway = _FakeGateway()
     with TestClient(_app(gateway)) as client:
@@ -499,7 +549,7 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
                 "createdAt": "2026-07-30T08:00:00Z",
                 "expireAt": "2026-07-30T16:00:00Z",
                 "toolType": "CodeEnv",
-                "region": "cn-beijing",
+                "createdBy": "alice",
                 "displayName": "",
             }
         ]
@@ -523,6 +573,63 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
     assert disconnected.json() == {"disconnected": True}
     assert gateway.deleted == []
     assert session_id == "remote-1"
+
+
+def test_sandbox_list_scope_follows_user_role() -> None:
+    gateway = _FakeGateway()
+    with TestClient(_app(gateway)) as client:
+        alice = client.post(
+            "/web/sandbox/sessions", headers={"X-Test-User": "alice"}
+        ).json()
+        bob = client.post(
+            "/web/sandbox/sessions", headers={"X-Test-User": "bob"}
+        ).json()
+        alice_list = client.get(
+            "/web/sandbox/sessions", headers={"X-Test-User": "alice"}
+        )
+        developer_list = client.get(
+            "/web/sandbox/sessions",
+            headers={"X-Test-User": "bob", "X-Test-Role": "developer"},
+        )
+        admin_list = client.get(
+            "/web/sandbox/sessions",
+            headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
+        )
+
+    assert [item["sessionId"] for item in alice_list.json()["sessions"]] == [
+        "remote-existing",
+        alice["sessionId"],
+    ]
+    assert [item["sessionId"] for item in developer_list.json()["sessions"]] == [
+        bob["sessionId"]
+    ]
+    assert {item["sessionId"] for item in admin_list.json()["sessions"]} == {
+        "remote-existing",
+        alice["sessionId"],
+        bob["sessionId"],
+    }
+    assert {item["createdBy"] for item in admin_list.json()["sessions"]} == {
+        "alice",
+        "bob",
+    }
+    assert gateway.usernames[-3:] == ["alice", "bob", None]
+
+
+def test_sandbox_admin_can_delete_another_users_session() -> None:
+    gateway = _FakeGateway()
+    with TestClient(_app(gateway)) as client:
+        created = client.post(
+            "/web/sandbox/sessions", headers={"X-Test-User": "alice"}
+        ).json()
+        deleted = client.delete(
+            f"/web/sandbox/sessions/{created['sessionId']}",
+            headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
+        )
+
+    assert deleted.status_code == 200
+    assert [session.instance_id for session in gateway.deleted] == [
+        created["sessionId"]
+    ]
 
 
 def test_sandbox_delete_disconnects_and_removes_cloud_session() -> None:
@@ -703,7 +810,7 @@ async def test_permissions_propagate_to_every_thread_in_the_cloud_session() -> N
     gateway = _FakeGateway()
     service = SandboxConversationService(gateway, tool_id="tool-studio")
     alice = await service.connect("remote-existing", "alice")
-    bob = await service.connect("remote-existing", "bob")
+    bob = await service.connect("remote-existing", "bob", is_admin=True)
     settings = CodexPermissionSettings(
         approval_policy="never",
         approvals_reviewer="auto_review",
@@ -978,6 +1085,68 @@ async def test_gateway_uses_the_installed_agentkit_list_sessions_contract() -> N
 
 
 @pytest.mark.asyncio
+async def test_gateway_filters_sessions_by_username_metadata() -> None:
+    requests: list[dict[str, object]] = []
+
+    class _Client:
+        def list_sessions(self, request: object) -> SimpleNamespace:
+            requests.append(request.model_dump(by_alias=True, exclude_none=True))
+            return SimpleNamespace(
+                session_infos=[
+                    SimpleNamespace(
+                        session_id="remote-alice",
+                        user_session_id="alice-agent",
+                        endpoint="https://sandbox.example/path?Authorization=secret",
+                        status="Ready",
+                        metadata=[
+                            {"Key": "Username", "Type": "String", "Value": "alice"}
+                        ],
+                    )
+                ],
+                next_token=None,
+            )
+
+    sessions = await AgentkitSandboxGateway(_Client()).list_sessions(
+        "tool-sdk", "alice"
+    )
+
+    assert requests == [
+        {
+            "MaxResults": 100,
+            "ToolId": "tool-sdk",
+            "Metadata": [{"Key": "Username", "Value": "alice"}],
+        }
+    ]
+    assert [session.created_by for session in sessions] == ["alice"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_creates_session_with_username_metadata() -> None:
+    requests: list[dict[str, object]] = []
+
+    class _Client:
+        def create_session(self, request: object) -> SimpleNamespace:
+            requests.append(request.model_dump(by_alias=True, exclude_none=True))
+            return SimpleNamespace(
+                session_id="remote-alice",
+                user_session_id="alice-agent",
+                endpoint="https://sandbox.example",
+            )
+
+    session = await AgentkitSandboxGateway(_Client()).create_session(
+        "tool-sdk",
+        "Alice Agent",
+        "alice",
+    )
+
+    assert requests[0]["Metadata"] == [
+        {"Key": "veadk_display_name", "Type": "String", "Value": "Alice Agent"},
+        {"Key": "Username", "Type": "String", "Value": "alice"},
+    ]
+    assert session.created_by == "alice"
+
+
+@pytest.mark.asyncio
 async def test_gateway_gets_an_existing_session_without_exposing_its_region() -> None:
     calls: list[str] = []
 
@@ -1116,7 +1285,7 @@ async def test_expiry_and_close_all_only_drop_local_connections() -> None:
     expired.expires_at = time.monotonic() - 1
 
     await service.cleanup_expired()
-    active = await service.connect("remote-existing", "bob")
+    active = await service.connect("remote-existing", "bob", is_admin=True)
     await service.close_all()
 
     with pytest.raises(SandboxSessionNotFoundError):

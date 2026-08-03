@@ -11,6 +11,7 @@ import {
 } from "../adk/client";
 import {
   sandboxClient,
+  sandboxStatusLabel,
   type SandboxAgentKind,
   type SandboxSession,
 } from "../adk/sandbox";
@@ -23,6 +24,7 @@ export interface MyAgentCardData {
   name: string;
   description: string;
   createdAt: string;
+  specificationLabel: string;
   specification: string;
   isMine?: boolean;
   runtime?: {
@@ -130,6 +132,10 @@ function formatCreatedAt(value: string): string {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
   }).format(date).replace(/\//g, "-");
 }
 
@@ -145,6 +151,7 @@ function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
     name: runtime.name,
     description: runtime.description?.trim() || "暂无描述",
     createdAt: formatCreatedAt(runtime.createdAt ?? ""),
+    specificationLabel: "地域",
     specification: formatRuntimeRegion(runtime.region),
     isMine: runtime.isMine,
     runtime: {
@@ -157,13 +164,13 @@ function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
 }
 
 function sandboxToAgent(session: SandboxSession): MyAgentCardData {
-  const status = session.status || "Unknown";
   return {
     id: session.id,
     name: session.displayName || `${session.toolName} 智能体`,
-    description: `AgentKit Session · ${status}`,
+    description: sandboxStatusLabel(session.status),
     createdAt: formatCreatedAt(session.createdAt),
-    specification: formatRuntimeRegion(session.region),
+    specificationLabel: "创建人",
+    specification: session.createdBy || "—",
     sandbox: session,
   };
 }
@@ -223,19 +230,35 @@ function AgentCard({
     <article className="my-agent-card">
       <div className="my-agent-card-content">
         <div className="my-agent-card-title">
-          <h3>{agent.name}</h3>
-          {showOwnership && agent.isMine && (
+          <div className="my-agent-card-title-copy">
+            <h3>{agent.name}</h3>
+            {agent.sandbox ? (
+              <span className="my-agent-session-id" title={agent.sandbox.id}>
+                Session ID：{agent.sandbox.id}
+              </span>
+            ) : null}
+          </div>
+          {agent.sandbox ? (
+            <span
+              className="my-agent-status-label"
+              data-ready={agent.sandbox.status.toLowerCase() === "ready" || undefined}
+            >
+              {agent.description}
+            </span>
+          ) : showOwnership && agent.isMine ? (
             <span className="runtime-owner-badge">我创建的</span>
-          )}
+          ) : null}
         </div>
-        <p className="my-agent-description">{agent.description}</p>
+        {!agent.sandbox ? (
+          <p className="my-agent-description">{agent.description}</p>
+        ) : null}
         <dl className="my-agent-meta">
           <div className="my-agent-created-at">
             <dt>创建时间</dt>
             <dd>{agent.createdAt}</dd>
           </div>
           <div className="my-agent-region">
-            <dt>地域</dt>
+            <dt>{agent.specificationLabel}</dt>
             <dd>{agent.specification}</dd>
           </div>
         </dl>

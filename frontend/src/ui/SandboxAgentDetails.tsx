@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { SandboxSession } from "../adk/sandbox";
+import { sandboxStatusLabel, type SandboxSession } from "../adk/sandbox";
 import "./SandboxAgentDetails.css";
 
 const AGENT_LABELS = {
@@ -18,6 +18,8 @@ function formatDate(value: string): string {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
   }).format(date);
 }
 
@@ -91,8 +93,8 @@ export function SandboxAgentDetails({
       <div className="sandbox-agent-detail-panel">
         <dl>
           <div><dt>智能体类型</dt><dd>{label}</dd></div>
-          <div><dt>状态</dt><dd>{session.status || "Unknown"}</dd></div>
-          <div><dt>地域</dt><dd>{session.region || "—"}</dd></div>
+          <div><dt>状态</dt><dd>{sandboxStatusLabel(session.status)}</dd></div>
+          <div><dt>创建人</dt><dd>{session.createdBy || "—"}</dd></div>
           <div><dt>工具类型</dt><dd>{session.toolType || "—"}</dd></div>
           <div><dt>创建时间</dt><dd>{formatDate(session.createdAt)}</dd></div>
           <div><dt>过期时间</dt><dd>{formatDate(session.expireAt)}</dd></div>

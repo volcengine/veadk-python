@@ -107,10 +107,10 @@ def test_studio_credentials_fall_back_to_volc_default_profile(
 @pytest.mark.parametrize(
     ("stage", "expected_prefix"),
     [
-        ("tool", "Failed to provision the AgentKit chat CodeEnv Tool"),
+        ("tool", "Failed to provision the AgentKit Codex Tool"),
         (
             "credential",
-            "Failed to provision the AgentKit chat model credential",
+            "Failed to provision the AgentKit Codex model credential",
         ),
     ],
 )
@@ -326,7 +326,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert veadk_environments["VEADK_STUDIO_UPDATE_REGION"] == expected_region
     assert veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] == "veadk/studio/main"
     assert veadk_environments["VEADK_STUDIO_PROJECT"] == expected_project
-    assert credential_tool_ids == [
+    assert sorted(credential_tool_ids) == [
         "chat-code-env-id",
         "skill-code-env-id",
     ]
@@ -347,12 +347,12 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     monkeypatch.delenv("SANDBOX_CHAT_OPENCLAW", raising=False)
     monkeypatch.delenv("SANDBOX_CHAT_HERMES", raising=False)
     monkeypatch.delenv("SANDBOX_SKILL_CREATOR", raising=False)
-    created_names: list[str] = []
+    created_kinds: list[str] = []
     credential_tool_ids: list[str] = []
     agent_tool_kinds: list[str] = []
     agent_credential_kinds: list[str] = []
-    creation_barrier = threading.Barrier(2)
-    created_names_lock = threading.Lock()
+    creation_barrier = threading.Barrier(4)
+    created_kinds_lock = threading.Lock()
 
     class _FakeCloudAgentEngine:
         def __init__(self, **_: object) -> None:
@@ -367,10 +367,27 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
 
     def _ensure_tool(**kwargs: object) -> str:
         name = str(kwargs["name"])
+        kind = "codex" if "-chat-" in name else "skill_creator"
         creation_barrier.wait(timeout=5)
-        with created_names_lock:
-            created_names.append(name)
-        return "chat-tool" if "-chat-" in name else "skill-tool"
+        with created_kinds_lock:
+            created_kinds.append(kind)
+        return "chat-tool" if kind == "codex" else "skill-tool"
+
+    def _ensure_agent_tool(**kwargs: object) -> str:
+        kind = str(kwargs["kind"])
+        creation_barrier.wait(timeout=5)
+        with created_kinds_lock:
+            created_kinds.append(kind)
+        agent_tool_kinds.append(kind)
+        return f"{kind}-tool"
+
+    def _ensure_code_credential(**kwargs: object) -> None:
+        assert len(created_kinds) == 4
+        credential_tool_ids.append(str(kwargs["tool_id"]))
+
+    def _ensure_agent_credential(**kwargs: object) -> None:
+        assert len(created_kinds) == 4
+        agent_credential_kinds.append(str(kwargs["kind"]))
 
     monkeypatch.setattr(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
@@ -384,17 +401,15 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     )
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_tool",
-        lambda **kwargs: (
-            agent_tool_kinds.append(str(kwargs["kind"])) or f"{kwargs['kind']}-tool"
-        ),
+        _ensure_agent_tool,
     )
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_model_credential",
-        lambda **kwargs: agent_credential_kinds.append(str(kwargs["kind"])),
+        _ensure_agent_credential,
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
-        lambda **kwargs: credential_tool_ids.append(str(kwargs["tool_id"])),
+        _ensure_code_credential,
     )
 
     result = CliRunner().invoke(
@@ -419,16 +434,24 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     )
 
     assert result.exit_code == 0, result.output
-    assert len(created_names) == 2
-    assert any("chat" in name for name in created_names)
-    assert any("skill" in name for name in created_names)
+    assert sorted(created_kinds) == [
+        "codex",
+        "hermes",
+        "openclaw",
+        "skill_creator",
+    ]
     assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-tool"
     assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "skill-tool"
-    assert credential_tool_ids == ["chat-tool", "skill-tool"]
-    assert agent_tool_kinds == ["openclaw", "hermes"]
-    assert agent_credential_kinds == ["openclaw", "hermes"]
+    assert sorted(credential_tool_ids) == ["chat-tool", "skill-tool"]
+    assert sorted(agent_tool_kinds) == ["hermes", "openclaw"]
+    assert sorted(agent_credential_kinds) == ["hermes", "openclaw"]
     assert veadk_environments["SANDBOX_CHAT_OPENCLAW"] == "openclaw-tool"
     assert veadk_environments["SANDBOX_CHAT_HERMES"] == "hermes-tool"
+    for label in ("Codex", "Skill Creator", "OpenClaw", "Hermes"):
+        assert f"Creating AgentKit {label} Tool" in result.output
+        assert f"AgentKit {label} Tool is ready." in result.output
+        assert f"Creating AgentKit {label} model credential" in result.output
+        assert f"AgentKit {label} model credential is ready." in result.output
 
 
 @pytest.mark.parametrize(

@@ -113,11 +113,11 @@ test("reveals the refreshed welcome heading and placeholder after Agent connecti
   );
   assert.match(featureNoticeSource, /className="welcome-feature-pill"[\s\S]*?焕然一新[\s\S]*?查看新特性/);
   assert.match(stylesSource, /--feature-link:\s*208 100% 47\.45%/);
-  assert.match(stylesSource, /\.welcome-primary\s*\{[\s\S]*?gap:\s*16px;/);
-  assert.match(stylesSource, /\.welcome-heading\s*\{[\s\S]*?gap:\s*72px;[\s\S]*?welcome-heading-enter 220ms/);
-  assert.match(stylesSource, /\.composer--new-chat \.comp-input::placeholder\s*\{[\s\S]*?welcome-placeholder-enter 200ms[\s\S]*?80ms both/);
-  assert.match(stylesSource, /@keyframes welcome-heading-enter[\s\S]*?translateY\(8px\)[\s\S]*?blur\(4px\)/);
-  assert.match(stylesSource, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.welcome-heading,[\s\S]*?\.composer--new-chat \.comp-input::placeholder[\s\S]*?animation:\s*none/);
+  assert.match(stylesSource, /\.welcome-primary\s*\{[\s\S]*?gap:\s*32px;/);
+  assert.match(stylesSource, /\.welcome-heading\s*\{[\s\S]*?gap:\s*72px;/);
+  assert.match(stylesSource, /\.welcome-title,[\s\S]*?\.composer--new-chat \.comp-input::placeholder\s*\{[\s\S]*?welcome-text-reveal 900ms/);
+  assert.match(stylesSource, /@keyframes welcome-text-reveal[\s\S]*?clip-path:\s*inset\(0 100% 0 0\)[\s\S]*?clip-path:\s*inset\(0 0 0 0\)/);
+  assert.match(stylesSource, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.welcome-title,[\s\S]*?\.composer--new-chat \.comp-input::placeholder[\s\S]*?animation:\s*none/);
 });
 
 test("hides the carousel and reveals feature details on hover or keyboard focus", () => {
@@ -130,8 +130,8 @@ test("hides the carousel and reveals feature details on hover or keyboard focus"
   assert.match(stylesSource, /\.welcome-feature-pill:focus-within \.welcome-feature-popover/);
 });
 
-test("shows task capsules for Harness agents and restores starter prompts otherwise", () => {
-  assert.match(composerSource, /STARTER_PROMPTS|AnalyzePromptIcon|PlanPromptIcon|RewritePromptIcon/);
+test("shows task capsules for Harness agents without generic starter prompts", () => {
+  assert.doesNotMatch(composerSource, /STARTER_PROMPTS|AnalyzePromptIcon|PlanPromptIcon|RewritePromptIcon/);
   assert.match(composerSource, /const TASK_SHORTCUTS = \[/);
   assert.match(taskToolsSource, /ppt:\s*\["ppt_generate"\]/);
   assert.match(taskToolsSource, /image:\s*\["image_generate"\]/);
@@ -146,9 +146,8 @@ test("shows task capsules for Harness agents and restores starter prompts otherw
   assert.match(composerSource, /<SkillCreateIcon \/>[\s\S]*?<span>创建 Skill<\/span>/);
   assert.match(composerSource, /className="task-shortcuts"/);
   assert.match(composerSource, /harnessEnabled && !selectedTask/);
-  assert.match(composerSource, /!harnessEnabled && !value\.trim\(\)/);
   assert.match(composerSource, /className="prompt-suggestions"/);
-  assert.match(composerSource, /onClick=\{\(\) => applyStarterPrompt\(prompt\.text\)\}/);
+  assert.doesNotMatch(composerSource, /applyStarterPrompt|aria-label="快捷提示"/);
   assert.match(composerSource, /onClick=\{\(\) => applyTaskShortcut\(task\)\}/);
   assert.match(composerSource, /function applyTaskShortcut[\s\S]*?onTaskChange\?\.\(task\.value\)[\s\S]*?setSelectionRange\(value\.length, value\.length\)/);
   assert.doesNotMatch(composerSource, /function applyTaskShortcut[\s\S]*?onChange\(task\.prompt\)/);
