@@ -57,6 +57,7 @@ import {
   type StudioAccess,
   type UiFeatures,
 } from "./adk/client";
+import { requiresSessionCapabilityRunner } from "./adk/sessionCapabilities";
 import {
   applyEvent,
   emptyAcc,
@@ -1696,10 +1697,19 @@ export default function App() {
     try {
       const list = await listSessions(app, userId);
       // Hydrate events so the sidebar can show a title per session.
-      const hydrated = await Promise.all(
+      const results = await Promise.allSettled(
         list.map((s) =>
           s.events?.length ? Promise.resolve(s) : getSession(app, userId, s.id),
         ),
+      );
+      const failed = results.find(
+        (result) =>
+          result.status === "rejected" &&
+          !/get session failed:\s*404\b/i.test(String(result.reason)),
+      );
+      if (failed?.status === "rejected") throw failed.reason;
+      const hydrated = results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
       );
       setSessions(hydrated);
       return hydrated;
@@ -2322,7 +2332,9 @@ export default function App() {
       return;
     }
 
-    let runWithSessionCapabilities = sessionCapabilities !== null;
+    let runWithSessionCapabilities = requiresSessionCapabilityRunner(
+      sessionCapabilities,
+    );
     if (selectedTask) {
       try {
         let updated = await getSessionCapabilities(appName, userId, sid);
@@ -2343,7 +2355,7 @@ export default function App() {
             );
         }
         setSessionCapabilities(updated);
-        runWithSessionCapabilities = true;
+        runWithSessionCapabilities = requiresSessionCapabilityRunner(updated);
       } catch (e) {
         if (createsSession) {
           setPendingTurns([]);
@@ -2517,7 +2529,7 @@ export default function App() {
           { id: block.callId, name: "adk_request_credential", response },
         ],
         signal: ctrl.signal,
-        sessionCapabilities: sessionCapabilities !== null,
+        sessionCapabilities: requiresSessionCapabilityRunner(sessionCapabilities),
       })) {
         if (ctrl.signal.aborted) break;
         applyStreamSignals(sid, event);

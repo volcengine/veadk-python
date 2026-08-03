@@ -888,6 +888,190 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert captured_config["common"]["description"] == "Updated description"
 
 
+@pytest.mark.parametrize(
+    ("session_storage", "min_instance", "max_instance", "expects_update"),
+    [
+        ("in-memory", 1, 1, True),
+        ("persistent", 1, 5, False),
+        ("persistent", 2, 4, True),
+    ],
+)
+def test_new_deployment_only_updates_non_default_instance_range(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    session_storage: str,
+    min_instance: int,
+    max_instance: int,
+    expects_update: bool,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime_id = "r-new-runtime"
+    update_requests: list[Any] = []
+
+    def create_runtime(_self: Any, _request: Any) -> SimpleNamespace:
+        return SimpleNamespace(runtime_id=runtime_id)
+
+    def update_runtime(_self: Any, request: Any) -> SimpleNamespace:
+        update_requests.append(request)
+        return SimpleNamespace(runtime_id=runtime_id)
+
+    def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
+        return SimpleNamespace(current_version_number=2)
+
+    def launch(**_kwargs: Any) -> SimpleNamespace:
+        request = SimpleNamespace(tags=[], apmplus_enable=True, description="demo")
+        created = AgentkitRuntimeClient.create_runtime(object(), request)
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": created.runtime_id,
+                    "runtime_name": "demo-agent",
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        )
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "create_runtime", create_runtime)
+    monkeypatch.setattr(AgentkitRuntimeClient, "update_runtime", update_runtime)
+    monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "demo-agent",
+                "sessionStorage": session_storage,
+                "minInstance": min_instance,
+                "maxInstance": max_instance,
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        ) as response:
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert bool(update_requests) is expects_update
+    assert any(frame.get("phase") == "update" for frame in frames) is expects_update
+    if expects_update:
+        request = update_requests[0]
+        assert request.runtime_id == runtime_id
+        assert request.min_instance == min_instance
+        assert request.max_instance == max_instance
+        assert request.release_enable is True
+
+
+@pytest.mark.parametrize(
+    ("min_instance", "max_instance", "detail"),
+    [
+        (0, 1, "Runtime instance range must use positive integers"),
+        ("1", 5, "Runtime instance range must use positive integers"),
+        (2, 1, "Runtime minInstance cannot exceed maxInstance"),
+    ],
+)
+def test_new_deployment_rejects_invalid_instance_range(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    min_instance: object,
+    max_instance: object,
+    detail: str,
+) -> None:
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "demo-agent",
+                "minInstance": min_instance,
+                "maxInstance": max_instance,
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == detail
+
+
+def test_single_instance_update_failure_fails_the_deployment_at_update_phase(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime_id = "r-update-failure"
+
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "create_runtime",
+        lambda _self, _request: SimpleNamespace(runtime_id=runtime_id),
+    )
+
+    def fail_update(_self: Any, _request: Any) -> None:
+        raise RuntimeError("instance update failed")
+
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "update_runtime",
+        fail_update,
+    )
+
+    def launch(**_kwargs: Any) -> SimpleNamespace:
+        request = SimpleNamespace(tags=[], apmplus_enable=True, description="demo")
+        created = AgentkitRuntimeClient.create_runtime(object(), request)
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={"runtime_id": created.runtime_id},
+            ),
+        )
+
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "demo-agent",
+                "sessionStorage": "in-memory",
+                "minInstance": 1,
+                "maxInstance": 1,
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        ) as response:
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is False
+    assert frames[-1]["phase"] == "update"
+    assert "instance update failed" in frames[-1]["error"]
+
+
 def test_update_deployment_rejects_incompatible_runtime_before_launch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

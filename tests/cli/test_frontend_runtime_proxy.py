@@ -633,8 +633,11 @@ def test_runtime_proxy_probe_retry_policy(
     )
 
 
+@pytest.mark.parametrize("upstream_path", ["run_sse", "harness/run_sse"])
 def test_runtime_proxy_resolves_studio_media_before_forwarding(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    upstream_path: str,
 ) -> None:
     monkeypatch.setenv("VEADK_MEDIA_LOCAL_DIR", str(tmp_path / "media"))
     app = _create_frontend_app(monkeypatch, tmp_path)
@@ -713,7 +716,7 @@ def test_runtime_proxy_resolves_studio_media_before_forwarding(
         assert upload.status_code == 200
         media = upload.json()
         response = client.post(
-            "/web/runtime-proxy/runtime-1/run_sse?region=cn-beijing",
+            f"/web/runtime-proxy/runtime-1/{upstream_path}?region=cn-beijing",
             json={
                 "app_name": "demo",
                 "user_id": "user",
