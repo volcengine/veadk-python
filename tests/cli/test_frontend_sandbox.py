@@ -259,6 +259,7 @@ class _FakeGateway:
         self.tool_ids: list[str] = []
         self.display_names: list[str] = []
         self.usernames: list[str | None] = []
+        self.creator_names: list[str] = []
         self.deleted: list[SandboxCloudSession] = []
         self.thread_ids: list[str] = []
         self.connections: list[_FakeCodex] = []
@@ -297,11 +298,16 @@ class _FakeGateway:
         return session
 
     async def create_session(
-        self, tool_id: str, display_name: str = "", username: str = ""
+        self,
+        tool_id: str,
+        display_name: str = "",
+        username: str = "",
+        creator_name: str = "",
     ) -> SandboxCloudSession:
         self.created += 1
         self.tool_ids.append(tool_id)
         self.display_names.append(display_name)
+        self.creator_names.append(creator_name)
         session = SandboxCloudSession(
             tool_id=tool_id,
             instance_id=f"remote-{self.created}",
@@ -314,6 +320,7 @@ class _FakeGateway:
             tool_type="CodeEnv",
             display_name=display_name,
             created_by=username,
+            creator_name=creator_name,
         )
         self.sessions[session.instance_id] = session
         return session
@@ -345,7 +352,16 @@ def _app(gateway: _FakeGateway, tool_id: str | None = "tool-studio") -> FastAPI:
     def _admin(request: Request) -> bool:
         return request.headers.get("X-Test-Role") == "admin"
 
-    mount_sandbox_routes(app, service, _owner, admin_resolver=_admin)
+    def _creator(request: Request) -> str:
+        return request.headers.get("X-Test-Creator") or _owner(request)
+
+    mount_sandbox_routes(
+        app,
+        service,
+        _owner,
+        admin_resolver=_admin,
+        creator_resolver=_creator,
+    )
     return app
 
 
@@ -360,6 +376,9 @@ def _agent_app(gateway: _FakeGateway) -> FastAPI:
 
     def _admin(request: Request) -> bool:
         return request.headers.get("X-Test-Role") == "admin"
+
+    def _creator(request: Request) -> str:
+        return request.headers.get("X-Test-Creator") or _owner(request)
 
     mount_sandbox_agent_routes(
         app,
@@ -377,6 +396,7 @@ def _agent_app(gateway: _FakeGateway) -> FastAPI:
         },
         _owner,
         _admin,
+        _creator,
     )
     return app
 
@@ -497,6 +517,29 @@ def test_managed_agent_routes_enforce_username_scope() -> None:
     }
     assert all(item["createdBy"] for item in admin_list.json()["sessions"])
     assert denied.status_code == 404
+
+
+def test_managed_agent_routes_display_creator_separately_from_owner_id() -> None:
+    gateway = _FakeGateway()
+    owner_id = "255d476b-099c-4719-b0f5-22f0d57efe56"
+    headers = {
+        "X-Test-User": owner_id,
+        "X-Test-Creator": "alice@example.com",
+    }
+    with TestClient(_agent_app(gateway)) as client:
+        created = client.post("/web/openclaw/sessions", headers=headers)
+        owner_list = client.get("/web/openclaw/sessions", headers=headers)
+        other_list = client.get(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "another-user-id"},
+        )
+
+    assert created.json()["createdBy"] == "alice@example.com"
+    assert owner_list.json()["sessions"][0]["createdBy"] == "alice@example.com"
+    assert other_list.json() == {"sessions": []}
+    session = gateway.sessions[created.json()["sessionId"]]
+    assert session.created_by == owner_id
+    assert session.creator_name == "alice@example.com"
 
 
 def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
@@ -1099,7 +1142,12 @@ async def test_gateway_filters_sessions_by_username_metadata() -> None:
                         endpoint="https://sandbox.example/path?Authorization=secret",
                         status="Ready",
                         metadata=[
-                            {"Key": "Username", "Type": "String", "Value": "alice"}
+                            {"Key": "Username", "Type": "String", "Value": "alice"},
+                            {
+                                "Key": "veadk_creator_name",
+                                "Type": "String",
+                                "Value": "alice@example.com",
+                            },
                         ],
                     )
                 ],
@@ -1118,6 +1166,7 @@ async def test_gateway_filters_sessions_by_username_metadata() -> None:
         }
     ]
     assert [session.created_by for session in sessions] == ["alice"]
+    assert [session.creator_name for session in sessions] == ["alice@example.com"]
 
 
 @pytest.mark.asyncio
@@ -1137,13 +1186,20 @@ async def test_gateway_creates_session_with_username_metadata() -> None:
         "tool-sdk",
         "Alice Agent",
         "alice",
+        "alice@example.com",
     )
 
     assert requests[0]["Metadata"] == [
         {"Key": "veadk_display_name", "Type": "String", "Value": "Alice Agent"},
         {"Key": "Username", "Type": "String", "Value": "alice"},
+        {
+            "Key": "veadk_creator_name",
+            "Type": "String",
+            "Value": "alice@example.com",
+        },
     ]
     assert session.created_by == "alice"
+    assert session.creator_name == "alice@example.com"
 
 
 @pytest.mark.asyncio
