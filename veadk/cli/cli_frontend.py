@@ -1191,6 +1191,12 @@ def _run_frontend_server(
             raise HTTPException(status_code=401, detail="Studio identity is required")
         return principal.owner_id
 
+    def _sandbox_creator(request: Request) -> str:
+        principal = _current_principal(request)
+        if principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        return principal.display_name
+
     def _sandbox_is_admin(request: Request) -> bool:
         return _request_role(request) == StudioRole.ADMIN
 
@@ -1243,12 +1249,14 @@ def _run_frontend_server(
         _sandbox_owner,
         _sandbox_proxy_target,
         _sandbox_is_admin,
+        _sandbox_creator,
     )
     mount_sandbox_agent_routes(
         app,
         sandbox_agent_services,
         _sandbox_owner,
         _sandbox_is_admin,
+        _sandbox_creator,
     )
 
     # Prefixes (and a few exact keys) we copy from the server's environment

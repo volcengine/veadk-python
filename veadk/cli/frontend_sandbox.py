@@ -36,6 +36,7 @@ from veadk.cli.agentkit_session_metadata import (
     build_create_session_request,
     build_list_sessions_request,
     call_session_client,
+    session_creator_name,
     session_display_name,
     session_username,
 )
@@ -225,6 +226,7 @@ class SandboxCloudSession:
     tool_type: str = ""
     display_name: str = ""
     created_by: str = ""
+    creator_name: str = ""
 
 
 @dataclass
@@ -382,7 +384,11 @@ class SandboxCloudGateway(Protocol):
         raise NotImplementedError
 
     async def create_session(
-        self, tool_id: str, display_name: str = "", username: str = ""
+        self,
+        tool_id: str,
+        display_name: str = "",
+        username: str = "",
+        creator_name: str = "",
     ) -> SandboxCloudSession:
         """Create a fresh remote Sandbox session."""
         raise NotImplementedError
@@ -496,6 +502,7 @@ class AgentkitSandboxGateway:
             tool_type=str(getattr(value, "tool_type", "") or "").strip(),
             display_name=session_display_name(value),
             created_by=session_username(value),
+            creator_name=session_creator_name(value),
         )
 
     async def list_sessions(
@@ -578,7 +585,11 @@ class AgentkitSandboxGateway:
         raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
 
     async def create_session(
-        self, tool_id: str, display_name: str = "", username: str = ""
+        self,
+        tool_id: str,
+        display_name: str = "",
+        username: str = "",
+        creator_name: str = "",
     ) -> SandboxCloudSession:
         user_session_id = f"studio-{uuid.uuid4()}"
         regions = self._region_candidates or ("",)
@@ -589,6 +600,7 @@ class AgentkitSandboxGateway:
                 user_session_id=user_session_id,
                 display_name=display_name,
                 username=username,
+                creator_name=creator_name,
             )
             create_task = asyncio.create_task(
                 self._call("create_session", request, region=region)
@@ -634,6 +646,7 @@ class AgentkitSandboxGateway:
                 status="Ready" if endpoint else "Creating",
                 display_name=display_name,
                 created_by=username,
+                creator_name=creator_name,
             )
         raise SandboxProvisioningError("无法在支持的地域创建 AgentKit 沙箱会话。")
 
@@ -749,7 +762,10 @@ class SandboxConversationService:
         )
 
     async def create(
-        self, owner_id: str, display_name: object = ""
+        self,
+        owner_id: str,
+        display_name: object = "",
+        creator_name: str = "",
     ) -> SandboxCloudSession:
         """Create a cloud Session without opening a conversation connection."""
         if not isinstance(display_name, str):
@@ -768,7 +784,9 @@ class SandboxConversationService:
                 raise SandboxCapacityError("Sandbox 创建或连接数已达上限，请稍后重试。")
             self._sessions_starting += 1
         try:
-            return await self._gateway.create_session(tool_id, display_name, owner_id)
+            return await self._gateway.create_session(
+                tool_id, display_name, owner_id, creator_name
+            )
         finally:
             async with self._registry_lock:
                 self._sessions_starting -= 1
@@ -1288,6 +1306,7 @@ class SandboxAgentSessionService:
         self,
         owner_id: str,
         display_name: object = "",
+        creator_name: str = "",
     ) -> SandboxCloudSession:
         if not isinstance(display_name, str):
             raise SandboxValidationError("智能体名称必须是文本。")
@@ -1297,7 +1316,7 @@ class SandboxAgentSessionService:
                 f"智能体名称不能超过 {STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH} 个字符。"
             )
         return await self._gateway.create_session(
-            self._tool_id(), display_name, owner_id
+            self._tool_id(), display_name, owner_id, creator_name
         )
 
     async def open(
@@ -1408,6 +1427,7 @@ def mount_sandbox_agent_routes(
     services: dict[str, SandboxAgentSessionService],
     owner_resolver: Callable[[Any], str],
     admin_resolver: Callable[[Any], bool] | None = None,
+    creator_resolver: Callable[[Any], str] | None = None,
 ) -> None:
     """Mount list/create/open routes for managed agent Sessions."""
     from fastapi import HTTPException
@@ -1456,7 +1476,7 @@ def mount_sandbox_agent_routes(
             "createdAt": session.created_at,
             "expireAt": session.expire_at,
             "toolType": session.tool_type,
-            "createdBy": session.created_by,
+            "createdBy": session.creator_name or session.created_by,
             "displayName": session.display_name,
             "toolName": kind,
         }
@@ -1505,6 +1525,7 @@ def mount_sandbox_agent_routes(
             session = await _service(kind).create(
                 owner_id,
                 data.get("displayName", ""),
+                creator_resolver(request) if creator_resolver else owner_id,
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -1592,6 +1613,7 @@ def mount_sandbox_routes(
     owner_resolver: Callable[[Any], str],
     proxy_target_resolver: Callable[[str, str], SandboxProxyTarget] | None = None,
     admin_resolver: Callable[[Any], bool] | None = None,
+    creator_resolver: Callable[[Any], str] | None = None,
 ) -> None:
     """Mount Studio HTTP routes for reusable Sandbox Sessions."""
     from fastapi import HTTPException
@@ -1631,7 +1653,7 @@ def mount_sandbox_routes(
             "createdAt": session.created_at,
             "expireAt": session.expire_at,
             "toolType": session.tool_type,
-            "createdBy": session.created_by,
+            "createdBy": session.creator_name or session.created_by,
             "displayName": session.display_name,
         }
 
@@ -1704,7 +1726,11 @@ def mount_sandbox_routes(
                     raise SandboxValidationError("创建智能体的请求格式无效。")
             else:
                 data = {}
-            session = await service.create(owner_id, data.get("displayName", ""))
+            session = await service.create(
+                owner_id,
+                data.get("displayName", ""),
+                creator_resolver(request) if creator_resolver else owner_id,
+            )
         except SandboxError as error:
             raise _http_error(error) from error
         return {
