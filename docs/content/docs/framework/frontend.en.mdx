@@ -209,11 +209,13 @@ polling directly from Sandbox state. An interrupted creation stream or a brief
 AgentKit control-plane delay no longer turns an intermediate state into an
 expired job.
 
-Before starting a local server, configure separate `Ready` CodeEnv Tools for
-temporary chats and Skill creation:
+Before starting a local server, configure separate `Ready` AgentKit Tools for
+Codex, OpenClaw, Hermes, and Skill creation:
 
 ```bash
 export SANDBOX_CHAT_CODEX=<chat-code-env-tool-id>
+export SANDBOX_CHAT_OPENCLAW=<openclaw-env-tool-id>
+export SANDBOX_CHAT_HERMES=<hermes-env-tool-id>
 export SANDBOX_SKILL_CREATOR=<skill-code-env-tool-id>
 veadk frontend --agents-dir examples
 ```
@@ -226,6 +228,8 @@ when the user provides SkillSpace IDs.
 | Environment variable | Default | Description |
 | :-- | :-- | :-- |
 | `SANDBOX_CHAT_CODEX` | — | AgentKit CodeEnv Tool ID dedicated to temporary chats. |
+| `SANDBOX_CHAT_OPENCLAW` | — | AgentKit ArkClawEnv Tool ID used by OpenClaw agents. |
+| `SANDBOX_CHAT_HERMES` | — | AgentKit HermesEnv Tool ID used by Hermes agents. |
 | `SANDBOX_SKILL_CREATOR` | — | AgentKit CodeEnv Tool ID dedicated to Skill creation. |
 | `VEADK_SKILL_CREATOR_TOS_BUCKET` | AgentKit account default | TOS bucket used for published artifacts. |
 | `VEADK_SKILL_CREATOR_TOS_PREFIX` | `agentkit/skills` | TOS object-key prefix. |
@@ -318,8 +322,9 @@ and `--site-logo` replace cloud branding only when explicitly provided;
 otherwise the current values are retained. Use `--path` to select a source
 checkout; it defaults to the current directory. Node.js and npm must be
 installed locally.
-`--sandbox-chat-codex-tool-id` and `--sandbox-skill-creator-tool-id` likewise
-replace only the explicitly supplied environment value. Omitting either option
+`--sandbox-chat-codex-tool-id`, `--sandbox-chat-openclaw-tool-id`,
+`--sandbox-chat-hermes-tool-id`, and `--sandbox-skill-creator-tool-id` likewise
+replace only the explicitly supplied environment value. Omitting an option
 keeps that Tool ID from the deployed Function instead of clearing it.
 
 ### One-click Studio updates

@@ -24,10 +24,13 @@ import volcengineLogo from "../assets/volcengine.svg";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 
+export type SidebarPage = "new-chat" | "agents" | "search" | null;
+
 export interface SidebarProps {
   branding: SiteBranding;
   sessions: AdkSession[];
   currentSessionId: string;
+  activePage: SidebarPage;
   /** Per-module feature gates; omitted modules default to shown. */
   features?: UiFeatures;
   /** Server-derived role and capabilities. */
@@ -243,6 +246,7 @@ export function Sidebar({
   branding,
   sessions,
   currentSessionId,
+  activePage,
   features,
   access,
   streamingSids,
@@ -333,9 +337,12 @@ export function Sidebar({
         </div>
         {show("newChat") && (
           <button
-            className="new-chat new-chat--conversation"
+            className={`new-chat new-chat--conversation${
+              activePage === "new-chat" ? " is-active" : ""
+            }`}
             onClick={onNewChat}
             aria-label="新会话"
+            aria-current={activePage === "new-chat" ? "page" : undefined}
             title="新会话"
           >
             <Plus className="icon" />
@@ -343,15 +350,20 @@ export function Sidebar({
           </button>
         )}
         <button
-          className="new-chat new-chat--agents"
+          className={`new-chat new-chat--agents${
+            activePage === "agents" ? " is-active" : ""
+          }`}
           onClick={onMyAgents}
           aria-label="智能体"
+          aria-current={activePage === "agents" ? "page" : undefined}
           title="智能体"
         >
           <AgentFaceIcon />
           <span className="sidebar-nav-label">智能体</span>
         </button>
-        {show("search") && <SearchButton onClick={onSearch} />}
+        {show("search") && (
+          <SearchButton active={activePage === "search"} onClick={onSearch} />
+        )}
       </div>
 
       {show("history") && (
@@ -384,6 +396,7 @@ export function Sidebar({
                 <button
                   className="history-item-btn"
                   onClick={() => onPickSession(s.id)}
+                  aria-current={s.id === currentSessionId ? "page" : undefined}
                   title={title}
                 >
                   {streamingSids?.has(s.id) && (

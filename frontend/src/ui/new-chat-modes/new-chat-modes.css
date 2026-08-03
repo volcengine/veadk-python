@@ -157,8 +157,8 @@
 .new-chat-mode__builtin-icon {
   width: 24px;
   height: 24px;
-  border-radius: 6px;
-  object-fit: contain;
+  flex: 0 0 auto;
+  stroke-width: 1.75;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -2096,7 +2096,9 @@ export async function getRuntimes(
   if (opts.nextToken) p.set("next_token", opts.nextToken);
   const res = await apiFetch(`/web/runtimes?${p.toString()}`);
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "加载 Runtime 失败"));
+    const detail = await httpErrorMessage(res, "加载 Runtime 失败");
+    const summary = `加载 Runtime 失败（HTTP ${res.status}）`;
+    throw new Error(detail === `加载 Runtime 失败 (${res.status})` ? summary : `${summary}：${detail}`);
   }
   const d = (await res.json()) as Partial<RuntimePage>;
   return { runtimes: d.runtimes ?? [], nextToken: d.nextToken ?? "" };

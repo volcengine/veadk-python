@@ -83,14 +83,20 @@ test("keeps alternate chat modes hidden from the new-chat composer", () => {
   assert.doesNotMatch(selectorSource, /<AgentSelector/);
   assert.match(navbarSource, /<AgentSelector[\s\S]*?variant="navbar"/);
   assert.match(selectorSource, /Codex 智能体/);
-  assert.match(selectorSource, /codexLogo/);
-  assert.match(selectorSource, /\{ label: "ArkClaw", logo: arkClawLogo \}/);
-  assert.match(selectorSource, /\{ label: "Hermes 智能体", logo: hermesLogo \}/);
-  assert.match(selectorSource, /className="new-chat-mode__builtin-icon" src=\{logo\}/);
+  assert.match(selectorSource, /\{ label: "ArkClaw", kind: "openclaw" \}/);
+  assert.match(selectorSource, /\{ label: "Hermes 智能体", kind: "hermes" \}/);
+  assert.match(
+    selectorSource,
+    /<SandboxAgentIcon kind="codex" className="new-chat-mode__builtin-icon"/,
+  );
+  assert.match(
+    selectorSource,
+    /<SandboxAgentIcon kind=\{kind\} className="new-chat-mode__builtin-icon"/,
+  );
   assert.doesNotMatch(selectorSource, />[CAH]<\/span>/);
   assert.match(
     modeStylesSource,
-    /\.new-chat-mode__builtin-icon\s*\{[\s\S]*?width:\s*24px;[\s\S]*?object-fit:\s*contain;/,
+    /\.new-chat-mode__builtin-icon\s*\{[\s\S]*?width:\s*24px;[\s\S]*?stroke-width:\s*1\.75;/,
   );
   assert.match(agentSelectorSource, /variant\?: "drawer" \| "navbar"/);
   assert.doesNotMatch(sidebarSource, /<AgentSelector/);
@@ -103,6 +109,12 @@ test("keeps alternate chat modes hidden from the new-chat composer", () => {
 });
 
 test("reveals the refreshed welcome heading and placeholder after Agent connection", () => {
+  const revealKeyframes = stylesSource.match(
+    /@keyframes welcome-text-reveal\s*\{([\s\S]*?)\n\}/,
+  )?.[1] ?? "";
+  const placeholderRule = stylesSource.match(
+    /\.composer-placeholder-reveal\s*\{\s*position:\s*absolute;([^}]*)\}/,
+  )?.[1] ?? "";
   assert.match(
     appSource,
     /key=\{`welcome-\$\{newChatCapabilities\.agentId \?\? appName\}`\}/,
@@ -113,11 +125,19 @@ test("reveals the refreshed welcome heading and placeholder after Agent connecti
   );
   assert.match(featureNoticeSource, /className="welcome-feature-pill"[\s\S]*?焕然一新[\s\S]*?查看新特性/);
   assert.match(stylesSource, /--feature-link:\s*208 100% 47\.45%/);
-  assert.match(stylesSource, /\.welcome-primary\s*\{[\s\S]*?gap:\s*16px;/);
-  assert.match(stylesSource, /\.welcome-heading\s*\{[\s\S]*?gap:\s*72px;[\s\S]*?welcome-heading-enter 220ms/);
-  assert.match(stylesSource, /\.composer--new-chat \.comp-input::placeholder\s*\{[\s\S]*?welcome-placeholder-enter 200ms[\s\S]*?80ms both/);
-  assert.match(stylesSource, /@keyframes welcome-heading-enter[\s\S]*?translateY\(8px\)[\s\S]*?blur\(4px\)/);
-  assert.match(stylesSource, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.welcome-heading,[\s\S]*?\.composer--new-chat \.comp-input::placeholder[\s\S]*?animation:\s*none/);
+  assert.match(stylesSource, /\.welcome-primary\s*\{[\s\S]*?gap:\s*32px;/);
+  assert.match(stylesSource, /\.welcome-heading\s*\{[\s\S]*?gap:\s*72px;/);
+  assert.match(stylesSource, /\.welcome-title,[\s\S]*?\.composer-placeholder-reveal\s*\{[\s\S]*?welcome-text-reveal 900ms/);
+  assert.match(stylesSource, /@keyframes welcome-text-reveal[\s\S]*?clip-path:\s*inset\(0 100% 0 0\)[\s\S]*?clip-path:\s*inset\(0 0 0 0\)/);
+  assert.doesNotMatch(revealKeyframes, /opacity:/);
+  assert.match(stylesSource, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.welcome-title,[\s\S]*?\.composer-placeholder-reveal[\s\S]*?animation:\s*none/);
+  assert.match(stylesSource, /\.composer--new-chat \.comp-input::placeholder\s*\{[\s\S]*?color:\s*transparent/);
+  assert.doesNotMatch(stylesSource, /\.comp-input::placeholder\s*\{[\s\S]*?animation:\s*welcome-text-reveal/);
+  assert.match(composerSource, /placeholder=\{placeholderText\}/);
+  assert.match(composerSource, /newChatLayout && value\.length === 0[\s\S]*?key=\{placeholderText\}[\s\S]*?className="composer-placeholder-reveal"[\s\S]*?aria-hidden="true"/);
+  assert.match(stylesSource, /\.composer-placeholder-reveal\s*\{[\s\S]*?pointer-events:\s*none/);
+  assert.match(placeholderRule, /width:\s*max-content;[\s\S]*?max-width:\s*calc\(100% - 20px\)/);
+  assert.doesNotMatch(placeholderRule, /right:\s*10px/);
 });
 
 test("hides the carousel and reveals feature details on hover or keyboard focus", () => {
@@ -130,8 +150,8 @@ test("hides the carousel and reveals feature details on hover or keyboard focus"
   assert.match(stylesSource, /\.welcome-feature-pill:focus-within \.welcome-feature-popover/);
 });
 
-test("shows task capsules for Harness agents and restores starter prompts otherwise", () => {
-  assert.match(composerSource, /STARTER_PROMPTS|AnalyzePromptIcon|PlanPromptIcon|RewritePromptIcon/);
+test("shows task capsules for Harness agents without generic starter prompts", () => {
+  assert.doesNotMatch(composerSource, /STARTER_PROMPTS|AnalyzePromptIcon|PlanPromptIcon|RewritePromptIcon/);
   assert.match(composerSource, /const TASK_SHORTCUTS = \[/);
   assert.match(taskToolsSource, /ppt:\s*\["ppt_generate"\]/);
   assert.match(taskToolsSource, /image:\s*\["image_generate"\]/);
@@ -146,9 +166,8 @@ test("shows task capsules for Harness agents and restores starter prompts otherw
   assert.match(composerSource, /<SkillCreateIcon \/>[\s\S]*?<span>创建 Skill<\/span>/);
   assert.match(composerSource, /className="task-shortcuts"/);
   assert.match(composerSource, /harnessEnabled && !selectedTask/);
-  assert.match(composerSource, /!harnessEnabled && !value\.trim\(\)/);
   assert.match(composerSource, /className="prompt-suggestions"/);
-  assert.match(composerSource, /onClick=\{\(\) => applyStarterPrompt\(prompt\.text\)\}/);
+  assert.doesNotMatch(composerSource, /applyStarterPrompt|aria-label="快捷提示"/);
   assert.match(composerSource, /onClick=\{\(\) => applyTaskShortcut\(task\)\}/);
   assert.match(composerSource, /function applyTaskShortcut[\s\S]*?onTaskChange\?\.\(task\.value\)[\s\S]*?setSelectionRange\(value\.length, value\.length\)/);
   assert.doesNotMatch(composerSource, /function applyTaskShortcut[\s\S]*?onChange\(task\.prompt\)/);

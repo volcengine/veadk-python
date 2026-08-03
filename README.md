@@ -104,11 +104,10 @@ between this live metadata and control-plane information without exposing prompt
 or credentials. The same metadata advertises mounted smart-search sources, so
 Studio can disable unavailable sources up front and query the Agent's web-search
 tool, KnowledgeBase, or long-term memory without exposing component credentials.
-Studio also provides an isolated Insight Sandbox for temporary Codex
-conversations. It reuses a dedicated AgentKit CodeEnv tool, creates a fresh
-user-owned Sandbox session, and deletes that session on exit without adding the
-conversation to normal Studio history. Reloading may create another temporary
-session; AgentKit reclaims abandoned sessions automatically when their TTL ends.
+Studio also manages user-owned Codex, OpenClaw, and Hermes AgentKit Sessions.
+Users can create, reopen, inspect, and explicitly delete each Agent; leaving a
+Codex conversation only disconnects it, while OpenClaw and Hermes expose their
+main interface and Terminal through Studio.
 When configuring skills, Studio can also browse account-scoped AgentKit Skill
 Spaces and their paginated skill lists by region and project. These requests are
 signed on the server, so browser clients never receive Volcengine credentials.

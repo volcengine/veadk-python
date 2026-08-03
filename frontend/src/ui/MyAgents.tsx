@@ -9,7 +9,15 @@ import {
   type CloudRuntime,
   type RuntimeScope,
 } from "../adk/client";
+import {
+  sandboxClient,
+  sandboxStatusLabel,
+  type SandboxAgentKind,
+  type SandboxSession,
+} from "../adk/sandbox";
+import { formatRequestError } from "../adk/requestError";
 import { AgentFaceIcon } from "./AgentFaceIcon";
+import { SandboxAgentIcon } from "./icons/SandboxAgentIcons";
 import "./MyAgents.css";
 
 export interface MyAgentCardData {
@@ -18,6 +26,7 @@ export interface MyAgentCardData {
   name: string;
   description: string;
   createdAt: string;
+  specificationLabel: string;
   specification: string;
   isMine?: boolean;
   runtime?: {
@@ -26,9 +35,10 @@ export interface MyAgentCardData {
     currentVersion?: number | null;
     canDelete: boolean;
   };
+  sandbox?: SandboxSession;
 }
 
-type AgentType = "general" | "codex" | "openclaw" | "hermes";
+export type AgentType = "general" | "codex" | "openclaw" | "hermes";
 type RuntimeRegion = "cn-beijing" | "cn-shanghai";
 const DEFAULT_CREATE_REGION: RuntimeRegion = "cn-beijing";
 
@@ -85,35 +95,7 @@ function AddIcon(props: SVGProps<SVGSVGElement>) {
 
 function AgentTypeIcon({ type }: { type: AgentType }) {
   if (type === "general") return <AgentFaceIcon />;
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {type === "codex" ? (
-        <>
-          <path d="m12 3 7 4v8l-7 4-7-4V7l7-4Z" />
-          <path d="m8 9 4-2.3L16 9v4.5L12 16l-4-2.5V9Z" />
-        </>
-      ) : type === "openclaw" ? (
-        <>
-          <path d="M7 19c-2-2.5-2.5-5.5-.8-8.2M17 19c2-2.5 2.5-5.5.8-8.2" />
-          <path d="m6.2 10.8-2.7-2M17.8 10.8l2.7-2M9.2 8 7.5 4M14.8 8 16.5 4" />
-          <path d="M8.5 18.5h7" />
-        </>
-      ) : (
-        <>
-          <path d="M5 18.5V9l7-4 7 4v9.5" />
-          <path d="M8.5 13h7M9 18.5v-2.8h6v2.8" />
-        </>
-      )}
-    </svg>
-  );
+  return <SandboxAgentIcon kind={type} />;
 }
 
 function formatCreatedAt(value: string): string {
@@ -124,13 +106,17 @@ function formatCreatedAt(value: string): string {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
   }).format(date).replace(/\//g, "-");
 }
 
-function formatRuntimeRegion(region?: string): string {
+function formatRuntimeRegion(region: string): string {
   if (region === "cn-shanghai") return "上海";
   if (region === "cn-beijing") return "北京";
-  return "—";
+  return region || "—";
 }
 
 function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
@@ -139,7 +125,8 @@ function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
     name: runtime.name,
     description: runtime.description?.trim() || "暂无描述",
     createdAt: formatCreatedAt(runtime.createdAt ?? ""),
-    specification: formatRuntimeRegion(runtime.region),
+    specificationLabel: "创建人",
+    specification: runtime.author || "—",
     isMine: runtime.isMine,
     runtime: {
       runtimeId: runtime.runtimeId,
@@ -147,6 +134,18 @@ function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
       currentVersion: runtime.currentVersion,
       canDelete: runtime.canDelete,
     },
+  };
+}
+
+function sandboxToAgent(session: SandboxSession): MyAgentCardData {
+  return {
+    id: session.id,
+    name: session.displayName || `${session.toolName} 智能体`,
+    description: sandboxStatusLabel(session.status),
+    createdAt: formatCreatedAt(session.createdAt),
+    specificationLabel: "创建人",
+    specification: session.createdBy || "—",
+    sandbox: session,
   };
 }
 
@@ -200,23 +199,47 @@ function AgentCard({
   connected?: boolean;
   showOwnership?: boolean;
 }) {
+  const actionable = Boolean(agent.runtime || agent.sandbox);
   return (
     <article className="my-agent-card">
       <div className="my-agent-card-content">
         <div className="my-agent-card-title">
-          <h3>{agent.name}</h3>
-          {showOwnership && agent.isMine && (
-            <span className="runtime-owner-badge">我创建的</span>
-          )}
+          <div className="my-agent-card-title-copy">
+            <h3>{agent.name}</h3>
+            {agent.sandbox ? (
+              <span className="my-agent-session-id" title={agent.sandbox.id}>
+                {agent.sandbox.id}
+              </span>
+            ) : null}
+          </div>
+          {agent.sandbox ? (
+            <span
+              className="my-agent-status-label"
+              data-ready={agent.sandbox.status.toLowerCase() === "ready" || undefined}
+            >
+              {agent.description}
+            </span>
+          ) : agent.runtime ? (
+            <div className="my-agent-card-badges">
+              <span className="my-agent-region-badge">
+                {formatRuntimeRegion(agent.runtime.region)}
+              </span>
+              {showOwnership && agent.isMine ? (
+                <span className="runtime-owner-badge">我创建的</span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
-        <p className="my-agent-description">{agent.description}</p>
+        {!agent.sandbox ? (
+          <p className="my-agent-description">{agent.description}</p>
+        ) : null}
         <dl className="my-agent-meta">
           <div className="my-agent-created-at">
             <dt>创建时间</dt>
             <dd>{agent.createdAt}</dd>
           </div>
           <div className="my-agent-region">
-            <dt>地域</dt>
+            <dt>{agent.specificationLabel}</dt>
             <dd>{agent.specification}</dd>
           </div>
         </dl>
@@ -225,7 +248,7 @@ function AgentCard({
         <button
           type="button"
           className="my-agent-details"
-          disabled={!agent.runtime}
+          disabled={!actionable}
           aria-label={`查看 ${agent.name} 详情`}
           onClick={() => onViewDetails?.(agent)}
         >
@@ -234,7 +257,7 @@ function AgentCard({
         <button
           type="button"
           className={`my-agent-use${connected ? " is-connected" : ""}`}
-          disabled={!agent.runtime || connecting || connected}
+          disabled={!actionable || connecting || connected}
           aria-busy={connecting || undefined}
           aria-label={connected ? `${agent.name} 已连接` : `使用 ${agent.name}`}
           onClick={() => void onUse?.(agent)}
@@ -257,6 +280,10 @@ export interface MyAgentsProps {
   onCreateAgent: (region: RuntimeRegion) => void;
   onUseAgent: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails: (agent: MyAgentCardData) => void;
+  onCreateSandboxAgent: (kind: "codex" | SandboxAgentKind) => void;
+  onUseSandboxAgent: (session: SandboxSession) => Promise<void>;
+  onViewSandboxAgentDetails: (session: SandboxSession) => void;
+  sandboxRefreshKey?: number;
   connectedRuntimeId?: string;
   hiddenRuntimeIds?: ReadonlySet<string>;
 }
@@ -267,18 +294,27 @@ export function MyAgents({
   onCreateAgent,
   onUseAgent,
   onViewAgentDetails,
+  onCreateSandboxAgent,
+  onUseSandboxAgent,
+  onViewSandboxAgentDetails,
+  sandboxRefreshKey = 0,
   connectedRuntimeId = "",
   hiddenRuntimeIds = EMPTY_RUNTIME_IDS,
 }: MyAgentsProps) {
   const resultsRef = useRef<HTMLElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const runtimeRequestRef = useRef(0);
+  const sandboxRequestRef = useRef(0);
+  const sandboxAbortRef = useRef<AbortController | null>(null);
   const [activeType, setActiveType] = useState<AgentType>("general");
   const [query, setQuery] = useState("");
   const [runtimeAgents, setRuntimeAgents] = useState<MyAgentCardData[]>([]);
   const [runtimeNextToken, setRuntimeNextToken] = useState("");
   const [loadingRuntimes, setLoadingRuntimes] = useState(true);
   const [runtimeError, setRuntimeError] = useState("");
+  const [sandboxAgents, setSandboxAgents] = useState<MyAgentCardData[]>([]);
+  const [loadingSandboxAgents, setLoadingSandboxAgents] = useState(false);
+  const [sandboxError, setSandboxError] = useState("");
   const [connectingAgentId, setConnectingAgentId] = useState("");
 
   const fetchRuntimePage = useCallback((token: string, reset: boolean) => {
@@ -294,7 +330,7 @@ export function MyAgents({
       })
       .catch((cause) => {
         if (runtimeRequestRef.current !== requestId) return;
-        setRuntimeError(cause instanceof Error ? cause.message : String(cause));
+        setRuntimeError(formatRequestError(cause, "加载通用智能体", "GET /web/runtimes"));
       })
       .finally(() => {
         if (runtimeRequestRef.current === requestId) setLoadingRuntimes(false);
@@ -302,13 +338,78 @@ export function MyAgents({
   }, [runtimeScope]);
 
   useEffect(() => {
+    if (activeType !== "general") return;
     setRuntimeAgents([]);
     setRuntimeNextToken("");
     void fetchRuntimePage("", true);
     return () => {
       runtimeRequestRef.current += 1;
     };
-  }, [fetchRuntimePage]);
+  }, [activeType, fetchRuntimePage]);
+
+  const fetchSandboxAgents = useCallback(async (type: Exclude<AgentType, "general">) => {
+    sandboxAbortRef.current?.abort();
+    const controller = new AbortController();
+    sandboxAbortRef.current = controller;
+    const requestId = ++sandboxRequestRef.current;
+    setLoadingSandboxAgents(true);
+    setSandboxError("");
+    setSandboxAgents([]);
+    try {
+      const sessions = type === "codex"
+        ? await sandboxClient.listSessions({ signal: controller.signal })
+        : await sandboxClient.listAgentSessions(type, { signal: controller.signal });
+      if (sandboxRequestRef.current !== requestId) return;
+      setSandboxAgents(sessions.map(sandboxToAgent));
+    } catch (cause) {
+      if ((cause as Error)?.name === "AbortError") return;
+      if (sandboxRequestRef.current !== requestId) return;
+      setSandboxError(formatRequestError(
+        cause,
+        `加载 ${AGENT_TYPES.find((item) => item.id === type)?.label ?? type}`,
+        `GET /web/${type === "codex" ? "sandbox" : type}/sessions`,
+      ));
+    } finally {
+      if (sandboxAbortRef.current === controller) sandboxAbortRef.current = null;
+      if (sandboxRequestRef.current === requestId) {
+        setLoadingSandboxAgents(false);
+      }
+    }
+  }, []);
+
+  function selectAgentType(type: AgentType) {
+    if (type === activeType) return;
+    if (type === "general") {
+      runtimeRequestRef.current += 1;
+      setRuntimeAgents([]);
+      setRuntimeNextToken("");
+      setRuntimeError("");
+      setLoadingRuntimes(true);
+    } else {
+      sandboxAbortRef.current?.abort();
+      sandboxAbortRef.current = null;
+      sandboxRequestRef.current += 1;
+      setSandboxAgents([]);
+      setSandboxError("");
+      setLoadingSandboxAgents(true);
+    }
+    setActiveType(type);
+  }
+
+  useEffect(() => {
+    if (activeType === "general") {
+      sandboxAbortRef.current?.abort();
+      sandboxAbortRef.current = null;
+      sandboxRequestRef.current += 1;
+      return;
+    }
+    void fetchSandboxAgents(activeType);
+    return () => {
+      sandboxAbortRef.current?.abort();
+      sandboxAbortRef.current = null;
+      sandboxRequestRef.current += 1;
+    };
+  }, [activeType, fetchSandboxAgents, sandboxRefreshKey]);
 
   useEffect(() => {
     const target = loadMoreRef.current;
@@ -331,20 +432,25 @@ export function MyAgents({
     setConnectingAgentId(agent.id);
     try {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      await onUseAgent(agent);
+      if (agent.sandbox) {
+        await onUseSandboxAgent(agent.sandbox);
+      } else {
+        await onUseAgent(agent);
+      }
     } finally {
       setConnectingAgentId("");
     }
-  }, [connectingAgentId, onUseAgent]);
+  }, [connectingAgentId, onUseAgent, onUseSandboxAgent]);
 
   const visibleAgents = useMemo(() => {
-    if (activeType !== "general") return [];
     const normalizedQuery = query.trim().toLocaleLowerCase();
+    const source = activeType === "general" ? runtimeAgents : sandboxAgents;
     const matchingAgents = normalizedQuery
-      ? runtimeAgents.filter((agent) =>
+      ? source.filter((agent) =>
           agent.name.toLocaleLowerCase().includes(normalizedQuery),
         )
-      : runtimeAgents;
+      : source;
+    if (activeType !== "general") return matchingAgents;
     const availableAgents = hiddenRuntimeIds.size > 0
       ? matchingAgents.filter((agent) =>
           !agent.runtime || !hiddenRuntimeIds.has(agent.runtime.runtimeId),
@@ -359,18 +465,29 @@ export function MyAgents({
       ...availableAgents.slice(0, connectedIndex),
       ...availableAgents.slice(connectedIndex + 1),
     ];
-  }, [activeType, connectedRuntimeId, hiddenRuntimeIds, query, runtimeAgents]);
+  }, [
+    activeType,
+    connectedRuntimeId,
+    hiddenRuntimeIds,
+    query,
+    runtimeAgents,
+    sandboxAgents,
+  ]);
 
   const activeTypeInfo = AGENT_TYPES.find((type) => type.id === activeType);
   const activeLabel = activeTypeInfo?.label ?? "智能体";
-  const showInitialLoading = activeType === "general" && loadingRuntimes && runtimeAgents.length === 0;
+  const showInitialLoading = activeType === "general"
+    ? loadingRuntimes && runtimeAgents.length === 0
+    : loadingSandboxAgents && sandboxAgents.length === 0;
   const showEmpty = !showInitialLoading && visibleAgents.length === 0;
-  const createAgent = canCreate && activeType === "general"
-    ? () => onCreateAgent(DEFAULT_CREATE_REGION)
+  const createAgent = canCreate
+    ? activeType === "general"
+      ? () => onCreateAgent(DEFAULT_CREATE_REGION)
+      : () => onCreateSandboxAgent(activeType)
     : undefined;
   const createDisabledReason = !canCreate
     ? "当前账号没有创建智能体权限"
-    : activeType !== "general" ? `${activeLabel}暂未开放` : undefined;
+    : undefined;
 
   return (
     <div className="my-agents-page">
@@ -405,7 +522,7 @@ export function MyAgents({
               key={type.id}
               className={`my-agent-type-pill${activeType === type.id ? " is-active" : ""}`}
               aria-pressed={activeType === type.id}
-              onClick={() => setActiveType(type.id)}
+              onClick={() => selectAgentType(type.id)}
             >
               {type.label}
             </button>
@@ -433,23 +550,24 @@ export function MyAgents({
             <span className="my-agent-loading-mark" aria-hidden="true" />
             <span>正在加载智能体</span>
           </div>
-        ) : runtimeError && activeType === "general" ? (
+        ) : (activeType === "general" ? runtimeError : sandboxError) ? (
           <div className="my-agent-empty" role="alert">
-            <p>{runtimeError}</p>
-            <button type="button" onClick={() => void fetchRuntimePage("", true)}>重新加载</button>
+            <p>{activeType === "general" ? runtimeError : sandboxError}</p>
+            <button
+              type="button"
+              onClick={() => {
+                if (activeType === "general") {
+                  void fetchRuntimePage("", true);
+                } else {
+                  void fetchSandboxAgents(activeType);
+                }
+              }}
+            >
+              重新加载
+            </button>
           </div>
         ) : showEmpty ? (
-          activeType !== "general" ? (
-            <div className="my-agent-empty-message">
-              <EmptyMessage fill="none">
-                <EmptyMessage.Icon>
-                  <AgentTypeIcon type={activeType} />
-                </EmptyMessage.Icon>
-                <EmptyMessage.Title>{activeLabel}暂未开放</EmptyMessage.Title>
-                <EmptyMessage.Description>敬请期待</EmptyMessage.Description>
-              </EmptyMessage>
-            </div>
-          ) : query.trim() ? (
+          query.trim() ? (
             <div className="my-agent-empty-message">
               <EmptyMessage fill="none">
                 <EmptyMessage.Icon>
@@ -457,6 +575,27 @@ export function MyAgents({
                 </EmptyMessage.Icon>
                 <EmptyMessage.Title>没有匹配的智能体</EmptyMessage.Title>
                 <EmptyMessage.Description>请尝试搜索其他名称</EmptyMessage.Description>
+              </EmptyMessage>
+            </div>
+          ) : activeType !== "general" ? (
+            <div className="my-agent-empty-message">
+              <EmptyMessage fill="none">
+                <EmptyMessage.Icon>
+                  <AgentTypeIcon type={activeType} />
+                </EmptyMessage.Icon>
+                <EmptyMessage.Title>暂无 {activeLabel}</EmptyMessage.Title>
+                {canCreate ? (
+                  <EmptyMessage.ActionRow>
+                    <Button
+                      color="primary"
+                      size="lg"
+                      onClick={() => onCreateSandboxAgent(activeType)}
+                    >
+                      <AddIcon />
+                      创建智能体
+                    </Button>
+                  </EmptyMessage.ActionRow>
+                ) : null}
               </EmptyMessage>
             </div>
           ) : (
@@ -491,7 +630,13 @@ export function MyAgents({
                 key={agent.id}
                 agent={agent}
                 onUse={useAgent}
-                onViewDetails={onViewAgentDetails}
+                onViewDetails={(agent) => {
+                  if (agent.sandbox) {
+                    onViewSandboxAgentDetails(agent.sandbox);
+                  } else {
+                    onViewAgentDetails(agent);
+                  }
+                }}
                 connecting={agent.id === connectingAgentId}
                 connected={agent.runtime?.runtimeId === connectedRuntimeId}
                 showOwnership={runtimeScope === "all"}

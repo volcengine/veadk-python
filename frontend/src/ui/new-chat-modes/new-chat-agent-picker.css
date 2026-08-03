@@ -96,7 +96,7 @@
   cursor: pointer;
 }
 
-.new-chat-agent-picker__type.is-active,
+.new-chat-agent-picker__type:hover,
 .new-chat-agent-picker__type.is-keyboard-active,
 .new-chat-agent-picker__runtime:hover:not(:disabled),
 .new-chat-agent-picker__runtime.is-keyboard-active { background: hsl(var(--accent)); }
@@ -141,6 +141,8 @@
   padding: 12px;
 }
 .new-chat-agent-picker__error { display: flex; flex-direction: column; gap: 8px; padding: 10px; color: hsl(var(--destructive)); }
+.new-chat-agent-picker__error > span,
+.new-chat-agent-picker__inline-error { white-space: pre-wrap; overflow-wrap: anywhere; }
 .new-chat-agent-picker__error button,
 .new-chat-agent-picker__load-more {
   min-height: 30px;

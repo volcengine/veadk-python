@@ -64,7 +64,7 @@ import {
   type Block,
   type Turn,
 } from "./blocks";
-import { Sidebar } from "./ui/Sidebar";
+import { Sidebar, type SidebarPage } from "./ui/Sidebar";
 import { AgentInfoPanel } from "./ui/AgentTopology";
 import { SkillCenterView } from "./ui/SkillCenter";
 import { AddAgentKitView } from "./ui/AddAgentKit";
@@ -102,7 +102,6 @@ import { CodePackageCreate } from "./create/CodePackageCreate";
 import { FileArchive } from "lucide-react";
 import type { AgentDraft } from "./create/types";
 import type { DeployResult, DeploymentTaskUpdate } from "./ui/ProjectPreview";
-import { TextShimmer } from "./ui/text-shimmer/TextShimmer";
 import { createSkillJob, deleteSkillJob } from "./ui/skill-create/api";
 import { SkillCreateWorkspace } from "./ui/skill-create/SkillCreateWorkspace";
 import { SKILL_MODELS, type SkillCreationJob } from "./ui/skill-create/types";
@@ -114,6 +113,8 @@ import {
 } from "./ui/new-chat-modes/taskTools";
 import {
   sandboxClient,
+  type SandboxAgentKind,
+  type SandboxAgentWorkspace as SandboxAgentWorkspaceData,
   type SandboxSession as SandboxSessionInfo,
 } from "./adk/sandbox";
 import {
@@ -127,6 +128,8 @@ import {
 import {
   SandboxSessionWarning,
 } from "./ui/SandboxSession";
+import { SandboxAgentDetails } from "./ui/SandboxAgentDetails";
+import { SandboxAgentWorkspace } from "./ui/SandboxAgentWorkspace";
 import defaultSiteLogo from "./assets/volcengine.svg";
 import {
   FeedbackDownIcon,
@@ -528,6 +531,14 @@ export default function App() {
   const [sandboxLaunchState, setSandboxLaunchState] =
     useState<SandboxLaunchState>("confirm");
   const [sandboxLaunchError, setSandboxLaunchError] = useState("");
+  const [sandboxLaunchKind, setSandboxLaunchKind] =
+    useState<"codex" | SandboxAgentKind>("codex");
+  const [sandboxLaunchFromAgents, setSandboxLaunchFromAgents] = useState(false);
+  const [sandboxAgentRefreshKey, setSandboxAgentRefreshKey] = useState(0);
+  const [sandboxAgentDetailTarget, setSandboxAgentDetailTarget] =
+    useState<SandboxSessionInfo | null>(null);
+  const [sandboxAgentWorkspace, setSandboxAgentWorkspace] =
+    useState<SandboxAgentWorkspaceData | null>(null);
   const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
   // Turns are stored PER SESSION, so a background stream can keep updating its
@@ -1697,11 +1708,16 @@ export default function App() {
     }
   }
 
-  function openSandboxLaunch() {
+  function openSandboxLaunch(
+    kind: "codex" | SandboxAgentKind = "codex",
+    fromAgents = false,
+  ) {
     if (sandboxSession) return;
     setError("");
     setSandboxLaunchError("");
     setSandboxLaunchState("confirm");
+    setSandboxLaunchKind(kind);
+    setSandboxLaunchFromAgents(fromAgents);
     setSandboxLaunchOpen(true);
   }
 
@@ -1711,19 +1727,41 @@ export default function App() {
     setSandboxLaunchOpen(false);
     setSandboxLaunchState("confirm");
     setSandboxLaunchError("");
-    if (!sandboxSession && newChatMode === "temporary") {
+    if (
+      !sandboxSession &&
+      newChatMode === "temporary" &&
+      !sandboxLaunchFromAgents
+    ) {
       setNewChatMode("agent");
     }
   }
 
-  async function launchSandboxSession() {
+  async function launchSandboxSession(displayName: string) {
     sandboxLaunchAbortRef.current?.abort();
     const controller = new AbortController();
     sandboxLaunchAbortRef.current = controller;
     setSandboxLaunchState("loading");
     setSandboxLaunchError("");
     try {
-      const nextSession = await sandboxClient.startSession({
+      const createdSession = sandboxLaunchKind === "codex"
+        ? await sandboxClient.startSession({
+            displayName,
+            signal: controller.signal,
+          })
+        : await sandboxClient.startAgentSession(sandboxLaunchKind, {
+            displayName,
+            signal: controller.signal,
+          });
+      if (sandboxLaunchAbortRef.current !== controller) return;
+      if (sandboxLaunchFromAgents) {
+        setSandboxAgentRefreshKey((current) => current + 1);
+        setSandboxLaunchOpen(false);
+        setSandboxLaunchState("confirm");
+        setMyAgents(true);
+        return;
+      }
+      if (sandboxLaunchKind !== "codex") return;
+      const nextSession = await sandboxClient.connectSession(createdSession.id, {
         signal: controller.signal,
       });
       if (sandboxLaunchAbortRef.current !== controller) return;
@@ -1747,6 +1785,8 @@ export default function App() {
       setManageAgents(false);
       setAgentDetailTarget(null);
       setMyAgents(false);
+      setSandboxAgentDetailTarget(null);
+      setSandboxAgentWorkspace(null);
       setSandboxLaunchOpen(false);
       setSandboxLaunchState("confirm");
     } catch (launchError) {
@@ -1763,6 +1803,54 @@ export default function App() {
         sandboxLaunchAbortRef.current = null;
       }
     }
+  }
+
+  async function openSandboxAgent(session: SandboxSessionInfo) {
+    setError("");
+    if (session.toolName === "codex") {
+      const connected = await sandboxClient.connectSession(session.id);
+      viewSidRef.current = "";
+      setSessionId("");
+      setPendingTurns([]);
+      setInput("");
+      setInvocation(emptyInvocation());
+      setSandboxTurns([]);
+      setSandboxSession(connected);
+      setSandboxAgentDetailTarget(null);
+      setSandboxAgentWorkspace(null);
+      setMyAgents(false);
+      setManageAgents(false);
+      return;
+    }
+    const workspace = await sandboxClient.openAgentSession(
+      session.toolName,
+      session.id,
+    );
+    setSandboxAgentWorkspace(workspace);
+    setSandboxAgentDetailTarget(null);
+    setMyAgents(false);
+    setManageAgents(false);
+  }
+
+  function openSandboxAgentDetails(session: SandboxSessionInfo) {
+    setSandboxAgentDetailTarget(session);
+    setSandboxAgentWorkspace(null);
+    setMyAgents(false);
+    setManageAgents(false);
+    setError("");
+  }
+
+  async function deleteSandboxAgent(session: SandboxSessionInfo) {
+    if (sandboxSession?.id === session.id) exitSandboxSession();
+    if (session.toolName === "codex") {
+      await sandboxClient.deleteSession(session.id);
+    } else {
+      await sandboxClient.deleteAgentSession(session.toolName, session.id);
+    }
+    setSandboxAgentDetailTarget(null);
+    setSandboxAgentWorkspace(null);
+    setSandboxAgentRefreshKey((current) => current + 1);
+    setMyAgents(true);
   }
 
   function exitSandboxSession() {
@@ -1895,6 +1983,8 @@ export default function App() {
     setSearchView(false);
     setManageAgents(false);
     setAgentDetailTarget(null);
+    setSandboxAgentDetailTarget(null);
+    setSandboxAgentWorkspace(null);
     setMyAgents(false);
     startNewChat();
   }
@@ -2764,6 +2854,16 @@ export default function App() {
     setError("");
   };
 
+  const openSandboxAgentCreate = (
+    kind: "codex" | SandboxAgentKind,
+  ) => {
+    if (!canCreateAgents) {
+      setError("当前账号没有创建智能体的权限。");
+      return;
+    }
+    openSandboxLaunch(kind, true);
+  };
+
   const openMyAgentsPage = () => {
     if (sandboxSession) exitSandboxSession();
     viewSidRef.current = "";
@@ -2775,6 +2875,8 @@ export default function App() {
     setSearchView(false);
     setManageAgents(false);
     setAgentDetailTarget(null);
+    setSandboxAgentDetailTarget(null);
+    setSandboxAgentWorkspace(null);
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId("");
     setMyAgents(true);
@@ -2821,6 +2923,14 @@ export default function App() {
       }
     : null;
 
+  const sidebarActivePage: SidebarPage = searchView
+    ? "search"
+    : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
+      ? "agents"
+      : sessionId || createView || skillCenter || addAgent || addMenu
+        ? null
+        : "new-chat";
+
   return (
     <div className="layout">
       <Sidebar
@@ -2829,6 +2939,7 @@ export default function App() {
         features={features}
         sessions={sessions}
         currentSessionId={sessionId}
+        activePage={sidebarActivePage}
         streamingSids={streamingSids}
         onNewChat={openNewChat}
         onSearch={() => {
@@ -2839,6 +2950,8 @@ export default function App() {
           setAddMenu(false);
           setManageAgents(false);
           setAgentDetailTarget(null);
+          setSandboxAgentDetailTarget(null);
+          setSandboxAgentWorkspace(null);
           setMyAgents(false);
           setSearchView(true);
           setError("");
@@ -2857,6 +2970,8 @@ export default function App() {
           setSearchView(false);
           setManageAgents(false);
           setAgentDetailTarget(null);
+          setSandboxAgentDetailTarget(null);
+          setSandboxAgentWorkspace(null);
           setMyAgents(false);
           setCreateView(null);
           setImportedDraft(null);
@@ -2872,6 +2987,8 @@ export default function App() {
           setSearchView(false);
           setManageAgents(false);
           setAgentDetailTarget(null);
+          setSandboxAgentDetailTarget(null);
+          setSandboxAgentWorkspace(null);
           setMyAgents(false);
           setSkillCenter(true);
           setError("");
@@ -2888,6 +3005,8 @@ export default function App() {
           setSearchView(false);
           setManageAgents(false);
           setAgentDetailTarget(null);
+          setSandboxAgentDetailTarget(null);
+          setSandboxAgentWorkspace(null);
           setMyAgents(false);
           setSessionId("");
           setAddMenu(false);
@@ -2903,6 +3022,8 @@ export default function App() {
           setSearchView(false);
           setManageAgents(false);
           setAgentDetailTarget(null);
+          setSandboxAgentDetailTarget(null);
+          setSandboxAgentWorkspace(null);
           setMyAgents(false);
           setError("");
           pickSession(id);
@@ -2919,7 +3040,16 @@ export default function App() {
             className={`composer-slot${sandboxSession ? " sandbox-composer-wrap" : ""}`}
           >
             {sandboxSession && (
-              <SandboxSessionWarning onExit={startNewChat} />
+              <SandboxSessionWarning
+                agentName={
+                  sandboxSession.toolName === "codex"
+                    ? "Codex"
+                    : sandboxSession.toolName === "openclaw"
+                      ? "OpenClaw"
+                      : "Hermes"
+                }
+                onExit={startNewChat}
+              />
             )}
             <Composer
               sessionId={sandboxSession ? sandboxSession.id : sessionId}
@@ -3041,6 +3171,7 @@ export default function App() {
                   name: runtime.name,
                   description: runtime.description?.trim() || "暂无描述",
                   createdAt: runtime.createdAt ?? "",
+                  specificationLabel: "地域",
                   specification:
                     runtime.region === "cn-shanghai" ? "上海" : "北京",
                   isMine: runtime.isMine,
@@ -3052,6 +3183,7 @@ export default function App() {
                   },
                 }, true);
               }}
+              onSelectSandboxSession={openSandboxAgent}
               showModeSelector={false}
               temporaryEnabled={newChatCapabilitiesReady && newChatCapabilities.temporaryEnabled}
               skillCreateEnabled={newChatCapabilitiesReady && newChatCapabilities.skillCreateEnabled}
@@ -3116,13 +3248,29 @@ export default function App() {
                 </div>
               )}
 
-            {myAgents ? (
+            {sandboxAgentWorkspace ? (
+              <SandboxAgentWorkspace
+                workspace={sandboxAgentWorkspace}
+                onBack={openMyAgentsPage}
+              />
+            ) : sandboxAgentDetailTarget ? (
+              <SandboxAgentDetails
+                session={sandboxAgentDetailTarget}
+                onBack={openMyAgentsPage}
+                onOpen={() => openSandboxAgent(sandboxAgentDetailTarget)}
+                onDelete={() => deleteSandboxAgent(sandboxAgentDetailTarget)}
+              />
+            ) : myAgents ? (
               <MyAgents
                 canCreate={canCreateAgents}
                 runtimeScope={access.capabilities.runtimeScope}
                 onCreateAgent={openAgentCreateFromMyAgents}
                 onUseAgent={connectMyAgent}
                 onViewAgentDetails={openMyAgentDetails}
+                onCreateSandboxAgent={openSandboxAgentCreate}
+                onUseSandboxAgent={openSandboxAgent}
+                onViewSandboxAgentDetails={openSandboxAgentDetails}
+                sandboxRefreshKey={sandboxAgentRefreshKey}
                 connectedRuntimeId={connectedRuntimeId}
                 hiddenRuntimeIds={hiddenRuntimeIds}
               />
@@ -3396,13 +3544,13 @@ export default function App() {
                 <div className="welcome-primary">
                   <div className="welcome-heading">
                     <NewChatFeatureNotice canUpdate={access.role === "admin"} />
-                    <TextShimmer as="h1" className="welcome-title" duration={4.8} spread={22}>
+                    <h1 className="welcome-title">
                       {sandboxSession
-                        ? "让灵感在临时空间里自由生长"
+                        ? "让灵感自由生长"
                         : newChatMode === "skill-create"
                           ? "想创建一个什么 Skill？"
                           : greeting}
-                    </TextShimmer>
+                    </h1>
                   </div>
                   {composer}
                 </div>
@@ -3645,9 +3793,10 @@ export default function App() {
       <SandboxLaunchDialog
         open={sandboxLaunchOpen}
         state={sandboxLaunchState}
+        agentKind={sandboxLaunchKind}
         error={sandboxLaunchError}
         onCancel={cancelSandboxLaunch}
-        onConfirm={() => void launchSandboxSession()}
+        onConfirm={(displayName) => void launchSandboxSession(displayName)}
       />
 
       <AuthExpiredDialog

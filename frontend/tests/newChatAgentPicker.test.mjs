@@ -15,6 +15,10 @@ const pickerStyles = readFileSync(
   new URL("../src/ui/new-chat-modes/new-chat-agent-picker.css", import.meta.url),
   "utf8",
 );
+const requestErrorSource = readFileSync(
+  new URL("../src/adk/requestError.ts", import.meta.url),
+  "utf8",
+);
 const agentFaceSource = readFileSync(
   new URL("../src/ui/AgentFaceIcon.tsx", import.meta.url),
   "utf8",
@@ -56,8 +60,12 @@ test("renders a two-level Agent type and runtime menu", () => {
   assert.match(pickerSource, /aria-label=\{`\$\{activeTypeLabel\}列表`\}/);
   assert.match(pickerSource, /getRuntimes\(\{[\s\S]*?region: "all"[\s\S]*?pageSize: PAGE_SIZE/);
   assert.match(pickerSource, /onSelectRuntime\(runtime\)/);
+  assert.match(pickerSource, /sandboxClient\.listSessions/);
+  assert.match(pickerSource, /sandboxClient\.listAgentSessions/);
+  assert.match(pickerSource, /onSelectSandboxSession\(session\)/);
   assert.match(appSource, /onSelectRuntime=\{async \(runtime\) => \{[\s\S]*?connectMyAgent/);
-  assert.match(pickerSource, /暂未开放/);
+  assert.match(appSource, /onSelectSandboxSession=\{openSandboxAgent\}/);
+  assert.doesNotMatch(pickerSource, /暂未开放/);
   assert.match(pickerSource, /disabled/);
   assert.match(pickerStyles, /\.new-chat-agent-picker__submenu/);
 });
@@ -92,10 +100,8 @@ test("uses compact official empty states without fake actions", () => {
     pickerSource,
     /runtimes\.length === 0[\s\S]*?className="new-chat-agent-picker__empty"[\s\S]*?<EmptyMessage\.Icon[\s\S]*?size="sm"[\s\S]*?<AgentFaceIcon[\s\S]*?<EmptyMessage\.Title[^>]*>[\s\S]*?暂无通用智能体[\s\S]*?<\/EmptyMessage\.Title>/,
   );
-  assert.match(
-    pickerSource,
-    /activeType !== "general"[\s\S]*?className="new-chat-agent-picker__empty"[\s\S]*?<AgentTypeIcon[\s\S]*?type=\{activeType\}[\s\S]*?<EmptyMessage\.Title[^>]*>[\s\S]*?\{activeTypeLabel\}[\s\S]*?<\/EmptyMessage\.Title>[\s\S]*?<EmptyMessage\.Description[^>]*>[\s\S]*?暂未开放[\s\S]*?<\/EmptyMessage\.Description>/,
-  );
+  assert.match(pickerSource, /sandboxSessions\.length === 0[\s\S]*?暂无 \{activeTypeLabel\}[\s\S]*?请前往智能体页创建/);
+  assert.match(pickerSource, /sandboxSessions\.map\(\(session, index\) =>/);
   assert.doesNotMatch(pickerSource, /new-chat-agent-picker__empty[\s\S]*?<Button/);
   assert.match(pickerStyles, /\.new-chat-agent-picker__empty\s*\{[\s\S]*?min-height: 116px/);
 });
@@ -144,4 +150,43 @@ test("opens on deliberate mouse hover and closes only after leaving the picker",
   assert.match(pickerSource, /window\.setTimeout\([\s\S]*?HOVER_CLOSE_DELAY_MS/);
   assert.match(pickerSource, /onClick=\{\(\) => open \? close\(\) : openPicker\(true\)\}/);
   assert.match(pickerSource, /event\.key === "ArrowDown" \|\| event\.key === "ArrowUp"/);
+});
+
+test("does not open the general Agent list until a type is deliberately chosen", () => {
+  assert.match(pickerSource, /useState<AgentType \| null>\(null\)/);
+  assert.match(pickerSource, /const \[keyboardNavigating, setKeyboardNavigating\] = useState\(false\)/);
+  assert.match(pickerSource, /function openPicker\(focusMenu: boolean, fromKeyboard = false\)/);
+  assert.match(pickerSource, /setActiveType\(fromKeyboard \? "general" : null\)/);
+  assert.match(
+    pickerSource,
+    /activeType !== null \? \(\s*<div\s+className="new-chat-agent-picker__submenu"/,
+  );
+  assert.match(
+    pickerSource,
+    /activeType === null \|\| activeType === "general" \|\| loadedSandboxType === activeType/,
+  );
+  assert.match(pickerSource, /if \(activeType === null\) activateType\(activeTypeIndex\)/);
+  assert.match(pickerSource, /setKeyboardNavigating\(fromKeyboard\)/);
+  assert.match(pickerSource, /if \(!open\) openPicker\(true, true\)/);
+  assert.match(
+    pickerSource,
+    /keyboardNavigating && keyboardPanel === "types" && activeTypeIndex === index \? " is-keyboard-active"/,
+  );
+  assert.doesNotMatch(pickerSource, /activeType === type\.id \? " is-active"/);
+  assert.match(
+    pickerStyles,
+    /\.new-chat-agent-picker__type:hover,\s*\.new-chat-agent-picker__type\.is-keyboard-active/,
+  );
+  assert.doesNotMatch(pickerStyles, /\.new-chat-agent-picker__type\.is-active/);
+});
+
+test("shows request context and backend detail for every picker error", () => {
+  assert.match(requestErrorSource, /export function formatRequestError/);
+  assert.match(requestErrorSource, /`详细信息：\$\{detail\}`/);
+  assert.match(requestErrorSource, /request \? `请求：\$\{request\}` : ""/);
+  assert.match(pickerSource, /formatRequestError\(cause, "加载通用智能体", "GET \/web\/runtimes"\)/);
+  assert.match(pickerSource, /formatRequestError\(cause, `加载 \$\{AGENT_TYPES\.find/);
+  assert.match(pickerSource, /formatRequestError\(cause, "连接通用智能体"\)/);
+  assert.match(pickerSource, /formatRequestError\(cause, `打开 \$\{activeTypeLabel\}`\)/);
+  assert.match(pickerStyles, /\.new-chat-agent-picker__error > span,[\s\S]*?white-space: pre-wrap/);
 });

@@ -54,26 +54,47 @@ test("shows the requested title, search, and agent type pills", () => {
   }
   assert.match(pageSource, /className="my-agent-type-pill/);
   assert.match(pageSource, /aria-pressed=\{activeType === type\.id\}/);
+  assert.match(pageSource, /onClick=\{\(\) => selectAgentType\(type\.id\)\}/);
 });
 
-test("renders only account-backed agents and never ships placeholder cards", () => {
+test("clears stale sandbox cards as soon as the Agent type changes", () => {
+  assert.match(
+    pageSource,
+    /function selectAgentType\(type: AgentType\)[\s\S]*?sandboxAbortRef\.current\?\.abort\(\)[\s\S]*?sandboxRequestRef\.current \+= 1[\s\S]*?setSandboxAgents\(\[\]\)[\s\S]*?setLoadingSandboxAgents\(true\)[\s\S]*?setActiveType\(type\)/,
+  );
+  assert.match(
+    pageSource,
+    /const fetchSandboxAgents[\s\S]*?setLoadingSandboxAgents\(true\)[\s\S]*?setSandboxAgents\(\[\]\)[\s\S]*?await sandboxClient/,
+  );
+  assert.match(
+    pageSource,
+    /type === "general"[\s\S]*?runtimeRequestRef\.current \+= 1[\s\S]*?setRuntimeAgents\(\[\]\)[\s\S]*?setLoadingRuntimes\(true\)/,
+  );
+  assert.match(
+    pageSource,
+    /useEffect\(\(\) => \{[\s\S]*?activeType !== "general"[\s\S]*?fetchRuntimePage\("", true\)[\s\S]*?\[activeType, fetchRuntimePage\]/,
+  );
+});
+
+test("renders only account-backed Runtime and Sandbox agents", () => {
   assert.doesNotMatch(pageSource, /STATIC_SECTIONS/);
   assert.doesNotMatch(
     pageSource,
     /codex-code-review|codex-test-coverage|openclaw-research|hermes-data-analysis/,
   );
-  assert.match(pageSource, /if \(activeType !== "general"\) return \[\]/);
+  assert.match(pageSource, /sandboxClient\.listSessions\(\{ signal: controller\.signal \}\)/);
+  assert.match(pageSource, /sandboxClient\.listAgentSessions\(type, \{ signal: controller\.signal \}\)/);
+  assert.match(pageSource, /sessions\.map\(sandboxToAgent\)/);
 });
 
 test("keeps a primary create action visible above the scrolling results", () => {
   assert.match(pageSource, /canCreate: boolean/);
-  assert.match(pageSource, /canCreate && activeType === "general"/);
+  assert.match(pageSource, /activeType === "general"[\s\S]*?onCreateAgent\(DEFAULT_CREATE_REGION\)[\s\S]*?onCreateSandboxAgent\(activeType\)/);
   assert.match(pageSource, /onCreateAgent\(DEFAULT_CREATE_REGION\)/);
-  assert.doesNotMatch(pageSource, /activeType === "codex" \? onCreateCodexAgent/);
+  assert.match(pageSource, /onCreateSandboxAgent: \(kind: "codex" \| SandboxAgentKind\) => void/);
   assert.match(pageSource, /className="my-agent-create-primary"[\s\S]*?disabled=\{!createAgent\}[\s\S]*?<span>创建智能体<\/span>/);
   assert.ok(pageSource.indexOf('className="my-agent-create-primary"') < pageSource.indexOf('className="my-agent-results"'));
   assert.match(pageSource, /当前账号没有创建智能体权限/);
-  assert.match(pageSource, /activeType !== "general" \? `\$\{activeLabel\}暂未开放`/);
   assert.match(pageStyles, /\.my-agent-create-primary\s*\{[\s\S]*?background: hsl\(var\(--foreground\)\);[\s\S]*?color: hsl\(var\(--background\)\)/);
   assert.match(pageStyles, /\.my-agent-create-primary:disabled\s*\{[\s\S]*?cursor: not-allowed/);
 });
@@ -81,7 +102,10 @@ test("keeps a primary create action visible above the scrolling results", () => 
 test("agent cards show the archived metadata hierarchy and two-action footer", () => {
   assert.match(pageSource, /<h3>\{agent\.name\}<\/h3>/);
   assert.match(pageSource, /<dt>创建时间<\/dt>/);
-  assert.match(pageSource, /<dt>地域<\/dt>[\s\S]*?<dd>\{agent\.specification\}<\/dd>/);
+  assert.match(pageSource, /<dt>\{agent\.specificationLabel\}<\/dt>[\s\S]*?<dd>\{agent\.specification\}<\/dd>/);
+  assert.match(pageSource, /className="my-agent-session-id"[\s\S]*?\{agent\.sandbox\.id\}/);
+  assert.doesNotMatch(pageSource, /Session ID：/);
+  assert.match(pageSource, /className="my-agent-status-label"[\s\S]*?\{agent\.description\}/);
   assert.doesNotMatch(pageSource, /<dt>工具<\/dt>|<dt>技能<\/dt>/);
   assert.match(pageSource, /className="my-agent-description">\{agent\.description\}/);
   assert.match(pageSource, /className="my-agent-actions"/);
@@ -94,19 +118,27 @@ test("agent cards show the archived metadata hierarchy and two-action footer", (
   assert.doesNotMatch(pageStyles, /font-family/);
 });
 
-test("uses the archived two-layer card layout", () => {
+test("uses a responsive two-layer card layout without an empty fixed-height gap", () => {
   assert.match(
     pageStyles,
-    /\.my-agent-grid\s*\{[\s\S]*?grid-template-columns: repeat\(auto-fit, minmax\(min\(204px, 100%\), 1fr\)\);[\s\S]*?gap: 12px;/,
+    /\.my-agent-grid\s*\{[\s\S]*?grid-template-columns: repeat\(auto-fill, minmax\(min\(280px, 100%\), 1fr\)\);[\s\S]*?align-items: start;[\s\S]*?gap: 12px;/,
   );
   assert.match(
     pageStyles,
-    /\.my-agent-card\s*\{[\s\S]*?height: 204px;[\s\S]*?background: transparent;/,
+    /\.my-agent-card\s*\{[\s\S]*?height: auto;[\s\S]*?background: hsl\(var\(--secondary\) \/ 0\.82\)/,
   );
   assert.match(pageStyles, /\.my-agent-card-content\s*\{[\s\S]*?background: hsl\(var\(--panel\)\);/);
+  assert.doesNotMatch(pageStyles, /\.my-agent-card:hover \.my-agent-card-content/);
   assert.match(pageStyles, /\.my-agent-description\s*\{[\s\S]*?-webkit-line-clamp: 2/);
   assert.match(pageStyles, /\.my-agent-actions\s*\{[\s\S]*?gap: 8px;[\s\S]*?padding: 6px 8px 7px;[\s\S]*?background: hsl\(var\(--secondary\) \/ 0\.82\)/);
   assert.match(pageStyles, /\.my-agent-actions button\s*\{[\s\S]*?background: transparent/);
+});
+
+test("aligns sandbox names with status and formats creation time to seconds", () => {
+  assert.match(pageStyles, /\.my-agent-card-title\s*\{[\s\S]*?justify-content: space-between/);
+  assert.match(pageStyles, /\.my-agent-session-id\s*\{/);
+  assert.match(pageSource, /hour: "2-digit"[\s\S]*?minute: "2-digit"[\s\S]*?second: "2-digit"/);
+  assert.match(pageSource, /agent\.sandbox \? \([\s\S]*?\{agent\.sandbox\.id\}/);
 });
 
 test("metadata remains compact without adding data-plane requests", () => {
@@ -118,7 +150,7 @@ test("metadata remains compact without adding data-plane requests", () => {
   assert.doesNotMatch(pageSource, /appName: info\.appName/);
 });
 
-test("loads both Runtime regions through the merged all-regions endpoint", () => {
+test("loads all Runtime regions and shows the creator in card metadata", () => {
   assert.match(pageSource, /getRuntimes/);
   assert.match(pageSource, /runtimeScope: RuntimeScope/);
   assert.match(pageSource, /scope: runtimeScope/);
@@ -127,8 +159,8 @@ test("loads both Runtime regions through the merged all-regions endpoint", () =>
   assert.match(pageSource, /id: runtime\.runtimeId/);
   assert.match(pageSource, /name: runtime\.name/);
   assert.match(pageSource, /description: runtime\.description\?\.trim\(\) \|\| "暂无描述"/);
-  assert.match(pageSource, /formatRuntimeRegion\(runtime\.region\)/);
-  assert.match(pageSource, /region === "cn-shanghai"[\s\S]*?"上海"[\s\S]*?region === "cn-beijing"[\s\S]*?"北京"/);
+  assert.match(pageSource, /specificationLabel: "创建人"/);
+  assert.match(pageSource, /specification: runtime\.author \|\| "—"/);
   assert.match(pageSource, /runtimeId: runtime\.runtimeId/);
   assert.match(pageSource, /region: runtime\.region/);
   assert.match(pageSource, /<AgentCard[\s\S]*?key=\{agent\.id\}/);
@@ -155,6 +187,25 @@ test("marks runtimes created by the administrator", () => {
   assert.match(pageSource, /showOwnership && agent\.isMine/);
   assert.match(pageSource, /className="runtime-owner-badge"[\s\S]*?>我创建的</);
   assert.match(appSource, /canCreate=\{canCreateAgents\}/);
+});
+
+test("shows the Runtime region before the ownership badge in the card title", () => {
+  assert.match(
+    pageSource,
+    /function formatRuntimeRegion\(region: string\): string \{[\s\S]*?cn-shanghai[\s\S]*?上海[\s\S]*?cn-beijing[\s\S]*?北京/,
+  );
+  assert.match(
+    pageSource,
+    /className="my-agent-card-badges"[\s\S]*?className="my-agent-region-badge"[\s\S]*?formatRuntimeRegion\(agent\.runtime\.region\)[\s\S]*?className="runtime-owner-badge"[\s\S]*?>我创建的</,
+  );
+  assert.match(
+    pageStyles,
+    /\.my-agent-card-badges\s*\{[\s\S]*?display: flex;[\s\S]*?gap: 6px/,
+  );
+  assert.match(
+    pageStyles,
+    /\.my-agent-region-badge\s*\{[\s\S]*?display: inline-flex;[\s\S]*?border-radius: 999px/,
+  );
 });
 
 test("hides deleted Runtime cards and invalidates stale Runtime pages", () => {
@@ -270,23 +321,23 @@ test("wires card details and connect actions into App navigation", () => {
 });
 
 test("keeps all requested type filters without nested category sections", () => {
-  assert.doesNotMatch(pageSource, /onCreateCodexAgent/);
-  assert.doesNotMatch(appSource, /onCreateCodexAgent=/);
+  assert.match(pageSource, /onCreateSandboxAgent/);
+  assert.match(appSource, /onCreateSandboxAgent=\{openSandboxAgentCreate\}/);
   assert.match(pageSource, /AGENT_TYPES\.map/);
   assert.match(pageSource, /label: "Codex 智能体"/);
   assert.match(pageSource, /label: "OpenClaw 智能体"/);
   assert.match(pageSource, /label: "Hermes 智能体"/);
   assert.doesNotMatch(pageSource, /AgentSection|my-agents-section|comingSoon/);
-  assert.match(pageSource, /<EmptyMessage\.Title>\{activeLabel\}暂未开放<\/EmptyMessage\.Title>/);
+  assert.match(pageSource, /<EmptyMessage\.Title>暂无 \{activeLabel\}<\/EmptyMessage\.Title>/);
   assert.match(pageSource, /activeType === "general"[\s\S]*?没有匹配的智能体/);
   assert.doesNotMatch(pageStyles, /\.my-agent-empty\s*\{[^}]*border:/);
   assert.doesNotMatch(pageStyles, /\.my-agent-empty\s*\{[^}]*background:/);
   assert.match(pageSource, /<EmptyMessage[\s\S]*?<EmptyMessage\.Icon/);
   assert.match(pageSource, /<AgentTypeIcon type=\{activeType\} \/>/);
-  assert.match(pageSource, /type === "codex"[\s\S]*?type === "openclaw"/);
   assert.match(pageSource, /type === "general"\) return <AgentFaceIcon \/>/);
-  assert.match(pageSource, /<EmptyMessage\.Title>\{activeLabel\}暂未开放<\/EmptyMessage\.Title>/);
-  assert.match(pageSource, /<EmptyMessage\.Description>敬请期待<\/EmptyMessage\.Description>/);
+  assert.match(pageSource, /return <SandboxAgentIcon kind=\{type\} \/>/);
+  assert.doesNotMatch(pageSource, /开始使用 AgentKit Session/);
+  assert.match(pageSource, /onClick=\{\(\) => onCreateSandboxAgent\(activeType\)\}/);
 });
 
 test("uses the official EmptyMessage and offers a real create action for an empty Runtime list", () => {
@@ -323,14 +374,19 @@ test("integrates Tailwind 4 and the Apps SDK UI foundation styles", () => {
 });
 
 test("keeps Runtime failures distinct from successful empty states", () => {
-  assert.match(pageSource, /runtimeError && activeType === "general"/);
+  assert.match(pageSource, /activeType === "general" \? runtimeError : sandboxError/);
   assert.match(pageSource, /className="my-agent-empty" role="alert"/);
-  assert.match(pageSource, />重新加载<\/button>/);
+  assert.match(pageSource, />\s*重新加载\s*<\/button>/);
   const errorBranch = pageSource.slice(
-    pageSource.indexOf('runtimeError && activeType === "general"'),
+    pageSource.indexOf('(activeType === "general" ? runtimeError : sandboxError)'),
     pageSource.indexOf(": showEmpty ?"),
   );
   assert.doesNotMatch(errorBranch, /<EmptyMessage/);
+  assert.match(errorBranch, /fetchSandboxAgents\(activeType\)/);
+  assert.match(pageSource, /formatRequestError\(cause, "加载通用智能体", "GET \/web\/runtimes"\)/);
+  assert.match(pageSource, /formatRequestError\([\s\S]*?`加载 \$\{AGENT_TYPES\.find/);
+  assert.match(pageSource, /`GET \/web\/\$\{type === "codex" \? "sandbox" : type\}\/sessions`/);
+  assert.match(pageStyles, /\.my-agent-empty p\s*\{[\s\S]*?white-space: pre-wrap;[\s\S]*?overflow-wrap: anywhere;/);
 });
 
 test("shows connecting progress and preserves the connected Runtime state", () => {
@@ -343,7 +399,8 @@ test("shows connecting progress and preserves the connected Runtime state", () =
   assert.match(pageSource, /my-agent-use-spinner/);
   assert.match(pageSource, /<span>连接中<\/span>/);
   assert.doesNotMatch(pageSource, /ConnectIcon/);
-  assert.match(pageSource, /disabled=\{!agent\.runtime \|\| connecting \|\| connected\}/);
+  assert.match(pageSource, /const actionable = Boolean\(agent\.runtime \|\| agent\.sandbox\)/);
+  assert.match(pageSource, /disabled=\{!actionable \|\| connecting \|\| connected\}/);
   assert.match(appSource, /connectedRuntimeId=\{connectedRuntimeId\}/);
   assert.match(pageStyles, /\.my-agent-loading-mark[\s\S]*?border-right-color: transparent/);
   assert.match(

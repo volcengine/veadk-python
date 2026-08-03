@@ -36,13 +36,12 @@ server that `veadk frontend` launches — no separate backend.
   Session IDs use normal text with a copy action, and sidebar title tooltips show
   the full conversation name. Long Agent lists stay within the viewport and
   scroll independently.
-- **Insight Sandbox**: start an isolated, temporary AgentKit CodeEnv session
-  from the new-chat composer or global header. Studio reuses its dedicated
-  Sandbox tool, creates a fresh user-owned session, streams Codex reasoning,
-  tool activity, and replies into the normal conversation renderer, and deletes
-  the cloud session on exit without adding it to normal chat history.
-  Reloading can create another session; AgentKit reclaims abandoned sessions
-  automatically when their TTL ends.
+- **Sandbox Agents**: create and reopen user-owned Codex, OpenClaw, and Hermes
+  AgentKit Sessions from the Agent page. Each type supports list, detail, and
+  explicit deletion. Codex streams reasoning, tool activity, and replies into
+  the normal conversation renderer; leaving the conversation only disconnects
+  it, so the Agent remains available until the user deletes it. OpenClaw and
+  Hermes expose their main interface and Terminal through Studio.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
@@ -354,12 +353,14 @@ assistant messages returned by the generator. Private chain-of-thought and
 credentials never enter the UI. Completed candidates still support preview,
 ZIP download, and AgentKit publish.
 
-Configure separate ready AgentKit `CodeEnv` Tools for temporary chats and Skill
+Configure separate ready AgentKit Tools for Codex, OpenClaw, Hermes, and Skill
 creation before starting the server. The Tool IDs are intentionally server-only
 and cannot be supplied by the browser:
 
 ```bash
 export SANDBOX_CHAT_CODEX=<chat-code-env-tool-id>
+export SANDBOX_CHAT_OPENCLAW=<openclaw-env-tool-id>
+export SANDBOX_CHAT_HERMES=<hermes-env-tool-id>
 export SANDBOX_SKILL_CREATOR=<skill-code-env-tool-id>
 veadk frontend --agents-dir examples
 ```
@@ -375,10 +376,11 @@ different instance.
 For local Studio, run the AgentKit `credential-hosting` command and bind its
 result to both CodeEnv Tools. A cloud deployment creates both Tools in parallel
 when their IDs are omitted. Alternatively, select existing Tools with
-`--sandbox-chat-codex-tool-id` and `--sandbox-skill-creator-tool-id`. The deploy
-command obtains the Ark key with the deployer's Volcengine credentials, stores
-it through AgentKit credential hosting, and binds only the returned ticket and
-relay URL to the Tools:
+`--sandbox-chat-codex-tool-id`, `--sandbox-chat-openclaw-tool-id`,
+`--sandbox-chat-hermes-tool-id`, and `--sandbox-skill-creator-tool-id`. The
+deploy command obtains the Ark key with the deployer's Volcengine credentials,
+stores it through AgentKit credential hosting, and binds only the returned
+ticket and relay URL to the Tools:
 
 ```bash
 veadk studio deploy \
