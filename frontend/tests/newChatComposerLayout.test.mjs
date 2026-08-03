@@ -115,9 +115,14 @@ test("reveals the refreshed welcome heading and placeholder after Agent connecti
   assert.match(stylesSource, /--feature-link:\s*208 100% 47\.45%/);
   assert.match(stylesSource, /\.welcome-primary\s*\{[\s\S]*?gap:\s*32px;/);
   assert.match(stylesSource, /\.welcome-heading\s*\{[\s\S]*?gap:\s*72px;/);
-  assert.match(stylesSource, /\.welcome-title,[\s\S]*?\.composer--new-chat \.comp-input::placeholder\s*\{[\s\S]*?welcome-text-reveal 900ms/);
+  assert.match(stylesSource, /\.welcome-title,[\s\S]*?\.composer-placeholder-reveal\s*\{[\s\S]*?welcome-text-reveal 900ms/);
   assert.match(stylesSource, /@keyframes welcome-text-reveal[\s\S]*?clip-path:\s*inset\(0 100% 0 0\)[\s\S]*?clip-path:\s*inset\(0 0 0 0\)/);
-  assert.match(stylesSource, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.welcome-title,[\s\S]*?\.composer--new-chat \.comp-input::placeholder[\s\S]*?animation:\s*none/);
+  assert.match(stylesSource, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.welcome-title,[\s\S]*?\.composer-placeholder-reveal[\s\S]*?animation:\s*none/);
+  assert.match(stylesSource, /\.composer--new-chat \.comp-input::placeholder\s*\{[\s\S]*?color:\s*transparent/);
+  assert.doesNotMatch(stylesSource, /\.comp-input::placeholder\s*\{[\s\S]*?animation:\s*welcome-text-reveal/);
+  assert.match(composerSource, /placeholder=\{placeholderText\}/);
+  assert.match(composerSource, /newChatLayout && value\.length === 0[\s\S]*?key=\{placeholderText\}[\s\S]*?className="composer-placeholder-reveal"[\s\S]*?aria-hidden="true"/);
+  assert.match(stylesSource, /\.composer-placeholder-reveal\s*\{[\s\S]*?pointer-events:\s*none/);
 });
 
 test("hides the carousel and reveals feature details on hover or keyboard focus", () => {

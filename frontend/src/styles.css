@@ -1158,7 +1158,7 @@ body {
   }
 }
 .welcome-title,
-.composer--new-chat .comp-input::placeholder {
+.composer-placeholder-reveal {
   animation: welcome-text-reveal 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 @keyframes welcome-text-reveal {
@@ -1173,7 +1173,7 @@ body {
 }
 @media (prefers-reduced-motion: reduce) {
   .welcome-title,
-  .composer--new-chat .comp-input::placeholder {
+  .composer-placeholder-reveal {
     animation: none;
     opacity: 1;
     clip-path: none;
@@ -2315,6 +2315,7 @@ body {
     0 24px 72px 8px rgb(0 0 0 / 0.02);
 }
 .composer-input-stack {
+  position: relative;
   display: flex;
   flex: 1;
   min-width: 0;
@@ -2325,6 +2326,23 @@ body {
 .composer--new-chat .comp-input {
   min-height: 76px;
   padding: 4px 10px;
+}
+.composer--new-chat .comp-input::placeholder {
+  color: transparent;
+}
+.composer-placeholder-reveal {
+  position: absolute;
+  top: 4px;
+  right: 10px;
+  left: 10px;
+  z-index: 1;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 15px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
 }
 .composer--new-chat .composer-menu-wrap {
   position: absolute;

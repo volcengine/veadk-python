@@ -218,6 +218,9 @@ export function Composer({
   const uploadPending = !skillMode && attachments.some((attachment) => attachment.status !== "ready");
   const canSend = !disabled && !busy && !uploadPending &&
     (value.trim().length > 0 || (!skillMode && attachments.length > 0));
+  const placeholderText = skillMode
+    ? `描述你想创建的 Skill，将使用 ${SKILL_MODELS.join(" 和 ")} 并行创建…`
+    : disabled ? "请先选择智能体" : `向 ${agentName} 发消息…`;
 
   const query = trigger?.query.toLocaleLowerCase() ?? "";
   const suggestions: CompletionItem[] = trigger?.kind === "skill"
@@ -510,9 +513,7 @@ export function Composer({
             rows={newChatLayout ? 4 : 1}
             value={value}
             disabled={disabled}
-            placeholder={skillMode
-              ? `描述你想创建的 Skill，将使用 ${SKILL_MODELS.join(" 和 ")} 并行创建…`
-              : disabled ? "请先选择智能体" : `向 ${agentName} 发消息…`}
+            placeholder={placeholderText}
             aria-expanded={Boolean(trigger)}
             onChange={(e) => {
               onChange(e.target.value);
@@ -561,6 +562,15 @@ export function Composer({
             }
             }}
           />
+          {newChatLayout && value.length === 0 ? (
+            <span
+              key={placeholderText}
+              className="composer-placeholder-reveal"
+              aria-hidden="true"
+            >
+              {placeholderText}
+            </span>
+          ) : null}
         </div>
         <motion.button
           type="button"
