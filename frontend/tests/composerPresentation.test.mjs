@@ -10,6 +10,10 @@ const composerSource = readFileSync(
   new URL("../src/ui/Composer.tsx", import.meta.url),
   "utf8",
 );
+const sandboxComposerSource = readFileSync(
+  new URL("../src/ui/SandboxComposer.tsx", import.meta.url),
+  "utf8",
+);
 const sidebarSource = readFileSync(
   new URL("../src/ui/Sidebar.tsx", import.meta.url),
   "utf8",
@@ -177,14 +181,16 @@ test("renders a normal-font session id with an inline copy action", () => {
   );
 });
 
-test("addresses the selected Agent by its display name in the composer", () => {
+test("uses the selected Agent display name outside dedicated sandbox sessions", () => {
   assert.match(
     appSource,
-    /agentName=\{[\s\S]*?sandboxSession[\s\S]*?"AgentKit 沙箱"[\s\S]*?labelOf\(appName\)/,
+    /<SandboxComposer[\s\S]*?appName=\{appName\}/,
   );
+  assert.match(appSource, /agentName=\{appName \? labelOf\(appName\) : "Agent"\}/);
   assert.match(composerSource, /`向 \$\{agentName\} 发消息…`/);
   assert.match(composerSource, /请先选择智能体/);
   assert.doesNotMatch(composerSource, /给智能体发消息/);
+  assert.match(sandboxComposerSource, /placeholder="向 AgentKit 沙箱发送消息/);
 });
 
 test("composer slot keeps the input full width in the centered welcome layout", () => {

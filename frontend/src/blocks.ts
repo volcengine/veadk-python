@@ -18,6 +18,7 @@ import type {
   MessageFeedbackState,
 } from "./adk/client";
 import type { A2uiMessage } from "./a2ui/types";
+import type { SandboxTokenUsage } from "./adk/sandbox";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
 const VALIDATED_JSON_KEY = "validated_a2ui_json";
@@ -77,17 +78,32 @@ export interface Acc {
 
 export interface TurnMeta {
   author?: string;
+  localId?: string;
   tokens?: number;
   ts?: number; // epoch seconds
   eventId?: string;
   invocationId?: string;
   feedback?: MessageFeedbackState;
+  sandboxUsage?: SandboxTokenUsage;
+}
+
+export interface TurnActivityDetail {
+  label: string;
+  value: string;
+  code?: boolean;
+}
+
+export interface TurnActivity {
+  id: string;
+  title: string;
+  details?: TurnActivityDetail[];
 }
 
 export interface Turn {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   blocks: Block[];
   meta?: TurnMeta;
+  activity?: TurnActivity;
 }
 
 export function emptyAcc(): Acc {
