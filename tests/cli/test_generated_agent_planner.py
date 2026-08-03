@@ -21,12 +21,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from veadk.cli.generated_agent_codegen import AgentDraft, generate_project_from_draft
 from veadk.cli.generated_agent_planner import (
     DEFAULT_GENERATED_MODEL_NAME,
     PLANNER_INSTRUCTION,
     GeneratedAgentDraftPlan,
+    GeneratedAgentDraftRequest,
     _to_agent_draft,
     generate_agent_draft,
 )
@@ -49,6 +51,15 @@ HIDDEN_GENERATED_FIELDS = {
     "knowledgebase",
     "knowledgebaseBackend",
 }
+
+
+def test_generated_agent_draft_request_requires_at_least_four_characters() -> None:
+    with pytest.raises(ValidationError):
+        GeneratedAgentDraftRequest(requirement="abc")
+
+    request = GeneratedAgentDraftRequest(requirement="abcd")
+
+    assert request.requirement == "abcd"
 
 
 def _leaf(

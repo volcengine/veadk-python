@@ -37,10 +37,11 @@ test("assistant feedback is tied to the final ADK event", () => {
   );
 });
 
-test("feedback controls are accessible hand-drawn SVG buttons", () => {
+test("feedback controls keep only the accessible rating actions", () => {
   assert.match(appSource, /aria-label="赞"/);
   assert.match(appSource, /aria-label="踩"/);
-  assert.match(appSource, /aria-label="查看评测案例"/);
+  assert.doesNotMatch(appSource, /aria-label="查看评测案例"/);
+  assert.doesNotMatch(appSource, /<ListTodo\b/);
   assert.match(appSource, /aria-pressed=/);
   assert.match(appSource, /filled=\{feedbackRating === "good"\}/);
   assert.match(appSource, /filled=\{feedbackRating === "bad"\}/);
@@ -78,22 +79,10 @@ test("feedback selection updates immediately and uses a neutral solid icon", () 
   assert.doesNotMatch(stylesSource, /\.feedback-btn--bad[\s\S]{0,120}destructive/);
 });
 
-test("chat feedback row can jump to the current agent cases", () => {
-  const handler = appSource.slice(
-    appSource.indexOf("const openCurrentAgentCases"),
-    appSource.indexOf("const selectAgent"),
-  );
-  assert.match(handler, /const openCurrentAgentCases = \(\s*kind\?: MessageFeedbackRating \| null,\s*turn\?: Turn,\s*input = "",\s*\) => \{/);
-  assert.match(handler, /setFeedbackCasePreview\(\{/);
-  assert.match(handler, /messageId: eventId/);
-  assert.match(handler, /setAgentDetailTarget\(\{[\s\S]*?appName: realApp[\s\S]*?runtimeId: currentConn\.runtimeId/);
-  assert.match(handler, /setFocusedWorkspaceAgentId\(""\)/);
-  assert.doesNotMatch(handler, /setFocusedWorkspaceAgentId\(appName\)/);
-  assert.match(handler, /setFocusedWorkspaceAgentSection\("evaluations"\)/);
-  assert.match(handler, /setFocusedWorkspaceCaseKind\(caseKind\)/);
+test("chat feedback row has no evaluation case shortcut", () => {
+  assert.doesNotMatch(appSource, /const openCurrentAgentCases/);
   assert.match(appSource, /feedbackCasePreview=\{feedbackCasePreview\}/);
   assert.match(appSource, /previousUserTurnText\(turns, i\)/);
   assert.match(appSource, /rateAssistantTurn\(\s*turn,\s*feedbackRating === "good" \? null : "good",\s*feedbackInput,\s*\)/);
   assert.match(appSource, /rateAssistantTurn\(\s*turn,\s*feedbackRating === "bad" \? null : "bad",\s*feedbackInput,\s*\)/);
-  assert.match(appSource, /openCurrentAgentCases\(\s*feedbackRating,\s*turn,\s*feedbackInput,\s*\)/);
 });

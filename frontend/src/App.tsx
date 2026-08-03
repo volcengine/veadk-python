@@ -11,7 +11,6 @@ import {
   Check,
   Copy,
   CornerDownRight,
-  ListTodo,
   Loader2,
 } from "lucide-react";
 import { motion } from "motion/react";
@@ -2554,12 +2553,7 @@ export default function App() {
           region: currentConn.region,
         }
       : undefined;
-  const connectedRuntimeId =
-    currentRuntime?.runtimeId ??
-    connections.reduce(
-      (runtimeId, connection) => connection.runtimeId ?? runtimeId,
-      "",
-    );
+  const connectedRuntimeId = currentRuntime?.runtimeId ?? "";
   const currentRuntimeAppName = currentConn
     ? currentConn.apps.find((app) =>
         remoteAppId(currentConn.id, app) === appName
@@ -2697,77 +2691,6 @@ export default function App() {
         return next;
       });
     }
-  };
-
-  const openCurrentAgentCases = (
-    kind?: MessageFeedbackRating | null,
-    turn?: Turn,
-    input = "",
-  ) => {
-    if (!currentRuntime || !currentConn?.runtimeId) return;
-    const realApp = currentRuntimeAppName;
-    const displayName =
-      currentConn.appLabels?.[realApp] ??
-      agentInfo?.name ??
-      currentConn.name;
-    const caseKind = kind === "bad" ? "bad" : "good";
-    const eventId = turn?.meta?.eventId ?? "";
-    const output = turn ? turnText(turn) : "";
-    if ((kind === "good" || kind === "bad") && eventId && output && sessionId) {
-      const createdAt = turn?.meta?.ts
-        ? new Date(turn.meta.ts * 1000).toISOString()
-        : new Date().toISOString();
-      setFeedbackCasePreview({
-        id: `local:${currentConn.runtimeId}:${sessionId}:${eventId}`,
-        itemKey: `local:${eventId}`,
-        kind: caseKind,
-        input,
-        output,
-        referenceOutput: output,
-        comment: "",
-        agentName: realApp,
-        sessionId,
-        messageId: eventId,
-        runtimeId: currentConn.runtimeId,
-        invocationId: turn?.meta?.invocationId ?? "",
-        userId,
-        createdAt,
-        evaluationSetId: "",
-        evaluationSetName: "",
-        workspaceId: "",
-      });
-    } else {
-      setFeedbackCasePreview(null);
-    }
-    setFeedbackCaseReturnAgentId("");
-    setFeedbackTargetEventId("");
-    setAgentDetailTarget({
-      id: currentConn.runtimeId,
-      appName: realApp,
-      name: displayName,
-      description: agentInfo?.description || currentConn.name,
-      createdAt: "—",
-      specification:
-        currentConn.region === "cn-shanghai" ? "上海" : "北京",
-      runtime: {
-        runtimeId: currentConn.runtimeId,
-        region: currentConn.region ?? "cn-beijing",
-        currentVersion: currentConn.currentVersion,
-        canDelete: libraryRuntimePermissions[currentConn.runtimeId]?.canDelete === true,
-      },
-    });
-    setFocusedDeploymentTaskId("");
-    setFocusedWorkspaceAgentId("");
-    setFocusedWorkspaceAgentSection("evaluations");
-    setFocusedWorkspaceCaseKind(caseKind);
-    setMyAgents(false);
-    setManageAgents(true);
-    setCreateView(null);
-    setSkillCenter(false);
-    setAddAgent(false);
-    setAddMenu(false);
-    setSearchView(false);
-    setError("");
   };
 
   // Refresh the selected Agent before leaving the current page, then open a
@@ -3652,19 +3575,6 @@ export default function App() {
                                   className="icon"
                                   filled={feedbackRating === "bad"}
                                 />
-                              </button>
-                              <button
-                                type="button"
-                                className="icon-btn feedback-btn"
-                                aria-label="查看评测案例"
-                                title="查看评测案例"
-                                onClick={() => openCurrentAgentCases(
-                                  feedbackRating,
-                                  turn,
-                                  feedbackInput,
-                                )}
-                              >
-                                <ListTodo className="icon" aria-hidden />
                               </button>
                             </>
                           )}

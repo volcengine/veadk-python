@@ -42,12 +42,20 @@ test("groups child Agent work in an identified muted execution card", () => {
   assert.match(appSource, /turn--subagent/);
   assert.match(appSource, /agentNode\?\.description/);
   assert.match(stylesSource, /\.turn--subagent\s*\{/);
-  assert.match(stylesSource, /\.turn--subagent\s*\{[^}]*backdrop-filter:\s*blur\(18px\)/s);
+  assert.match(stylesSource, /\.turn--subagent::before\s*\{[^}]*backdrop-filter:\s*blur\(18px\)/s);
   assert.match(stylesSource, /\.turn--subagent\s*\{[^}]*margin-top:\s*42px/s);
+  assert.match(stylesSource, /\.turn--subagent\s*\{[^}]*margin-bottom:\s*22px/s);
+  assert.match(stylesSource, /\.turn--subagent\s*\{[^}]*box-shadow:\s*none/s);
   assert.match(stylesSource, /\.turn--subagent::before\s*\{[^}]*radial-gradient/s);
+  assert.match(stylesSource, /\.turn--subagent:has\(> \.turn-meta\)::before\s*\{[^}]*bottom:\s*44px/s);
   assert.match(stylesSource, /\.subagent-run-label\s*\{[^}]*position:\s*absolute/s);
+  assert.match(stylesSource, /\.subagent-run-label\s*\{[^}]*box-shadow:\s*none/s);
   assert.match(stylesSource, /\.subagent-run-title\s*\{[^}]*font-size:\s*14\.5px[^}]*font-weight:\s*400/s);
-  assert.match(stylesSource, /\.turn--subagent \.turn-meta\s*\{[^}]*position:\s*absolute/s);
+  assert.match(stylesSource, /\.turn--subagent \.turn-meta\s*\{[^}]*position:\s*static[^}]*margin:\s*20px -16px 0/s);
+  assert.doesNotMatch(
+    stylesSource,
+    /\.turn--subagent \.turn-meta\s*\{[^}]*(?:position:\s*absolute|bottom:\s*-\d+px)/s,
+  );
   assert.match(appSource, /<CornerDownRight \/>/);
   assert.match(stylesSource, /\.subagent-run-description\s*\{[^}]*font-size:\s*13\.5px/s);
   assert.doesNotMatch(stylesSource, /\.subagent-run-description\s*\{[^}]*border-bottom/s);

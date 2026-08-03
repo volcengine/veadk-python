@@ -27,7 +27,6 @@ export function NewChatFeatureNotice({ canUpdate = false }: { canUpdate?: boolea
       >
         查看新特性
       </button>
-      {canUpdate && <StudioUpdateControl variant="feature-link" />}
       <section
         id="welcome-feature-popover"
         className="welcome-feature-popover"
@@ -43,6 +42,7 @@ export function NewChatFeatureNotice({ canUpdate = false }: { canUpdate?: boolea
           ))}
         </ul>
       </section>
+      {canUpdate && <StudioUpdateControl variant="feature-link" />}
     </div>
   );
 }
