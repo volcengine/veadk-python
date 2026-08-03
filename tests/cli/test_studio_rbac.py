@@ -20,6 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 import yaml
 from click.testing import CliRunner
@@ -109,6 +110,37 @@ def _runtime(
         network_configurations=[],
         authorizer_configuration=None,
     )
+
+
+class _RuntimeJsonResponse:
+    def __init__(
+        self,
+        data: Any,
+        *,
+        status_code: int = 200,
+        text: str = "",
+    ) -> None:
+        self._data = data
+        self.status_code = status_code
+        self.text = text
+        self.headers = {"content-type": "application/json"}
+
+    def json(self) -> Any:
+        return self._data
+
+
+def _runtime_with_public_endpoint(runtime: SimpleNamespace) -> SimpleNamespace:
+    runtime.network_configurations = [
+        SimpleNamespace(
+            endpoint="https://runtime.example.com",
+            network_type="public",
+        )
+    ]
+    runtime.authorizer_configuration = SimpleNamespace(
+        key_auth=SimpleNamespace(api_key="runtime-key"),
+        custom_jwt_authorizer=None,
+    )
+    return runtime
 
 
 def test_runtime_description_is_safe_and_bounded() -> None:
@@ -505,13 +537,265 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
     assert deleted == ["runtime-developer", "runtime-other"]
 
 
+def test_runtime_update_capability_supports_owned_unmanaged_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime = _runtime_with_public_endpoint(
+        _runtime("runtime-unmanaged", "developer", managed=False)
+    )
+    runtime.current_version_number = 7
+    requested_paths: list[str] = []
+
+    def get_runtime(_self: Any, request: Any) -> SimpleNamespace:
+        if request.runtime_id == "runtime-missing":
+            raise RuntimeError("InvalidResource.NotFound")
+        return runtime
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self,
+            _method: str,
+            url: str,
+            **_kwargs: Any,
+        ) -> _RuntimeJsonResponse:
+            requested_paths.append(url)
+            if url.endswith("/list-apps"):
+                return _RuntimeJsonResponse(["selected-agent"])
+            assert url.endswith("/web/agent-info/selected-agent")
+            return _RuntimeJsonResponse(
+                {
+                    "name": "selected-agent",
+                    "description": "Existing Agent",
+                }
+            )
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        admins="admin",
+        developers="developer,other-developer",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-update-capability",
+            params={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-beijing",
+            },
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        missing_app = client.get(
+            "/web/runtime-update-capability",
+            params={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-beijing",
+                "appName": "missing-agent",
+            },
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        forbidden = client.get(
+            "/web/runtime-update-capability",
+            params={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-beijing",
+                "appName": "selected-agent",
+            },
+            headers={"X-VeADK-Local-User": "other-developer"},
+        )
+        no_permission = client.get(
+            "/web/runtime-update-capability",
+            params={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-beijing",
+                "appName": "selected-agent",
+            },
+            headers={"X-VeADK-Local-User": "viewer"},
+        )
+        missing_runtime = client.get(
+            "/web/runtime-update-capability",
+            params={
+                "runtimeId": "runtime-missing",
+                "region": "cn-beijing",
+                "appName": "selected-agent",
+            },
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "canUpdate": True,
+        "reason": "",
+        "reasonCode": "",
+        "runtime": {
+            "runtimeId": runtime.runtime_id,
+            "name": runtime.name,
+            "status": "Running",
+            "region": "cn-beijing",
+            "currentVersion": 7,
+            "managed": False,
+        },
+        "agent": {
+            "appName": "selected-agent",
+            "name": "selected-agent",
+            "description": "Existing Agent",
+        },
+    }
+    assert requested_paths[:2] == [
+        "https://runtime.example.com/list-apps",
+        "https://runtime.example.com/web/agent-info/selected-agent",
+    ]
+    assert missing_app.status_code == 200
+    assert missing_app.json()["canUpdate"] is False
+    assert missing_app.json()["reasonCode"] == "runtime_app_not_found"
+    assert missing_app.json()["reason"] == "该 Runtime 中不存在当前 Agent，无法更新。"
+    assert missing_app.json()["agent"] == {"appName": "missing-agent"}
+    assert forbidden.status_code == 404
+    assert forbidden.json()["detail"] == "runtime_access_denied"
+    assert no_permission.status_code == 403
+    assert missing_runtime.status_code == 404
+    assert missing_runtime.json()["detail"] == "runtime_not_found"
+
+
+def test_runtime_update_capability_distinguishes_incompatible_and_network_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime = _runtime_with_public_endpoint(_runtime("runtime-1", "developer"))
+    mode = "unsupported"
+
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: runtime,
+    )
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self,
+            _method: str,
+            url: str,
+            **_kwargs: Any,
+        ) -> _RuntimeJsonResponse:
+            if mode == "network":
+                raise httpx.ConnectError("connect failed")
+            if url.endswith("/list-apps"):
+                if mode == "unsupported":
+                    return _RuntimeJsonResponse(
+                        {},
+                        status_code=404,
+                        text="Not Found",
+                    )
+                if mode == "empty":
+                    return _RuntimeJsonResponse([])
+                if mode == "multiple":
+                    return _RuntimeJsonResponse(["selected-agent", "other-agent"])
+                return _RuntimeJsonResponse(["selected-agent"])
+            assert url.endswith("/web/agent-info/selected-agent")
+            assert mode == "agent-unsupported"
+            return _RuntimeJsonResponse({}, status_code=404, text="Not Found")
+
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+    )
+    params = {
+        "runtimeId": runtime.runtime_id,
+        "region": "cn-beijing",
+        "appName": "selected-agent",
+    }
+
+    with TestClient(app) as client:
+        incompatible = client.get(
+            "/web/runtime-update-capability",
+            params=params,
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        mode = "agent-unsupported"
+        agent_unsupported = client.get(
+            "/web/runtime-update-capability",
+            params=params,
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        mode = "empty"
+        no_apps = client.get(
+            "/web/runtime-update-capability",
+            params=params,
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        mode = "multiple"
+        multiple_apps = client.get(
+            "/web/runtime-update-capability",
+            params=params,
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        mode = "network"
+        network_error = client.get(
+            "/web/runtime-update-capability",
+            params=params,
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert incompatible.status_code == 200
+    assert incompatible.json()["canUpdate"] is False
+    assert incompatible.json()["reasonCode"] == "runtime_list_apps_unsupported"
+    assert incompatible.json()["reason"] == (
+        "该 Runtime 不支持 list-apps 接口，无法更新。"
+    )
+    assert agent_unsupported.status_code == 200
+    assert agent_unsupported.json()["canUpdate"] is False
+    assert agent_unsupported.json()["reasonCode"] == ("runtime_agent_info_unsupported")
+    assert agent_unsupported.json()["agent"] == {"appName": "selected-agent"}
+    assert no_apps.status_code == 200
+    assert no_apps.json()["canUpdate"] is False
+    assert no_apps.json()["reasonCode"] == "runtime_no_apps"
+    assert no_apps.json()["reason"] == "该 Runtime 未提供可更新 Agent。"
+    assert multiple_apps.status_code == 200
+    assert multiple_apps.json()["canUpdate"] is False
+    assert multiple_apps.json()["reasonCode"] == "runtime_multiple_apps"
+    assert multiple_apps.json()["reason"] == (
+        "该 Runtime 包含多个 Agent，暂不支持原地更新。"
+    )
+    assert network_error.status_code == 502
+    assert network_error.json()["detail"] == "runtime_json_connect_error"
+
+
 def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
-    runtime = _runtime("runtime-developer", "developer")
+    runtime = _runtime_with_public_endpoint(
+        _runtime("runtime-developer", "developer", managed=False)
+    )
     runtime.role_name = "runtime-role"
     runtime.current_version_number = 3
     captured_config: dict[str, Any] = {}
@@ -540,6 +824,29 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         )
 
     monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self,
+            _method: str,
+            url: str,
+            **_kwargs: Any,
+        ) -> _RuntimeJsonResponse:
+            if url.endswith("/list-apps"):
+                return _RuntimeJsonResponse(["updated-agent"])
+            assert url.endswith("/web/agent-info/updated-agent")
+            return _RuntimeJsonResponse({"name": "updated-agent"})
+
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
     monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
     app = _create_studio_app(
         monkeypatch,
@@ -557,6 +864,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
                 "name": "updated-agent",
                 "description": "Updated\n description 🤖",
                 "runtimeId": runtime.runtime_id,
+                "appName": "updated-agent",
                 "files": [{"path": "app.py", "content": "app = object()\n"}],
                 "config": {"region": "cn-beijing", "projectName": "default"},
             },
@@ -578,3 +886,71 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert cloud["image_tag"] == "veadk-v4"
     assert "runtime_network" not in cloud
     assert captured_config["common"]["description"] == "Updated description"
+
+
+def test_update_deployment_rejects_incompatible_runtime_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime = _runtime_with_public_endpoint(
+        _runtime("runtime-developer", "developer", managed=False)
+    )
+    launched = False
+
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: runtime,
+    )
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self,
+            _method: str,
+            url: str,
+            **_kwargs: Any,
+        ) -> _RuntimeJsonResponse:
+            assert url.endswith("/list-apps")
+            return _RuntimeJsonResponse(["updated-agent", "different-agent"])
+
+    def launch(**_kwargs: Any) -> None:
+        nonlocal launched
+        launched = True
+
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "updated-agent",
+                "runtimeId": runtime.runtime_id,
+                "appName": "updated-agent",
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "该 Runtime 包含多个 Agent，暂不支持原地更新。"
+    )
+    assert launched is False
