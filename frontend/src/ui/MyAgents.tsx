@@ -554,10 +554,7 @@ export function MyAgents({
                 <EmptyMessage.Icon>
                   <AgentTypeIcon type={activeType} />
                 </EmptyMessage.Icon>
-                <EmptyMessage.Title>暂无{activeLabel}</EmptyMessage.Title>
-                <EmptyMessage.Description>
-                  创建一个{activeLabel}，开始使用 AgentKit Session
-                </EmptyMessage.Description>
+                <EmptyMessage.Title>暂无 {activeLabel}</EmptyMessage.Title>
                 {canCreate ? (
                   <EmptyMessage.ActionRow>
                     <Button
