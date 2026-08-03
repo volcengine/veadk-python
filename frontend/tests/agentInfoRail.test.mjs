@@ -182,7 +182,10 @@ test("mixes session capabilities into the existing lists with custom badges", ()
   assert.match(railSource, /skill\.custom && \([\s\S]*?topo-remove-capability/);
   assert.doesNotMatch(railSource, /本会话添加/);
   assert.match(appSource, /getSessionCapabilities\(appName, userId, sessionId\)/);
-  assert.match(appSource, /sessionCapabilities:\s*sessionCapabilities !== null/);
+  assert.match(
+    appSource,
+    /sessionCapabilities:\s*requiresSessionCapabilityRunner\(sessionCapabilities\)/,
+  );
 });
 
 test("offers session-scoped tool and skill controls in the information rail", () => {

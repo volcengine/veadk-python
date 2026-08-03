@@ -333,10 +333,28 @@ const DEPLOYMENT_STEPS = [
   { phase: "publish", label: "发布服务", description: "等待服务就绪并生成访问地址" },
   { phase: "complete", label: "部署完成", description: "智能体已可以正常使用" },
 ] as const;
+function instanceUpdateStep(range: { min: number; max: number }) {
+  return {
+    phase: "update",
+    label: "更新实例配置",
+    description: `将 Runtime 实例数调整为 ${range.min}～${range.max}`,
+  } as const;
+}
 const BUILD_STEP_INDEX = DEPLOYMENT_STEPS.findIndex((step) => step.phase === "build");
 
+function deploymentSteps(task: DeploymentTaskUpdate) {
+  return task.instanceRange
+    ? [
+        ...DEPLOYMENT_STEPS.slice(0, -1),
+        instanceUpdateStep(task.instanceRange),
+        DEPLOYMENT_STEPS[DEPLOYMENT_STEPS.length - 1],
+      ]
+    : DEPLOYMENT_STEPS;
+}
+
 function deploymentStepIndex(task: DeploymentTaskUpdate): number {
-  if (task.status === "success") return DEPLOYMENT_STEPS.length - 1;
+  const steps = deploymentSteps(task);
+  if (task.status === "success") return steps.length - 1;
   const phase = task.phase ?? ({
     准备部署: "prepare",
     构建镜像: "build",
@@ -344,7 +362,7 @@ function deploymentStepIndex(task: DeploymentTaskUpdate): number {
     发布: "publish",
     部署完成: "complete",
   } as Record<string, string>)[task.label];
-  const index = DEPLOYMENT_STEPS.findIndex((step) => step.phase === phase);
+  const index = steps.findIndex((step) => step.phase === phase);
   return index < 0 ? 0 : index;
 }
 
@@ -464,6 +482,7 @@ function DeploymentBuildLog({ task }: { task: DeploymentTaskUpdate }) {
 }
 
 function DeploymentProgressCard({ task }: { task: DeploymentTaskUpdate }) {
+  const steps = deploymentSteps(task);
   const currentIndex = deploymentStepIndex(task);
   const progress = task.status === "success"
     ? 100
@@ -514,7 +533,7 @@ function DeploymentProgressCard({ task }: { task: DeploymentTaskUpdate }) {
       </div>
 
       <ol className="aw-deploy-steps">
-        {DEPLOYMENT_STEPS.map((step, index) => {
+        {steps.map((step, index) => {
           const status = task.status === "success" || index < currentIndex
             ? "done"
             : index === currentIndex

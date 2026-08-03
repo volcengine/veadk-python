@@ -2619,6 +2619,32 @@ def _run_frontend_server(
         )
         client.delete_runtime(_rt.DeleteRuntimeRequest(RuntimeId=runtime_id))
 
+    def _set_agentkit_runtime_instance_range(
+        runtime_id: str,
+        region: str,
+        min_instance: int,
+        max_instance: int,
+    ) -> None:
+        """Set a Runtime instance range and publish the configuration update."""
+        from agentkit.sdk.runtime import types as _rt
+        from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+        ak, sk, token = _resolve_ve_credentials()
+        client = AgentkitRuntimeClient(
+            access_key=ak,
+            secret_key=sk,
+            session_token=token or "",
+            region=region,
+        )
+        client.update_runtime(
+            _rt.UpdateRuntimeRequest(
+                RuntimeId=runtime_id,
+                MinInstance=min_instance,
+                MaxInstance=max_instance,
+                ReleaseEnable=True,
+            )
+        )
+
     def _destroy_deploy_task_runtime(task: dict[str, Any]) -> bool:
         """Destroy a task's Runtime once, if creation has reached that stage."""
         with _deploy_tasks_lock:
@@ -2704,6 +2730,29 @@ def _run_frontend_server(
             raise HTTPException(status_code=400, detail="Agent name is required")
         if not files:
             raise HTTPException(status_code=400, detail="No files provided")
+
+        min_instance = data.get("minInstance", 1)
+        max_instance = data.get("maxInstance", 5)
+        if (
+            isinstance(min_instance, bool)
+            or isinstance(max_instance, bool)
+            or not isinstance(min_instance, int)
+            or not isinstance(max_instance, int)
+            or min_instance < 1
+            or max_instance < 1
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Runtime instance range must use positive integers",
+            )
+        if min_instance > max_instance:
+            raise HTTPException(
+                status_code=400,
+                detail="Runtime minInstance cannot exceed maxInstance",
+            )
+        needs_instance_update = not runtime_id and (
+            min_instance != 1 or max_instance != 5
+        )
 
         region = config.get("region", "cn-beijing")
         project_name = config.get("projectName", "default")
@@ -2896,7 +2945,7 @@ def _run_frontend_server(
         cp_log_stop_event = _threading.Event()
         task_state["cp_log_stop_event"] = cp_log_stop_event
 
-        _PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2}
+        _PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2, "update": 3}
         _CP_WORKSPACE_NAME = "agentkit-cli-workspace"
         _CP_LOG_POLL_INTERVAL = 5.0
 
@@ -3362,6 +3411,31 @@ def _run_frontend_server(
                         _emit(
                             "warning",
                             "云构建使用的 TOS 源码包签名超过 900 秒有效期，自动重试一次。",
+                        )
+                    if (
+                        result is not None
+                        and getattr(result, "success", False)
+                        and needs_instance_update
+                    ):
+                        created_runtime_id = str(task_state.get("runtime_id") or "")
+                        if not created_runtime_id:
+                            raise RuntimeError("Runtime 创建成功，但未返回 Runtime ID")
+                        state["phase"] = "update"
+                        _emit(
+                            "info",
+                            f"正在将 Runtime 实例数调整为 {min_instance}～{max_instance}",
+                            0,
+                        )
+                        _set_agentkit_runtime_instance_range(
+                            created_runtime_id,
+                            region,
+                            min_instance,
+                            max_instance,
+                        )
+                        _emit(
+                            "success",
+                            f"Runtime 实例数已调整为 {min_instance}～{max_instance}",
+                            100,
                         )
                     result_box["result"] = result
                 except Exception as e:
@@ -4177,7 +4251,7 @@ def _run_frontend_server(
             auth_type=auth_type,
         )
         body = await request.body()
-        if request.method == "POST" and path == "run_sse":
+        if request.method == "POST" and path in {"run_sse", "harness/run_sse"}:
             try:
                 payload = json.loads(body)
             except json.JSONDecodeError as error:
