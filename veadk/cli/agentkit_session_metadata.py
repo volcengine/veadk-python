@@ -23,6 +23,7 @@ from pydantic import Field
 
 SESSION_DISPLAY_NAME_MAX_LENGTH = 40
 SESSION_DISPLAY_NAME_METADATA_KEY = "veadk_display_name"
+SESSION_CREATOR_NAME_METADATA_KEY = "veadk_creator_name"
 SESSION_USERNAME_METADATA_KEY = "Username"
 
 
@@ -76,6 +77,7 @@ def build_create_session_request(
     user_session_id: str,
     display_name: str,
     username: str = "",
+    creator_name: str = "",
 ) -> Any:
     """Build a native or compatibility CreateSession request."""
     metadata = []
@@ -93,6 +95,14 @@ def build_create_session_request(
                 Key=SESSION_USERNAME_METADATA_KEY,
                 Type="String",
                 Value=username,
+            )
+        )
+    if creator_name:
+        metadata.append(
+            _SessionMetadata(
+                Key=SESSION_CREATOR_NAME_METADATA_KEY,
+                Type="String",
+                Value=creator_name,
             )
         )
     request_type: Any = tools_types.CreateSessionRequest
@@ -198,4 +208,21 @@ def session_username(value: Any) -> str:
             username = getattr(item, "value", "")
         if key == SESSION_USERNAME_METADATA_KEY and isinstance(username, str):
             return username.strip()
+    return ""
+
+
+def session_creator_name(value: Any) -> str:
+    """Extract the human-readable creator name from one Session response."""
+    metadata = getattr(value, "metadata", None)
+    if not isinstance(metadata, (list, tuple)):
+        return ""
+    for item in metadata:
+        if isinstance(item, dict):
+            key = item.get("key") or item.get("Key")
+            creator_name = item.get("value") or item.get("Value")
+        else:
+            key = getattr(item, "key", "")
+            creator_name = getattr(item, "value", "")
+        if key == SESSION_CREATOR_NAME_METADATA_KEY and isinstance(creator_name, str):
+            return creator_name.strip()
     return ""
