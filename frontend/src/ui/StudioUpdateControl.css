@@ -93,7 +93,8 @@
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
   column-gap: 10px;
-  width: 500px;
+  width: min(500px, calc(100vw - 32px));
+  min-width: 0;
 }
 
 .studio-update-dialog > .studio-update-dialog-mark {
@@ -110,6 +111,17 @@
 
 .studio-update-dialog > :not(.studio-update-dialog-mark, .confirm-title) {
   grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.studio-update-dialog .confirm-text,
+.studio-update-dialog .studio-update-changelog li,
+.studio-update-dialog .studio-update-changelog p,
+.studio-update-dialog .studio-update-error,
+.studio-update-dialog .studio-update-progress small,
+.studio-update-dialog .studio-update-progress-note,
+.studio-update-dialog .studio-update-console-link {
+  overflow-wrap: anywhere;
 }
 
 .studio-update-field {
@@ -171,6 +183,14 @@
   stroke-linecap: round;
   stroke-linejoin: round;
   transition: transform 0.16s ease;
+}
+
+.studio-update-version-trigger > span,
+.studio-update-version-option > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .studio-update-version-trigger[aria-expanded="true"] > svg {
@@ -586,10 +606,4 @@
   color: hsl(var(--muted-foreground));
   font-size: 11px;
   line-height: 1.55;
-}
-
-@media (max-width: 720px) {
-  .studio-update-dialog {
-    width: calc(100vw - 32px);
-  }
 }

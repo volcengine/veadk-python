@@ -118,6 +118,7 @@ def mount_media_routes(app: FastAPI, service: MediaService) -> None:
         return RedirectResponse(signed_url, status_code=307)
 
     @app.delete("/web/media/{app_name}/{user_id}/{session_id}/{media_id}")
+    @app.post("/web/media/{app_name}/{user_id}/{session_id}/{media_id}/delete")
     async def delete_media(
         app_name: str, user_id: str, session_id: str, media_id: str
     ) -> None:
@@ -126,6 +127,7 @@ def mount_media_routes(app: FastAPI, service: MediaService) -> None:
         )
 
     @app.delete("/web/media/{app_name}/{user_id}/{session_id}")
+    @app.post("/web/media/{app_name}/{user_id}/{session_id}/delete")
     async def delete_session_media(
         app_name: str, user_id: str, session_id: str
     ) -> None:

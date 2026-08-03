@@ -66,3 +66,51 @@ test("dims the input and shows a spinner while generation is active", () => {
   assert.match(createStyles, /\.cw-ai-orb\s*\{[\s\S]*?animation: cw-ai-orb-spin 720ms linear infinite/);
   assert.match(createStyles, /@keyframes cw-ai-orb-spin/);
 });
+
+test("names the planner model and preserves generation errors verbatim", () => {
+  assert.match(
+    createSource,
+    /placeholder="描述目标，使用 doubao-seed-2-0-lite-260428 模型一键生成配置"/,
+  );
+  assert.match(
+    createSource,
+    /setAiErrorDialog\(\s*error instanceof Error \? error\.message : String\(error\),?\s*\)/,
+  );
+  assert.doesNotMatch(
+    createSource,
+    /error instanceof Error \? error\.message : "生成 Agent 配置失败"/,
+  );
+});
+
+test("validates short generation requirements beside the input before requesting", () => {
+  const handler = createSource.slice(
+    createSource.indexOf("const handleGenerateDraft"),
+    createSource.indexOf("const addCanvasStep"),
+  );
+
+  assert.match(createSource, /const GENERATED_AGENT_REQUIREMENT_MIN_LENGTH = 4/);
+  assert.match(
+    handler,
+    /if \(requirement\.length < GENERATED_AGENT_REQUIREMENT_MIN_LENGTH\) return/,
+  );
+  assert.match(
+    createSource,
+    /const aiRequirementError =[\s\S]*?"请至少输入 4 个字符。"/,
+  );
+  assert.ok(
+    handler.indexOf(
+      "requirement.length < GENERATED_AGENT_REQUIREMENT_MIN_LENGTH",
+    ) <
+      handler.indexOf("generateAgentDraftFromRequirement(requirement)"),
+  );
+  assert.match(createSource, /aria-invalid=\{Boolean\(aiRequirementError\)\}/);
+  assert.match(
+    createSource,
+    /aria-describedby=\{\s*aiRequirementError \? "ai-requirement-error" : undefined\s*\}/,
+  );
+  assert.match(
+    createSource,
+    /id="ai-requirement-error"[\s\S]*?role="alert"[\s\S]*?\{aiRequirementError\}/,
+  );
+  assert.match(createStyles, /\.cw-ai-requirement-error\s*\{/);
+});

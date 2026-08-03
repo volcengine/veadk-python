@@ -357,12 +357,22 @@ test("uses connected Runtime state only for the card action", () => {
   assert.match(pageSource, /agent\.runtime\?\.runtimeId === connectedRuntimeId/);
   assert.match(pageSource, /const connectedIndex = availableAgents\.findIndex/);
   assert.match(pageSource, /availableAgents\[connectedIndex\][\s\S]*?availableAgents\.slice\(0, connectedIndex\)/);
-  assert.match(appSource, /const connectedRuntimeId =[\s\S]*?currentRuntime\?\.runtimeId \?\?[\s\S]*?connections\.reduce/);
+  assert.match(appSource, /const connectedRuntimeId = currentRuntime\?\.runtimeId \?\? ""/);
+  assert.doesNotMatch(
+    appSource,
+    /const connectedRuntimeId =[\s\S]*?connections\.reduce/,
+  );
   assert.match(appSource, /connectedRuntimeId=\{connectedRuntimeId\}/);
 });
 
-test("authenticated users land on the Agent page by default", () => {
-  assert.match(appSource, /if \(id\.status === "authenticated"\)[\s\S]*?setMyAgents\(true\)/);
-  assert.match(appSource, /function onUsername[\s\S]*?startNewChat\(\);[\s\S]*?setMyAgents\(true\)/);
-  assert.match(appSource, /defaultViewAppliedRef\.current \|\| myAgents/);
+test("authenticated users land on a new chat without a selected Agent", () => {
+  assert.match(
+    appSource,
+    /if \(id\.status === "authenticated"\)[\s\S]*?setAppName\(""\)[\s\S]*?setMyAgents\(false\)/,
+  );
+  assert.match(
+    appSource,
+    /function onUsername[\s\S]*?startNewChat\(\);[\s\S]*?setAppName\(""\)[\s\S]*?setMyAgents\(false\)/,
+  );
+  assert.doesNotMatch(appSource, /defaultViewAppliedRef/);
 });

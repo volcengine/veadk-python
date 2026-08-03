@@ -86,6 +86,21 @@ Traceback (most recent call last):"""
     assert snapshot["truncated"] is True
 
 
+def test_sanitize_build_log_snapshot_removes_camel_case_credentials() -> None:
+    text = """requesting temporary upload credentials
+Resp {"sessionToken":"temporary-session-token","accessKeyId":"temporary-access-key","secretAccessKey":"temporary-secret-key"}
+credentials received"""
+
+    snapshot = _sanitize_build_log_snapshot(text)
+
+    assert "temporary-session-token" not in snapshot["text"]
+    assert "temporary-access-key" not in snapshot["text"]
+    assert "temporary-secret-key" not in snapshot["text"]
+    assert "requesting temporary upload credentials" in snapshot["text"]
+    assert "credentials received" in snapshot["text"]
+    assert snapshot["truncated"] is True
+
+
 def test_cp_metadata_from_reporter_message_extracts_pipeline_and_run_ids() -> None:
     assert _cp_metadata_from_reporter_message(
         "Pipeline created successfully: agentkit-cli-demo-abcd (ID: pl-123)"

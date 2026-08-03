@@ -107,7 +107,10 @@ test("reveals the refreshed welcome heading and placeholder after Agent connecti
     appSource,
     /key=\{`welcome-\$\{newChatCapabilities\.agentId \?\? appName\}`\}/,
   );
-  assert.match(appSource, /<NewChatFeatureNotice \/>/);
+  assert.match(
+    appSource,
+    /<NewChatFeatureNotice canUpdate=\{access\.role === "admin"\} \/>/,
+  );
   assert.match(featureNoticeSource, /className="welcome-feature-pill"[\s\S]*?焕然一新[\s\S]*?查看新特性/);
   assert.match(stylesSource, /--feature-link:\s*208 100% 47\.45%/);
   assert.match(stylesSource, /\.welcome-primary\s*\{[\s\S]*?gap:\s*16px;/);

@@ -116,6 +116,7 @@ import "./CustomCreate.css";
 const MarkdownPromptEditor = lazy(() => import("./MarkdownPromptEditor"));
 
 const DEBUG_TEST_RUN_STORAGE_KEY = "veadk.generatedAgentTestRuns";
+const GENERATED_AGENT_REQUIREMENT_MIN_LENGTH = 4;
 
 function readStoredDebugTestRunIds(): string[] {
   if (typeof window === "undefined") return [];
@@ -2381,6 +2382,12 @@ export function CustomCreate({
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiGenerated, setAiGenerated] = useState(false);
   const [aiErrorDialog, setAiErrorDialog] = useState<string | null>(null);
+  const trimmedAiRequirement = aiRequirement.trim();
+  const aiRequirementError =
+    trimmedAiRequirement.length > 0 &&
+    trimmedAiRequirement.length < GENERATED_AGENT_REQUIREMENT_MIN_LENGTH
+      ? "请至少输入 4 个字符。"
+      : "";
   const initialDraftSnapshotRef = useRef(JSON.stringify(draft));
   const lastNotifiedDraftSnapshotRef = useRef(initialDraftSnapshotRef.current);
   const draftSnapshot = JSON.stringify(draft);
@@ -2595,6 +2602,7 @@ export function CustomCreate({
   const handleGenerateDraft = async () => {
     const requirement = aiRequirement.trim();
     if (!requirement || aiGenerating) return;
+    if (requirement.length < GENERATED_AGENT_REQUIREMENT_MIN_LENGTH) return;
     if (
       draftDirty &&
       !window.confirm("生成的新配置会替换当前画布和属性，确定继续吗？")
@@ -2616,7 +2624,7 @@ export function CustomCreate({
       setAiGenerated(true);
     } catch (error) {
       setAiErrorDialog(
-        error instanceof Error ? error.message : "生成 Agent 配置失败",
+        error instanceof Error ? error.message : String(error),
       );
     } finally {
       setAiGenerating(false);
@@ -3213,7 +3221,11 @@ export function CustomCreate({
                 value={aiRequirement}
                 maxLength={8000}
                 disabled={aiGenerating}
-                placeholder="输入您的目标"
+                placeholder="描述目标，使用 doubao-seed-2-0-lite-260428 模型一键生成配置"
+                aria-invalid={Boolean(aiRequirementError)}
+                aria-describedby={
+                  aiRequirementError ? "ai-requirement-error" : undefined
+                }
                 onChange={(event) => setAiRequirement(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
@@ -3224,7 +3236,11 @@ export function CustomCreate({
               />
               <button
                 type="submit"
-                disabled={aiGenerating || !aiRequirement.trim()}
+                disabled={
+                  aiGenerating ||
+                  !trimmedAiRequirement ||
+                  Boolean(aiRequirementError)
+                }
                 aria-label={aiGenerating ? "正在智能生成" : "智能生成"}
               >
                 {aiGenerating ? (
@@ -3236,6 +3252,15 @@ export function CustomCreate({
                 )}
               </button>
             </form>
+            {aiRequirementError && (
+              <p
+                className="cw-ai-requirement-error"
+                id="ai-requirement-error"
+                role="alert"
+              >
+                {aiRequirementError}
+              </p>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

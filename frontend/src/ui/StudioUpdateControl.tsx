@@ -164,7 +164,11 @@ function StudioUpdateLog({
   );
 }
 
-export function StudioUpdateControl() {
+export function StudioUpdateControl({
+  variant = "default",
+}: {
+  variant?: "default" | "feature-link";
+}) {
   const [initialPending] = useState<PendingStudioUpdate | null>(loadPendingUpdate);
   const [status, setStatus] = useState<StudioUpdateStatus | null>(null);
   const [phase, setPhase] = useState<UpdatePhase>(
@@ -352,7 +356,11 @@ export function StudioUpdateControl() {
     <>
       <button
         type="button"
-        className={`studio-update-trigger is-${phase}`}
+        className={
+          variant === "feature-link"
+            ? "welcome-feature-link studio-update-trigger--feature"
+            : `studio-update-trigger is-${phase}`
+        }
         title={
           phase === "submitting"
             ? "正在更新 Studio"
@@ -372,13 +380,17 @@ export function StudioUpdateControl() {
           }
         }}
       >
-        <StudioUpdateIcon className="studio-update-icon" />
+        {variant !== "feature-link" && (
+          <StudioUpdateIcon className="studio-update-icon" />
+        )}
         {phase === "submitting" ? (
           <TextShimmer as="span">正在更新</TextShimmer>
         ) : phase === "published" ? (
           <span>刷新使用新版</span>
         ) : phase === "error" ? (
           <span>更新失败</span>
+        ) : variant === "feature-link" ? (
+          <span>立即更新</span>
         ) : (
           <span>有新版更新</span>
         )}

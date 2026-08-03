@@ -29,6 +29,21 @@ test("matches conversation copy to thinking status typography", () => {
   assert.match(stylesSource, /\.md\s*\{[^}]*line-height:\s*1\.65/);
 });
 
+test("aligns the conversation composer with the transcript content column", () => {
+  assert.match(
+    stylesSource,
+    /\.conversation-composer-slot\s*\{[^}]*padding:\s*6px 16px 18px/,
+  );
+  assert.match(
+    stylesSource,
+    /\.conversation-composer-slot > \.composer-slot > \.composer\s*\{[^}]*padding:\s*0/,
+  );
+  assert.match(
+    appSource,
+    /<div className="conversation-composer-slot">\s*\{composer\}\s*<\/div>/,
+  );
+});
+
 test("smoothly positions new turns and follows streamed output until interrupted", () => {
   assert.match(
     appSource,
@@ -87,6 +102,19 @@ test("keeps thinking and tool status copy legible below the answer hierarchy", (
   assert.match(stylesSource, /\.think-body\s*\{[^}]*margin:\s*0/);
   assert.match(stylesSource, /\.think-body\s*\{[^}]*padding:\s*0/);
   assert.match(stylesSource, /\.think-body\s*\{[^}]*border-left:\s*0/);
+});
+
+test("collapses untouched thinking as soon as answer text starts streaming", () => {
+  assert.match(blocksSource, /answerStarted\?: boolean/);
+  assert.match(
+    blocksSource,
+    /if \(!touched\.current\) setOpen\(!\(done \|\| answerStarted\)\)/,
+  );
+  assert.match(
+    blocksSource,
+    /blocks\.slice\(i \+ 1\)\.some\([\s\S]*?block\.kind === "text"[\s\S]*?block\.text\.trim\(\)/,
+  );
+  assert.match(blocksSource, /answerStarted=\{answerStarted\}/);
 });
 
 test("shows session metadata only after the conversation starts", () => {

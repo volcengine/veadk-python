@@ -51,6 +51,8 @@ test("shows Agent tools, skills, and a fullscreen execution canvas", () => {
   assert.match(railSource, /className="topo-module-card topo-tools-card"/);
   assert.match(railSource, /className="topo-module-card topo-skills-card"/);
   assert.match(railSource, /className="topo-module-card topo-topology" aria-label="Agent 画布"/);
+  assert.match(railSource, /<ModuleTitle title="结构拓扑" count=\{totalNodes\(graph\)\} \/>/);
+  assert.doesNotMatch(railSource, /<ModuleTitle title="画布"/);
   assert.match(
     railSource,
     /<AgentBuildCanvas[\s\S]*?direction="horizontal"[\s\S]*?readOnly[\s\S]*?interactivePreview/,

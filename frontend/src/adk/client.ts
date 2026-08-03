@@ -304,8 +304,11 @@ async function apiFetch(
   ep: AdkEndpoint = {},
   timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
 ): Promise<Response> {
+  const runtimeMethodOverride =
+    Boolean(ep.runtimeId) && String(init.method ?? "GET").toUpperCase() === "DELETE";
   const baseOpts = {
     ...init,
+    ...(runtimeMethodOverride ? { method: "POST" } : {}),
     headers: withLocalUser(init.headers),
   };
   const send = () => {
@@ -317,6 +320,7 @@ async function apiFetch(
       const runtimeParams = new URLSearchParams();
       if (ep.region) runtimeParams.set("region", ep.region);
       if (ep.retryProbe) runtimeParams.set("probe_retry", "connect");
+      if (runtimeMethodOverride) runtimeParams.set("_method", "DELETE");
       const rq = runtimeParams.toString()
         ? `${path.includes("?") ? "&" : "?"}${runtimeParams.toString()}`
         : "";
@@ -1005,8 +1009,8 @@ export async function deleteSessionMedia(
   sessionId: string,
 ): Promise<void> {
   const { app } = resolve(appName);
-  const path = `/web/media/${encodeURIComponent(app)}/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}`;
-  const res = await apiFetch(path, { method: "DELETE" });
+  const path = `/web/media/${encodeURIComponent(app)}/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}/delete`;
+  const res = await apiFetch(path, { method: "POST" });
   if (!res.ok && res.status !== 404) {
     throw new Error(await httpErrorMessage(res, "media cleanup failed"));
   }
@@ -1034,7 +1038,7 @@ export async function deleteMedia(appName: string, uri: string): Promise<void> {
   const path = mediaApiPath(uri);
   if (!path) throw new Error("Invalid VeADK media URI");
   void appName;
-  const res = await apiFetch(path, { method: "DELETE" });
+  const res = await apiFetch(`${path}/delete`, { method: "POST" });
   if (!res.ok && res.status !== 404) {
     throw new Error(await httpErrorMessage(res, "media cleanup failed"));
   }

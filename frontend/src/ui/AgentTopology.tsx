@@ -348,7 +348,7 @@ export function AgentInfoPanel({
 
         <section className="topo-module-card topo-topology" aria-label="Agent 画布">
           <div className="topo-canvas-heading">
-            <ModuleTitle title="画布" count={totalNodes(graph)} />
+            <ModuleTitle title="结构拓扑" count={totalNodes(graph)} />
             <button
               ref={expandCanvasRef}
               type="button"
