@@ -42,6 +42,7 @@ from urllib.parse import urlparse
 import click
 from pydantic import BaseModel, Field
 
+from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
 from veadk.utils.logger import get_logger
 
@@ -2631,12 +2632,20 @@ def _run_frontend_server(
         existing_runtime = None
         if runtime_id:
             try:
-                existing_runtime = _authorized_runtime(
+                (
+                    update_capability,
+                    existing_runtime,
+                ) = await _runtime_update_capability_details(
                     request,
-                    runtime_id,
-                    region,
-                    managed_only=True,
+                    runtime_id=runtime_id,
+                    region=region,
+                    app_name=str(data.get("appName") or agent_name).strip(),
                 )
+                if not update_capability["canUpdate"]:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=update_capability["reason"],
+                    )
             except HTTPException:
                 raise
             except Exception as e:
@@ -4519,7 +4528,8 @@ def _run_frontend_server(
         method: str,
         path: str,
         payload: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+        expected_type: type = dict,
+    ) -> Any:
         """Call one authorized Runtime JSON endpoint from the Studio server."""
         endpoint, apikey, auth_type, endpoint_network_type = _resolve_runtime_conn(
             runtime_id,
@@ -4635,9 +4645,199 @@ def _run_frontend_server(
                 "Runtime returned a non-JSON response "
                 f"(HTTP {response.status_code}, Content-Type: {content_type})"
             ) from error
-        if not isinstance(data, dict):
+        if not isinstance(data, expected_type):
             raise RuntimeError("Runtime returned an invalid JSON response")
         return data
+
+    def _runtime_update_payload(runtime: Any, region: str) -> dict[str, Any]:
+        tags = _runtime_tags(runtime)
+        return {
+            "runtimeId": str(getattr(runtime, "runtime_id", "") or ""),
+            "name": str(getattr(runtime, "name", "") or ""),
+            "status": str(getattr(runtime, "status", "") or ""),
+            "region": region,
+            "currentVersion": getattr(runtime, "current_version_number", None),
+            "managed": tags.get("veadk:managed") == "true",
+        }
+
+    def _runtime_update_result(
+        runtime: Any,
+        runtime_payload: dict[str, Any],
+        app_name: str,
+        *,
+        can_update: bool,
+        reason: str = "",
+        reason_code: str = "",
+        agent: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], Any]:
+        return (
+            {
+                "canUpdate": can_update,
+                "reason": reason,
+                "reasonCode": reason_code,
+                "runtime": runtime_payload,
+                "agent": {**(agent or {}), "appName": app_name},
+            },
+            runtime,
+        )
+
+    async def _runtime_update_capability_details(
+        request: Request,
+        *,
+        runtime_id: str,
+        region: str,
+        app_name: str,
+    ) -> tuple[dict[str, Any], Any]:
+        try:
+            runtime = _authorized_runtime(
+                request,
+                runtime_id,
+                region,
+                coded_access_error=True,
+            )
+        except HTTPException:
+            raise
+        except Exception as error:
+            if is_agentkit_resource_not_found(error):
+                raise HTTPException(
+                    status_code=404,
+                    detail="runtime_not_found",
+                ) from error
+            logger.error(
+                "resolve runtime update capability failed runtime_id=%s region=%s",
+                runtime_id,
+                region,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="runtime_lookup_failed",
+            ) from error
+
+        runtime_payload = _runtime_update_payload(runtime, region)
+
+        try:
+            apps = await _runtime_json_request(
+                request,
+                runtime=runtime,
+                runtime_id=runtime_id,
+                region=region,
+                method="GET",
+                path="list-apps",
+                expected_type=list,
+            )
+        except HTTPException as error:
+            if error.status_code != 404:
+                raise
+            return _runtime_update_result(
+                runtime,
+                runtime_payload,
+                app_name,
+                can_update=False,
+                reason="该 Runtime 不支持 list-apps 接口，无法更新。",
+                reason_code="runtime_list_apps_unsupported",
+            )
+        except RuntimeError:
+            return _runtime_update_result(
+                runtime,
+                runtime_payload,
+                app_name,
+                can_update=False,
+                reason="该 Runtime 的 list-apps 返回格式不兼容，无法更新。",
+                reason_code="runtime_list_apps_invalid",
+            )
+
+        if not all(isinstance(app, str) and app for app in apps):
+            return _runtime_update_result(
+                runtime,
+                runtime_payload,
+                app_name,
+                can_update=False,
+                reason="该 Runtime 的 list-apps 返回格式不兼容，无法更新。",
+                reason_code="runtime_list_apps_invalid",
+            )
+        if not apps:
+            return _runtime_update_result(
+                runtime,
+                runtime_payload,
+                app_name,
+                can_update=False,
+                reason="该 Runtime 未提供可更新 Agent。",
+                reason_code="runtime_no_apps",
+            )
+        if len(apps) > 1:
+            return _runtime_update_result(
+                runtime,
+                runtime_payload,
+                app_name,
+                can_update=False,
+                reason="该 Runtime 包含多个 Agent，暂不支持原地更新。",
+                reason_code="runtime_multiple_apps",
+            )
+        if app_name not in apps:
+            return _runtime_update_result(
+                runtime,
+                runtime_payload,
+                app_name,
+                can_update=False,
+                reason="该 Runtime 中不存在当前 Agent，无法更新。",
+                reason_code="runtime_app_not_found",
+            )
+
+        agent_info_path = f"web/agent-info/{quote(app_name, safe='')}"
+        try:
+            agent = await _runtime_json_request(
+                request,
+                runtime=runtime,
+                runtime_id=runtime_id,
+                region=region,
+                method="GET",
+                path=agent_info_path,
+            )
+        except HTTPException as error:
+            if error.status_code != 404:
+                raise
+            return _runtime_update_result(
+                runtime,
+                runtime_payload,
+                app_name,
+                can_update=False,
+                reason="该 Runtime 不支持 Agent 信息接口，无法更新。",
+                reason_code="runtime_agent_info_unsupported",
+            )
+        except RuntimeError:
+            return _runtime_update_result(
+                runtime,
+                runtime_payload,
+                app_name,
+                can_update=False,
+                reason="该 Runtime 的 Agent 信息返回格式不兼容，无法更新。",
+                reason_code="runtime_agent_info_invalid",
+            )
+
+        return _runtime_update_result(
+            runtime,
+            runtime_payload,
+            app_name,
+            can_update=True,
+            agent=agent,
+        )
+
+    @app.get("/web/runtime-update-capability")
+    async def _web_runtime_update_capability(
+        request: Request,
+        runtimeId: str = Query(..., min_length=1),
+        appName: str = Query(..., min_length=1),
+        region: str = Query(default="cn-beijing", min_length=1),
+    ) -> dict[str, Any]:
+        _require_agent_management(request)
+        capability, _runtime = await _runtime_update_capability_details(
+            request,
+            runtime_id=runtimeId,
+            region=region,
+            app_name=appName,
+        )
+        return capability
 
     @app.post("/web/evaluation/feedback")
     async def _web_message_feedback(

@@ -250,7 +250,7 @@ test("runtime update deployments stay on the existing agent row", () => {
   );
   assert.match(
     workspaceSource,
-    /selectedAgentUpdateDraft[\s\S]*?onEditDraft\?\.\(selectedAgentUpdateDraft\)/,
+    /selectedAgentUpdateDraft[\s\S]*?onEditDraft\?\.\(\{[\s\S]*?deploymentTarget:\s*selectedUpdateTarget/,
   );
   assert.match(
     workspaceSource,
@@ -322,15 +322,43 @@ test("runtime refresh preserves agent order and detail loading uses an overlay",
     /className="aw-detail-loading"[\s\S]*?className="loading-gap-spinner"/,
   );
   assert.match(workspaceSource, /正在加载智能体/);
-  assert.match(
-    workspaceSource,
-    /!canUpdate \|\| \(!loadingAgentInfo && !selectedAgentInfo\)/,
-  );
-  assert.doesNotMatch(
-    workspaceSource,
-    /!canUpdate \|\| loadingAgentInfo \|\| !selectedAgentInfo/,
-  );
+  assert.match(workspaceSource, /const updateBlockedReason = selectedDraft/);
+  assert.match(workspaceSource, /updateCapabilityLoading[\s\S]*?正在检查 Runtime 更新能力/);
   assert.match(workspaceStyles, /\.aw-detail-loading\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?inset:\s*0;/);
+});
+
+test("runtime updates use the Agent selected in management instead of the active chat connection", () => {
+  assert.match(clientSource, /export interface RuntimeUpdateCapability/);
+  assert.match(clientSource, /agent\?:\s*\{[\s\S]*?\}\s*\| null/);
+  assert.match(clientSource, /export async function getRuntimeUpdateCapability/);
+  assert.match(clientSource, /\/web\/runtime-update-capability\?\$\{params\.toString\(\)\}/);
+  assert.match(workspaceSource, /getRuntimeUpdateCapability\(\{[\s\S]*?runtimeId,[\s\S]*?region,[\s\S]*?appName/);
+  assert.match(workspaceSource, /onUpdateAgent: \(draft: AgentDraft, capability: RuntimeUpdateCapability\) => void/);
+  assert.match(workspaceSource, /selectedUpdateCapability\.agent\?\.draft \?\? draft,[\s\S]*?selectedUpdateCapability/);
+  assert.match(clientSource, /appName:\s*opts\?\.appName/);
+  assert.match(customCreateSource, /appName:\s*deploymentTarget\?\.appName/);
+
+  const handlerStart = appSource.indexOf("onUpdateAgent={(nextDraft, capability) =>");
+  const handlerEnd = appSource.indexOf("onEditDraft=", handlerStart);
+  assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
+  const handler = appSource.slice(handlerStart, handlerEnd);
+  assert.doesNotMatch(handler, /currentConn/);
+  assert.match(handler, /capability\.runtime\.runtimeId/);
+  assert.match(handler, /capability\.runtime\.region/);
+  assert.match(handler, /capability\.runtime\.currentVersion/);
+});
+
+test("runtime update capability checks ignore aborted and stale selections", () => {
+  assert.match(workspaceSource, /const updateCapabilityRequestRef = useRef\(0\)/);
+  assert.match(workspaceSource, /const controller = new AbortController\(\)/);
+  assert.match(workspaceSource, /requestId !== updateCapabilityRequestRef\.current/);
+  assert.match(workspaceSource, /return \(\) => controller\.abort\(\)/);
+  assert.match(workspaceSource, /const updateCapabilityRequestKey = JSON\.stringify\(\[/);
+  assert.match(workspaceSource, /updateCapability\?\.requestKey === updateCapabilityRequestKey/);
+  assert.match(workspaceSource, /value\.runtime\.region !== region/);
+  assert.match(workspaceSource, /value\.canUpdate && value\.agent\?\.appName !== appName/);
+  assert.match(workspaceSource, /selectedUpdateCapability\.agent\?\.appName/);
+  assert.match(workspaceSource, /title=\{updateBlockedReason \|\| undefined\}/);
 });
 
 test("workspace keeps agent deletion in selection mode and the floating detail actions", () => {

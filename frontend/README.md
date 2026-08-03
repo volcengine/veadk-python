@@ -64,7 +64,10 @@ server that `veadk frontend` launches — no separate backend.
   the info action opens a tabbed Agent/Runtime panel. The Agent directory loads
   one selected region at a time, defaults to Beijing, and carries the Runtime's
   region through details, connection, update, evaluation, and deletion. Studio
-  distinguishes its
+  enables in-place updates for any authorized single-Agent Runtime that exposes
+  compatible `list-apps` and `web/agent-info` endpoints, regardless of whether
+  Studio originally deployed it; multi-Agent Runtimes are rejected because an
+  AgentKit update replaces the whole Runtime package. Studio distinguishes its
   own ownership checks from Agent Server compatibility and authentication
   failures when a connection cannot be established. Long descriptions, names,
   component summaries, IDs, and environment values stay inside the scrollable panel.

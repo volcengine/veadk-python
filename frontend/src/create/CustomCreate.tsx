@@ -2344,6 +2344,7 @@ interface CustomCreateProps extends CreateModeProps {
     runtimeId: string;
     name: string;
     region: string;
+    appName?: string;
     currentVersion?: number | null;
   };
   /** Region selected before entering the create flow. */
@@ -3131,6 +3132,7 @@ export function CustomCreate({
         ...options,
         onStage,
         runtimeId: deploymentTarget?.runtimeId,
+        appName: deploymentTarget?.appName,
         description: draft.description,
       },
     );
