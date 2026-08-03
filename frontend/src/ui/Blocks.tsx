@@ -146,20 +146,22 @@ function loadSkillLabel(name: string, args: unknown): string | undefined {
 export function ThinkingBlock({
   text,
   done,
+  answerStarted = false,
   streaming = false,
   onStreamFrame,
 }: {
   text: string;
   done: boolean;
+  answerStarted?: boolean;
   streaming?: boolean;
   onStreamFrame?: () => void;
 }) {
-  // Expanded while thinking; auto-collapses when done. A manual toggle wins.
-  const [open, setOpen] = useState(!done);
+  // Expanded while thinking; auto-collapses when the answer starts. A manual toggle wins.
+  const [open, setOpen] = useState(!(done || answerStarted));
   const touched = useRef(false);
   useEffect(() => {
-    if (!touched.current) setOpen(!done);
-  }, [done]);
+    if (!touched.current) setOpen(!(done || answerStarted));
+  }, [answerStarted, done]);
   const toggle = () => {
     touched.current = true;
     setOpen((o) => !o);
@@ -526,16 +528,21 @@ export function Blocks({
     <>
       {blocks.map((b, i) => {
         switch (b.kind) {
-          case "thinking":
+          case "thinking": {
+            const answerStarted = blocks.slice(i + 1).some(
+              (block) => block.kind === "text" && Boolean(block.text.trim()),
+            );
             return (
               <ThinkingBlock
                 key={i}
                 text={b.text}
                 done={b.done}
+                answerStarted={answerStarted}
                 streaming={streaming}
                 onStreamFrame={onStreamFrame}
               />
             );
+          }
           case "text": {
             const t = b.text.replace(/^\s+/, "");
             return t ? (

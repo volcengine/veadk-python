@@ -197,6 +197,8 @@
 }
 .cw-ai-compose-entry {
   min-width: 0;
+  display: grid;
+  gap: 6px;
 }
 .cw-ai-compose-form {
   min-width: 0;
@@ -272,6 +274,13 @@
 .cw-ai-compose-form button:disabled {
   cursor: not-allowed;
   opacity: 0.34;
+}
+.cw-ai-requirement-error {
+  margin: 0;
+  padding: 0 16px;
+  color: hsl(var(--destructive));
+  font-size: 12px;
+  line-height: 18px;
 }
 .cw-ai-compose.is-generating .cw-ai-compose-form button:disabled {
   width: 34px;

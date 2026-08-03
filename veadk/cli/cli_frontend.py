@@ -63,6 +63,12 @@ _SENSITIVE_LOG_PATTERNS = (
     re.compile(r"authorization\s*[:=]", re.IGNORECASE),
     re.compile(r"\bbearer\s+\S+", re.IGNORECASE),
     re.compile(
+        r'"?(?:accessKeyId|secretAccessKey|apiKey|clientSecret|privateKey|'
+        r"accessToken|sessionToken|securityToken|refreshToken|idToken|jwtToken|"
+        r'crToken|password|credential|signature)"?\s*[:=]',
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"(?:access[_ -]?key(?:[_ -]?id)?|secret[_ -]?key|api[_ -]?key|"
         r"client[_ -]?secret|private[_ -]?key|(?:access|session|security|refresh|"
         r"id|jwt|cr)[_ -]?token|password|credential|signature)"
@@ -4031,6 +4037,12 @@ def _run_frontend_server(
 
         The browser never sees an API key. Streams the response so /run_sse works.
         """
+        method_override = request.query_params.get("_method", "").upper()
+        if method_override and not (
+            request.method == "POST" and method_override == "DELETE"
+        ):
+            raise HTTPException(status_code=400, detail="invalid method override")
+        upstream_method = method_override or request.method
         region = request.query_params.get("region", "cn-beijing")
         try:
             runtime = _authorized_runtime(
@@ -4054,7 +4066,7 @@ def _run_frontend_server(
         qs = {
             k: v
             for k, v in request.query_params.items()
-            if k not in {"region", "probe_retry"}
+            if k not in {"region", "probe_retry", "_method"}
         }
         target = f"{endpoint.rstrip('/')}/{path}"
         target_host = _runtime_endpoint_host(target)
@@ -4063,7 +4075,7 @@ def _run_frontend_server(
             "path=%s target_host=%s query_keys=%s auth_type=%s",
             runtime_id,
             region,
-            request.method,
+            upstream_method,
             path,
             target_host,
             sorted(qs.keys()),
@@ -4102,7 +4114,7 @@ def _run_frontend_server(
 
         from fastapi.responses import StreamingResponse
 
-        is_probe_request = _runtime_proxy_should_retry_probe(request.method, path)
+        is_probe_request = _runtime_proxy_should_retry_probe(upstream_method, path)
         max_attempts = _runtime_proxy_probe_attempts(
             request,
             path,
@@ -4115,7 +4127,7 @@ def _run_frontend_server(
         upstream = None
         for attempt in range(1, max_attempts + 1):
             req = client.build_request(
-                request.method, target, params=qs, headers=headers, content=body
+                upstream_method, target, params=qs, headers=headers, content=body
             )
             try:
                 upstream = await client.send(req, stream=True)
@@ -4142,7 +4154,7 @@ def _run_frontend_server(
                         "attempt=%s max_attempts=%s delay=%.1fs error=%s",
                         runtime_id,
                         region,
-                        request.method,
+                        upstream_method,
                         path,
                         target_host,
                         endpoint_network_type,
@@ -4161,7 +4173,7 @@ def _run_frontend_server(
                     "timeout" if timed_out else "connect failed",
                     runtime_id,
                     region,
-                    request.method,
+                    upstream_method,
                     path,
                     target_host,
                     sorted(qs.keys()),
@@ -4185,7 +4197,7 @@ def _run_frontend_server(
                     "method=%s path=%s target_host=%s query_keys=%s error=%s",
                     runtime_id,
                     region,
-                    request.method,
+                    upstream_method,
                     path,
                     target_host,
                     sorted(qs.keys()),
@@ -4205,7 +4217,7 @@ def _run_frontend_server(
             "path=%s target_host=%s status=%s",
             runtime_id,
             region,
-            request.method,
+            upstream_method,
             path,
             target_host,
             upstream.status_code,
@@ -4218,7 +4230,7 @@ def _run_frontend_server(
             body_bytes = b"".join(body_chunks)
             logger.warning(
                 "runtime-proxy %s %s -> %s (%s): %s",
-                request.method,
+                upstream_method,
                 path,
                 upstream.status_code,
                 target,

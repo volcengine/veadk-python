@@ -54,7 +54,7 @@ def test_upload_download_and_session_cleanup(tmp_path: Path) -> None:
     )
     assert second_response.status_code == 200
 
-    assert client.delete("/web/media/demo/user/session").status_code == 200
+    assert client.post("/web/media/demo/user/session/delete").status_code == 200
     second_id = second_response.json()["id"]
     assert (
         client.get(f"/web/media/demo/user/session/{second_id}/content").status_code
