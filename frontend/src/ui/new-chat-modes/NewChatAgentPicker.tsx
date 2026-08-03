@@ -6,7 +6,14 @@ import {
   type CloudRuntime,
   type RuntimeScope,
 } from "../../adk/client";
+import {
+  sandboxClient,
+  sandboxStatusLabel,
+  type SandboxSession,
+} from "../../adk/sandbox";
+import { formatRequestError } from "../../adk/requestError";
 import { AgentFaceIcon } from "../AgentFaceIcon";
+import { SandboxAgentIcon } from "../icons/SandboxAgentIcons";
 import "./new-chat-agent-picker.css";
 
 type AgentType = "general" | "codex" | "openclaw" | "hermes";
@@ -34,6 +41,7 @@ export interface NewChatAgentPickerProps {
   runtimeScope: RuntimeScope;
   disabled?: boolean;
   onSelectRuntime: (runtime: CloudRuntime) => Promise<void>;
+  onSelectSandboxSession: (session: SandboxSession) => Promise<void>;
 }
 
 function ChevronIcon(props: SVGProps<SVGSVGElement>) {
@@ -74,36 +82,7 @@ function AgentTypeIcon({
   if (type === "general") {
     return <AgentFaceIcon className={className} />;
   }
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {type === "codex" ? (
-        <>
-          <path d="m12 3 7 4v8l-7 4-7-4V7l7-4Z" />
-          <path d="m8 9 4-2.3L16 9v4.5L12 16l-4-2.5V9Z" />
-        </>
-      ) : type === "openclaw" ? (
-        <>
-          <path d="M7 19c-2-2.5-2.5-5.5-.8-8.2M17 19c2-2.5 2.5-5.5.8-8.2" />
-          <path d="m6.2 10.8-2.7-2M17.8 10.8l2.7-2M9.2 8 7.5 4M14.8 8 16.5 4" />
-          <path d="M8.5 18.5h7" />
-        </>
-      ) : (
-        <>
-          <path d="M5 18.5V9l7-4 7 4v9.5" />
-          <path d="M8.5 13h7M9 18.5v-2.8h6v2.8" />
-        </>
-      )}
-    </svg>
-  );
+  return <SandboxAgentIcon kind={type} className={className} />;
 }
 
 export function NewChatAgentPicker({
@@ -112,13 +91,17 @@ export function NewChatAgentPicker({
   runtimeScope,
   disabled = false,
   onSelectRuntime,
+  onSelectSandboxSession,
 }: NewChatAgentPickerProps) {
   const [open, setOpen] = useState(false);
-  const [activeType, setActiveType] = useState<AgentType>("general");
+  const [activeType, setActiveType] = useState<AgentType | null>(null);
   const [activeTypeIndex, setActiveTypeIndex] = useState(0);
   const [activeRuntimeIndex, setActiveRuntimeIndex] = useState(0);
   const [keyboardPanel, setKeyboardPanel] = useState<"types" | "runtimes">("types");
+  const [keyboardNavigating, setKeyboardNavigating] = useState(false);
   const [runtimes, setRuntimes] = useState<CloudRuntime[]>([]);
+  const [sandboxSessions, setSandboxSessions] = useState<SandboxSession[]>([]);
+  const [loadedSandboxType, setLoadedSandboxType] = useState<Exclude<AgentType, "general"> | null>(null);
   const [nextToken, setNextToken] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -127,6 +110,7 @@ export function NewChatAgentPicker({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const requestIdRef = useRef(0);
+  const sandboxAbortRef = useRef<AbortController | null>(null);
   const hoverOpenTimerRef = useRef<number | null>(null);
   const hoverCloseTimerRef = useRef<number | null>(null);
   const activeTypeLabel = AGENT_TYPES.find((item) => item.id === activeType)?.label ?? "智能体";
@@ -141,7 +125,9 @@ export function NewChatAgentPicker({
       hoverCloseTimerRef.current = null;
     }
     setOpen(false);
+    setActiveType(null);
     setKeyboardPanel("types");
+    setKeyboardNavigating(false);
     if (returnFocus) triggerRef.current?.focus();
   }, []);
 
@@ -176,17 +162,51 @@ export function NewChatAgentPicker({
       setActiveRuntimeIndex(0);
     } catch (cause) {
       if (requestIdRef.current !== requestId) return;
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(formatRequestError(cause, "加载通用智能体", "GET /web/runtimes"));
     } finally {
       window.clearTimeout(timeoutId);
       if (requestIdRef.current === requestId) setLoading(false);
     }
   }, [runtimeScope]);
 
+  const loadSandboxSessions = useCallback(async (
+    type: Exclude<AgentType, "general">,
+  ) => {
+    sandboxAbortRef.current?.abort();
+    const controller = new AbortController();
+    sandboxAbortRef.current = controller;
+    const requestId = ++requestIdRef.current;
+    setLoading(true);
+    setError("");
+    setSandboxSessions([]);
+    try {
+      const sessions = type === "codex"
+        ? await sandboxClient.listSessions({ signal: controller.signal })
+        : await sandboxClient.listAgentSessions(type, { signal: controller.signal });
+      if (requestIdRef.current !== requestId) return;
+      setSandboxSessions(sessions);
+      setLoadedSandboxType(type);
+      setActiveRuntimeIndex(0);
+    } catch (cause) {
+      if ((cause as Error)?.name === "AbortError") return;
+      if (requestIdRef.current !== requestId) return;
+      setError(formatRequestError(cause, `加载 ${AGENT_TYPES.find((item) => item.id === type)?.label ?? type}`, `GET /web/${type === "codex" ? "sandbox" : type}/sessions`));
+      setLoadedSandboxType(type);
+    } finally {
+      if (sandboxAbortRef.current === controller) sandboxAbortRef.current = null;
+      if (requestIdRef.current === requestId) setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!open || activeType !== "general" || runtimes.length > 0 || loading || error) return;
     void loadRuntimes("", true);
   }, [activeType, error, loadRuntimes, loading, open, runtimes.length]);
+
+  useEffect(() => {
+    if (!open || activeType === null || activeType === "general" || loadedSandboxType === activeType) return;
+    void loadSandboxSessions(activeType);
+  }, [activeType, loadSandboxSessions, loadedSandboxType, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -199,6 +219,7 @@ export function NewChatAgentPicker({
 
   useEffect(() => () => {
     requestIdRef.current += 1;
+    sandboxAbortRef.current?.abort();
     if (hoverOpenTimerRef.current !== null) {
       window.clearTimeout(hoverOpenTimerRef.current);
     }
@@ -207,7 +228,7 @@ export function NewChatAgentPicker({
     }
   }, []);
 
-  function openPicker(focusMenu: boolean) {
+  function openPicker(focusMenu: boolean, fromKeyboard = false) {
     if (hoverOpenTimerRef.current !== null) {
       window.clearTimeout(hoverOpenTimerRef.current);
       hoverOpenTimerRef.current = null;
@@ -217,8 +238,10 @@ export function NewChatAgentPicker({
       hoverCloseTimerRef.current = null;
     }
     setOpen(true);
+    setActiveType(fromKeyboard ? "general" : null);
+    setActiveTypeIndex(0);
     setKeyboardPanel("types");
-    setActiveTypeIndex(AGENT_TYPES.findIndex((item) => item.id === activeType));
+    setKeyboardNavigating(fromKeyboard);
     if (focusMenu) requestAnimationFrame(() => menuRef.current?.focus());
   }
 
@@ -250,8 +273,16 @@ export function NewChatAgentPicker({
 
   function activateType(index: number) {
     const normalized = (index + AGENT_TYPES.length) % AGENT_TYPES.length;
+    const nextType = AGENT_TYPES[normalized].id;
+    if (nextType !== activeType) {
+      requestIdRef.current += 1;
+      sandboxAbortRef.current?.abort();
+      sandboxAbortRef.current = null;
+      setLoading(false);
+      setError("");
+    }
     setActiveTypeIndex(normalized);
-    setActiveType(AGENT_TYPES[normalized].id);
+    setActiveType(nextType);
     setActiveRuntimeIndex(0);
   }
 
@@ -263,7 +294,21 @@ export function NewChatAgentPicker({
       await onSelectRuntime(runtime);
       close(true);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(formatRequestError(cause, "连接通用智能体"));
+    } finally {
+      setConnectingRuntimeId("");
+    }
+  }
+
+  async function chooseSandboxSession(session: SandboxSession) {
+    if (connectingRuntimeId) return;
+    setConnectingRuntimeId(session.id);
+    setError("");
+    try {
+      await onSelectSandboxSession(session);
+      close(true);
+    } catch (cause) {
+      setError(formatRequestError(cause, `打开 ${activeTypeLabel}`));
     } finally {
       setConnectingRuntimeId("");
     }
@@ -275,12 +320,16 @@ export function NewChatAgentPicker({
       close(true);
       return;
     }
+    if (["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft", "Enter"].includes(event.key)) {
+      setKeyboardNavigating(true);
+    }
     if (keyboardPanel === "types") {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         activateType(activeTypeIndex + (event.key === "ArrowDown" ? 1 : -1));
       } else if (event.key === "ArrowRight" || event.key === "Enter") {
         event.preventDefault();
+        if (activeType === null) activateType(activeTypeIndex);
         setKeyboardPanel("runtimes");
       }
       return;
@@ -288,21 +337,18 @@ export function NewChatAgentPicker({
     if (event.key === "ArrowLeft") {
       event.preventDefault();
       setKeyboardPanel("types");
-    } else if (
-      activeType === "general" &&
-      runtimes.length > 0 &&
-      (event.key === "ArrowDown" || event.key === "ArrowUp")
-    ) {
+    } else if ((activeType === "general" ? runtimes : sandboxSessions).length > 0 &&
+      (event.key === "ArrowDown" || event.key === "ArrowUp")) {
       event.preventDefault();
       const delta = event.key === "ArrowDown" ? 1 : -1;
-      setActiveRuntimeIndex((index) => (index + delta + runtimes.length) % runtimes.length);
-    } else if (
-      activeType === "general" &&
-      event.key === "Enter" &&
-      runtimes[activeRuntimeIndex]
-    ) {
+      const optionCount = activeType === "general" ? runtimes.length : sandboxSessions.length;
+      setActiveRuntimeIndex((index) => (index + delta + optionCount) % optionCount);
+    } else if (event.key === "Enter" && activeType === "general" && runtimes[activeRuntimeIndex]) {
       event.preventDefault();
       void chooseRuntime(runtimes[activeRuntimeIndex]);
+    } else if (event.key === "Enter" && activeType !== "general" && sandboxSessions[activeRuntimeIndex]) {
+      event.preventDefault();
+      void chooseSandboxSession(sandboxSessions[activeRuntimeIndex]);
     }
   }
 
@@ -332,7 +378,7 @@ export function NewChatAgentPicker({
         onKeyDown={(event) => {
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             event.preventDefault();
-            if (!open) openPicker(true);
+            if (!open) openPicker(true, true);
           } else if (event.key === "Escape" && open) {
             event.preventDefault();
             close(true);
@@ -352,6 +398,9 @@ export function NewChatAgentPicker({
           className="new-chat-agent-picker__menus"
           tabIndex={-1}
           onKeyDown={onMenuKeyDown}
+          onPointerMove={(event) => {
+            if (event.pointerType === "mouse") setKeyboardNavigating(false);
+          }}
         >
           <div className="new-chat-agent-picker__menu" role="menu" aria-label="智能体类型">
             {AGENT_TYPES.map((type, index) => (
@@ -361,7 +410,7 @@ export function NewChatAgentPicker({
                 role="menuitem"
                 aria-haspopup="menu"
                 aria-expanded={activeType === type.id}
-                className={`new-chat-agent-picker__type${activeType === type.id ? " is-active" : ""}${keyboardPanel === "types" && activeTypeIndex === index ? " is-keyboard-active" : ""}`}
+                className={`new-chat-agent-picker__type${keyboardNavigating && keyboardPanel === "types" && activeTypeIndex === index ? " is-keyboard-active" : ""}`}
                 onMouseEnter={() => activateType(index)}
                 onClick={() => {
                   activateType(index);
@@ -375,12 +424,25 @@ export function NewChatAgentPicker({
             ))}
           </div>
 
-          <div
-            className="new-chat-agent-picker__submenu"
-            role="listbox"
-            aria-label={`${activeTypeLabel}列表`}
-          >
-            {activeType !== "general" ? (
+          {activeType !== null ? (
+            <div
+              className="new-chat-agent-picker__submenu"
+              role="listbox"
+              aria-label={`${activeTypeLabel}列表`}
+            >
+            {activeType !== "general" && loading && sandboxSessions.length === 0 ? (
+              <div className="new-chat-agent-picker__status" role="status" aria-live="polite">
+                <span className="new-chat-agent-picker__spinner" aria-hidden="true" />
+                正在加载智能体
+              </div>
+            ) : activeType !== "general" && error && sandboxSessions.length === 0 ? (
+              <div className="new-chat-agent-picker__error" role="alert">
+                <span>{error}</span>
+                <button type="button" onClick={() => void loadSandboxSessions(activeType)}>
+                  重新加载
+                </button>
+              </div>
+            ) : activeType !== "general" && sandboxSessions.length === 0 ? (
               <EmptyMessage className="new-chat-agent-picker__empty" fill="none">
                 <EmptyMessage.Icon size="sm">
                   <AgentTypeIcon
@@ -390,13 +452,40 @@ export function NewChatAgentPicker({
                 </EmptyMessage.Icon>
                 <EmptyMessage.Title>
                   <span className="new-chat-agent-picker__empty-title">
-                    {activeTypeLabel}
+                    暂无 {activeTypeLabel}
                   </span>
                 </EmptyMessage.Title>
                 <EmptyMessage.Description>
-                  暂未开放
+                  请前往智能体页创建
                 </EmptyMessage.Description>
               </EmptyMessage>
+            ) : activeType !== "general" ? (
+              <div className="new-chat-agent-picker__runtime-list">
+                {sandboxSessions.map((session, index) => {
+                  const connecting = connectingRuntimeId === session.id;
+                  return (
+                    <button
+                      key={session.id}
+                      type="button"
+                      role="option"
+                      aria-selected={false}
+                      aria-busy={connecting || undefined}
+                      className={`new-chat-agent-picker__runtime${keyboardNavigating && keyboardPanel === "runtimes" && activeRuntimeIndex === index ? " is-keyboard-active" : ""}`}
+                      disabled={Boolean(connectingRuntimeId)}
+                      title={`${session.displayName || activeTypeLabel} · ${session.id}`}
+                      onMouseEnter={() => setActiveRuntimeIndex(index)}
+                      onClick={() => void chooseSandboxSession(session)}
+                    >
+                      <AgentTypeIcon
+                        type={activeType}
+                        className="new-chat-agent-picker__runtime-icon"
+                      />
+                      <span>{session.displayName || activeTypeLabel}</span>
+                      <small>{connecting ? "正在打开" : sandboxStatusLabel(session.status)}</small>
+                    </button>
+                  );
+                })}
+              </div>
             ) : loading && runtimes.length === 0 ? (
               <div className="new-chat-agent-picker__status" role="status" aria-live="polite">
                 <span className="new-chat-agent-picker__spinner" aria-hidden="true" />
@@ -436,7 +525,7 @@ export function NewChatAgentPicker({
                         role="option"
                         aria-selected={selected}
                         aria-busy={connecting || undefined}
-                        className={`new-chat-agent-picker__runtime${keyboardPanel === "runtimes" && activeRuntimeIndex === index ? " is-keyboard-active" : ""}`}
+                        className={`new-chat-agent-picker__runtime${keyboardNavigating && keyboardPanel === "runtimes" && activeRuntimeIndex === index ? " is-keyboard-active" : ""}`}
                         disabled={Boolean(connectingRuntimeId)}
                         title={runtime.name}
                         onMouseEnter={() => setActiveRuntimeIndex(index)}
@@ -466,7 +555,8 @@ export function NewChatAgentPicker({
                 ) : null}
               </>
             )}
-          </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

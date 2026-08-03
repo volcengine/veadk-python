@@ -39,9 +39,21 @@ function SourceChevron({ open }: { open: boolean }) {
   );
 }
 
-export function SearchButton({ onClick }: { onClick: () => void }) {
+export function SearchButton({
+  active = false,
+  onClick,
+}: {
+  active?: boolean;
+  onClick: () => void;
+}) {
   return (
-    <button className="new-chat" onClick={onClick} aria-label="搜索" title="搜索">
+    <button
+      className={`new-chat${active ? " is-active" : ""}`}
+      onClick={onClick}
+      aria-label="搜索"
+      aria-current={active ? "page" : undefined}
+      title="搜索"
+    >
       <SearchGlyph />
       <span className="sidebar-nav-label">搜索</span>
     </button>

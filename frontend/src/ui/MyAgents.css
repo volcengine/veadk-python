@@ -139,16 +139,17 @@
 
 .my-agent-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(204px, 100%), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+  align-items: start;
   gap: 12px;
 }
 
 .my-agent-card {
   width: 100%;
-  height: 204px;
+  height: auto;
   box-sizing: border-box;
   border-radius: 12px;
-  background: transparent;
+  background: hsl(var(--secondary) / 0.82);
 }
 
 .my-agent-create-primary {
@@ -194,7 +195,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  overflow: visible;
+  overflow: hidden;
   border: 0;
   animation: my-agent-card-enter 220ms ease-out both;
   transition: transform 160ms ease;
@@ -204,12 +205,8 @@
   transform: translateY(-1px);
 }
 
-.my-agent-card:hover .my-agent-card-content {
-  box-shadow: 0 5px 18px hsl(var(--foreground) / 0.07);
-}
-
 .my-agent-card-content {
-  flex: 1;
+  flex: 0 0 auto;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -222,14 +219,60 @@
   border-radius: 12px;
   background: hsl(var(--panel));
   box-shadow: 0 1px 2px hsl(var(--foreground) / 0.035);
-  transition: box-shadow 160ms ease;
 }
 
 .my-agent-card-title {
   min-width: 0;
   display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.my-agent-card-title-copy {
+  min-width: 0;
+}
+
+.my-agent-card-badges {
+  display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 6px;
+}
+
+.my-agent-region-badge {
+  min-height: 22px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.my-agent-card-badges .runtime-owner-badge {
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  line-height: 1;
+}
+
+.my-agent-session-id {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .my-agent-card h3 {
@@ -255,6 +298,27 @@
   line-height: 1.5;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.my-agent-status-label {
+  display: inline-flex;
+  min-height: 22px;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  font-weight: 550;
+  line-height: 1;
+}
+
+.my-agent-status-label[data-ready] {
+  border-color: hsl(142 35% 40% / 0.22);
+  background: hsl(142 42% 94%);
+  color: hsl(142 55% 28%);
 }
 
 .my-agent-meta,
@@ -444,6 +508,8 @@
 }
 
 .my-agent-empty p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   color: inherit;
   font-size: inherit;
   font-weight: 400;

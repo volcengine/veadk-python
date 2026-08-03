@@ -10,6 +10,10 @@ const sidebarSource = readFileSync(
   new URL("../src/ui/Sidebar.tsx", import.meta.url),
   "utf8",
 );
+const searchSource = readFileSync(
+  new URL("../src/ui/Search.tsx", import.meta.url),
+  "utf8",
+);
 const navbarSource = readFileSync(
   new URL("../src/ui/Navbar.tsx", import.meta.url),
   "utf8",
@@ -83,6 +87,40 @@ test("global sidebar can collapse to a compact icon rail", () => {
   );
 });
 
+test("sidebar persistently highlights only the current top-level page", () => {
+  assert.match(
+    sidebarSource,
+    /export type SidebarPage = "new-chat" \| "agents" \| "search" \| null/,
+  );
+  assert.match(sidebarSource, /activePage: SidebarPage/);
+  assert.match(
+    sidebarSource,
+    /new-chat--conversation\$\{[\s\S]*?activePage === "new-chat" \? " is-active" : ""/,
+  );
+  assert.match(
+    sidebarSource,
+    /new-chat--agents\$\{[\s\S]*?activePage === "agents" \? " is-active" : ""/,
+  );
+  assert.match(
+    sidebarSource,
+    /aria-current=\{activePage === "new-chat" \? "page" : undefined\}/,
+  );
+  assert.match(sidebarSource, /<SearchButton active=\{activePage === "search"\}/);
+  assert.match(
+    searchSource,
+    /className=\{`new-chat\$\{active \? " is-active" : ""\}`\}[\s\S]*?aria-current=\{active \? "page" : undefined\}/,
+  );
+  assert.match(
+    appSource,
+    /const sidebarActivePage: SidebarPage =[\s\S]*?searchView[\s\S]*?myAgents \|\| manageAgents \|\| sandboxAgentDetailTarget \|\| sandboxAgentWorkspace[\s\S]*?sessionId[\s\S]*?"new-chat"/,
+  );
+  assert.match(appSource, /<Sidebar[\s\S]*?activePage=\{sidebarActivePage\}/);
+  assert.match(
+    stylesSource,
+    /\.new-chat:hover,\s*\.new-chat\.is-active\s*\{\s*background:\s*hsl\(var\(--foreground\) \/ 0\.05\);\s*\}/,
+  );
+});
+
 test("the main navbar owns the complete Agent selector", () => {
   assert.match(navbarSource, /<AgentSelector[\s\S]*?variant="navbar"/);
   assert.doesNotMatch(sidebarSource, /<AgentSelector/);
@@ -123,10 +161,11 @@ test("main panel fills the shell with equal outer spacing and no global navbar",
   assert.doesNotMatch(appSource, /<StudioUpdateControl\b/);
 });
 
-test("welcome headings share the neutral TextShimmer and stable smoke avatars", () => {
+test("welcome heading uses the synchronized reveal while login keeps TextShimmer", () => {
   assert.match(sidebarSource, /function smokeAvatarStyle/);
   assert.match(sidebarSource, /style=\{avatarStyle\}/);
-  assert.match(appSource, /<TextShimmer as="h1" className="welcome-title"/);
+  assert.match(appSource, /<h1 className="welcome-title">/);
+  assert.doesNotMatch(appSource, /<TextShimmer as="h1" className="welcome-title"/);
   assert.match(loginSource, /<TextShimmer as="h1" className="login-title"/);
   assert.match(textShimmerSource, /hsl\(var\(--muted-foreground\)\)/);
   assert.match(textShimmerSource, /hsl\(var\(--foreground\)\) 50%/);

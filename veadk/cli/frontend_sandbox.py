@@ -12,36 +12,71 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Reusable AgentKit Sandbox access for temporary Studio conversations."""
+"""Reusable AgentKit Sandbox Sessions for Studio Codex agents."""
 
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
 import json
 import os
 import re
-import shlex
+import secrets
 import time
 import uuid
-
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol
-from urllib.parse import urlsplit, urlunsplit
+from typing import Annotated, Any, Protocol
 
-from fastapi import Request
+from fastapi import File, Request, UploadFile
 
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
+from veadk.cli.agentkit_session_metadata import (
+    SESSION_DISPLAY_NAME_MAX_LENGTH,
+    build_create_session_request,
+    build_list_sessions_request,
+    call_session_client,
+    session_display_name,
+    session_username,
+)
+from veadk.cli.codex_app_server import (
+    ApprovalDecision,
+    CodexAppServerError,
+    CodexAppServerEvent,
+    CodexAppServerSession,
+    CodexDirectoryListing,
+    CodexModel,
+    CodexPermissionSettings,
+    CodexSkill,
+    CodexThreadSnapshot,
+    CodexThreadSummary,
+    CodexTokenUsage,
+    approval_decision_from_payload,
+    permission_settings_from_payload,
+)
+from veadk.cli.frontend_sandbox_proxy import (
+    SANDBOX_UPLOAD_MAX_BYTES,
+    SandboxProxyTarget,
+    browser_launch_url,
+    mount_sandbox_proxy_routes,
+    proxy_cookie_name,
+    proxy_prefix,
+    terminal_launch_url,
+    upload_sandbox_file,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 STUDIO_SANDBOX_TOOL_NAME = "veadk-studio-codex"
-STUDIO_SANDBOX_TTL_SECONDS = 3_600
+STUDIO_SANDBOX_TTL_SECONDS = 28_800
 STUDIO_SANDBOX_MAX_ACTIVE = 20
+STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH = SESSION_DISPLAY_NAME_MAX_LENGTH
 _SANDBOX_CHAT_TOOL_ENV = "SANDBOX_CHAT_CODEX"
+_SANDBOX_AGENT_TOOL_ENVS = {
+    "openclaw": ("SANDBOX_CHAT_OPENCLAW", "SANDBOX_OPENCLAW_TOOL"),
+    "hermes": ("SANDBOX_CHAT_HERMES", "SANDBOX_HERMES_TOOL"),
+}
 _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 _SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
 _SENSITIVE_PATTERN = re.compile(
@@ -63,6 +98,12 @@ class SandboxConfigurationError(SandboxError):
     code = "SANDBOX_NOT_CONFIGURED"
 
 
+class SandboxValidationError(SandboxError):
+    """A Studio Sandbox request did not satisfy the public contract."""
+
+    code = "SANDBOX_INVALID_REQUEST"
+
+
 class SandboxProvisioningError(SandboxError):
     """AgentKit could not provision the requested Sandbox resource."""
 
@@ -71,9 +112,16 @@ class SandboxProvisioningError(SandboxError):
 
 
 class SandboxSessionNotFoundError(SandboxError):
-    """The temporary conversation does not exist or is not owned by the user."""
+    """The cloud Session or local conversation connection is unavailable."""
 
     code = "SANDBOX_SESSION_NOT_FOUND"
+
+
+class SandboxSessionUnavailableError(SandboxError):
+    """The cloud Session exists but cannot accept a conversation yet."""
+
+    code = "SANDBOX_SESSION_UNAVAILABLE"
+    retryable = True
 
 
 class SandboxInvocationError(SandboxError):
@@ -84,40 +132,56 @@ class SandboxInvocationError(SandboxError):
 
 
 class SandboxCapacityError(SandboxError):
-    """The user or Studio has reached the temporary-session limit."""
+    """Studio has reached its local conversation-bridge limit."""
 
     code = "SANDBOX_CAPACITY_EXCEEDED"
     retryable = True
 
 
+def _require_session_access(
+    session: SandboxCloudSession,
+    owner_id: str,
+    *,
+    is_admin: bool,
+) -> None:
+    if not is_admin and session.created_by != owner_id:
+        raise SandboxSessionNotFoundError("智能体 Session 不存在或不属于当前用户。")
+
+
 def _safe_error_message(error: object) -> str:
     """Return a bounded credential-safe diagnostic message."""
-    message = str(error).strip()
-    for key, value in os.environ.items():
+    message = _redact_public_text(str(error).strip(), maximum=1_000)
+    return message or type(error).__name__
+
+
+def _redact_public_text(value: str, *, maximum: int) -> str:
+    """Redact credentials from browser-visible text without inventing content."""
+    message = value
+    for key, env_value in os.environ.items():
         if (
-            value
-            and len(value) >= 8
+            env_value
+            and len(env_value) >= 8
             and any(
                 token in key.upper() for token in ("KEY", "SECRET", "TOKEN", "PASSWORD")
             )
         ):
-            message = message.replace(value, "***")
+            message = message.replace(env_value, "***")
     message = re.sub(r"(?i)(\bbearer\s+)\S+", r"\1***", message)
     message = _SENSITIVE_PATTERN.sub(r"\1***", message)
     message = re.sub(r"https?://[^\s?]+\?[^\s]+", "[sandbox endpoint]", message)
-    return message[:1000] or type(error).__name__
+    return message[:maximum]
 
 
 def _safe_public_value(value: object, depth: int = 0) -> object:
     """Return a bounded, credential-safe value for browser-visible events."""
-    if depth >= 4:
+    if depth > 4:
         return "…"
     if isinstance(value, str):
-        return _safe_error_message(value)
+        return _redact_public_text(value, maximum=20_000)
     if isinstance(value, dict):
         result: dict[str, object] = {}
         for key, item in list(value.items())[:30]:
-            safe_key = _safe_error_message(key)[:100]
+            safe_key = _redact_public_text(key, maximum=100)
             if any(
                 marker in str(key).upper()
                 for marker in ("KEY", "PASSWORD", "SECRET", "TOKEN", "AUTHORIZATION")
@@ -136,7 +200,7 @@ def _safe_public_value(value: object, depth: int = 0) -> object:
 def _public_event_text(value: object) -> str:
     """Extract readable text from a Codex event field."""
     if isinstance(value, str):
-        return _safe_error_message(value)
+        return _redact_public_text(value, maximum=100_000)
     if isinstance(value, list):
         return "\n".join(filter(None, (_public_event_text(item) for item in value)))
     if isinstance(value, dict):
@@ -148,23 +212,30 @@ def _public_event_text(value: object) -> str:
 
 @dataclass(frozen=True)
 class SandboxCloudSession:
-    """Remote AgentKit Sandbox session data kept only on the server."""
+    """Remote AgentKit Sandbox Session data kept only on the server."""
 
     tool_id: str
     instance_id: str
     user_session_id: str
     endpoint: str
     region: str = ""
+    status: str = "Unknown"
+    created_at: str = ""
+    expire_at: str = ""
+    tool_type: str = ""
+    display_name: str = ""
+    created_by: str = ""
 
 
 @dataclass
 class SandboxConversation:
-    """Server-side state for one non-persistent Studio conversation."""
+    """Server-side connection state for one reusable cloud Session."""
 
     session_id: str
     owner_id: str
     cloud: SandboxCloudSession
-    thread_id: str | None = None
+    codex: SandboxCodexConnection
+    proxy_token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     expires_at: float = field(
         default_factory=lambda: time.monotonic() + STUDIO_SANDBOX_TTL_SECONDS
     )
@@ -183,12 +254,136 @@ class SandboxStreamEvent:
     arguments: object | None = None
     response: object | None = None
     thread_id: str | None = None
+    approval: object | None = None
+    approval_resolved_id: str = ""
+    turn_id: str = ""
+    usage: CodexTokenUsage | None = None
+    thread_total: CodexTokenUsage | None = None
+    model_context_window: int | None = None
+
+
+class SandboxCodexConnection(Protocol):
+    """Persistent Codex app-server connection owned by one Studio session."""
+
+    thread_id: str
+    cwd: str
+    model: str
+    permissions: CodexPermissionSettings
+
+    @property
+    def active(self) -> bool:
+        """Whether a turn is currently running."""
+        raise NotImplementedError
+
+    @property
+    def workspace_locked(self) -> bool:
+        """Whether the first turn has already started."""
+        raise NotImplementedError
+
+    async def stream_turn(
+        self, prompt: str, skill_ids: tuple[str, ...] = ()
+    ) -> AsyncIterator[CodexAppServerEvent]:
+        """Run and stream one turn."""
+        if False:
+            yield CodexAppServerEvent()
+
+    @property
+    def thread_token_total(self) -> CodexTokenUsage | None:
+        """Latest cumulative token usage for the active thread."""
+        raise NotImplementedError
+
+    @property
+    def model_context_window(self) -> int | None:
+        """Current model context window when reported by app-server."""
+        raise NotImplementedError
+
+    async def list_models(self) -> tuple[CodexModel, ...]:
+        """List visible Codex models."""
+        raise NotImplementedError
+
+    async def set_model(self, model: str) -> str:
+        """Change the active thread model."""
+        raise NotImplementedError
+
+    async def list_skills(self, force_reload: bool = False) -> tuple[CodexSkill, ...]:
+        """List browser-safe Skills."""
+        raise NotImplementedError
+
+    async def new_thread(self) -> CodexThreadSnapshot:
+        """Start a fresh thread."""
+        raise NotImplementedError
+
+    async def list_threads(
+        self,
+        *,
+        cursor: str = "",
+        search_term: str = "",
+        archived: bool = False,
+    ) -> tuple[tuple[CodexThreadSummary, ...], str]:
+        """List recent threads."""
+        raise NotImplementedError
+
+    async def resume_thread(self, thread_id: str) -> CodexThreadSnapshot:
+        """Resume an existing thread."""
+        raise NotImplementedError
+
+    async def fork_thread(self) -> CodexThreadSnapshot:
+        """Fork the active thread."""
+        raise NotImplementedError
+
+    async def archive_thread(self, thread_id: str) -> CodexThreadSnapshot | None:
+        """Archive one thread."""
+        raise NotImplementedError
+
+    async def compact_thread(self) -> None:
+        """Compact the active thread."""
+        raise NotImplementedError
+
+    async def update_permissions(
+        self, settings: CodexPermissionSettings
+    ) -> CodexPermissionSettings:
+        """Persist and hot-apply Session permissions."""
+        raise NotImplementedError
+
+    async def apply_session_permissions(
+        self, settings: CodexPermissionSettings
+    ) -> None:
+        """Adopt permissions persisted by another thread."""
+        raise NotImplementedError
+
+    async def update_workspace(self, cwd: str) -> str:
+        """Update the CWD before the first turn."""
+        raise NotImplementedError
+
+    async def list_directories(self, path: str) -> CodexDirectoryListing:
+        """List remote directories."""
+        raise NotImplementedError
+
+    def resolve_approval(self, approval_id: str, decision: ApprovalDecision) -> None:
+        """Resolve one pending user approval."""
+        raise NotImplementedError
+
+    async def close(self) -> None:
+        """Close the persistent connection."""
+        raise NotImplementedError
 
 
 class SandboxCloudGateway(Protocol):
-    """AgentKit operations needed by the Studio conversation service."""
+    """AgentKit operations needed by the Studio Session service."""
 
-    async def create_session(self, tool_id: str) -> SandboxCloudSession:
+    async def list_sessions(
+        self, tool_id: str, username: str | None = None
+    ) -> list[SandboxCloudSession]:
+        """List Sessions, optionally filtered by Username metadata."""
+        raise NotImplementedError
+
+    async def get_session(self, tool_id: str, session_id: str) -> SandboxCloudSession:
+        """Resolve one existing Session and its private Endpoint."""
+        raise NotImplementedError
+
+    async def create_session(
+        self, tool_id: str, display_name: str = "", username: str = ""
+    ) -> SandboxCloudSession:
         """Create a fresh remote Sandbox session."""
         raise NotImplementedError
 
@@ -196,15 +391,9 @@ class SandboxCloudGateway(Protocol):
         """Delete a remote Sandbox session."""
         raise NotImplementedError
 
-    async def stream_codex(
-        self,
-        session: SandboxCloudSession,
-        prompt: str,
-        thread_id: str | None,
-    ) -> AsyncIterator[SandboxStreamEvent]:
-        """Stream one turn from the coding agent inside the Sandbox."""
-        if False:
-            yield SandboxStreamEvent()
+    async def open_codex(self, session: SandboxCloudSession) -> SandboxCodexConnection:
+        """Open one persistent Codex app-server connection."""
+        raise NotImplementedError
 
     async def drain(self) -> None:
         """Wait for asynchronous cloud cleanup started by cancelled requests."""
@@ -212,11 +401,11 @@ class SandboxCloudGateway(Protocol):
 
 
 class AgentkitSandboxGateway:
-    """AgentKit SDK and Sandbox terminal adapter.
+    """AgentKit SDK and persistent Codex app-server adapter.
 
     The AgentKit management SDK is synchronous, so each API call runs in a
-    worker thread. Conversation output uses the Sandbox terminal WebSocket;
-    the session endpoint, including its authorization query, never leaves this
+    worker thread. Conversation output uses the Sandbox app-server WebSocket;
+    the Session Endpoint, including its authorization query, never leaves this
     process.
     """
 
@@ -240,8 +429,12 @@ class AgentkitSandboxGateway:
             client = self._client(region) if self._region_candidates else self._client()
         else:
             client = self._client
-        method = getattr(client, method_name)
-        return await asyncio.to_thread(method, request)
+        return await asyncio.to_thread(
+            call_session_client,
+            client,
+            method_name,
+            request,
+        )
 
     async def _reconcile_created_session(
         self, tool_id: str, user_session_id: str, region: str = ""
@@ -268,28 +461,134 @@ class AgentkitSandboxGateway:
                 if (session.status or "").lower() != "ready":
                     continue
                 if session.session_id and session.endpoint:
-                    return SandboxCloudSession(
-                        tool_id=tool_id,
-                        instance_id=session.session_id,
-                        user_session_id=user_session_id,
-                        endpoint=session.endpoint,
+                    return self._cloud_session(
+                        tool_id,
+                        session,
                         region=region,
+                        fallback_user_session_id=user_session_id,
                     )
             if attempt < 5:
                 await asyncio.sleep(5)
         return None
 
-    async def create_session(self, tool_id: str) -> SandboxCloudSession:
+    @staticmethod
+    def _cloud_session(
+        tool_id: str,
+        value: Any,
+        *,
+        region: str = "",
+        fallback_user_session_id: str = "",
+    ) -> SandboxCloudSession:
+        instance_id = str(getattr(value, "session_id", "") or "").strip()
+        if not instance_id:
+            raise SandboxProvisioningError("AgentKit Session 响应缺少 SessionId。")
+        return SandboxCloudSession(
+            tool_id=tool_id,
+            instance_id=instance_id,
+            user_session_id=str(
+                getattr(value, "user_session_id", "") or fallback_user_session_id
+            ).strip(),
+            endpoint=str(getattr(value, "endpoint", "") or "").strip(),
+            region=region,
+            status=str(getattr(value, "status", "") or "Unknown").strip(),
+            created_at=str(getattr(value, "created_at", "") or "").strip(),
+            expire_at=str(getattr(value, "expire_at", "") or "").strip(),
+            tool_type=str(getattr(value, "tool_type", "") or "").strip(),
+            display_name=session_display_name(value),
+            created_by=session_username(value),
+        )
+
+    async def list_sessions(
+        self, tool_id: str, username: str | None = None
+    ) -> list[SandboxCloudSession]:
+        regions = self._region_candidates or ("",)
+        for index, region in enumerate(regions):
+            sessions: dict[str, SandboxCloudSession] = {}
+            next_token: str | None = None
+            seen_tokens: set[str] = set()
+            try:
+                for _page in range(100):
+                    response = await self._call(
+                        "list_sessions",
+                        build_list_sessions_request(
+                            tool_id=tool_id,
+                            max_results=100,
+                            next_token=next_token,
+                            username=username,
+                        ),
+                        region=region,
+                    )
+                    for value in response.session_infos or []:
+                        session = self._cloud_session(
+                            tool_id,
+                            value,
+                            region=region,
+                        )
+                        sessions[session.instance_id] = session
+                    next_token = str(response.next_token or "").strip() or None
+                    if next_token is None:
+                        return sorted(
+                            sessions.values(),
+                            key=lambda item: item.created_at,
+                            reverse=True,
+                        )
+                    if next_token in seen_tokens:
+                        raise SandboxProvisioningError(
+                            "AgentKit ListSessions 返回了重复的 NextToken。"
+                        )
+                    seen_tokens.add(next_token)
+                raise SandboxProvisioningError(
+                    "AgentKit ListSessions 分页超过安全上限。"
+                )
+            except SandboxError:
+                raise
+            except Exception as error:
+                if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
+                    continue
+                raise SandboxProvisioningError(
+                    f"读取 AgentKit Session 失败：{_safe_error_message(error)}"
+                ) from error
+        raise SandboxProvisioningError("无法在支持的地域读取 AgentKit Session。")
+
+    async def get_session(self, tool_id: str, session_id: str) -> SandboxCloudSession:
         from agentkit.sdk.tools import types as tools_types
 
+        regions = self._region_candidates or ("",)
+        for index, region in enumerate(regions):
+            try:
+                response = await self._call(
+                    "get_session",
+                    tools_types.GetSessionRequest(
+                        ToolId=tool_id,
+                        SessionId=session_id,
+                    ),
+                    region=region,
+                )
+                return self._cloud_session(tool_id, response, region=region)
+            except Exception as error:
+                if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
+                    continue
+                if is_agentkit_resource_not_found(error):
+                    raise SandboxSessionNotFoundError(
+                        "AgentKit Session 不存在或已过期。"
+                    ) from error
+                raise SandboxProvisioningError(
+                    f"读取 AgentKit Session 失败：{_safe_error_message(error)}"
+                ) from error
+        raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
+
+    async def create_session(
+        self, tool_id: str, display_name: str = "", username: str = ""
+    ) -> SandboxCloudSession:
         user_session_id = f"studio-{uuid.uuid4()}"
         regions = self._region_candidates or ("",)
         for index, region in enumerate(regions):
-            request = tools_types.CreateSessionRequest(
-                ToolId=tool_id,
-                Ttl=STUDIO_SANDBOX_TTL_SECONDS,
-                TtlUnit="second",
-                UserSessionId=user_session_id,
+            request = build_create_session_request(
+                tool_id=tool_id,
+                ttl_seconds=STUDIO_SANDBOX_TTL_SECONDS,
+                user_session_id=user_session_id,
+                display_name=display_name,
+                username=username,
             )
             create_task = asyncio.create_task(
                 self._call("create_session", request, region=region)
@@ -324,16 +623,17 @@ class AgentkitSandboxGateway:
 
             instance_id = (response.session_id or "").strip()
             endpoint = (response.endpoint or "").strip()
-            if not instance_id or not endpoint:
-                raise SandboxProvisioningError(
-                    "AgentKit 创建会话响应缺少 SessionId 或 Endpoint。"
-                )
+            if not instance_id:
+                raise SandboxProvisioningError("AgentKit 创建会话响应缺少 SessionId。")
             return SandboxCloudSession(
                 tool_id=tool_id,
                 instance_id=instance_id,
                 user_session_id=response.user_session_id or user_session_id,
                 endpoint=endpoint,
                 region=region,
+                status="Ready" if endpoint else "Creating",
+                display_name=display_name,
+                created_by=username,
             )
         raise SandboxProvisioningError("无法在支持的地域创建 AgentKit 沙箱会话。")
 
@@ -349,15 +649,16 @@ class AgentkitSandboxGateway:
         cloud: SandboxCloudSession | None = None
         try:
             response = await create_task
-            if response.session_id and response.endpoint:
+            if response.session_id:
                 cloud = SandboxCloudSession(
                     tool_id=tool_id,
                     instance_id=response.session_id,
                     user_session_id=response.user_session_id or user_session_id,
-                    endpoint=response.endpoint,
+                    endpoint=response.endpoint or "",
                     region=region,
+                    status="Ready" if response.endpoint else "Creating",
                 )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - cleanup boundary
             if _CREATE_SESSION_START_FAIL_CODE in str(error):
                 cloud = await self._reconcile_created_session(
                     tool_id, user_session_id, region
@@ -399,273 +700,33 @@ class AgentkitSandboxGateway:
         if self._background_tasks:
             await asyncio.gather(*tuple(self._background_tasks), return_exceptions=True)
 
-    @staticmethod
-    def _terminal_url(endpoint: str) -> str:
-        parsed = urlsplit(endpoint)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise SandboxProvisioningError("AgentKit 沙箱返回了无效 Endpoint。")
-        scheme = "wss" if parsed.scheme == "https" else "ws"
-        path = f"{parsed.path.rstrip('/')}/v1/shell/ws"
-        return urlunsplit((scheme, parsed.netloc, path, parsed.query, ""))
-
-    @staticmethod
-    def _command(thread_id: str | None, input_marker: str, marker: str) -> str:
-        stdin = (
-            "python3 -c 'import base64,sys;"
-            "sys.stdout.buffer.write(base64.b64decode(sys.stdin.buffer.readline()))'"
-        )
-        if thread_id:
-            invocation = (
-                "codex exec resume --json --dangerously-bypass-approvals-and-sandbox "
-                f"{shlex.quote(thread_id)} -"
-            )
-        else:
-            invocation = (
-                "codex exec --json --color never --skip-git-repo-check "
-                "--dangerously-bypass-approvals-and-sandbox -"
-            )
-        return (
-            f"stty -echo; printf '\\n{input_marker}\\n'; "
-            f"{stdin} | {invocation}; __veadk_status=$?; stty echo; "
-            f"printf '\\n{marker}%s\\n' \"$__veadk_status\"; exit"
-        )
-
-    @staticmethod
-    def _completion_status(line: str, marker: str) -> int | None:
-        match = re.fullmatch(rf"{re.escape(marker)}(\d+)", line.strip())
-        return int(match.group(1)) if match else None
-
-    @staticmethod
-    def _parse_codex_event(line: str) -> SandboxStreamEvent | None:
+    async def open_codex(self, session: SandboxCloudSession) -> SandboxCodexConnection:
+        """Connect to Codex without exposing the private Session Endpoint."""
+        connection = CodexAppServerSession(session.endpoint)
         try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(event, dict):
-            return None
-        if event.get("type") == "thread.started":
-            thread_id = event.get("thread_id")
-            if isinstance(thread_id, str) and thread_id:
-                return SandboxStreamEvent(thread_id=thread_id)
-            return None
-        event_type = event.get("type")
-        if event_type not in {"item.started", "item.completed"}:
-            return None
-        item = event.get("item")
-        if not isinstance(item, dict):
-            return None
-        item_type = str(item.get("type") or "")
-        item_id = str(item.get("id") or f"item-{uuid.uuid4().hex}")[:100]
-        status = "running" if event_type == "item.started" else "done"
-
-        if item_type == "reasoning":
-            text = _public_event_text(
-                item.get("text") or item.get("summary") or item.get("content")
-            )
-            return (
-                SandboxStreamEvent(
-                    kind="thinking",
-                    item_id=item_id,
-                    status=status,
-                    text=text,
-                )
-                if text
-                else None
-            )
-        if item_type == "agent_message":
-            text = _public_event_text(item.get("text"))
-            return SandboxStreamEvent(kind="text", text=text) if text else None
-        if item_type == "command_execution":
-            response = None
-            if status == "done":
-                response = {
-                    "status": _safe_public_value(item.get("status") or "completed"),
-                    "exitCode": _safe_public_value(item.get("exit_code")),
-                    "output": _safe_public_value(item.get("aggregated_output")),
-                }
-            return SandboxStreamEvent(
-                kind="tool",
-                item_id=item_id,
-                status=status,
-                name="运行命令",
-                arguments={"command": _safe_public_value(item.get("command") or "")},
-                response=response,
-            )
-        if item_type in {"file_change", "file_changes"}:
-            changes = item.get("changes")
-            arguments = (
-                {"changes": _safe_public_value(changes)}
-                if isinstance(changes, list)
-                else {"path": _safe_public_value(item.get("path") or "")}
-            )
-            return SandboxStreamEvent(
-                kind="tool",
-                item_id=item_id,
-                status=status,
-                name="修改文件",
-                arguments=arguments,
-                response={"status": _safe_public_value(item.get("status") or status)}
-                if status == "done"
-                else None,
-            )
-        if item_type == "mcp_tool_call":
-            server = _safe_error_message(item.get("server") or "MCP")[:100]
-            tool = _safe_error_message(item.get("tool") or item.get("name") or "工具")[
-                :100
-            ]
-            return SandboxStreamEvent(
-                kind="tool",
-                item_id=item_id,
-                status=status,
-                name=f"MCP · {server}/{tool}",
-                arguments=_safe_public_value(item.get("arguments")),
-                response=_safe_public_value(item.get("result") or item.get("error"))
-                if status == "done"
-                else None,
-            )
-        if item_type in {"web_search", "web_search_call"}:
-            return SandboxStreamEvent(
-                kind="tool",
-                item_id=item_id,
-                status=status,
-                name="网络搜索",
-                arguments=_safe_public_value(
-                    item.get("query") or item.get("arguments")
-                ),
-                response=_safe_public_value(item.get("result") or item.get("output"))
-                if status == "done"
-                else None,
-            )
-        text = _public_event_text(item.get("text") or item.get("summary"))
-        return (
-            SandboxStreamEvent(
-                kind="thinking",
-                item_id=item_id,
-                status=status,
-                text=text,
-            )
-            if text
-            else None
-        )
-
-    async def stream_codex(
-        self,
-        session: SandboxCloudSession,
-        prompt: str,
-        thread_id: str | None,
-    ) -> AsyncIterator[SandboxStreamEvent]:
-        import websockets
-
-        input_marker = f"__VEADK_INPUT_{uuid.uuid4().hex}__"
-        marker = f"__VEADK_DONE_{uuid.uuid4().hex}__"
-        command = self._command(thread_id, input_marker, marker)
-        encoded_prompt = base64.b64encode(prompt.encode("utf-8")).decode("ascii")
-        buffer = ""
-        exit_status: int | None = None
-        prompt_sent = False
-        try:
-            async with websockets.connect(
-                self._terminal_url(session.endpoint),
-                open_timeout=30,
-                close_timeout=5,
-                max_size=8 * 1024 * 1024,
-            ) as websocket:
-                await websocket.send(
-                    json.dumps({"type": "resize", "data": {"cols": 120, "rows": 40}})
-                )
-                async with asyncio.timeout(30):
-                    while True:
-                        payload = json.loads(await websocket.recv())
-                        if payload.get("type") == "ping":
-                            await websocket.send(
-                                json.dumps(
-                                    {"type": "pong", "data": payload.get("data")}
-                                )
-                            )
-                        if payload.get("type") == "ready":
-                            await websocket.send(
-                                json.dumps({"type": "input", "data": f"{command}\n"})
-                            )
-                            break
-
-                try:
-                    async with asyncio.timeout(600):
-                        async for raw_message in websocket:
-                            payload = json.loads(raw_message)
-                            if payload.get("type") == "ping":
-                                await websocket.send(
-                                    json.dumps(
-                                        {"type": "pong", "data": payload.get("data")}
-                                    )
-                                )
-                                continue
-                            if payload.get("type") == "error":
-                                raise SandboxInvocationError(
-                                    _safe_error_message(
-                                        payload.get("data") or "terminal error"
-                                    )
-                                )
-                            if payload.get("type") != "output":
-                                continue
-                            buffer += str(payload.get("data") or "")
-                            while "\n" in buffer:
-                                line, buffer = buffer.split("\n", 1)
-                                if not prompt_sent and line.strip() == input_marker:
-                                    await websocket.send(
-                                        json.dumps(
-                                            {
-                                                "type": "input",
-                                                "data": f"{encoded_prompt}\n",
-                                            }
-                                        )
-                                    )
-                                    prompt_sent = True
-                                    continue
-                                status = self._completion_status(line, marker)
-                                if status is not None:
-                                    exit_status = status
-                                    break
-                                event = self._parse_codex_event(line.strip())
-                                if event is not None:
-                                    yield event
-                            if exit_status is not None:
-                                break
-                except asyncio.CancelledError:
-                    await websocket.send(
-                        json.dumps({"type": "input", "data": "\u0003exit\n"})
-                    )
-                    await websocket.close()
-                    raise
-        except asyncio.CancelledError:
-            raise
-        except TimeoutError as error:
-            raise SandboxInvocationError("临时会话响应超时，请重试。") from error
-        except SandboxError:
-            raise
-        except Exception as error:
+            await connection.connect()
+        except CodexAppServerError as error:
+            await connection.close()
             raise SandboxInvocationError(
                 f"连接 AgentKit 沙箱失败：{_safe_error_message(error)}"
             ) from error
-        if exit_status != 0:
-            raise SandboxInvocationError(
-                f"沙箱中的对话进程退出，状态码：{exit_status}。"
-            )
+        return connection
 
 
 class SandboxConversationService:
-    """Own temporary conversation lifecycle and per-user isolation."""
+    """Manage reusable cloud Sessions and per-user conversation connections."""
 
     def __init__(
         self, gateway: SandboxCloudGateway, tool_id: str | None = None
     ) -> None:
         self._gateway = gateway
         self._configured_tool_id = (tool_id or "").strip()
-        self._sessions: dict[str, SandboxConversation] = {}
+        self._sessions: dict[tuple[str, str], SandboxConversation] = {}
         self._registry_lock = asyncio.Lock()
         self._sessions_starting = 0
 
     def capabilities(self) -> dict[str, object]:
-        """Report whether the dedicated temporary-chat Tool is configured."""
+        """Report whether the dedicated Codex Tool is configured."""
         enabled = bool(self._tool_id(required=False))
         return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
 
@@ -678,37 +739,92 @@ class SandboxConversationService:
             raise SandboxConfigurationError("管理员未配置")
         return tool_id
 
-    async def start(self, owner_id: str) -> SandboxConversation:
-        cloud: SandboxCloudSession | None = None
+    async def list_sessions(
+        self, owner_id: str, *, is_admin: bool = False
+    ) -> list[SandboxCloudSession]:
+        """List the configured account's Sessions without exposing Endpoints."""
+        return await self._gateway.list_sessions(
+            self._tool_id(),
+            None if is_admin else owner_id,
+        )
+
+    async def create(
+        self, owner_id: str, display_name: object = ""
+    ) -> SandboxCloudSession:
+        """Create a cloud Session without opening a conversation connection."""
+        if not isinstance(display_name, str):
+            raise SandboxValidationError("智能体名称必须是文本。")
+        display_name = display_name.strip()
+        if len(display_name) > STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH:
+            raise SandboxValidationError(
+                f"智能体名称不能超过 {STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH} 个字符。"
+            )
         tool_id = self._tool_id()
         await self.cleanup_expired()
         async with self._registry_lock:
             if len(self._sessions) + self._sessions_starting >= (
                 STUDIO_SANDBOX_MAX_ACTIVE
             ):
-                raise SandboxCapacityError("临时会话并发数已达上限，请稍后重试。")
+                raise SandboxCapacityError("Sandbox 创建或连接数已达上限，请稍后重试。")
             self._sessions_starting += 1
         try:
-            cloud = await self._gateway.create_session(tool_id)
-            session = SandboxConversation(
-                session_id=str(uuid.uuid4()),
+            return await self._gateway.create_session(tool_id, display_name, owner_id)
+        finally:
+            async with self._registry_lock:
+                self._sessions_starting -= 1
+
+    async def connect(
+        self,
+        session_id: str,
+        owner_id: str,
+        *,
+        is_admin: bool = False,
+    ) -> SandboxConversation:
+        """Attach an existing Ready cloud Session to the conversation bridge."""
+        key = (owner_id, session_id)
+        existing = self._sessions.get(key)
+        if existing is not None:
+            return existing
+        await self.cleanup_expired()
+        async with self._registry_lock:
+            existing = self._sessions.get(key)
+            if existing is not None:
+                return existing
+            if len(self._sessions) + self._sessions_starting >= (
+                STUDIO_SANDBOX_MAX_ACTIVE
+            ):
+                raise SandboxCapacityError("智能体连接数已达上限，请稍后重试。")
+            self._sessions_starting += 1
+        try:
+            cloud = await self._gateway.get_session(self._tool_id(), session_id)
+            _require_session_access(cloud, owner_id, is_admin=is_admin)
+            if cloud.status.lower() != "ready" or not cloud.endpoint:
+                status = cloud.status or "Unknown"
+                raise SandboxSessionUnavailableError(
+                    f"AgentKit Session 尚未就绪，当前状态：{status}。"
+                )
+            codex = await self._gateway.open_codex(cloud)
+            conversation = SandboxConversation(
+                session_id=cloud.instance_id,
                 owner_id=owner_id,
                 cloud=cloud,
+                codex=codex,
             )
-            self._sessions[session.session_id] = session
-            return session
-        except asyncio.CancelledError:
-            if cloud is not None:
-                await asyncio.shield(self._gateway.delete_session(cloud))
-            raise
+            async with self._registry_lock:
+                existing = self._sessions.get(key)
+                if existing is not None:
+                    await codex.close()
+                    return existing
+                self._sessions[key] = conversation
+                return conversation
         finally:
             async with self._registry_lock:
                 self._sessions_starting -= 1
 
     def _owned(self, session_id: str, owner_id: str) -> SandboxConversation:
-        session = self._sessions.get(session_id)
-        if session is None or session.owner_id != owner_id:
-            raise SandboxSessionNotFoundError("临时会话不存在或已过期。")
+        session = self._sessions.get((owner_id, session_id))
+        if session is None:
+            raise SandboxSessionNotFoundError("智能体尚未连接，请返回列表后重新进入。")
         return session
 
     def require_owned(self, session_id: str, owner_id: str) -> None:
@@ -716,26 +832,384 @@ class SandboxConversationService:
         self._owned(session_id, owner_id)
 
     async def stream_message(
-        self, session_id: str, owner_id: str, prompt: str
+        self,
+        session_id: str,
+        owner_id: str,
+        prompt: str,
+        skill_ids: tuple[str, ...] = (),
     ) -> AsyncIterator[SandboxStreamEvent]:
         session = self._owned(session_id, owner_id)
         async with session.lock:
-            async for event in self._gateway.stream_codex(
-                session.cloud, prompt, session.thread_id
-            ):
-                if event.thread_id:
-                    session.thread_id = event.thread_id
-                if event.kind:
-                    yield event
+            try:
+                events = (
+                    session.codex.stream_turn(prompt, skill_ids)
+                    if skill_ids
+                    else session.codex.stream_turn(prompt)
+                )
+                async for event in events:
+                    if event.kind:
+                        yield SandboxStreamEvent(
+                            kind=event.kind,
+                            item_id=event.item_id,
+                            status=event.status,
+                            text=_public_event_text(event.text),
+                            name=_safe_error_message(event.name),
+                            arguments=_safe_public_value(event.arguments),
+                            response=_safe_public_value(event.response),
+                            thread_id=session.codex.thread_id,
+                            approval=(
+                                _safe_public_value(event.approval.public_dict())
+                                if event.approval is not None
+                                else None
+                            ),
+                            approval_resolved_id=(event.approval_resolved_id),
+                            turn_id=event.turn_id,
+                            usage=event.usage,
+                            thread_total=event.thread_total,
+                            model_context_window=event.model_context_window,
+                        )
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
 
-    async def close(self, session_id: str, owner_id: str) -> None:
+    def settings(self, session_id: str, owner_id: str) -> dict[str, object]:
+        """Return the current permissions, workspace, and lock state."""
+        session = self._owned(session_id, owner_id)
+        return {
+            "threadId": session.codex.thread_id,
+            "cwd": session.codex.cwd,
+            **(
+                {"model": session.codex.model}
+                if getattr(session.codex, "model", "")
+                else {}
+            ),
+            "workspaceLocked": session.codex.workspace_locked,
+            "busy": session.codex.active,
+            "permissions": session.codex.permissions.public_dict(),
+        }
+
+    def status(self, session_id: str, owner_id: str) -> dict[str, object]:
+        """Return current thread settings and exact usage when available."""
+        session = self._owned(session_id, owner_id)
+        total = getattr(session.codex, "thread_token_total", None)
+        context_window = getattr(session.codex, "model_context_window", None)
+        return {
+            **self.settings(session_id, owner_id),
+            **(
+                {"threadTotal": total.public_dict()}
+                if isinstance(total, CodexTokenUsage)
+                else {}
+            ),
+            **(
+                {"modelContextWindow": context_window}
+                if isinstance(context_window, int)
+                else {}
+            ),
+        }
+
+    async def list_models(
+        self, session_id: str, owner_id: str
+    ) -> tuple[CodexModel, ...]:
+        """List visible models for the connected Codex session."""
+        session = self._owned(session_id, owner_id)
+        try:
+            return await session.codex.list_models()
+        except CodexAppServerError as error:
+            raise SandboxInvocationError(_safe_error_message(error)) from error
+
+    async def set_model(self, session_id: str, owner_id: str, model: str) -> str:
+        """Change the model without forwarding slash syntax as a prompt."""
         session = self._owned(session_id, owner_id)
         async with session.lock:
-            await self._gateway.delete_session(session.cloud)
-            self._sessions.pop(session_id, None)
+            try:
+                return await session.codex.set_model(model)
+            except (TypeError, ValueError) as error:
+                raise SandboxValidationError(str(error)) from error
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
+
+    async def list_skills(
+        self,
+        session_id: str,
+        owner_id: str,
+        *,
+        force_reload: bool = False,
+    ) -> tuple[CodexSkill, ...]:
+        """List Skills without exposing server-side paths."""
+        session = self._owned(session_id, owner_id)
+        try:
+            return await session.codex.list_skills(force_reload)
+        except CodexAppServerError as error:
+            raise SandboxInvocationError(_safe_error_message(error)) from error
+
+    def _public_snapshot(
+        self, session: SandboxConversation, snapshot: CodexThreadSnapshot
+    ) -> dict[str, object]:
+        value = _safe_public_value(snapshot.public_dict(session.codex.permissions))
+        if not isinstance(value, dict):
+            raise SandboxInvocationError("Codex Thread 响应格式无效。")
+        return value
+
+    async def new_thread(self, session_id: str, owner_id: str) -> dict[str, object]:
+        """Create and activate a fresh Codex thread."""
+        session = self._owned(session_id, owner_id)
+        async with session.lock:
+            try:
+                snapshot = await session.codex.new_thread()
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
+        return self._public_snapshot(session, snapshot)
+
+    async def list_threads(
+        self,
+        session_id: str,
+        owner_id: str,
+        *,
+        cursor: str = "",
+        search_term: str = "",
+        archived: bool = False,
+    ) -> tuple[tuple[CodexThreadSummary, ...], str]:
+        """List recent Codex threads."""
+        session = self._owned(session_id, owner_id)
+        try:
+            return await session.codex.list_threads(
+                cursor=cursor,
+                search_term=search_term,
+                archived=archived,
+            )
+        except CodexAppServerError as error:
+            raise SandboxInvocationError(_safe_error_message(error)) from error
+
+    async def resume_thread(
+        self, session_id: str, owner_id: str, thread_id: str
+    ) -> dict[str, object]:
+        """Resume and activate a selected Codex thread."""
+        session = self._owned(session_id, owner_id)
+        async with session.lock:
+            try:
+                snapshot = await session.codex.resume_thread(thread_id)
+            except ValueError as error:
+                raise SandboxValidationError(str(error)) from error
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
+        return self._public_snapshot(session, snapshot)
+
+    async def fork_thread(self, session_id: str, owner_id: str) -> dict[str, object]:
+        """Fork and activate the current Codex thread."""
+        session = self._owned(session_id, owner_id)
+        async with session.lock:
+            try:
+                snapshot = await session.codex.fork_thread()
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
+        return self._public_snapshot(session, snapshot)
+
+    async def archive_thread(
+        self, session_id: str, owner_id: str, thread_id: str
+    ) -> dict[str, object]:
+        """Archive a thread and return a replacement snapshot when needed."""
+        session = self._owned(session_id, owner_id)
+        async with session.lock:
+            try:
+                snapshot = await session.codex.archive_thread(thread_id)
+            except ValueError as error:
+                raise SandboxValidationError(str(error)) from error
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
+        return {
+            "archived": True,
+            **(
+                self._public_snapshot(session, snapshot) if snapshot is not None else {}
+            ),
+        }
+
+    async def compact_thread(self, session_id: str, owner_id: str) -> None:
+        """Start compacting the current Codex thread."""
+        session = self._owned(session_id, owner_id)
+        async with session.lock:
+            try:
+                await session.codex.compact_thread()
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
+
+    async def update_permissions(
+        self,
+        session_id: str,
+        owner_id: str,
+        settings: CodexPermissionSettings,
+    ) -> CodexPermissionSettings:
+        """Persist permissions and adopt them in every local thread."""
+        session = self._owned(session_id, owner_id)
+        if session.codex.active:
+            raise SandboxSessionUnavailableError("当前任务运行中，暂时不能修改权限。")
+        async with session.lock:
+            try:
+                applied = await session.codex.update_permissions(settings)
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
+
+        peers = [
+            candidate
+            for candidate in self._sessions.values()
+            if candidate.session_id == session_id and candidate is not session
+        ]
+        results = await asyncio.gather(
+            *(peer.codex.apply_session_permissions(applied) for peer in peers),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning(
+                    "Failed to hot-apply Sandbox permissions to a peer: %s",
+                    _safe_error_message(result),
+                )
+        return applied
+
+    async def update_workspace(self, session_id: str, owner_id: str, cwd: str) -> str:
+        """Change the thread workspace before the first conversation turn."""
+        session = self._owned(session_id, owner_id)
+        if session.codex.active or session.codex.workspace_locked:
+            raise SandboxSessionUnavailableError(
+                "当前对话已经开始，工作空间不能再修改。"
+            )
+        async with session.lock:
+            try:
+                return await session.codex.update_workspace(cwd)
+            except (TypeError, ValueError) as error:
+                raise SandboxValidationError(str(error)) from error
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
+
+    async def list_directories(
+        self, session_id: str, owner_id: str, path: str
+    ) -> CodexDirectoryListing:
+        """List directories in the remote Sandbox."""
+        session = self._owned(session_id, owner_id)
+        try:
+            return await session.codex.list_directories(path)
+        except (TypeError, ValueError) as error:
+            raise SandboxValidationError(str(error)) from error
+        except CodexAppServerError as error:
+            raise SandboxInvocationError(_safe_error_message(error)) from error
+
+    def resolve_approval(
+        self,
+        session_id: str,
+        owner_id: str,
+        approval_id: str,
+        decision: ApprovalDecision,
+    ) -> None:
+        """Resolve an approval without waiting on the active turn lock."""
+        session = self._owned(session_id, owner_id)
+        try:
+            session.codex.resolve_approval(approval_id, decision)
+        except CodexAppServerError as error:
+            raise SandboxValidationError(str(error)) from error
+
+    async def launch_terminal(
+        self, session_id: str, owner_id: str
+    ) -> tuple[str, str, str]:
+        """Create a shell and return its native browser URL and capability."""
+        session = self._owned(session_id, owner_id)
+        try:
+            url, shell_session_id = await terminal_launch_url(
+                session.cloud.endpoint,
+                session_id,
+                direct=True,
+            )
+        except (RuntimeError, TypeError, ValueError) as error:
+            raise SandboxInvocationError(_safe_error_message(error)) from error
+        return url, shell_session_id, session.proxy_token
+
+    def launch_browser(self, session_id: str, owner_id: str) -> tuple[str, str]:
+        """Return the Browser UI's native URL and capability."""
+        session = self._owned(session_id, owner_id)
+        try:
+            url = browser_launch_url(
+                session_id,
+                endpoint=session.cloud.endpoint,
+                direct=True,
+            )
+        except (RuntimeError, TypeError, ValueError) as error:
+            raise SandboxInvocationError(_safe_error_message(error)) from error
+        return url, session.proxy_token
+
+    async def upload_file(
+        self,
+        session_id: str,
+        owner_id: str,
+        file_name: str,
+        content_type: str,
+        content: bytes,
+    ) -> str:
+        """Upload a browser attachment into the current remote workspace."""
+        session = self._owned(session_id, owner_id)
+        try:
+            return await upload_sandbox_file(
+                session.cloud.endpoint,
+                session.codex.cwd,
+                file_name,
+                content_type,
+                content,
+            )
+        except (RuntimeError, TypeError, ValueError) as error:
+            raise SandboxInvocationError(_safe_error_message(error)) from error
+
+    def resolve_proxy_target(self, session_id: str, token: str) -> SandboxProxyTarget:
+        """Resolve an opaque data-plane capability without browser identity."""
+        found = False
+        for session in self._sessions.values():
+            if session.session_id != session_id:
+                continue
+            found = True
+            if token and secrets.compare_digest(token, session.proxy_token):
+                return SandboxProxyTarget(endpoint=session.cloud.endpoint)
+        if found:
+            raise PermissionError("invalid Sandbox proxy capability")
+        raise KeyError(session_id)
+
+    async def close(self, session_id: str, owner_id: str) -> None:
+        """Disconnect the local bridge without deleting the cloud Session."""
+        session = self._owned(session_id, owner_id)
+        async with session.lock:
+            self._sessions.pop((owner_id, session_id), None)
+            await session.codex.close()
+
+    async def delete(
+        self,
+        session_id: str,
+        owner_id: str,
+        *,
+        is_admin: bool = False,
+    ) -> None:
+        """Delete a cloud Session and close its local bridge when connected."""
+        key = (owner_id, session_id)
+        if not is_admin and any(
+            candidate_id == session_id and candidate_owner != owner_id
+            for candidate_owner, candidate_id in self._sessions
+        ):
+            raise SandboxSessionNotFoundError("智能体 Session 不存在或不属于当前用户。")
+        session = self._sessions.pop(key, None)
+        if session is None:
+            cloud = await self._gateway.get_session(self._tool_id(), session_id)
+            _require_session_access(cloud, owner_id, is_admin=is_admin)
+        else:
+            cloud = session.cloud
+            async with session.lock:
+                await session.codex.close()
+        if is_admin:
+            other_sessions = [
+                candidate
+                for (candidate_owner, candidate_id), candidate in self._sessions.items()
+                if candidate_id == session_id and candidate_owner != owner_id
+            ]
+            for candidate in other_sessions:
+                self._sessions.pop((candidate.owner_id, candidate.session_id), None)
+                async with candidate.lock:
+                    await candidate.codex.close()
+        await self._gateway.delete_session(cloud)
 
     async def cleanup_expired(self) -> None:
-        """Delete sessions that exceeded their remote TTL."""
+        """Drop local connections that exceeded their remote TTL window."""
         now = time.monotonic()
         expired = [
             (session.session_id, session.owner_id)
@@ -747,44 +1221,392 @@ class SandboxConversationService:
                 await self.close(session_id, owner_id)
             except SandboxError as error:
                 logger.warning(
-                    "Failed to clean up expired Sandbox session %s: %s",
+                    "Failed to disconnect expired Sandbox Session %s: %s",
                     session_id,
                     _safe_error_message(error),
                 )
 
     async def close_all(self) -> None:
-        """Best-effort process-shutdown cleanup for all cloud sessions."""
-        sessions = [
-            (session.session_id, session.owner_id)
-            for session in self._sessions.values()
-        ]
-        for session_id, owner_id in sessions:
-            try:
-                await self.close(session_id, owner_id)
-            except SandboxError as error:
-                logger.warning(
-                    "Failed to clean up Sandbox session %s at shutdown: %s",
-                    session_id,
-                    _safe_error_message(error),
-                )
+        """Drop local connections while leaving cloud Sessions reusable."""
+        sessions = tuple(self._sessions.values())
+        self._sessions.clear()
+        if sessions:
+            await asyncio.gather(
+                *(session.codex.close() for session in sessions),
+                return_exceptions=True,
+            )
         await self._gateway.drain()
+
+
+class SandboxAgentSessionService:
+    """List, create, and securely open managed Hermes/OpenClaw Sessions."""
+
+    def __init__(
+        self,
+        gateway: SandboxCloudGateway,
+        *,
+        kind: str,
+        tool_id: str | None = None,
+    ) -> None:
+        if kind not in _SANDBOX_AGENT_TOOL_ENVS:
+            raise ValueError(f"Unsupported Studio sandbox agent kind: {kind}")
+        self._gateway = gateway
+        self.kind = kind
+        self._configured_tool_id = (tool_id or "").strip()
+        self._workspaces: dict[
+            tuple[str, str], tuple[SandboxCloudSession, str, float]
+        ] = {}
+
+    def _tool_id(self, *, required: bool = True) -> str:
+        tool_id = self._configured_tool_id
+        if not tool_id:
+            tool_id = next(
+                (
+                    value
+                    for env_name in _SANDBOX_AGENT_TOOL_ENVS[self.kind]
+                    if (value := (os.getenv(env_name) or "").strip())
+                ),
+                "",
+            )
+        if required and not tool_id:
+            raise SandboxConfigurationError("管理员未配置")
+        return tool_id
+
+    def capabilities(self) -> dict[str, object]:
+        enabled = bool(self._tool_id(required=False))
+        return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
+
+    async def list_sessions(
+        self, owner_id: str, *, is_admin: bool = False
+    ) -> list[SandboxCloudSession]:
+        return await self._gateway.list_sessions(
+            self._tool_id(),
+            None if is_admin else owner_id,
+        )
+
+    async def create(
+        self,
+        owner_id: str,
+        display_name: object = "",
+    ) -> SandboxCloudSession:
+        if not isinstance(display_name, str):
+            raise SandboxValidationError("智能体名称必须是文本。")
+        display_name = display_name.strip()
+        if len(display_name) > STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH:
+            raise SandboxValidationError(
+                f"智能体名称不能超过 {STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH} 个字符。"
+            )
+        return await self._gateway.create_session(
+            self._tool_id(), display_name, owner_id
+        )
+
+    async def open(
+        self,
+        session_id: str,
+        owner_id: str,
+        *,
+        is_admin: bool = False,
+    ) -> tuple[SandboxCloudSession, str]:
+        """Resolve one ready Session and issue an opaque WebUI capability."""
+        self._cleanup_expired()
+        cloud = await self._gateway.get_session(self._tool_id(), session_id)
+        _require_session_access(cloud, owner_id, is_admin=is_admin)
+        if cloud.status.lower() != "ready" or not cloud.endpoint:
+            status = cloud.status or "Unknown"
+            raise SandboxSessionUnavailableError(
+                f"AgentKit Session 尚未就绪，当前状态：{status}。"
+            )
+        token = secrets.token_urlsafe(32)
+        self._workspaces[(owner_id, session_id)] = (
+            cloud,
+            token,
+            time.monotonic() + STUDIO_SANDBOX_TTL_SECONDS,
+        )
+        return cloud, token
+
+    async def delete(
+        self,
+        session_id: str,
+        owner_id: str,
+        *,
+        is_admin: bool = False,
+    ) -> None:
+        """Delete one managed cloud Session and revoke its local workspace."""
+        if not is_admin and any(
+            candidate_id == session_id and candidate_owner != owner_id
+            for candidate_owner, candidate_id in self._workspaces
+        ):
+            raise SandboxSessionNotFoundError("智能体 Session 不存在或不属于当前用户。")
+        cloud = await self._gateway.get_session(self._tool_id(), session_id)
+        _require_session_access(cloud, owner_id, is_admin=is_admin)
+        self._workspaces = {
+            key: workspace
+            for key, workspace in self._workspaces.items()
+            if key[1] != session_id or (not is_admin and key[0] != owner_id)
+        }
+        await self._gateway.delete_session(cloud)
+
+    async def launch_terminal(
+        self,
+        session_id: str,
+        owner_id: str,
+    ) -> tuple[str, str, str]:
+        """Create a shell for an opened branded Session."""
+        cloud, token, _expires_at = self._workspace(session_id, owner_id)
+        try:
+            url, shell_session_id = await terminal_launch_url(
+                cloud.endpoint,
+                session_id,
+                direct=True,
+            )
+        except (RuntimeError, TypeError, ValueError) as error:
+            raise SandboxInvocationError(_safe_error_message(error)) from error
+        return url, shell_session_id, token
+
+    def resolve_proxy_target(
+        self,
+        session_id: str,
+        token: str,
+    ) -> SandboxProxyTarget:
+        """Resolve an opaque capability for WebUI or Terminal proxying."""
+        self._cleanup_expired()
+        found = False
+        for cloud, candidate, _expires_at in self._workspaces.values():
+            if cloud.instance_id != session_id:
+                continue
+            found = True
+            if token and secrets.compare_digest(token, candidate):
+                return SandboxProxyTarget(endpoint=cloud.endpoint)
+        if found:
+            raise PermissionError("invalid managed agent proxy capability")
+        raise KeyError(session_id)
+
+    def _workspace(
+        self,
+        session_id: str,
+        owner_id: str,
+    ) -> tuple[SandboxCloudSession, str, float]:
+        self._cleanup_expired()
+        workspace = self._workspaces.get((owner_id, session_id))
+        if workspace is None:
+            raise SandboxSessionNotFoundError(
+                "智能体 Session 尚未打开，请返回列表后重新进入。"
+            )
+        return workspace
+
+    def _cleanup_expired(self) -> None:
+        now = time.monotonic()
+        self._workspaces = {
+            key: workspace
+            for key, workspace in self._workspaces.items()
+            if workspace[2] > now
+        }
+
+
+def mount_sandbox_agent_routes(
+    app: Any,
+    services: dict[str, SandboxAgentSessionService],
+    owner_resolver: Callable[[Any], str],
+    admin_resolver: Callable[[Any], bool] | None = None,
+) -> None:
+    """Mount list/create/open routes for managed agent Sessions."""
+    from fastapi import HTTPException
+    from fastapi.responses import JSONResponse
+
+    from veadk.cli.frontend_agent_proxy import (
+        agent_surface_prefix,
+        mount_agent_surface_proxy_routes,
+    )
+
+    def _service(kind: str) -> SandboxAgentSessionService:
+        service = services.get(kind)
+        if service is None:
+            raise HTTPException(status_code=404, detail="未知的沙箱智能体类型。")
+        return service
+
+    def _is_admin(request: Request) -> bool:
+        return bool(admin_resolver and admin_resolver(request))
+
+    def _http_error(error: SandboxError) -> HTTPException:
+        status_code = 500
+        if isinstance(error, SandboxConfigurationError):
+            status_code = 503
+        elif isinstance(error, SandboxValidationError):
+            status_code = 422
+        elif isinstance(error, SandboxSessionNotFoundError):
+            status_code = 404
+        elif isinstance(error, SandboxSessionUnavailableError):
+            status_code = 409
+        elif isinstance(error, SandboxProvisioningError):
+            status_code = 502
+        return HTTPException(
+            status_code=status_code,
+            detail={
+                "code": error.code,
+                "message": str(error),
+                "retryable": error.retryable,
+            },
+        )
+
+    def _public_session(session: SandboxCloudSession, kind: str) -> dict[str, str]:
+        return {
+            "sessionId": session.instance_id,
+            "userSessionId": session.user_session_id,
+            "status": session.status,
+            "createdAt": session.created_at,
+            "expireAt": session.expire_at,
+            "toolType": session.tool_type,
+            "createdBy": session.created_by,
+            "displayName": session.display_name,
+            "toolName": kind,
+        }
+
+    @app.get("/web/{kind}/capabilities")
+    async def _sandbox_agent_capabilities(
+        kind: str,
+        request: Request,
+    ) -> dict[str, object]:
+        owner_resolver(request)
+        return _service(kind).capabilities()
+
+    @app.get("/web/{kind}/sessions")
+    async def _list_sandbox_agent_sessions(
+        kind: str,
+        request: Request,
+    ) -> dict[str, object]:
+        try:
+            sessions = await _service(kind).list_sessions(
+                owner_resolver(request),
+                is_admin=_is_admin(request),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"sessions": [_public_session(session, kind) for session in sessions]}
+
+    @app.post("/web/{kind}/sessions")
+    async def _create_sandbox_agent_session(
+        kind: str,
+        request: Request,
+    ) -> dict[str, str]:
+        owner_id = owner_resolver(request)
+        try:
+            body = await request.body()
+            if body:
+                try:
+                    data = json.loads(body)
+                except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                    raise SandboxValidationError(
+                        "创建智能体的请求不是有效 JSON。"
+                    ) from error
+                if not isinstance(data, dict):
+                    raise SandboxValidationError("创建智能体的请求格式无效。")
+            else:
+                data = {}
+            session = await _service(kind).create(
+                owner_id,
+                data.get("displayName", ""),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return _public_session(session, kind)
+
+    @app.post("/web/{kind}/sessions/{session_id}/open")
+    async def _open_sandbox_agent_session(
+        kind: str,
+        session_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        service = _service(kind)
+        try:
+            session, token = await service.open(
+                session_id,
+                owner_resolver(request),
+                is_admin=_is_admin(request),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        prefix = agent_surface_prefix(kind, session_id, token)
+        return {
+            **_public_session(session, kind),
+            "webuiUrl": f"{prefix}/{kind}/",
+        }
+
+    @app.delete("/web/{kind}/sessions/{session_id}")
+    async def _delete_sandbox_agent_session(
+        kind: str,
+        session_id: str,
+        request: Request,
+    ) -> dict[str, bool]:
+        try:
+            await _service(kind).delete(
+                session_id,
+                owner_resolver(request),
+                is_admin=_is_admin(request),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"deleted": True}
+
+    @app.post("/web/{kind}/sessions/{session_id}/terminal")
+    async def _open_sandbox_agent_terminal(
+        kind: str,
+        session_id: str,
+        request: Request,
+    ) -> JSONResponse:
+        try:
+            url, shell_session_id, token = await _service(kind).launch_terminal(
+                session_id,
+                owner_resolver(request),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        response = JSONResponse({"url": url, "shellSessionId": shell_session_id})
+        response.headers["Cache-Control"] = "no-store"
+        forwarded_protocol = (
+            request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+        )
+        response.set_cookie(
+            proxy_cookie_name(session_id),
+            token,
+            max_age=STUDIO_SANDBOX_TTL_SECONDS,
+            httponly=True,
+            secure=(request.url.scheme == "https" or forwarded_protocol == "https"),
+            samesite="strict",
+            path=proxy_prefix(session_id, "terminal").rsplit("/", 1)[0],
+        )
+        return response
+
+    def _surface_target(
+        kind: str,
+        session_id: str,
+        token: str,
+    ) -> SandboxProxyTarget:
+        return _service(kind).resolve_proxy_target(session_id, token)
+
+    mount_agent_surface_proxy_routes(app, _surface_target)
 
 
 def mount_sandbox_routes(
     app: Any,
     service: SandboxConversationService,
     owner_resolver: Callable[[Any], str],
+    proxy_target_resolver: Callable[[str, str], SandboxProxyTarget] | None = None,
+    admin_resolver: Callable[[Any], bool] | None = None,
 ) -> None:
-    """Mount thin Studio HTTP routes for temporary Sandbox conversations."""
+    """Mount Studio HTTP routes for reusable Sandbox Sessions."""
     from fastapi import HTTPException
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import JSONResponse, StreamingResponse
 
     def _http_error(error: SandboxError) -> HTTPException:
         status_code = 500
         if isinstance(error, SandboxConfigurationError):
             status_code = 503
+        elif isinstance(error, SandboxValidationError):
+            status_code = 422
         elif isinstance(error, SandboxSessionNotFoundError):
             status_code = 404
+        elif isinstance(error, SandboxSessionUnavailableError):
+            status_code = 409
         elif isinstance(error, SandboxProvisioningError):
             status_code = 502
         elif isinstance(error, SandboxCapacityError):
@@ -798,33 +1620,398 @@ def mount_sandbox_routes(
             },
         )
 
+    def _is_admin(request: Request) -> bool:
+        return bool(admin_resolver and admin_resolver(request))
+
+    def _public_session(session: SandboxCloudSession) -> dict[str, str]:
+        return {
+            "sessionId": session.instance_id,
+            "userSessionId": session.user_session_id,
+            "status": session.status,
+            "createdAt": session.created_at,
+            "expireAt": session.expire_at,
+            "toolType": session.tool_type,
+            "createdBy": session.created_by,
+            "displayName": session.display_name,
+        }
+
+    async def _request_object(
+        request: Request, *, maximum: int = 64 * 1024
+    ) -> dict[str, object]:
+        body = await request.body()
+        if len(body) > maximum:
+            raise SandboxValidationError("请求内容过大。")
+        try:
+            value = json.loads(body) if body else {}
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise SandboxValidationError("请求不是有效 JSON。") from error
+        if not isinstance(value, dict):
+            raise SandboxValidationError("请求必须是 JSON 对象。")
+        return value
+
+    def _launch_response(
+        request: Request,
+        session_id: str,
+        token: str,
+        value: dict[str, object],
+    ) -> JSONResponse:
+        response = JSONResponse(value)
+        response.headers["Cache-Control"] = "no-store"
+        common_path = proxy_prefix(session_id, "terminal").rsplit("/", 1)[0]
+        forwarded_protocol = (
+            request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+        )
+        response.set_cookie(
+            proxy_cookie_name(session_id),
+            token,
+            max_age=STUDIO_SANDBOX_TTL_SECONDS,
+            httponly=True,
+            secure=(request.url.scheme == "https" or forwarded_protocol == "https"),
+            samesite="strict",
+            path=common_path,
+        )
+        return response
+
     @app.get("/web/sandbox/capabilities")
     async def _sandbox_capabilities(request: Request) -> dict[str, object]:
         owner_resolver(request)
         return service.capabilities()
 
+    @app.get("/web/sandbox/sessions")
+    async def _list_sandbox_sessions(request: Request) -> dict[str, object]:
+        try:
+            sessions = await service.list_sessions(
+                owner_resolver(request),
+                is_admin=_is_admin(request),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"sessions": [_public_session(session) for session in sessions]}
+
     @app.post("/web/sandbox/sessions")
     async def _start_sandbox_session(request: Request) -> dict[str, str]:
+        owner_id = owner_resolver(request)
         try:
-            session = await service.start(owner_resolver(request))
+            body = await request.body()
+            if body:
+                try:
+                    data = json.loads(body)
+                except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                    raise SandboxValidationError(
+                        "创建智能体的请求不是有效 JSON。"
+                    ) from error
+                if not isinstance(data, dict):
+                    raise SandboxValidationError("创建智能体的请求格式无效。")
+            else:
+                data = {}
+            session = await service.create(owner_id, data.get("displayName", ""))
         except SandboxError as error:
             raise _http_error(error) from error
         return {
-            "sessionId": session.session_id,
-            "status": "ready",
+            **_public_session(session),
             "toolName": STUDIO_SANDBOX_TOOL_NAME,
+        }
+
+    @app.post("/web/sandbox/sessions/{session_id}/connect")
+    async def _connect_sandbox_session(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        try:
+            session = await service.connect(
+                session_id,
+                owner_resolver(request),
+                is_admin=_is_admin(request),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {
+            **_public_session(session.cloud),
+            "toolName": STUDIO_SANDBOX_TOOL_NAME,
+            **service.settings(session_id, session.owner_id),
+        }
+
+    @app.get("/web/sandbox/sessions/{session_id}/settings")
+    async def _sandbox_settings(session_id: str, request: Request) -> dict[str, object]:
+        try:
+            return service.settings(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+
+    @app.get("/web/sandbox/sessions/{session_id}/status")
+    async def _sandbox_status(session_id: str, request: Request) -> dict[str, object]:
+        try:
+            return service.status(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+
+    @app.get("/web/sandbox/sessions/{session_id}/models")
+    async def _list_sandbox_models(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        try:
+            models = await service.list_models(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"models": [model.public_dict() for model in models]}
+
+    @app.put("/web/sandbox/sessions/{session_id}/model")
+    async def _set_sandbox_model(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        try:
+            data = await _request_object(request)
+            model = data.get("model")
+            if not isinstance(model, str):
+                raise SandboxValidationError("模型名称必须是文本。")
+            applied = await service.set_model(session_id, owner_id, model)
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"model": applied}
+
+    @app.get("/web/sandbox/sessions/{session_id}/skills")
+    async def _list_sandbox_skills(
+        session_id: str,
+        request: Request,
+        force_reload: bool = False,
+    ) -> dict[str, object]:
+        try:
+            skills = await service.list_skills(
+                session_id,
+                owner_resolver(request),
+                force_reload=force_reload,
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"skills": [skill.public_dict() for skill in skills]}
+
+    @app.get("/web/sandbox/sessions/{session_id}/threads")
+    async def _list_sandbox_threads(
+        session_id: str,
+        request: Request,
+        cursor: str = "",
+        search: str = "",
+        archived: bool = False,
+    ) -> dict[str, object]:
+        if len(cursor) > 2_000 or len(search) > 500:
+            raise _http_error(SandboxValidationError("Thread 查询参数过长。"))
+        try:
+            threads, next_cursor = await service.list_threads(
+                session_id,
+                owner_resolver(request),
+                cursor=cursor,
+                search_term=search,
+                archived=archived,
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {
+            "threads": [thread.public_dict() for thread in threads],
+            **({"nextCursor": next_cursor} if next_cursor else {}),
+        }
+
+    @app.post("/web/sandbox/sessions/{session_id}/threads/new")
+    async def _new_sandbox_thread(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        try:
+            return await service.new_thread(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+
+    @app.post("/web/sandbox/sessions/{session_id}/threads/resume")
+    async def _resume_sandbox_thread(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        try:
+            data = await _request_object(request)
+            thread_id = data.get("threadId")
+            if not isinstance(thread_id, str):
+                raise SandboxValidationError("Thread ID 必须是文本。")
+            return await service.resume_thread(session_id, owner_id, thread_id)
+        except SandboxError as error:
+            raise _http_error(error) from error
+
+    @app.post("/web/sandbox/sessions/{session_id}/threads/fork")
+    async def _fork_sandbox_thread(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        try:
+            return await service.fork_thread(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+
+    @app.post("/web/sandbox/sessions/{session_id}/threads/archive")
+    async def _archive_sandbox_thread(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        try:
+            data = await _request_object(request)
+            thread_id = data.get("threadId")
+            if not isinstance(thread_id, str):
+                raise SandboxValidationError("Thread ID 必须是文本。")
+            return await service.archive_thread(session_id, owner_id, thread_id)
+        except SandboxError as error:
+            raise _http_error(error) from error
+
+    @app.post("/web/sandbox/sessions/{session_id}/threads/compact")
+    async def _compact_sandbox_thread(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        try:
+            await service.compact_thread(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"started": True}
+
+    @app.put("/web/sandbox/sessions/{session_id}/permissions")
+    async def _update_sandbox_permissions(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        try:
+            data = await _request_object(request)
+            try:
+                settings = permission_settings_from_payload(data)
+            except (TypeError, ValueError) as error:
+                raise SandboxValidationError(str(error)) from error
+            applied = await service.update_permissions(session_id, owner_id, settings)
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"permissions": applied.public_dict()}
+
+    @app.put("/web/sandbox/sessions/{session_id}/workspace")
+    async def _update_sandbox_workspace(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        try:
+            data = await _request_object(request)
+            cwd = data.get("cwd")
+            if not isinstance(cwd, str):
+                raise SandboxValidationError("工作目录必须是文本。")
+            applied = await service.update_workspace(session_id, owner_id, cwd)
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"cwd": applied, "workspaceLocked": False}
+
+    @app.get("/web/sandbox/sessions/{session_id}/directories")
+    async def _list_sandbox_directories(
+        session_id: str, request: Request, path: str = "/"
+    ) -> dict[str, object]:
+        try:
+            listing = await service.list_directories(
+                session_id, owner_resolver(request), path
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return listing.public_dict()
+
+    @app.post("/web/sandbox/sessions/{session_id}/approvals/{approval_id}")
+    async def _resolve_sandbox_approval(
+        session_id: str, approval_id: str, request: Request
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        try:
+            data = await _request_object(request)
+            try:
+                decision = approval_decision_from_payload(data.get("decision"))
+            except ValueError as error:
+                raise SandboxValidationError(str(error)) from error
+            service.resolve_approval(session_id, owner_id, approval_id, decision)
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"approvalId": approval_id, "decision": decision}
+
+    @app.post("/web/sandbox/sessions/{session_id}/terminal")
+    async def _launch_sandbox_terminal(
+        session_id: str, request: Request
+    ) -> JSONResponse:
+        try:
+            url, shell_session_id, token = await service.launch_terminal(
+                session_id, owner_resolver(request)
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return _launch_response(
+            request,
+            session_id,
+            token,
+            {"url": url, "shellSessionId": shell_session_id},
+        )
+
+    @app.post("/web/sandbox/sessions/{session_id}/browser")
+    async def _launch_sandbox_browser(
+        session_id: str, request: Request
+    ) -> JSONResponse:
+        try:
+            url, token = service.launch_browser(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return _launch_response(request, session_id, token, {"url": url})
+
+    @app.post("/web/sandbox/sessions/{session_id}/files")
+    async def _upload_sandbox_file(
+        session_id: str,
+        request: Request,
+        file: Annotated[UploadFile, File()],
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        content = bytearray()
+        try:
+            while chunk := await file.read(1024 * 1024):
+                content.extend(chunk)
+                if len(content) > SANDBOX_UPLOAD_MAX_BYTES:
+                    limit_mb = SANDBOX_UPLOAD_MAX_BYTES // (1024 * 1024)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"文件不能超过 {limit_mb} MB。",
+                    )
+            path = await service.upload_file(
+                session_id,
+                owner_id,
+                file.filename or "attachment",
+                file.content_type or "application/octet-stream",
+                bytes(content),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        finally:
+            await file.close()
+        return {
+            "id": path,
+            "path": path,
+            "name": path.rsplit("/", 1)[-1],
+            "mimeType": file.content_type or "application/octet-stream",
+            "sizeBytes": len(content),
         }
 
     @app.post("/web/sandbox/sessions/{session_id}/messages")
     async def _send_sandbox_message(
         session_id: str, request: Request
     ) -> StreamingResponse:
-        data = await request.json()
-        prompt = data.get("message") if isinstance(data, dict) else None
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise HTTPException(status_code=422, detail="message must not be empty")
-        if len(prompt) > 100_000:
-            raise HTTPException(status_code=413, detail="message is too large")
+        try:
+            data = await _request_object(request, maximum=128 * 1024)
+            prompt = data.get("message")
+            if not isinstance(prompt, str) or not prompt.strip():
+                raise SandboxValidationError("message must not be empty")
+            if len(prompt) > 100_000:
+                raise SandboxValidationError("message is too large")
+            raw_skill_ids = data.get("skillIds", [])
+            if (
+                not isinstance(raw_skill_ids, list)
+                or len(raw_skill_ids) > 20
+                or any(
+                    not isinstance(skill_id, str) or not skill_id or len(skill_id) > 500
+                    for skill_id in raw_skill_ids
+                )
+            ):
+                raise SandboxValidationError("skillIds 格式无效。")
+            skill_ids = tuple(dict.fromkeys(raw_skill_ids))
+        except SandboxError as error:
+            raise _http_error(error) from error
         owner_id = owner_resolver(request)
         try:
             service.require_owned(session_id, owner_id)
@@ -834,11 +2021,44 @@ def mount_sandbox_routes(
         async def _stream() -> AsyncIterator[str]:
             try:
                 async for event in service.stream_message(
-                    session_id, owner_id, prompt.strip()
+                    session_id, owner_id, prompt.strip(), skill_ids
                 ):
                     if event.kind == "text":
                         payload = {"text": event.text}
                         yield f"event: delta\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                        continue
+                    if event.approval is not None:
+                        yield (
+                            "event: approval\n"
+                            f"data: {json.dumps(event.approval, ensure_ascii=False)}\n\n"
+                        )
+                        continue
+                    if event.approval_resolved_id:
+                        payload = {"approvalId": event.approval_resolved_id}
+                        yield (
+                            "event: approval_resolved\n"
+                            f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                        )
+                        continue
+                    if event.kind == "usage" and event.usage is not None:
+                        payload = {
+                            "turnId": event.turn_id,
+                            "usage": event.usage.public_dict(),
+                            **(
+                                {"threadTotal": event.thread_total.public_dict()}
+                                if event.thread_total is not None
+                                else {}
+                            ),
+                            **(
+                                {"modelContextWindow": (event.model_context_window)}
+                                if event.model_context_window is not None
+                                else {}
+                            ),
+                        }
+                        yield (
+                            "event: usage\n"
+                            f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                        )
                         continue
                     payload = {
                         "id": event.item_id,
@@ -856,7 +2076,8 @@ def mount_sandbox_routes(
                     await asyncio.shield(service.close(session_id, owner_id))
                 except SandboxError:
                     logger.warning(
-                        "Failed to clean up cancelled Sandbox session %s", session_id
+                        "Failed to disconnect cancelled Sandbox Session %s",
+                        session_id,
                     )
                 raise
             except SandboxError as error:
@@ -876,15 +2097,34 @@ def mount_sandbox_routes(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    @app.delete("/web/sandbox/sessions/{session_id}")
-    async def _delete_sandbox_session(
+    @app.post("/web/sandbox/sessions/{session_id}/disconnect")
+    async def _disconnect_sandbox_session(
         session_id: str, request: Request
     ) -> dict[str, bool]:
         try:
             await service.close(session_id, owner_resolver(request))
         except SandboxError as error:
             raise _http_error(error) from error
+        return {"disconnected": True}
+
+    @app.delete("/web/sandbox/sessions/{session_id}")
+    async def _delete_sandbox_session(
+        session_id: str, request: Request
+    ) -> dict[str, bool]:
+        try:
+            await service.delete(
+                session_id,
+                owner_resolver(request),
+                is_admin=_is_admin(request),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
         return {"deleted": True}
+
+    mount_sandbox_proxy_routes(
+        app,
+        proxy_target_resolver or service.resolve_proxy_target,
+    )
 
     cleanup_task: asyncio.Task[None] | None = None
 

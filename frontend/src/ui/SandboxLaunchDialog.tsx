@@ -1,41 +1,63 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { InsightIcon } from "./icons/InsightIcon";
+import {
+  SANDBOX_DISPLAY_NAME_MAX_LENGTH,
+  type SandboxAgentKind,
+} from "../adk/sandbox";
+import { SandboxAgentIcon } from "./icons/SandboxAgentIcons";
 
 export type SandboxLaunchState = "confirm" | "loading" | "error";
+const DEFAULT_SANDBOX_DISPLAY_NAME = "我的智能体";
 
 export interface SandboxLaunchDialogProps {
   open: boolean;
   state: SandboxLaunchState;
+  agentKind?: "codex" | SandboxAgentKind;
   error?: string;
   onCancel: () => void;
-  onConfirm: () => void;
+  onConfirm: (displayName: string) => void;
 }
 
 export function SandboxLaunchDialog({
   open,
   state,
+  agentKind = "codex",
   error,
   onCancel,
   onConfirm,
 }: SandboxLaunchDialogProps) {
-  const dialogRef = useRef<HTMLElement>(null);
+  const agentLabel = agentKind === "codex"
+    ? "Codex"
+    : agentKind === "openclaw" ? "OpenClaw" : "Hermes";
+  const defaultDisplayName = agentKind === "codex"
+    ? DEFAULT_SANDBOX_DISPLAY_NAME
+    : `我的 ${agentLabel}`;
+  const dialogRef = useRef<HTMLFormElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const composingRef = useRef(false);
+  const onCancelRef = useRef(onCancel);
+  const [displayName, setDisplayName] = useState(defaultDisplayName);
+  onCancelRef.current = onCancel;
 
   useEffect(() => {
     if (!open) return;
+    setDisplayName(defaultDisplayName);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    cancelButtonRef.current?.focus();
+    const focusFrame = window.requestAnimationFrame(() => {
+      nameInputRef.current?.focus();
+      nameInputRef.current?.select();
+    });
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onCancel();
+        onCancelRef.current();
         return;
       }
       if (event.key !== "Tab") return;
-      const controls = dialogRef.current?.querySelectorAll<HTMLButtonElement>(
-        "button:not(:disabled)",
+      const controls = dialogRef.current?.querySelectorAll<HTMLElement>(
+        "input:not(:disabled), button:not(:disabled)",
       );
       if (!controls?.length) return;
       const first = controls[0];
@@ -50,19 +72,21 @@ export function SandboxLaunchDialog({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => {
+      window.cancelAnimationFrame(focusFrame);
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [onCancel, open]);
+  }, [defaultDisplayName, open]);
 
   if (!open) return null;
 
   const loading = state === "loading";
+  const validDisplayName = displayName.trim();
   const title = loading
-    ? "正在初始化沙箱"
+    ? `正在创建 ${agentLabel} 智能体`
     : state === "error"
       ? "启动失败"
-      : "启用 Codex 智能体";
+      : `创建 ${agentLabel} 智能体`;
 
   return createPortal(
     <div
@@ -71,18 +95,28 @@ export function SandboxLaunchDialog({
         if (event.target === event.currentTarget && !loading) onCancel();
       }}
     >
-      <section
+      <form
         ref={dialogRef}
         className="sandbox-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="sandbox-dialog-title"
-        aria-describedby="sandbox-dialog-description"
+        aria-describedby={state === "confirm" ? undefined : "sandbox-dialog-description"}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!loading && !composingRef.current && validDisplayName) {
+            onConfirm(validDisplayName);
+          }
+        }}
       >
         <div className="sandbox-dialog-visual" aria-hidden="true">
           <span className="sandbox-dialog-orbit" />
           <span className="sandbox-dialog-icon">
-            {loading ? <span className="sandbox-spinner" /> : <InsightIcon />}
+            {loading ? (
+              <span className="sandbox-spinner" />
+            ) : (
+              <SandboxAgentIcon kind={agentKind} />
+            )}
           </span>
         </div>
         <div className="sandbox-dialog-copy">
@@ -93,25 +127,57 @@ export function SandboxLaunchDialog({
             </p>
           ) : loading ? (
             <p id="sandbox-dialog-description" aria-live="polite">
-              正在寻找可用工具并创建内置智能体会话，通常需要一点时间。
+              正在创建并等待 {agentLabel} 智能体就绪，这通常需要半分钟
             </p>
-          ) : (
-            <p id="sandbox-dialog-description">
-              将启动 AgentKit 沙箱与 Codex 智能体，本次对话不会被持久化保存。
-            </p>
-          )}
+          ) : null}
+          <label className="sandbox-dialog-field">
+            <span className="sandbox-dialog-field-label">
+              <span>智能体名称</span>
+              <span aria-hidden="true">
+                {displayName.length}/{SANDBOX_DISPLAY_NAME_MAX_LENGTH}
+              </span>
+            </span>
+            <input
+              ref={nameInputRef}
+              type="text"
+              required
+              value={displayName}
+              maxLength={SANDBOX_DISPLAY_NAME_MAX_LENGTH}
+              disabled={loading}
+              placeholder={defaultDisplayName}
+              autoComplete="off"
+              onChange={(event) => setDisplayName(event.target.value)}
+              onCompositionStart={() => {
+                composingRef.current = true;
+              }}
+              onCompositionEnd={() => {
+                composingRef.current = false;
+              }}
+              onKeyDown={(event) => {
+                const { nativeEvent } = event;
+                if (
+                  event.key === "Enter" &&
+                  (composingRef.current ||
+                    nativeEvent.isComposing ||
+                    nativeEvent.keyCode === 229)
+                ) {
+                  event.preventDefault();
+                }
+              }}
+            />
+          </label>
         </div>
         <footer className="sandbox-dialog-actions">
           <button ref={cancelButtonRef} type="button" onClick={onCancel}>
-            {loading ? "取消启动" : "取消"}
+            {loading ? "取消创建" : "取消"}
           </button>
           {!loading && (
-            <button type="button" className="is-primary" onClick={onConfirm}>
-              {state === "error" ? "重新尝试" : "确认开启"}
+            <button type="submit" className="is-primary" disabled={!validDisplayName}>
+              {state === "error" ? "重新尝试" : "确认创建"}
             </button>
           )}
         </footer>
-      </section>
+      </form>
     </div>,
     document.body,
   );
