@@ -45,3 +45,28 @@ python main.py
 - 将 `backend="local"` 替换为持久化存储（如 `openviking`、`milvus`、`viking`、
   `opensearch`、`redis`，在 `.env` 或 `config.yaml` 中配置），用于生产环境。
 - 继续阅读 [06 · 多智能体工作流](../06_multi_agent/)，组合多个智能体。
+
+### OpenViking 变体
+
+使用 OpenViking 时，先配置服务连接：
+
+```bash
+export DATABASE_OPENVIKING_URL="http://127.0.0.1:1933"
+export DATABASE_OPENVIKING_API_KEY="your-openviking-api-key"
+# 可选；不配置时默认 default。
+export DATABASE_OPENVIKING_USER_ID="team_a"
+```
+
+然后切换后端：
+
+```python
+knowledgebase = KnowledgeBase(
+    backend="openviking",
+    index="company_faq",
+)
+knowledgebase.add_from_directory("./docs")
+```
+
+未配置 `DATABASE_OPENVIKING_TARGET_URI` 时，资源默认隔离在
+`viking://user/{openviking_user_id or default}/resources/company_faq/`。只有需要固定到其他目录时，才设置
+`DATABASE_OPENVIKING_TARGET_URI`。
