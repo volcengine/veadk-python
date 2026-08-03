@@ -749,6 +749,70 @@
   align-self: center;
 }
 
+.aw-update-wrap {
+  position: relative;
+  align-self: center;
+  display: inline-flex;
+  border-radius: 999px;
+}
+
+.aw-update-wrap.is-disabled {
+  cursor: not-allowed;
+}
+
+.aw-update-wrap.is-disabled .aw-update {
+  cursor: inherit;
+}
+
+.aw-update-spinner {
+  width: 14px;
+  height: 14px;
+  flex-basis: 14px;
+  border-color: currentColor;
+  border-right-color: transparent;
+}
+
+.aw-update-disabled-reason {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  width: max-content;
+  max-width: 260px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 3px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.aw-update-wrap.is-disabled:hover .aw-update-disabled-reason,
+.aw-update-wrap.is-disabled:focus-visible .aw-update-disabled-reason {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.aw-update-wrap:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.55);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aw-update-disabled-reason {
+    transition: none;
+  }
+}
+
 .aw-talk svg {
   width: 15px;
   height: 15px;

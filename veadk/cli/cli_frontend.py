@@ -4663,20 +4663,21 @@ def _run_frontend_server(
     def _runtime_update_result(
         runtime: Any,
         runtime_payload: dict[str, Any],
-        app_name: str,
+        app_name: str | None,
         *,
         can_update: bool,
         reason: str = "",
         reason_code: str = "",
         agent: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], Any]:
+        agent_payload = {**(agent or {}), "appName": app_name} if app_name else None
         return (
             {
                 "canUpdate": can_update,
                 "reason": reason,
                 "reasonCode": reason_code,
                 "runtime": runtime_payload,
-                "agent": {**(agent or {}), "appName": app_name},
+                "agent": agent_payload,
             },
             runtime,
         )
@@ -4686,7 +4687,7 @@ def _run_frontend_server(
         *,
         runtime_id: str,
         region: str,
-        app_name: str,
+        app_name: str | None = None,
     ) -> tuple[dict[str, Any], Any]:
         try:
             runtime = _authorized_runtime(
@@ -4774,7 +4775,8 @@ def _run_frontend_server(
                 reason="该 Runtime 包含多个 Agent，暂不支持原地更新。",
                 reason_code="runtime_multiple_apps",
             )
-        if app_name not in apps:
+        runtime_app_name = apps[0]
+        if app_name and app_name != runtime_app_name:
             return _runtime_update_result(
                 runtime,
                 runtime_payload,
@@ -4783,6 +4785,8 @@ def _run_frontend_server(
                 reason="该 Runtime 中不存在当前 Agent，无法更新。",
                 reason_code="runtime_app_not_found",
             )
+
+        app_name = runtime_app_name
 
         agent_info_path = f"web/agent-info/{quote(app_name, safe='')}"
         try:
@@ -4827,7 +4831,7 @@ def _run_frontend_server(
     async def _web_runtime_update_capability(
         request: Request,
         runtimeId: str = Query(..., min_length=1),
-        appName: str = Query(..., min_length=1),
+        appName: str | None = Query(default=None, min_length=1),
         region: str = Query(default="cn-beijing", min_length=1),
     ) -> dict[str, Any]:
         _require_agent_management(request)

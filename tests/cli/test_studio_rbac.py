@@ -596,7 +596,6 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
             params={
                 "runtimeId": runtime.runtime_id,
                 "region": "cn-beijing",
-                "appName": "selected-agent",
             },
             headers={"X-VeADK-Local-User": "developer"},
         )

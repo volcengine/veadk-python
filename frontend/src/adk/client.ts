@@ -2163,15 +2163,13 @@ export interface RuntimeUpdateCapability {
 export async function getRuntimeUpdateCapability({
   runtimeId,
   region,
-  appName,
   signal,
 }: {
   runtimeId: string;
   region: string;
-  appName: string;
   signal?: AbortSignal;
 }): Promise<RuntimeUpdateCapability> {
-  const params = new URLSearchParams({ runtimeId, region, appName });
+  const params = new URLSearchParams({ runtimeId, region });
   const res = await apiFetch(
     `/web/runtime-update-capability?${params.toString()}`,
     { signal },

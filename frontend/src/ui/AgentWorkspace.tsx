@@ -760,7 +760,6 @@ export function AgentWorkspace({
   const updateCapabilityRequestKey = JSON.stringify([
     selectedAgent?.runtimeId ?? "",
     selectedAgent?.region ?? "",
-    selectedAgentAppName,
   ]);
   const selectedUpdateCapability =
     updateCapability?.requestKey === updateCapabilityRequestKey
@@ -774,8 +773,7 @@ export function AgentWorkspace({
 
     const runtimeId = selectedAgent?.runtimeId ?? "";
     const region = selectedAgent?.region ?? "";
-    const appName = selectedAgentAppName;
-    if (!canUpdate || !runtimeId || !region || !appName) {
+    if (!canUpdate || !runtimeId || !region) {
       setUpdateCapabilityLoading(false);
       return;
     }
@@ -785,14 +783,13 @@ export function AgentWorkspace({
     void getRuntimeUpdateCapability({
       runtimeId,
       region,
-      appName,
       signal: controller.signal,
     }).then((value) => {
       if (requestId !== updateCapabilityRequestRef.current) return;
       if (
         value.runtime.runtimeId !== runtimeId ||
         value.runtime.region !== region ||
-        (value.canUpdate && value.agent?.appName !== appName)
+        (value.canUpdate && !value.agent?.appName)
       ) {
         setUpdateCapabilityError("Runtime 更新能力响应与当前选择不匹配。");
         return;
@@ -815,7 +812,7 @@ export function AgentWorkspace({
       }
     });
     return () => controller.abort();
-  }, [canUpdate, selectedAgent?.region, selectedAgent?.runtimeId, selectedAgentAppName, updateCapabilityRequestKey]);
+  }, [canUpdate, selectedAgent?.region, selectedAgent?.runtimeId, updateCapabilityRequestKey]);
   const listedAgents = useMemo(() => {
     const originalOrder = new Map(agents.map((agent, index) => [agent.id, index]));
     const savedOrder = new Map(agentOrder.map((id, index) => [id, index]));
@@ -878,19 +875,18 @@ export function AgentWorkspace({
         ? "仅支持更新已部署的云端智能体。"
         : !selectedAgent.region
           ? "Runtime 缺少地域信息，无法更新。"
-          : !selectedAgentAppName
-            ? "Runtime 缺少智能体名称，无法更新。"
-            : updateCapabilityLoading
-              ? "正在检查 Runtime 更新能力…"
-              : updateCapabilityError
-                ? updateCapabilityError
-                : !selectedUpdateCapability
-                  ? "尚未完成 Runtime 更新能力检查。"
-                  : !selectedUpdateCapability.canUpdate
-                    ? selectedUpdateCapability.reason || "当前 Runtime 不支持原地更新。"
-                    : selectedUpdateCapability.agent?.appName
-                      ? ""
-                      : "Runtime 更新能力响应缺少智能体信息。";
+          : updateCapabilityLoading
+            ? "正在检查 Runtime 更新能力…"
+            : updateCapabilityError
+              ? updateCapabilityError
+              : !selectedUpdateCapability
+                ? "尚未完成 Runtime 更新能力检查。"
+                : !selectedUpdateCapability.canUpdate
+                  ? selectedUpdateCapability.reason || "当前 Runtime 不支持原地更新。"
+                  : selectedUpdateCapability.agent?.appName
+                    ? ""
+                    : "Runtime 更新能力响应缺少智能体信息。";
+  const updateReasonId = "aw-update-disabled-reason";
   const selectedUpdateTarget = selectedUpdateCapability?.agent
     ? {
         runtimeId: selectedUpdateCapability.runtime.runtimeId,
@@ -2239,29 +2235,57 @@ export function AgentWorkspace({
                     <span>去对话</span>
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="aw-update studio-update-action"
-                  disabled={Boolean(updateBlockedReason)}
-                  title={updateBlockedReason || undefined}
-                  onClick={() =>
-                    selectedDraft
-                      ? onEditDraft?.(selectedDraft)
-                      : selectedAgentUpdateDraft
-                        ? onEditDraft?.({
-                            ...selectedAgentUpdateDraft,
-                            deploymentTarget: selectedUpdateTarget,
-                          })
-                        : selectedUpdateCapability
-                          ? onUpdateAgent(
-                              selectedUpdateCapability.agent?.draft ?? draft,
-                              selectedUpdateCapability,
-                            )
-                          : undefined
-                  }
+                <span
+                  className={`aw-update-wrap${updateBlockedReason ? " is-disabled" : ""}`}
+                  tabIndex={updateBlockedReason ? 0 : undefined}
+                  aria-describedby={updateBlockedReason ? updateReasonId : undefined}
                 >
-                  {selectedDraft || selectedAgentUpdateDraft ? "继续编辑" : "更新"}
-                </button>
+                  <button
+                    type="button"
+                    className="aw-update studio-update-action"
+                    disabled={Boolean(updateBlockedReason)}
+                    aria-busy={updateCapabilityLoading || undefined}
+                    aria-describedby={updateBlockedReason ? updateReasonId : undefined}
+                    onClick={() =>
+                      selectedDraft
+                        ? onEditDraft?.(selectedDraft)
+                        : selectedAgentUpdateDraft
+                          ? onEditDraft?.({
+                              ...selectedAgentUpdateDraft,
+                              deploymentTarget: selectedUpdateTarget,
+                            })
+                          : selectedUpdateCapability
+                            ? onUpdateAgent(
+                                selectedUpdateCapability.agent?.draft ?? draft,
+                                selectedUpdateCapability,
+                              )
+                            : undefined
+                    }
+                  >
+                    {updateCapabilityLoading ? (
+                      <>
+                        <span
+                          className="loading-gap-spinner aw-update-spinner"
+                          aria-hidden="true"
+                        />
+                        <span>检测中</span>
+                      </>
+                    ) : selectedDraft || selectedAgentUpdateDraft ? (
+                      "继续编辑"
+                    ) : (
+                      "更新"
+                    )}
+                  </button>
+                  {updateBlockedReason && (
+                    <span
+                      id={updateReasonId}
+                      className="aw-update-disabled-reason"
+                      role="tooltip"
+                    >
+                      {updateBlockedReason}
+                    </span>
+                  )}
+                </span>
               </div>
             )}
           </main>
