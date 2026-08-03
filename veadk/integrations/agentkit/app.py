@@ -56,6 +56,8 @@ from veadk.integrations.agentkit.session_capabilities import (
 from veadk.memory.short_term_memory import ShortTermMemory
 
 if TYPE_CHECKING:
+    from agentkit.identity import RuntimeIdentity
+
     from veadk.runner import Runner
 
 
@@ -78,6 +80,19 @@ _ADK_SERVER_STATE_KEY = "_veadk_adk_server"
 _DYNAMIC_A2A_ROUTES_ENABLED_STATE_KEY = "_veadk_dynamic_a2a_routes_enabled"
 _SESSION_CAPABILITY_SERVICE_STATE_KEY = "_veadk_session_capability_service"
 _REGISTRY_CONFIG_ATTR = "_veadk_a2a_registry_config"
+_RUNTIME_IDENTITY_REQUIREMENT = (
+    "Runtime identity requires agentkit-sdk-python>=0.8.2; "
+    "upgrade AgentKit SDK before passing identity."
+)
+
+
+def _agentkit_supports_runtime_identity() -> bool:
+    """Return whether the installed AgentKit server exposes identity binding."""
+    try:
+        parameters = inspect.signature(AgentkitAgentServerApp).parameters
+    except (TypeError, ValueError):
+        return False
+    return "identity" in parameters and "identity_health_routes" in parameters
 
 
 def _agent_type(agent: object) -> str:
@@ -1039,6 +1054,7 @@ def create_agentkit_app(
     *,
     agent_draft: Mapping[str, Any] | None = None,
     enable_feishu: bool = False,
+    identity: RuntimeIdentity | None = None,
 ) -> FastAPI:
     """Create an AgentKit-compatible FastAPI app for ``root_agent``.
 
@@ -1052,6 +1068,9 @@ def create_agentkit_app(
         agent_draft: Optional sanitized builder draft for read-only editing metadata.
         enable_feishu: Whether to start the Feishu channel with credentials from
             ``FEISHU_APP_ID`` and ``FEISHU_APP_SECRET``.
+        identity: Optional AgentKit Runtime identity boundary. When supplied,
+            AgentKit verifies and binds the inbound user identity before VeADK
+            Agent or Tool code runs.
 
     Returns:
         The configured FastAPI application.
@@ -1061,10 +1080,18 @@ def create_agentkit_app(
     if short_term_memory is None:
         short_term_memory = ShortTermMemory(backend="local")
 
-    agent_server = AgentkitAgentServerApp(
-        agent=root_agent,
-        short_term_memory=short_term_memory,
-    )
+    agent_server_kwargs: dict[str, Any] = {
+        "agent": root_agent,
+        "short_term_memory": short_term_memory,
+    }
+    if identity is not None:
+        if not _agentkit_supports_runtime_identity():
+            raise RuntimeError(_RUNTIME_IDENTITY_REQUIREMENT)
+        agent_server_kwargs["identity"] = identity
+        # VeADK's fixed /ping route returns only {"status": "ok"}. AgentKit
+        # keeps every business and introspection route identity-bound.
+        agent_server_kwargs["identity_health_routes"] = ("/ping",)
+    agent_server = AgentkitAgentServerApp(**agent_server_kwargs)
     app = cast(FastAPI, agent_server.app)
     setattr(app.state, _SERVER_STATE_KEY, agent_server)
     _configure_dynamic_a2a_routes(app, root_agent)
