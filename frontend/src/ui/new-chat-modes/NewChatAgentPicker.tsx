@@ -11,6 +11,7 @@ import {
   sandboxStatusLabel,
   type SandboxSession,
 } from "../../adk/sandbox";
+import { formatRequestError } from "../../adk/requestError";
 import { AgentFaceIcon } from "../AgentFaceIcon";
 import { SandboxAgentIcon } from "../icons/SandboxAgentIcons";
 import "./new-chat-agent-picker.css";
@@ -93,10 +94,11 @@ export function NewChatAgentPicker({
   onSelectSandboxSession,
 }: NewChatAgentPickerProps) {
   const [open, setOpen] = useState(false);
-  const [activeType, setActiveType] = useState<AgentType>("general");
+  const [activeType, setActiveType] = useState<AgentType | null>(null);
   const [activeTypeIndex, setActiveTypeIndex] = useState(0);
   const [activeRuntimeIndex, setActiveRuntimeIndex] = useState(0);
   const [keyboardPanel, setKeyboardPanel] = useState<"types" | "runtimes">("types");
+  const [keyboardNavigating, setKeyboardNavigating] = useState(false);
   const [runtimes, setRuntimes] = useState<CloudRuntime[]>([]);
   const [sandboxSessions, setSandboxSessions] = useState<SandboxSession[]>([]);
   const [loadedSandboxType, setLoadedSandboxType] = useState<Exclude<AgentType, "general"> | null>(null);
@@ -123,7 +125,9 @@ export function NewChatAgentPicker({
       hoverCloseTimerRef.current = null;
     }
     setOpen(false);
+    setActiveType(null);
     setKeyboardPanel("types");
+    setKeyboardNavigating(false);
     if (returnFocus) triggerRef.current?.focus();
   }, []);
 
@@ -158,7 +162,7 @@ export function NewChatAgentPicker({
       setActiveRuntimeIndex(0);
     } catch (cause) {
       if (requestIdRef.current !== requestId) return;
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(formatRequestError(cause, "加载通用智能体", "GET /web/runtimes"));
     } finally {
       window.clearTimeout(timeoutId);
       if (requestIdRef.current === requestId) setLoading(false);
@@ -186,7 +190,7 @@ export function NewChatAgentPicker({
     } catch (cause) {
       if ((cause as Error)?.name === "AbortError") return;
       if (requestIdRef.current !== requestId) return;
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(formatRequestError(cause, `加载 ${AGENT_TYPES.find((item) => item.id === type)?.label ?? type}`, `GET /web/${type === "codex" ? "sandbox" : type}/sessions`));
       setLoadedSandboxType(type);
     } finally {
       if (sandboxAbortRef.current === controller) sandboxAbortRef.current = null;
@@ -200,7 +204,7 @@ export function NewChatAgentPicker({
   }, [activeType, error, loadRuntimes, loading, open, runtimes.length]);
 
   useEffect(() => {
-    if (!open || activeType === "general" || loadedSandboxType === activeType) return;
+    if (!open || activeType === null || activeType === "general" || loadedSandboxType === activeType) return;
     void loadSandboxSessions(activeType);
   }, [activeType, loadSandboxSessions, loadedSandboxType, open]);
 
@@ -224,7 +228,7 @@ export function NewChatAgentPicker({
     }
   }, []);
 
-  function openPicker(focusMenu: boolean) {
+  function openPicker(focusMenu: boolean, fromKeyboard = false) {
     if (hoverOpenTimerRef.current !== null) {
       window.clearTimeout(hoverOpenTimerRef.current);
       hoverOpenTimerRef.current = null;
@@ -234,8 +238,10 @@ export function NewChatAgentPicker({
       hoverCloseTimerRef.current = null;
     }
     setOpen(true);
+    setActiveType(fromKeyboard ? "general" : null);
+    setActiveTypeIndex(0);
     setKeyboardPanel("types");
-    setActiveTypeIndex(AGENT_TYPES.findIndex((item) => item.id === activeType));
+    setKeyboardNavigating(fromKeyboard);
     if (focusMenu) requestAnimationFrame(() => menuRef.current?.focus());
   }
 
@@ -288,7 +294,7 @@ export function NewChatAgentPicker({
       await onSelectRuntime(runtime);
       close(true);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(formatRequestError(cause, "连接通用智能体"));
     } finally {
       setConnectingRuntimeId("");
     }
@@ -302,7 +308,7 @@ export function NewChatAgentPicker({
       await onSelectSandboxSession(session);
       close(true);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(formatRequestError(cause, `打开 ${activeTypeLabel}`));
     } finally {
       setConnectingRuntimeId("");
     }
@@ -314,12 +320,16 @@ export function NewChatAgentPicker({
       close(true);
       return;
     }
+    if (["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft", "Enter"].includes(event.key)) {
+      setKeyboardNavigating(true);
+    }
     if (keyboardPanel === "types") {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         activateType(activeTypeIndex + (event.key === "ArrowDown" ? 1 : -1));
       } else if (event.key === "ArrowRight" || event.key === "Enter") {
         event.preventDefault();
+        if (activeType === null) activateType(activeTypeIndex);
         setKeyboardPanel("runtimes");
       }
       return;
@@ -368,7 +378,7 @@ export function NewChatAgentPicker({
         onKeyDown={(event) => {
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             event.preventDefault();
-            if (!open) openPicker(true);
+            if (!open) openPicker(true, true);
           } else if (event.key === "Escape" && open) {
             event.preventDefault();
             close(true);
@@ -388,6 +398,9 @@ export function NewChatAgentPicker({
           className="new-chat-agent-picker__menus"
           tabIndex={-1}
           onKeyDown={onMenuKeyDown}
+          onPointerMove={(event) => {
+            if (event.pointerType === "mouse") setKeyboardNavigating(false);
+          }}
         >
           <div className="new-chat-agent-picker__menu" role="menu" aria-label="智能体类型">
             {AGENT_TYPES.map((type, index) => (
@@ -397,7 +410,7 @@ export function NewChatAgentPicker({
                 role="menuitem"
                 aria-haspopup="menu"
                 aria-expanded={activeType === type.id}
-                className={`new-chat-agent-picker__type${activeType === type.id ? " is-active" : ""}${keyboardPanel === "types" && activeTypeIndex === index ? " is-keyboard-active" : ""}`}
+                className={`new-chat-agent-picker__type${keyboardNavigating && keyboardPanel === "types" && activeTypeIndex === index ? " is-keyboard-active" : ""}`}
                 onMouseEnter={() => activateType(index)}
                 onClick={() => {
                   activateType(index);
@@ -411,11 +424,12 @@ export function NewChatAgentPicker({
             ))}
           </div>
 
-          <div
-            className="new-chat-agent-picker__submenu"
-            role="listbox"
-            aria-label={`${activeTypeLabel}列表`}
-          >
+          {activeType !== null ? (
+            <div
+              className="new-chat-agent-picker__submenu"
+              role="listbox"
+              aria-label={`${activeTypeLabel}列表`}
+            >
             {activeType !== "general" && loading && sandboxSessions.length === 0 ? (
               <div className="new-chat-agent-picker__status" role="status" aria-live="polite">
                 <span className="new-chat-agent-picker__spinner" aria-hidden="true" />
@@ -456,7 +470,7 @@ export function NewChatAgentPicker({
                       role="option"
                       aria-selected={false}
                       aria-busy={connecting || undefined}
-                      className={`new-chat-agent-picker__runtime${keyboardPanel === "runtimes" && activeRuntimeIndex === index ? " is-keyboard-active" : ""}`}
+                      className={`new-chat-agent-picker__runtime${keyboardNavigating && keyboardPanel === "runtimes" && activeRuntimeIndex === index ? " is-keyboard-active" : ""}`}
                       disabled={Boolean(connectingRuntimeId)}
                       title={`${session.displayName || activeTypeLabel} · ${session.id}`}
                       onMouseEnter={() => setActiveRuntimeIndex(index)}
@@ -511,7 +525,7 @@ export function NewChatAgentPicker({
                         role="option"
                         aria-selected={selected}
                         aria-busy={connecting || undefined}
-                        className={`new-chat-agent-picker__runtime${keyboardPanel === "runtimes" && activeRuntimeIndex === index ? " is-keyboard-active" : ""}`}
+                        className={`new-chat-agent-picker__runtime${keyboardNavigating && keyboardPanel === "runtimes" && activeRuntimeIndex === index ? " is-keyboard-active" : ""}`}
                         disabled={Boolean(connectingRuntimeId)}
                         title={runtime.name}
                         onMouseEnter={() => setActiveRuntimeIndex(index)}
@@ -541,7 +555,8 @@ export function NewChatAgentPicker({
                 ) : null}
               </>
             )}
-          </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

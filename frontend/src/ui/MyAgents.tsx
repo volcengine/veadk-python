@@ -15,6 +15,7 @@ import {
   type SandboxAgentKind,
   type SandboxSession,
 } from "../adk/sandbox";
+import { formatRequestError } from "../adk/requestError";
 import { AgentFaceIcon } from "./AgentFaceIcon";
 import { SandboxAgentIcon } from "./icons/SandboxAgentIcons";
 import "./MyAgents.css";
@@ -329,7 +330,7 @@ export function MyAgents({
       })
       .catch((cause) => {
         if (runtimeRequestRef.current !== requestId) return;
-        setRuntimeError(cause instanceof Error ? cause.message : String(cause));
+        setRuntimeError(formatRequestError(cause, "加载通用智能体", "GET /web/runtimes"));
       })
       .finally(() => {
         if (runtimeRequestRef.current === requestId) setLoadingRuntimes(false);
@@ -363,7 +364,11 @@ export function MyAgents({
     } catch (cause) {
       if ((cause as Error)?.name === "AbortError") return;
       if (sandboxRequestRef.current !== requestId) return;
-      setSandboxError(cause instanceof Error ? cause.message : String(cause));
+      setSandboxError(formatRequestError(
+        cause,
+        `加载 ${AGENT_TYPES.find((item) => item.id === type)?.label ?? type}`,
+        `GET /web/${type === "codex" ? "sandbox" : type}/sessions`,
+      ));
     } finally {
       if (sandboxAbortRef.current === controller) sandboxAbortRef.current = null;
       if (sandboxRequestRef.current === requestId) {

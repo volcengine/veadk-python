@@ -64,6 +64,14 @@ test("sandbox access is isolated behind a reusable typed client", () => {
   assert.doesNotMatch(sandboxClientSource, /setTimeout|crypto\.randomUUID/);
 });
 
+test("sandbox errors preserve HTTP status and backend detail", () => {
+  assert.match(sandboxClientSource, /const text = await response\.text\(\)\.catch\(\(\) => ""\)/);
+  assert.match(sandboxClientSource, /nestedDetail \?\? payload\.error \?\? payload\.message/);
+  assert.match(sandboxClientSource, /detail == null[\s\S]*?JSON\.stringify\(detail\)/);
+  assert.match(sandboxClientSource, /`\$\{fallback\}（HTTP \$\{response\.status\}）`/);
+  assert.match(sandboxClientSource, /text \? `\$\{summary\}：\$\{text\}` : summary/);
+});
+
 test("new-chat built-in agent mode launches the AgentKit sandbox", () => {
   assert.match(modeSelectorSource, /value: "temporary"[\s\S]*?label: "内置智能体"/);
   assert.match(appSource, /mode === "temporary"[\s\S]*?openSandboxLaunch\(\)/);

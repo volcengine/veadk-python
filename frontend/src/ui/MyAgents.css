@@ -508,6 +508,8 @@
 }
 
 .my-agent-empty p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   color: inherit;
   font-size: inherit;
   font-weight: 400;

@@ -18,3 +18,9 @@ test("session creation surfaces the backend error detail with its status", () =>
     /detail === fallback \? fallback : `\$\{fallback\}：\$\{detail\}`/,
   );
 });
+
+test("runtime listing surfaces HTTP status and backend detail", () => {
+  assert.match(clientSource, /const detail = await httpErrorMessage\(res, "加载 Runtime 失败"\)/);
+  assert.match(clientSource, /const summary = `加载 Runtime 失败（HTTP \$\{res\.status\}）`/);
+  assert.match(clientSource, /`\$\{summary\}：\$\{detail\}`/);
+});

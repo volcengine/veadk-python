@@ -383,6 +383,10 @@ test("keeps Runtime failures distinct from successful empty states", () => {
   );
   assert.doesNotMatch(errorBranch, /<EmptyMessage/);
   assert.match(errorBranch, /fetchSandboxAgents\(activeType\)/);
+  assert.match(pageSource, /formatRequestError\(cause, "加载通用智能体", "GET \/web\/runtimes"\)/);
+  assert.match(pageSource, /formatRequestError\([\s\S]*?`加载 \$\{AGENT_TYPES\.find/);
+  assert.match(pageSource, /`GET \/web\/\$\{type === "codex" \? "sandbox" : type\}\/sessions`/);
+  assert.match(pageStyles, /\.my-agent-empty p\s*\{[\s\S]*?white-space: pre-wrap;[\s\S]*?overflow-wrap: anywhere;/);
 });
 
 test("shows connecting progress and preserves the connected Runtime state", () => {

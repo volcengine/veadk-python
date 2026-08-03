@@ -375,6 +375,7 @@ interface ListSessionsResponse {
 
 interface SandboxErrorPayload {
   detail?: unknown;
+  error?: unknown;
   message?: unknown;
 }
 
@@ -409,18 +410,26 @@ function sandboxHeaders(headers?: HeadersInit): Headers {
 }
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
+  const text = await response.text().catch(() => "");
   let payload: SandboxErrorPayload = {};
   try {
-    payload = (await response.json()) as SandboxErrorPayload;
+    payload = JSON.parse(text) as SandboxErrorPayload;
   } catch {
-    return new Error(`${fallback}（HTTP ${response.status}）`);
+    const summary = `${fallback}（HTTP ${response.status}）`;
+    return new Error(text ? `${summary}：${text}` : summary);
   }
   const nestedDetail = payload.detail;
   const detail =
     nestedDetail && typeof nestedDetail === "object" && "message" in nestedDetail
       ? (nestedDetail as SandboxErrorPayload).message
-      : (nestedDetail ?? payload.message);
-  return new Error(typeof detail === "string" && detail ? detail : fallback);
+      : (nestedDetail ?? payload.error ?? payload.message);
+  const detailText = typeof detail === "string"
+    ? detail
+    : detail == null
+      ? ""
+      : JSON.stringify(detail);
+  const summary = `${fallback}（HTTP ${response.status}）`;
+  return new Error(detailText ? `${summary}：${detailText}` : summary);
 }
 
 function parseSession(
