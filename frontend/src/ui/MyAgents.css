@@ -205,10 +205,6 @@
   transform: translateY(-1px);
 }
 
-.my-agent-card:hover .my-agent-card-content {
-  box-shadow: 0 5px 18px hsl(var(--foreground) / 0.07);
-}
-
 .my-agent-card-content {
   flex: 0 0 auto;
   min-width: 0;
@@ -223,7 +219,6 @@
   border-radius: 12px;
   background: hsl(var(--panel));
   box-shadow: 0 1px 2px hsl(var(--foreground) / 0.035);
-  transition: box-shadow 160ms ease;
 }
 
 .my-agent-card-title {

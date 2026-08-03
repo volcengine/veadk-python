@@ -139,20 +139,14 @@ function formatCreatedAt(value: string): string {
   }).format(date).replace(/\//g, "-");
 }
 
-function formatRuntimeRegion(region?: string): string {
-  if (region === "cn-shanghai") return "上海";
-  if (region === "cn-beijing") return "北京";
-  return "—";
-}
-
 function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
   return {
     id: runtime.runtimeId,
     name: runtime.name,
     description: runtime.description?.trim() || "暂无描述",
     createdAt: formatCreatedAt(runtime.createdAt ?? ""),
-    specificationLabel: "地域",
-    specification: formatRuntimeRegion(runtime.region),
+    specificationLabel: "创建人",
+    specification: runtime.author || "—",
     isMine: runtime.isMine,
     runtime: {
       runtimeId: runtime.runtimeId,
@@ -234,7 +228,7 @@ function AgentCard({
             <h3>{agent.name}</h3>
             {agent.sandbox ? (
               <span className="my-agent-session-id" title={agent.sandbox.id}>
-                Session ID：{agent.sandbox.id}
+                {agent.sandbox.id}
               </span>
             ) : null}
           </div>
@@ -357,13 +351,14 @@ export function MyAgents({
   }, [runtimeScope]);
 
   useEffect(() => {
+    if (activeType !== "general") return;
     setRuntimeAgents([]);
     setRuntimeNextToken("");
     void fetchRuntimePage("", true);
     return () => {
       runtimeRequestRef.current += 1;
     };
-  }, [fetchRuntimePage]);
+  }, [activeType, fetchRuntimePage]);
 
   const fetchSandboxAgents = useCallback(async (type: Exclude<AgentType, "general">) => {
     sandboxAbortRef.current?.abort();
@@ -372,6 +367,7 @@ export function MyAgents({
     const requestId = ++sandboxRequestRef.current;
     setLoadingSandboxAgents(true);
     setSandboxError("");
+    setSandboxAgents([]);
     try {
       const sessions = type === "codex"
         ? await sandboxClient.listSessions({ signal: controller.signal })
@@ -389,6 +385,25 @@ export function MyAgents({
       }
     }
   }, []);
+
+  function selectAgentType(type: AgentType) {
+    if (type === activeType) return;
+    if (type === "general") {
+      runtimeRequestRef.current += 1;
+      setRuntimeAgents([]);
+      setRuntimeNextToken("");
+      setRuntimeError("");
+      setLoadingRuntimes(true);
+    } else {
+      sandboxAbortRef.current?.abort();
+      sandboxAbortRef.current = null;
+      sandboxRequestRef.current += 1;
+      setSandboxAgents([]);
+      setSandboxError("");
+      setLoadingSandboxAgents(true);
+    }
+    setActiveType(type);
+  }
 
   useEffect(() => {
     if (activeType === "general") {
@@ -516,7 +531,7 @@ export function MyAgents({
               key={type.id}
               className={`my-agent-type-pill${activeType === type.id ? " is-active" : ""}`}
               aria-pressed={activeType === type.id}
-              onClick={() => setActiveType(type.id)}
+              onClick={() => selectAgentType(type.id)}
             >
               {type.label}
             </button>

@@ -54,6 +54,26 @@ test("shows the requested title, search, and agent type pills", () => {
   }
   assert.match(pageSource, /className="my-agent-type-pill/);
   assert.match(pageSource, /aria-pressed=\{activeType === type\.id\}/);
+  assert.match(pageSource, /onClick=\{\(\) => selectAgentType\(type\.id\)\}/);
+});
+
+test("clears stale sandbox cards as soon as the Agent type changes", () => {
+  assert.match(
+    pageSource,
+    /function selectAgentType\(type: AgentType\)[\s\S]*?sandboxAbortRef\.current\?\.abort\(\)[\s\S]*?sandboxRequestRef\.current \+= 1[\s\S]*?setSandboxAgents\(\[\]\)[\s\S]*?setLoadingSandboxAgents\(true\)[\s\S]*?setActiveType\(type\)/,
+  );
+  assert.match(
+    pageSource,
+    /const fetchSandboxAgents[\s\S]*?setLoadingSandboxAgents\(true\)[\s\S]*?setSandboxAgents\(\[\]\)[\s\S]*?await sandboxClient/,
+  );
+  assert.match(
+    pageSource,
+    /type === "general"[\s\S]*?runtimeRequestRef\.current \+= 1[\s\S]*?setRuntimeAgents\(\[\]\)[\s\S]*?setLoadingRuntimes\(true\)/,
+  );
+  assert.match(
+    pageSource,
+    /useEffect\(\(\) => \{[\s\S]*?activeType !== "general"[\s\S]*?fetchRuntimePage\("", true\)[\s\S]*?\[activeType, fetchRuntimePage\]/,
+  );
 });
 
 test("renders only account-backed Runtime and Sandbox agents", () => {
@@ -83,7 +103,8 @@ test("agent cards show the archived metadata hierarchy and two-action footer", (
   assert.match(pageSource, /<h3>\{agent\.name\}<\/h3>/);
   assert.match(pageSource, /<dt>创建时间<\/dt>/);
   assert.match(pageSource, /<dt>\{agent\.specificationLabel\}<\/dt>[\s\S]*?<dd>\{agent\.specification\}<\/dd>/);
-  assert.match(pageSource, /Session ID：\{agent\.sandbox\.id\}/);
+  assert.match(pageSource, /className="my-agent-session-id"[\s\S]*?\{agent\.sandbox\.id\}/);
+  assert.doesNotMatch(pageSource, /Session ID：/);
   assert.match(pageSource, /className="my-agent-status-label"[\s\S]*?\{agent\.description\}/);
   assert.doesNotMatch(pageSource, /<dt>工具<\/dt>|<dt>技能<\/dt>/);
   assert.match(pageSource, /className="my-agent-description">\{agent\.description\}/);
@@ -107,6 +128,7 @@ test("uses a responsive two-layer card layout without an empty fixed-height gap"
     /\.my-agent-card\s*\{[\s\S]*?height: auto;[\s\S]*?background: hsl\(var\(--secondary\) \/ 0\.82\)/,
   );
   assert.match(pageStyles, /\.my-agent-card-content\s*\{[\s\S]*?background: hsl\(var\(--panel\)\);/);
+  assert.doesNotMatch(pageStyles, /\.my-agent-card:hover \.my-agent-card-content/);
   assert.match(pageStyles, /\.my-agent-description\s*\{[\s\S]*?-webkit-line-clamp: 2/);
   assert.match(pageStyles, /\.my-agent-actions\s*\{[\s\S]*?gap: 8px;[\s\S]*?padding: 6px 8px 7px;[\s\S]*?background: hsl\(var\(--secondary\) \/ 0\.82\)/);
   assert.match(pageStyles, /\.my-agent-actions button\s*\{[\s\S]*?background: transparent/);
@@ -116,7 +138,7 @@ test("aligns sandbox names with status and formats creation time to seconds", ()
   assert.match(pageStyles, /\.my-agent-card-title\s*\{[\s\S]*?justify-content: space-between/);
   assert.match(pageStyles, /\.my-agent-session-id\s*\{/);
   assert.match(pageSource, /hour: "2-digit"[\s\S]*?minute: "2-digit"[\s\S]*?second: "2-digit"/);
-  assert.match(pageSource, /agent\.sandbox \? \([\s\S]*?Session ID：\{agent\.sandbox\.id\}/);
+  assert.match(pageSource, /agent\.sandbox \? \([\s\S]*?\{agent\.sandbox\.id\}/);
 });
 
 test("metadata remains compact without adding data-plane requests", () => {
@@ -128,7 +150,7 @@ test("metadata remains compact without adding data-plane requests", () => {
   assert.doesNotMatch(pageSource, /appName: info\.appName/);
 });
 
-test("loads both Runtime regions through the merged all-regions endpoint", () => {
+test("loads all Runtime regions and shows the creator on each card", () => {
   assert.match(pageSource, /getRuntimes/);
   assert.match(pageSource, /runtimeScope: RuntimeScope/);
   assert.match(pageSource, /scope: runtimeScope/);
@@ -137,8 +159,9 @@ test("loads both Runtime regions through the merged all-regions endpoint", () =>
   assert.match(pageSource, /id: runtime\.runtimeId/);
   assert.match(pageSource, /name: runtime\.name/);
   assert.match(pageSource, /description: runtime\.description\?\.trim\(\) \|\| "暂无描述"/);
-  assert.match(pageSource, /formatRuntimeRegion\(runtime\.region\)/);
-  assert.match(pageSource, /region === "cn-shanghai"[\s\S]*?"上海"[\s\S]*?region === "cn-beijing"[\s\S]*?"北京"/);
+  assert.match(pageSource, /specificationLabel: "创建人"/);
+  assert.match(pageSource, /specification: runtime\.author \|\| "—"/);
+  assert.doesNotMatch(pageSource, /formatRuntimeRegion/);
   assert.match(pageSource, /runtimeId: runtime\.runtimeId/);
   assert.match(pageSource, /region: runtime\.region/);
   assert.match(pageSource, /<AgentCard[\s\S]*?key=\{agent\.id\}/);
