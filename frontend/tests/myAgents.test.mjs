@@ -56,24 +56,25 @@ test("shows the requested title, search, and agent type pills", () => {
   assert.match(pageSource, /aria-pressed=\{activeType === type\.id\}/);
 });
 
-test("renders only account-backed agents and never ships placeholder cards", () => {
+test("renders only account-backed Runtime and Sandbox agents", () => {
   assert.doesNotMatch(pageSource, /STATIC_SECTIONS/);
   assert.doesNotMatch(
     pageSource,
     /codex-code-review|codex-test-coverage|openclaw-research|hermes-data-analysis/,
   );
-  assert.match(pageSource, /if \(activeType !== "general"\) return \[\]/);
+  assert.match(pageSource, /sandboxClient\.listSessions\(\{ signal: controller\.signal \}\)/);
+  assert.match(pageSource, /sandboxClient\.listAgentSessions\(type, \{ signal: controller\.signal \}\)/);
+  assert.match(pageSource, /sessions\.map\(sandboxToAgent\)/);
 });
 
 test("keeps a primary create action visible above the scrolling results", () => {
   assert.match(pageSource, /canCreate: boolean/);
-  assert.match(pageSource, /canCreate && activeType === "general"/);
+  assert.match(pageSource, /activeType === "general"[\s\S]*?onCreateAgent\(DEFAULT_CREATE_REGION\)[\s\S]*?onCreateSandboxAgent\(activeType\)/);
   assert.match(pageSource, /onCreateAgent\(DEFAULT_CREATE_REGION\)/);
-  assert.doesNotMatch(pageSource, /activeType === "codex" \? onCreateCodexAgent/);
+  assert.match(pageSource, /onCreateSandboxAgent: \(kind: "codex" \| SandboxAgentKind\) => void/);
   assert.match(pageSource, /className="my-agent-create-primary"[\s\S]*?disabled=\{!createAgent\}[\s\S]*?<span>创建智能体<\/span>/);
   assert.ok(pageSource.indexOf('className="my-agent-create-primary"') < pageSource.indexOf('className="my-agent-results"'));
   assert.match(pageSource, /当前账号没有创建智能体权限/);
-  assert.match(pageSource, /activeType !== "general" \? `\$\{activeLabel\}暂未开放`/);
   assert.match(pageStyles, /\.my-agent-create-primary\s*\{[\s\S]*?background: hsl\(var\(--foreground\)\);[\s\S]*?color: hsl\(var\(--background\)\)/);
   assert.match(pageStyles, /\.my-agent-create-primary:disabled\s*\{[\s\S]*?cursor: not-allowed/);
 });
@@ -270,14 +271,14 @@ test("wires card details and connect actions into App navigation", () => {
 });
 
 test("keeps all requested type filters without nested category sections", () => {
-  assert.doesNotMatch(pageSource, /onCreateCodexAgent/);
-  assert.doesNotMatch(appSource, /onCreateCodexAgent=/);
+  assert.match(pageSource, /onCreateSandboxAgent/);
+  assert.match(appSource, /onCreateSandboxAgent=\{openSandboxAgentCreate\}/);
   assert.match(pageSource, /AGENT_TYPES\.map/);
   assert.match(pageSource, /label: "Codex 智能体"/);
   assert.match(pageSource, /label: "OpenClaw 智能体"/);
   assert.match(pageSource, /label: "Hermes 智能体"/);
   assert.doesNotMatch(pageSource, /AgentSection|my-agents-section|comingSoon/);
-  assert.match(pageSource, /<EmptyMessage\.Title>\{activeLabel\}暂未开放<\/EmptyMessage\.Title>/);
+  assert.match(pageSource, /<EmptyMessage\.Title>暂无\{activeLabel\}<\/EmptyMessage\.Title>/);
   assert.match(pageSource, /activeType === "general"[\s\S]*?没有匹配的智能体/);
   assert.doesNotMatch(pageStyles, /\.my-agent-empty\s*\{[^}]*border:/);
   assert.doesNotMatch(pageStyles, /\.my-agent-empty\s*\{[^}]*background:/);
@@ -285,8 +286,8 @@ test("keeps all requested type filters without nested category sections", () => 
   assert.match(pageSource, /<AgentTypeIcon type=\{activeType\} \/>/);
   assert.match(pageSource, /type === "codex"[\s\S]*?type === "openclaw"/);
   assert.match(pageSource, /type === "general"\) return <AgentFaceIcon \/>/);
-  assert.match(pageSource, /<EmptyMessage\.Title>\{activeLabel\}暂未开放<\/EmptyMessage\.Title>/);
-  assert.match(pageSource, /<EmptyMessage\.Description>敬请期待<\/EmptyMessage\.Description>/);
+  assert.match(pageSource, /创建一个\{activeLabel\}，开始使用 AgentKit Session/);
+  assert.match(pageSource, /onClick=\{\(\) => onCreateSandboxAgent\(activeType\)\}/);
 });
 
 test("uses the official EmptyMessage and offers a real create action for an empty Runtime list", () => {
@@ -323,14 +324,15 @@ test("integrates Tailwind 4 and the Apps SDK UI foundation styles", () => {
 });
 
 test("keeps Runtime failures distinct from successful empty states", () => {
-  assert.match(pageSource, /runtimeError && activeType === "general"/);
+  assert.match(pageSource, /activeType === "general" \? runtimeError : sandboxError/);
   assert.match(pageSource, /className="my-agent-empty" role="alert"/);
-  assert.match(pageSource, />重新加载<\/button>/);
+  assert.match(pageSource, />\s*重新加载\s*<\/button>/);
   const errorBranch = pageSource.slice(
-    pageSource.indexOf('runtimeError && activeType === "general"'),
+    pageSource.indexOf('(activeType === "general" ? runtimeError : sandboxError)'),
     pageSource.indexOf(": showEmpty ?"),
   );
   assert.doesNotMatch(errorBranch, /<EmptyMessage/);
+  assert.match(errorBranch, /fetchSandboxAgents\(activeType\)/);
 });
 
 test("shows connecting progress and preserves the connected Runtime state", () => {
@@ -343,7 +345,8 @@ test("shows connecting progress and preserves the connected Runtime state", () =
   assert.match(pageSource, /my-agent-use-spinner/);
   assert.match(pageSource, /<span>连接中<\/span>/);
   assert.doesNotMatch(pageSource, /ConnectIcon/);
-  assert.match(pageSource, /disabled=\{!agent\.runtime \|\| connecting \|\| connected\}/);
+  assert.match(pageSource, /const actionable = Boolean\(agent\.runtime \|\| agent\.sandbox\)/);
+  assert.match(pageSource, /disabled=\{!actionable \|\| connecting \|\| connected\}/);
   assert.match(appSource, /connectedRuntimeId=\{connectedRuntimeId\}/);
   assert.match(pageStyles, /\.my-agent-loading-mark[\s\S]*?border-right-color: transparent/);
   assert.match(

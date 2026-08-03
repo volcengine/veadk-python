@@ -14,6 +14,14 @@ const dialogSource = readFileSync(
   new URL("../src/ui/SandboxLaunchDialog.tsx", import.meta.url),
   "utf8",
 );
+const detailsSource = readFileSync(
+  new URL("../src/ui/SandboxAgentDetails.tsx", import.meta.url),
+  "utf8",
+);
+const workspaceSource = readFileSync(
+  new URL("../src/ui/SandboxAgentWorkspace.tsx", import.meta.url),
+  "utf8",
+);
 const sandboxSessionSource = readFileSync(
   new URL("../src/ui/SandboxSession.tsx", import.meta.url),
   "utf8",
@@ -33,7 +41,10 @@ const modeSelectorSource = readFileSync(
 
 test("sandbox access is isolated behind a reusable typed client", () => {
   assert.match(sandboxClientSource, /export interface AgentKitSandboxClient/);
-  assert.match(sandboxClientSource, /startSession\(options\?: SandboxRequestOptions\)/);
+  assert.match(sandboxClientSource, /startSession\(options\?: SandboxStartOptions\)/);
+  assert.match(sandboxClientSource, /listAgentSessions\([\s\S]*kind: SandboxAgentKind/);
+  assert.match(sandboxClientSource, /startAgentSession\([\s\S]*kind: SandboxAgentKind/);
+  assert.match(sandboxClientSource, /deleteAgentSession\([\s\S]*kind: SandboxAgentKind/);
   assert.match(sandboxClientSource, /sendMessage\([\s\S]*options\?: SandboxRequestOptions/);
   assert.match(sandboxClientSource, /closeSession\([\s\S]*options\?: SandboxRequestOptions/);
   assert.match(sandboxClientSource, /signal\?: AbortSignal/);
@@ -57,12 +68,14 @@ test("new-chat built-in agent mode launches the AgentKit sandbox", () => {
 
 test("sandbox launch dialog covers confirmation loading failure and retry", () => {
   assert.match(dialogSource, /role="dialog"/);
-  assert.match(dialogSource, /启用 Codex 智能体/);
-  assert.match(dialogSource, /将启动 AgentKit 沙箱与 Codex 智能体/);
-  assert.match(dialogSource, /本次对话不会被持久化保存/);
-  assert.match(dialogSource, /正在初始化沙箱/);
+  assert.match(dialogSource, /`创建 \$\{agentLabel\} 智能体`/);
+  assert.match(dialogSource, /创建一个可重复进入的 AgentKit Session/);
+  assert.match(dialogSource, /智能体名称（可选）/);
+  assert.match(dialogSource, /正在创建沙箱/);
   assert.match(dialogSource, /启动失败/);
   assert.match(dialogSource, /重新尝试/);
+  assert.match(dialogSource, /确认创建/);
+  assert.match(dialogSource, /nativeEvent\.isComposing/);
   assert.match(dialogSource, /if \(event\.key === "Escape"/);
   assert.match(appSource, /sandboxLaunchAbortRef\.current\?\.abort\(\)/);
 });
@@ -71,7 +84,7 @@ test("active sandbox conversation is visibly temporary and never uses normal ses
   assert.match(sandboxSessionSource, /当前为 Codex 智能体会话，退出后对话内容消失/);
   assert.match(sandboxSessionSource, /退出内置智能体/);
   assert.match(appSource, /sandboxClient\.sendMessage/);
-  assert.doesNotMatch(sandboxClientSource, /runSSE|listSessions/);
+  assert.doesNotMatch(sandboxClientSource, /runSSE/);
   assert.match(stylesSource, /\.main\.is-sandbox-session::before/);
   assert.match(stylesSource, /\.sandbox-session-warning/);
   assert.match(
@@ -86,6 +99,25 @@ test("active sandbox conversation is visibly temporary and never uses normal ses
     stylesSource,
     /\.main\.is-sandbox-session[\s\S]*linear-gradient\([\s\S]*to bottom/,
   );
+});
+
+test("sandbox agents expose detail deletion and reusable workspaces", () => {
+  assert.match(detailsSource, /Session 详情/);
+  assert.match(detailsSource, /删除智能体/);
+  assert.match(detailsSource, /role="alertdialog"/);
+  assert.match(detailsSource, /确认删除/);
+  assert.match(appSource, /sandboxClient\.deleteSession\(session\.id\)/);
+  assert.match(appSource, /sandboxClient\.deleteAgentSession\(session\.toolName, session\.id\)/);
+  assert.match(workspaceSource, /主界面/);
+  assert.match(workspaceSource, /Terminal/);
+  assert.match(workspaceSource, /sandboxClient\.launchAgentTerminal/);
+});
+
+test("disconnecting Codex keeps the agent while deletion removes it", () => {
+  assert.match(sandboxClientSource, /\/disconnect/);
+  assert.match(sandboxClientSource, /async deleteSession\([\s\S]*?method: "DELETE"/);
+  assert.match(appSource, /\.closeSession\(closingSession\.id\)/);
+  assert.match(appSource, /await sandboxClient\.deleteSession\(session\.id\)/);
 });
 
 test("normal session refresh cannot close a newly launched sandbox session", () => {

@@ -682,6 +682,20 @@ def _serve_options(f):
             "(env: SANDBOX_CHAT_CODEX).",
         ),
         click.option(
+            "--sandbox-chat-openclaw-tool-id",
+            default=None,
+            envvar="SANDBOX_CHAT_OPENCLAW",
+            help="AgentKit ArkClawEnv Tool ID used by OpenClaw agents "
+            "(env: SANDBOX_CHAT_OPENCLAW).",
+        ),
+        click.option(
+            "--sandbox-chat-hermes-tool-id",
+            default=None,
+            envvar="SANDBOX_CHAT_HERMES",
+            help="AgentKit HermesEnv Tool ID used by Hermes agents "
+            "(env: SANDBOX_CHAT_HERMES).",
+        ),
+        click.option(
             "--sandbox-skill-creator-tool-id",
             "--skill-creator-tool-id",
             default=None,
@@ -745,6 +759,8 @@ def frontend(
     auth_mode: str,
     generated_agent_test_run_ttl: int,
     sandbox_chat_codex_tool_id: str | None,
+    sandbox_chat_openclaw_tool_id: str | None,
+    sandbox_chat_hermes_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
@@ -773,6 +789,8 @@ def frontend(
         auth_mode=auth_mode,
         generated_agent_test_run_ttl=generated_agent_test_run_ttl,
         sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
+        sandbox_chat_openclaw_tool_id=sandbox_chat_openclaw_tool_id,
+        sandbox_chat_hermes_tool_id=sandbox_chat_hermes_tool_id,
         sandbox_skill_creator_tool_id=sandbox_skill_creator_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
@@ -805,6 +823,8 @@ def studio(
     auth_mode: str,
     generated_agent_test_run_ttl: int,
     sandbox_chat_codex_tool_id: str | None,
+    sandbox_chat_openclaw_tool_id: str | None,
+    sandbox_chat_hermes_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
@@ -838,6 +858,8 @@ def studio(
         auth_mode=auth_mode,
         generated_agent_test_run_ttl=generated_agent_test_run_ttl,
         sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
+        sandbox_chat_openclaw_tool_id=sandbox_chat_openclaw_tool_id,
+        sandbox_chat_hermes_tool_id=sandbox_chat_hermes_tool_id,
         sandbox_skill_creator_tool_id=sandbox_skill_creator_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
@@ -866,6 +888,8 @@ def _run_frontend_server(
     auth_mode: str,
     generated_agent_test_run_ttl: int,
     sandbox_chat_codex_tool_id: str | None = None,
+    sandbox_chat_openclaw_tool_id: str | None = None,
+    sandbox_chat_hermes_tool_id: str | None = None,
     sandbox_skill_creator_tool_id: str | None = None,
     studio_admins: str | None = None,
     studio_developers: str | None = None,
@@ -903,6 +927,10 @@ def _run_frontend_server(
 
     if sandbox_chat_codex_tool_id:
         os.environ["SANDBOX_CHAT_CODEX"] = sandbox_chat_codex_tool_id
+    if sandbox_chat_openclaw_tool_id:
+        os.environ["SANDBOX_CHAT_OPENCLAW"] = sandbox_chat_openclaw_tool_id
+    if sandbox_chat_hermes_tool_id:
+        os.environ["SANDBOX_CHAT_HERMES"] = sandbox_chat_hermes_tool_id
     if sandbox_skill_creator_tool_id:
         os.environ["SANDBOX_SKILL_CREATOR"] = sandbox_skill_creator_tool_id
 
@@ -1131,13 +1159,16 @@ def _run_frontend_server(
         _require_studio_admin,
     )
 
+    from veadk.cli.agentkit_sandbox_region import sandbox_region_candidates
     from veadk.cli.frontend_sandbox import (
         AgentkitSandboxGateway,
+        SandboxAgentSessionService,
         SandboxConfigurationError,
         SandboxConversationService,
+        SandboxProxyTarget,
+        mount_sandbox_agent_routes,
         mount_sandbox_routes,
     )
-    from veadk.cli.agentkit_sandbox_region import sandbox_region_candidates
 
     def _sandbox_client(region: str):
         from agentkit.sdk.tools.client import AgentkitToolsClient
@@ -1159,16 +1190,58 @@ def _run_frontend_server(
             raise HTTPException(status_code=401, detail="Studio identity is required")
         return principal.owner_id
 
+    sandbox_gateway = AgentkitSandboxGateway(
+        _sandbox_client,
+        region_candidates=sandbox_region_candidates(
+            os.getenv("AGENTKIT_SANDBOX_REGION")
+        ),
+    )
+    sandbox_service = SandboxConversationService(
+        sandbox_gateway,
+        tool_id=sandbox_chat_codex_tool_id,
+    )
+    sandbox_agent_services = {
+        "openclaw": SandboxAgentSessionService(
+            sandbox_gateway,
+            kind="openclaw",
+            tool_id=sandbox_chat_openclaw_tool_id,
+        ),
+        "hermes": SandboxAgentSessionService(
+            sandbox_gateway,
+            kind="hermes",
+            tool_id=sandbox_chat_hermes_tool_id,
+        ),
+    }
+
+    def _sandbox_proxy_target(session_id: str, token: str) -> SandboxProxyTarget:
+        resolvers = (
+            sandbox_service.resolve_proxy_target,
+            *(
+                service.resolve_proxy_target
+                for service in sandbox_agent_services.values()
+            ),
+        )
+        found = False
+        for resolver in resolvers:
+            try:
+                return resolver(session_id, token)
+            except PermissionError:
+                found = True
+            except KeyError:
+                continue
+        if found:
+            raise PermissionError("invalid Sandbox proxy capability")
+        raise KeyError(session_id)
+
     mount_sandbox_routes(
         app,
-        SandboxConversationService(
-            AgentkitSandboxGateway(
-                _sandbox_client,
-                region_candidates=sandbox_region_candidates(
-                    os.getenv("AGENTKIT_SANDBOX_REGION")
-                ),
-            )
-        ),
+        sandbox_service,
+        _sandbox_owner,
+        _sandbox_proxy_target,
+    )
+    mount_sandbox_agent_routes(
+        app,
+        sandbox_agent_services,
         _sandbox_owner,
     )
 
@@ -5729,6 +5802,22 @@ def _resolve_studio_cloud_credentials(
     "Default: create one during deployment.",
 )
 @click.option(
+    "--sandbox-chat-openclaw-tool-id",
+    "sandbox_chat_openclaw_tool_id",
+    default=None,
+    envvar="SANDBOX_CHAT_OPENCLAW",
+    help="Dedicated ready AgentKit ArkClawEnv Tool ID. "
+    "Default: create one during deployment.",
+)
+@click.option(
+    "--sandbox-chat-hermes-tool-id",
+    "sandbox_chat_hermes_tool_id",
+    default=None,
+    envvar="SANDBOX_CHAT_HERMES",
+    help="Dedicated ready AgentKit HermesEnv Tool ID. "
+    "Default: create one during deployment.",
+)
+@click.option(
     "--sandbox-skill-creator-tool-id",
     "--skill-creator-tool-id",
     "sandbox_skill_creator_tool_id",
@@ -5777,6 +5866,8 @@ def frontend_deploy(
     studio_admins: str | None,
     studio_developers: str | None,
     sandbox_chat_codex_tool_id: str | None,
+    sandbox_chat_openclaw_tool_id: str | None,
+    sandbox_chat_hermes_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
     studio_update_bucket: str,
     studio_update_region: str | None,
@@ -5849,6 +5940,9 @@ def frontend_deploy(
         "skill": sandbox_skill_creator_tool_id,
     }
     from veadk.cli.studio_sandbox_tools import (
+        STUDIO_SANDBOX_AGENT_MODEL_NAME,
+        ensure_studio_agent_model_credential,
+        ensure_studio_agent_tool,
         ensure_studio_code_env_tool,
         studio_sandbox_tool_name,
     )
@@ -5917,6 +6011,49 @@ def frontend_deploy(
             ) from error
         click.echo(f"AgentKit {purpose} model credential is ready.")
 
+    sandbox_agent_tool_ids = {
+        "openclaw": sandbox_chat_openclaw_tool_id,
+        "hermes": sandbox_chat_hermes_tool_id,
+    }
+    for kind, configured_tool_id in sandbox_agent_tool_ids.items():
+        tool_name = studio_sandbox_tool_name(vefaas_app_name, kind)
+        if configured_tool_id:
+            tool_id = configured_tool_id
+            click.echo(f"Using configured AgentKit {kind} Tool '{tool_id}'.")
+        else:
+            click.echo(f"Ensuring AgentKit {kind} Tool '{tool_name}'…")
+        try:
+            if not configured_tool_id:
+                tool_id = ensure_studio_agent_tool(
+                    name=tool_name,
+                    kind=kind,
+                    model_name=STUDIO_SANDBOX_AGENT_MODEL_NAME,
+                    region=region,
+                    access_key=ak,
+                    secret_key=sk,
+                    session_token=session_token or "",
+                )
+            ensure_studio_agent_model_credential(
+                tool_id=tool_id,
+                kind=kind,
+                model_name=STUDIO_SANDBOX_AGENT_MODEL_NAME,
+                region=region,
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token,
+            )
+        except Exception as error:
+            detail = _safe_exception_detail(
+                error,
+                secrets=(ak, sk, session_token),
+            )
+            raise click.ClickException(
+                f"Failed to provision the AgentKit {kind} Tool. "
+                f"Underlying error:\n{detail}"
+            ) from error
+        sandbox_agent_tool_ids[kind] = tool_id
+        click.echo(f"AgentKit {kind} Tool and model credential are ready.")
+
     chat_codex_tool_id = sandbox_tool_ids["chat"]
     skill_creator_tool_id = sandbox_tool_ids["skill"]
     if not chat_codex_tool_id or not skill_creator_tool_id:
@@ -5947,6 +6084,8 @@ def frontend_deploy(
         veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
     veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
+    veadk_environments["SANDBOX_CHAT_OPENCLAW"] = sandbox_agent_tool_ids["openclaw"]
+    veadk_environments["SANDBOX_CHAT_HERMES"] = sandbox_agent_tool_ids["hermes"]
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
     veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
     veadk_environments["VEADK_STUDIO_UPDATE_REGION"] = studio_update_region or region
@@ -6124,6 +6263,18 @@ def frontend_deploy(
     help="Replace the temporary-chat AgentKit CodeEnv Tool ID.",
 )
 @click.option(
+    "--sandbox-chat-openclaw-tool-id",
+    "sandbox_chat_openclaw_tool_id",
+    default=None,
+    help="Replace the OpenClaw AgentKit Tool ID.",
+)
+@click.option(
+    "--sandbox-chat-hermes-tool-id",
+    "sandbox_chat_hermes_tool_id",
+    default=None,
+    help="Replace the Hermes AgentKit Tool ID.",
+)
+@click.option(
     "--sandbox-skill-creator-tool-id",
     "--skill-creator-tool-id",
     "sandbox_skill_creator_tool_id",
@@ -6140,6 +6291,8 @@ def frontend_update(
     site_logo: str | None,
     site_title: str | None,
     sandbox_chat_codex_tool_id: str | None,
+    sandbox_chat_openclaw_tool_id: str | None,
+    sandbox_chat_hermes_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
@@ -6239,6 +6392,12 @@ def frontend_update(
             environment_overrides["VEADK_SITE_TITLE"] = branding_title
         if sandbox_chat_codex_tool_id is not None:
             environment_overrides["SANDBOX_CHAT_CODEX"] = sandbox_chat_codex_tool_id
+        if sandbox_chat_openclaw_tool_id is not None:
+            environment_overrides["SANDBOX_CHAT_OPENCLAW"] = (
+                sandbox_chat_openclaw_tool_id
+            )
+        if sandbox_chat_hermes_tool_id is not None:
+            environment_overrides["SANDBOX_CHAT_HERMES"] = sandbox_chat_hermes_tool_id
         if sandbox_skill_creator_tool_id is not None:
             environment_overrides["SANDBOX_SKILL_CREATOR"] = (
                 sandbox_skill_creator_tool_id
