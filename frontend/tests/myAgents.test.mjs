@@ -278,7 +278,7 @@ test("keeps all requested type filters without nested category sections", () => 
   assert.match(pageSource, /label: "OpenClaw 智能体"/);
   assert.match(pageSource, /label: "Hermes 智能体"/);
   assert.doesNotMatch(pageSource, /AgentSection|my-agents-section|comingSoon/);
-  assert.match(pageSource, /<EmptyMessage\.Title>暂无\{activeLabel\}<\/EmptyMessage\.Title>/);
+  assert.match(pageSource, /<EmptyMessage\.Title>暂无 \{activeLabel\}<\/EmptyMessage\.Title>/);
   assert.match(pageSource, /activeType === "general"[\s\S]*?没有匹配的智能体/);
   assert.doesNotMatch(pageStyles, /\.my-agent-empty\s*\{[^}]*border:/);
   assert.doesNotMatch(pageStyles, /\.my-agent-empty\s*\{[^}]*background:/);
@@ -286,7 +286,7 @@ test("keeps all requested type filters without nested category sections", () => 
   assert.match(pageSource, /<AgentTypeIcon type=\{activeType\} \/>/);
   assert.match(pageSource, /type === "codex"[\s\S]*?type === "openclaw"/);
   assert.match(pageSource, /type === "general"\) return <AgentFaceIcon \/>/);
-  assert.match(pageSource, /创建一个\{activeLabel\}，开始使用 AgentKit Session/);
+  assert.doesNotMatch(pageSource, /开始使用 AgentKit Session/);
   assert.match(pageSource, /onClick=\{\(\) => onCreateSandboxAgent\(activeType\)\}/);
 });
 

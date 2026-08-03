@@ -69,7 +69,7 @@ test("new-chat built-in agent mode launches the AgentKit sandbox", () => {
 test("sandbox launch dialog covers confirmation loading failure and retry", () => {
   assert.match(dialogSource, /role="dialog"/);
   assert.match(dialogSource, /`创建 \$\{agentLabel\} 智能体`/);
-  assert.match(dialogSource, /创建一个可重复进入的 AgentKit Session/);
+  assert.doesNotMatch(dialogSource, /创建一个可重复进入的 AgentKit Session/);
   assert.match(dialogSource, /智能体名称（可选）/);
   assert.match(dialogSource, /正在创建沙箱/);
   assert.match(dialogSource, /启动失败/);

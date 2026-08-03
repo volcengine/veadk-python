@@ -100,7 +100,7 @@ export function SandboxLaunchDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="sandbox-dialog-title"
-        aria-describedby="sandbox-dialog-description"
+        aria-describedby={state === "confirm" ? undefined : "sandbox-dialog-description"}
         onSubmit={(event) => {
           event.preventDefault();
           if (!loading && !composingRef.current) onConfirm(displayName.trim());
@@ -122,11 +122,7 @@ export function SandboxLaunchDialog({
             <p id="sandbox-dialog-description" aria-live="polite">
               正在创建 AgentKit Session 并等待沙箱就绪，通常需要一点时间。
             </p>
-          ) : (
-            <p id="sandbox-dialog-description">
-              创建一个可重复进入的 AgentKit Session，并将它作为 {agentLabel} 智能体显示在列表中。
-            </p>
-          )}
+          ) : null}
           <label className="sandbox-dialog-field">
             <span className="sandbox-dialog-field-label">
               <span>智能体名称（可选）</span>
