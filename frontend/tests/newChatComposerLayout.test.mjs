@@ -109,6 +109,12 @@ test("keeps alternate chat modes hidden from the new-chat composer", () => {
 });
 
 test("reveals the refreshed welcome heading and placeholder after Agent connection", () => {
+  const revealKeyframes = stylesSource.match(
+    /@keyframes welcome-text-reveal\s*\{([\s\S]*?)\n\}/,
+  )?.[1] ?? "";
+  const placeholderRule = stylesSource.match(
+    /\.composer-placeholder-reveal\s*\{\s*position:\s*absolute;([^}]*)\}/,
+  )?.[1] ?? "";
   assert.match(
     appSource,
     /key=\{`welcome-\$\{newChatCapabilities\.agentId \?\? appName\}`\}/,
@@ -123,12 +129,15 @@ test("reveals the refreshed welcome heading and placeholder after Agent connecti
   assert.match(stylesSource, /\.welcome-heading\s*\{[\s\S]*?gap:\s*72px;/);
   assert.match(stylesSource, /\.welcome-title,[\s\S]*?\.composer-placeholder-reveal\s*\{[\s\S]*?welcome-text-reveal 900ms/);
   assert.match(stylesSource, /@keyframes welcome-text-reveal[\s\S]*?clip-path:\s*inset\(0 100% 0 0\)[\s\S]*?clip-path:\s*inset\(0 0 0 0\)/);
+  assert.doesNotMatch(revealKeyframes, /opacity:/);
   assert.match(stylesSource, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.welcome-title,[\s\S]*?\.composer-placeholder-reveal[\s\S]*?animation:\s*none/);
   assert.match(stylesSource, /\.composer--new-chat \.comp-input::placeholder\s*\{[\s\S]*?color:\s*transparent/);
   assert.doesNotMatch(stylesSource, /\.comp-input::placeholder\s*\{[\s\S]*?animation:\s*welcome-text-reveal/);
   assert.match(composerSource, /placeholder=\{placeholderText\}/);
   assert.match(composerSource, /newChatLayout && value\.length === 0[\s\S]*?key=\{placeholderText\}[\s\S]*?className="composer-placeholder-reveal"[\s\S]*?aria-hidden="true"/);
   assert.match(stylesSource, /\.composer-placeholder-reveal\s*\{[\s\S]*?pointer-events:\s*none/);
+  assert.match(placeholderRule, /width:\s*max-content;[\s\S]*?max-width:\s*calc\(100% - 20px\)/);
+  assert.doesNotMatch(placeholderRule, /right:\s*10px/);
 });
 
 test("hides the carousel and reveals feature details on hover or keyboard focus", () => {

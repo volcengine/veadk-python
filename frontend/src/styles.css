@@ -1164,11 +1164,9 @@ body {
 }
 @keyframes welcome-text-reveal {
   from {
-    opacity: 0;
     clip-path: inset(0 100% 0 0);
   }
   to {
-    opacity: 1;
     clip-path: inset(0 0 0 0);
   }
 }
@@ -2334,9 +2332,10 @@ body {
 .composer-placeholder-reveal {
   position: absolute;
   top: 4px;
-  right: 10px;
   left: 10px;
   z-index: 1;
+  width: max-content;
+  max-width: calc(100% - 20px);
   overflow: hidden;
   color: hsl(var(--muted-foreground));
   font-size: 15px;
