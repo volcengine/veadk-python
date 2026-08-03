@@ -212,10 +212,28 @@ def _set_agent_output_attribute(span: Span, llm_response: LlmResponse) -> None:
 
     content = llm_response.content
     if content and content.parts:
+        output_parts = []
+        for part in content.parts:
+            if not part.text:
+                output_parts = []
+                break
+            output_parts.append(
+                {
+                    "type": "reasoning" if getattr(part, "thought", False) else "text",
+                    "content": part.text,
+                }
+            )
+
+        output = (
+            {"messages": [{"role": content.role, "parts": output_parts}]}
+            if output_parts
+            else content.model_dump(exclude_none=True)
+        )
+
         # set gen_ai.output attribute required by APMPlus
         span.set_attribute(
             "gen_ai.output",
-            safe_json_serialize(content.model_dump(exclude_none=True)),
+            safe_json_serialize(output),
         )
 
         for idx, part in enumerate(content.parts):
