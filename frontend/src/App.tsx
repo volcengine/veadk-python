@@ -106,6 +106,7 @@ import { createSkillJob, deleteSkillJob } from "./ui/skill-create/api";
 import { SkillCreateWorkspace } from "./ui/skill-create/SkillCreateWorkspace";
 import { SKILL_MODELS, type SkillCreationJob } from "./ui/skill-create/types";
 import type { NewChatMode, NewChatTask } from "./ui/new-chat-modes/types";
+import { NewChatFeatureCarousel } from "./ui/new-chat-modes/NewChatFeatureCarousel";
 import { NewChatFeatureNotice } from "./ui/new-chat-modes/NewChatFeatureNotice";
 import {
   NEW_CHAT_TASK_OPTIONAL_TOOLS,
@@ -3554,6 +3555,7 @@ export default function App() {
                   </div>
                   {composer}
                 </div>
+                <NewChatFeatureCarousel />
               </div>
             ) : (
               <>

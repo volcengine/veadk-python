@@ -39,6 +39,22 @@ const featureNoticeSource = readFileSync(
   new URL("../src/ui/new-chat-modes/NewChatFeatureNotice.tsx", import.meta.url),
   "utf8",
 );
+const featureCarouselSource = readFileSync(
+  new URL("../src/ui/new-chat-modes/NewChatFeatureCarousel.tsx", import.meta.url),
+  "utf8",
+);
+const featureCarouselStylesSource = readFileSync(
+  new URL("../src/ui/new-chat-modes/new-chat-feature-carousel.css", import.meta.url),
+  "utf8",
+);
+const newChatAgentPickerSource = readFileSync(
+  new URL("../src/ui/new-chat-modes/NewChatAgentPicker.tsx", import.meta.url),
+  "utf8",
+);
+const newChatAgentPickerStylesSource = readFileSync(
+  new URL("../src/ui/new-chat-modes/new-chat-agent-picker.css", import.meta.url),
+  "utf8",
+);
 
 test("expands only the new-chat composer into a multiline input", () => {
   assert.match(
@@ -140,8 +156,107 @@ test("reveals the refreshed welcome heading and placeholder after Agent connecti
   assert.doesNotMatch(placeholderRule, /right:\s*10px/);
 });
 
-test("hides the carousel and reveals feature details on hover or keyboard focus", () => {
-  assert.doesNotMatch(appSource, /NewChatFeatureCarousel/);
+test("shows a larger auto-advancing feature carousel near the bottom of the main panel", () => {
+  assert.match(appSource, /import \{ NewChatFeatureCarousel \}/);
+  assert.match(appSource, /className="welcome"[\s\S]*?<NewChatFeatureCarousel \/>/);
+  assert.match(
+    featureCarouselSource,
+    /随心应变[\s\S]*?支持多类 Agent[\s\S]*?一键成型[\s\S]*?自动构建 Agent[\s\S]*?一搜即达[\s\S]*?全局搜索[\s\S]*?开箱即用[\s\S]*?丰富内置工具/,
+  );
+  assert.doesNotMatch(featureCarouselSource, /new-chat-feature-card__index|padStart/);
+  assert.doesNotMatch(featureCarouselStylesSource, /new-chat-feature-card__index/);
+  assert.match(featureCarouselSource, /type FeatureIllustrationKind = "agents" \| "build" \| "search" \| "tools"/);
+  assert.match(featureCarouselSource, /function FeatureIllustration/);
+  assert.match(featureCarouselSource, /kind === "agents"[\s\S]*?kind === "build"[\s\S]*?kind === "search"/);
+  assert.match(featureCarouselSource, /className="new-chat-feature-card__illustration"/);
+  assert.match(
+    featureCarouselSource,
+    /new-chat-feature-card__illustration-connectors[\s\S]*?M43 27\.5V33\.5H22V38\.5[\s\S]*?new-chat-feature-card__illustration-surfaces/,
+  );
+  assert.match(featureCarouselSource, /M39\.5 21h7/);
+  assert.doesNotMatch(featureCarouselSource, /M38\.5 21c1\.7-2\.6 7\.3-2\.6 9 0/);
+  assert.match(featureCarouselSource, /aria-hidden="true"/);
+  assert.match(featureCarouselSource, /type CarouselApi/);
+  assert.match(featureCarouselSource, /opts=\{\{ align: "start", loop: true \}\}/);
+  assert.match(featureCarouselSource, /setApi=\{setApi\}/);
+  assert.match(featureCarouselSource, /window\.setInterval\(\(\) => api\.scrollNext\(\), 6_000\)/);
+  assert.match(featureCarouselSource, /window\.clearInterval\(intervalId\)/);
+  assert.match(featureCarouselSource, /prefers-reduced-motion: reduce/);
+  assert.match(featureCarouselSource, /onPointerEnter=\{\(\) => setPointerPaused\(true\)\}/);
+  assert.match(featureCarouselSource, /onFocusCapture=\{\(\) => setFocusPaused\(true\)\}/);
+  assert.match(featureCarouselSource, /const \[visible, setVisible\] = useState\(true\)/);
+  assert.match(featureCarouselSource, /if \(!visible\) return null/);
+  assert.match(
+    featureCarouselSource,
+    /aria-label="关闭新特性轮播"[\s\S]*?onClick=\{\(\) => setVisible\(false\)\}/,
+  );
+  assert.match(
+    featureCarouselStylesSource,
+    /\.new-chat-feature-carousel\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?bottom:\s*10px;/,
+  );
+  assert.match(
+    featureCarouselStylesSource,
+    /grid-template-columns:\s*28px minmax\(0, 230px\) 28px;[\s\S]*?column-gap:\s*12px;/,
+  );
+  assert.match(
+    featureCarouselStylesSource,
+    /\.new-chat-feature-card\s*\{[\s\S]*?height:\s*104px;/,
+  );
+  assert.match(
+    featureCarouselStylesSource,
+    /\.new-chat-feature-carousel \.ui-carousel__track\s*\{[\s\S]*?margin-left:\s*-10px;/,
+  );
+  assert.match(
+    featureCarouselStylesSource,
+    /\.new-chat-feature-carousel \.ui-carousel__item\s*\{[\s\S]*?padding-left:\s*10px;/,
+  );
+  const featureCardRule = featureCarouselStylesSource.match(
+    /\.new-chat-feature-card\s*\{([\s\S]*?)\n\}/,
+  )?.[1] ?? "";
+  assert.match(featureCardRule, /border:\s*0;/);
+  assert.match(featureCardRule, /background:\s*hsl\(var\(--muted\) \/ 0\.58\)/);
+  assert.match(stylesSource, /\.welcome-feature-pill\s*\{[\s\S]*?background:\s*hsl\(var\(--muted\)\)/);
+  assert.match(
+    featureCarouselStylesSource,
+    /\.new-chat-feature-card__illustration\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?width:\s*86px;/,
+  );
+  assert.match(
+    featureCarouselStylesSource,
+    /\.new-chat-feature-card__illustration\s*\{[\s\S]*?stroke-width:\s*1\.25;[\s\S]*?shape-rendering:\s*geometricPrecision;/,
+  );
+  assert.match(
+    featureCarouselStylesSource,
+    /\.new-chat-feature-card__illustration-surfaces\s*\{[\s\S]*?fill:\s*hsl\(var\(--panel\) \/ 0\.82\);/,
+  );
+  assert.match(
+    featureCarouselStylesSource,
+    /\.new-chat-feature-carousel__close\s*\{[\s\S]*?left:\s*41px;[\s\S]*?width:\s*28px;[\s\S]*?height:\s*28px;/,
+  );
+  assert.doesNotMatch(
+    featureCarouselStylesSource.match(
+      /\.new-chat-feature-carousel__close\s*\{([\s\S]*?)\n\}/,
+    )?.[1] ?? "",
+    /right:/,
+  );
+  assert.doesNotMatch(featureCarouselStylesSource, /aspect-ratio:\s*16 \/ 9/);
+});
+
+test("keeps the Agent picker aligned without extra highlighting or guidance", () => {
+  assert.match(newChatAgentPickerSource, /className="new-chat-agent-picker"/);
+  assert.doesNotMatch(newChatAgentPickerSource, /is-unselected|new-chat-agent-picker-guide|aria-describedby/);
+  assert.doesNotMatch(newChatAgentPickerStylesSource, /is-unselected|new-chat-agent-picker__guide/);
+  assert.match(
+    newChatAgentPickerStylesSource,
+    /\.new-chat-agent-picker__trigger > span\s*\{[\s\S]*?display:\s*flex;[\s\S]*?align-items:\s*center;[\s\S]*?line-height:\s*20px;/,
+  );
+  assert.match(
+    newChatAgentPickerStylesSource,
+    /\.new-chat-agent-picker__trigger-icon,[\s\S]*?\.new-chat-agent-picker__trigger-chevron\s*\{[\s\S]*?display:\s*block;/,
+  );
+  assert.doesNotMatch(newChatAgentPickerStylesSource, /new-chat-agent-picker-bounce/);
+});
+
+test("reveals feature details on hover or keyboard focus", () => {
   assert.match(featureNoticeSource, /role="tooltip"/);
   assert.match(featureNoticeSource, /多地域智能体/);
   assert.match(featureNoticeSource, /会话内切换/);
