@@ -18,6 +18,10 @@ const selectorSource = readFileSync(
   new URL("../src/ui/new-chat-modes/NewChatModeSelector.tsx", import.meta.url),
   "utf8",
 );
+const launchDialogSource = readFileSync(
+  new URL("../src/ui/SandboxLaunchDialog.tsx", import.meta.url),
+  "utf8",
+);
 
 test("sandbox agent icons share one local outline system", () => {
   for (const icon of ["CodexAgentIcon", "OpenClawAgentIcon", "HermesAgentIcon"]) {
@@ -33,5 +37,7 @@ test("all sandbox agent entry points use the shared vector icons", () => {
   assert.match(myAgentsSource, /<SandboxAgentIcon kind=\{type\}/);
   assert.match(selectorSource, /<SandboxAgentIcon kind="codex"/);
   assert.match(selectorSource, /<SandboxAgentIcon kind=\{kind\}/);
+  assert.match(launchDialogSource, /<SandboxAgentIcon kind=\{agentKind\}/);
+  assert.doesNotMatch(launchDialogSource, /<InsightIcon/);
   assert.doesNotMatch(selectorSource, /builtin-agents\/.*\.png/);
 });

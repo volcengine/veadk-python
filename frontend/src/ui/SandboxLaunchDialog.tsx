@@ -4,7 +4,7 @@ import {
   SANDBOX_DISPLAY_NAME_MAX_LENGTH,
   type SandboxAgentKind,
 } from "../adk/sandbox";
-import { InsightIcon } from "./icons/InsightIcon";
+import { SandboxAgentIcon } from "./icons/SandboxAgentIcons";
 
 export type SandboxLaunchState = "confirm" | "loading" | "error";
 const DEFAULT_SANDBOX_DISPLAY_NAME = "我的智能体";
@@ -112,7 +112,11 @@ export function SandboxLaunchDialog({
         <div className="sandbox-dialog-visual" aria-hidden="true">
           <span className="sandbox-dialog-orbit" />
           <span className="sandbox-dialog-icon">
-            {loading ? <span className="sandbox-spinner" /> : <InsightIcon />}
+            {loading ? (
+              <span className="sandbox-spinner" />
+            ) : (
+              <SandboxAgentIcon kind={agentKind} />
+            )}
           </span>
         </div>
         <div className="sandbox-dialog-copy">
