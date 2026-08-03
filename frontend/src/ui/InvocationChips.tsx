@@ -3,12 +3,14 @@ import type { FrontendInvocation } from "../adk/client";
 
 export interface InvocationChipsProps {
   value: FrontendInvocation;
+  skillPrefix?: "/" | "$";
   onRemoveSkill?: (name: string) => void;
   onRemoveAgent?: () => void;
 }
 
 export function InvocationChips({
   value,
+  skillPrefix = "/",
   onRemoveSkill,
   onRemoveAgent,
 }: InvocationChipsProps) {
@@ -19,7 +21,7 @@ export function InvocationChips({
       {value.skills.map((skill) => (
         <span className="invocation-chip invocation-chip--skill" key={skill.name} title={skill.description}>
           <Sparkles aria-hidden />
-          <span>/{skill.name}</span>
+          <span>{skillPrefix}{skill.name}</span>
           {onRemoveSkill ? (
             <button type="button" onClick={() => onRemoveSkill(skill.name)} aria-label={`移除技能 ${skill.name}`}>
               <X />
