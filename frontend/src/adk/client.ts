@@ -1720,6 +1720,7 @@ export async function deployAgentkitProject(
   opts?: {
     taskId?: string;
     runtimeId?: string;
+    appName?: string;
     description?: string;
     onStage?: (s: DeployStage) => void;
     im?: {
@@ -1759,6 +1760,7 @@ export async function deployAgentkitProject(
           config,
           taskId,
           runtimeId: opts?.runtimeId,
+          appName: opts?.appName,
           description: normalizeRuntimeDescription(opts?.description ?? ""),
           im: opts?.im,
           envs: opts?.envs,
@@ -2138,6 +2140,44 @@ export async function deleteRuntime(
     const t = await res.text().catch(() => "");
     throw new Error(t || `删除失败 (${res.status})`);
   }
+}
+
+/** Server-authorized update compatibility for one concrete Runtime app. */
+export interface RuntimeUpdateCapability {
+  canUpdate: boolean;
+  reason: string;
+  runtime: {
+    runtimeId: string;
+    name: string;
+    region: string;
+    currentVersion?: number | null;
+  };
+  agent?: {
+    appName: string;
+    name?: string;
+    description?: string;
+    draft?: AgentDraft;
+  } | null;
+}
+
+export async function getRuntimeUpdateCapability({
+  runtimeId,
+  region,
+  signal,
+}: {
+  runtimeId: string;
+  region: string;
+  signal?: AbortSignal;
+}): Promise<RuntimeUpdateCapability> {
+  const params = new URLSearchParams({ runtimeId, region });
+  const res = await apiFetch(
+    `/web/runtime-update-capability?${params.toString()}`,
+    { signal },
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "检查 Runtime 更新能力失败"));
+  }
+  return (await res.json()) as RuntimeUpdateCapability;
 }
 
 /** Control-plane detail for a runtime (GetRuntime), for the 管理 Agent view. */

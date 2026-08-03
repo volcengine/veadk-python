@@ -27,6 +27,7 @@ import {
   getAgentFeedbackCases,
   getRuntimeAgentInfo,
   getRuntimeDetail,
+  getRuntimeUpdateCapability,
   prefetchAgentFeedbackCases,
   prefetchRuntimeAgentInfo,
   prefetchRuntimeDetail,
@@ -36,6 +37,7 @@ import {
   type AgentInfo,
   type AgentNode,
   type RuntimeDetail,
+  type RuntimeUpdateCapability,
 } from "../adk/client";
 import type { AgentEntry } from "../adk/connections";
 import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
@@ -101,6 +103,7 @@ export interface WorkspaceAgentDraft {
     runtimeId: string;
     name: string;
     region: string;
+    appName?: string;
     currentVersion?: number | null;
   };
 }
@@ -576,7 +579,7 @@ export interface AgentWorkspaceProps {
   onOpenFeedbackCase?: (item: AgentFeedbackCase) => void | Promise<void>;
   onFeedbackCasesDeleted?: (items: AgentFeedbackCase[]) => void;
   onCreateAgent: () => void;
-  onUpdateAgent: (draft: AgentDraft) => void;
+  onUpdateAgent: (draft: AgentDraft, capability: RuntimeUpdateCapability) => void;
   onEditDraft?: (draft: WorkspaceAgentDraft) => void;
 }
 
@@ -615,6 +618,12 @@ export function AgentWorkspace({
   const [activeAgentId, setActiveAgentId] = useState("");
   const [activeDraftId, setActiveDraftId] = useState("");
   const [runtimeDetail, setRuntimeDetail] = useState<RuntimeDetail | null>(null);
+  const [updateCapability, setUpdateCapability] = useState<{
+    requestKey: string;
+    value: RuntimeUpdateCapability;
+  } | null>(null);
+  const [updateCapabilityLoading, setUpdateCapabilityLoading] = useState(false);
+  const [updateCapabilityError, setUpdateCapabilityError] = useState("");
   const [detailAgentInfo, setDetailAgentInfo] = useState<AgentInfo | null>(null);
   const [detailAgentInfoResolved, setDetailAgentInfoResolved] = useState(false);
   const [query, setQuery] = useState("");
@@ -644,6 +653,7 @@ export function AgentWorkspace({
   const suppressAgentClickRef = useRef(false);
   const appliedFocusKeyRef = useRef("");
   const caseTableRef = useRef<HTMLDivElement | null>(null);
+  const updateCapabilityRequestRef = useRef(0);
   const [evaluationGroups, setEvaluationGroups] = useState(DEFAULT_EVALUATION_GROUPS);
   const [activeEvaluationGroupId, setActiveEvaluationGroupId] = useState("");
 
@@ -747,6 +757,62 @@ export function AgentWorkspace({
       : null;
   const selectedAgentAppName =
     selectedAgentInfo?.appName || selectedAgent?.runtimeApp || selectedAgent?.app || "";
+  const updateCapabilityRequestKey = JSON.stringify([
+    selectedAgent?.runtimeId ?? "",
+    selectedAgent?.region ?? "",
+  ]);
+  const selectedUpdateCapability =
+    updateCapability?.requestKey === updateCapabilityRequestKey
+      ? updateCapability.value
+      : null;
+  useEffect(() => {
+    const requestId = updateCapabilityRequestRef.current + 1;
+    updateCapabilityRequestRef.current = requestId;
+    setUpdateCapability(null);
+    setUpdateCapabilityError("");
+
+    const runtimeId = selectedAgent?.runtimeId ?? "";
+    const region = selectedAgent?.region ?? "";
+    if (!canUpdate || !runtimeId || !region) {
+      setUpdateCapabilityLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setUpdateCapabilityLoading(true);
+    void getRuntimeUpdateCapability({
+      runtimeId,
+      region,
+      signal: controller.signal,
+    }).then((value) => {
+      if (requestId !== updateCapabilityRequestRef.current) return;
+      if (
+        value.runtime.runtimeId !== runtimeId ||
+        value.runtime.region !== region ||
+        (value.canUpdate && !value.agent?.appName)
+      ) {
+        setUpdateCapabilityError("Runtime 更新能力响应与当前选择不匹配。");
+        return;
+      }
+      setUpdateCapability({ requestKey: updateCapabilityRequestKey, value });
+    }).catch((error: unknown) => {
+      if (
+        requestId !== updateCapabilityRequestRef.current ||
+        controller.signal.aborted
+      ) return;
+      setUpdateCapabilityError(
+        error instanceof Error ? error.message : "检查 Runtime 更新能力失败。",
+      );
+    }).finally(() => {
+      if (
+        requestId === updateCapabilityRequestRef.current &&
+        !controller.signal.aborted
+      ) {
+        setUpdateCapabilityLoading(false);
+      }
+    });
+    return () => controller.abort();
+  }, [canUpdate, selectedAgent?.region, selectedAgent?.runtimeId, updateCapabilityRequestKey]);
   const listedAgents = useMemo(() => {
     const originalOrder = new Map(agents.map((agent, index) => [agent.id, index]));
     const savedOrder = new Map(agentOrder.map((id, index) => [id, index]));
@@ -801,6 +867,35 @@ export function AgentWorkspace({
       selectedPendingTask?.agentDraft,
     ],
   );
+  const updateBlockedReason = selectedDraft
+    ? canCreate ? "" : "当前账号没有新建 Agent 的权限。"
+    : !canUpdate
+      ? "当前账号没有管理 Agent 的权限。"
+      : !selectedAgent?.runtimeId
+        ? "仅支持更新已部署的云端智能体。"
+        : !selectedAgent.region
+          ? "Runtime 缺少地域信息，无法更新。"
+          : updateCapabilityLoading
+            ? "正在检查 Runtime 更新能力…"
+            : updateCapabilityError
+              ? updateCapabilityError
+              : !selectedUpdateCapability
+                ? "尚未完成 Runtime 更新能力检查。"
+                : !selectedUpdateCapability.canUpdate
+                  ? selectedUpdateCapability.reason || "当前 Runtime 不支持原地更新。"
+                  : selectedUpdateCapability.agent?.appName
+                    ? ""
+                    : "Runtime 更新能力响应缺少智能体信息。";
+  const updateReasonId = "aw-update-disabled-reason";
+  const selectedUpdateTarget = selectedUpdateCapability?.agent
+    ? {
+        runtimeId: selectedUpdateCapability.runtime.runtimeId,
+        name: selectedUpdateCapability.runtime.name,
+        region: selectedUpdateCapability.runtime.region,
+        appName: selectedUpdateCapability.agent.appName,
+        currentVersion: selectedUpdateCapability.runtime.currentVersion,
+      }
+    : selectedAgentUpdateDraft?.deploymentTarget;
   const toolNames = useMemo(() => {
     if (selectedAgentInfo) return selectedAgentInfo.tools;
     const builtinNames = (draft.builtinTools ?? []).map(
@@ -2140,22 +2235,57 @@ export function AgentWorkspace({
                     <span>去对话</span>
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="aw-update studio-update-action"
-                  disabled={selectedDraft || selectedAgentUpdateDraft
-                    ? !canCreate
-                    : !selectedAgent?.runtimeId || !canUpdate || (!loadingAgentInfo && !selectedAgentInfo)}
-                  onClick={() =>
-                    selectedDraft
-                      ? onEditDraft?.(selectedDraft)
-                      : selectedAgentUpdateDraft
-                        ? onEditDraft?.(selectedAgentUpdateDraft)
-                        : onUpdateAgent(draft)
-                  }
+                <span
+                  className={`aw-update-wrap${updateBlockedReason ? " is-disabled" : ""}`}
+                  tabIndex={updateBlockedReason ? 0 : undefined}
+                  aria-describedby={updateBlockedReason ? updateReasonId : undefined}
                 >
-                  {selectedDraft || selectedAgentUpdateDraft ? "继续编辑" : "更新"}
-                </button>
+                  <button
+                    type="button"
+                    className="aw-update studio-update-action"
+                    disabled={Boolean(updateBlockedReason)}
+                    aria-busy={updateCapabilityLoading || undefined}
+                    aria-describedby={updateBlockedReason ? updateReasonId : undefined}
+                    onClick={() =>
+                      selectedDraft
+                        ? onEditDraft?.(selectedDraft)
+                        : selectedAgentUpdateDraft
+                          ? onEditDraft?.({
+                              ...selectedAgentUpdateDraft,
+                              deploymentTarget: selectedUpdateTarget,
+                            })
+                          : selectedUpdateCapability
+                            ? onUpdateAgent(
+                                selectedUpdateCapability.agent?.draft ?? draft,
+                                selectedUpdateCapability,
+                              )
+                            : undefined
+                    }
+                  >
+                    {updateCapabilityLoading ? (
+                      <>
+                        <span
+                          className="loading-gap-spinner aw-update-spinner"
+                          aria-hidden="true"
+                        />
+                        <span>检测中</span>
+                      </>
+                    ) : selectedDraft || selectedAgentUpdateDraft ? (
+                      "继续编辑"
+                    ) : (
+                      "更新"
+                    )}
+                  </button>
+                  {updateBlockedReason && (
+                    <span
+                      id={updateReasonId}
+                      className="aw-update-disabled-reason"
+                      role="tooltip"
+                    >
+                      {updateBlockedReason}
+                    </span>
+                  )}
+                </span>
               </div>
             )}
           </main>

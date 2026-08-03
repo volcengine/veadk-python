@@ -855,6 +855,7 @@ export default function App() {
     runtimeId: string;
     name: string;
     region: string;
+    appName?: string;
     currentVersion?: number | null;
   } | null>(null);
   const [newRuntimeRegion, setNewRuntimeRegion] = useState("cn-beijing");
@@ -3171,32 +3172,41 @@ export default function App() {
                   setFocusedWorkspaceAgentId("");
                   setError("");
                 }}
-                onUpdateAgent={(nextDraft) => {
+                onUpdateAgent={(nextDraft, capability) => {
                   if (!canManageAgents && !canCreateAgents) {
                     setError("当前账号没有管理 Agent 的权限。");
                     return;
                   }
-                  if (!currentConn?.runtimeId) {
+                  if (!capability.canUpdate) {
+                    setError(capability.reason || "当前 Runtime 不支持原地更新。");
+                    return;
+                  }
+                  if (!capability.runtime.runtimeId) {
                     setError("仅支持更新已部署的云端智能体。");
                     return;
                   }
-                  if (!currentConn.region) {
+                  if (!capability.runtime.region) {
                     setError("Runtime 缺少地域信息，无法更新。");
+                    return;
+                  }
+                  if (!capability.agent?.appName) {
+                    setError("Runtime 缺少智能体名称，无法更新。");
                     return;
                   }
                   setManageAgents(false);
                   setImportedDraft(nextDraft);
-                  const nextDraftId = `runtime-${currentConn.runtimeId}`;
+                  const nextDraftId = `runtime-${capability.runtime.runtimeId}`;
                   setEditingDraftId(nextDraftId);
                   editingDraftBaselineRef.current =
                     savedAgentDrafts.find((item) => item.id === nextDraftId) ?? null;
                   setFocusedDeploymentTaskId("");
                   setFocusedWorkspaceAgentId("");
                   setRuntimeUpdateTarget({
-                    runtimeId: currentConn.runtimeId,
-                    name: currentConn.name,
-                    region: currentConn.region,
-                    currentVersion: currentConn.currentVersion,
+                    runtimeId: capability.runtime.runtimeId,
+                    name: capability.runtime.name || capability.agent.name || nextDraft.name,
+                    region: capability.runtime.region,
+                    appName: capability.agent.appName,
+                    currentVersion: capability.runtime.currentVersion,
                   });
                   setCreateView("custom");
                   setError("");
