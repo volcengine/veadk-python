@@ -881,9 +881,10 @@
 
 .aw-integration-intro h3,
 .aw-integration-intro p,
-.aw-integration-card h3,
-.aw-integration-card dl,
-.aw-integration-card dd {
+.aw-integration-panel h3,
+.aw-integration-panel h4,
+.aw-integration-panel dl,
+.aw-integration-panel dd {
   margin: 0;
 }
 
@@ -898,35 +899,109 @@
   font-size: 12.5px;
 }
 
-.aw-integration-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+.aw-integration-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.aw-integration-card {
+.aw-integration-protocol-tabs {
+  position: relative;
+  display: grid;
+  width: min(360px, 100%);
+  height: 44px;
+  box-sizing: border-box;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: hsl(var(--secondary));
+}
+
+.aw-integration-protocol-slider {
+  position: absolute;
+  z-index: 0;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc((100% - 12px) / 2);
+  border: 1px solid hsl(var(--border));
+  border-radius: 7px;
+  background: hsl(var(--panel));
+  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.05);
+  transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.aw-integration-protocol-tabs.is-a2a .aw-integration-protocol-slider {
+  transform: translateX(calc(100% + 4px));
+}
+
+.aw-integration-protocol-tabs button {
+  position: relative;
+  z-index: 1;
   min-width: 0;
-  padding: 18px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.aw-integration-protocol-tabs button:hover {
+  background: hsl(var(--panel) / 0.45);
+  color: hsl(var(--foreground));
+}
+
+.aw-integration-protocol-tabs button[aria-selected="true"] {
+  color: hsl(var(--foreground));
+  font-weight: 620;
+}
+
+.aw-integration-protocol-tabs button:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.62);
+  outline-offset: 1px;
+}
+
+.aw-integration-panel {
+  min-width: 0;
+  padding: 20px;
   border: 1px solid hsl(var(--border));
   border-radius: 12px;
   background: hsl(var(--panel));
 }
 
-.aw-integration-card header {
+.aw-integration-panel.has-example {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.78fr) minmax(0, 1.22fr);
+  gap: 20px 24px;
+}
+
+.aw-integration-panel header {
   display: flex;
+  grid-column: 1 / -1;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 4px;
 }
 
-.aw-integration-card h3 {
+.aw-integration-panel h3 {
   color: hsl(var(--foreground));
   font-size: 14px;
   font-weight: 620;
 }
 
-.aw-integration-card header > span {
+.aw-integration-panel header > span {
   flex: 0 0 auto;
   padding: 3px 7px;
   border-radius: 999px;
@@ -936,33 +1011,121 @@
   font-weight: 600;
 }
 
-.aw-integration-card header > span.is-available {
+.aw-integration-panel header > span.is-available {
   background: hsl(142 55% 94%);
   color: hsl(142 62% 30%);
 }
 
-.aw-integration-card dl {
+.aw-integration-panel dl {
   display: grid;
+  align-content: start;
   gap: 12px;
 }
 
-.aw-integration-card dl > div {
+.aw-integration-panel dl > div {
   display: grid;
   grid-template-columns: 76px minmax(0, 1fr);
   align-items: start;
   gap: 12px;
 }
 
-.aw-integration-card dt {
+.aw-integration-panel dt {
   color: hsl(var(--muted-foreground));
   font-size: 12px;
 }
 
-.aw-integration-card dd {
+.aw-integration-panel dd {
   min-width: 0;
   overflow-wrap: anywhere;
   color: hsl(var(--foreground));
   font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.aw-integration-secret {
+  display: inline-flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.aw-integration-secret-value {
+  min-width: 52px;
+  overflow-wrap: anywhere;
+}
+
+.aw-integration-secret-toggle {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--panel));
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+
+.aw-integration-secret-toggle:hover:not(:disabled) {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+
+.aw-integration-secret-toggle:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.62);
+  outline-offset: 1px;
+}
+
+.aw-integration-secret-toggle:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.aw-integration-secret-toggle svg,
+.aw-integration-secret-toggle .loading-gap-spinner {
+  width: 16px;
+  height: 16px;
+}
+
+.aw-integration-secret-error {
+  flex-basis: 100%;
+  color: hsl(var(--destructive));
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.aw-integration-example {
+  min-width: 0;
+}
+
+.aw-integration-example h4 {
+  margin-bottom: 8px;
+  color: hsl(var(--foreground));
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.aw-integration-example-code.md {
+  min-width: 0;
+  font-size: 12px;
+}
+
+.aw-integration-example-code.md pre {
+  max-height: 360px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--secondary));
+}
+
+.aw-integration-example-code.md pre code {
+  display: block;
+  min-width: max-content;
+  padding: 14px 16px;
   line-height: 1.55;
 }
 
@@ -2337,7 +2500,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .aw-integration-grid {
+  .aw-integration-panel.has-example {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2366,6 +2529,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .aw-integration-protocol-slider {
+    transition: none;
+  }
+
   .aw-root *,
   .aw-root *::before,
   .aw-root *::after {

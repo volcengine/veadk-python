@@ -70,9 +70,12 @@ server that `veadk frontend` launches — no separate backend.
   own ownership checks from Agent Server compatibility and authentication
   failures when a connection cannot be established. Each Agent detail page also
   probes and lists confirmed API Server and A2A integration endpoints; protocols
-  that the Runtime does not expose are shown as unavailable. Long descriptions,
-  names, component summaries, IDs, and environment values stay inside the
-  scrollable panel.
+  that the Runtime does not expose are shown as unavailable. The integration
+  panel switches between the detected protocols and provides a Python request
+  example for each one. Runtime API Keys stay masked as `****` and are fetched
+  only after the user explicitly reveals them; examples always use placeholders
+  instead of credentials. Long descriptions, names, component summaries, IDs,
+  and environment values stay inside the scrollable panel.
 - **Custom-agent workbench**: configure an agent with a rich Markdown
   system-prompt editor (including heading and list shortcuts), then debug with
   expandable, copyable runner error details, per-result Trace inspection, and

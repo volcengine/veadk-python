@@ -2195,6 +2195,26 @@ export async function probeRuntimeA2a(
   };
 }
 
+/** Reveal a Runtime API Key on demand without adding it to metadata caches. */
+export async function revealRuntimeApiKey(
+  runtimeId: string,
+  region: string,
+): Promise<string> {
+  const params = new URLSearchParams({ runtimeId, region });
+  const res = await apiFetch(
+    `/web/runtime-api-key/reveal?${params.toString()}`,
+    { method: "POST", cache: "no-store" },
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "读取 Runtime API Key 失败"));
+  }
+  const payload = (await res.json()) as { apiKey?: unknown };
+  if (typeof payload.apiKey !== "string" || !payload.apiKey) {
+    throw new Error("Runtime 未返回可用的 API Key");
+  }
+  return payload.apiKey;
+}
+
 /** Delete a deployed runtime by id. */
 export async function deleteRuntime(
   runtimeId: string,

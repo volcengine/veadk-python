@@ -3795,6 +3795,31 @@ def _run_frontend_server(
             logger.error(f"get runtime detail failed: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail=str(e))
 
+    @app.post("/web/runtime-api-key/reveal")
+    async def _web_runtime_api_key_reveal(
+        request: Request,
+        response: Response,
+        runtimeId: str = "",
+        region: str = "cn-beijing",
+    ):
+        """Return one authorized Runtime API Key after an explicit UI action.
+
+        The regular Runtime detail payload deliberately excludes credentials. This
+        endpoint is separate so the browser only receives the key when the user
+        asks to reveal it, and the response is never cacheable.
+        """
+        if not runtimeId:
+            raise HTTPException(status_code=400, detail="runtimeId is required")
+        runtime = _authorized_runtime(request, runtimeId, region)
+        authorizer = getattr(runtime, "authorizer_configuration", None)
+        key_auth = getattr(authorizer, "key_auth", None) if authorizer else None
+        api_key = getattr(key_auth, "api_key", "") or ""
+        if not api_key:
+            raise HTTPException(status_code=404, detail="Runtime API Key not found")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        return {"apiKey": api_key}
+
     _runtime_list_cache_ttl_seconds = 30.0
     _runtime_list_cache: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
     _runtime_list_locks: dict[tuple[Any, ...], asyncio.Lock] = {}
