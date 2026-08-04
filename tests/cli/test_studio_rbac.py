@@ -443,7 +443,9 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
     runtimes = {
-        "runtime-developer": _runtime("runtime-developer", "developer"),
+        "runtime-developer": _runtime_with_public_endpoint(
+            _runtime("runtime-developer", "developer")
+        ),
         "runtime-viewer": _runtime("runtime-viewer", "viewer"),
         "runtime-other": _runtime("runtime-other", "someone-else"),
         "runtime-unmanaged": _runtime(
@@ -474,12 +476,28 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
         viewer_headers = {"X-VeADK-Local-User": "viewer"}
         admin_headers = {"X-VeADK-Local-User": "admin"}
 
+        runtime_detail = client.get(
+            "/web/runtime-detail?runtimeId=runtime-developer&region=cn-beijing",
+            headers=developer_headers,
+        )
+        assert runtime_detail.status_code == 200
+        assert runtime_detail.json()["endpoint"] == "https://runtime.example.com"
+        assert runtime_detail.json()["authType"] == "key_auth"
+        assert "runtime-key" not in runtime_detail.text
+        revealed_key = client.post(
+            "/web/runtime-api-key/reveal?runtimeId=runtime-developer&region=cn-beijing",
+            headers=developer_headers,
+        )
+        assert revealed_key.status_code == 200
+        assert revealed_key.json() == {"apiKey": "runtime-key"}
+        assert revealed_key.headers["cache-control"] == "no-store"
+        assert revealed_key.headers["pragma"] == "no-cache"
         assert (
-            client.get(
-                "/web/runtime-detail?runtimeId=runtime-developer&region=cn-beijing",
+            client.post(
+                "/web/runtime-api-key/reveal?runtimeId=runtime-other&region=cn-beijing",
                 headers=developer_headers,
             ).status_code
-            == 200
+            == 404
         )
         assert (
             client.get(

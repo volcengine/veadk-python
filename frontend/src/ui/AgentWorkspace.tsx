@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type ReactNode,
 } from "react";
 import {
   ArrowRight,
@@ -28,14 +29,19 @@ import {
   getRuntimeAgentInfo,
   getRuntimeDetail,
   getRuntimeUpdateCapability,
+  probeRuntimeA2a,
+  probeRuntimeApps,
   prefetchAgentFeedbackCases,
   prefetchRuntimeAgentInfo,
   prefetchRuntimeDetail,
+  revealRuntimeApiKey,
   type AgentFeedbackCasesResponse,
   type AgentFeedbackCase,
   type AgentFeedbackSetSummary,
   type AgentInfo,
   type AgentNode,
+  type RuntimeA2aIntegration,
+  RuntimeProbeError,
   type RuntimeDetail,
   type RuntimeUpdateCapability,
 } from "../adk/client";
@@ -45,11 +51,13 @@ import { emptyDraft, type AgentDraft } from "../create/types";
 import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
+import { Markdown } from "./Markdown";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import "./AgentWorkspace.css";
 
 type WorkspaceView = "library" | "evaluation";
-type AgentSection = "basic" | "evaluations";
+type AgentSection = "basic" | "integrations" | "evaluations";
+type IntegrationProtocol = "api-server" | "a2a";
 type EvaluationSection = "config" | "history";
 type CaseKind = "good" | "bad";
 
@@ -210,7 +218,263 @@ const DEFAULT_EVALUATION_GROUPS: EvaluationGroup[] = [
 const AGENT_SECTIONS: Array<{ id: AgentSection; label: string }> = [
   { id: "basic", label: "基本信息" },
   { id: "evaluations", label: "评测集" },
+  { id: "integrations", label: "接入方法" },
 ];
+
+const INTEGRATION_PROTOCOLS: Array<{
+  id: IntegrationProtocol;
+  label: string;
+}> = [
+  { id: "api-server", label: "API Server" },
+  { id: "a2a", label: "A2A" },
+];
+
+interface IntegrationProbeResult {
+  requestKey: string;
+  apiApps: string[] | null;
+  a2a: RuntimeA2aIntegration | null;
+}
+
+interface RevealedApiKey {
+  requestKey: string;
+  value: string;
+}
+
+function endpointPath(endpoint: string, path: string): string {
+  return endpoint ? `${endpoint.replace(/\/+$/, "")}${path}` : "";
+}
+
+function normalizeRuntimeA2aEndpoint(
+  endpoint: string,
+  runtimeEndpoint: string,
+): string {
+  const value = endpoint.trim();
+  if (!value || !runtimeEndpoint) return value;
+  try {
+    const agentUrl = new URL(value);
+    const hostname = agentUrl.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    if (!["localhost", "127.0.0.1", "::1"].includes(hostname)) return value;
+    const publicUrl = new URL(runtimeEndpoint);
+    agentUrl.protocol = publicUrl.protocol;
+    agentUrl.hostname = publicUrl.hostname;
+    agentUrl.port = publicUrl.port;
+    return agentUrl.toString();
+  } catch {
+    return value;
+  }
+}
+
+function authTypeLabel(authType?: RuntimeDetail["authType"]): string {
+  if (authType === "key_auth") return "API Key";
+  if (authType === "custom_jwt") return "OAuth / JWT";
+  if (authType === "none") return "无需鉴权";
+  return "暂无";
+}
+
+function pythonString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function pythonAuthSetup(authType?: RuntimeDetail["authType"]): string {
+  if (authType === "key_auth") {
+    return `API_KEY = "<API_KEY>"\nHEADERS = {"Authorization": f"Bearer {API_KEY}"}`;
+  }
+  if (authType === "custom_jwt") {
+    return `ACCESS_TOKEN = "<ACCESS_TOKEN>"\nHEADERS = {"Authorization": f"Bearer {ACCESS_TOKEN}"}`;
+  }
+  if (authType === "none") return "HEADERS = {}";
+  return `AUTH_TOKEN = "<AUTH_TOKEN>"\nHEADERS = {"Authorization": f"Bearer {AUTH_TOKEN}"}`;
+}
+
+function apiServerPythonExample(
+  endpoint: string,
+  appName: string,
+  authType?: RuntimeDetail["authType"],
+): string {
+  const baseUrl = endpoint.replace(/\/+$/, "");
+  return `\`\`\`python
+import uuid
+
+import requests
+
+BASE_URL = ${pythonString(baseUrl)}
+APP_NAME = ${pythonString(appName)}
+USER_ID = "demo-user"
+SESSION_ID = str(uuid.uuid4())
+${pythonAuthSetup(authType)}
+
+session_response = requests.post(
+    f"{BASE_URL}/apps/{APP_NAME}/users/{USER_ID}/sessions/{SESSION_ID}",
+    headers=HEADERS,
+    json={},
+    timeout=30,
+)
+session_response.raise_for_status()
+
+with requests.post(
+    f"{BASE_URL}/run_sse",
+    headers=HEADERS,
+    json={
+        "app_name": APP_NAME,
+        "user_id": USER_ID,
+        "session_id": SESSION_ID,
+        "new_message": {
+            "role": "user",
+            "parts": [{"text": "你好，请介绍一下自己"}],
+        },
+        "streaming": True,
+    },
+    stream=True,
+    timeout=120,
+) as response:
+    response.raise_for_status()
+    for line in response.iter_lines():
+        if line:
+            print(line.decode("utf-8"))
+\`\`\``;
+}
+
+function a2aPythonExample(
+  endpoint: string,
+  authType?: RuntimeDetail["authType"],
+): string {
+  return `\`\`\`python
+import uuid
+
+import requests
+
+AGENT_URL = ${pythonString(endpoint)}
+${pythonAuthSetup(authType)}
+
+response = requests.post(
+    AGENT_URL,
+    headers=HEADERS,
+    json={
+        "jsonrpc": "2.0",
+        "id": str(uuid.uuid4()),
+        "method": "message/send",
+        "params": {
+            "message": {
+                "messageId": str(uuid.uuid4()),
+                "role": "user",
+                "parts": [{"kind": "text", "text": "你好，请介绍一下自己"}],
+            }
+        },
+    },
+    timeout=120,
+)
+response.raise_for_status()
+print(response.json())
+\`\`\``;
+}
+
+function SecretVisibilityIcon({ visible }: { visible: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2.8 12s3.3-5.4 9.2-5.4 9.2 5.4 9.2 5.4-3.3 5.4-9.2 5.4S2.8 12 2.8 12Z" />
+      <circle cx="12" cy="12" r="2.4" />
+      {!visible && <path d="m4.2 4.2 15.6 15.6" />}
+    </svg>
+  );
+}
+
+function IntegrationApiKey({
+  available,
+  authType,
+  value,
+  visible,
+  loading,
+  error,
+  onToggle,
+}: {
+  available: boolean;
+  authType?: RuntimeDetail["authType"];
+  value: string;
+  visible: boolean;
+  loading: boolean;
+  error: string;
+  onToggle: () => void;
+}) {
+  if (!available) return "暂无";
+  if (authType === "none") return "无需 API Key";
+  if (authType === "custom_jwt") return "使用 OAuth / JWT";
+  if (authType !== "key_auth") return "暂无";
+  return (
+    <span className="aw-integration-secret">
+      <span className="aw-integration-secret-value" aria-live="polite">
+        {visible && value ? value : "****"}
+      </span>
+      <button
+        type="button"
+        className="aw-integration-secret-toggle"
+        aria-label={visible ? "隐藏 API Key" : "显示 API Key"}
+        title={visible ? "隐藏 API Key" : "显示 API Key"}
+        disabled={loading}
+        onClick={onToggle}
+      >
+        {loading ? (
+          <span className="loading-gap-spinner" aria-hidden="true" />
+        ) : (
+          <SecretVisibilityIcon visible={visible} />
+        )}
+      </button>
+      {error && <span className="aw-integration-secret-error" role="alert">{error}</span>}
+    </span>
+  );
+}
+
+function IntegrationPanel({
+  protocol,
+  title,
+  available,
+  fields,
+  example,
+}: {
+  protocol: IntegrationProtocol;
+  title: string;
+  available: boolean;
+  fields: Array<{ label: string; value: ReactNode }>;
+  example: string;
+}) {
+  return (
+    <section
+      className={`aw-integration-panel${available && example ? " has-example" : ""}`}
+      id={`integration-${protocol}-panel`}
+      role="tabpanel"
+      aria-labelledby={`integration-${protocol}-tab`}
+    >
+      <header>
+        <h3>{title}</h3>
+      </header>
+      <dl>
+        {fields.map((field) => (
+          <div key={field.label}>
+            <dt>{field.label}</dt>
+            <dd>{field.value || "暂无"}</dd>
+          </div>
+        ))}
+      </dl>
+      {available && example && (
+        <section className="aw-integration-example">
+          <h4>Python 示例</h4>
+          <Markdown
+            text={example}
+            className="aw-integration-example-code"
+            allowRawHtml={false}
+          />
+        </section>
+      )}
+    </section>
+  );
+}
 
 function graphNodeToDraft(node: AgentNode): AgentDraft {
   const runtimeTools = node.tools ?? [];
@@ -625,6 +889,18 @@ export function AgentWorkspace({
   const [activeAgentId, setActiveAgentId] = useState("");
   const [activeDraftId, setActiveDraftId] = useState("");
   const [runtimeDetail, setRuntimeDetail] = useState<RuntimeDetail | null>(null);
+  const [integrationProbe, setIntegrationProbe] =
+    useState<IntegrationProbeResult | null>(null);
+  const [integrationLoading, setIntegrationLoading] = useState(false);
+  const [integrationError, setIntegrationError] = useState("");
+  const [integrationReloadToken, setIntegrationReloadToken] = useState(0);
+  const [integrationProtocol, setIntegrationProtocol] =
+    useState<IntegrationProtocol>("api-server");
+  const [revealedApiKey, setRevealedApiKey] =
+    useState<RevealedApiKey | null>(null);
+  const [apiKeyVisible, setApiKeyVisible] = useState(false);
+  const [apiKeyLoading, setApiKeyLoading] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState("");
   const [updateCapability, setUpdateCapability] = useState<{
     requestKey: string;
     value: RuntimeUpdateCapability;
@@ -661,6 +937,7 @@ export function AgentWorkspace({
   const appliedFocusKeyRef = useRef("");
   const caseTableRef = useRef<HTMLDivElement | null>(null);
   const updateCapabilityRequestRef = useRef(0);
+  const apiKeyRequestRef = useRef(0);
   const [evaluationGroups, setEvaluationGroups] = useState(DEFAULT_EVALUATION_GROUPS);
   const [activeEvaluationGroupId, setActiveEvaluationGroupId] = useState("");
 
@@ -764,6 +1041,24 @@ export function AgentWorkspace({
       : null;
   const selectedAgentAppName =
     selectedAgentInfo?.appName || selectedAgent?.runtimeApp || selectedAgent?.app || "";
+  const integrationRequestKey = `${selectedAgent?.region ?? "cn-beijing"}:${selectedAgent?.runtimeId ?? ""}`;
+  const selectedRevealedApiKey =
+    revealedApiKey?.requestKey === integrationRequestKey
+      ? revealedApiKey.value
+      : "";
+  const selectedIntegrationProbe =
+    integrationProbe?.requestKey === integrationRequestKey
+      ? integrationProbe
+      : null;
+  const apiIntegrationAvailable = Boolean(selectedIntegrationProbe?.apiApps?.length);
+  const a2aIntegrationAvailable = Boolean(selectedIntegrationProbe?.a2a);
+  const apiIntegrationAppName =
+    selectedIntegrationProbe?.apiApps?.[0] ?? selectedAgentAppName;
+  const runtimeEndpoint = runtimeDetail?.endpoint ?? "";
+  const a2aEndpoint = normalizeRuntimeA2aEndpoint(
+    selectedIntegrationProbe?.a2a?.endpoint ?? "",
+    runtimeEndpoint,
+  );
   const updateCapabilityRequestKey = JSON.stringify([
     selectedAgent?.runtimeId ?? "",
     selectedAgent?.region ?? "",
@@ -1077,6 +1372,58 @@ export function AgentWorkspace({
   ]);
 
   useEffect(() => {
+    apiKeyRequestRef.current += 1;
+    setRevealedApiKey(null);
+    setApiKeyVisible(false);
+    setApiKeyLoading(false);
+    setApiKeyError("");
+    setIntegrationProtocol("api-server");
+  }, [integrationRequestKey, section]);
+
+  function clearRevealedApiKey() {
+    apiKeyRequestRef.current += 1;
+    setRevealedApiKey(null);
+    setApiKeyVisible(false);
+    setApiKeyLoading(false);
+    setApiKeyError("");
+  }
+
+  function selectIntegrationProtocol(protocol: IntegrationProtocol) {
+    if (protocol === integrationProtocol) return;
+    clearRevealedApiKey();
+    setIntegrationProtocol(protocol);
+  }
+
+  async function toggleApiKeyVisibility() {
+    if (apiKeyVisible) {
+      clearRevealedApiKey();
+      return;
+    }
+    const runtimeId = selectedAgent?.runtimeId ?? "";
+    const region = selectedAgent?.region ?? "cn-beijing";
+    if (!runtimeId) return;
+    const requestId = apiKeyRequestRef.current + 1;
+    apiKeyRequestRef.current = requestId;
+    setApiKeyLoading(true);
+    setApiKeyError("");
+    try {
+      const value = await revealRuntimeApiKey(runtimeId, region);
+      if (requestId !== apiKeyRequestRef.current) return;
+      setRevealedApiKey({ requestKey: integrationRequestKey, value });
+      setApiKeyVisible(true);
+    } catch (error) {
+      if (requestId !== apiKeyRequestRef.current) return;
+      setRevealedApiKey(null);
+      setApiKeyVisible(false);
+      setApiKeyError(
+        error instanceof Error ? error.message : "读取 Runtime API Key 失败。",
+      );
+    } finally {
+      if (requestId === apiKeyRequestRef.current) setApiKeyLoading(false);
+    }
+  }
+
+  useEffect(() => {
     let cancelled = false;
     const runtimeId = selectedAgent?.runtimeId ?? "";
     const region = selectedAgent?.region ?? "cn-beijing";
@@ -1100,6 +1447,53 @@ export function AgentWorkspace({
       cancelled = true;
     };
   }, [
+    selectedAgent?.currentVersion,
+    selectedAgent?.region,
+    selectedAgent?.runtimeId,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const runtimeId = selectedAgent?.runtimeId ?? "";
+    const region = selectedAgent?.region ?? "cn-beijing";
+    const requestKey = `${region}:${runtimeId}`;
+    setIntegrationError("");
+    if (section !== "integrations" || !runtimeId) {
+      setIntegrationLoading(false);
+      if (!runtimeId) setIntegrationProbe(null);
+      return;
+    }
+    setIntegrationLoading(true);
+    const apiServerProbe = probeRuntimeApps(runtimeId, region, {
+      retryProbe: true,
+    }).catch((error: unknown) => {
+      if (error instanceof RuntimeProbeError && error.unsupported) return null;
+      throw error;
+    });
+    void Promise.all([
+      apiServerProbe,
+      probeRuntimeA2a(runtimeId, region, { retryProbe: true }),
+    ])
+      .then(([apiApps, a2a]) => {
+        if (!cancelled) setIntegrationProbe({ requestKey, apiApps, a2a });
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setIntegrationProbe(null);
+          setIntegrationError(
+            error instanceof Error ? error.message : "探测集成方式失败。",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIntegrationLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    integrationReloadToken,
+    section,
     selectedAgent?.currentVersion,
     selectedAgent?.region,
     selectedAgent?.runtimeId,
@@ -1925,6 +2319,17 @@ export function AgentWorkspace({
                 </div>
               </div>
             )}
+            {section === "integrations" && integrationLoading && (
+              <div className="aw-detail-loading" role="status" aria-live="polite">
+                <div className="aw-detail-loading-card">
+                  <span className="loading-gap-spinner" aria-hidden="true" />
+                  <span>
+                    <strong>正在探测接入方式</strong>
+                    <small>正在确认 API Server 与 A2A…</small>
+                  </span>
+                </div>
+              </div>
+            )}
             <div className="aw-agent-head">
               <div>
                 <div className="aw-agent-title-row">
@@ -1979,21 +2384,50 @@ export function AgentWorkspace({
                 <DeploymentProgressCard task={deploymentTask} />
               </div>
             )}
-            <nav className="aw-agent-tabs" aria-label="智能体详情">
+            <nav
+              className="aw-agent-tabs"
+              aria-label="智能体详情"
+              role="tablist"
+            >
               {AGENT_SECTIONS.map((item) => (
                 <button
                   type="button"
                   key={item.id}
+                  id={`agent-${item.id}-tab`}
                   className={section === item.id ? "is-active" : ""}
-                  aria-pressed={section === item.id}
+                  role="tab"
+                  aria-selected={section === item.id}
+                  aria-controls={`agent-${item.id}-panel`}
+                  tabIndex={section === item.id ? 0 : -1}
                   onClick={() => setSection(item.id)}
+                  onKeyDown={(event) => {
+                    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                    event.preventDefault();
+                    const currentIndex = AGENT_SECTIONS.findIndex(
+                      (sectionItem) => sectionItem.id === item.id,
+                    );
+                    const nextIndex = event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? AGENT_SECTIONS.length - 1
+                        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + AGENT_SECTIONS.length)
+                          % AGENT_SECTIONS.length;
+                    const nextSection = AGENT_SECTIONS[nextIndex];
+                    setSection(nextSection.id);
+                    document.getElementById(`agent-${nextSection.id}-tab`)?.focus();
+                  }}
                 >
                   {item.label}
                 </button>
               ))}
             </nav>
 
-            <div className="aw-content">
+            <div
+              className="aw-content"
+              id={`agent-${section}-panel`}
+              role="tabpanel"
+              aria-labelledby={`agent-${section}-tab`}
+            >
               {section === "basic" && (
                 <div className="aw-basic-stack">
                   <section className="aw-deployment-panel aw-settings-card">
@@ -2110,6 +2544,184 @@ export function AgentWorkspace({
                       </div>
                     </div>
                   </section>
+                </div>
+              )}
+              {section === "integrations" && (
+                <div className="aw-integration-stack">
+                  <div className="aw-integration-intro">
+                    <h3>接入方式</h3>
+                    <p>仅展示当前 Runtime 可确认的公开协议与地址。</p>
+                  </div>
+                  {integrationError && (
+                    <div className="aw-integration-error" role="alert">
+                      <span>{integrationError}</span>
+                      <button
+                        type="button"
+                        onClick={() => setIntegrationReloadToken((value) => value + 1)}
+                      >
+                        重试
+                      </button>
+                    </div>
+                  )}
+                  {!integrationError && (
+                    <div className="aw-integration-body">
+                      <div
+                        className={`aw-integration-protocol-tabs${
+                          integrationProtocol === "a2a" ? " is-a2a" : ""
+                        }`}
+                        role="tablist"
+                        aria-label="接入协议"
+                      >
+                        <span
+                          className="aw-integration-protocol-slider"
+                          aria-hidden="true"
+                        />
+                        {INTEGRATION_PROTOCOLS.map((protocol, protocolIndex) => (
+                          <button
+                            type="button"
+                            key={protocol.id}
+                            id={`integration-${protocol.id}-tab`}
+                            role="tab"
+                            aria-selected={integrationProtocol === protocol.id}
+                            aria-controls={`integration-${protocol.id}-panel`}
+                            tabIndex={integrationProtocol === protocol.id ? 0 : -1}
+                            onClick={() => selectIntegrationProtocol(protocol.id)}
+                            onKeyDown={(event) => {
+                              if (![
+                                "ArrowLeft",
+                                "ArrowRight",
+                                "Home",
+                                "End",
+                              ].includes(event.key)) return;
+                              event.preventDefault();
+                              const nextIndex = event.key === "Home"
+                                ? 0
+                                : event.key === "End"
+                                  ? INTEGRATION_PROTOCOLS.length - 1
+                                  : (
+                                      protocolIndex +
+                                      (event.key === "ArrowRight" ? 1 : -1) +
+                                      INTEGRATION_PROTOCOLS.length
+                                    ) % INTEGRATION_PROTOCOLS.length;
+                              const nextProtocol = INTEGRATION_PROTOCOLS[nextIndex];
+                              selectIntegrationProtocol(nextProtocol.id);
+                              document
+                                .getElementById(`integration-${nextProtocol.id}-tab`)
+                                ?.focus();
+                            }}
+                          >
+                            {protocol.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {integrationProtocol === "api-server" ? (
+                        <IntegrationPanel
+                          protocol="api-server"
+                          title="API Server"
+                          available={apiIntegrationAvailable}
+                          fields={[
+                            {
+                              label: "Agent",
+                              value: apiIntegrationAvailable
+                                ? selectedIntegrationProbe?.apiApps?.join("、") ?? ""
+                                : "",
+                            },
+                            {
+                              label: "发现接口",
+                              value: apiIntegrationAvailable
+                                ? endpointPath(runtimeEndpoint, "/list-apps")
+                                : "",
+                            },
+                            {
+                              label: "调用接口",
+                              value: apiIntegrationAvailable
+                                ? endpointPath(runtimeEndpoint, "/run_sse")
+                                : "",
+                            },
+                            {
+                              label: "鉴权方式",
+                              value: apiIntegrationAvailable
+                                ? authTypeLabel(runtimeDetail?.authType)
+                                : "",
+                            },
+                            {
+                              label: "API Key",
+                              value: (
+                                <IntegrationApiKey
+                                  available={apiIntegrationAvailable}
+                                  authType={runtimeDetail?.authType}
+                                  value={selectedRevealedApiKey}
+                                  visible={apiKeyVisible && Boolean(selectedRevealedApiKey)}
+                                  loading={apiKeyLoading}
+                                  error={apiKeyError}
+                                  onToggle={() => void toggleApiKeyVisibility()}
+                                />
+                              ),
+                            },
+                          ]}
+                          example={apiIntegrationAvailable
+                            ? apiServerPythonExample(
+                                runtimeEndpoint,
+                                apiIntegrationAppName,
+                                runtimeDetail?.authType,
+                              )
+                            : ""}
+                        />
+                      ) : (
+                        <IntegrationPanel
+                          protocol="a2a"
+                          title="A2A"
+                          available={a2aIntegrationAvailable}
+                          fields={[
+                            {
+                              label: "Agent",
+                              value: selectedIntegrationProbe?.a2a?.name ?? "",
+                            },
+                            {
+                              label: "Agent Card",
+                              value: a2aIntegrationAvailable
+                                ? endpointPath(
+                                    runtimeEndpoint,
+                                    "/.well-known/agent-card.json",
+                                  )
+                                : "",
+                            },
+                            {
+                              label: "调用地址",
+                              value: a2aEndpoint,
+                            },
+                            {
+                              label: "鉴权方式",
+                              value: a2aIntegrationAvailable
+                                ? authTypeLabel(runtimeDetail?.authType)
+                                : "",
+                            },
+                            {
+                              label: "API Key",
+                              value: (
+                                <IntegrationApiKey
+                                  available={a2aIntegrationAvailable}
+                                  authType={runtimeDetail?.authType}
+                                  value={selectedRevealedApiKey}
+                                  visible={apiKeyVisible && Boolean(selectedRevealedApiKey)}
+                                  loading={apiKeyLoading}
+                                  error={apiKeyError}
+                                  onToggle={() => void toggleApiKeyVisibility()}
+                                />
+                              ),
+                            },
+                          ]}
+                          example={a2aIntegrationAvailable
+                            ? a2aPythonExample(
+                                a2aEndpoint,
+                                runtimeDetail?.authType,
+                              )
+                            : ""}
+                        />
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 

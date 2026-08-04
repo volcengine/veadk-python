@@ -2142,6 +2142,79 @@ export async function probeRuntimeApps(
   }
 }
 
+export interface RuntimeA2aIntegration {
+  name: string;
+  description: string;
+  endpoint: string;
+}
+
+/** Probe the standard A2A Agent Card without exposing Runtime credentials. */
+export async function probeRuntimeA2a(
+  runtimeId: string,
+  region: string,
+  options: { retryProbe?: boolean } = {},
+): Promise<RuntimeA2aIntegration | null> {
+  const endpoint: AdkEndpoint = { runtimeId, region };
+  if (options.retryProbe) endpoint.retryProbe = true;
+  const res = await apiFetch("/.well-known/agent-card.json", {}, endpoint);
+  const runtimeErrorCode = await runtimeProxyErrorCode(res);
+  if (runtimeErrorCode === "runtime_access_denied") {
+    throw new RuntimeAccessDeniedError();
+  }
+  if (runtimeErrorCode === "runtime_private_endpoint_unreachable") {
+    throw new RuntimeProbeError(PRIVATE_RUNTIME_UNREACHABLE_MESSAGE);
+  }
+  if (
+    ["runtime_proxy_connect_error", "runtime_proxy_timeout"].includes(
+      runtimeErrorCode,
+    )
+  ) {
+    throw new RuntimeProbeError(RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE);
+  }
+  if (res.status === 404) return null;
+  if (res.status === 401 || res.status === 403) {
+    throw new RuntimeProbeError(
+      "Runtime 服务拒绝了 A2A 探测请求，请检查 Runtime 的鉴权配置。",
+    );
+  }
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "读取 A2A Agent Card 失败"));
+  }
+  const payload = (await res.json().catch(() => null)) as Record<
+    string,
+    unknown
+  > | null;
+  const integrationEndpoint =
+    typeof payload?.url === "string" ? payload.url.trim() : "";
+  if (!integrationEndpoint) return null;
+  return {
+    name: typeof payload?.name === "string" ? payload.name : "",
+    description:
+      typeof payload?.description === "string" ? payload.description : "",
+    endpoint: integrationEndpoint,
+  };
+}
+
+/** Reveal a Runtime API Key on demand without adding it to metadata caches. */
+export async function revealRuntimeApiKey(
+  runtimeId: string,
+  region: string,
+): Promise<string> {
+  const params = new URLSearchParams({ runtimeId, region });
+  const res = await apiFetch(
+    `/web/runtime-api-key/reveal?${params.toString()}`,
+    { method: "POST", cache: "no-store" },
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "读取 Runtime API Key 失败"));
+  }
+  const payload = (await res.json()) as { apiKey?: unknown };
+  if (typeof payload.apiKey !== "string" || !payload.apiKey) {
+    throw new Error("Runtime 未返回可用的 API Key");
+  }
+  return payload.apiKey;
+}
+
 /** Delete a deployed runtime by id. */
 export async function deleteRuntime(
   runtimeId: string,
@@ -2224,6 +2297,8 @@ export interface RuntimeDetail {
   artifactUrl: string;
   artifactType: string;
   networkTypes: string[];
+  endpoint: string;
+  authType: "none" | "key_auth" | "custom_jwt" | "unknown";
 }
 
 /** Fetch a runtime's control-plane detail (config/status/envs). */
