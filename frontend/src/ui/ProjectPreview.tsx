@@ -1133,6 +1133,38 @@ export function ProjectPreview({
     URL.revokeObjectURL(url);
   }
 
+  const artifactActions = (
+    <div
+      className={`pp-artifact-actions${embedded ? " is-rail" : ""}`}
+      aria-label="发布产物操作"
+    >
+      {onExportYaml && (
+        <button type="button" className="pp-secondary" onClick={onExportYaml}>
+          <FileDown className="pp-ic" />
+          导出 YAML
+        </button>
+      )}
+      {editable && onChange && (
+        <ProjectCodeBrowser
+          project={project}
+          onChange={onChange}
+          className="pp-artifact-source"
+          label="查看源代码"
+        />
+      )}
+      {project.files.length > 0 && (
+        <button
+          type="button"
+          className="pp-secondary"
+          onClick={handleDownloadZip}
+        >
+          <Download className="pp-ic" />
+          下载源代码
+        </button>
+      )}
+    </div>
+  );
+
   function renderNode(node: TreeNode, depth: number, prefix: string) {
     return sortedChildren(node).map((child) => {
       const key = prefix ? `${prefix}/${child.name}` : child.name;
@@ -1200,7 +1232,7 @@ export function ProjectPreview({
       <div className="pp-body">
         {onDeploy && !deploymentPrimaryPane && (
           <section className="pp-release-overview" aria-label="发布概览">
-            <div className="pp-release-preview">
+            <div className={`pp-release-preview${embedded ? " is-embedded" : ""}`}>
               <div className="pp-flow-thumbnail">
                 {agentDraft && (
                   <AgentBuildCanvas
@@ -1225,6 +1257,7 @@ export function ProjectPreview({
                   <Maximize2 aria-hidden />
                 </button>
               </div>
+              {embedded && artifactActions}
               {!embedded && (
                 <div className="pp-release-info">
                 <div className="pp-release-card-head">Agent 概览</div>
@@ -1274,35 +1307,7 @@ export function ProjectPreview({
                     )}
                     </dl>
                   </div>
-                  <div className="pp-artifact-actions">
-                    {onExportYaml && (
-                      <button
-                        type="button"
-                        className="pp-secondary"
-                        onClick={onExportYaml}
-                      >
-                        <FileDown className="pp-ic" />
-                        导出配置文件
-                      </button>
-                    )}
-                    {editable && onChange && (
-                      <ProjectCodeBrowser
-                        project={project}
-                        onChange={onChange}
-                        className="pp-artifact-source"
-                      />
-                    )}
-                    {project.files.length > 0 && (
-                      <button
-                        type="button"
-                        className="pp-secondary"
-                        onClick={handleDownloadZip}
-                      >
-                        <Download className="pp-ic" />
-                        导出源码
-                      </button>
-                    )}
-                  </div>
+                  {artifactActions}
                 </div>
                 </div>
               )}

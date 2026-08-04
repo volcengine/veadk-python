@@ -104,6 +104,11 @@
   background: hsl(var(--accent));
 }
 
+.pp-secondary:focus-visible {
+  outline: 2px solid hsl(var(--primary) / 0.34);
+  outline-offset: 1px;
+}
+
 .pp-secondary:disabled {
   opacity: 0.55;
   cursor: default;
@@ -461,6 +466,11 @@
   padding: 8px 0 12px;
 }
 
+.pp-release-preview.is-embedded {
+  grid-template-columns: minmax(0, 1fr) 132px;
+  align-items: stretch;
+}
+
 .pp-flow-thumbnail {
   position: relative;
   height: 200px;
@@ -632,6 +642,22 @@
   gap: 8px;
   margin-top: 18px;
   padding-top: 12px;
+}
+
+.pp-artifact-actions.is-rail {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+
+.pp-artifact-actions.is-rail .pp-secondary,
+.pp-artifact-actions.is-rail .code-browser-trigger {
+  flex: 1 1 0;
+  width: 100%;
+  min-height: 36px;
+  justify-content: center;
 }
 
 .pp-artifact-actions .pp-secondary,
