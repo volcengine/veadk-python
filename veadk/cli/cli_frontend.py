@@ -31,19 +31,25 @@ import sys
 import tempfile
 import unicodedata
 import zipfile
-
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import monotonic
 from typing import Any, Literal
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import click
 from pydantic import BaseModel, Field
 
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
+from veadk.cli.studio_telemetry import (
+    StudioTelemetryConfigurationError,
+    studio_apmplus_environment_from_options,
+    studio_telemetry_config,
+)
+from veadk.consts import STUDIO_APMPLUS_ENV
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -280,6 +286,10 @@ def _safe_exception_detail(
             parts.append(message)
         current = current.__cause__ or current.__context__
     return "\nCaused by:\n".join(parts)
+
+
+def _new_studio_deploy_id() -> str:
+    return f"stddep_{uuid4().hex}"
 
 
 def _claims_from_forwarded_jwt(authorization: str | None) -> dict | None:
@@ -1103,7 +1113,11 @@ def _run_frontend_server(
         principal = _current_principal(request)
         if access_policy.enabled and principal is None:
             raise HTTPException(status_code=401, detail="Studio identity is required")
-        return access_policy.access_payload(principal)
+        payload = access_policy.access_payload(principal)
+        payload["telemetry"] = {
+            "userId": principal.owner_id if principal else "",
+        }
+        return payload
 
     def _resolve_ve_credentials() -> tuple[str, str, str | None]:
         """Resolve cloud credentials as (access_key, secret_key, session_token).
@@ -1444,9 +1458,10 @@ def _run_frontend_server(
         as `veadk frontend` — all modules (chat/search/skill-center/history +
         add/manage agent) enabled, landing on the chat view. The `studio` flag
         is informational."""
+        version = current_studio_display_version()
         return {
             "studio": studio,
-            "version": current_studio_display_version(),
+            "version": version,
             "branding": {
                 "title": branding_title,
                 "logoUrl": "/web/site-logo" if branding_logo is not None else "",
@@ -1466,6 +1481,7 @@ def _run_frontend_server(
                 "generatedAgentTestRunDisabledReason": "",
             },
             "defaultView": "chat",
+            "telemetry": studio_telemetry_config(version),
         }
 
     @app.get("/web/agent-info/{app_name}")
@@ -6528,6 +6544,30 @@ def _resolve_studio_cloud_credentials(
     envvar="VEADK_STUDIO_UPDATE_PREFIX",
     help="TOS object prefix for the Studio main release channel.",
 )
+@click.option(
+    "--apmplus-aid",
+    default="",
+    envvar="VEADK_STUDIO_APMPLUS_AID",
+    help="APMPlus Client aid for Studio frontend telemetry.",
+)
+@click.option(
+    "--apmplus-token",
+    default="",
+    envvar="VEADK_STUDIO_APMPLUS_TOKEN",
+    help="APMPlus Client token for Studio frontend telemetry.",
+)
+@click.option(
+    "--apmplus-domain",
+    default="",
+    envvar="VEADK_STUDIO_APMPLUS_DOMAIN",
+    help="APMPlus Client reporting domain. Default: apmplus.volces.com.",
+)
+@click.option(
+    "--apmplus-env",
+    default="",
+    envvar="VEADK_STUDIO_APMPLUS_ENV",
+    help=f"APMPlus environment name. Default: {STUDIO_APMPLUS_ENV}.",
+)
 def frontend_deploy(
     user_pool_id: str,
     allowed_client_id: str,
@@ -6555,6 +6595,10 @@ def frontend_deploy(
     studio_update_bucket: str,
     studio_update_region: str | None,
     studio_update_prefix: str,
+    apmplus_aid: str,
+    apmplus_token: str,
+    apmplus_domain: str,
+    apmplus_env: str,
 ) -> None:
     """Deploy the SSO web frontend to VeFaaS.
 
@@ -6571,6 +6615,15 @@ def frontend_deploy(
         branding_title = normalize_site_title(site_title)
         branding_logo = resolve_site_logo(site_logo)
     except ValueError as error:
+        raise click.ClickException(str(error)) from error
+    try:
+        apmplus_environment = studio_apmplus_environment_from_options(
+            apmplus_aid=apmplus_aid,
+            apmplus_token=apmplus_token,
+            apmplus_domain=apmplus_domain,
+            apmplus_env=apmplus_env,
+        )
+    except StudioTelemetryConfigurationError as error:
         raise click.ClickException(str(error)) from error
 
     ak, sk, session_token = _resolve_studio_cloud_credentials(
@@ -6787,6 +6840,11 @@ def frontend_deploy(
     veadk_environments["VEADK_STUDIO_UPDATE_REGION"] = studio_update_region or region
     veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] = studio_update_prefix
     veadk_environments["VEADK_STUDIO_PROJECT"] = project
+    studio_deploy_id = _new_studio_deploy_id()
+    veadk_environments["VEADK_STUDIO_DEPLOY_ID"] = studio_deploy_id
+    veadk_environments["VEADK_STUDIO_USER_POOL_ID"] = user_pool_id
+    veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] = region
+    veadk_environments.update(apmplus_environment)
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 
@@ -6900,7 +6958,15 @@ def frontend_deploy(
         function_id = getattr(app, "vefaas_function_id", "")
         if url and function_id:
             click.echo(f"Setting OAUTH2_REDIRECT_URI={redirect_uri} and re-releasing…")
-            release_environment = {"OAUTH2_REDIRECT_URI": redirect_uri}
+            release_environment = {
+                "OAUTH2_REDIRECT_URI": redirect_uri,
+                "VEADK_STUDIO_DEPLOY_ID": studio_deploy_id,
+                "VEADK_STUDIO_USER_POOL_ID": veadk_environments[
+                    "VEADK_STUDIO_USER_POOL_ID"
+                ],
+                "VEADK_STUDIO_DEPLOY_REGION": region,
+            }
+            release_environment.update(apmplus_environment)
             if studio_update_bucket:
                 release_environment.update(
                     {

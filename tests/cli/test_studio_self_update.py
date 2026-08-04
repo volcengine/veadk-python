@@ -14,6 +14,7 @@
 """Tests for the VeFaaS-hosted Studio self-update service."""
 
 import hashlib
+import json
 import time
 import zipfile
 from pathlib import Path
@@ -25,6 +26,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from veadk.cli.frontend_branding import SiteLogo
+from veadk.cli.studio_package import STUDIO_RELEASE_ENVIRONMENT_FILENAME
 from veadk.cli.studio_release import StudioReleaseError, StudioReleaseManifest
 from veadk.cli.studio_self_update import (
     StudioSelfUpdater,
@@ -90,10 +92,20 @@ def _settings() -> StudioUpdateSettings:
     )
 
 
-def _bundle(path: Path, *, unsafe_name: str | None = None) -> None:
+def _bundle(
+    path: Path,
+    *,
+    unsafe_name: str | None = None,
+    release_environment: dict[str, str] | None = None,
+) -> None:
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("run.sh", "#!/bin/bash\n")
         archive.writestr("requirements.txt", "veadk-python\n")
+        if release_environment:
+            archive.writestr(
+                STUDIO_RELEASE_ENVIRONMENT_FILENAME,
+                json.dumps(release_environment),
+            )
         if unsafe_name:
             archive.writestr(unsafe_name, "unsafe")
 
@@ -132,7 +144,13 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     tmp_path: Path,
 ) -> None:
     archive = tmp_path / "source.zip"
-    _bundle(archive)
+    _bundle(
+        archive,
+        release_environment={
+            "VEADK_STUDIO_APMPLUS_AID": "12345",
+            "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
+        },
+    )
     content = archive.read_bytes()
     manifest = StudioReleaseManifest(
         version="20260724153045",
@@ -164,6 +182,7 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
             package = Path(str(kwargs["path"]))
             assert (package / "run.sh").is_file()
             assert (package / "requirements.txt").is_file()
+            assert not (package / STUDIO_RELEASE_ENVIRONMENT_FILENAME).exists()
             captured["update"] = kwargs
 
     updater = StudioSelfUpdater(
@@ -188,7 +207,9 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     assert update["application_id"] == "application-id"
     assert update["function_id"] == "function-id"
     assert update["environment_overrides"] == {
-        "VEADK_STUDIO_RELEASE_VERSION": manifest.version
+        "VEADK_STUDIO_RELEASE_VERSION": manifest.version,
+        "VEADK_STUDIO_APMPLUS_AID": "12345",
+        "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
     }
     status = updater.status()
     assert status["state"] == "updating"

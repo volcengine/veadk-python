@@ -77,6 +77,7 @@ import {
   type DeployStage,
   type IdentityUserPool,
 } from "../adk/client";
+import { trackStudioEvent } from "../adk/telemetry";
 import feishuLogo from "../assets/feishu-logo.svg";
 import { buildZip } from "./zip";
 import { ProjectCodeBrowser } from "./CodeBrowserDialog";
@@ -642,6 +643,12 @@ export interface DeploymentTaskUpdate {
   retry?: () => Promise<void>;
 }
 
+export type DeploymentTelemetrySource =
+  | "custom_create"
+  | "intelligent_create"
+  | "code_package"
+  | "unknown";
+
 export interface ProjectPreviewProps {
   project: AgentProject;
   /** Render inside the Agent workspace without taking over the app toolbar. */
@@ -700,6 +707,8 @@ export interface ProjectPreviewProps {
   deployRegion?: string;
   /** Called when the user changes the deploy region. */
   onDeployRegionChange?: (region: string) => void;
+  /** Creation entry used to group Studio deployment telemetry. */
+  deploymentTelemetrySource?: DeploymentTelemetrySource;
   /** Deploy-page toolbar actions. */
   onBack?: () => void;
   backLabel?: string;
@@ -735,6 +744,16 @@ function buildTree(files: ProjectFile[]): TreeNode {
     });
   }
   return root;
+}
+
+function deploymentErrorKind(error: unknown, phase: string): string {
+  if (phase === "build") return "build_failed";
+  if (error instanceof RuntimeProbeError) return "runtime_probe_error";
+  if (error instanceof DOMException && error.name === "AbortError") return "abort";
+  if (error instanceof Error && error.name && error.name !== "Error") {
+    return error.name;
+  }
+  return "unknown";
 }
 
 function sortedChildren(node: TreeNode): TreeNode[] {
@@ -825,6 +844,7 @@ export function ProjectPreview({
   onNetworkChange,
   deployRegion = "cn-beijing",
   onDeployRegionChange,
+  deploymentTelemetrySource = "unknown",
   onBack,
   backLabel = "返回配置",
   onExportYaml,
@@ -987,6 +1007,13 @@ export function ProjectPreview({
   const selectedFile =
     project.files.find((f) => f.path === selected) ?? null;
   const networkMode = network?.mode ?? "public";
+  const deploymentTelemetryCategories = () => ({
+    deploy_source: deploymentTelemetrySource,
+    deploy_action: deploymentRuntimeId ? "update" : "create",
+    deploy_region: deployRegion,
+    runtime_network_type: networkMode,
+    feishu_enabled: feishuEnabled,
+  });
   const automaticEnvRows = runtimeEnvDisplayRows(
     feishuEnabled ? [...deploymentEnv, ...FEISHU_ENV] : deploymentEnv,
     deploymentEnvValues,
@@ -1299,6 +1326,10 @@ export function ProjectPreview({
         setDeployResult(result);
         setActivePhase(null);
       }
+      trackStudioEvent("studio_agent_deploy_succeeded", {
+        ...deploymentTelemetryCategories(),
+        runtime_id: result.runtimeId || deploymentRuntimeId || "",
+      });
       onDeploymentTaskChange?.({
         id: taskId,
         runtimeName: result.agentName || taskRuntimeName,
@@ -1351,6 +1382,11 @@ export function ProjectPreview({
       if (mountedRef.current) setDeployError(message);
       const buildLog = mergeBuildFailureLog(message);
       const failedInBuild = Boolean(buildLog);
+      trackStudioEvent("studio_agent_deploy_failed", {
+        ...deploymentTelemetryCategories(),
+        failed_phase: latestPhase,
+        error_kind: deploymentErrorKind(err, latestPhase),
+      });
       onDeploymentTaskChange?.({
         id: taskId,
         runtimeName: taskRuntimeName,

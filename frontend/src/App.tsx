@@ -271,6 +271,11 @@ import {
   authenticationRestored,
   isAuthenticationPending,
 } from "./adk/authSession";
+import {
+  identifyStudioTelemetryUser,
+  initStudioTelemetry,
+  trackStudioEvent,
+} from "./adk/telemetry";
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
 import { buildSurfaces } from "./a2ui/Surface";
 
@@ -332,6 +337,14 @@ function MigrationIcon({ className }: { className?: string }) {
       <path d="M17.25 15.5h1.5M17.25 12.5h1.5M8.75 12h6.5m-2.5-2.5 2.5 2.5-2.5 2.5" />
     </svg>
   );
+}
+
+function sandboxTelemetryErrorKind(error: unknown): string {
+  if ((error as Error | undefined)?.name === "AbortError") return "abort";
+  if (error instanceof Error && error.name && error.name !== "Error") {
+    return error.name;
+  }
+  return "unknown";
 }
 
 /** Hand-drawn "tracing / observability" icon (stacked spans). */
@@ -1725,6 +1738,15 @@ export default function App() {
   // chat; privileged pages remain explicit navigation destinations.
   useEffect(() => {
     getUiConfig().then((cfg) => {
+      initStudioTelemetry(cfg.telemetry);
+      trackStudioEvent(
+        "studio_instance_loaded",
+        {
+          agents_source: cfg.agentsSource,
+        },
+        undefined,
+        { dedupeKey: "studio_instance_loaded" },
+      );
       setFeatures(cfg.features);
       setAgentsSource(cfg.agentsSource);
       setSiteBranding(cfg.branding);
@@ -1732,6 +1754,15 @@ export default function App() {
       setUiConfigLoaded(true);
     });
   }, []);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !userInfo || !access) return;
+    identifyStudioTelemetryUser({
+      userId: access.telemetry.userId,
+      role: access.role,
+      local: localMode,
+    });
+  }, [access, authStatus, localMode, userInfo]);
 
   useEffect(() => {
     if (!access) return;
@@ -2066,6 +2097,11 @@ export default function App() {
             signal: controller.signal,
           });
       if (sandboxLaunchAbortRef.current !== controller) return;
+      trackStudioEvent("studio_sandbox_create_succeeded", {
+        sandbox_kind: sandboxLaunchKind,
+        sandbox_source: sandboxLaunchFromAgents ? "my_agents" : "new_chat",
+        sandbox_session_id: createdSession.id,
+      });
       if (sandboxLaunchFromAgents) {
         setSandboxAgentRefreshKey((current) => current + 1);
         setSandboxLaunchOpen(false);
@@ -2105,6 +2141,11 @@ export default function App() {
     } catch (launchError) {
       if ((launchError as Error)?.name === "AbortError") return;
       if (sandboxLaunchAbortRef.current !== controller) return;
+      trackStudioEvent("studio_sandbox_create_failed", {
+        sandbox_kind: sandboxLaunchKind,
+        sandbox_source: sandboxLaunchFromAgents ? "my_agents" : "new_chat",
+        error_kind: sandboxTelemetryErrorKind(launchError),
+      });
       setSandboxLaunchError(
         launchError instanceof Error
           ? launchError.message

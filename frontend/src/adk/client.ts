@@ -1992,6 +1992,30 @@ export interface SiteBranding {
   logoUrl: string;
 }
 
+export interface StudioTelemetryApmplusConfig {
+  aid: number;
+  token: string;
+  domain: string;
+  env: string;
+}
+
+export interface StudioTelemetryContext {
+  deployId: string;
+  userPoolId: string;
+  applicationId: string;
+  functionId: string;
+  region: string;
+  project: string;
+  version: string;
+}
+
+export interface StudioTelemetryConfig {
+  enabled: boolean;
+  provider?: "apmplus";
+  apmplus?: StudioTelemetryApmplusConfig;
+  studio?: StudioTelemetryContext;
+}
+
 export interface UiConfig {
   studio: boolean;
   version: string;
@@ -2001,11 +2025,16 @@ export interface UiConfig {
   /** Where the agent picker sources agents: local apps (`--dev`) or the user's
    *  cloud AgentKit runtimes (default). */
   agentsSource: "local" | "cloud";
+  telemetry: StudioTelemetryConfig;
 }
 
 export const DEFAULT_SITE_BRANDING: SiteBranding = {
   title: "VeADK Studio",
   logoUrl: "",
+};
+
+const DISABLED_STUDIO_TELEMETRY: StudioTelemetryConfig = {
+  enabled: false,
 };
 
 const DEFAULT_UI_CONFIG: UiConfig = {
@@ -2024,7 +2053,54 @@ const DEFAULT_UI_CONFIG: UiConfig = {
   },
   defaultView: "chat",
   agentsSource: "local",
+  telemetry: DISABLED_STUDIO_TELEMETRY,
 };
+
+function normalizeStudioTelemetryConfig(value: unknown): StudioTelemetryConfig {
+  if (!value || typeof value !== "object") return DISABLED_STUDIO_TELEMETRY;
+  const config = value as Partial<StudioTelemetryConfig>;
+  if (!config.enabled) return DISABLED_STUDIO_TELEMETRY;
+  const apmplus = config.apmplus;
+  if (
+    !apmplus ||
+    typeof apmplus.aid !== "number" ||
+    !Number.isFinite(apmplus.aid) ||
+    typeof apmplus.token !== "string" ||
+    !apmplus.token
+  ) {
+    return DISABLED_STUDIO_TELEMETRY;
+  }
+  const studio = (config.studio ?? {}) as Partial<StudioTelemetryContext>;
+  return {
+    enabled: true,
+    provider: config.provider === "apmplus" ? "apmplus" : undefined,
+    apmplus: {
+      aid: apmplus.aid,
+      token: apmplus.token,
+      domain: typeof apmplus.domain === "string" && apmplus.domain
+        ? apmplus.domain
+        : "apmplus.volces.com",
+      env: typeof apmplus.env === "string" && apmplus.env
+        ? apmplus.env
+        : "production",
+    },
+    studio: {
+      deployId: typeof studio.deployId === "string" ? studio.deployId : "",
+      userPoolId: typeof studio.userPoolId === "string"
+        ? studio.userPoolId
+        : "",
+      applicationId: typeof studio.applicationId === "string"
+        ? studio.applicationId
+        : "",
+      functionId: typeof studio.functionId === "string"
+        ? studio.functionId
+        : "",
+      region: typeof studio.region === "string" ? studio.region : "",
+      project: typeof studio.project === "string" ? studio.project : "",
+      version: typeof studio.version === "string" ? studio.version : "",
+    },
+  };
+}
 
 /** Fetch the UI feature gates; falls back to all-enabled on any error. */
 export async function getUiConfig(): Promise<UiConfig> {
@@ -2049,6 +2125,7 @@ export async function getUiConfig(): Promise<UiConfig> {
       features: { ...DEFAULT_UI_CONFIG.features, ...(d.features ?? {}) },
       defaultView: d.defaultView ?? "chat",
       agentsSource: d.agentsSource === "cloud" ? "cloud" : "local",
+      telemetry: normalizeStudioTelemetryConfig(d.telemetry),
     };
   } catch {
     return DEFAULT_UI_CONFIG;
@@ -2060,6 +2137,9 @@ export type RuntimeScope = "all" | "mine";
 
 export interface StudioAccess {
   role: StudioRole;
+  telemetry: {
+    userId: string;
+  };
   capabilities: {
     createAgents: boolean;
     manageAgents: boolean;
@@ -2070,6 +2150,9 @@ export interface StudioAccess {
 /** Least-privileged fallback while access is loading or unavailable. */
 export const DEFAULT_STUDIO_ACCESS: StudioAccess = {
   role: "user",
+  telemetry: {
+    userId: "",
+  },
   capabilities: {
     createAgents: false,
     manageAgents: false,
@@ -2084,6 +2167,7 @@ export async function getStudioAccess(): Promise<StudioAccess> {
   const access = (await res.json()) as StudioAccess;
   if (
     !["admin", "developer", "user"].includes(access.role) ||
+    typeof access.telemetry?.userId !== "string" ||
     typeof access.capabilities?.createAgents !== "boolean" ||
     typeof access.capabilities?.manageAgents !== "boolean" ||
     !["all", "mine"].includes(access.capabilities?.runtimeScope)

@@ -19,7 +19,9 @@ const cliFrontendSource = readFileSync(
 
 test("Studio access fails closed until the server-derived role is known", () => {
   assert.match(clientSource, /export type StudioRole = "admin" \| "developer" \| "user"/);
-  assert.match(clientSource, /export const DEFAULT_STUDIO_ACCESS[\s\S]*?createAgents: false[\s\S]*?manageAgents: false[\s\S]*?runtimeScope: "mine"/);
+  assert.match(clientSource, /telemetry:\s*\{\s*userId: string;\s*\}/);
+  assert.match(clientSource, /export const DEFAULT_STUDIO_ACCESS[\s\S]*?userId: ""[\s\S]*?createAgents: false[\s\S]*?manageAgents: false[\s\S]*?runtimeScope: "mine"/);
+  assert.match(clientSource, /typeof access\.telemetry\?\.userId !== "string"/);
   assert.match(clientSource, /apiFetch\("\/web\/access"\)/);
   assert.match(appSource, /if \(!access\) \{\s*return <div className="boot" \/>;\s*\}/);
   assert.match(appSource, /setAccess\(DEFAULT_STUDIO_ACCESS\)/);

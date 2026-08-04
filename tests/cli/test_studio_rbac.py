@@ -577,7 +577,9 @@ def test_access_endpoint_resolves_local_roles_and_blocks_user_management(
 
     assert admin.json()["role"] == "admin"
     assert developer.json()["role"] == "developer"
+    assert developer.json()["telemetry"] == {"userId": "developer"}
     assert user.json()["role"] == "user"
+    assert user.json()["telemetry"]["userId"] == "reader"
     assert forbidden.status_code == 403
     assert skill_creator_forbidden.status_code == 403
 
