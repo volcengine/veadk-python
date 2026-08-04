@@ -125,7 +125,7 @@ See the [Volcengine Cloud Search Service docs: Create an instance](https://www.v
 
 #### config.yaml
 
-Fill the provisioned VikingDB, TOS, and OpenSearch details into `config.yaml`. Do **not** put secrets in the file — reference them via environment variables:
+Fill the provisioned VikingDB, TOS, OpenSearch, or OpenViking details into `config.yaml`. Do **not** put secrets in the file; reference them via environment variables:
 
 ```yaml
 model:
@@ -153,6 +153,14 @@ database:
     port: 9200
     username: admin
     password: ${DATABASE_OPENSEARCH_PASSWORD}
+  openviking:
+    url: http://127.0.0.1:1933
+    api_key: ${DATABASE_OPENVIKING_API_KEY}
+    # user_id is the OpenViking owner/context ID in config.yaml.
+    # When target_uri is unset, VeADK uses:
+    # viking://user/default/resources/{index}/
+    # user_id: team_a
+    # target_uri: viking://user/team_a/resources/company_faq/
 ```
 
 Provide those secrets in environment variables:
@@ -162,6 +170,7 @@ export MODEL_AGENT_API_KEY="<your Ark API key>"
 export VOLCENGINE_ACCESS_KEY="<your AK>"
 export VOLCENGINE_SECRET_KEY="<your SK>"
 export DATABASE_OPENSEARCH_PASSWORD="<your OpenSearch password>"
+export DATABASE_OPENVIKING_API_KEY="<your OpenViking API key>"
 ```
 
 ### Demo scenario
@@ -208,6 +217,37 @@ if not kb.collection_status()["existed"]:
     kb.create_collection()  # Viking requires an explicit create
 
 kb.add_from_text(mock_data)
+```
+
+### Using OpenViking as storage
+
+The OpenViking backend stores knowledge in OpenViking resource directories and does not need local embedding configuration. `index` still names the resource directory. If you do not pass `backend_config`, VeADK can fill `index` from `KnowledgeBase(index=...)` or `app_name`; when you do pass `backend_config`, include `index` in that dictionary. When `target_uri` is not configured, the default directory is:
+
+```text
+viking://user/{openviking_user_id or default}/resources/{index}/
+```
+
+`openviking_user_id` comes from `backend_config["openviking_user_id"]` or `DATABASE_OPENVIKING_USER_ID`; if both are unset, it defaults to `default`. The legacy `backend_config["user_id"]` still works as a compatibility alias. If you pass `target_uri` or set `DATABASE_OPENVIKING_TARGET_URI`, that directory is used directly.
+
+```python
+from veadk.knowledgebase import KnowledgeBase
+
+kb = KnowledgeBase(
+    backend="openviking",
+    app_name="company_faq",
+    backend_config={
+        "index": "company_faq",
+        "url": "http://127.0.0.1:1933",
+        "api_key": "your-openviking-api-key",
+        # Optional; defaults to default when omitted.
+        "openviking_user_id": "team_a",
+        # Optional; defaults to viking://user/team_a/resources/company_faq/
+        # "target_uri": "viking://user/team_a/resources/company_faq/",
+    },
+)
+
+kb.add_from_directory("./docs")
+results = kb.search("What is the remote work policy?")
 ```
 
 Complete runnable example (VikingDB backend with a date-difference tool):

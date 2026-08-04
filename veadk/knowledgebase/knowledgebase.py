@@ -14,7 +14,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Literal, Union
+from collections.abc import Callable
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -85,7 +86,7 @@ def _get_backend_cls(backend: str) -> type[BaseKnowledgebaseBackend]:
                 "KnowledgeBase functionality requires 'veadk-python[extensions]'. "
                 "Please install it via `pip install veadk-python[extensions]`."
             ) from e
-        raise e
+        raise
 
 
 class KnowledgeBase(BaseModel):
@@ -126,7 +127,7 @@ class KnowledgeBase(BaseModel):
 
     description: str = "This knowledgebase stores some user-related information."
 
-    backend: Union[
+    backend: (
         Literal[
             "local",
             "opensearch",
@@ -136,9 +137,9 @@ class KnowledgeBase(BaseModel):
             "tos_vector",
             "context_search",
             "openviking",
-        ],
-        BaseKnowledgebaseBackend,
-    ] = "local"
+        ]
+        | BaseKnowledgebaseBackend
+    ) = "local"
 
     backend_config: dict = Field(default_factory=dict)
 
@@ -152,7 +153,7 @@ class KnowledgeBase(BaseModel):
 
     query_with_user_profile: bool = False
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, __context: Any, /) -> None:
         if isinstance(self.backend, BaseKnowledgebaseBackend):
             self._backend = self.backend
             self.index = self._backend.index
@@ -279,6 +280,12 @@ class KnowledgeBase(BaseModel):
                 )
 
         return entries
+
+    def close(self) -> None:
+        """Release backend resources when the backend exposes a close hook."""
+        close = getattr(self._backend, "close", None)
+        if callable(close):
+            close()
 
     def __getattr__(self, name) -> Callable:
         """In case of knowledgebase have no backends' methods (`delete`, `list_chunks`, etc)

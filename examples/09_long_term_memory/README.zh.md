@@ -45,3 +45,34 @@ python main.py
 - 短期 vs 长期：会话内的记忆见 [03](../03_short_term_memory/)。
 - 把 `backend="local"` 换成持久化存储（`openviking`、`viking`、`redis`、
   `opensearch`、`mem0`），让记忆在进程重启后依然存在。
+
+### OpenViking 变体
+
+使用 OpenViking 时，先配置服务连接和 owner/context ID：
+
+```bash
+export DATABASE_OPENVIKING_URL="http://127.0.0.1:1933"
+export DATABASE_OPENVIKING_API_KEY="your-openviking-api-key"
+export DATABASE_OPENVIKING_USER_ID="agent_context"
+```
+
+然后切换后端：
+
+```python
+long_term_memory = LongTermMemory(
+    backend="openviking",
+    app_name="ltm_demo",
+    backend_config={
+        # 可选；不配置时保持 VeADK 默认 OpenViking policy。
+        "memory_policy": {
+            "self": {"enabled": False},
+            "peer": {"enabled": True},
+            "memory_types": ["entities", "events", "preferences"],
+        },
+    },
+)
+```
+
+`Runner.user_id` 仍表示最终用户，并会作为 OpenViking `peer_id` 传入。
+`DATABASE_OPENVIKING_USER_ID` 表示 OpenViking 里的记忆 owner/context，未配置时默认
+`default`。

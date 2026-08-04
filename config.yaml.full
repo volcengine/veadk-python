@@ -182,11 +182,13 @@ database:
   openviking:
     url: http://127.0.0.1:1933 # OpenViking HTTP server base URL
     api_key: your-openviking-api-key # OpenViking service owner API key
+    # user_id: default # OpenViking owner/context id used by knowledge and memory
+    # memory_policy: '{"self":{"enabled":false},"peer":{"enabled":true},"memory_types":["entities","events","preferences"]}' # JSON string; omit to keep the default policy
     # Optional knowledgebase settings:
     # account:
     # user:
     # actor_peer_id:
-    # target_uri: viking://resources/{index}/
+    # target_uri: viking://user/{OpenViking user_id or default}/resources/{index}/
     # wait: true
     # import_timeout: 300
     # hydrate_results: true

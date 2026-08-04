@@ -50,3 +50,28 @@ The answer about annual leave / remote work comes straight from
   production use.
 - Move on to [06 · Multi-agent workflow](../06_multi_agent/) to compose several
   agents.
+
+### OpenViking variant
+
+For OpenViking, set the service connection first:
+
+```bash
+export DATABASE_OPENVIKING_URL="http://127.0.0.1:1933"
+export DATABASE_OPENVIKING_API_KEY="your-openviking-api-key"
+# Optional. Defaults to default when omitted.
+export DATABASE_OPENVIKING_USER_ID="team_a"
+```
+
+Then switch the backend:
+
+```python
+knowledgebase = KnowledgeBase(
+    backend="openviking",
+    index="company_faq",
+)
+knowledgebase.add_from_directory("./docs")
+```
+
+Without `DATABASE_OPENVIKING_TARGET_URI`, the resources are scoped to
+`viking://user/{openviking_user_id or default}/resources/company_faq/`. Set
+`DATABASE_OPENVIKING_TARGET_URI` only when you want to pin a different directory.

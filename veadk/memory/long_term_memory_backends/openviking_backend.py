@@ -25,6 +25,7 @@ from openviking_sdk import SyncHTTPClient
 from pydantic import Field
 from typing_extensions import override
 
+import veadk.config  # noqa: F401  # Load .env and config.yaml before settings.
 from veadk.configs.database_configs import OpenVikingConfig
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
@@ -48,19 +49,29 @@ class OpenVikingLTMBackend(BaseLongTermMemoryBackend):
     openviking_config: OpenVikingConfig = Field(default_factory=OpenVikingConfig)
     url: str = ""
     api_key: str = ""
+    openviking_user_id: str = ""
+    memory_policy: dict[str, Any] | None = None
     peer_id_resolver: Callable[[str, str], str] | None = None
     timeout: float = 30
 
     _PEER_MEMORY_TYPES: ClassVar[list[str]] = ["entities", "events", "preferences"]
-    _MEMORY_POLICY: ClassVar[dict[str, Any]] = {
+    _DEFAULT_MEMORY_POLICY: ClassVar[dict[str, Any]] = {
         "self": {"enabled": False},
         "peer": {"enabled": True},
         "memory_types": _PEER_MEMORY_TYPES,
     }
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, __context: Any, /) -> None:
         self.url = (self.url or self.openviking_config.url).rstrip("/")
         self.api_key = self.api_key or self.openviking_config.api_key
+        configured_openviking_user_id = (
+            self.openviking_user_id or self.openviking_config.user_id
+        ).strip()
+        using_default_openviking_user_id = not configured_openviking_user_id
+        self.openviking_user_id = self._validate_safe_path_segment(
+            configured_openviking_user_id or "default",
+            name="openviking_user_id",
+        )
         if not self.url:
             raise ValueError(
                 "OpenViking URL is required. Set DATABASE_OPENVIKING_URL or pass url."
@@ -69,6 +80,23 @@ class OpenVikingLTMBackend(BaseLongTermMemoryBackend):
             raise ValueError(
                 "OpenViking API key is required. Set DATABASE_OPENVIKING_API_KEY or pass api_key."
             )
+        if using_default_openviking_user_id:
+            logger.warning(
+                "OpenViking long-term memory `openviking_user_id` is not configured. "
+                "VeADK `user_id` identifies the current requester and is used as "
+                "OpenViking `peer_id`. OpenViking `openviking_user_id` identifies "
+                "the memory owner/context in `viking://user/<openviking_user_id>/...`. "
+                "Falling back to OpenViking user_id='default'. Set "
+                "backend_config['openviking_user_id'] or DATABASE_OPENVIKING_USER_ID "
+                "to isolate memories by agent/context."
+            )
+        self.memory_policy = (
+            self.memory_policy
+            if self.memory_policy is not None
+            else self.openviking_config.memory_policy
+        )
+        if self.memory_policy is None:
+            self.memory_policy = json.loads(json.dumps(self._DEFAULT_MEMORY_POLICY))
         if not self.peer_id_resolver:
             self.peer_id_resolver = default_peer_id_resolver
 
@@ -91,6 +119,7 @@ class OpenVikingLTMBackend(BaseLongTermMemoryBackend):
         peer_id = self._resolve_peer_id(app_name=app_name, user_id=user_id)
         openviking_session_id = self._openviking_session_id(
             app_name=app_name,
+            openviking_user_id=self.openviking_user_id,
             peer_id=peer_id,
             session_id=session_id,
         )
@@ -134,22 +163,27 @@ class OpenVikingLTMBackend(BaseLongTermMemoryBackend):
     def _resolve_peer_id(self, *, app_name: str, user_id: str) -> str:
         assert self.peer_id_resolver is not None
         peer_id = str(self.peer_id_resolver(app_name, user_id) or "").strip()
-        if not peer_id:
-            raise ValueError("OpenViking peer_id must not be empty")
-        if peer_id in {".", ".."} or not _SAFE_ID_PATTERN.match(peer_id):
+        return self._validate_safe_path_segment(peer_id, name="peer_id")
+
+    def _validate_safe_path_segment(self, value: str, *, name: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError(f"OpenViking {name} must not be empty")
+        if value in {".", ".."} or not _SAFE_ID_PATTERN.match(value):
             raise ValueError(
-                "OpenViking peer_id must be a safe single path segment. "
+                f"OpenViking {name} must be a safe single path segment. "
                 "Allowed characters: letters, digits, '.', '_', '@', '-'."
             )
-        return peer_id
+        return value
 
     def _peer_memory_target_uri(self, *, peer_id: str) -> str:
-        return f"viking://user/peers/{peer_id}/memories"
+        return f"viking://user/{self.openviking_user_id}/peers/{peer_id}/memories"
 
     def _openviking_session_id(
         self,
         *,
         app_name: str,
+        openviking_user_id: str,
         peer_id: str,
         session_id: str,
     ) -> str:
@@ -157,6 +191,7 @@ class OpenVikingLTMBackend(BaseLongTermMemoryBackend):
             [
                 "veadk",
                 self._safe_identifier_part(app_name, fallback="app"),
+                self._safe_identifier_part(openviking_user_id, fallback="user"),
                 self._safe_identifier_part(peer_id, fallback="peer"),
                 self._safe_identifier_part(session_id, fallback="session"),
             ]
@@ -182,7 +217,7 @@ class OpenVikingLTMBackend(BaseLongTermMemoryBackend):
         try:
             client.create_session(
                 session_id=session_id,
-                memory_policy=self._MEMORY_POLICY,
+                memory_policy=self.memory_policy,
             )
         except Exception as e:
             if self._is_existing_session_error(e):

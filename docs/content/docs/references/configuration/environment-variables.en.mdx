@@ -115,10 +115,12 @@ Prefix `DATABASE_`, grouped by storage type. Memory and the knowledge base read 
 | | `DATABASE_TOS_BUCKET` | Bucket name |
 | OpenViking | `DATABASE_OPENVIKING_URL` | OpenViking HTTP server URL |
 | | `DATABASE_OPENVIKING_API_KEY` | OpenViking service owner API key |
+| | `DATABASE_OPENVIKING_USER_ID` | OpenViking owner/context ID, default `default`; maps to `backend_config["openviking_user_id"]`, used for the knowledge directory when `target_uri` is not configured and as the long-term memory owner/context |
+| | `DATABASE_OPENVIKING_MEMORY_POLICY` | Long-term memory `memory_policy` JSON; uses the default policy when unset |
 | | `DATABASE_OPENVIKING_ACCOUNT` | Optional account for multi-tenant or trusted gateway setups |
 | | `DATABASE_OPENVIKING_USER` | Optional user for multi-tenant or trusted gateway setups |
 | | `DATABASE_OPENVIKING_ACTOR_PEER_ID` | Optional caller agent or peer identifier |
-| | `DATABASE_OPENVIKING_TARGET_URI` | Knowledge resource directory, default `viking://resources/{index}/` |
+| | `DATABASE_OPENVIKING_TARGET_URI` | Knowledge resource directory; defaults to `viking://user/{openviking_user_id or default}/resources/{index}/` when unset |
 | | `DATABASE_OPENVIKING_WAIT` | Wait for resource parsing and indexing on import, default `true` |
 | | `DATABASE_OPENVIKING_IMPORT_TIMEOUT` | Import wait timeout in seconds, default `300` |
 | | `DATABASE_OPENVIKING_HYDRATE_RESULTS` | Read full content or overview after search hits, default `true` |
@@ -144,8 +146,10 @@ database:
   openviking:
     url: http://127.0.0.1:1933
     api_key: your-openviking-api-key
+    # user_id: default
+    # memory_policy: '{"self":{"enabled":false},"peer":{"enabled":true},"memory_types":["entities","events","preferences"]}'
     # Optional for KnowledgeBase(backend="openviking"):
-    # target_uri: viking://resources/my_app/
+    # target_uri: viking://user/default/resources/my_app/
     # wait: true
     # import_timeout: 300
     # hydrate_results: true
@@ -153,6 +157,16 @@ database:
     # score_threshold: 0.3
     # use_context_search: false
 ```
+
+`KnowledgeBase(backend="openviking")` first uses an explicit `target_uri`; when it
+is unset, VeADK uses
+`viking://user/{openviking_user_id or default}/resources/{index}/`, where
+`openviking_user_id` comes from `backend_config["openviking_user_id"]` or
+`DATABASE_OPENVIKING_USER_ID`. If `backend_config` is omitted, `index` comes from
+`KnowledgeBase(index=...)` or `app_name`; if `backend_config` is provided, include
+`index` in that dictionary. For
+`LongTermMemory(backend="openviking")`, omitting `memory_policy` keeps VeADK's
+default policy; provide valid JSON only when you want to override it.
 
 ## Observability
 

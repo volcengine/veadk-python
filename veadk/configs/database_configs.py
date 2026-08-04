@@ -14,6 +14,7 @@
 
 import os
 from functools import cached_property
+from typing import Any
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -138,6 +139,12 @@ class OpenVikingConfig(BaseSettings):
     api_key: str = ""
     """OpenViking service owner user key"""
 
+    user_id: str = ""
+    """OpenViking memory owner/context user id used in viking://user/<user_id>/..."""
+
+    memory_policy: dict[str, Any] | None = None
+    """OpenViking memory policy JSON used by LongTermMemory(backend="openviking")"""
+
 
 class VikingKnowledgebaseConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DATABASE_VIKING_")
@@ -155,7 +162,7 @@ class TOSConfig(BaseSettings):
 
     region: str = "cn-beijing"
 
-    def model_post_init(self, __context) -> None:
+    def model_post_init(self, __context, /) -> None:
         cloud_provider = os.getenv("CLOUD_PROVIDER", "volces").lower()
 
         if cloud_provider == "byteplus":

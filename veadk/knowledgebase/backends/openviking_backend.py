@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -22,11 +23,13 @@ from typing import Any
 from pydantic import Field, PrivateAttr
 from typing_extensions import override
 
+import veadk.config  # noqa: F401  # Load .env and config.yaml before reading env vars.
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.entry import KnowledgebaseEntry
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
+_SAFE_PATH_SEGMENT_PATTERN = re.compile(r"^[A-Za-z0-9_.@-]+$")
 
 
 def _getenv(*names: str) -> str | None:
@@ -55,18 +58,35 @@ def _parse_float(value: str | None, default: float | None) -> float | None:
     return float(value)
 
 
-def _default_target_uri(index: str) -> str:
-    return f"viking://resources/{index.strip('/')}/"
+def _default_target_uri(openviking_user_id: str, index: str) -> str:
+    openviking_user_id = _validate_safe_path_segment(
+        openviking_user_id,
+        name="openviking_user_id",
+    )
+    index = _validate_safe_path_segment(index, name="index")
+    return f"viking://user/{openviking_user_id}/resources/{index}/"
+
+
+def _validate_safe_path_segment(value: str, *, name: str) -> str:
+    value = str(value or "").strip()
+    if not value:
+        raise ValueError(f"OpenViking knowledgebase {name} must not be empty")
+    if value in {".", ".."} or not _SAFE_PATH_SEGMENT_PATTERN.match(value):
+        raise ValueError(
+            f"OpenViking knowledgebase {name} must be a safe single path segment. "
+            "Allowed characters: letters, digits, '.', '_', '@', '-'."
+        )
+    return value
 
 
 class OpenVikingKnowledgeBackend(BaseKnowledgebaseBackend):
     """OpenViking SDK backend for VeADK knowledge base operations.
 
     Each VeADK knowledgebase index maps to an OpenViking resources directory,
-    e.g. ``viking://resources/{index}/``. Imported resources are written under
-    that directory and searches are scoped with ``target_uri``. OpenViking
-    performs resource parsing and indexing, so this backend does not require
-    local embedding configuration.
+    e.g. ``viking://user/{openviking_user_id}/resources/{index}/``. Imported
+    resources are written under that directory and searches are scoped with
+    ``target_uri``. OpenViking performs resource parsing and indexing, so this
+    backend does not require local embedding configuration.
     """
 
     url: str | None = Field(
@@ -85,6 +105,8 @@ class OpenVikingKnowledgeBackend(BaseKnowledgebaseBackend):
     user: str | None = Field(
         default_factory=lambda: _getenv("DATABASE_OPENVIKING_USER", "OPENVIKING_USER")
     )
+    openviking_user_id: str | None = None
+    user_id: str | None = None
     actor_peer_id: str | None = Field(
         default_factory=lambda: _getenv(
             "DATABASE_OPENVIKING_ACTOR_PEER_ID", "OPENVIKING_ACTOR_PEER_ID"
@@ -128,12 +150,23 @@ class OpenVikingKnowledgeBackend(BaseKnowledgebaseBackend):
 
     _client: Any = PrivateAttr(default=None)
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, __context: Any, /) -> None:
         self.precheck_index_naming()
-        self.target_uri = self._normalize_target_uri(
-            self.target_uri or _default_target_uri(self.index)
+        configured_openviking_user_id = (
+            self.openviking_user_id
+            or self.user_id
+            or _getenv("DATABASE_OPENVIKING_USER_ID", "OPENVIKING_USER_ID")
+            or "default"
         )
-        self._client = self._build_client()
+        self.openviking_user_id = configured_openviking_user_id.strip() or "default"
+        self.user_id = self.openviking_user_id
+        if self.target_uri:
+            self.target_uri = self._normalize_target_uri(self.target_uri)
+        else:
+            self.target_uri = self._normalize_target_uri(
+                _default_target_uri(self.openviking_user_id, self.index)
+            )
+        self._ensure_client()
 
     @override
     def precheck_index_naming(self) -> None:
@@ -163,18 +196,44 @@ class OpenVikingKnowledgeBackend(BaseKnowledgebaseBackend):
             actor_peer_id=self.actor_peer_id,
         )
 
+    def _initialize_client(self, client: Any) -> None:
+        initialize = getattr(client, "initialize", None)
+        if callable(initialize):
+            initialize()
+
+    def _ensure_client(self) -> Any:
+        if self._client is None:
+            client = self._build_client()
+            self._initialize_client(client)
+            self._client = client
+        return self._client
+
+    def close(self) -> None:
+        client = self._client
+        if client is None:
+            return
+
+        try:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
+        finally:
+            self._client = None
+
     def _normalize_target_uri(self, target_uri: str) -> str:
         if not target_uri:
-            return _default_target_uri(self.index)
-        if target_uri.startswith("viking://resources/") and not target_uri.endswith(
-            "/"
-        ):
+            return _default_target_uri(
+                self.openviking_user_id or "default",
+                self.index,
+            )
+        if target_uri.startswith("viking://") and not target_uri.endswith("/"):
             return f"{target_uri}/"
         return target_uri
 
     @override
     def add_from_directory(self, directory: str, **kwargs) -> bool:
-        self._client.add_resource(
+        client = self._ensure_client()
+        client.add_resource(
             path=directory,
             to=kwargs.get("target_uri", self.target_uri),
             wait=kwargs.get("wait", self.wait),
@@ -193,8 +252,9 @@ class OpenVikingKnowledgeBackend(BaseKnowledgebaseBackend):
 
     @override
     def add_from_files(self, files: list[str], **kwargs) -> bool:
+        client = self._ensure_client()
         for file in files:
-            self._client.add_resource(
+            client.add_resource(
                 path=file,
                 parent=kwargs.get("target_uri", self.target_uri),
                 wait=kwargs.get("wait", self.wait),
@@ -223,7 +283,8 @@ class OpenVikingKnowledgeBackend(BaseKnowledgebaseBackend):
         target_uri = kwargs.get("target_uri", self.target_uri)
         score_threshold = kwargs.get("score_threshold", self.score_threshold)
         use_context_search = kwargs.get("use_context_search", self.use_context_search)
-        method = self._client.search if use_context_search else self._client.find
+        client = self._ensure_client()
+        method = client.search if use_context_search else client.find
 
         call_kwargs = {
             "query": query,
@@ -287,9 +348,10 @@ class OpenVikingKnowledgeBackend(BaseKnowledgebaseBackend):
             return str(item.get("abstract") or "")
 
         try:
+            client = self._ensure_client()
             if item.get("is_leaf"):
-                return self._client.read(uri, offset=0, limit=self.read_limit)
-            return self._client.overview(uri)
-        except Exception as e:
+                return client.read(uri, offset=0, limit=self.read_limit)
+            return client.overview(uri)
+        except Exception as e:  # noqa: BLE001 - SDK hydration failures fall back to abstracts.
             logger.debug(f"Failed to hydrate OpenViking resource {uri}: {e}")
             return str(item.get("abstract") or "")
