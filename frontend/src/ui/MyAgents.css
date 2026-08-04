@@ -290,10 +290,10 @@
   flex: 0 0 auto;
   align-items: center;
   padding: 0 8px;
-  border: 1px solid hsl(var(--ring) / 0.24);
+  border: 1px solid hsl(43 90% 48% / 0.3);
   border-radius: 999px;
-  background: hsl(var(--ring) / 0.09);
-  color: hsl(var(--foreground));
+  background: hsl(45 96% 52% / 0.14);
+  color: hsl(38 78% 36%);
   font-size: 10px;
   font-weight: 600;
   line-height: 1;
