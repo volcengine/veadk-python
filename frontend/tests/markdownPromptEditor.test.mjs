@@ -22,6 +22,14 @@ const localPickerSource = readFileSync(
   new URL("../src/create/LocalPicker.tsx", import.meta.url),
   "utf8",
 );
+const skillHubPickerSource = readFileSync(
+  new URL("../src/create/SkillHubPicker.tsx", import.meta.url),
+  "utf8",
+);
+const skillSpacePickerSource = readFileSync(
+  new URL("../src/create/SkillSpacePicker.tsx", import.meta.url),
+  "utf8",
+);
 const localSkillSource = readFileSync(
   new URL("../src/create/skills/local.ts", import.meta.url),
   "utf8",
@@ -695,6 +703,41 @@ test("local Skill folders and ZIP archives support drag and drop", () => {
   assert.match(
     createStyles,
     /\.cw-local-dropzone\.is-dragging\s*\{[\s\S]*?border-color:/,
+  );
+});
+
+test("Skill picker states fill the dialog without clipping content", () => {
+  assert.match(
+    createStyles,
+    /\.cw-local\s*\{[\s\S]*?height:\s*100%;[\s\S]*?display:\s*flex;[\s\S]*?flex-direction:\s*column;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-local-dropzone\s*\{[\s\S]*?flex:\s*1;[\s\S]*?justify-content:\s*center;/,
+  );
+  assert.match(skillSpacePickerSource, /className="cw-empty-line cw-skill-loading"/);
+  assert.match(skillHubPickerSource, /className="cw-empty-line cw-skill-loading"/);
+  assert.match(
+    createStyles,
+    /\.cw-skill-loading\s*\{[\s\S]*?align-items:\s*center;[\s\S]*?justify-content:\s*center;[\s\S]*?white-space:\s*nowrap;/,
+  );
+  assert.doesNotMatch(skillSpacePickerSource, /\[\$\{s\.region\}\]/);
+  assert.match(skillSpacePickerSource, /className="cw-skillspace-region-label"/);
+  assert.match(
+    createStyles,
+    /\.cw-skill-input:focus[\s\S]*?background:\s*hsl\(var\(--background\)\);[\s\S]*?box-shadow:\s*none;/,
+  );
+  assert.doesNotMatch(
+    createStyles,
+    /\.cw-skill-result\s*\{[^}]*max-height:\s*72px;/,
+  );
+  assert.doesNotMatch(
+    createStyles,
+    /\.cw-skill-result\s*\{[^}]*overflow:\s*hidden;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-skill-result\s*\{[^}]*flex-shrink:\s*0;/,
   );
 });
 

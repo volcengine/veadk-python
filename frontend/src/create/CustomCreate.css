@@ -3580,6 +3580,8 @@
 
 /* ---------- skill hub picker ---------- */
 .cw-skillhub {
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -3604,6 +3606,14 @@
 .cw-skill-input {
   padding-left: 36px;
 }
+.cw-skill-input:focus,
+.cw-skill-input:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.38);
+  outline-offset: 1px;
+  border-color: hsl(var(--ring) / 0.48);
+  background: hsl(var(--background));
+  box-shadow: none;
+}
 .cw-skill-selected {
   display: flex;
   flex-direction: column;
@@ -3625,6 +3635,7 @@
   scrollbar-gutter: stable;
 }
 .cw-skill-result {
+  flex-shrink: 0;
   display: flex;
   align-items: flex-start;
   gap: 12px;
@@ -3640,8 +3651,6 @@
     background 0.12s,
     border-color 0.12s;
   min-height: 72px;
-  max-height: 72px;
-  overflow: hidden;
 }
 .cw-skill-result:hover {
   background: hsl(var(--foreground) / 0.05);
@@ -3696,9 +3705,20 @@
 }
 .cw-skill-result-repo {
   font-size: 11px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: inherit;
+  line-height: 1.4;
   color: hsl(var(--muted-foreground));
   word-break: break-all;
+}
+
+.cw-skill-loading {
+  flex: 1;
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  white-space: nowrap;
 }
 
 /* ---------- spinner ---------- */
@@ -3958,10 +3978,20 @@
 }
 
 /* local picker */
+.cw-local {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .cw-local-dropzone {
+  flex: 1;
+  min-height: 240px;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 9px;
   padding: 18px 14px;
   border: 1px dashed hsl(var(--border));
@@ -3992,23 +4022,43 @@
   color: hsl(var(--foreground));
 }
 .cw-local-hint {
-  margin: 0 0 8px;
+  margin: 0;
   font-size: 12px;
   color: hsl(var(--muted-foreground));
   line-height: 1.5;
 }
 
 /* skillspace picker */
+.cw-skillspace {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .cw-skillspace-header {
   display: flex;
   gap: 8px;
-  align-items: flex-start;
+  align-items: center;
   margin-bottom: 10px;
 }
 .cw-skillspace-select {
   width: 100%;
   flex: 1;
   min-width: 0;
+}
+.cw-skillspace-region-label {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--muted) / 0.52);
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 .cw-skillspace-console-link {
   flex-shrink: 0;

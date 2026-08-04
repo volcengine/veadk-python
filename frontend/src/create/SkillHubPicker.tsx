@@ -113,7 +113,9 @@ export function SkillHubPicker({
       )}
 
       {loading && results.length === 0 ? (
-        <p className="cw-empty-line">正在搜索…</p>
+        <p className="cw-empty-line cw-skill-loading" role="status">
+          <Loader2 className="cw-i cw-spin" /> 正在搜索…
+        </p>
       ) : results.length > 0 ? (
         <div className="cw-skill-results">
           {results.map((hit) => {
