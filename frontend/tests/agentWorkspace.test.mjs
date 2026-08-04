@@ -51,8 +51,11 @@ test("Agent navigation opens the PR 748 workspace with creation and evaluation",
 });
 
 test("workspace drafts stay wired to custom Agent creation", () => {
-  assert.match(appSource, /function loadWorkspaceDrafts/);
+  assert.match(appSource, /loadWorkspaceDrafts,[\s\S]*?from "\.\/create\/agentDraftStorage"/);
   assert.match(appSource, /saveWorkspaceDraft/);
+  assert.match(appSource, /DRAFT_AUTOSAVE_DELAY_MS = 600/);
+  assert.match(appSource, /window\.addEventListener\("pagehide", flushPendingWorkspaceDraft\)/);
+  assert.match(appSource, /draftStorageError/);
   assert.match(appSource, /onDraftChange=\{\(draft, dirty\) =>/);
   assert.match(appSource, /deploymentTarget=\{runtimeUpdateTarget \?\? undefined\}/);
   assert.match(
@@ -162,6 +165,10 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(
     appSource,
     /const finishDeployment = useCallback[\s\S]*?setConnections\(loadConnections\(\)\);[\s\S]*?setAgentInfoRefreshKey\(\(key\) => key \+ 1\)/,
+  );
+  assert.match(
+    appSource,
+    /const finishDeployment = useCallback[\s\S]*?removeWorkspaceDraft\(editingDraftId\)[\s\S]*?setFocusedWorkspaceAgentId\(agentId\)[\s\S]*?setManageAgents\(true\)/,
   );
   assert.match(appSource, /onDeploymentStarted=\{openDeploymentDetail\}/);
   assert.match(appSource, /onDeploymentComplete=\{finishDeployment\}/);
@@ -396,6 +403,10 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   assert.match(appSource, /onDeleteAgents=\{deleteWorkspaceAgents\}/);
   assert.match(appSource, /const deleteWorkspaceDrafts = useCallback/);
   assert.match(appSource, /onDeleteDrafts=\{deleteWorkspaceDrafts\}/);
+  assert.match(
+    appSource,
+    /const deleteWorkspaceDrafts = useCallback[\s\S]*?cancelPendingWorkspaceDraft\(\)[\s\S]*?commitWorkspaceDrafts\([\s\S]*?filter\(\(item\) => !deletedDraftIds\.has\(item\.id\)\)/,
+  );
 
   assert.match(workspaceSource, /onDeleteAgents\?: \(agents: AgentEntry\[\]\) => Promise<void>/);
   assert.match(workspaceSource, /onDeleteDrafts\?: \(drafts: WorkspaceAgentDraft\[\]\) => void/);

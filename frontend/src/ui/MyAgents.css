@@ -144,6 +144,35 @@
   gap: 12px;
 }
 
+.my-agent-inline-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid hsl(var(--destructive) / 0.2);
+  border-radius: 8px;
+  background: hsl(var(--destructive) / 0.05);
+  color: hsl(var(--destructive));
+  font-size: 12px;
+}
+
+.my-agent-inline-error span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.my-agent-inline-error button {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
 .my-agent-card {
   width: 100%;
   height: auto;
@@ -250,6 +279,21 @@
   border-radius: 999px;
   background: hsl(var(--muted));
   color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.my-agent-draft-badge {
+  min-height: 22px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid hsl(var(--ring) / 0.24);
+  border-radius: 999px;
+  background: hsl(var(--ring) / 0.09);
+  color: hsl(var(--foreground));
   font-size: 10px;
   font-weight: 600;
   line-height: 1;
@@ -429,6 +473,15 @@
 
 .my-agent-actions .my-agent-details {
   background: hsl(var(--background) / 0.56);
+}
+
+.my-agent-actions .my-agent-delete {
+  color: hsl(var(--destructive));
+}
+
+.my-agent-actions .my-agent-delete:hover:not(:disabled) {
+  background: hsl(var(--destructive) / 0.08);
+  color: hsl(var(--destructive));
 }
 
 .my-agent-actions .my-agent-use:hover:not(:disabled) {

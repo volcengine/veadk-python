@@ -101,7 +101,7 @@ test("keeps a primary create action visible above the scrolling results", () => 
 
 test("agent cards show the archived metadata hierarchy and two-action footer", () => {
   assert.match(pageSource, /<h3>\{agent\.name\}<\/h3>/);
-  assert.match(pageSource, /<dt>创建时间<\/dt>/);
+  assert.match(pageSource, /<dt>\{agent\.draft \? "更新时间" : "创建时间"\}<\/dt>/);
   assert.match(pageSource, /<dt>\{agent\.specificationLabel\}<\/dt>[\s\S]*?<dd>\{agent\.specification\}<\/dd>/);
   assert.match(pageSource, /className="my-agent-session-id"[\s\S]*?\{agent\.sandbox\.id\}/);
   assert.doesNotMatch(pageSource, /Session ID：/);
@@ -116,6 +116,21 @@ test("agent cards show the archived metadata hierarchy and two-action footer", (
   assert.ok(pageSource.indexOf("my-agent-details") < pageSource.indexOf("my-agent-use"));
   assert.doesNotMatch(pageSource, /<small|<code/);
   assert.doesNotMatch(pageStyles, /font-family/);
+});
+
+test("shows browser-local drafts with edit and confirmed delete actions", () => {
+  assert.match(pageSource, /drafts\?: WorkspaceAgentDraft\[\]/);
+  assert.match(pageSource, /function draftToAgent\(item: WorkspaceAgentDraft\)/);
+  assert.match(pageSource, /specification: "当前浏览器"/);
+  assert.match(pageSource, /\? \[\.\.\.draftAgents, \.\.\.runtimeAgents\]/);
+  assert.match(pageSource, /className="my-agent-draft-badge">草稿<\/span>/);
+  assert.match(pageSource, /aria-label=\{`编辑草稿 \$\{agent\.name\}`\}/);
+  assert.match(pageSource, /aria-label=\{`删除草稿 \$\{agent\.name\}`\}/);
+  assert.match(pageSource, /title="删除草稿？"[\s\S]*?confirmLabel="删除草稿"/);
+  assert.match(appSource, /<MyAgents[\s\S]*?drafts=\{savedAgentDrafts\}/);
+  assert.match(appSource, /onDeleteDraft=\{\(item\) => deleteWorkspaceDrafts\(\[item\]\)\}/);
+  assert.match(pageStyles, /\.my-agent-draft-badge\s*\{/);
+  assert.match(pageStyles, /\.my-agent-actions \.my-agent-delete\s*\{/);
 });
 
 test("uses a responsive two-layer card layout without an empty fixed-height gap", () => {
