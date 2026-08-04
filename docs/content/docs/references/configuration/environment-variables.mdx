@@ -115,10 +115,12 @@ volcengine:
 | | `DATABASE_TOS_BUCKET` | 桶名称 |
 | OpenViking | `DATABASE_OPENVIKING_URL` | OpenViking HTTP 服务地址 |
 | | `DATABASE_OPENVIKING_API_KEY` | OpenViking service owner API Key |
+| | `DATABASE_OPENVIKING_USER_ID` | OpenViking owner/context 标识，默认 `default`；对应 `backend_config["openviking_user_id"]`，未配置 `target_uri` 时用于知识库目录，也用于长期记忆 owner/context |
+| | `DATABASE_OPENVIKING_MEMORY_POLICY` | 长期记忆 `memory_policy` JSON；未配置时使用默认 policy |
 | | `DATABASE_OPENVIKING_ACCOUNT` | 多租户或 trusted gateway 场景使用（可选） |
 | | `DATABASE_OPENVIKING_USER` | 多租户或 trusted gateway 场景使用（可选） |
 | | `DATABASE_OPENVIKING_ACTOR_PEER_ID` | 调用方 agent 或 peer 标识（可选） |
-| | `DATABASE_OPENVIKING_TARGET_URI` | 知识库资源目录，默认 `viking://resources/{index}/` |
+| | `DATABASE_OPENVIKING_TARGET_URI` | 知识库资源目录；未配置时使用 `viking://user/{openviking_user_id or default}/resources/{index}/` |
 | | `DATABASE_OPENVIKING_WAIT` | 导入资源时是否等待解析与索引，默认 `true` |
 | | `DATABASE_OPENVIKING_IMPORT_TIMEOUT` | 导入等待超时时间，单位秒，默认 `300` |
 | | `DATABASE_OPENVIKING_HYDRATE_RESULTS` | 搜索命中后是否读取正文或概览，默认 `true` |
@@ -144,8 +146,10 @@ database:
   openviking:
     url: http://127.0.0.1:1933
     api_key: your-openviking-api-key
+    # user_id: default
+    # memory_policy: '{"self":{"enabled":false},"peer":{"enabled":true},"memory_types":["entities","events","preferences"]}'
     # Optional for KnowledgeBase(backend="openviking"):
-    # target_uri: viking://resources/my_app/
+    # target_uri: viking://user/default/resources/my_app/
     # wait: true
     # import_timeout: 300
     # hydrate_results: true
@@ -153,6 +157,14 @@ database:
     # score_threshold: 0.3
     # use_context_search: false
 ```
+
+`KnowledgeBase(backend="openviking")` 会优先使用显式配置的 `target_uri`；未配置时使用
+`viking://user/{openviking_user_id or default}/resources/{index}/`，其中
+`openviking_user_id` 来自 `backend_config["openviking_user_id"]` 或
+`DATABASE_OPENVIKING_USER_ID`。如果未传 `backend_config`，`index` 来自
+`KnowledgeBase(index=...)` 或 `app_name`；如果传了 `backend_config`，请在该字典内提供
+`index`。`LongTermMemory(backend="openviking")` 的
+`memory_policy` 未配置时保持 VeADK 默认 policy；如需覆盖，请传入合法 JSON。
 
 ## 可观测
 

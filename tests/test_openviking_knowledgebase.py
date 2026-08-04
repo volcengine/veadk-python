@@ -14,6 +14,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -45,6 +48,14 @@ class FakeOpenVikingClient:
         self.overview_response = "overview body"
         self.fail_read = False
         self.fail_overview = False
+        self.initialize_calls = 0
+        self.close_calls = 0
+
+    def initialize(self):
+        self.initialize_calls += 1
+
+    def close(self):
+        self.close_calls += 1
 
     def add_resource(self, **kwargs):
         self.add_resource_calls.append(kwargs)
@@ -79,16 +90,23 @@ class FakeOpenVikingClient:
 
 class FakeOpenVikingKnowledgeBackend(OpenVikingKnowledgeBackend):
     fake_client: ClassVar[FakeOpenVikingClient | None] = None
+    built_clients: ClassVar[list[FakeOpenVikingClient]] = []
 
     def _build_client(self):
-        return self.fake_client or FakeOpenVikingClient()
+        client = self.fake_client or FakeOpenVikingClient()
+        self.built_clients.append(client)
+        return client
 
 
 def make_backend(
     client: FakeOpenVikingClient | None = None,
+    default_openviking_user_id: str | None = "owner",
     **kwargs,
 ) -> FakeOpenVikingKnowledgeBackend:
     FakeOpenVikingKnowledgeBackend.fake_client = client
+    FakeOpenVikingKnowledgeBackend.built_clients = []
+    if default_openviking_user_id is not None:
+        kwargs.setdefault("openviking_user_id", default_openviking_user_id)
     try:
         return FakeOpenVikingKnowledgeBackend(**kwargs)
     finally:
@@ -103,11 +121,13 @@ def test_knowledgebase_openviking_instantiates():
             "index": "demo",
             "url": "http://127.0.0.1:1933",
             "api_key": "test-key",
+            "openviking_user_id": "owner",
         },
     )
 
     assert isinstance(kb._backend, OpenVikingKnowledgeBackend)
-    assert kb._backend.target_uri == "viking://resources/demo/"
+    assert kb._backend.openviking_user_id == "owner"
+    assert kb._backend.target_uri == "viking://user/owner/resources/demo/"
 
 
 def test_missing_index_and_app_name_keeps_existing_error():
@@ -115,10 +135,203 @@ def test_missing_index_and_app_name_keeps_existing_error():
         KnowledgeBase(backend="openviking")
 
 
-def test_default_target_uri_from_index():
-    backend = make_backend(index="demo")
+def test_backend_config_requires_its_own_index_even_with_app_name():
+    with pytest.raises(Exception, match="index|Field required"):
+        KnowledgeBase(
+            backend="openviking",
+            app_name="demo",
+            backend_config={
+                "url": "http://127.0.0.1:1933",
+                "api_key": "test-key",
+                "openviking_user_id": "owner",
+            },
+        )
 
-    assert backend.target_uri == "viking://resources/demo/"
+
+def test_default_target_uri_from_openviking_user_id_and_index():
+    backend = make_backend(index="demo", openviking_user_id="alice")
+
+    assert backend.openviking_user_id == "alice"
+    assert backend.target_uri == "viking://user/alice/resources/demo/"
+
+
+def test_legacy_user_id_still_sets_default_target_uri():
+    backend = make_backend(
+        index="demo",
+        user_id="legacy_owner",
+        default_openviking_user_id=None,
+    )
+
+    assert backend.openviking_user_id == "legacy_owner"
+    assert backend.user_id == "legacy_owner"
+    assert backend.target_uri == "viking://user/legacy_owner/resources/demo/"
+
+
+def test_explicit_target_uri_is_used_without_openviking_user_id():
+    backend = make_backend(
+        index="demo",
+        target_uri="viking://resources/shared",
+        openviking_user_id=None,
+    )
+
+    assert backend.target_uri == "viking://resources/shared/"
+
+
+def test_missing_openviking_user_id_without_target_uri_defaults_to_default(monkeypatch):
+    monkeypatch.delenv("DATABASE_OPENVIKING_USER_ID", raising=False)
+    monkeypatch.delenv("OPENVIKING_USER_ID", raising=False)
+    backend = make_backend(index="demo", default_openviking_user_id=None)
+
+    assert backend.openviking_user_id == "default"
+    assert backend.user_id == "default"
+    assert backend.target_uri == "viking://user/default/resources/demo/"
+
+
+def test_default_target_uri_reads_openviking_user_id_from_env(monkeypatch):
+    monkeypatch.setenv("DATABASE_OPENVIKING_USER_ID", "env_owner")
+
+    backend = make_backend(index="demo", default_openviking_user_id=None)
+
+    assert backend.openviking_user_id == "env_owner"
+    assert backend.target_uri == "viking://user/env_owner/resources/demo/"
+
+
+def test_openviking_backend_close_releases_client():
+    client = FakeOpenVikingClient()
+    backend = make_backend(client, index="demo")
+
+    assert client.initialize_calls == 1
+
+    backend.close()
+
+    assert client.close_calls == 1
+    assert backend._client is None
+
+    backend.close()
+
+    assert client.close_calls == 1
+
+
+def test_openviking_backend_reconnects_after_close():
+    first_client = FakeOpenVikingClient()
+    backend = make_backend(first_client, index="demo")
+
+    backend.close()
+    entries = backend.search("policy")
+
+    assert entries == []
+    assert first_client.close_calls == 1
+    assert len(FakeOpenVikingKnowledgeBackend.built_clients) == 2
+    second_client = FakeOpenVikingKnowledgeBackend.built_clients[1]
+    assert second_client.initialize_calls == 1
+    assert second_client.find_calls[0]["query"] == "policy"
+    assert backend._client is second_client
+
+
+def test_knowledgebase_close_forwards_to_backend():
+    client = FakeOpenVikingClient()
+    backend = make_backend(client, index="demo")
+    kb = KnowledgeBase(backend=backend)
+
+    kb.close()
+
+    assert client.close_calls == 1
+    assert backend._client is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("openviking_user_id", "team/a"),
+        ("openviking_user_id", "team:alpha"),
+        ("openviking_user_id", "team alpha"),
+        ("openviking_user_id", "."),
+        ("openviking_user_id", ".."),
+        ("index", "docs/faq"),
+        ("index", "../faq"),
+        ("index", "docs:faq"),
+        ("index", "docs faq"),
+    ],
+)
+def test_default_target_uri_rejects_unsafe_path_segments(field, value):
+    kwargs = {"index": "demo", "openviking_user_id": "owner"}
+    kwargs[field] = value
+
+    with pytest.raises(Exception, match="safe single path segment"):
+        make_backend(**kwargs)
+
+
+def test_openviking_backends_load_config_yaml(tmp_path):
+    (tmp_path / "config.yaml").write_text(
+        """database:
+  openviking:
+    url: http://config-yaml.example
+    api_key: config-key
+    user_id: config-owner
+""",
+        encoding="utf-8",
+    )
+    repo_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    for name in [
+        "DATABASE_OPENVIKING_URL",
+        "DATABASE_OPENVIKING_API_KEY",
+        "DATABASE_OPENVIKING_USER_ID",
+        "DATABASE_OPENVIKING_TARGET_URI",
+        "OPENVIKING_URL",
+        "OPENVIKING_API_KEY",
+        "OPENVIKING_USER_ID",
+        "OPENVIKING_TARGET_URI",
+    ]:
+        env.pop(name, None)
+    env["PYTHONPATH"] = (
+        str(repo_root)
+        if not env.get("PYTHONPATH")
+        else f"{repo_root}{os.pathsep}{env['PYTHONPATH']}"
+    )
+    scripts = [
+        (
+            "knowledgebase",
+            """
+from veadk.knowledgebase.backends.openviking_backend import OpenVikingKnowledgeBackend
+
+
+class FakeKnowledgeBackend(OpenVikingKnowledgeBackend):
+    def _build_client(self):
+        return object()
+
+
+kb = FakeKnowledgeBackend(index="faq")
+assert kb.url == "http://config-yaml.example"
+assert kb.api_key == "config-key"
+assert kb.openviking_user_id == "config-owner"
+assert kb.target_uri == "viking://user/config-owner/resources/faq/"
+""",
+        ),
+        (
+            "long_term_memory",
+            """
+from veadk.memory.long_term_memory_backends.openviking_backend import OpenVikingLTMBackend
+
+ltm = OpenVikingLTMBackend(index="support")
+assert ltm.url == "http://config-yaml.example"
+assert ltm.api_key == "config-key"
+assert ltm.openviking_user_id == "config-owner"
+""",
+        ),
+    ]
+
+    for name, script in scripts:
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, f"{name} failed: {result.stderr}"
 
 
 def test_add_from_files_imports_each_file_under_target_uri():
@@ -129,7 +342,7 @@ def test_add_from_files_imports_each_file_under_target_uri():
 
     assert [call["path"] for call in client.add_resource_calls] == ["a.md", "b.md"]
     assert all(
-        call["parent"] == "viking://resources/demo/"
+        call["parent"] == "viking://user/owner/resources/demo/"
         for call in client.add_resource_calls
     )
     assert all(call["wait"] is True for call in client.add_resource_calls)
@@ -145,7 +358,7 @@ def test_add_from_directory_imports_to_target_uri_with_structure():
     assert client.add_resource_calls == [
         {
             "path": "./docs",
-            "to": "viking://resources/demo/",
+            "to": "viking://user/owner/resources/demo/",
             "wait": True,
             "timeout": 300,
             "strict": False,
@@ -208,7 +421,7 @@ def test_search_converts_resources_to_entries_without_memories_or_skills():
         "context_type": "resource",
         "is_leaf": True,
     }
-    assert client.find_calls[0]["target_uri"] == "viking://resources/demo/"
+    assert client.find_calls[0]["target_uri"] == "viking://user/owner/resources/demo/"
     assert client.find_calls[0]["limit"] == 3
 
 

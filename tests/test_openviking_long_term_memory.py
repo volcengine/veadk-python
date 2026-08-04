@@ -213,6 +213,7 @@ def test_openviking_backend_writes_peer_messages_and_commits(monkeypatch):
         index="support_app",
         url="http://openviking.test",
         api_key="owner-key",
+        openviking_user_id="agent_scene",
     )
 
     assert backend.save_memory(
@@ -236,6 +237,7 @@ def test_openviking_backend_writes_peer_messages_and_commits(monkeypatch):
     assert openviking_session_id != "session_001"
     assert openviking_session_id.startswith("veadk__")
     assert "support_app" in openviking_session_id
+    assert "agent_scene" in openviking_session_id
     assert "alice" in openviking_session_id
     assert calls[0] == {
         "method": "create_session",
@@ -272,6 +274,7 @@ def test_openviking_backend_sdk_create_payload(monkeypatch):
         index="support_app",
         url="http://openviking.test",
         api_key="owner-key",
+        openviking_user_id="agent_scene",
     )
     client = backend._new_client()
 
@@ -293,12 +296,58 @@ def test_openviking_backend_sdk_create_payload(monkeypatch):
     ]
 
 
+def test_openviking_backend_uses_configured_memory_policy(monkeypatch):
+    calls = _install_fake_openviking_sdk(monkeypatch)
+    memory_policy = {
+        "self": {"enabled": True},
+        "peer": {"enabled": False},
+        "memory_types": ["events"],
+    }
+    backend = OpenVikingLTMBackend(
+        index="support_app",
+        url="http://openviking.test",
+        api_key="owner-key",
+        openviking_user_id="agent_scene",
+        memory_policy=memory_policy,
+    )
+    client = backend._new_client()
+
+    backend._create_session(client=client, session_id="sa1")
+
+    assert calls[0]["payload"]["memory_policy"] == memory_policy
+
+
+def test_openviking_backend_reads_memory_policy_from_env(monkeypatch):
+    calls = _install_fake_openviking_sdk(monkeypatch)
+    memory_policy = {
+        "self": {"enabled": False},
+        "peer": {"enabled": True},
+        "memory_types": ["entities"],
+    }
+    monkeypatch.setenv(
+        "DATABASE_OPENVIKING_MEMORY_POLICY",
+        json.dumps(memory_policy),
+    )
+    backend = OpenVikingLTMBackend(
+        index="support_app",
+        url="http://openviking.test",
+        api_key="owner-key",
+        openviking_user_id="agent_scene",
+    )
+    client = backend._new_client()
+
+    backend._create_session(client=client, session_id="sa1")
+
+    assert calls[0]["payload"]["memory_policy"] == memory_policy
+
+
 def test_openviking_backend_sdk_message_payload(monkeypatch):
     calls = _install_fake_openviking_sdk(monkeypatch)
     backend = OpenVikingLTMBackend(
         index="support_app",
         url="http://openviking.test",
         api_key="owner-key",
+        openviking_user_id="agent_scene",
     )
     client = backend._new_client()
 
@@ -333,6 +382,7 @@ def test_openviking_backend_search_uses_find_with_actor_peer(monkeypatch):
         index="support_app",
         url="http://openviking.test",
         api_key="owner-key",
+        openviking_user_id="agent_scene",
     )
 
     memories = backend.search_memory(
@@ -354,7 +404,7 @@ def test_openviking_backend_search_uses_find_with_actor_peer(monkeypatch):
         "actor_peer_id": "alice",
         "payload": {
             "query": "用户偏好",
-            "target_uri": "viking://user/peers/alice/memories",
+            "target_uri": "viking://user/agent_scene/peers/alice/memories",
             "context_type": "memory",
             "limit": 3,
         },
@@ -370,6 +420,7 @@ def test_openviking_backend_search_falls_back_to_find_without_session(monkeypatc
         index="support_app",
         url="http://openviking.test",
         api_key="owner-key",
+        openviking_user_id="default",
     )
 
     assert (
@@ -388,12 +439,64 @@ def test_openviking_backend_search_falls_back_to_find_without_session(monkeypatc
             "actor_peer_id": "alice",
             "payload": {
                 "query": "用户偏好",
-                "target_uri": "viking://user/peers/alice/memories",
+                "target_uri": "viking://user/default/peers/alice/memories",
                 "context_type": "memory",
                 "limit": 3,
             },
         }
     ]
+
+
+def test_openviking_backend_reads_openviking_user_id_from_env(monkeypatch):
+    calls = _install_fake_openviking_sdk(
+        monkeypatch,
+        responses={"find": {"memories": []}},
+    )
+    monkeypatch.setenv("DATABASE_OPENVIKING_USER_ID", "env_scene")
+    backend = OpenVikingLTMBackend(
+        index="support_app",
+        url="http://openviking.test",
+        api_key="owner-key",
+    )
+
+    backend.search_memory(
+        user_id="alice",
+        query="用户偏好",
+        top_k=3,
+        app_name="support_app",
+    )
+
+    assert backend.openviking_user_id == "env_scene"
+    assert calls[0]["payload"]["target_uri"] == (
+        "viking://user/env_scene/peers/alice/memories"
+    )
+
+
+def test_openviking_backend_defaults_openviking_user_id_with_warning(monkeypatch):
+    monkeypatch.delenv("DATABASE_OPENVIKING_USER_ID", raising=False)
+    warnings = []
+    monkeypatch.setattr(
+        "veadk.memory.long_term_memory_backends.openviking_backend.logger.warning",
+        warnings.append,
+    )
+
+    backend = OpenVikingLTMBackend(
+        index="support_app",
+        url="http://openviking.test",
+        api_key="owner-key",
+    )
+
+    assert backend.openviking_user_id == "default"
+    expected_warning = (
+        "OpenViking long-term memory `openviking_user_id` is not configured. "
+        "VeADK `user_id` identifies the current requester and is used as "
+        "OpenViking `peer_id`. OpenViking `openviking_user_id` identifies "
+        "the memory owner/context in `viking://user/<openviking_user_id>/...`. "
+        "Falling back to OpenViking user_id='default'. Set "
+        "backend_config['openviking_user_id'] or DATABASE_OPENVIKING_USER_ID "
+        "to isolate memories by agent/context."
+    )
+    assert warnings == [expected_warning]
 
 
 def test_openviking_backend_sdk_find_payload(monkeypatch):
@@ -405,6 +508,7 @@ def test_openviking_backend_sdk_find_payload(monkeypatch):
         index="support_app",
         url="http://openviking.test",
         api_key="owner-key",
+        openviking_user_id="default",
     )
 
     backend._search_with_actor_client(
@@ -419,7 +523,7 @@ def test_openviking_backend_sdk_find_payload(monkeypatch):
             "actor_peer_id": "a1",
             "payload": {
                 "query": "我的专属暗号和回答风格偏好是什么？",
-                "target_uri": "viking://user/peers/a1/memories",
+                "target_uri": "viking://user/default/peers/a1/memories",
                 "context_type": "memory",
                 "limit": 10,
             },
@@ -549,6 +653,20 @@ def test_openviking_backend_rejects_unsafe_peer_id(peer_id):
         )
 
 
+@pytest.mark.parametrize(
+    "openviking_user_id",
+    ["app/scene", "app:scene", "scene+1", ".", "..", "scene owner"],
+)
+def test_openviking_backend_rejects_unsafe_openviking_user_id(openviking_user_id):
+    with pytest.raises(ValueError, match="safe single path segment|must not be empty"):
+        OpenVikingLTMBackend(
+            index="support_app",
+            url="http://openviking.test",
+            api_key="owner-key",
+            openviking_user_id=openviking_user_id,
+        )
+
+
 def test_openviking_backend_namespaces_same_session_by_peer(monkeypatch):
     calls = _install_fake_openviking_sdk(monkeypatch)
     backend = OpenVikingLTMBackend(
@@ -594,7 +712,7 @@ async def test_long_term_memory_openviking_search_runs_sdk_off_event_loop_thread
             "find": {
                 "memories": [
                     {
-                        "uri": "viking://user/peers/alice/memories/preferences/a.md",
+                        "uri": "viking://user/agent_scene/peers/alice/memories/preferences/a.md",
                         "abstract": "用户喜欢简短直接的回答",
                     }
                 ]
@@ -607,6 +725,7 @@ async def test_long_term_memory_openviking_search_runs_sdk_off_event_loop_thread
             "index": "support_app",
             "url": "http://openviking.test",
             "api_key": "owner-key",
+            "openviking_user_id": "agent_scene",
         },
         top_k=2,
     )
@@ -623,7 +742,7 @@ async def test_long_term_memory_openviking_search_runs_sdk_off_event_loop_thread
     assert calls[1]["actor_peer_id"] == "alice"
     assert calls[1]["payload"] == {
         "query": "用户偏好",
-        "target_uri": "viking://user/peers/alice/memories",
+        "target_uri": "viking://user/agent_scene/peers/alice/memories",
         "context_type": "memory",
         "limit": 2,
     }

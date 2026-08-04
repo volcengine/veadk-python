@@ -125,7 +125,7 @@ print(asyncio.run(runner.run(messages="年假有多少天？可以远程办公�
 
 #### config.yaml
 
-把上面开通的 VikingDB、TOS、OpenSearch 信息填入 `config.yaml`。密钥**不要**写进配置文件——用环境变量引用：
+把上面开通的 VikingDB、TOS、OpenSearch 或 OpenViking 信息填入 `config.yaml`。密钥**不要**写进配置文件，用环境变量引用：
 
 ```yaml
 model:
@@ -153,6 +153,14 @@ database:
     port: 9200
     username: admin
     password: ${DATABASE_OPENSEARCH_PASSWORD}
+  openviking:
+    url: http://127.0.0.1:1933
+    api_key: ${DATABASE_OPENVIKING_API_KEY}
+    # user_id 是 config.yaml 中的 OpenViking owner/context ID。
+    # 未配置 target_uri 时使用：
+    # viking://user/default/resources/{index}/
+    # user_id: team_a
+    # target_uri: viking://user/team_a/resources/company_faq/
 ```
 
 对应地，在环境变量中提供这些密钥：
@@ -162,6 +170,7 @@ export MODEL_AGENT_API_KEY="<你的方舟 API Key>"
 export VOLCENGINE_ACCESS_KEY="<你的 AK>"
 export VOLCENGINE_SECRET_KEY="<你的 SK>"
 export DATABASE_OPENSEARCH_PASSWORD="<你的 OpenSearch 密码>"
+export DATABASE_OPENVIKING_API_KEY="<你的 OpenViking API Key>"
 ```
 
 ### 演示场景
@@ -208,6 +217,37 @@ if not kb.collection_status()["existed"]:
     kb.create_collection()  # Viking 需要显式创建集合
 
 kb.add_from_text(mock_data)
+```
+
+### OpenViking 作为存储
+
+OpenViking 后端使用 OpenViking 的资源目录存放知识，不需要本地 embedding 配置。`index` 仍用于命名资源目录。如果不传 `backend_config`，VeADK 可以从 `KnowledgeBase(index=...)` 或 `app_name` 补齐 `index`；如果传了 `backend_config`，请在该字典内显式提供 `index`。未显式配置 `target_uri` 时，默认目录为：
+
+```text
+viking://user/{openviking_user_id or default}/resources/{index}/
+```
+
+其中 `openviking_user_id` 来自 `backend_config["openviking_user_id"]` 或 `DATABASE_OPENVIKING_USER_ID`，都未配置时使用 `default`。旧的 `backend_config["user_id"]` 仍作为兼容 alias 可用。如果传入 `target_uri` 或 `DATABASE_OPENVIKING_TARGET_URI`，则直接使用该目录。
+
+```python
+from veadk.knowledgebase import KnowledgeBase
+
+kb = KnowledgeBase(
+    backend="openviking",
+    app_name="company_faq",
+    backend_config={
+        "index": "company_faq",
+        "url": "http://127.0.0.1:1933",
+        "api_key": "your-openviking-api-key",
+        # 可选；不传时默认 default
+        "openviking_user_id": "team_a",
+        # 可选；不传时默认 viking://user/team_a/resources/company_faq/
+        # "target_uri": "viking://user/team_a/resources/company_faq/",
+    },
+)
+
+kb.add_from_directory("./docs")
+results = kb.search("远程办公政策是什么？")
 ```
 
 完整可运行示例（VikingDB 后端，配合一个日期差工具）：
