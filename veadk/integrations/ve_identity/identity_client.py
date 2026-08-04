@@ -747,6 +747,38 @@ class IdentityClient:
         return response.uid, response.domain
 
     @refresh_credentials
+    def list_user_pools(self, *, page_size: int = 100) -> list[dict[str, str]]:
+        """List all user pools available to the current account."""
+        from volcenginesdkid import ListUserPoolsRequest, ListUserPoolsResponse
+
+        if page_size < 1:
+            raise ValueError("page_size must be positive")
+
+        pools: list[dict[str, str]] = []
+        page_number = 1
+        while True:
+            response: ListUserPoolsResponse = self._api_client.list_user_pools(
+                ListUserPoolsRequest(
+                    page_number=page_number,
+                    page_size=page_size,
+                )
+            )
+            page = list(response.data or [])
+            pools.extend(
+                {
+                    "uid": str(pool.uid or ""),
+                    "name": str(pool.name or ""),
+                    "domain": str(pool.domain or ""),
+                }
+                for pool in page
+            )
+            total_count = int(response.total_count or 0)
+            if not page or len(pools) >= total_count:
+                break
+            page_number += 1
+        return pools
+
+    @refresh_credentials
     def get_user_pool(
         self,
         name: Optional[str] = None,

@@ -26,6 +26,10 @@ const catalogSource = readFileSync(
   new URL("../src/create/veadkCatalog.ts", import.meta.url),
   "utf8",
 );
+const adkClientSource = readFileSync(
+  new URL("../src/adk/client.ts", import.meta.url),
+  "utf8",
+);
 
 test("offers code execution with its sandbox configuration", () => {
   assert.match(
@@ -224,6 +228,29 @@ test("uses a flipping Feishu channel card instead of a switch", () => {
   assert.match(
     projectPreviewStyles,
     /\.pp-channel-remove\s*\{[\s\S]*?background:\s*hsl\(var\(--destructive\) \/ 0\.07\);[\s\S]*?color:\s*hsl\(0 46% 36%\);/,
+  );
+});
+
+test("configures API Key or Identity user-pool authentication for deployment", () => {
+  assert.match(
+    projectPreviewSource,
+    /useState<DeployAuthentication\["type"\]>\("api_key"\)/,
+  );
+  assert.match(projectPreviewSource, />访问鉴权</);
+  assert.match(projectPreviewSource, /label: "API Key"/);
+  assert.match(projectPreviewSource, /label: "用户池"/);
+  assert.match(projectPreviewSource, /当前 Studio/);
+  assert.match(projectPreviewSource, /role="listbox"/);
+  assert.match(projectPreviewSource, /aria-selected=\{selected\}/);
+  assert.match(
+    projectPreviewSource,
+    /authenticationType === "user_pool"[\s\S]*?userPoolUid/,
+  );
+  assert.match(adkClientSource, /"\/web\/identity\/user-pools"/);
+  assert.match(adkClientSource, /authentication: opts\?\.authentication/);
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-deployment-select-trigger\s*\{[\s\S]*?height:\s*36px;[\s\S]*?border-radius:\s*6px;/,
   );
 });
 

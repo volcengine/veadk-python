@@ -2682,6 +2682,112 @@ def _run_frontend_server(
             task["destroyed"] = True
         return True
 
+    def _identity_region() -> str:
+        return os.getenv("VEIDENTITY_REGION", "cn-beijing").strip() or "cn-beijing"
+
+    def _identity_client():
+        from veadk.integrations.ve_identity.identity_client import IdentityClient
+
+        ak, sk, token = _resolve_ve_credentials()
+        return IdentityClient(
+            access_key=ak,
+            secret_key=sk,
+            session_token=token or "",
+            region=_identity_region(),
+        )
+
+    def _current_studio_identity_ids(client: Any) -> tuple[str, str]:
+        current_pool_uid = str(oauth2_user_pool_uid or "").strip()
+        if not current_pool_uid and oauth2_user_pool:
+            pool = client.get_user_pool(name=oauth2_user_pool)
+            if pool:
+                current_pool_uid = str(pool[0] or "").strip()
+
+        current_client_uid = str(oauth2_user_pool_client_uid or "").strip()
+        if current_pool_uid and not current_client_uid and oauth2_user_pool_client:
+            user_pool_client = client.get_user_pool_client(
+                current_pool_uid,
+                name=oauth2_user_pool_client,
+            )
+            if user_pool_client:
+                current_client_uid = str(user_pool_client[0] or "").strip()
+        return current_pool_uid, current_client_uid
+
+    def _user_pool_runtime_authentication(
+        authentication: Any,
+    ) -> dict[str, Any]:
+        if authentication is None:
+            return {"runtime_auth_type": "key_auth"}
+        if not isinstance(authentication, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="authentication must be an object",
+            )
+
+        authentication_type = str(authentication.get("type") or "api_key").strip()
+        if authentication_type == "api_key":
+            return {"runtime_auth_type": "key_auth"}
+        if authentication_type != "user_pool":
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported deployment authentication type",
+            )
+
+        user_pool_uid = str(authentication.get("userPoolUid") or "").strip()
+        if not user_pool_uid:
+            raise HTTPException(
+                status_code=400,
+                detail="userPoolUid is required for user-pool authentication",
+            )
+        client = _identity_client()
+        user_pool = client.get_user_pool(uid=user_pool_uid)
+        if not user_pool:
+            raise HTTPException(
+                status_code=400,
+                detail="Selected Identity user pool was not found",
+            )
+        resolved_uid, domain = user_pool
+        issuer = str(domain or "").strip().rstrip("/")
+        if not issuer:
+            raise HTTPException(
+                status_code=400,
+                detail="Selected Identity user pool has no domain",
+            )
+        if not issuer.startswith(("https://", "http://")):
+            issuer = f"https://{issuer}"
+
+        current_pool_uid, current_client_uid = _current_studio_identity_ids(client)
+        allowed_clients: list[str] = []
+        if str(resolved_uid) == current_pool_uid:
+            if not current_client_uid:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Current Studio user-pool client UID is unavailable",
+                )
+            allowed_clients.append(current_client_uid)
+        return {
+            "runtime_auth_type": "custom_jwt",
+            "runtime_jwt_discovery_url": (f"{issuer}/.well-known/openid-configuration"),
+            "runtime_jwt_allowed_clients": allowed_clients,
+        }
+
+    def _existing_runtime_authentication(runtime: Any) -> dict[str, Any]:
+        authorizer = getattr(runtime, "authorizer_configuration", None)
+        custom_jwt = (
+            getattr(authorizer, "custom_jwt_authorizer", None) if authorizer else None
+        )
+        if custom_jwt:
+            return {
+                "runtime_auth_type": "custom_jwt",
+                "runtime_jwt_discovery_url": str(
+                    getattr(custom_jwt, "discovery_url", "") or ""
+                ),
+                "runtime_jwt_allowed_clients": list(
+                    getattr(custom_jwt, "allowed_clients", None) or []
+                ),
+            }
+        return {"runtime_auth_type": "key_auth"}
+
     @app.post("/web/cancel-deploy-agentkit")
     async def _cancel_deploy_to_agentkit(request: Request):
         """Cancel a deployment and destroy any Runtime it already created."""
@@ -2792,6 +2898,11 @@ def _run_frontend_server(
             except Exception as e:
                 logger.error("resolve update runtime failed: %s", e, exc_info=True)
                 raise HTTPException(status_code=502, detail=str(e)) from e
+        runtime_authentication = (
+            _existing_runtime_authentication(existing_runtime)
+            if existing_runtime is not None
+            else _user_pool_runtime_authentication(data.get("authentication"))
+        )
         # Network config (advanced): optional VPC/private networking.
         # Shape: { mode: "public"|"private"|"both", vpc_id?, subnet_ids?, enable_shared_internet_access? }
         # When absent or mode=public, use the default public endpoint.
@@ -2901,6 +3012,7 @@ def _run_frontend_server(
             "runtime_envs": runtime_envs,
             "python_version": "3.12",
         }
+        cloud_config.update(runtime_authentication)
         if existing_runtime is not None:
             cloud_config.update(
                 {
@@ -4615,6 +4727,30 @@ def _run_frontend_server(
             os.getenv("VOLCENGINE_ACCESS_KEY") and os.getenv("VOLCENGINE_SECRET_KEY")
         ) or os.path.exists("/var/run/secrets/iam/credential")
         return {"credentials": has_creds}
+
+    @app.get("/web/identity/user-pools")
+    async def _web_identity_user_pools(request: Request):
+        """List deployable Identity user pools without exposing cloud credentials."""
+        _require_agent_management(request)
+        try:
+            client = _identity_client()
+            current_pool_uid, _ = _current_studio_identity_ids(client)
+            region = _identity_region()
+            return {
+                "items": [
+                    {
+                        **pool,
+                        "region": region,
+                        "isCurrent": pool["uid"] == current_pool_uid,
+                    }
+                    for pool in client.list_user_pools()
+                ]
+            }
+        except HTTPException:
+            raise
+        except Exception as error:
+            logger.error("list Identity user pools failed: %s", error, exc_info=True)
+            raise HTTPException(status_code=502, detail=str(error)) from error
 
     # ---- AgentKit account-scoped resources (A2A Spaces / Skills) ----------
     # These routes sign requests with the SERVER's Volcengine credentials (same

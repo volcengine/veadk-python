@@ -3,6 +3,7 @@ import {
   Suspense,
   type ReactNode,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -67,9 +68,12 @@ import {
   runtimeEnvVars,
 } from "../create/deploymentEnv";
 import {
+  listIdentityUserPools,
   RuntimeProbeError,
+  type DeployAuthentication,
   type DeployBuildLogSnapshot,
   type DeployStage,
+  type IdentityUserPool,
 } from "../adk/client";
 import feishuLogo from "../assets/feishu-logo.svg";
 import { buildZip } from "./zip";
@@ -163,6 +167,279 @@ function DeploymentConfirmDialog({
     document.body,
   );
 }
+
+interface DeploymentSelectOption {
+  value: string;
+  label: string;
+  description?: string;
+  badge?: string;
+}
+
+interface DeploymentSelectProps {
+  ariaLabel: string;
+  value: string;
+  placeholder: string;
+  options: DeploymentSelectOption[];
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}
+
+function DeploymentSelect({
+  ariaLabel,
+  value,
+  placeholder,
+  options,
+  disabled = false,
+  onChange,
+}: DeploymentSelectProps) {
+  const listboxId = useId();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const selectedOption = options.find((option) => option.value === value);
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        rootRef.current &&
+        !rootRef.current.contains(event.target)
+      ) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    optionRefs.current[activeIndex]?.focus();
+  }, [activeIndex, open]);
+
+  const openMenu = (direction: 1 | -1 = 1) => {
+    const selectedIndex = options.findIndex((option) => option.value === value);
+    const nextIndex =
+      selectedIndex >= 0
+        ? selectedIndex
+        : direction === 1
+          ? 0
+          : Math.max(0, options.length - 1);
+    setActiveIndex(nextIndex);
+    setOpen(true);
+  };
+
+  const moveActiveOption = (nextIndex: number) => {
+    if (options.length === 0) return;
+    setActiveIndex((nextIndex + options.length) % options.length);
+  };
+
+  const selectOption = (option: DeploymentSelectOption) => {
+    onChange(option.value);
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  return (
+    <div
+      className="pp-deployment-select"
+      ref={rootRef}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && open) {
+          event.preventDefault();
+          setOpen(false);
+          triggerRef.current?.focus();
+          return;
+        }
+        if (event.key === "Tab") {
+          setOpen(false);
+          return;
+        }
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          if (!open) openMenu(1);
+          else moveActiveOption(activeIndex + 1);
+        } else if (event.key === "ArrowUp") {
+          event.preventDefault();
+          if (!open) openMenu(-1);
+          else moveActiveOption(activeIndex - 1);
+        } else if (open && event.key === "Home") {
+          event.preventDefault();
+          setActiveIndex(0);
+        } else if (open && event.key === "End") {
+          event.preventDefault();
+          setActiveIndex(Math.max(0, options.length - 1));
+        }
+      }}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        className="pp-deployment-select-trigger"
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={open ? listboxId : undefined}
+        disabled={disabled || options.length === 0}
+        onClick={() => {
+          if (open) setOpen(false);
+          else openMenu();
+        }}
+      >
+        <span className={!selectedOption ? "is-placeholder" : undefined}>
+          {selectedOption?.label ?? placeholder}
+        </span>
+        <ChevronDown
+          aria-hidden="true"
+          className={`pp-deployment-select-chevron${open ? " is-open" : ""}`}
+        />
+      </button>
+      {open && (
+        <div
+          id={listboxId}
+          className="pp-deployment-select-menu"
+          role="listbox"
+          aria-label={ariaLabel}
+        >
+          {options.map((option, index) => {
+            const selected = option.value === value;
+            return (
+              <button
+                key={option.value}
+                ref={(node) => {
+                  optionRefs.current[index] = node;
+                }}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                tabIndex={index === activeIndex ? 0 : -1}
+                className={`pp-deployment-select-option${selected ? " is-selected" : ""}`}
+                title={option.description}
+                onFocus={() => setActiveIndex(index)}
+                onClick={() => selectOption(option)}
+              >
+                <span className="pp-deployment-select-copy">
+                  <span className="pp-deployment-select-name">
+                    {option.label}
+                    {option.badge && (
+                      <span className="pp-deployment-select-badge">
+                        {option.badge}
+                      </span>
+                    )}
+                  </span>
+                  {option.description && <small>{option.description}</small>}
+                </span>
+                {selected && <Check aria-hidden="true" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IdentityUserPoolSelect({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  disabled: boolean;
+  onChange: (uid: string) => void;
+}) {
+  const [pools, setPools] = useState<IdentityUserPool[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError(null);
+    listIdentityUserPools(controller.signal)
+      .then((items) => setPools(items))
+      .catch((cause) => {
+        if (cause instanceof DOMException && cause.name === "AbortError") return;
+        setPools([]);
+        setError(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [reloadKey]);
+
+  const options = useMemo(
+    () =>
+      [...pools]
+        .sort((left, right) => Number(right.isCurrent) - Number(left.isCurrent))
+        .map((pool) => ({
+          value: pool.uid,
+          label: pool.name.trim() || "未命名用户池",
+          description: pool.domain || pool.uid,
+          badge: pool.isCurrent ? "当前 Studio" : undefined,
+        })),
+    [pools],
+  );
+  const selectedPool = pools.find((pool) => pool.uid === value);
+
+  return (
+    <div className="pp-user-pool-picker">
+      <DeploymentSelect
+        ariaLabel="部署用户池"
+        value={value}
+        placeholder={loading ? "正在加载用户池…" : "请选择用户池"}
+        options={options}
+        disabled={disabled || loading || Boolean(error)}
+        onChange={onChange}
+      />
+      {error ? (
+        <div className="pp-user-pool-error" role="alert">
+          <span>{error}</span>
+          <button type="button" onClick={() => setReloadKey((key) => key + 1)}>
+            重试
+          </button>
+        </div>
+      ) : loading ? (
+        <span className="pp-user-pool-status" aria-live="polite">
+          <Loader2 aria-hidden="true" className="pp-user-pool-spinner" />
+          正在加载 Identity 用户池…
+        </span>
+      ) : pools.length === 0 ? (
+        <span className="pp-user-pool-status">当前账号下暂无 Identity 用户池。</span>
+      ) : selectedPool?.isCurrent ? (
+        <span className="pp-user-pool-status">
+          当前 Studio 的登录 JWT 将透传访问此 Runtime。
+        </span>
+      ) : selectedPool ? (
+        <span className="pp-user-pool-status">
+          访问时需要使用此用户池签发的 JWT。
+        </span>
+      ) : (
+        <span className="pp-user-pool-status">
+          当前 Studio 使用的用户池已在列表中标注。
+        </span>
+      )}
+    </div>
+  );
+}
+
+const DEPLOYMENT_AUTHENTICATION_OPTIONS: DeploymentSelectOption[] = [
+  {
+    value: "api_key",
+    label: "API Key",
+    description: "默认方式，使用 Runtime API Key 访问",
+  },
+  {
+    value: "user_pool",
+    label: "用户池",
+    description: "使用 Identity 用户池签发的 JWT",
+  },
+];
 
 // --- syntax highlighting ----------------------------------------------------
 
@@ -317,6 +594,7 @@ export interface DeployOptions {
   sessionStorage?: "in-memory" | "persistent";
   minInstance?: number;
   maxInstance?: number;
+  authentication?: DeployAuthentication;
   im?: {
     feishu?: {
       enabled: boolean;
@@ -564,6 +842,9 @@ export function ProjectPreview({
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
   const [showEnvValues, setShowEnvValues] = useState(false);
   const [regionMenuOpen, setRegionMenuOpen] = useState(false);
+  const [authenticationType, setAuthenticationType] =
+    useState<DeployAuthentication["type"]>("api_key");
+  const [userPoolUid, setUserPoolUid] = useState("");
   const [minInstance, setMinInstance] = useState("1");
   const [maxInstance, setMaxInstance] = useState(
     inMemorySession ? "1" : "5",
@@ -814,6 +1095,14 @@ export function ProjectPreview({
       setDeployError(instanceRange.error);
       return;
     }
+    if (
+      !isRuntimeUpdate &&
+      authenticationType === "user_pool" &&
+      !userPoolUid
+    ) {
+      setDeployError("请选择用于 Runtime 鉴权的用户池。");
+      return;
+    }
     if (networkMode !== "public" && !network?.vpcId?.trim()) {
       setDeployError("使用 VPC 网络时，请填写 VPC ID。");
       return;
@@ -953,6 +1242,17 @@ export function ProjectPreview({
           sessionStorage: inMemorySession ? "in-memory" : "persistent",
           minInstance: instanceRange.min,
           maxInstance: instanceRange.max,
+          ...(!isRuntimeUpdate
+            ? {
+                authentication:
+                  authenticationType === "user_pool"
+                    ? {
+                        type: "user_pool" as const,
+                        userPoolUid,
+                      }
+                    : { type: "api_key" as const },
+              }
+            : {}),
           ...(feishuEnabled
             ? {
                 im: {
@@ -1425,6 +1725,49 @@ export function ProjectPreview({
                 <section className="pp-config-section">
                   <div className="pp-config-label">发布区域</div>
                   {deploymentRegionPicker(false)}
+                </section>
+              )}
+
+              {!deploymentPrimaryPane && (
+                <section className="pp-config-section pp-auth-section">
+                  <div className="pp-config-label">访问鉴权</div>
+                  {isRuntimeUpdate ? (
+                    <p className="pp-config-note pp-auth-preserved-note">
+                      更新时保持现有 Runtime 的鉴权方式不变。
+                    </p>
+                  ) : (
+                    <div className="pp-auth-fields">
+                      <label>
+                        <span>鉴权方式</span>
+                        <DeploymentSelect
+                          ariaLabel="部署鉴权方式"
+                          value={authenticationType}
+                          placeholder="请选择鉴权方式"
+                          options={DEPLOYMENT_AUTHENTICATION_OPTIONS}
+                          disabled={deploying}
+                          onChange={(value) => {
+                            setDeployError(null);
+                            setAuthenticationType(
+                              value as DeployAuthentication["type"],
+                            );
+                          }}
+                        />
+                      </label>
+                      {authenticationType === "user_pool" && (
+                        <label>
+                          <span>用户池</span>
+                          <IdentityUserPoolSelect
+                            value={userPoolUid}
+                            disabled={deploying}
+                            onChange={(uid) => {
+                              setDeployError(null);
+                              setUserPoolUid(uid);
+                            }}
+                          />
+                        </label>
+                      )}
+                    </div>
+                  )}
                 </section>
               )}
 
