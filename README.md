@@ -80,6 +80,55 @@ res = asyncio.run(agent.run("hello!"))
 print(res)
 ```
 
+## AgentKit application
+
+Use the shared AgentKit application factory when your project needs AgentKit
+APIs, VeADK's bundled Web UI, health checks, and agent-topology endpoints. This
+keeps platform routes and lifecycle code out of your agent module:
+
+```python
+from veadk import Agent
+from veadk.integrations.agentkit import create_agentkit_app
+
+root_agent = Agent(name="customer_support")
+app = create_agentkit_app(root_agent)
+```
+
+See [`examples/generated_agentkit_project`](examples/generated_agentkit_project)
+for a complete generated project.
+
+The Agent Server metadata endpoint reports the root Agent's name, description,
+model, sub-Agents, tools, skills, and mounted component summaries. Each Runtime
+row in Studio has explicit connect and info actions; the info panel's tabs switch
+between this live metadata and control-plane information without exposing prompts
+or credentials. The same metadata advertises mounted smart-search sources, so
+Studio can disable unavailable sources up front and query the Agent's web-search
+tool, KnowledgeBase, or long-term memory without exposing component credentials.
+Studio also manages user-owned Codex, OpenClaw, and Hermes AgentKit Sessions.
+Users can create, reopen, inspect, and explicitly delete each Agent; leaving a
+Codex conversation only disconnects it, while OpenClaw and Hermes expose their
+main interface and Terminal through Studio.
+When configuring skills, Studio can also browse account-scoped AgentKit Skill
+Spaces and their paginated skill lists by region and project. These requests are
+signed on the server, so browser clients never receive Volcengine credentials.
+
+The Studio deployment flow lists Feishu, knowledge-base, short-/long-term
+memory, and observability settings in their feature sections. Values entered
+there are mirrored in the deployment environment-variable summary and converted
+to VeADK runtime environment variables only when deploying; secrets are not
+written to generated source or exported YAML. For multi-instance runtimes, use
+a database-backed short-term memory store so sessions remain available across
+instances.
+
+When a cloud image build fails from the bundled Web UI, the deployment error
+includes a credential-safe excerpt from the build log so dependency and
+Dockerfile failures can be diagnosed directly.
+
+When Studio connects to an AgentKit Runtime, users can rate completed answers
+with like/dislike controls. Feedback is written server-side to per-Agent
+`{agent_name}_good_case` and `{agent_name}_bad_case` evaluation sets, with
+stable item keys so repeated clicks and rating changes remain idempotent.
+
 ## Feishu bot channel
 
 VeADK now provides `veadk.extensions.FeishuChannelExtension` for bridging a Feishu bot with a `Runner`. It maps `union_id` to `user_id`, and `thread_id` / `chat_id` to `session_id`, so VeADK memory and tracing can work directly in Feishu conversations.
@@ -94,55 +143,6 @@ channel = FeishuChannelExtension(runner=runner)
 ```
 
 Configure credentials with `TOOL_FEISHU_CHANNEL_APP_ID` and `TOOL_FEISHU_CHANNEL_APP_SECRET`, or in `config.yaml` under `tool.feishu_channel`.
-
-## A2UI (agent-driven UI)
-
-VeADK integrates Google's [A2UI](https://a2ui.org), letting an agent reply with
-declarative UI (cards, rows, forms) instead of plain text. A client renders the
-UI with native components. Enable it with a single flag (requires the optional
-`a2ui-agent-sdk` dependency: `pip install veadk-python[a2ui]`):
-
-```python
-from veadk import Agent
-
-agent = Agent(enable_a2ui=True)  # uses the bundled "basic" component catalog
-```
-
-A bundled React web UI renders A2UI over the standard ADK API server. The built
-UI ships inside the package (`veadk/webui`, produced by `npm run build`), so
-installed users can launch it directly:
-
-```bash
-veadk frontend --agents-dir examples           # serve UI + API on http://127.0.0.1:8000
-```
-
-To rebuild the UI from source (output goes to `veadk/webui`, which is committed
-so it ships with the wheel):
-
-```bash
-cd frontend && npm install && npm run build
-```
-
-Point the agent at a custom component catalog (relative paths resolve against the
-agent's directory; absolute paths work too). With no argument it auto-discovers a
-`catalog.json` next to the agent, falling back to the bundled basic catalog:
-
-```python
-Agent(enable_a2ui=True, a2ui_catalog="catalog.json")  # beside the agent
-```
-
-Enterprises extend the component set in two matching halves: a backend catalog
-(a `catalog.json` or a `veadk.a2ui.BaseA2UICatalog` subclass) and a frontend
-renderer directory (`frontend/src/a2ui/components/<Name>/`). See
-[`frontend/README.md`](frontend/README.md).
-
-## Command line tools
-
-VeADK provides several useful command line tools for faster deployment and optimization, such as:
-
-- `veadk deploy`: deploy your project to [Volcengine VeFaaS platform](https://www.volcengine.com/product/vefaas) (you can use `veadk init` to init a demo project first)
-- `veadk prompt`: otpimize the system prompt of your agent by [PromptPilot](https://promptpilot.volcengine.com)
-- `veadk frontend`: serve the A2UI web UI together with the ADK agent API server
 
 ## Contribution
 

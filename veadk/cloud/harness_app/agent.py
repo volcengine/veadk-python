@@ -22,6 +22,7 @@ memory backend defaults to ``local``.
 Environment variables:
     MODEL_NAME              Reasoning model name. Default: VeADK default model.
     SYSTEM_PROMPT           Agent instruction. Default: VeADK default instruction.
+    DESCRIPTION             Agent description (e.g. for A2A discovery). Default: VeADK default description.
     TOOLS                   Comma-separated built-in tool names, e.g. "web_search,link_reader".
     SKILLS                  Comma-separated skill names, e.g. "data-visualization-cloud,...".
     RUNTIME                 Agent runtime backend: "adk" (default) or "codex".
@@ -30,6 +31,9 @@ Environment variables:
     KNOWLEDGEBASE_TYPE      Knowledge base backend (e.g. "viking"). Unset disables it.
     LONG_TERM_MEMORY_TYPE   Long-term memory backend (e.g. "viking"). Unset disables it.
     SHORT_TERM_MEMORY_TYPE  Short-term memory backend (e.g. "sqlite"). Default: "local".
+    REGISTRY_TYPE           Remote Agent discovery backend. Currently: "agentkit_a2a".
+    REGISTRY_SPACE_ID       AgentKit A2A SpaceId used by SearchAgentCards/GetA2aAgent.
+    REGISTRY_TOP_K          Candidate AgentCard count for semantic search. Default: 3.
 """
 
 from veadk.cloud.harness_app.utils import init_harness_agent

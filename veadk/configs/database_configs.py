@@ -14,7 +14,9 @@
 
 import os
 from functools import cached_property
+from typing import Any
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from veadk.consts import DEFAULT_TOS_BUCKET_NAME
@@ -69,6 +71,12 @@ class PostgreSqlConfig(BaseSettings):
 
     database: str = ""
 
+    schema: str = ""
+    """Optional PostgreSQL schema to isolate this deployment's short-term memory
+    tables in. When set, the connection's search_path is pinned to it (and the
+    schema is created if absent), so several deployments can share one database
+    while keeping their sessions in separate schemas. Env: DATABASE_POSTGRESQL_SCHEMA."""
+
     secret_token: str = ""
 
 
@@ -89,6 +97,26 @@ class RedisConfig(BaseSettings):
     """STS token for Redis auth, not supported yet."""
 
 
+class MilvusConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="DATABASE_MILVUS_")
+
+    uri: str = ""
+
+    token: str = ""
+
+    user: str = ""
+
+    password: str = ""
+
+    db_name: str = "default"
+
+    overwrite: bool = False
+
+    timeout: float | None = None
+
+    output_fields: list[str] | str = Field(default_factory=list)
+
+
 class Mem0Config(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DATABASE_MEM0_")
 
@@ -100,6 +128,22 @@ class Mem0Config(BaseSettings):
     project_id: str = ""
 
     base_url: str = ""  # "https://api.mem0.ai/v1"
+
+
+class OpenVikingConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="DATABASE_OPENVIKING_")
+
+    url: str = ""
+    """OpenViking server base URL"""
+
+    api_key: str = ""
+    """OpenViking service owner user key"""
+
+    user_id: str = ""
+    """OpenViking memory owner/context user id used in viking://user/<user_id>/..."""
+
+    memory_policy: dict[str, Any] | None = None
+    """OpenViking memory policy JSON used by LongTermMemory(backend="openviking")"""
 
 
 class VikingKnowledgebaseConfig(BaseSettings):
@@ -118,7 +162,7 @@ class TOSConfig(BaseSettings):
 
     region: str = "cn-beijing"
 
-    def model_post_init(self, __context) -> None:
+    def model_post_init(self, __context, /) -> None:
         cloud_provider = os.getenv("CLOUD_PROVIDER", "volces").lower()
 
         if cloud_provider == "byteplus":
@@ -185,6 +229,18 @@ class TOSVectorConfig(BaseSettings):
     user_agent_soft_version: str | None = None
 
     user_agent_customized_key_values: dict[str, str] | None = None
+
+
+class TOSContextBucketConfig(BaseSettings):
+    """Configuration for the TOS ContextBucket controller APIs."""
+
+    model_config = SettingsConfigDict(env_prefix="DATABASE_TOS_CONTEXT_")
+
+    endpoint: str = "tos-cn-beijing.volces.com"
+
+    region: str = "cn-beijing"
+
+    control_endpoint: str | None = None
 
 
 class MSENacosConfig(BaseSettings):

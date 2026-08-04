@@ -1,0 +1,722 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Tests for the VeFaaS-hosted Studio self-update service."""
+
+import hashlib
+import time
+import zipfile
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
+
+import pytest
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.testclient import TestClient
+
+from veadk.cli.frontend_branding import SiteLogo
+from veadk.cli.studio_release import StudioReleaseError, StudioReleaseManifest
+from veadk.cli.studio_self_update import (
+    StudioSelfUpdater,
+    StudioUpdateSettings,
+    _parse_vefaas_time,
+    current_studio_display_version,
+    current_studio_release_version,
+    extract_studio_bundle,
+    mount_studio_update_routes,
+)
+
+
+def test_studio_release_version_defaults_to_bundled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VEADK_STUDIO_RELEASE_VERSION", raising=False)
+
+    assert current_studio_release_version() == "bundled"
+
+
+def test_studio_display_version_selects_local_or_release_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("veadk.cli.studio_self_update.VERSION", "1.2.3")
+    monkeypatch.delenv("VEADK_STUDIO_RELEASE_VERSION", raising=False)
+    assert current_studio_display_version() == "1.2.3"
+
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+    assert current_studio_display_version() == "1.2.3"
+
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "20260726123000")
+    assert current_studio_display_version() == "20260726123000"
+
+
+def test_parse_vefaas_time_supports_application_and_function_formats() -> None:
+    assert _parse_vefaas_time(
+        "2026-07-26 08:53:15.942 +0000 UTC"
+    ) == _parse_vefaas_time("2026-07-26T08:53:15.942Z")
+    assert _parse_vefaas_time(
+        "2026-07-26 16:53:15.942 +0800 CST"
+    ) == _parse_vefaas_time("2026-07-26T08:53:15.942Z")
+
+
+def _manifest() -> StudioReleaseManifest:
+    return StudioReleaseManifest(
+        version="20260724153045",
+        git_sha="a" * 40,
+        sha256=hashlib.sha256(b"placeholder").hexdigest(),
+        size=len(b"placeholder"),
+        created_at="2026-07-24T15:30:45+08:00",
+        changelog=("支持选择更新版本",),
+    )
+
+
+def _settings() -> StudioUpdateSettings:
+    return StudioUpdateSettings(
+        bucket="studio-releases",
+        region="cn-beijing",
+        prefix="veadk/studio/main",
+        application_id="application-id",
+        function_id="function-id",
+        project="default",
+    )
+
+
+def _bundle(path: Path, *, unsafe_name: str | None = None) -> None:
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("run.sh", "#!/bin/bash\n")
+        archive.writestr("requirements.txt", "veadk-python\n")
+        if unsafe_name:
+            archive.writestr(unsafe_name, "unsafe")
+
+
+def test_extract_studio_bundle_rejects_path_traversal(tmp_path: Path) -> None:
+    archive = tmp_path / "bundle.zip"
+    _bundle(archive, unsafe_name="../outside.txt")
+
+    with pytest.raises(StudioReleaseError, match="unsafe path"):
+        extract_studio_bundle(archive, tmp_path / "package")
+
+
+def test_self_update_preserves_deployed_branding_logo(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("ak", "sk", "token"),
+        branding_logo=SiteLogo(
+            content=b"logo",
+            media_type="image/png",
+            extension="png",
+        ),
+    )
+
+    updater._preserve_branding(package)
+
+    assert (package / "site-logo.png").read_bytes() == b"logo"
+    assert '--site-logo "$ROOT_DIR/site-logo.png"' in (package / "run.sh").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_submit_latest_uses_fixed_deployment_ids_and_sts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "source.zip"
+    _bundle(archive)
+    content = archive.read_bytes()
+    manifest = StudioReleaseManifest(
+        version="20260724153045",
+        git_sha="a" * 40,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size=len(content),
+        created_at="2026-07-24T15:30:45+08:00",
+    )
+    captured: dict[str, Any] = {}
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+        def download_bundle(
+            self, release: StudioReleaseManifest, destination: Path
+        ) -> None:
+            assert release == manifest
+            destination.write_bytes(content)
+
+    class _VeFaaS:
+        def __init__(self, **kwargs: str) -> None:
+            captured["credentials"] = kwargs
+
+        def submit_application_code_bundle_update(self, **kwargs: Any) -> None:
+            package = Path(str(kwargs["path"]))
+            assert (package / "run.sh").is_file()
+            assert (package / "requirements.txt").is_file()
+            captured["update"] = kwargs
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+
+    assert updater.submit_latest() == manifest
+
+    assert captured["credentials"] == {
+        "access_key": "sts-ak",
+        "secret_key": "sts-sk",
+        "session_token": "sts-token",
+        "region": "cn-beijing",
+        "project_name": "default",
+    }
+    update = captured["update"]
+    assert update["application_id"] == "application-id"
+    assert update["function_id"] == "function-id"
+    assert update["environment_overrides"] == {
+        "VEADK_STUDIO_RELEASE_VERSION": manifest.version
+    }
+    status = updater.status()
+    assert status["state"] == "updating"
+    assert status["progressStage"] == "publishing"
+    assert status["progressMessage"] == "已提交，正在等待新 Revision 发布"
+    assert status["targetVersion"] == manifest.version
+    assert status["startedAt"] > 0
+
+
+def test_submit_latest_reports_missing_vefaas_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "source.zip"
+    _bundle(archive)
+    content = archive.read_bytes()
+    manifest = StudioReleaseManifest(
+        version="20260724153045",
+        git_sha="a" * 40,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size=len(content),
+        created_at="2026-07-24T15:30:45+08:00",
+    )
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+        def download_bundle(
+            self, release: StudioReleaseManifest, destination: Path
+        ) -> None:
+            assert release == manifest
+            destination.write_bytes(content)
+
+    class _VeFaaS:
+        def __init__(self, **_kwargs: str) -> None:
+            pass
+
+        def submit_application_code_bundle_update(self, **_kwargs: Any) -> None:
+            raise RuntimeError(
+                "AccessDenied: permission denied for sts-ak/sts-sk "
+                "at https://upload.example.com/object?token=sts-token"
+            )
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+
+    with pytest.raises(StudioReleaseError, match="Studio 更新权限不足"):
+        updater.submit_latest()
+
+    status = updater.status()
+    assert status["state"] == "error"
+    assert status["errorId"]
+    assert status["errorStage"] == "submitting"
+    assert "AccessDenied: permission denied" in status["errorLog"]
+    assert "applicationId=application-id" in status["errorLog"]
+    assert "functionId=function-id" in status["errorLog"]
+    assert "sts-ak" not in status["errorLog"]
+    assert "sts-sk" not in status["errorLog"]
+    assert "sts-token" not in status["errorLog"]
+    assert "?[REDACTED]" in status["errorLog"]
+    assert status["consoleUrl"] == (
+        "https://console.volcengine.com/vefaas/"
+        "region:vefaas+cn-beijing/function/detail/function-id"
+    )
+
+
+def test_vefaas_update_logs_use_revision_cache_and_redaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _VeFaaS:
+        def __init__(self, **_kwargs: str) -> None:
+            pass
+
+        def _get_application_logs(self, app_id: str, **kwargs: Any) -> list[str]:
+            calls.append({"app_id": app_id, **kwargs})
+            return [
+                *(f"build line {index}" for index in range(220)),
+                "access_key=sts-ak",
+                "https://upload.example.com/object?token=sts-token",
+            ]
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+
+    first = updater._load_vefaas_logs(7)
+    second = updater._load_vefaas_logs(7)
+
+    assert first == second
+    assert len(calls) == 1
+    assert calls[0] == {
+        "app_id": "application-id",
+        "revision_number": 7,
+        "limit": 200,
+    }
+    assert len(first) <= 200
+    assert "sts-ak" not in "\n".join(first)
+    assert "sts-token" not in "\n".join(first)
+    assert "access_key=***" in first
+    assert "https://upload.example.com/object?[REDACTED]" in first
+
+
+def test_update_routes_require_admin_and_custom_header() -> None:
+    submitted: list[str | None] = []
+    requested_status: list[tuple[str | None, int | None]] = []
+    app = FastAPI()
+    updater = SimpleNamespace(
+        status=lambda *, target_version=None, started_at=None: (
+            requested_status.append((target_version, started_at))
+            or {
+                "enabled": True,
+                "currentVersion": "bundled",
+                "latestVersion": "20260724153045",
+                "available": True,
+            }
+        ),
+        submit_version=lambda version: submitted.append(version) or _manifest(),
+    )
+
+    def _admin(request: Request) -> None:
+        if request.headers.get("X-Admin") != "1":
+            raise HTTPException(status_code=403)
+
+    mount_studio_update_routes(app, cast(Any, updater), _admin)
+    client = TestClient(app)
+
+    assert client.get("/web/studio-update").status_code == 403
+    assert (
+        client.get(
+            "/web/studio-update?targetVersion=20260724153045&startedAt=123456",
+            headers={"X-Admin": "1"},
+        ).status_code
+        == 200
+    )
+    assert requested_status == [("20260724153045", 123456)]
+    assert (
+        client.get(
+            "/web/studio-update?targetVersion=invalid",
+            headers={"X-Admin": "1"},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.get(
+            "/web/studio-update?startedAt=invalid",
+            headers={"X-Admin": "1"},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post("/web/studio-update", headers={"X-Admin": "1"}).status_code == 403
+    )
+    response = client.post(
+        "/web/studio-update",
+        headers={"X-Admin": "1", "X-VeADK-Studio-Update": "1"},
+        json={"version": "20260724153045"},
+    )
+    assert response.status_code == 202
+    assert response.json()["version"] == "20260724153045"
+    assert submitted == ["20260724153045"]
+
+
+def test_status_lists_only_newer_releases_with_changelog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = StudioReleaseManifest(
+        version="20260724143045",
+        git_sha="b" * 40,
+        sha256="c" * 64,
+        size=1,
+        created_at="2026-07-24T14:30:45+08:00",
+    )
+    latest = _manifest()
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return latest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [latest, current]
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr(
+        updater,
+        "_application_status",
+        lambda: ("deploy_success", current.version, 3, False),
+    )
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", current.version)
+
+    status = updater.status()
+
+    assert status["available"] is True
+    assert status["releases"] == [
+        {
+            "version": latest.version,
+            "gitSha": latest.git_sha,
+            "createdAt": latest.created_at,
+            "changelog": ["支持选择更新版本"],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("application_status", "expected_state", "expected_stage"),
+    [
+        ("deploying", "updating", "publishing"),
+        ("deploy_success", "updating", "publishing"),
+        ("deploy_fail", "error", "error"),
+    ],
+)
+def test_status_recovers_update_from_vefaas_control_plane(
+    monkeypatch: pytest.MonkeyPatch,
+    application_status: str,
+    expected_state: str,
+    expected_stage: str,
+) -> None:
+    manifest = _manifest()
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr(
+        updater,
+        "_application_status",
+        lambda: (application_status, manifest.version, 4, False),
+    )
+    requested_revisions: list[int] = []
+    monkeypatch.setattr(
+        updater,
+        "_load_vefaas_logs",
+        lambda revision: requested_revisions.append(revision) or ["cloud build log"],
+    )
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+
+    status = updater.status(target_version=manifest.version)
+
+    assert status["state"] == expected_state
+    assert status["progressStage"] == expected_stage
+    assert status["targetVersion"] == manifest.version
+    assert status["updateLogs"][-1] == "cloud build log"
+    assert requested_revisions == [4]
+    if application_status == "deploy_fail":
+        assert status["errorId"]
+        assert status["errorStage"] == "publishing"
+        assert "deploy_fail" in status["errorLog"]
+
+
+def test_status_rejects_stale_deploy_success_for_unsubmitted_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest()
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr(
+        updater,
+        "_application_status",
+        lambda: ("deploy_success", "20260724143045", 3, False),
+    )
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "20260724143045")
+
+    status = updater.status(target_version=manifest.version)
+
+    assert status["state"] == "error"
+    assert status["errorStage"] == "submitting"
+    assert status["targetVersion"] == manifest.version
+    assert status["message"] == "目标版本未成功提交，请重新尝试更新"
+    assert updater._last_error == ""
+    assert updater.status()["state"] == "idle"
+
+
+def test_status_waits_during_cross_instance_submission_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest()
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr(
+        updater,
+        "_application_status",
+        lambda: ("deploy_success", "20260724143045", 3, False),
+    )
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "20260724143045")
+
+    status = updater.status(
+        target_version=manifest.version,
+        started_at=int(time.time() * 1000),
+    )
+
+    assert status["state"] == "updating"
+    assert status["progressStage"] == "submitting"
+    assert status["message"] == "正在等待 Function 更新提交"
+    assert status["errorId"] == ""
+
+
+def test_status_treats_newer_release_as_completed_stale_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest()
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr(
+        updater,
+        "_application_status",
+        lambda: pytest.fail("completed stale targets must not query VeFaaS"),
+    )
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "20260724163045")
+
+    status = updater.status(target_version=manifest.version, started_at=123456)
+
+    assert status["state"] == "idle"
+    assert status["progressStage"] == "complete"
+    assert status["targetVersion"] == manifest.version
+
+
+def test_status_reports_function_update_without_revision_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest()
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr(
+        updater,
+        "_application_status",
+        lambda: ("deploy_success", manifest.version, 3, True),
+    )
+    monkeypatch.setattr(updater, "_load_vefaas_logs", lambda _revision: [])
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+
+    status = updater.status(target_version=manifest.version)
+
+    assert status["state"] == "error"
+    assert status["errorStage"] == "publishing"
+    assert status["message"] == "Function 已更新但 Revision 未发布，请重新尝试更新"
+
+
+def test_status_infers_target_when_another_device_observes_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest()
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr(
+        updater,
+        "_application_status",
+        lambda: ("deploying", manifest.version, 4, False),
+    )
+    monkeypatch.setattr(updater, "_load_vefaas_logs", lambda _revision: [])
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+
+    status = updater.status()
+
+    assert status["state"] == "updating"
+    assert status["progressStage"] == "publishing"
+    assert status["targetVersion"] == manifest.version
+
+
+def test_submit_version_rejects_downgrade(monkeypatch: pytest.MonkeyPatch) -> None:
+    selected = _manifest()
+
+    class _Store:
+        def manifest(self, version: str) -> StudioReleaseManifest:
+            assert version == selected.version
+            return selected
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "20260724163045")
+
+    with pytest.raises(StudioReleaseError, match="只能选择比当前版本新的"):
+        updater.submit_version(selected.version)
+
+
+def test_retry_clears_previous_failure_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "source.zip"
+    _bundle(archive)
+    content = archive.read_bytes()
+    manifest = StudioReleaseManifest(
+        version="20260724153045",
+        git_sha="a" * 40,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size=len(content),
+        created_at="2026-07-24T15:30:45+08:00",
+    )
+
+    class _Store:
+        def manifest(self, version: str) -> StudioReleaseManifest:
+            assert version == manifest.version
+            return manifest
+
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+        def download_bundle(
+            self, release: StudioReleaseManifest, destination: Path
+        ) -> None:
+            assert release == manifest
+            destination.write_bytes(content)
+
+    attempts = 0
+
+    class _VeFaaS:
+        def __init__(self, **_kwargs: str) -> None:
+            pass
+
+        def submit_application_code_bundle_update(self, **_kwargs: Any) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("first attempt failed")
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+
+    with pytest.raises(StudioReleaseError, match="Studio 更新提交失败"):
+        updater.submit_version(manifest.version)
+    first_error_id = updater.status()["errorId"]
+
+    assert updater.submit_version(manifest.version) == manifest
+    status = updater.status()
+    assert attempts == 2
+    assert first_error_id
+    assert status["errorId"] == ""
+    assert status["errorStage"] == ""
+    assert "first attempt failed" not in status["errorLog"]
+    assert status["progressStage"] == "publishing"

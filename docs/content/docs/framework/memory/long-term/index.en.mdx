@@ -25,7 +25,7 @@ ltm = LongTermMemory(backend="viking", app_name="ltm_demo")
 
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `backend` | `"local" \| "opensearch" \| "redis" \| "viking" \| "mem0"` or a backend instance | `"opensearch"` | Selects the backend, or pass a `BaseLongTermMemoryBackend` instance directly. `viking_mem` is deprecated and maps to `viking`. |
+| `backend` | `"local" \| "opensearch" \| "redis" \| "viking" \| "mem0" \| "openviking" \| "tos_context"` or a backend instance | `"opensearch"` | Selects the backend, or pass a `BaseLongTermMemoryBackend` instance directly. `viking_mem` is deprecated and maps to `viking`. |
 | `backend_config` | `dict` | `{}` | Config passed to the backend constructor; if it lacks `index`, it's filled from `index` or `app_name`. |
 | `top_k` | `int` | `5` | Number of most-similar chunks to retrieve. |
 | `index` | `str` | `""` | Index/collection name for storing memories. Falls back to `app_name`, then `default_app`. |
@@ -33,7 +33,7 @@ ltm = LongTermMemory(backend="viking", app_name="ltm_demo")
 | `user_id` | `str` | `""` | **Deprecated**, kept only for backward compatibility. |
 
 <Callout type="info">
-Vector backends (`local`, `opensearch`, `redis`) embed memories, which requires `pip install "veadk-python[extensions]"` and an embedding model (env prefix `MODEL_EMBEDDING_`, falling back to `MODEL_AGENT_API_KEY`). `viking` and `mem0` are managed services and need no local embedding.
+Vector backends (`local`, `opensearch`, `redis`) embed memories, which requires `pip install "veadk-python[extensions]"` and an embedding model (env prefix `MODEL_EMBEDDING_`, falling back to `MODEL_AGENT_API_KEY`). `viking`, `mem0`, `openviking`, and `tos_context` are managed services and need no local embedding.
 </Callout>
 
 ## Backend contract: `BaseLongTermMemoryBackend`
@@ -68,8 +68,45 @@ Use `local` for debugging; prefer `viking` or `mem0` in production.
 | `local` | In-memory vector index | `extensions` + embedding | Local debugging | [In-memory](/en/docs/framework/memory/long-term/local) |
 | `viking` | VikingDB memory (managed) | Volcengine account | Recommended for production | [VikingDB](/en/docs/framework/memory/long-term/vikingdb) |
 | `mem0` | Mem0 memory (managed) | Mem0 API key | Recommended for production | [Mem0](/en/docs/framework/memory/long-term/mem0) |
+| `openviking` | OpenViking memory (managed or self-hosted OpenViking service) | OpenViking URL and API key | OpenViking unified resources and memory | [Environment variables](/en/docs/references/configuration/environment-variables#database) |
 | `opensearch` | OpenSearch vector store | OpenSearch + embedding | Self-hosted vector search | [OpenSearch](/en/docs/framework/memory/long-term/opensearch) |
 | `redis` | Redis vector store | Redis (RediSearch) + embedding | Self-hosted vector search | [Redis](/en/docs/framework/memory/long-term/redis) |
+| `tos_context` | TOS ContextBucket (managed) | Volcengine account (AK/SK; temporary credentials also need `VOLCENGINE_SESSION_TOKEN`) + `tos>=2.9.4b1` | Server-side inference/retrieval, per-user isolation | [TOS ContextBucket](/en/docs/framework/memory/long-term/tos-context#configuration) |
+
+### OpenViking configuration example
+
+The `openviking` backend writes conversations to OpenViking sessions and lets OpenViking extract long-term memories. `Runner.user_id` is used as the OpenViking `peer_id`; `DATABASE_OPENVIKING_USER_ID` or `backend_config["openviking_user_id"]` identifies the OpenViking memory owner/context and defaults to `default` when omitted.
+
+```bash
+export DATABASE_OPENVIKING_URL="http://127.0.0.1:1933"
+export DATABASE_OPENVIKING_API_KEY="your-openviking-api-key"
+export DATABASE_OPENVIKING_USER_ID="agent_context"
+```
+
+```python
+from veadk.memory.long_term_memory import LongTermMemory
+
+ltm = LongTermMemory(
+    backend="openviking",
+    app_name="support_app",
+    backend_config={
+        # url/api_key can also come from DATABASE_OPENVIKING_URL/API_KEY.
+        "openviking_user_id": "agent_context",
+        # Optional: keep VeADK's default policy when omitted.
+        "memory_policy": {
+            "self": {"enabled": False},
+            "peer": {"enabled": True},
+            "memory_types": ["entities", "events", "preferences"],
+        },
+    },
+)
+```
+
+You can also override the memory policy with an environment variable. The value must be a JSON string:
+
+```bash
+export DATABASE_OPENVIKING_MEMORY_POLICY='{"self":{"enabled":false},"peer":{"enabled":true},"memory_types":["entities","events","preferences"]}'
+```
 
 ## Binding to an Agent
 

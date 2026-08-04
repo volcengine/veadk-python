@@ -38,6 +38,35 @@ veadk agentkit init
 veadk agentkit launch
 ```
 
+## 调用 HarnessApp Runtime
+
+`veadk agentkit invoke` 可以直接调用 HarnessApp Runtime，并通过请求参数临时开启 Harness Extension。常用参数如下：
+
+| 参数 | 说明 |
+| :-- | :-- |
+| `--harness` | HarnessApp 中的智能体名称。 |
+| `--endpoint` | Runtime endpoint。 |
+| `--apikey` | Runtime API Key。 |
+| `--model-id` | 单次调用覆盖模型名称。 |
+| `--tools` | 单次调用覆盖工具列表，逗号分隔。 |
+| `--skills` | 单次调用覆盖技能列表，逗号分隔。 |
+| `--enable-harness-enhance` | 本次调用启用 Harness Extension。 |
+| `--harness-components` | 本次调用启用的 Harness 组件，逗号分隔。 |
+| `--harness-profile` | 可选运行 profile。 |
+| `--harness-compression-provider` | 可选压缩 provider，默认 `builtin`。 |
+
+```bash
+veadk agentkit invoke \
+  --harness research-agent \
+  --endpoint "$HARNESS_URL" \
+  --apikey "$HARNESS_KEY" \
+  --model-id "your-model-id" \
+  --tools web_search,run_code \
+  --enable-harness-enhance \
+  --harness-components "invocation_context,compactor,response_verification" \
+  "Summarize the tool results with evidence."
+```
+
 ## 更多参考
 
 各子命令的完整参数说明请参阅 [AgentKit 命令行工具](https://volcengine.github.io/agentkit-sdk-python/content/2.agentkit-cli/1.overview.html)。

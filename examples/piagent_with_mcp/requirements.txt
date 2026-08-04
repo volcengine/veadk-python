@@ -1,0 +1,8 @@
+# VeADK is installed from vendor/veadk_python-*.whl in the Dockerfile so the
+# AgentKit image uses the exact local build copied into this example.
+
+# The demo MCP server imports mcp.server.fastmcp.
+mcp
+
+fastapi
+uvicorn

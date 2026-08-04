@@ -522,12 +522,13 @@ Environment variables:
 
 - `MODEL_AGENT_API_KEY`: API key for the agent's reasoning model
 - `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY`: Volcengine AK / SK
-- `AGENTKIT_TOOL_ID`: default AgentKit sandbox ID, the fallback for all sandbox tools
-- `AGENTKIT_TOOL_ID_SCRIPT`: sandbox ID dedicated to `run_code`; falls back to `AGENTKIT_TOOL_ID`
+- `AGENTKIT_TOOL_ID`: code-execution sandbox ID used by `run_code` and the
+  fallback for other sandbox tools
 - `AGENTKIT_TOOL_ID_SKILLS`: sandbox ID dedicated to `execute_skills`; falls back to `AGENTKIT_TOOL_ID`
 - `AGENTKIT_TOOL_ID_OPENCODE`: sandbox ID dedicated to `coding`; falls back to `AGENTKIT_TOOL_ID`
 - `AGENTKIT_TOOL_HOST`: endpoint for calling AgentKit Tools
 - `AGENTKIT_TOOL_SERVICE_CODE`: ServiceCode for calling AgentKit Tools
+- `AGENTKIT_TOOL_REGION`: region for calling AgentKit Tools; defaults to `cn-beijing`
 
 Additional `config.yaml` keys:
 

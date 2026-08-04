@@ -1,0 +1,441 @@
+import { useCallback, useEffect, useState } from "react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Link2,
+  Loader2,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
+import {
+  deleteRuntime,
+  getMyRuntimes,
+  getRuntimeDetail,
+  type AgentNode,
+  type ManagedRuntime,
+  type RuntimeDetail,
+} from "../adk/client";
+import "./ManageAgents.css";
+
+export interface ManageAgentsViewProps {
+  /** Runtime currently connected through the global Agent selector. */
+  currentRuntimeId?: string;
+  /** Connect a managed Runtime and switch the global Agent selector to it. */
+  onConnect: (runtime: ManagedRuntime) => Promise<void>;
+}
+
+/** Per-runtime detail state: control-plane detail + (if creds are stored) the
+ *  in-container agent graph, loaded lazily when the row is expanded. */
+interface DetailState {
+  loading: boolean;
+  error?: string;
+  detail?: RuntimeDetail;
+  graphs?: AgentNode[]; // one per app inside the runtime
+  graphNote?: string; // why the agent tree isn't shown, if applicable
+}
+
+/** Lists the AgentKit runtimes the server authorizes this user to manage. */
+export function ManageAgentsView({
+  currentRuntimeId,
+  onConnect,
+}: ManageAgentsViewProps) {
+  const [runtimes, setRuntimes] = useState<ManagedRuntime[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [details, setDetails] = useState<Record<string, DetailState>>({});
+  const [regionFilter, setRegionFilter] = useState<string>("cn-beijing");
+  const [regionMenuOpen, setRegionMenuOpen] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setRuntimes(await getMyRuntimes(regionFilter));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [regionFilter]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function loadDetail(rt: ManagedRuntime) {
+    setDetails((p) => ({ ...p, [rt.runtimeId]: { loading: true } }));
+    const next: DetailState = { loading: false };
+    try {
+      next.detail = await getRuntimeDetail(rt.runtimeId, rt.region);
+    } catch (e) {
+      next.error = e instanceof Error ? e.message : String(e);
+    }
+    // Show the main agent from control-plane metadata. The runtime's data-plane
+    // apikey is a secret and is deliberately never stored in the browser, so the
+    // full sub-agent tree (which needs that key) is not fetched client-side.
+    if (next.detail) {
+      next.graphs = [
+        {
+          name: next.detail.name,
+          description: next.detail.description,
+          type: "llm",
+          model: next.detail.model,
+          tools: [],
+          skills: [],
+          path: [next.detail.name],
+          mentionable: false,
+          children: [],
+        },
+      ];
+      next.graphNote = "仅显示主 Agent（控制面信息）。";
+    }
+    setDetails((p) => ({ ...p, [rt.runtimeId]: next }));
+  }
+
+  function toggle(rt: ManagedRuntime) {
+    const open = expanded === rt.runtimeId;
+    setExpanded(open ? null : rt.runtimeId);
+    if (!open && !details[rt.runtimeId]) void loadDetail(rt);
+  }
+
+  async function handleDelete(rt: ManagedRuntime) {
+    if (deleting) return;
+    if (!window.confirm(`确定删除 Agent "${rt.name}"？该 Runtime 将被永久删除。`)) {
+      return;
+    }
+    setDeleting(rt.runtimeId);
+    setError("");
+    try {
+      await deleteRuntime(rt.runtimeId, rt.region);
+      setRuntimes((prev) => prev.filter((r) => r.runtimeId !== rt.runtimeId));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  async function handleConnect(rt: ManagedRuntime) {
+    if (connecting || currentRuntimeId === rt.runtimeId) return;
+    setConnecting(rt.runtimeId);
+    setError("");
+    try {
+      await onConnect(rt);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setConnecting(null);
+    }
+  }
+
+  return (
+    <div className="manage">
+      <div className="manage-head">
+        <div>
+          <h2 className="manage-title">管理 Agent</h2>
+          <p className="manage-sub">
+            列出你有权管理的 AgentKit Runtime
+          </p>
+        </div>
+        <div className="manage-head-actions">
+          <div
+            className="manage-region-picker"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setRegionMenuOpen(false);
+            }}
+          >
+            <button
+              type="button"
+              className="manage-region"
+              onClick={() => setRegionMenuOpen((open) => !open)}
+              title="按区域筛选"
+              aria-label="区域筛选"
+              aria-haspopup="listbox"
+              aria-expanded={regionMenuOpen}
+            >
+              <span>{regionFilter === "cn-beijing" ? "北京" : "上海"}</span>
+              <ChevronDown
+                className={`manage-region-chevron${regionMenuOpen ? " is-open" : ""}`}
+              />
+            </button>
+            {regionMenuOpen && (
+              <>
+                <div
+                  className="menu-scrim"
+                  onClick={() => setRegionMenuOpen(false)}
+                />
+                <div className="manage-region-menu" role="listbox" aria-label="区域">
+                  {[
+                    { value: "cn-beijing", label: "北京" },
+                    { value: "cn-shanghai", label: "上海" },
+                  ].map((region) => {
+                    const selected = region.value === regionFilter;
+                    return (
+                      <button
+                        key={region.value}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        className={`manage-region-option${selected ? " is-selected" : ""}`}
+                        onClick={() => {
+                          setRegionFilter(region.value);
+                          setRegionMenuOpen(false);
+                        }}
+                      >
+                        <span>{region.label}</span>
+                        {selected && <Check aria-hidden="true" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+          <button
+            type="button"
+            className="manage-refresh"
+            onClick={() => void load()}
+            disabled={loading}
+            title="刷新"
+          >
+            <RefreshCw className={`icon ${loading ? "spin" : ""}`} />
+            刷新
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="manage-error">{error}</div>}
+
+      {loading ? (
+        <div className="manage-empty">
+          <Loader2 className="icon spin" /> 加载中…
+        </div>
+      ) : runtimes.length === 0 ? (
+        <div className="manage-empty">暂无你部署的 Agent。</div>
+      ) : (
+        <ul className="manage-list">
+          {runtimes.map((rt) => {
+            const open = expanded === rt.runtimeId;
+            const d = details[rt.runtimeId];
+            return (
+              <li key={rt.runtimeId} className="manage-item">
+                <div className="manage-item-row">
+                  <button
+                    type="button"
+                    className="manage-item-toggle"
+                    onClick={() => toggle(rt)}
+                    aria-expanded={open}
+                  >
+                    {open ? (
+                      <ChevronDown className="icon" />
+                    ) : (
+                      <ChevronRight className="icon" />
+                    )}
+                    <span className="manage-item-main">
+                      <span className="manage-item-name">{rt.name}</span>
+                      <span className={`manage-badge is-${statusKind(rt.status)}`}>
+                        {rt.status || "-"}
+                      </span>
+                    </span>
+                  </button>
+                  <div className="manage-item-actions">
+                    <button
+                      type="button"
+                      className="manage-connect"
+                      onClick={() => void handleConnect(rt)}
+                      disabled={
+                        connecting !== null || currentRuntimeId === rt.runtimeId
+                      }
+                    >
+                      {connecting === rt.runtimeId ? (
+                        <Loader2 className="icon spin" />
+                      ) : (
+                        <Link2 className="icon" />
+                      )}
+                      {currentRuntimeId === rt.runtimeId
+                        ? "已连接"
+                        : "连接到此 Agent"}
+                    </button>
+                    <button
+                      type="button"
+                      className="manage-del"
+                      onClick={() => void handleDelete(rt)}
+                      disabled={deleting === rt.runtimeId}
+                      title="删除该 Runtime"
+                    >
+                      {deleting === rt.runtimeId ? (
+                        <Loader2 className="icon spin" />
+                      ) : (
+                        <Trash2 className="icon" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+                <div className="manage-item-meta">
+                  <span className="manage-item-id" title={rt.runtimeId}>
+                    {rt.runtimeId}
+                  </span>
+                  <span className="manage-item-dot">·</span>
+                  <span>{rt.region}</span>
+                  {rt.createdAt && (
+                    <>
+                      <span className="manage-item-dot">·</span>
+                      <span>{formatTime(rt.createdAt)}</span>
+                    </>
+                  )}
+                </div>
+
+                {open && (
+                  <div className="manage-detail">
+                    {!d || d.loading ? (
+                      <div className="manage-detail-loading">
+                        <Loader2 className="icon spin" /> 读取详情…
+                      </div>
+                    ) : (
+                      <>
+                        {d.error && <div className="manage-error">{d.error}</div>}
+                        {d.detail && <RuntimeDetailCard detail={d.detail} />}
+                        <div className="manage-tree-head">Agent 结构</div>
+                        {d.graphs && d.graphs.length > 0 ? (
+                          d.graphs.map((g, i) => <AgentTree key={i} node={g} />)
+                        ) : (
+                          <div className="manage-tree-note">{d.graphNote}</div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** Env keys whose values are commonly credentials. */
+const SENSITIVE_ENV_RE = /KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL/i;
+
+function EnvValue({ envKey, value }: { envKey: string; value: string }) {
+  const [revealed, setRevealed] = useState(false);
+  if (!SENSITIVE_ENV_RE.test(envKey) || revealed) {
+    return <code className="manage-env-v">{value}</code>;
+  }
+  return (
+    <button
+      type="button"
+      className="manage-env-v manage-env-masked"
+      title="敏感值已隐藏，点击显示"
+      aria-label={`显示 ${envKey} 的值`}
+      onClick={() => setRevealed(true)}
+    >
+      ••••••••
+    </button>
+  );
+}
+
+/** Renders the control-plane detail fields (model, resources, envs, ids). */
+function RuntimeDetailCard({ detail }: { detail: RuntimeDetail }) {
+  const r = detail.resources;
+  const rows: [string, string][] = [];
+  if (detail.model) rows.push(["模型", detail.model]);
+  if (detail.description) rows.push(["描述", detail.description]);
+  if (detail.statusMessage) rows.push(["状态信息", detail.statusMessage]);
+  if (detail.project) rows.push(["Project", detail.project]);
+  if (detail.currentVersion != null) rows.push(["版本", String(detail.currentVersion)]);
+  const res = [
+    r.cpuMilli != null ? `CPU ${r.cpuMilli}m` : "",
+    r.memoryMb != null ? `内存 ${r.memoryMb}MB` : "",
+    r.minInstance != null || r.maxInstance != null
+      ? `实例 ${r.minInstance ?? "?"}~${r.maxInstance ?? "?"}`
+      : "",
+    r.maxConcurrency != null ? `并发 ${r.maxConcurrency}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  if (res) rows.push(["资源", res]);
+  if (detail.memoryId) rows.push(["Memory", detail.memoryId]);
+  if (detail.toolId) rows.push(["Tool", detail.toolId]);
+  if (detail.knowledgeId) rows.push(["Knowledge", detail.knowledgeId]);
+  if (detail.mcpToolsetId) rows.push(["MCP Toolset", detail.mcpToolsetId]);
+  if (detail.updatedAt) rows.push(["更新时间", formatTime(detail.updatedAt)]);
+
+  return (
+    <div className="manage-detail-card">
+      <dl className="manage-kv">
+        {rows.map(([k, v]) => (
+          <div key={k} className="manage-kv-row">
+            <dt>{k}</dt>
+            <dd>{v}</dd>
+          </div>
+        ))}
+      </dl>
+      {detail.envs.length > 0 && (
+        <div className="manage-envs">
+          <div className="manage-envs-head">环境变量</div>
+          {detail.envs.map((e) => (
+            <div key={e.key} className="manage-env">
+              <code className="manage-env-k">{e.key}</code>
+              <EnvValue envKey={e.key} value={e.value} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const TYPE_LABEL: Record<string, string> = {
+  llm: "LLM",
+  sequential: "Sequential",
+  parallel: "Parallel",
+  loop: "Loop",
+  a2a: "A2A",
+};
+
+/** Recursive agent tree: name + type/model/tools, with nested sub-agents. */
+function AgentTree({ node, depth = 0 }: { node: AgentNode; depth?: number }) {
+  return (
+    <div className="manage-tree" style={{ marginLeft: depth ? 16 : 0 }}>
+      <div className="manage-tree-node">
+        <span className="manage-tree-name">{node.name || "(未命名)"}</span>
+        <span className="manage-tree-type">{TYPE_LABEL[node.type] || node.type}</span>
+        {node.model && <span className="manage-tree-model">{node.model}</span>}
+      </div>
+      {node.tools.length > 0 && (
+        <div className="manage-tree-tools">
+          {node.tools.map((t) => (
+            <span key={t} className="manage-tree-tool">
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
+      {node.children.map((c, i) => (
+        <AgentTree key={i} node={c} depth={depth + 1} />
+      ))}
+    </div>
+  );
+}
+
+/** Bucket a raw runtime status into a colour class. */
+function statusKind(status: string): "ok" | "warn" | "bad" | "muted" {
+  const s = (status || "").toLowerCase();
+  if (s.includes("run") || s.includes("ready") || s.includes("active")) return "ok";
+  if (s.includes("creat") || s.includes("pend") || s.includes("deploy")) return "warn";
+  if (s.includes("fail") || s.includes("error") || s.includes("delet")) return "bad";
+  return "muted";
+}
+
+/** Format an ISO / epoch timestamp for display, tolerating either form. */
+function formatTime(raw: string): string {
+  const n = Number(raw);
+  const d = Number.isFinite(n) && String(n) === raw ? new Date(n * 1000) : new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  return d.toLocaleString();
+}

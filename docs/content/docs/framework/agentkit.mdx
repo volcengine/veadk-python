@@ -9,6 +9,36 @@ title: "部署到 AgentKit"
 - 已安装 VeADK（包含 `agentkit` 依赖）。
 - 已在项目根目录的 `.env` 文件中配置火山引擎访问凭据（Access Key / Secret Key）。
 
+## 公共应用组件
+
+通过 Studio 新生成的项目只保留 Agent 业务代码和一个精简的 `app.py`。AgentKit
+接口、健康检查、Agent 拓扑、内置 Web UI、短期记忆默认配置和可选的飞书生命周期
+由 `veadk.integrations.agentkit` 统一提供：
+
+```python
+from agents.my_agent.agent import AGENT_DISPLAY_NAMES, root_agent
+from veadk.integrations.agentkit import create_agentkit_app
+
+app = create_agentkit_app(
+    root_agent,
+    AGENT_DISPLAY_NAMES,
+)
+```
+
+服务会提供 AgentKit 对话接口，以及 `/ping`、`/web/agent-info/{app_name}`、
+`/web/agent-graph`、`/web/search` 和内置 Web UI。完整生成结果可参考
+[`examples/generated_agentkit_project`](https://github.com/volcengine/veadk-python/tree/main/examples/generated_agentkit_project)。
+
+`/web/agent-info/{app_name}` 会返回根 Agent 的名称、描述、模型、子 Agent、
+Tools、Skills 和已挂载组件摘要；`/web/agent-graph` 的每个节点也包含对应的
+Skills、组件、路径与是否可在对话中选择。Studio 的每个 Runtime 条目都提供独立的
+连接和信息操作；点击信息图标会展开详情面板，可通过 Tab 切换 Agent 实时信息和
+Runtime 控制面信息。接口不会返回系统提示词、凭据、环境变量值或任意对象序列化内容。
+元数据还会通过 `searchSources` 标识 Agent 实际挂载的检索源。Studio 会提前置灰
+未挂载的来源，仅在 Agent 挂载 `web_search`、知识库或长期记忆后启用对应搜索，
+并由 `/web/search` 复用 Agent 已有的检索能力。知识库检索会分别标注当前索引名称
+与后端类型，便于用户确认实际数据源。
+
 ## 步骤
 
 <Steps>
@@ -44,5 +74,15 @@ veadk agentkit launch
 </Step>
 
 </Steps>
+
+通过 Studio 部署时，飞书、知识库、短期记忆、长期记忆和观测所需参数会显示在
+各自的配置区域。填写的值只在部署时转换为 VeADK 运行时环境变量；选择观测
+exporter 后，对应的 `ENABLE_*` 开关也会自动启用。这些值不会写入生成源码或导出的
+YAML。部署页的“组件自动生成”环境变量分组会同步显示这些键值，便于部署前核对。
+多实例部署应使用 MySQL、PostgreSQL 等数据库持久化短期记忆；如果 `run_sse` 返回
+404，界面也会提示检查是否因 in-memory 或 SQLite 会话落在不同实例。
+
+通过内置 Web UI 部署时，如果云端镜像构建失败，部署错误会显示经过凭据脱敏的
+构建日志关键片段，便于直接定位依赖解析或 Dockerfile 执行错误。
 
 `veadk agentkit` 透传了 AgentKit 的全部子命令（如 `build`、`deploy`、`status`、`destroy` 等）。完整命令列表与说明见 [AgentKit 命令兼容](/cn/docs/cli/agentkit-cli)，更详细的平台部署步骤见 [AgentKit 官方文档](https://volcengine.github.io/agentkit-sdk-python/content/2.agentkit-cli/1.overview.html)。

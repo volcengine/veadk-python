@@ -204,12 +204,12 @@ def norm_query(params):
     return query.replace("+", "%20")
 
 
-def request(method, date, query, header, ak, sk, token, action, body):
+def request(method, date, query, header, ak, sk, token, action, body, region=Region):
     credential = {
         "access_key_id": ak,
         "secret_access_key": sk,
         "service": Service,
-        "region": Region,
+        "region": region,
     }
 
     if token is not None:
@@ -310,7 +310,14 @@ def request(method, date, query, header, ak, sk, token, action, body):
     return r.json()
 
 
-def signed_request(ak: str, sk: str, target: str, body: dict):
+def signed_request(
+    ak: str,
+    sk: str,
+    target: str,
+    body: dict,
+    region: str = Region,
+    session_token: str = "",
+):
     now = datetime.datetime.utcnow()
 
     try:
@@ -321,9 +328,10 @@ def signed_request(ak: str, sk: str, target: str, body: dict):
             {},
             ak,
             sk,
-            "",
+            session_token,
             target,
             json.dumps(body),
+            region=region,
         )
         return response_body
     except Exception as e:

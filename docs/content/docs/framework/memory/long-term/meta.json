@@ -1,4 +1,4 @@
 {
   "title": "长期记忆",
-  "pages": ["index", "local", "vikingdb", "mem0", "opensearch", "redis"]
+  "pages": ["index", "local", "vikingdb", "mem0", "opensearch", "redis", "tos-context"]
 }

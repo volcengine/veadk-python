@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 from typing import TYPE_CHECKING, AsyncGenerator, Dict, Literal, Optional, Union
 
 from google.adk.flows.llm_flows.base_llm_flow import BaseLlmFlow
@@ -51,7 +52,11 @@ from veadk.prompts.prompt_manager import BasePromptManager
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.adk_compat import is_adk_gte
 from veadk.utils.logger import get_logger
-from veadk.utils.patches import patch_asyncio, patch_tracer
+from veadk.utils.patches import (
+    patch_asyncio,
+    patch_mcp_session_retry,
+    patch_tracer,
+)
 from veadk.version import VERSION
 
 if TYPE_CHECKING:
@@ -60,6 +65,7 @@ if TYPE_CHECKING:
 
 patch_tracer()
 patch_asyncio()
+patch_mcp_session_retry()
 logger = get_logger(__name__)
 
 
@@ -108,7 +114,13 @@ class Agent(LlmAgent):
     )
     model_provider: str = Field(default_factory=lambda: settings.model.provider)
     model_api_base: str = Field(default_factory=lambda: settings.model.api_base)
-    model_api_key: str = Field(default_factory=lambda: settings.model.api_key)
+    model_api_key: str = ""
+    """The API key for accessing the model. Resolved at init if left empty:
+    by `model_api_key_name` if set, otherwise the configured/first ARK key."""
+    model_api_key_name: str = Field(default_factory=lambda: settings.model.api_key_name)
+    """Name of the ARK API key to resolve the value from (defaults to env
+    MODEL_AGENT_API_KEY_NAME). A key value always wins over a key name, so this
+    is ignored when `model_api_key` or the MODEL_AGENT_API_KEY env is set."""
     model_extra_config: dict = Field(default_factory=dict)
 
     tools: list[ToolUnion] = []
@@ -169,10 +181,16 @@ class Agent(LlmAgent):
     enable_skills_checklist: bool = False
     _skills_with_checklist: Dict[str, Any] = {}
 
-    runtime: Literal["adk", "codex"] = "adk"
+    runtime: Literal["adk", "codex", "piagent"] = "adk"
     """Agent runtime backend. ``"adk"`` (default) uses Google ADK's built-in LLM
     flow. ``"codex"`` delegates the inner agent loop to the OpenAI Codex SDK.
-    Non-``adk`` runtimes are implemented under :mod:`veadk.runtime`."""
+    ``"piagent"`` delegates the inner agent loop to a local Pi coding agent
+    binary through its RPC mode. Non-``adk`` runtimes are implemented under
+    :mod:`veadk.runtime`."""
+
+    codex_runtime_config: Optional[Any] = None
+    """Optional :class:`veadk.runtime.codex.config.CodexRuntimeConfig` (or a
+    matching dict). Codex defaults are fail-closed and invocation-isolated."""
 
     enable_a2ui: bool = False
     """Enable A2UI (agent-driven UI). When True, a `SendA2uiToClientToolset` is
@@ -195,6 +213,23 @@ class Agent(LlmAgent):
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
+
+        # Resolve the model API key when not set explicitly. A key value always
+        # wins over a key name. Precedence:
+        #   explicit model_api_key
+        #   > MODEL_AGENT_API_KEY env
+        #   > model_api_key_name / MODEL_AGENT_API_KEY_NAME (resolved by name)
+        #   > first ARK key in the account
+        if not self.model_api_key:
+            env_key = os.getenv("MODEL_AGENT_API_KEY")
+            if env_key:
+                self.model_api_key = env_key
+            elif self.model_api_key_name:
+                from veadk.auth.veauth.ark_veauth import get_ark_token
+
+                self.model_api_key = get_ark_token(api_key_name=self.model_api_key_name)
+            else:
+                self.model_api_key = settings.model.api_key
 
         # Initialize run_processor if not provided
         if self.run_processor is None:
@@ -219,35 +254,36 @@ class Agent(LlmAgent):
         logger.info(f"Model extra config: {self.model_extra_config}")
 
         if not self.model:
+            fallbacks = None
+            if isinstance(self.model_name, list):
+                if self.model_name:
+                    model_name = self.model_name[0]
+                    fallbacks = [
+                        f"{self.model_provider}/{m}" for m in self.model_name[1:]
+                    ]
+                    logger.info(
+                        f"Using primary model: {model_name}, with fallbacks: {self.model_name[1:]}"
+                    )
+                else:
+                    model_name = settings.model.name
+                    logger.warning(
+                        f"Empty model_name list provided, using default model from settings: {model_name}"
+                    )
+            else:
+                model_name = self.model_name
+
             if self.enable_responses:
                 from veadk.models.ark_llm import ArkLlm
 
                 self.model = ArkLlm(
-                    model=f"{self.model_provider}/{self.model_name}",
+                    model=f"{self.model_provider}/{model_name}",
                     api_key=self.model_api_key,
                     api_base=self.model_api_base,
+                    fallbacks=fallbacks,
                     enable_responses_cache=self.enable_responses_cache,
                     **self.model_extra_config,
                 )
             else:
-                fallbacks = None
-                if isinstance(self.model_name, list):
-                    if self.model_name:
-                        model_name = self.model_name[0]
-                        fallbacks = [
-                            f"{self.model_provider}/{m}" for m in self.model_name[1:]
-                        ]
-                        logger.info(
-                            f"Using primary model: {model_name}, with fallbacks: {self.model_name[1:]}"
-                        )
-                    else:
-                        model_name = settings.model.name
-                        logger.warning(
-                            f"Empty model_name list provided, using default model from settings: {model_name}"
-                        )
-                else:
-                    model_name = self.model_name
-
                 self.model = LiteLlm(
                     model=f"{self.model_provider}/{model_name}",
                     api_key=self.model_api_key,
@@ -496,6 +532,19 @@ class Agent(LlmAgent):
                         "Custom tool detected, default skills_mode is skills_sandbox; set skills_mode to aio_sandbox if you want to run skills with aio_sandbox"
                     )
             logger.info(f"Determined skills_mode: {self.skills_mode}")
+
+        if self.skills_mode == "local":
+            warning_message = (
+                "Agent(skills=..., skills_mode='local') is deprecated for legacy "
+                "local skill loading, including local paths and remote sources "
+                "loaded for local execution. For Google ADK-compatible local "
+                "skills, load skills with google.adk.skills.load_skill_from_dir. "
+                "For remote skill spaces, use veadk.skills.VeSkillRegistry "
+                "with google.adk.tools.skill_toolset.SkillToolset via "
+                "Agent(tools=[...])."
+            )
+            warnings.warn(warning_message, DeprecationWarning, stacklevel=2)
+            logger.warning(warning_message)
 
         for item in self.skills:
             if not item or str(item).strip() == "":

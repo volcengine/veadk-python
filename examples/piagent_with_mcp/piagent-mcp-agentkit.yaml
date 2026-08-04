@@ -1,0 +1,34 @@
+common:
+  agent_name: piagent-with-mcp
+  entry_point: app.py
+  description: VeADK PiAgent runtime example using an MCP toolset.
+  language: Python
+  language_version: '3.12'
+  agent_type: Basic App
+  dependencies_file: requirements.txt
+  launch_type: cloud
+launch_types:
+  cloud:
+    region: cn-beijing
+    tos_bucket: agentkit-platform-{{account_id}}
+    tos_prefix: agentkit-builds
+    image_tag: '{{timestamp}}'
+    cr_instance_name: agentkit-platform-{{account_id}}
+    cr_namespace_name: agentkit
+    cr_repo_name: piagent-with-mcp
+    cr_auto_create_instance_type: Micro
+    cr_image_full_url: agentkit-platform-2107625663-cn-beijing.cr.volces.com/agentkit/piagent-with-mcp:20260715155044
+    build_timeout: 3600
+    cp_workspace_name: agentkit-cli-workspace
+    cp_pipeline_name: piagent-with-mcp
+    cp_pipeline_id: f472fcdc6f4848fe8889c0855caaa2d0
+    runtime_id: r-yeqksmpybko2eybtg5z8
+    runtime_name: piagent-with-mcp
+    runtime_role_name: AgentKit_Runtime_Default_ServiceRole_j1gzh8c
+    runtime_auth_type: key_auth
+    runtime_apikey_name: API-KEY-da6ikern
+    runtime_apikey: BNwxzuKr9hoKhJwJgm2laluVs_yN_BIfzQKN
+    runtime_jwt_allowed_clients: []
+    runtime_endpoint: https://scd6b76f5sagn55rj2dh1.apigateway-cn-beijing.volceapi.com
+docker_build:
+  platform: linux/amd64

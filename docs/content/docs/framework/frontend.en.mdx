@@ -15,12 +15,80 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
 ### What it can do
 
 - **Chat**: multi-turn conversations that render streamed A2UI cards, plus thinking, tool calls, token usage and timing.
-- **Agent picker**: switch agents from the top-left; hover an agent to see its model and mounted tools.
+- **Multimodal messages**: upload images, TXT/Markdown, PDF, and video; preview
+  and replay both user and model media from history. Chat images use compact
+  thumbnails and open in a zoomable full-screen viewer.
+- **Skill and sub-agent invocation**: type `/` to select a mounted skill or `@` to route the turn to an eligible sub-agent.
+- **New-chat modes**: retain the Agent conversation path, start a temporary
+  Codex Agent conversation in an AgentKit Sandbox, or generate two real Skill
+  candidates in isolated AgentKit CodeEnv sessions for comparison, ZIP
+  download, and AgentKit publishing.
+- **Agent picker**: switch agents from the top-left; long lists scroll within
+  the viewport, and hovering an agent shows its model and mounted tools.
 - **Session history**: auto-saved, time-sorted, reopen or delete.
+- **Temporary session**: start an isolated temporary AgentKit Sandbox from the
+  new-chat composer. Studio reuses its dedicated CodeEnv tool,
+  creates a fresh user-owned Sandbox session, and runs multi-turn Codex chat
+  with live public reasoning summaries, commands, file changes, MCP calls, and
+  final replies.
+  Exiting deletes the cloud session without writing it to normal chat history;
+  after a reload, users can start another session and AgentKit reclaims the
+  abandoned session automatically when its TTL ends.
 - **Smart search**: the *Session* source full-text-searches the current agent's history; the *Web* source calls the agent's mounted web-search tool live (using credentials from the server's environment variables).
+- **Message feedback**: when connected to a cloud AgentKit Runtime, the
+  like/dislike controls below each answer write the question, answer, and
+  feedback state to AgentKit evaluation sets. Each Agent gets stable
+  `{agent_name}_good_case` and `{agent_name}_bad_case` sets; changing or
+  cancelling a rating updates the item idempotently. If the standard name is
+  reserved but hidden by the service, Studio uses and reuses a deterministic
+  suffixed name. If a Runtime does not expose Session state updates, the browser
+  keeps a compatibility cache.
 - **Add an AgentKit agent**: paste a URL + API key to connect a remote agent over the ADK protocol; it then appears in the picker.
+- **Custom-agent workbench**: author system prompts in a rich Markdown editor
+  with heading and list shortcuts. Local skills accept a dropped folder or ZIP
+  and detect the format automatically. You can also browse account-scoped
+  AgentKit Skill Spaces and their skills by region and project. Then debug the
+  agent beside its configuration.
+  Remote Agents can only be added as child Agents. They are configured through
+  an AgentKit center ID, recall count, region, and OpenAPI endpoint, while their
+  names, descriptions, and capabilities come from Agent Cards returned by the
+  center. The generated internal proxy discovers and mounts matching remote
+  Agents dynamically for each request.
+- Selecting **Code execution** in the custom Agent's built-in tools adds the
+  `run_code` tool and reveals the required `AGENTKIT_TOOL_ID` sandbox field
+  and optional `AGENTKIT_TOOL_REGION` field below the built-in tool list. The
+  region defaults to `cn-beijing`. Studio applies both fields to local debug runs
+  and deployed runtimes. The Agent supplies code, language, and timeout at runtime
+  from the tool signature, while ADK injects `tool_context`.
+  Initialization, session, and conversation failures show credential-redacted
+  error details and Runner logs that can be expanded and copied. The deployment
+  page shows the Agent topology on the left, with hover details, configuration
+  export, source download, and a code browser/editor dialog; region, message
+  channel, network, and environment settings remain primary on the right. The
+  global task list shows the actual AgentKit-generated Runtime name, region,
+  and progress across pages; in-flight tasks can be cancelled and cleaned up,
+  and failed tasks can be retried. Remote topology and traces are fetched
+  through the selected Runtime data plane.
 - **Tracing**: view the call flame graph for the current session.
 - **Login**: SSO (VeIdentity / GitHub / Google / any OIDC) or a local username.
+
+Knowledge-base, memory, tool, and tracing components request only settings that
+cannot be derived automatically. Studio forwards its server-side Volcengine
+credentials to local debug runs and deployed AgentKit runtimes, allowing VeADK
+to resolve Ark, embedding, media, speech, VeSearch, and APMPlus keys without
+asking for them again.
+
+Insight Sandbox requires server-side `VOLCENGINE_ACCESS_KEY`,
+`VOLCENGINE_SECRET_KEY`, `MODEL_AGENT_API_KEY`, and `MODEL_AGENT_NAME` values.
+Volcengine credentials, model credentials, and the authorized Sandbox endpoint
+remain on the Studio server and are never returned to the browser.
+Temporary Sandbox state is process-local. Run Studio with one server process,
+or configure session affinity so create, message, and exit requests from one
+browser reach the same instance.
+
+When the Feishu channel is enabled or disabled on the deployment page, Studio
+regenerates the project so `app.py`, the `extensions` dependency, and runtime
+environment variables stay aligned before deployment.
 
 ### Run
 
@@ -63,6 +131,341 @@ cd frontend && npm run dev                    # http://localhost:5173 (proxies A
   Outside dev mode, if the built frontend directory is not found, the command fails and asks you to run `npm run build` first (or use `--dev` with the Vite dev server).
 </Callout>
 
+### Multimodal attachments and storage
+
+The composer accepts PNG, JPEG, WebP, GIF, TXT, Markdown, PDF, MP4, WebM, and QuickTime files. The default per-file limit is 20 MB. The browser uploads binary form data and never writes attachment base64 into the session.
+
+Media bytes are stored separately from the ADK Session:
+
+- Local mode writes to `/tmp/veadk-media/apps/.../sessions/.../media/<media-id>/` by default. `content` contains the bytes and `metadata.json` contains the name, MIME type, size, and hash.
+- TOS mode writes the same two objects below `veadk-media/users/<encoded-username>/apps/<app>/sessions/<session>/media/<media-id>/` by default. The username is the outer tenant prefix, isolating each user's objects; username, app, and session segments are URL-encoded.
+- Session Events contain only a stable Google GenAI `FileData` reference such as `veadk-media://apps/.../media/<media-id>`; reopening history fetches the original object through the media API.
+
+Before a model call, TXT/Markdown is decoded into `Part.text`; images and video
+are read from the configured backend and converted to `Part.inline_data`, while
+PDFs are automatically rendered to page PNGs. The PDF rendering runtime is
+included in VeADK's default dependencies, with no extra installation or Agent
+callback required. Model-returned `inline_data` is persisted first, then
+replaced with a stable reference before the Event is saved or emitted over SSE.
+A 15-minute TOS signed URL is used only for browser download and preview, never
+as the model's `FileData` URI.
+
+When a cloud Agent Runtime is selected, upload, preview, and deletion still use
+Studio's own `/web/media` API instead of being forwarded to the Runtime. Studio
+resolves stable references into model-ready Parts only while proxying
+`/run_sse`. It preserves the original `veadkMedia` metadata so history reloads
+the original file type and name. This works with both `/tmp` and TOS and does
+not require the remote Runtime to mount media HTTP routes.
+
+| Environment variable | Default | Description |
+| :-- | :-- | :-- |
+| `VEADK_MEDIA_STORAGE` | `local` | Select `local` or `tos`. |
+| `VEADK_MEDIA_LOCAL_DIR` | `/tmp/veadk-media` | Local media root. |
+| `VEADK_MEDIA_MAX_FILE_BYTES` | `20971520` | Byte limit for one upload or model output. |
+| `VEADK_MEDIA_TOS_PREFIX` | `veadk-media` | TOS object-key prefix. |
+| `DATABASE_TOS_BUCKET` | — | TOS bucket. |
+| `DATABASE_TOS_REGION` / `DATABASE_TOS_ENDPOINT` | cloud-aware defaults | TOS region and endpoint. |
+| `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY` | — | TOS credentials. |
+| `VOLCENGINE_SESSION_TOKEN` | — | Optional temporary credential token. |
+
+Removing an unsent attachment deletes its object; deleting a Session cleans up all media scoped to that Session. Local mode needs no additional configuration, but `/tmp` may be cleared when the process or host is replaced. Use TOS when attachments must remain durable. Minimal TOS configuration:
+
+```bash
+export VEADK_MEDIA_STORAGE=tos
+export DATABASE_TOS_BUCKET=<bucket>
+export DATABASE_TOS_REGION=cn-beijing
+export VOLCENGINE_ACCESS_KEY=<access-key>
+export VOLCENGINE_SECRET_KEY=<secret-key>
+veadk frontend --agents-dir examples
+```
+
+### Using skills and sub-agents
+
+Type `/` in the composer to search skills mounted on the current agent. Type `@` to search eligible descendants in its agent tree. Use the arrow keys to move, Enter or Tab to select, and Escape to close the menu. A selection becomes a removable chip instead of remaining ordinary message text.
+
+After selecting a sub-agent, the `/` menu shows skills mounted on that target. Changing or removing the target clears its selected skills, preventing a skill from being sent to an agent that does not own it. `task` and `single_turn` workflow nodes remain visible in the topology but cannot be selected with `@`.
+
+The frontend sends structured `veadkInvocation` metadata instead of inferring invocation intent from the message string. The backend plugin directs ADK to call the skill tool or invoke `transfer_to_agent` one tree edge at a time until it reaches the target. The same metadata is written to the first Google GenAI `Part`, so reopening session history restores the `/skill` and `@agent` chips.
+
+### Skill creation mode
+
+The new-chat **Skill creation** mode runs
+`doubao-seed-2-0-pro-260215` and `deepseek-v4-flash-260425` in parallel through
+Ark Responses. Each candidate gets an independent AgentKit CodeEnv session.
+The server validates the generated directory name, `SKILL.md` frontmatter,
+file count, size, and safe paths before packaging a ZIP. AgentKit credential
+configuration resolves the Ark API key with the deployer's AK/SK and writes it
+directly to each dedicated CodeEnv Tool. Per-job Session variables cannot
+override the Tool's model credential. Model credentials are never returned to
+the browser, and the Skill creation APIs require the Studio developer or admin
+role.
+
+After submission, both candidate conversations appear immediately and
+independently render public reasoning summaries, tool calls, and assistant
+messages returned by the generator. Private chain-of-thought and credentials
+never enter the page. Completed candidates still support preview, ZIP download,
+and AgentKit publishing. Once the real job ID is available, the frontend resumes
+polling directly from Sandbox state. An interrupted creation stream or a brief
+AgentKit control-plane delay no longer turns an intermediate state into an
+expired job.
+
+Before starting a local server, configure separate `Ready` AgentKit Tools for
+Codex, OpenClaw, Hermes, and Skill creation:
+
+```bash
+export SANDBOX_CHAT_CODEX=<chat-code-env-tool-id>
+export SANDBOX_CHAT_OPENCLAW=<openclaw-env-tool-id>
+export SANDBOX_CHAT_HERMES=<hermes-env-tool-id>
+export SANDBOX_SKILL_CREATOR=<skill-code-env-tool-id>
+veadk frontend --agents-dir examples
+```
+
+For local Studio, configure the Ark model variables on both dedicated CodeEnv
+Tools. Adding a candidate to AgentKit uploads its ZIP to TOS, then creates or
+updates the Skill through the Skills API. It is published to a SkillSpace only
+when the user provides SkillSpace IDs.
+
+| Environment variable | Default | Description |
+| :-- | :-- | :-- |
+| `SANDBOX_CHAT_CODEX` | — | AgentKit CodeEnv Tool ID dedicated to temporary chats. |
+| `SANDBOX_CHAT_OPENCLAW` | — | AgentKit ArkClawEnv Tool ID used by OpenClaw agents. |
+| `SANDBOX_CHAT_HERMES` | — | AgentKit HermesEnv Tool ID used by Hermes agents. |
+| `SANDBOX_SKILL_CREATOR` | — | AgentKit CodeEnv Tool ID dedicated to Skill creation. |
+| `VEADK_SKILL_CREATOR_TOS_BUCKET` | AgentKit account default | TOS bucket used for published artifacts. |
+| `VEADK_SKILL_CREATOR_TOS_PREFIX` | `agentkit/skills` | TOS object-key prefix. |
+| `VEADK_SKILL_CREATOR_PROJECT_NAME` | — | Project name used when creating a Skill. |
+
+Candidate sessions have a 30-minute TTL and are deleted immediately when the
+user starts over or leaves the job. Job state is stored in Sandbox rather than
+frontend-process memory, so polling and downloads continue to work when FaaS
+requests reach different instances.
+
+On the first cloud deployment, the command creates two independent CodeEnv
+Tools in parallel with the deployer's AK/SK when Tool IDs are omitted. Existing
+Tools can be selected with `--sandbox-chat-codex-tool-id` and
+`--sandbox-skill-creator-tool-id`. The Ark credential is resolved with the
+deployer's AK/SK and written directly to both Tools as model environment
+variables. Sandbox sessions inherit those Tool variables. The browser and
+VeFaaS Function receive only Tool IDs, never model credentials.
+
+If Tool or model-credential provisioning fails, the CLI prints the underlying
+error verbatim, including its original line breaks, after redacting credential
+values. Use the service action, error code, request ID, and request details to
+identify the missing permission or account resource.
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name>
+```
+
+Deployment credentials can be supplied explicitly with
+`--volcengine-access-key` / `--volcengine-secret-key`, through the current
+process's `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY` environment
+variables, or through the `[default]` profile in `~/.volc/credentials` when the
+other sources are absent.
+
+### Custom Studio branding
+
+Use `--site-title` for a system name of up to six characters and `--site-logo`
+for a local image or HTTP(S) image URL. The logo is used in the sidebar, login
+page, and browser favicon; the system name also becomes the browser page title.
+Omitting `--site-title` keeps the default `VeADK Studio` name; the six-character
+limit applies only to custom names.
+
+```bash
+veadk studio --site-title 火山助手 --site-logo ./logo.png
+veadk studio --site-title 火山助手 --site-logo https://example.com/logo.webp
+```
+
+PNG, JPEG, GIF, WebP, AVIF, and ICO images up to 5 MB are supported. The
+equivalent environment variables are `VEADK_SITE_TITLE` and `VEADK_SITE_LOGO`.
+Cloud deployment accepts the same options. A remote image is downloaded during
+deployment and bundled into VeFaaS just like a local image, so the deployed site
+does not depend on the original URL:
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --region cn-beijing \
+  --project default \
+  --site-title 火山助手 \
+  --site-logo ./logo.png
+```
+
+`--region` selects the Studio deployment region, defaults to `cn-beijing`, and
+also supports `cn-shanghai`. Deployment checks the deployment region first and
+then searches the Beijing and Shanghai Identity regions. A cross-region match
+emits a warning and continues. `--project` selects the VeFaaS function project
+and defaults to `default`. The VeFaaS Application, Function, APIG, and AgentKit
+resources use the selected deployment region. The deployed Function records the
+selected AgentKit Sandbox region so temporary chat and Skill-creation sessions
+query the same region as their CodeEnv Tools.
+
+To update an existing Studio deployment, run this command from a VeADK source
+checkout:
+
+```bash
+veadk studio update --vefaas-app-name <app-name>
+```
+
+The command rebuilds the local frontend, replaces the existing VeFaaS
+Function's code, and releases the original Application. When `--region` and
+`--project` are omitted, it searches Beijing, Shanghai, and all visible
+projects. If the Application name is ambiguous, it lists the candidates and
+requires a narrower scope. The update preserves the Application and Function
+IDs, URL, SSO, IAM, gateway, and existing environment variables. `--site-title`
+and `--site-logo` replace cloud branding only when explicitly provided;
+otherwise the current values are retained. Use `--path` to select a source
+checkout; it defaults to the current directory. Node.js and npm must be
+installed locally.
+`--sandbox-chat-codex-tool-id`, `--sandbox-chat-openclaw-tool-id`,
+`--sandbox-chat-hermes-tool-id`, and `--sandbox-skill-creator-tool-id` likewise
+replace only the explicitly supplied environment value. Omitting an option
+keeps that Tool ID from the deployed Function instead of clearing it.
+
+### One-click Studio updates
+
+Configure a release channel during deployment:
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --studio-update-bucket <tos-bucket> \
+  --studio-update-region cn-beijing \
+  --studio-update-prefix veadk/studio/main
+```
+
+Studio reads `latest.json` every three minutes. Administrators can inspect each
+newer release's changelog and Git SHA and update the current Function without
+changing its Application, URL, SSO client, or server-side secrets. The complete
+Bundle replaces the Python backend and frontend assets together.
+
+`.github/workflows/publish-studio-release.yaml` does not run automatically on
+source changes. Manually dispatch `Publish Studio Release` on `main` and enter
+the user-facing changelog for every release. GitHub checks out the exact SHA,
+builds the frontend, verifies the fixed offline wheels, and uploads a prepared
+source archive through a short-lived job-bound TOS URL. The API-key-protected
+VeFaaS release server consumes and deletes that private object, builds and
+publishes the immutable Bundle and Manifest, updates the bounded
+`releases.json` catalog, and replaces `latest.json` last. Store only
+`STUDIO_RELEASE_SERVER_URL` and
+`STUDIO_RELEASE_SERVER_API_KEY` as GitHub Secrets; GitHub receives no TOS
+AK/SK.
+
+The Release Server runtime and deployment assets live together under
+`frontend/service/studio_release_server/` and are not shipped in the `veadk`
+Python package. After changing that directory, update the existing VeFaaS
+Function from the repository root:
+
+```bash
+frontend/service/studio_release_server/deploy.sh
+```
+
+The script reuses the existing Serverless gateway, checks `/healthz`, rotates
+the API key, and updates the `STUDIO_RELEASE_SERVER_URL` and
+`STUDIO_RELEASE_SERVER_API_KEY` repository Secrets. Set
+`VOLCENGINE_ACCESS_KEY` and `VOLCENGINE_SECRET_KEY`, and authenticate GitHub CLI
+before running it.
+
+When deployment registers the callback URL, it keeps the VeIdentity login page
+enabled and enables skip-consent for that client. This avoids showing a second
+authorization confirmation after login.
+
+### Studio roles and Runtime access
+
+`--admin` and `--developer` each accept a comma-separated list of local
+usernames or OAuth email addresses. Whitespace is ignored and matching is
+case-insensitive. If the same identity appears in both lists, `admin` takes
+precedence. For a local Studio:
+
+```bash
+veadk studio \
+  --admin "admin,admin@example.com" \
+  --developer "alice,alice@example.com,bob"
+```
+
+The equivalent environment variables are `VEADK_STUDIO_ADMINS` and
+`VEADK_STUDIO_DEVELOPERS`.
+
+Use the same options for a deployed Studio:
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --admin "admin@example.com" \
+  --developer "alice@example.com,bob@example.com"
+```
+
+Omitting both options treats every signed-in user as an `admin`. Supplying
+either list enables role-based access control. An identity that does not match
+either list is a regular user.
+
+| Capability | admin | developer | Regular user |
+| :-- | :-- | :-- | :-- |
+| Add, debug, and deploy agents | Allowed | Allowed | Denied; add/manage items are hidden from the sidebar |
+| View and connect to Runtimes | All Runtimes | Own Runtimes only | Own Runtimes only |
+| Manage or delete Runtimes | All Studio-managed Runtimes | Own Runtimes only | Denied |
+
+The account footer shows the OAuth email below the display name. Purple,
+yellow, and green badges identify admins, developers, and regular users.
+The manage-agent view defaults to Beijing and can be switched to Shanghai.
+After the first message is sent, a new conversation opens immediately while the
+server session ID initializes in the background.
+
+The server records Runtime ownership when it creates a Runtime; authorization
+does not trust an author field submitted by the browser. Existing Runtimes may
+still be claimed by the legacy-compatible `veadk:author` ownership tag. A
+historical Runtime with neither `veadk:owner` nor `veadk:author` is visible only
+to admins.
+
+<Callout type="warning">
+  A local username is stored in the browser and can be changed or impersonated.
+  Use it only for local development and feature testing. Production deployments
+  must use OAuth or gateway authentication so roles and Runtime ownership come
+  from a server-verified identity.
+</Callout>
+
+### IAM permissions for `veadk studio deploy`
+
+The deploy command first checks `ServerlessApplicationRole`. If the role is
+missing, the terminal shows a yellow warning and creates it automatically. It
+also creates or reuses the custom `vefaas_full_access` policy and attaches these
+policies, all with Global scope:
+
+- `CloudMonitorReadOnlyAccess`
+- `vefaas_full_access`
+- `VPCFullAccess`
+- `TLSFullAccess`
+- `APIGFullAccess`
+- `ECSFullAccess`
+- `VeFaaSFullAccess`
+- `STSAssumeRoleAccess`
+
+This check runs even when `--iam-role` is provided. The deployment AK/SK must
+be allowed to inspect and create IAM roles and policies and to attach policies.
+
+When `--iam-role` is omitted, the deploy command creates or reuses `VeADKFrontendServiceRole` and ensures that the role has these Volcengine system policies:
+
+- `ArkReadOnlyAccess`
+- `TLSReadOnlyAccess`
+- `APMPlusServerReadOnlyAccess`
+- `VikingdbReadOnlyAccess`
+- `ESCloudReadOnlyAccess`
+- `LLMShieldProtectSdkAccess`
+- `TorchlightApiFullAccess`
+- `Mem0ReadOnlyAccess`
+- `IDReadOnlyAccess`
+
+The role also retains the AgentKit permissions from the custom `VeADKFrontendPolicy`. When `--iam-role` is provided, the command uses that role without modifying its policies.
+
 ### Authentication (SSO / local username)
 
 Sessions and memory are scoped by the ADK `user_id`, which comes from the
@@ -83,6 +486,11 @@ Requires Volcengine credentials (AK/SK) in the environment. The middleware
 protects the API while exempting the SPA shell and `GET /web/auth-config`, so the
 app loads and shows its own login page instead of being bounced to the IdP. The
 login button's label/icon is config-driven (`--oauth2-provider` / `-label`).
+
+When connecting to an AgentKit Runtime protected by `custom_jwt`, the
+server-side proxy forwards the OAuth access token already validated for the
+current session. The token issuer must match the Runtime discovery URL, and its
+client ID must be included in the Runtime `allowed_clients` list.
 
 **Third-party / custom OAuth2 (env vars)** — without a VeIdentity user pool, set
 `OAUTH2_CLIENT_ID` (and secret) to enable GitHub, Google, or any OAuth2/OIDC
@@ -121,15 +529,26 @@ full example lives at `examples/front_with_sso/`.
   enabled automatically when that URL is HTTPS.
 </Callout>
 
+SSO prompt remains the concise “登录以继续使用” without appending the system
+name. The login footer identifies AgentKit as the enterprise Agent solution
+provided by Volcengine.
+
 **No SSO (local username)** — without those flags, the login page asks for a
 username (letters + digits, ≤16), stored locally and used as the `user_id`.
 
 <Callout type="info">
   Login state is cached: SSO via the `veadk_session` cookie, local mode via
-  `localStorage`. The session itself is created lazily on the first message (not
-  on page load). Logout is a local logout (clears the session and returns to the
-  login page).
+  `localStorage`. The session itself is created lazily on the first message or
+  attachment upload (not on page load). Logout is a local logout (clears the
+  session and returns to the login page).
 </Callout>
+
+### Agent naming rules
+
+Studio validates root and nested Agent names against Google ADK rules. A name
+must start with an ASCII letter or underscore, may then contain ASCII letters,
+digits, and underscores, cannot be the reserved name `user`, and must be unique
+within the Agent tree.
 
 ### How it works
 
@@ -137,6 +556,14 @@ username (letters + digits, ≤16), stored locally and used as the `user_id`.
 
 <Step>
 `adk/client.ts` calls `/list-apps`, creates a session, and streams `/run_sse`.
+</Step>
+
+<Step>
+`veadk.multimodal` validates uploads, manages local/TOS storage, resolves media references before model calls, and persists model-returned media before history is saved.
+</Step>
+
+<Step>
+`veadk.cli.frontend_invocation` exposes mounted skills and translates structured `/skill` and `@agent` selections into ADK skill-tool and agent-transfer directives.
 </Step>
 
 <Step>
@@ -186,4 +613,3 @@ export function RevenueChart({ node, ctx }: ComponentRendererProps) {
 <Callout type="info">
   Unknown components with no registered renderer fall back to a collapsible JSON view, so a catalog/renderer mismatch never crashes the UI.
 </Callout>
-

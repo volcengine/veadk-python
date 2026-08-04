@@ -1,0 +1,743 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+import base64
+import json
+from pathlib import Path
+from threading import Barrier
+from types import SimpleNamespace
+from typing import Any
+
+import httpx
+import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
+
+from veadk.cli.cli_frontend import (
+    _build_agentkit_proxy_headers,
+    _frontend_allow_origins,
+    _runtime_regions,
+    _run_frontend_server,
+)
+
+
+def _create_frontend_app(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    site_logo: str | None = None,
+    site_title: str | None = None,
+) -> FastAPI:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "uvicorn.run",
+        lambda app, **kwargs: captured.setdefault("app", app),
+    )
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "sk")
+
+    _run_frontend_server(
+        agents_dir=str(tmp_path),
+        frontend_dir=None,
+        site_logo=site_logo,
+        site_title=site_title,
+        host="127.0.0.1",
+        port=8765,
+        dev=True,
+        vite=True,
+        oauth2_user_pool=None,
+        oauth2_user_pool_client=None,
+        oauth2_user_pool_uid=None,
+        oauth2_user_pool_client_uid=None,
+        oauth2_redirect_uri=None,
+        oauth2_provider=None,
+        oauth2_provider_label=None,
+        auth_mode="frontend",
+        generated_agent_test_run_ttl=60,
+        open_browser=False,
+    )
+    return captured["app"]
+
+
+def test_proxy_headers_do_not_forward_unvalidated_authorization() -> None:
+    headers = _build_agentkit_proxy_headers(
+        {
+            "Authorization": "Bearer unvalidated.jwt.token",
+            "Cookie": "session=secret",
+            "Accept": "application/json",
+        },
+        api_key=None,
+    )
+
+    assert headers == {"Accept": "application/json"}
+
+
+def test_vite_allows_both_loopback_browser_origins() -> None:
+    assert _frontend_allow_origins(vite=True) == [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ]
+    assert _frontend_allow_origins(vite=False) == []
+
+
+def test_runtime_regions_use_both_volcengine_regions() -> None:
+    assert _runtime_regions("volcengine", "all") == [
+        "cn-beijing",
+        "cn-shanghai",
+    ]
+
+
+def test_runtime_regions_use_byteplus_default_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BYTEPLUS_REGION", raising=False)
+    assert _runtime_regions("byteplus", "all") == ["ap-southeast-1"]
+    monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-2")
+    assert _runtime_regions("byteplus", "all") == ["ap-southeast-2"]
+
+
+def test_ui_config_serves_custom_branding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "20260726093000")
+    logo = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8A"
+        "AQUBAScY42YAAAAASUVORK5CYII="
+    )
+    logo_path = tmp_path / "logo.png"
+    logo_path.write_bytes(logo)
+    app = _create_frontend_app(
+        monkeypatch,
+        tmp_path,
+        site_logo=str(logo_path),
+        site_title="火山助手",
+    )
+
+    with TestClient(app) as client:
+        config_response = client.get("/web/ui-config")
+        logo_response = client.get("/web/site-logo")
+
+    assert config_response.status_code == 200
+    assert config_response.json()["branding"] == {
+        "title": "火山助手",
+        "logoUrl": "/web/site-logo",
+    }
+    assert config_response.json()["version"] == "20260726093000"
+    assert logo_response.status_code == 200
+    assert logo_response.headers["content-type"].startswith("image/png")
+    assert logo_response.content == logo
+
+
+def test_runtime_list_paginates_across_regions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    calls: list[tuple[str, str, int]] = []
+    runtimes = {
+        "cn-beijing": [
+            ("beijing-new", "2026-07-21T05:00:00Z"),
+            ("beijing-mid", "2026-07-21T03:00:00Z"),
+            ("beijing-old", "2026-07-21T01:00:00Z"),
+        ],
+        "cn-shanghai": [
+            ("shanghai-new", "2026-07-21T06:00:00Z"),
+            ("shanghai-old", "2026-07-21T02:00:00Z"),
+        ],
+    }
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def list_runtimes(self, request: Any) -> SimpleNamespace:
+            offset = int(getattr(request, "next_token", "") or 0)
+            page_size = request.max_results
+            calls.append((self.region, str(offset), page_size))
+            source = runtimes[self.region]
+            page = source[offset : offset + page_size]
+            page_end = offset + len(page)
+            return SimpleNamespace(
+                agent_kit_runtimes=[
+                    SimpleNamespace(
+                        name=name,
+                        runtime_id=f"runtime-{name}",
+                        status="Ready",
+                        created_at=created_at,
+                        description=f"Description for {name}",
+                        cpu_milli=1000,
+                        memory_mb=2048,
+                        tags=[],
+                    )
+                    for name, created_at in page
+                ],
+                next_token=str(page_end) if page_end < len(source) else "",
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
+    )
+
+    with TestClient(app) as client:
+        first = client.get("/web/runtimes", params={"region": "all", "page_size": 2})
+        first_calls = list(calls)
+        cached_first = client.get(
+            "/web/runtimes", params={"region": "all", "page_size": 2}
+        )
+        cached_first_calls = list(calls)
+        second = client.get(
+            "/web/runtimes",
+            params={
+                "region": "all",
+                "page_size": 2,
+                "next_token": first.json()["nextToken"],
+            },
+        )
+        third = client.get(
+            "/web/runtimes",
+            params={
+                "region": "all",
+                "page_size": 2,
+                "next_token": second.json()["nextToken"],
+            },
+        )
+
+    assert [item["name"] for item in first.json()["runtimes"]] == [
+        "shanghai-new",
+        "beijing-new",
+    ]
+    assert first.json()["runtimes"][0]["description"] == (
+        "Description for shanghai-new"
+    )
+    assert first.json()["runtimes"][0]["cpuMilli"] == 1000
+    assert first.json()["runtimes"][0]["memoryMb"] == 2048
+    assert sorted(first_calls) == [
+        ("cn-beijing", "0", 2),
+        ("cn-shanghai", "0", 2),
+    ]
+    assert cached_first.json() == first.json()
+    assert cached_first_calls == first_calls
+    assert first.json()["nextToken"] == "all:2"
+    assert [item["name"] for item in second.json()["runtimes"]] == [
+        "beijing-mid",
+        "shanghai-old",
+    ]
+    assert second.json()["nextToken"] == "all:4"
+    assert [item["name"] for item in third.json()["runtimes"]] == ["beijing-old"]
+    assert third.json()["nextToken"] == ""
+
+
+@pytest.mark.parametrize("scope", ["all", "mine"])
+def test_runtime_list_fetches_regions_concurrently(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scope: str
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    regional_requests = Barrier(2)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def list_runtimes(self, _request: Any) -> SimpleNamespace:
+            regional_requests.wait(timeout=2)
+            return SimpleNamespace(
+                agent_kit_runtimes=[
+                    SimpleNamespace(
+                        name=self.region,
+                        runtime_id=f"runtime-{self.region}",
+                        status="Ready",
+                        created_at="2026-07-21T05:00:00Z",
+                        tags=[SimpleNamespace(key="veadk:owner", value="developer")],
+                    )
+                ],
+                next_token="",
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtimes",
+            params={"region": "all", "page_size": 2, "scope": scope},
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert response.status_code == 200
+    assert {item["name"] for item in response.json()["runtimes"]} == {
+        "cn-beijing",
+        "cn-shanghai",
+    }
+
+
+def test_runtime_list_surfaces_redacted_error_chain(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    access_key = "runtime-access-key-123456"
+    secret_key = "runtime-secret-key-123456"
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", access_key)
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", secret_key)
+
+    class _FailingRuntimeClient:
+        def __init__(self, **_: Any) -> None:
+            pass
+
+        def list_runtimes(self, request: Any) -> SimpleNamespace:
+            try:
+                raise OSError(
+                    "DNS lookup failed for agentkit.cn-beijing.example; "
+                    f"secret_key={secret_key}"
+                )
+            except OSError as cause:
+                raise RuntimeError(
+                    f"Failed to ListRuntimes: network error; access_key={access_key}"
+                ) from cause
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FailingRuntimeClient,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/web/runtimes", params={"region": "cn-beijing"})
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert "Failed to ListRuntimes: network error" in detail
+    assert "DNS lookup failed for agentkit.cn-beijing.example" in detail
+    assert "Caused by:" in detail
+    assert access_key not in detail
+    assert secret_key not in detail
+    assert "access_key=***" in detail
+    assert "secret_key=***" in detail
+
+
+def test_runtime_list_surfaces_all_regional_failures(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FailingRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def list_runtimes(self, _request: Any) -> SimpleNamespace:
+            try:
+                raise OSError(f"{self.region} DNS lookup failed")
+            except OSError as cause:
+                raise RuntimeError(
+                    f"{self.region} control plane unavailable"
+                ) from cause
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FailingRuntimeClient,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/web/runtimes", params={"region": "all"})
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert "cn-beijing control plane unavailable" in detail
+    assert "cn-shanghai control plane unavailable" in detail
+    assert "cn-beijing DNS lookup failed" in detail
+    assert "cn-shanghai DNS lookup failed" in detail
+
+
+@pytest.mark.parametrize(
+    ("authorizer", "expected_authorization"),
+    [
+        (
+            SimpleNamespace(
+                key_auth=None,
+                custom_jwt_authorizer=SimpleNamespace(
+                    discovery_url="https://issuer.example/.well-known/openid-configuration",
+                    allowed_clients=["frontend-client"],
+                ),
+            ),
+            "Bearer validated.jwt.token",
+        ),
+        (
+            SimpleNamespace(
+                key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                custom_jwt_authorizer=None,
+            ),
+            "Bearer runtime-api-key",
+        ),
+    ],
+)
+def test_runtime_proxy_uses_authorizer_credential(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    authorizer: SimpleNamespace,
+    expected_authorization: str,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    @app.middleware("http")
+    async def _mark_validated_oauth_token(request: Request, call_next):
+        request.state.oauth2_access_token_validated = True
+        request.state.oauth2_access_token = "validated.jwt.token"
+        return await call_next(request)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example", network_type="public"
+                    )
+                ],
+                authorizer_configuration=authorizer,
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    upstream_headers: dict[str, str] = {}
+    upstream_url = ""
+
+    class _FakeUpstreamResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
+        async def aiter_raw(self):
+            yield b'["demo_agent"]'
+
+        async def aclose(self) -> None:
+            pass
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def build_request(
+            self,
+            method: str,
+            url: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+            content: bytes,
+        ) -> object:
+            nonlocal upstream_url
+            upstream_url = url
+            upstream_headers.update(headers)
+            return object()
+
+        async def send(self, request: object, *, stream: bool) -> _FakeUpstreamResponse:
+            return _FakeUpstreamResponse()
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-proxy/runtime-1/dev/apps/demo_agent/debug/trace/"
+            "session/session-1"
+            "?region=cn-beijing"
+        )
+
+    assert response.status_code == 200
+    assert response.json() == ["demo_agent"]
+    assert upstream_url == (
+        "https://runtime.example/dev/apps/demo_agent/debug/trace/session/session-1"
+    )
+    assert upstream_headers["Authorization"] == expected_authorization
+
+
+def test_runtime_proxy_accepts_post_delete_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example", network_type="public"
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                    custom_jwt_authorizer=None,
+                ),
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
+    )
+    upstream_method = ""
+    upstream_params: dict[str, str] = {}
+
+    class _FakeUpstreamResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
+        async def aiter_raw(self):
+            yield b"{}"
+
+        async def aclose(self) -> None:
+            pass
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def build_request(
+            self,
+            method: str,
+            url: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+            content: bytes,
+        ) -> object:
+            nonlocal upstream_method, upstream_params
+            upstream_method = method
+            upstream_params = params
+            return object()
+
+        async def send(self, request: object, *, stream: bool) -> _FakeUpstreamResponse:
+            return _FakeUpstreamResponse()
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/runtime-proxy/runtime-1/apps/demo/users/user/sessions/session"
+            "?region=cn-beijing&_method=DELETE"
+        )
+
+    assert response.status_code == 200
+    assert upstream_method == "DELETE"
+    assert upstream_params == {}
+
+
+@pytest.mark.parametrize(
+    ("network_type", "query", "expected_attempts"),
+    [
+        ("private", "?region=cn-beijing&probe_retry=connect", 1),
+        ("public", "?region=cn-beijing&probe_retry=connect", 3),
+        ("public", "?region=cn-beijing", 1),
+    ],
+)
+def test_runtime_proxy_probe_retry_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    network_type: str,
+    query: str,
+    expected_attempts: int,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    async def _noop_sleep(delay: float) -> None:
+        pass
+
+    monkeypatch.setattr("veadk.cli.cli_frontend.asyncio.sleep", _noop_sleep)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example",
+                        network_type=network_type,
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                    custom_jwt_authorizer=None,
+                ),
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    attempts = 0
+    forwarded_params: list[dict[str, str]] = []
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def build_request(
+            self,
+            method: str,
+            url: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+            content: bytes,
+        ) -> object:
+            forwarded_params.append(params)
+            return object()
+
+        async def send(self, request: object, *, stream: bool) -> None:
+            nonlocal attempts
+            attempts += 1
+            raise httpx.ConnectError("connect failed")
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.get(f"/web/runtime-proxy/runtime-1/list-apps{query}")
+
+    assert response.status_code == 502
+    assert attempts == expected_attempts
+    assert forwarded_params == [{}] * expected_attempts
+    assert response.json()["detail"] == (
+        "runtime_private_endpoint_unreachable"
+        if network_type == "private"
+        else "runtime_proxy_connect_error"
+    )
+
+
+@pytest.mark.parametrize("upstream_path", ["run_sse", "harness/run_sse"])
+def test_runtime_proxy_resolves_studio_media_before_forwarding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    upstream_path: str,
+) -> None:
+    monkeypatch.setenv("VEADK_MEDIA_LOCAL_DIR", str(tmp_path / "media"))
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example", network_type="public"
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                    custom_jwt_authorizer=None,
+                ),
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
+    )
+    upstream_body = b""
+
+    class _FakeUpstreamResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
+        async def aiter_raw(self):
+            yield b"{}"
+
+        async def aclose(self) -> None:
+            pass
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def build_request(
+            self,
+            method: str,
+            url: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+            content: bytes,
+        ) -> object:
+            nonlocal upstream_body
+            upstream_body = content
+            return object()
+
+        async def send(self, request: object, *, stream: bool) -> _FakeUpstreamResponse:
+            return _FakeUpstreamResponse()
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUB"
+        "AScY42YAAAAASUVORK5CYII="
+    )
+
+    with TestClient(app) as client:
+        upload = client.post(
+            "/web/media",
+            data={
+                "app_name": "demo",
+                "user_id": "user",
+                "session_id": "session",
+            },
+            files={"file": ("cat.png", png, "image/png")},
+        )
+        assert upload.status_code == 200
+        media = upload.json()
+        response = client.post(
+            f"/web/runtime-proxy/runtime-1/{upstream_path}?region=cn-beijing",
+            json={
+                "app_name": "demo",
+                "user_id": "user",
+                "session_id": "session",
+                "new_message": {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "fileData": {
+                                "fileUri": media["uri"],
+                                "mimeType": "image/png",
+                            },
+                            "partMetadata": {"veadkMedia": media},
+                        }
+                    ],
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    forwarded_part = json.loads(upstream_body)["new_message"]["parts"][0]
+    assert "fileData" not in forwarded_part
+    assert base64.b64decode(forwarded_part["inlineData"]["data"]) == png
+    assert forwarded_part["partMetadata"]["veadkMedia"]["uri"] == media["uri"]

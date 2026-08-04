@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Runtime state
+.adk/
+pipeline_failed_*.log
+.env
+.env.*
+!.env.example
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+.windsurf/
+
+# Git
+.git/
+.gitignore

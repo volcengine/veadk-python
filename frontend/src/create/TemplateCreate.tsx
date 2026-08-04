@@ -17,6 +17,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { type CreateModeProps, type AgentDraft, emptyDraft } from "./types";
+import { displayDescription } from "./displayText";
 import "./TemplateCreate.css";
 
 /** A gallery preset: an AgentDraft plus presentation metadata. */
@@ -209,7 +210,9 @@ function Gallery({ onPick }: { onPick: (t: Template) => void }) {
               <t.icon className="icon" />
             </span>
             <span className="tpl-card-name">{t.draft.name}</span>
-            <span className="tpl-card-desc">{t.draft.description}</span>
+            <span className="tpl-card-desc">
+              {displayDescription(t.draft.description)}
+            </span>
           </motion.button>
         ))}
       </div>
@@ -254,7 +257,9 @@ function TemplateDetail({
           </span>
           <div className="tpl-detail-headtext">
             <div className="tpl-detail-name">{template.draft.name}</div>
-            <div className="tpl-detail-desc">{template.draft.description}</div>
+            <div className="tpl-detail-desc">
+              {displayDescription(template.draft.description)}
+            </div>
           </div>
         </div>
 
@@ -308,10 +313,6 @@ function TemplateDetail({
             <span className="tpl-meta-key">观测追踪</span>
             <span className="tpl-meta-val">{template.draft.tracing ? "已开启" : "关闭"}</span>
           </div>
-          <div className="tpl-meta">
-            <span className="tpl-meta-key">A2UI</span>
-            <span className="tpl-meta-val">{template.draft.enableA2ui ? "已开启" : "关闭"}</span>
-          </div>
         </div>
 
         {template.draft.subAgents.length > 0 && (
@@ -328,7 +329,9 @@ function TemplateDetail({
                       <span className="tpl-subagent-tools">{sub.tools.join("、")}</span>
                     )}
                   </div>
-                  <div className="tpl-subagent-desc">{sub.description}</div>
+                  <div className="tpl-subagent-desc">
+                    {displayDescription(sub.description)}
+                  </div>
                 </div>
               ))}
             </div>

@@ -178,6 +178,23 @@ configures the runtime's gateway authorizer.
   in `harness.json` (no key). Calling such a runtime requires your own
   `Authorization: Bearer <user-pool JWT>` header — the CLI does not mint it.
 
+### Calling OAuth remote agents from A2A Registry
+
+When a harness enables the `agentkit_a2a` registry, the runtime dynamically
+discovers agents through `SearchAgentCards` / `GetA2aAgent` and mounts them as
+per-turn `remote_a2a_*` tools. If a matched remote AgentCard uses `apiKey`
+auth, the runtime injects the declared header from `securitySchemes`. If it
+uses `oauth2` with `clientCredentials.tokenUrl`, the runtime parses the
+Volcengine Identity UserPool from the token URL, finds its
+`MACHINE_TO_MACHINE` client, exchanges `client_credentials` for an access token,
+and calls the remote agent's `message/send` / `tasks/get` with
+`Authorization: Bearer <access_token>`.
+
+Normally this only requires the harness runtime to have permission to call the
+AgentKit A2A Registry and Identity OpenAPI. If the registry endpoint is custom
+and cannot also serve Identity OpenAPI requests, set `REGISTRY_ID_ENDPOINT` or
+`AGENTKIT_ID_ENDPOINT` to the Identity OpenAPI endpoint.
+
 ## `veadk harness invoke`
 
 Invoke a **deployed** harness and print its output. The `url` and `key` are resolved from `harness.json` (written by `deploy`) by `--name`, so you need not pass them explicitly.

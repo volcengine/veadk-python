@@ -1,0 +1,300 @@
+.code-browser-trigger {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.code-browser-trigger svg {
+  width: 13px;
+  height: 13px;
+}
+
+.code-browser-trigger:hover {
+  background: hsl(var(--foreground) / 0.04);
+  color: hsl(var(--foreground));
+}
+
+.code-browser-trigger:focus-visible {
+  outline: 2px solid hsl(var(--primary) / 0.34);
+  outline-offset: 1px;
+}
+
+.code-browser-backdrop {
+  position: fixed;
+  z-index: 1200;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: hsl(var(--foreground) / 0.22);
+  backdrop-filter: blur(3px);
+  animation: code-browser-fade-in 140ms ease-out;
+}
+
+.code-browser-dialog {
+  width: min(1040px, 92vw);
+  height: min(720px, 84vh);
+  min-height: 420px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--background));
+  box-shadow: 0 24px 64px hsl(var(--foreground) / 0.16);
+  animation: code-browser-rise-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.code-browser-head {
+  flex: 0 0 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 16px 0 18px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.code-browser-title-wrap {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.code-browser-title-icon {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+
+.code-browser-title-icon svg,
+.code-browser-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.code-browser-title-wrap h2,
+.code-browser-title-wrap p {
+  margin: 0;
+}
+
+.code-browser-title-wrap h2 {
+  color: hsl(var(--foreground));
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.code-browser-title-wrap p {
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-browser-close {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+
+.code-browser-close:hover {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+
+.code-browser-workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.code-browser-sidebar {
+  flex: 0 0 220px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid hsl(var(--border));
+  background: hsl(var(--secondary) / 0.22);
+}
+
+.code-browser-sidebar-head,
+.code-browser-path {
+  flex: 0 0 38px;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.code-browser-sidebar-head {
+  justify-content: space-between;
+  padding: 0 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.code-browser-sidebar-head span {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.code-browser-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 0 12px;
+}
+
+.code-browser-file,
+.code-browser-folder {
+  width: 100%;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 4px;
+  padding-right: 10px;
+  padding-bottom: 4px;
+  border: 0;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.code-browser-file:hover,
+.code-browser-folder:hover {
+  background: hsl(var(--foreground) / 0.045);
+  color: hsl(var(--foreground));
+}
+
+.code-browser-file.is-active {
+  background: hsl(var(--foreground) / 0.075);
+  color: hsl(var(--foreground));
+}
+
+.code-browser-file svg,
+.code-browser-folder svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.code-browser-folder > svg:first-child {
+  width: 12px;
+  height: 12px;
+  transition: transform 120ms ease;
+}
+
+.code-browser-folder > svg:first-child.is-open {
+  transform: rotate(90deg);
+}
+
+.code-browser-file span,
+.code-browser-folder span,
+.code-browser-path span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-browser-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.code-browser-path {
+  gap: 7px;
+  padding: 0 13px;
+  color: hsl(var(--muted-foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+}
+
+.code-browser-path svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+.code-browser-editor {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.code-browser-editor > div,
+.code-browser-editor .cm-theme,
+.code-browser-editor .cm-editor {
+  height: 100%;
+}
+
+.code-browser-editor .cm-scroller {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12.5px;
+}
+
+.code-browser-empty {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+@keyframes code-browser-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes code-browser-rise-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.992); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 720px) {
+  .code-browser-backdrop { padding: 12px; }
+  .code-browser-dialog { width: 100%; height: min(760px, 92vh); }
+  .code-browser-sidebar { flex-basis: 168px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .code-browser-backdrop,
+  .code-browser-dialog { animation: none; }
+}

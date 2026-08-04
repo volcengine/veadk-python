@@ -20,23 +20,27 @@
 | 09 | [长期记忆](./09_long_term_memory/) | 复杂 | 跨会话回忆事实（`auto_save_session`） |
 | 10 | [智能体路由](./10_agent_routing/) | 复杂 | 协调者动态委派给专家智能体 |
 | 11 | [链路追踪](./11_tracing/) | 复杂 | 观测大模型/工具调用；导出 span |
+| 13 | [OpenViking](./13_openviking/) | 复杂 | 使用 OpenViking 做知识检索与长期记忆 |
 
-另外还有 [`a2ui_agent/`](./a2ui_agent/) —— 一个由智能体驱动 UI 的示例，
-可通过 `veadk frontend --agents-dir examples` 运行。
+另外还有可通过 `veadk frontend --agents-dir examples` 运行的 frontend 示例：
+
+- [`a2ui_agent/`](./a2ui_agent/) 展示由智能体驱动的 UI。
+- [`multimodal_agent/`](./multimodal_agent/) 分析从聊天输入框上传的图片、
+  TXT/Markdown、PDF 和视频。
 
 如需一个可部署的**完整应用**（Web 前端 + Agent API 同处一个容器，通过
 `veadk agentkit` 部署到火山引擎 AgentKit），参见 [`basic-app/`](./basic-app/)。
 
 这些示例按概念分组：01–02 基础，03 与 09 记忆，04–05 工具与知识，
-06 与 10 多智能体，07–08 模型行为，11 可观测性。
+06 与 10 多智能体，07–08 模型行为，11 可观测性，13 为 OpenViking 知识与记忆。
 
 ## 通用准备
 
-1. 安装 VeADK（示例 05 需要 `extensions` 扩展）：
+1. 安装 VeADK（示例 05 使用 local 后端时需要 `extensions` 扩展）：
 
    ```bash
    pip install veadk-python
-   # RAG 示例需要：
+   # 示例 05 的 local RAG 后端需要：
    pip install "veadk-python[extensions]"
    ```
 

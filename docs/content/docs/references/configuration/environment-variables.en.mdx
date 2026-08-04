@@ -62,6 +62,23 @@ Prefix `TOOL_`, configured only when the corresponding tool is used.
 | VOD | `TOOL_VOD_GROUPS` | Video editing capability groups |
 | | `TOOL_VOD_TIMEOUT` | Connection timeout |
 
+## Harness Extension
+
+Prefix `HARNESS_`, used to attach optional Harness plugins to HarnessApp Runtime or `Runner`. The Harness Extension is bundled with VeADK; install the `veadk-python[harness]` extra only when you want the optional `headroom` compaction provider.
+
+| Variable | Meaning |
+| :- | :- |
+| `HARNESS_ENHANCE_ENABLED` | Enable Harness plugins; accepts `true` / `false`. |
+| `HARNESS_ENHANCE_COMPONENTS` | Enabled components, comma-separated; common value: `invocation_context,compactor,response_verification`. |
+| `HARNESS_PROFILE` | Plugin runtime profile for policy selection; default `default`. |
+| `HARNESS_COMPRESSION_PROVIDER` | Tool-result compaction provider, default `builtin`; optional `headroom`. |
+| `HARNESS_MAX_CONTEXT_CHARS` | Context compaction threshold, default `24000`. |
+| `HARNESS_MAX_TOOL_RESULT_CHARS` | Single tool-result compaction threshold, default `4000`. |
+| `HARNESS_VERIFIER_MODE` | Final-response verification mode, `observe` or `block`; default `observe`. |
+| `HARNESS_STORE_PATH` | Optional JSONL event store path; in-memory store is used when unset. |
+
+The `harness_enhance` block maps to these environment variables when deploying a HarnessApp Runtime. Prefer `harness.yaml` or `veadk agentkit invoke` flags for normal developer workflows; use environment variables for platform integration and container runtimes.
+
 ## Databases
 
 Prefix `DATABASE_`, grouped by storage type. Memory and the knowledge base read the matching config based on the selected backend.
@@ -83,11 +100,73 @@ Prefix `DATABASE_`, grouped by storage type. Memory and the knowledge base read 
 | | `DATABASE_REDIS_PORT` | Port, default 6379 |
 | | `DATABASE_REDIS_PASSWORD` | Password |
 | | `DATABASE_REDIS_DB` | Database number, default 0 |
+| Milvus | `DATABASE_MILVUS_URI` | Milvus address; local Milvus Lite file path or remote URI |
+| | `DATABASE_MILVUS_TOKEN` | Auth token; takes precedence over user/password (optional) |
+| | `DATABASE_MILVUS_USER` | Username (optional) |
+| | `DATABASE_MILVUS_PASSWORD` | Password (optional) |
+| | `DATABASE_MILVUS_DB_NAME` | Database name, default `default` |
+| | `DATABASE_MILVUS_OVERWRITE` | Overwrite the collection, default `false` |
+| | `DATABASE_MILVUS_TIMEOUT` | Connection/request timeout (optional) |
+| | `DATABASE_MILVUS_OUTPUT_FIELDS` | Comma-separated retrieval output fields (optional) |
 | VikingDB | `DATABASE_VIKING_PROJECT` | Project name |
 | | `DATABASE_VIKING_REGION` | Region |
 | TOS | `DATABASE_TOS_ENDPOINT` | Endpoint |
 | | `DATABASE_TOS_REGION` | Region |
 | | `DATABASE_TOS_BUCKET` | Bucket name |
+| OpenViking | `DATABASE_OPENVIKING_URL` | OpenViking HTTP server URL |
+| | `DATABASE_OPENVIKING_API_KEY` | OpenViking service owner API key |
+| | `DATABASE_OPENVIKING_USER_ID` | OpenViking owner/context ID, default `default`; maps to `backend_config["openviking_user_id"]`, used for the knowledge directory when `target_uri` is not configured and as the long-term memory owner/context |
+| | `DATABASE_OPENVIKING_MEMORY_POLICY` | Long-term memory `memory_policy` JSON; uses the default policy when unset |
+| | `DATABASE_OPENVIKING_ACCOUNT` | Optional account for multi-tenant or trusted gateway setups |
+| | `DATABASE_OPENVIKING_USER` | Optional user for multi-tenant or trusted gateway setups |
+| | `DATABASE_OPENVIKING_ACTOR_PEER_ID` | Optional caller agent or peer identifier |
+| | `DATABASE_OPENVIKING_TARGET_URI` | Knowledge resource directory; defaults to `viking://user/{openviking_user_id or default}/resources/{index}/` when unset |
+| | `DATABASE_OPENVIKING_WAIT` | Wait for resource parsing and indexing on import, default `true` |
+| | `DATABASE_OPENVIKING_IMPORT_TIMEOUT` | Import wait timeout in seconds, default `300` |
+| | `DATABASE_OPENVIKING_HYDRATE_RESULTS` | Read full content or overview after search hits, default `true` |
+| | `DATABASE_OPENVIKING_READ_LIMIT` | Maximum lines to read from file content, default `200` |
+| | `DATABASE_OPENVIKING_SCORE_THRESHOLD` | Optional minimum retrieval score |
+| | `DATABASE_OPENVIKING_USE_CONTEXT_SEARCH` | Use context-aware search, default `false` |
+
+```yaml title="config.yaml"
+database:
+  milvus:
+    uri: ./milvus.db
+    # token:
+    # user:
+    # password:
+    # db_name: default
+    # overwrite: false
+    # timeout: 5.0
+    # output_fields: text,metadata
+```
+
+```yaml title="config.yaml"
+database:
+  openviking:
+    url: http://127.0.0.1:1933
+    api_key: your-openviking-api-key
+    # user_id: default
+    # memory_policy: '{"self":{"enabled":false},"peer":{"enabled":true},"memory_types":["entities","events","preferences"]}'
+    # Optional for KnowledgeBase(backend="openviking"):
+    # target_uri: viking://user/default/resources/my_app/
+    # wait: true
+    # import_timeout: 300
+    # hydrate_results: true
+    # read_limit: 200
+    # score_threshold: 0.3
+    # use_context_search: false
+```
+
+`KnowledgeBase(backend="openviking")` first uses an explicit `target_uri`; when it
+is unset, VeADK uses
+`viking://user/{openviking_user_id or default}/resources/{index}/`, where
+`openviking_user_id` comes from `backend_config["openviking_user_id"]` or
+`DATABASE_OPENVIKING_USER_ID`. If `backend_config` is omitted, `index` comes from
+`KnowledgeBase(index=...)` or `app_name`; if `backend_config` is provided, include
+`index` in that dictionary. For
+`LongTermMemory(backend="openviking")`, omitting `memory_policy` keeps VeADK's
+default policy; provide valid JSON only when you want to override it.
 
 ## Observability
 

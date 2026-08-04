@@ -14,6 +14,7 @@
 
 import json
 import os
+import re
 from typing import Optional
 
 from google.adk.tools import ToolContext
@@ -23,11 +24,39 @@ from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_PROTECTED_ENV_VARS = frozenset({"TOOL_USER_SESSION_ID", "USER_SESSION_ID"})
+
+
+def _merge_execution_env_vars(
+    base_env_vars: dict[str, str],
+    custom_env_vars: Optional[dict[str, str]] = None,
+) -> dict[str, str]:
+    """Validate and merge environment variables for one sandbox execution."""
+    merged_env_vars = dict(base_env_vars)
+    if not custom_env_vars:
+        return merged_env_vars
+
+    for key, value in custom_env_vars.items():
+        if not isinstance(key, str) or not _ENV_VAR_NAME_PATTERN.fullmatch(key):
+            raise ValueError(
+                f"Invalid environment variable name {key!r}. "
+                "Names must match [A-Za-z_][A-Za-z0-9_]*."
+            )
+        if key in _PROTECTED_ENV_VARS:
+            raise ValueError(f"Environment variable {key!r} is managed by VeADK.")
+        if not isinstance(value, str):
+            raise TypeError(f"Environment variable {key!r} must have a string value.")
+        if "\x00" in value:
+            raise ValueError(f"Environment variable {key!r} contains a null byte.")
+
+        merged_env_vars[key] = value
+
+    return merged_env_vars
+
 
 def _clean_ansi_codes(text: str) -> str:
     """Remove ANSI escape sequences (color codes, etc.)."""
-    import re
-
     ansi_escape = re.compile(r"\x1b\[[0-9;]*m")
     return ansi_escape.sub("", text)
 
@@ -89,9 +118,13 @@ import select
 import sys
 
 env = os.environ.copy()
+srv_pythonpath = env.get("SRV_PYTHONPATH")
+if srv_pythonpath:
+    env["PYTHONPATH"] = os.pathsep.join(
+        value for value in (srv_pythonpath, env.get("PYTHONPATH")) if value
+    )
 for key, value in {env_vars!r}.items():
-    if key not in env:
-        env[key] = value
+    env[key] = value
 
 process = subprocess.Popen(
     {cmd!r},
@@ -163,15 +196,13 @@ def run_sandbox_agent(
     tool_user_session_id = agent_name + "_" + user_id + "_" + session_id
     logger.debug(f"tool_user_session_id: {tool_user_session_id}")
 
-    env_vars = {
+    base_env_vars = {
         "TOOL_USER_SESSION_ID": tool_user_session_id,
-        "PYTHONPATH": "$SRV_PYTHONPATH:$PYTHONPATH",
     }
     skill_space_id = os.getenv("SKILL_SPACE_ID", "")
     if skill_space_id:
-        env_vars["SKILL_SPACE_ID"] = skill_space_id
-    if extra_env_vars:
-        env_vars.update({k: v for k, v in extra_env_vars.items() if v})
+        base_env_vars["SKILL_SPACE_ID"] = skill_space_id
+    env_vars = _merge_execution_env_vars(base_env_vars, extra_env_vars)
 
     logger.debug(
         f"Run sandbox agent in session_id={session_id}, tool_id={tool_id}, timeout={timeout}, skills={skills}"
@@ -192,7 +223,8 @@ def run_sandbox_agent(
         kernel_name="python3",
         tool_state=tool_context.state if tool_context else None,
     )
-    logger.debug(f"Invoke run sandbox agent response: {res}")
+    # The response can echo the submitted runner code, including custom env values.
+    logger.debug("Invoke run sandbox agent completed")
 
     try:
         return _format_execution_result(res["Result"]["Result"])

@@ -14,6 +14,7 @@
 
 import json
 import os
+import time
 from typing import Any, Optional
 
 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
@@ -22,6 +23,11 @@ from veadk.utils.logger import get_logger
 from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
+
+
+_SESSION_READY_TIMEOUT = 120.0
+_SESSION_POLL_INTERVAL = 1.0
+_SESSION_TERMINAL_STATUSES = frozenset({"failed", "terminating", "terminated"})
 
 
 def resolve_agentkit_tool_id(*preferred_env_names: str) -> str:
@@ -153,3 +159,165 @@ def invoke_agentkit_run_code(
         header=header,
         scheme=scheme,
     )
+
+
+def invoke_agentkit_exec_bash(
+    *,
+    tool_id: str,
+    tool_user_session_id: str,
+    command: str,
+    exec_dir: Optional[str] = None,
+    env: Optional[dict[str, str]] = None,
+    timeout: int = 30,
+    hard_timeout: Optional[int] = None,
+    max_output_length: Optional[int] = None,
+    tool_state: Optional[dict[str, Any]] = None,
+    ttl: Optional[int] = None,
+) -> dict[str, Any]:
+    """Invoke AgentKit's Bash execution operation through InvokeTool."""
+    service, region, host, scheme = get_agentkit_endpoint_config()
+    ak, sk, header = get_agentkit_credentials(tool_state)
+
+    operation_payload: dict[str, Any] = {
+        "command": command,
+        "timeout": timeout,
+    }
+    if exec_dir is not None:
+        operation_payload["exec_dir"] = exec_dir
+    if env is not None:
+        operation_payload["env"] = env
+    if hard_timeout is not None:
+        operation_payload["hard_timeout"] = hard_timeout
+    if max_output_length is not None:
+        operation_payload["max_output_length"] = max_output_length
+
+    request_body: dict[str, Any] = {
+        "ToolId": tool_id,
+        "OperationType": "ExecBash",
+        "UserSessionId": tool_user_session_id,
+        "OperationPayload": json.dumps(operation_payload),
+    }
+    if ttl is not None:
+        request_body["Ttl"] = ttl
+
+    return ve_request(
+        request_body=request_body,
+        action="InvokeTool",
+        ak=ak,
+        sk=sk,
+        service=service,
+        version="2025-10-30",
+        region=region,
+        host=host,
+        header=header,
+        scheme=scheme,
+    )
+
+
+def ensure_agentkit_session_endpoint(
+    *,
+    tool_id: str,
+    tool_user_session_id: str,
+    tool_state: Optional[dict[str, Any]] = None,
+    ttl: int = 1800,
+    prefer_internal_endpoint: bool = False,
+    wait_until_ready: bool = False,
+    ready_timeout: float = _SESSION_READY_TIMEOUT,
+    poll_interval: float = _SESSION_POLL_INTERVAL,
+) -> str:
+    """Create or reuse an AgentKit tool session and return its endpoint."""
+    from agentkit.sdk.tools import types as tools_types
+    from agentkit.sdk.tools.client import AgentkitToolsClient
+
+    if wait_until_ready:
+        if ready_timeout < 0:
+            raise ValueError("ready_timeout must be greater than or equal to 0")
+        if poll_interval <= 0:
+            raise ValueError("poll_interval must be greater than 0")
+
+    _, region, _, _ = get_agentkit_endpoint_config()
+    ak, sk, header = get_agentkit_credentials(tool_state)
+    session_token = header.get("X-Security-Token", "")
+    client = AgentkitToolsClient(
+        access_key=ak,
+        secret_key=sk,
+        region=region,
+        session_token=session_token,
+    )
+    session = client.create_session(
+        tools_types.CreateSessionRequest(
+            ToolId=tool_id,
+            UserSessionId=tool_user_session_id,
+            Ttl=ttl,
+        )
+    )
+    if not wait_until_ready:
+        public_endpoint = getattr(session, "endpoint", None)
+        internal_endpoint = getattr(session, "internal_endpoint", None)
+        endpoint = (
+            internal_endpoint or public_endpoint
+            if prefer_internal_endpoint
+            else public_endpoint or internal_endpoint
+        )
+        if endpoint:
+            return endpoint
+
+        session_id = session.session_id
+        if not session_id:
+            return ""
+        current_session = client.get_session(
+            tools_types.GetSessionRequest(
+                ToolId=tool_id,
+                SessionId=session_id,
+            )
+        )
+        if prefer_internal_endpoint:
+            return current_session.internal_endpoint or current_session.endpoint or ""
+        return current_session.endpoint or current_session.internal_endpoint or ""
+
+    session_id = session.session_id
+    if not session_id:
+        raise RuntimeError("AgentKit CreateSession response is missing SessionId")
+
+    deadline = time.monotonic() + ready_timeout
+    last_status = "Unknown"
+    while True:
+        current_session = client.get_session(
+            tools_types.GetSessionRequest(
+                ToolId=tool_id,
+                SessionId=session_id,
+            )
+        )
+        status = (getattr(current_session, "status", None) or "").strip()
+        last_status = status or "Unknown"
+        logger.debug(f"AgentKit session {session_id} status: {last_status}")
+        normalized_status = status.lower()
+        if normalized_status == "ready":
+            public_endpoint = getattr(current_session, "endpoint", None) or getattr(
+                session, "endpoint", None
+            )
+            internal_endpoint = getattr(
+                current_session, "internal_endpoint", None
+            ) or getattr(session, "internal_endpoint", None)
+            endpoint = (
+                internal_endpoint or public_endpoint
+                if prefer_internal_endpoint
+                else public_endpoint or internal_endpoint
+            )
+            if endpoint:
+                return endpoint
+            raise RuntimeError(
+                f"AgentKit session {session_id} is Ready but has no endpoint"
+            )
+        if normalized_status in _SESSION_TERMINAL_STATUSES:
+            raise RuntimeError(
+                f"AgentKit session {session_id} entered terminal status {last_status}"
+            )
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"Timed out waiting for AgentKit session {session_id} to become "
+                f"Ready; last status: {last_status}"
+            )
+        time.sleep(min(poll_interval, remaining))

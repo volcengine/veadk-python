@@ -28,7 +28,40 @@ agent = Agent(name="assistant", runtime="codex")
 | 取值 | 说明 |
 | :--- | :--- |
 | `adk`（默认） | 使用 Google ADK 内置的执行流程，适用于绝大多数场景。 |
-| `codex` | 其他执行后端，面向高级定制场景。 |
+| `codex` | 使用 OpenAI Codex SDK 驱动内层循环。 |
+
+使用 Codex runtime 前安装可选依赖：
+
+```bash
+pip install "veadk-python[codex]"
+```
+
+### Codex 安全配置
+
+Codex 默认使用独立 Session workspace、`workspace_write` 沙箱、禁用网络，并拒绝需要提权的操作。需要扩大权限时必须显式配置：
+
+```python title="agent.py"
+from veadk import Agent
+from veadk.runtime.codex import CodexRuntimeConfig
+
+agent = Agent(
+    name="assistant",
+    runtime="codex",
+    codex_runtime_config=CodexRuntimeConfig(
+        sandbox="workspace_write",
+        approval_mode="auto_review",
+        network_access=True,
+        # 若需在已有工程内工作，显式指定目录；默认使用 Session 隔离目录。
+        workspace_root="/workspace/codex",
+    ),
+)
+```
+
+`full_access` 和 `reuse_workspace=True` 会放宽不同调用之间的文件系统边界，只应在受信环境中开启。
+
+### Codex 可观测性
+
+Codex 原生生命周期和 ADK Function/MCP 工具调用都会转换为 ADK Event。运行日志使用稳定的 `codex_*` 事件名，并包含 `invocation_id`、`call_id`、`tool`、`status`、`duration_ms` 等可归因字段。日志不会记录工具参数、工具结果、API Token、凭证或后端地址；Token Usage 通过 `codex_event_type=token_usage` 事件及对应日志提供。
 
 ## 请求处理
 

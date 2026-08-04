@@ -1,7 +1,7 @@
-import { Fragment, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Cpu, Loader2, LogOut, Wrench } from "lucide-react";
-import { getAgentInfo, type AgentInfo } from "../adk/client";
-import { displayName } from "../adk/identity";
+import { Fragment, type ReactNode, useState } from "react";
+import { ArrowLeftRight, ChevronDown, ChevronRight } from "lucide-react";
+import type { RuntimeScope } from "../adk/client";
+import { AgentSelector, type SelectedRuntime } from "./AgentSelector";
 
 export interface Crumb {
   label: string;
@@ -10,87 +10,138 @@ export interface Crumb {
 }
 
 export interface NavbarProps {
-  apps: string[];
   appName: string;
-  onAppChange: (app: string) => void;
+  onAppChange: (app: string) => void | Promise<void>;
   /** Map a picker id to its display label (e.g. remote AgentKit apps). */
   agentLabel?: (id: string) => string;
-  userInfo?: Record<string, unknown>;
-  onLogout: () => void;
+  agentsSource: "local" | "cloud";
+  localApps: string[];
+  currentRuntime?: SelectedRuntime;
+  runtimeScope: RuntimeScope;
+  onBrowseAgents?: () => void;
   /** When set, the left side shows this title instead of the agent picker. */
   title?: string;
+  /** Optional action rendered immediately before the page title. */
+  titleLeading?: ReactNode;
   /** When set, the left side shows a breadcrumb trail (takes priority over title). */
   crumbs?: Crumb[];
+  /** Persistent app-level status rendered on the far right. */
+  rightContent?: ReactNode;
 }
 
-/** Top bar inside the main panel: agent picker on the left, account on the right. */
-export function Navbar({ apps, appName, onAppChange, agentLabel, userInfo, onLogout, title, crumbs }: NavbarProps) {
+/** Top bar inside the main panel: agent picker / title / breadcrumb on the left.
+ *  (The account block lives at the bottom of the sidebar.) */
+export function Navbar({
+  appName,
+  onAppChange,
+  agentLabel,
+  agentsSource,
+  localApps,
+  currentRuntime,
+  runtimeScope,
+  onBrowseAgents,
+  title,
+  titleLeading,
+  crumbs,
+  rightContent,
+}: NavbarProps) {
   return (
     <div className="navbar">
-      {crumbs && crumbs.length > 0 ? (
-        <nav className="navbar-crumbs" aria-label="面包屑">
-          {crumbs.map((c, i) => (
-            <Fragment key={i}>
-              {i > 0 && <ChevronRight className="crumb-sep" />}
-              {c.onClick ? (
-                <button className="crumb crumb-link" onClick={c.onClick}>
-                  {c.label}
-                </button>
-              ) : (
-                <span className="crumb crumb-current">{c.label}</span>
-              )}
-            </Fragment>
-          ))}
-        </nav>
-      ) : title ? (
-        <div className="navbar-title">{title}</div>
-      ) : (
-        <AgentSelect apps={apps} appName={appName} onAppChange={onAppChange} agentLabel={agentLabel} />
-      )}
-      <Account userInfo={userInfo} onLogout={onLogout} />
+      <div className="navbar-left">
+        <div className="navbar-default">
+          {crumbs && crumbs.length > 0 ? (
+            <nav className="navbar-crumbs" aria-label="面包屑">
+              {crumbs.map((c, i) => (
+                <Fragment key={i}>
+                  {i > 0 && <ChevronRight className="crumb-sep" />}
+                  {c.onClick ? (
+                    <button className="crumb crumb-link" onClick={c.onClick}>
+                      {c.label}
+                    </button>
+                  ) : (
+                    <span className="crumb crumb-current">{c.label}</span>
+                  )}
+                </Fragment>
+              ))}
+            </nav>
+          ) : title ? (
+            <div className="navbar-title-group">
+              {titleLeading}
+              <div className="navbar-title" title={title}>{title}</div>
+            </div>
+          ) : (
+            <div className="navbar-title-group">
+              {titleLeading}
+              <AgentSelect
+                appName={appName}
+                onAppChange={onAppChange}
+                agentLabel={agentLabel}
+                agentsSource={agentsSource}
+                localApps={localApps}
+                currentRuntime={currentRuntime}
+                runtimeScope={runtimeScope}
+                onBrowseAgents={onBrowseAgents}
+              />
+            </div>
+          )}
+        </div>
+        <div id="veadk-page-header-left" className="navbar-portal-slot" />
+      </div>
+      <div className="navbar-right">
+        <div id="veadk-page-header-actions" className="navbar-portal-actions" />
+        {rightContent}
+      </div>
     </div>
   );
 }
 
-type InfoState = AgentInfo | "loading" | "error" | undefined;
-
-/** ChatGPT-style dropdown: a heading trigger that opens a popover of agents.
- *  Hovering a row reveals a flyout with that agent's model + tools. */
+/** Title-styled trigger backed by the complete Agent picker. */
 function AgentSelect({
-  apps,
   appName,
   onAppChange,
   agentLabel,
-}: Pick<NavbarProps, "apps" | "appName" | "onAppChange" | "agentLabel">) {
+  agentsSource,
+  localApps,
+  currentRuntime,
+  runtimeScope,
+  onBrowseAgents,
+}: Pick<
+  NavbarProps,
+  | "appName"
+  | "onAppChange"
+  | "agentLabel"
+  | "agentsSource"
+  | "localApps"
+  | "currentRuntime"
+  | "runtimeScope"
+  | "onBrowseAgents"
+>) {
   const [open, setOpen] = useState(false);
-  const [hovered, setHovered] = useState<string | null>(null);
-  const [cache, setCache] = useState<Record<string, InfoState>>({});
-  const [flyoutTop, setFlyoutTop] = useState<number>(0);
-  const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const label = (id: string) => (agentLabel ? agentLabel(id) : id);
 
-  function loadInfo(app: string) {
-    setHovered(app);
-    const rowEl = rowRefs.current[app];
-    if (rowEl) {
-      const rect = rowEl.getBoundingClientRect();
-      const ddEl = rowEl.closest('.agent-dd');
-      if (ddEl) {
-        const ddRect = ddEl.getBoundingClientRect();
-        // Position relative to .agent-dd container, accounting for menu's top offset
-        setFlyoutTop(rect.top - ddRect.top);
-      }
-    }
-    if (cache[app] !== undefined) return;
-    setCache((c) => ({ ...c, [app]: "loading" }));
-    getAgentInfo(app)
-      .then((info) => setCache((c) => ({ ...c, [app]: info })))
-      .catch(() => setCache((c) => ({ ...c, [app]: "error" })));
+  if (agentsSource === "cloud") {
+    return (
+      <div className="agent-switch">
+        <span className="agent-dd-current">
+          {appName ? label(appName) : "选择 Agent"}
+        </span>
+        {appName && onBrowseAgents ? (
+          <button
+            type="button"
+            className="agent-switch-action"
+            aria-label="切换智能体"
+            title="切换智能体"
+            onClick={onBrowseAgents}
+          >
+            <ArrowLeftRight aria-hidden="true" />
+          </button>
+        ) : null}
+      </div>
+    );
   }
 
   function close() {
     setOpen(false);
-    setHovered(null);
   }
 
   return (
@@ -102,111 +153,20 @@ function AgentSelect({
       {open && (
         <>
           <div className="menu-scrim" onClick={close} />
-          <div className="agent-dd-menu">
-            {apps.map((a) => (
-              <div
-                key={a}
-                ref={(el) => (rowRefs.current[a] = el)}
-                className="agent-dd-row"
-                onMouseEnter={() => loadInfo(a)}
-                onMouseLeave={() => setHovered((h) => (h === a ? null : h))}
-              >
-                <button
-                  className={`agent-dd-item ${a === appName ? "active" : ""}`}
-                  onClick={() => {
-                    onAppChange(a);
-                    close();
-                  }}
-                >
-                  <span className="agent-dd-item-name">{label(a)}</span>
-                  {a === appName && <span className="agent-dd-item-dot" aria-label="当前" />}
-                </button>
-              </div>
-            ))}
-          </div>
-          {hovered && <AgentFlyout state={cache[hovered]} top={flyoutTop} />}
-        </>
-      )}
-    </div>
-  );
-}
-
-function AgentFlyout({ state, top }: { state: InfoState; top: number }) {
-  return (
-    <div className="agent-dd-flyout" style={{ top: `${top}px` }}>
-      {state === undefined || state === "loading" ? (
-        <div className="agent-dd-fly-loading">
-          <Loader2 className="icon spin" /> 加载中…
-        </div>
-      ) : state === "error" ? (
-        <div className="agent-dd-fly-loading">读取信息失败</div>
-      ) : (
-        <>
-          <div className="agent-dd-fly-name">{state.name}</div>
-          {state.description && (
-            <div className="agent-dd-fly-desc">{state.description}</div>
-          )}
-          <div className="agent-dd-fly-field">
-            <Cpu className="icon" />
-            <span className="agent-dd-fly-model">{state.model}</span>
-          </div>
-          {state.tools.length > 0 && (
-            <div className="agent-dd-fly-field agent-dd-fly-field--tools">
-              <Wrench className="icon" />
-              <div className="agent-dd-fly-chips">
-                {state.tools.map((t) => (
-                  <span key={t} className="agent-dd-chip">
-                    {t}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-          {state.subAgents.length > 0 && (
-            <div className="agent-dd-fly-field">
-              <span className="agent-dd-fly-label">子 Agent</span>
-              <span className="agent-dd-fly-model">{state.subAgents.join("、")}</span>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-/** Avatar-only account button; clicking opens a small panel with name + logout. */
-function Account({ userInfo, onLogout }: Pick<NavbarProps, "userInfo" | "onLogout">) {
-  const [open, setOpen] = useState(false);
-  if (!userInfo) return null;
-  const name = displayName(userInfo);
-  const email = String(userInfo.email ?? userInfo.sub ?? "");
-  const initial = (name || "U").slice(0, 1).toUpperCase();
-  return (
-    <div className="account">
-      <button className="account-avatar" title={name} onClick={() => setOpen((o) => !o)}>
-        {initial}
-      </button>
-      {open && (
-        <>
-          <div className="menu-scrim" onClick={() => setOpen(false)} />
-          <div className="account-pop">
-            <div className="account-head">
-              <div className="account-avatar account-avatar--lg">{initial}</div>
-              <div className="account-id">
-                <div className="account-name">{name}</div>
-                {email && email !== name && <div className="account-sub">{email}</div>}
-              </div>
-            </div>
-            <button
-              className="account-logout"
-              onClick={() => {
-                setOpen(false);
-                onLogout();
-              }}
-            >
-              <LogOut className="icon" /> 退出登录
-            </button>
-          </div>
+          <AgentSelector
+            open
+            variant="navbar"
+            agentsSource={agentsSource}
+            localApps={localApps}
+            currentId={appName}
+            currentRuntime={currentRuntime}
+            runtimeScope={runtimeScope}
+            onSelect={async (id) => {
+              await onAppChange(id);
+              close();
+            }}
+            onClose={close}
+          />
         </>
       )}
     </div>

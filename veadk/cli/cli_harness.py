@@ -19,7 +19,7 @@ Subcommands scaffold, configure, and deploy the harness server
 
 * ``veadk harness create <dir>`` writes a deployable directory: a blank
   ``harness.yaml`` template, a ``.env.example`` (deploy credentials only), a
-  ``Dockerfile``, and a short ``README.md``.
+  ``Dockerfile``, a ``.gitignore``, and a short ``README.md``.
 * ``veadk harness add`` writes agent parameters into ``harness.yaml``.
 * ``veadk harness deploy`` flattens ``harness.yaml`` into runtime env vars and
   performs a cloud AgentKit build + runtime create (no local Docker).
@@ -88,6 +88,25 @@ system_prompt: ""
 # Agent runtime backend: adk (default) | codex.
 #   env: RUNTIME               flag: --runtime
 runtime: adk
+
+# Structured tool calls via Ark Responses API.
+#   env: STRUCTURED_TOOL_CALLS       flag: --structured-tool-calls
+#   env: INCLUDE_TOOLS_EVERY_TURN    flag: --include-tools-every-turn
+structured_tool_calls: false
+include_tools_every_turn: true
+
+# --- Harness enhance (optional) ---------------------------------------------
+# Enables composable Runner plugins for context engineering, tool-result
+# compression, and answer verification inside the runtime. Edit this block
+# directly in harness.yaml, or override it per request through AgentKit invoke.
+#   env: HARNESS_ENHANCE_ENABLED
+#   env: HARNESS_ENHANCE_COMPONENTS
+#   env: HARNESS_ENHANCE_PROFILE
+harness_enhance:
+  enabled: false
+  components: [invocation_context, compactor, response_verification]
+  profile: default
+  compression_provider: builtin
 
 # --- Knowledge base ----------------------------------------------------------
 #   type -> env: KNOWLEDGEBASE_TYPE   flag: --knowledgebase-type
@@ -174,12 +193,25 @@ VOLCENGINE_SECRET_KEY=
 # VOLCENGINE_REGION=cn-beijing
 """
 
-# Container image for the harness server. The base image's apt mirror is an
-# unreachable internal host, so apt is repointed at aliyun; the source branch is
-# cloned via the ghfast proxy with a github fallback; uv installs from aliyun.
+_GITIGNORE = """\
+# Local deploy credentials and generated runtime metadata.
+.env
+.env.*
+!.env.example
+harness.json
+agentkit.yaml
+agentkit*.yaml
+.agentkit/
+"""
+
+# Container image for the harness server. The base image's default apt source
+# can be unreachable in some environments, so apt is repointed at a public
+# mirror. The source branch is cloned through an acceleration URL with an
+# official GitHub fallback, and uv installs from a public Python mirror.
 _DOCKERFILE = """\
 FROM agentkit-cn-beijing.cr.volces.com/base/py-simple:python3.12-bookworm-slim-latest
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/src
 RUN set -eux; \\
     rm -f /etc/apt/sources.list.d/*; \\
     printf 'deb http://mirrors.aliyun.com/debian bookworm main contrib non-free non-free-firmware\\n\\
@@ -190,17 +222,18 @@ deb http://mirrors.aliyun.com/debian-security bookworm-security main contrib non
     apt-get install -y --no-install-recommends git ca-certificates; \\
     rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+ARG VEADK_REF=main
 RUN set -eux; \\
     for url in \\
         https://ghfast.top/https://github.com/volcengine/veadk-python.git \\
         https://github.com/volcengine/veadk-python.git ; do \\
       for i in 1 2 3; do \\
-        git clone --depth 1 -b feat/harness-runtime "$url" src && break 2 || sleep 8; \\
+        git clone --depth 1 -b "$VEADK_REF" "$url" src && break 2 || sleep 8; \\
       done; \\
     done; \\
     test -d src/veadk
 RUN uv pip install --system --index-url https://mirrors.aliyun.com/pypi/simple/ \\
-        ./src fastapi "uvicorn[standard]"
+        "./src[harness]" fastapi "uvicorn[standard]"
 EXPOSE 8000
 CMD ["python", "-m", "uvicorn", "veadk.cloud.harness_app.app:app", "--host", "0.0.0.0", "--port", "8000"]
 """
@@ -215,6 +248,7 @@ Volcengine **AgentKit runtime** (cloud build, no local Docker).
 
 - `harness.yaml` — agent configuration; flattened into runtime env vars.
 - `.env.example` — Volcengine deploy credentials; copy to `.env` and fill in.
+- `.gitignore` — keeps local credentials and generated deploy metadata out of git.
 - `Dockerfile` — builds the harness server image.
 - `README.md` — this file.
 
@@ -244,6 +278,7 @@ _CREATE_SUCCESS = """\
 Harness deployment directory created at {target}:
 - harness.yaml   (agent configuration)
 - .env.example   (copy to .env and set VOLCENGINE_ACCESS_KEY / SECRET_KEY)
+- .gitignore     (ignores local credentials and generated deploy metadata)
 - Dockerfile     (builds the harness image)
 - README.md
 
@@ -280,6 +315,7 @@ def create(dir_name: str) -> None:
     target.mkdir(parents=True, exist_ok=True)
     (target / "harness.yaml").write_text(_HARNESS_YAML)
     (target / ".env.example").write_text(_ENV_EXAMPLE)
+    (target / ".gitignore").write_text(_GITIGNORE)
     (target / "Dockerfile").write_text(_DOCKERFILE)
     (target / "README.md").write_text(_README)
 
@@ -319,7 +355,10 @@ def _prune_empty(data: dict) -> None:
             for sub in list(value):
                 if _is_blank(value[sub]):
                     del value[sub]
-            if (key in COMPONENT_TYPE_ENV and not value.get("type")) or not value:
+            if (
+                (key in COMPONENT_TYPE_ENV or key == "registry")
+                and not value.get("type")
+            ) or not value:
                 del data[key]
         elif _is_blank(value):
             del data[key]
@@ -348,11 +387,14 @@ def _override_options(func):
     """Attach a ``--flag`` for every :class:`HarnessOverrides` field.
 
     Shared by ``add`` and ``invoke`` so their model / tools / skills /
-    system-prompt / runtime flags stay identical and in sync with the model —
-    adding a field to ``HarnessOverrides`` exposes the flag in both. Each flag
-    defaults to ``None`` (unset → not applied).
+    system-prompt / runtime flags stay identical and in sync with the model.
+    ``registry_*`` overrides are accepted by the HTTP API for AgentKit, but are
+    intentionally hidden from the VeADK CLI. Each exposed flag defaults to
+    ``None`` (unset → not applied).
     """
     for name, field in reversed(list(HarnessOverrides.model_fields.items())):
+        if name.startswith("registry_"):
+            continue
         option: dict = {
             "default": None,
             "help": field.description or f"`{name}`.",
@@ -391,6 +433,18 @@ def _override_options(func):
     default=None,
     help="Default max LLM calls per run (overridable per invocation).",
 )
+@click.option(
+    "--structured-tool-calls",
+    is_flag=True,
+    default=None,
+    help="Use Ark Responses API for structured tool calling.",
+)
+@click.option(
+    "--include-tools-every-turn",
+    is_flag=True,
+    default=None,
+    help="Include tool definitions on every model turn.",
+)
 @_connection_options
 @click.option(
     "--path",
@@ -403,6 +457,8 @@ def add(
     long_term_memory_type: str | None,
     short_term_memory_type: str | None,
     max_llm_calls: int | None,
+    structured_tool_calls: bool | None,
+    include_tools_every_turn: bool | None,
     path: str,
     model_name: str | None,
     tools: str | None,
@@ -420,11 +476,17 @@ def add(
     """
     yaml_path = Path(path).resolve() / "harness.yaml"
     data = _load_harness_yaml(yaml_path)
+    data.pop("enable_responses", None)
+    data.pop("enable_responses_cache", None)
 
     if harness_name is not None:
         data["harness_name"] = harness_name
     if max_llm_calls is not None:
         data["max_llm_calls"] = max_llm_calls
+    if structured_tool_calls is not None:
+        data["structured_tool_calls"] = structured_tool_calls
+    if include_tools_every_turn is not None:
+        data["include_tools_every_turn"] = include_tools_every_turn
     if model_name is not None:
         model = data.get("model")
         if not isinstance(model, dict):
@@ -435,6 +497,7 @@ def add(
         data["system_prompt"] = system_prompt
     if runtime is not None:
         data["runtime"] = runtime
+
     # Set only the backend `type`, preserving any connection params already set
     # under the component section.
     for type_value, section_key in (
@@ -502,12 +565,14 @@ def show(path: str) -> None:
     click.echo("")
     click.secho("Overridable at invoke time:", fg="green", bold=True)
     for name, field in HarnessOverrides.model_fields.items():
+        if name.startswith("registry_"):
+            continue
         flag = "--" + name.replace("_", "-")
         click.echo(f"  {flag}: {field.description or name}")
     click.echo("")
     click.echo(
         "Override per call via `veadk harness invoke ... --<flag>`. "
-        "Memory and knowledgebase are NOT overridable."
+        "Memory, knowledgebase, and registry are not exposed as VeADK CLI overrides."
     )
 
 
@@ -780,7 +845,7 @@ def deploy(
         lines.append(f"Discovery:  {auth['discovery_url']}")
         lines.append(f"Allowed ids: {', '.join(auth['allowed_ids'])}")
     elif apikey:
-        lines.append(f"API key:    {apikey}")
+        lines.append("API key:    saved in local harness.json (not printed)")
 
     if endpoint:
         json_path = _record_harness(

@@ -22,6 +22,63 @@ os.environ["VOLCENGINE_ACCESS_KEY"] = "test_access_key"
 os.environ["VOLCENGINE_SECRET_KEY"] = "test_secret_key"
 
 from veadk.cloud.cloud_agent_engine import CloudAgentEngine
+from veadk.integrations.ve_faas.ve_faas import VeFaaS
+
+
+def test_vefaas_create_function_uses_configured_project() -> None:
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        project_name="studio-project",
+    )
+    service.client = Mock()
+    service.client.create_function.return_value = Mock(
+        id="function-id", project_name="studio-project"
+    )
+    service._upload_and_mount_code = Mock()
+
+    service._create_function("studio-function", ".")
+
+    request = service.client.create_function.call_args.args[0]
+    assert request.project_name == "studio-project"
+
+
+def test_vefaas_code_upload_callback_uses_configured_region() -> None:
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        region="cn-shanghai",
+    )
+    service.client = Mock()
+    service.client.get_code_upload_address.return_value = Mock(
+        upload_address="https://example.com/upload"
+    )
+
+    with (
+        patch(
+            "veadk.integrations.ve_faas.ve_faas.zip_and_encode_folder",
+            return_value=(b"archive", 7, None),
+        ),
+        patch("veadk.integrations.ve_faas.ve_faas.requests.put") as upload,
+        patch("veadk.integrations.ve_faas.ve_faas.signed_request") as callback,
+    ):
+        upload.return_value = Mock(status_code=200)
+        service._upload_and_mount_code("function-id", ".")
+
+    upload.assert_called_once_with(
+        url="https://example.com/upload",
+        data=b"archive",
+        headers={"Content-Type": "application/zip"},
+        timeout=(30, 300),
+    )
+    callback.assert_called_once_with(
+        ak="test_access_key",
+        sk="test_secret_key",
+        target="CodeUploadCallback",
+        body={"FunctionId": "function-id"},
+        region="cn-shanghai",
+        session_token="",
+    )
 
 
 @pytest.mark.asyncio
@@ -68,7 +125,17 @@ async def test_cloud():
                 )
 
                 # Test CloudAgentEngine creation and deploy functionality
-                engine = CloudAgentEngine()
+                engine = CloudAgentEngine(
+                    project="studio-project",
+                    volcengine_access_key="test_access_key",
+                    volcengine_secret_key="test_secret_key",
+                )
+                mock_vefaas_class.assert_called_once_with(
+                    access_key="test_access_key",
+                    secret_key="test_secret_key",
+                    region="cn-beijing",
+                    project_name="studio-project",
+                )
 
                 # Test deploy operation
                 cloud_app = engine.deploy(application_name=app_name, path=temp_dir)
@@ -125,7 +192,10 @@ async def test_cloud():
                             cloud_app, "_get_vefaas_application_id_by_name"
                         ) as mock_get_id_by_name:
                             mock_get_id_by_name.return_value = None
-                            cloud_app.delete_self()
+                            cloud_app.delete_self(
+                                volcengine_ak="test_access_key",
+                                volcengine_sk="test_secret_key",
+                            )
                             mock_vefaas_client.delete.assert_called_with("app-123")
 
                 # Verify all mocks were called as expected

@@ -1,0 +1,91 @@
+---
+title: "TOS ContextBucket（tos_context）"
+---
+
+`tos_context` 后端（`TosContextBucketLTMBackend`）使用火山引擎 [TOS](https://www.volcengine.com/product/TOS) 的 ContextBucket 记忆能力作为长期记忆存储。它是托管服务，由服务端完成记忆推理（inference）与检索，无需自建向量库或本地 embedding。
+
+后端把 `index`（或 `app_name`）映射为一个 **ContextBucket**，把运行时的 `user_id` 映射为该桶下的一个 **ContextSet**，从而按用户天然隔离记忆。首次使用时会自动创建对应的 ContextBucket 与 ContextSet（Lazy Ensure）。
+
+## 何时使用
+
+- 生产环境、需要持久化与托管运维；
+- 希望使用火山引擎 TOS 的 ContextBucket 记忆能力（服务端推理与检索）；
+- 希望按 `user_id` 做强隔离（每个用户对应一个 ContextSet）。
+
+## 依赖要求与安装
+
+ContextBucket API 目前只在**预发布(beta)版本**的 TOS SDK 中提供:`tos>=2.9.4b1`。VeADK 的核心依赖为稳定版 `tos>=2.8.4`(供 TOS 对象存储、Viking DB 使用),**不会**自动为你安装 beta 版。因此在使用 `backend="tos_context"` 前，需要显式升级 TOS SDK：
+
+```bash
+pip install --upgrade "tos>=2.9.4b1" --pre
+```
+
+<Callout type="warn">
+pip / uv 默认会**忽略预发布版本**，必须显式加 `--pre`（uv 使用 `--prerelease=allow`），否则不会安装上 `2.9.4b1`，运行时仍会命中下方的报错。
+</Callout>
+
+## 常见运行时报错与处理
+
+`tos_context` 采用 fail-closed 设计：依赖或配置不满足时会**在初始化阶段直接抛错**，不会静默降级或写入错误数据。常见错误及处理如下：
+
+| 报错类型 | 触发条件 | 处理方式 |
+| :--- | :--- | :--- |
+| `ImportError` | 环境中未安装 `tos` SDK。 | 安装 SDK：`pip install --upgrade "tos>=2.9.4b1" --pre`。 |
+| `RuntimeError` | 已安装 `tos`，但版本过旧（如 `2.8.4`、`2.9.2` 稳定版），`TosClientV2` 缺少 ContextBucket 相关方法。 | 升级到预发布版：`pip install --upgrade "tos>=2.9.4b1" --pre`。报错信息会附带当前已安装版本号与该命令。 |
+| `ValueError` | `account_id` 或 `control_endpoint` 未配置。 | 补齐环境变量 `DATABASE_TOS_CONTEXT_ACCOUNT_ID`、`DATABASE_TOS_CONTEXT_CONTROL_ENDPOINT`（见下方配置表）。 |
+
+<Callout type="info">
+**为什么装了 `tos` 还会报 `RuntimeError` 而不是 `ImportError`？** 因为 ContextBucket 能力是在既有的 `TosClientV2` 类上**新增方法**实现的，旧版本仍可 `import tos` 成功、只是缺少这些方法。VeADK 在初始化时会通过方法探测（`hasattr`）判断当前 SDK 是否真正支持 ContextBucket，从而把"能 import 但调用时静默失败"的隐性问题，转化为初始化阶段清晰、可操作的报错。
+</Callout>
+
+## 配置
+
+通过火山引擎 AK/SK 鉴权。凭据解析顺序为：**优先**使用显式的 AK/SK（环境变量 `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY`，此时 STS Token 取自 `VOLCENGINE_SESSION_TOKEN`）；**若二者未同时提供**，则回退到 VeFaaS IAM 凭证文件（`/var/run/secrets/iam/credential`），从中读取临时 AK/SK 与 STS Token——这是云上部署（VeFaaS / AgentKit）免密运行的路径。其余连接项使用环境变量前缀 `DATABASE_TOS_CONTEXT_`，本地可写在 `config.yaml` 的 `database.tos_context.*` 下（会被拍平为对应环境变量）。
+
+| 配置项 | 环境变量 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `volcengine_access_key` | `VOLCENGINE_ACCESS_KEY` | — | 火山引擎 Access Key（可为长期或 STS 临时 AK）。 |
+| `volcengine_secret_key` | `VOLCENGINE_SECRET_KEY` | — | 火山引擎 Secret Key（可为长期或 STS 临时 SK）。 |
+| `session_token` | `VOLCENGINE_SESSION_TOKEN` | — | STS 临时凭证的 Security Token（可选，仅在使用临时 AK/SK 时需要）。 |
+| `account_id` | `DATABASE_TOS_CONTEXT_ACCOUNT_ID` | — | **必填**。账号 ID，用于 ContextBucket 控制面接口。 |
+| `control_endpoint` | `DATABASE_TOS_CONTEXT_CONTROL_ENDPOINT` | — | **必填**。ContextBucket 控制面（Controller）域名。 |
+| `context_bucket_name` | `DATABASE_TOS_CONTEXT_BUCKET_NAME` | 回退到 `index` | ContextBucket 名。未设置时使用 `LongTermMemory` 的 `index`（或 `app_name`）。 |
+| `endpoint` | `DATABASE_TOS_CONTEXT_ENDPOINT` | `tos-cn-beijing.volces.com` | TOS 数据面域名。 |
+| `region` | `DATABASE_TOS_CONTEXT_REGION` | `cn-beijing` | 区域。 |
+
+<Callout type="warn">
+`account_id` 与 `control_endpoint` 为必填项，缺失会在初始化时直接抛出 `ValueError`（fail-closed，不会静默降级）。
+</Callout>
+
+<Callout type="info">
+STS Token 复用全局约定 `VOLCENGINE_SESSION_TOKEN`（与 TOS 对象存储等其他组件一致），不再使用独立的 `DATABASE_TOS_CONTEXT_SECURITY_TOKEN`。使用长期 AK/SK 时无需设置。若 `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY` 未同时提供，会尝试读取 VeFaaS IAM 凭证文件；文件不存在时抛出 `FileNotFoundError`。
+</Callout>
+
+## 用法
+
+```python
+from veadk import Agent
+from veadk.memory.long_term_memory import LongTermMemory
+
+# index 会映射为 ContextBucket 名，必须满足桶命名规则（见下方 Callout）
+ltm = LongTermMemory(
+    backend="tos_context",
+    index="demo-agent-memory",
+    top_k=5,
+)
+agent = Agent(
+    name="demo",
+    long_term_memory=ltm,
+    auto_save_session=True,  # 会话结束自动写入长期记忆
+)
+```
+
+初始化时若 ContextBucket 不存在，VeADK 会自动创建；每个 `user_id` 首次写入/检索时，若对应的 ContextSet 不存在也会自动创建（并启用 `memory` 场景）。
+
+<Callout type="info">
+`index`（即 ContextBucket 名）需满足 TOS 桶命名规则：**长度 3–63**，仅包含**小写字母、数字和连字符（`-`）**，且不能以连字符开头或结尾。可用 `DATABASE_TOS_CONTEXT_BUCKET_NAME` 覆盖由 `app_name`/`index` 推导出的桶名。
+</Callout>
+
+<Callout type="info">
+记忆按 `user_id` 隔离：不同 `user_id` 写入的是不同的 ContextSet，检索时也只会命中同一 `user_id` 的记忆。跨会话召回时请确保使用一致的 `user_id`。
+</Callout>

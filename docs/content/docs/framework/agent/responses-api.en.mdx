@@ -8,20 +8,20 @@ As foundation model technology keeps advancing, the Responses API provides a mor
 
 ## Tutorial
 
-Currently only the `veadk-python` version supports the Responses API, and it has a specific requirement on the `google-adk` version (`google-adk>=1.21.0`). Make sure your environment meets the requirement.
+Currently only the `veadk-python` version supports the Responses API, and it has a specific requirement on the `google-adk` version (`google-adk>=1.34.0`). Make sure your environment meets the requirement.
 
 <Tabs items={['pip', 'uv']}>
 <Tab value="pip">
 
 ```bash
-pip install "google-adk>=1.21.0"
+pip install "google-adk>=1.34.0"
 ```
 
 </Tab>
 <Tab value="uv">
 
 ```bash
-uv pip install "google-adk>=1.21.0"
+uv pip install "google-adk>=1.34.0"
 ```
 
 </Tab>
@@ -38,6 +38,17 @@ from veadk import Agent
 
 root_agent = Agent(
     enable_responses=True, # Enable the Responses API
+)
+```
+
+**Model fallbacks**
+
+The Responses API also accepts a `model_name` list for resilience. If a request fails, VeADK tries each subsequent model in order until one succeeds or all models fail.
+
+```python
+root_agent = Agent(
+    enable_responses=True,
+    model_name=["doubao-seed-1-8-251228", "deepseek-r1-250528"],
 )
 ```
 
@@ -350,7 +361,7 @@ Note: The `cached_content_token_count` of turn N is not necessarily equal to the
 
 ## Notes
 
-1. **Version requirement**: You must ensure `google-adk>=1.21.0`.
+1. **Version requirement**: You must ensure `google-adk>=1.34.0`.
 2. **Model support**: Make sure the model you use supports the Responses API (note: Doubao series models after version 0615 generally support it unless otherwise stated).
 3. **Caching mechanism**: When VeADK enables the Responses API with a Volcengine Ark model, context (session) caching is enabled by default. However, if `output_schema` is set on the Agent, caching is automatically disabled because that field conflicts with the caching mechanism.
 

@@ -1,8 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, Loader2, X } from "lucide-react";
-import { getSessionTrace, type TraceSpan } from "../adk/client";
+import {
+  getGeneratedAgentTestTrace,
+  getSessionTrace,
+  type TraceSpan,
+} from "../adk/client";
 
-const COLORS = ["#5b8def", "#56b87f", "#e0a32e", "#c062d8", "#e06c5e", "#3fb6c4"];
+// Softer, cohesive palette that sits better on the neutral UI than the old
+// saturated primaries.
+const COLORS = [
+  "#6366f1", // indigo
+  "#0ea5e9", // sky
+  "#10b981", // emerald
+  "#f59e0b", // amber
+  "#f43f5e", // rose
+  "#a855f7", // violet
+  "#14b8a6", // teal
+  "#f472b6", // pink
+];
 function colorFor(name: string): string {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
@@ -72,12 +87,23 @@ function attrs(span: TraceSpan): Attr[] {
     .sort((a, b) => Number(a.long) - Number(b.long)); // short props first
 }
 
-export interface TraceDrawerProps {
+type TraceSource =
+  | { appName: string; testRunId?: never }
+  | { appName?: never; testRunId: string };
+
+export type TraceDrawerProps = TraceSource & {
   sessionId: string;
   onClose: () => void;
-}
+  title?: string;
+};
 
-export function TraceDrawer({ sessionId, onClose }: TraceDrawerProps) {
+export function TraceDrawer({
+  appName,
+  testRunId,
+  sessionId,
+  onClose,
+  title = "调用链路观测",
+}: TraceDrawerProps) {
   const [spans, setSpans] = useState<TraceSpan[] | null>(null);
   const [err, setErr] = useState("");
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
@@ -86,13 +112,22 @@ export function TraceDrawer({ sessionId, onClose }: TraceDrawerProps) {
   useEffect(() => {
     setSpans(null);
     setErr("");
-    getSessionTrace(sessionId)
+    let request: Promise<TraceSpan[]>;
+    if (testRunId) {
+      request = getGeneratedAgentTestTrace(testRunId, sessionId);
+    } else if (appName) {
+      request = getSessionTrace(appName, sessionId);
+    } else {
+      setErr("缺少调用链路来源");
+      return;
+    }
+    request
       .then((s) => {
         setSpans(s);
         setSelectedId(s.length ? s.reduce((a, b) => (a.start_time <= b.start_time ? a : b)).span_id : null);
       })
       .catch((e) => setErr(String(e)));
-  }, [sessionId]);
+  }, [appName, sessionId, testRunId]);
 
   const { rootNodes, min, total } = useMemo(() => buildTree(spans ?? []), [spans]);
   const rows = useMemo(() => flatten(rootNodes, collapsed), [rootNodes, collapsed]);
@@ -112,9 +147,9 @@ export function TraceDrawer({ sessionId, onClose }: TraceDrawerProps) {
       <aside className="drawer drawer--trace">
         <header className="drawer-head">
           <div>
-            <div className="drawer-title">Tracing 观测</div>
+            <div className="drawer-title">{title}</div>
             <div className="drawer-sub">
-              {spans ? `${spans.length} spans · ${totalMs.toFixed(1)} ms` : "加载中"}
+              {spans ? `${spans.length} 个调用 · ${totalMs.toFixed(1)} ms` : "加载中"}
             </div>
           </div>
           <button className="drawer-close" onClick={onClose} aria-label="关闭">
@@ -124,12 +159,12 @@ export function TraceDrawer({ sessionId, onClose }: TraceDrawerProps) {
 
         {spans == null && !err && (
           <div className="drawer-loading">
-            <Loader2 className="icon spin" /> 加载 trace…
+            <Loader2 className="icon spin" /> 加载调用链路…
           </div>
         )}
         {err && <div className="error">{err}</div>}
         {spans && spans.length === 0 && (
-          <div className="drawer-empty">该会话暂无 trace（可能尚未产生调用）。</div>
+          <div className="drawer-empty">该会话暂无调用链路（可能尚未产生调用）。</div>
         )}
 
         {rows.length > 0 && (
@@ -184,7 +219,7 @@ export function TraceDrawer({ sessionId, onClose }: TraceDrawerProps) {
                     {fmtMs(selected.end_time - selected.start_time)}
                   </div>
 
-                  <div className="td-section">Properties</div>
+                  <div className="td-section">属性</div>
                   <div className="td-props">
                     {attrs(selected)
                       .filter((a) => !a.long)
@@ -206,7 +241,7 @@ export function TraceDrawer({ sessionId, onClose }: TraceDrawerProps) {
                     ))}
                 </>
               ) : (
-                <div className="drawer-empty">选择左侧的一个 span 查看详情</div>
+                <div className="drawer-empty">选择左侧的一个调用查看详情</div>
               )}
             </div>
           </div>

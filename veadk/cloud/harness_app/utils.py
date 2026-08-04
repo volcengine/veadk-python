@@ -21,15 +21,20 @@ Two factory functions cover the two creation paths:
   from the skill hub and mounting them as an ADK skill toolset.
 * :func:`spawn_harness_agent` — temporary, one-off creation that clones the base
   agent and applies a per-request override (incremental tools/skills on top).
+* :func:`spawn_harness_run_agent` — per-turn clone that also attaches dynamic
+  registry-discovered remote A2A tools for the current user message.
 """
 
 import io
 import os
+import re
 import shutil
 import tempfile
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import frontmatter
 import httpx
@@ -41,21 +46,40 @@ from veadk.cloud.harness_app.types import HarnessConfig, HarnessOverrides
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.skills.materializer import materialize_remote_skill
+from veadk.skills.utils import _load_skills_from_space_id
 from veadk.tools import get_builtin_tool, list_builtin_tools
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_REGISTRY_CONFIG_ATTR = "_veadk_a2a_registry_config"
+_REGISTRY_TOOL_NAMES = {
+    "a2a_registry_search_agent_cards",
+    "a2a_registry_task_create",
+    "a2a_registry_task_poll",
+}
+_REGISTRY_OVERRIDE_FIELDS = {
+    "registry_space_id",
+    "registry_endpoint",
+    "registry_region",
+    "registry_top_k",
+}
+_SKILL_CENTER_SPACE_PREFIX = "space:"
+
 __all__ = [
     "HarnessConfig",
     "HarnessOverrides",
     "split_csv",
+    "agent_name_from_harness",
     "build_skill_toolset",
     "SkillLoadError",
     "ToolLoadError",
     "config_from_env",
     "init_harness_agent",
     "spawn_harness_agent",
+    "spawn_harness_run_agent",
+    "has_a2a_registry_config",
 ]
 
 
@@ -83,6 +107,8 @@ def _load_builtin_tool(name: str) -> Any:
 # "web-scraper"); the hub downloads by *slug* (e.g.
 # "clawhub/yinanping-cpu/web-scraper"). We resolve name -> slug via the search
 # API, then download by slug. Both are env-overridable.
+# Skill hub download endpoint. A skill name in a harness is the path after
+# `/download/`, e.g. "namespace/owner/skill-name".
 SKILL_HUB_DOWNLOAD_URL = os.getenv(
     "SKILL_HUB_DOWNLOAD_URL", "https://skills.volces.com/v1/skills/download"
 )
@@ -102,12 +128,24 @@ _ENV_FIELDS = {
     "tools": "TOOLS",
     "skills": "SKILLS",
     "system_prompt": "SYSTEM_PROMPT",
+    "description": "DESCRIPTION",
     "runtime": "RUNTIME",
+    "structured_tool_calls": "STRUCTURED_TOOL_CALLS",
+    "include_tools_every_turn": "INCLUDE_TOOLS_EVERY_TURN",
     "name": "HARNESS_NAME",
     "knowledgebase_type": "KNOWLEDGEBASE_TYPE",
     "longterm_memory_type": "LONG_TERM_MEMORY_TYPE",
     "shortterm_memory_type": "SHORT_TERM_MEMORY_TYPE",
     "max_llm_calls": "MAX_LLM_CALLS",
+    "registry_type": "REGISTRY_TYPE",
+    "registry_space_id": "REGISTRY_SPACE_ID",
+    "registry_endpoint": "REGISTRY_ENDPOINT",
+    "registry_version": "REGISTRY_VERSION",
+    "registry_service_name": "REGISTRY_SERVICE_NAME",
+    "registry_region": "REGISTRY_REGION",
+    "registry_top_k": "REGISTRY_TOP_K",
+    "registry_timeout_ms": "REGISTRY_TIMEOUT_MS",
+    "registry_poll_interval_ms": "REGISTRY_POLL_INTERVAL_MS",
 }
 
 
@@ -154,6 +192,22 @@ def _resolve_skill_slug(skill: str) -> str:
         f"Skill '{skill}' not found in the skill hub (search returned: {seen}). "
         f"Check the skill name, or pass its full slug (e.g. 'clawhub/<org>/<name>')."
     )
+def agent_name_from_harness(harness_name: str) -> str:
+    """Derive a valid ADK agent name from the harness name.
+
+    The agent name becomes the A2A agent card's ``name``, so it should reflect
+    the harness rather than a shared constant. ADK requires the agent ``name``
+    to be a Python identifier (letters, digits, underscores; not starting with a
+    digit) and forbids ``"user"``, while harness names also allow ``-`` and may
+    start with a digit. Normalize: map every non-identifier char to ``_`` and
+    prefix a digit-leading or empty name with ``_``.
+
+    ``"oauth-test"`` -> ``"oauth_test"``; ``"2048-bot"`` -> ``"_2048_bot"``.
+    """
+    name = re.sub(r"[^0-9A-Za-z_]", "_", harness_name or "")
+    if not name or name[0].isdigit():
+        name = f"_{name}"
+    return f"{name}_" if name == "user" else name
 
 
 def _download_and_extract_skill(skill: str, dest_dir: Path) -> Path:
@@ -162,6 +216,8 @@ def _download_and_extract_skill(skill: str, dest_dir: Path) -> Path:
     Args:
         skill: Skill name (e.g. ``"web-scraper"``) or full hub slug (e.g.
             ``"clawhub/lgwventrue/system-file-handler"``).
+        skill: Skill identifier — the hub path after ``/download/``
+            (e.g. ``"namespace/owner/skill-name"``).
         dest_dir: Base directory to extract into; the skill is placed in a
             subdirectory named after its declared name in ``SKILL.md``.
 
@@ -186,6 +242,7 @@ def _download_and_extract_skill(skill: str, dest_dir: Path) -> Path:
             f"Skill '{skill}' (slug='{slug}') download did not return a zip "
             f"(content-type={ct!r}, {len(response.content)} bytes)"
         )
+    name, archive = _download_skill_archive(skill)
 
     # Extract to a staging dir first; the final directory must be named after
     # the skill's declared name (ADK's load_skill_from_dir enforces this).
@@ -194,7 +251,7 @@ def _download_and_extract_skill(skill: str, dest_dir: Path) -> Path:
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
     staging_root = staging.resolve()
-    with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
         for member in zf.namelist():
             # Guard against path traversal (zip-slip).
             if not (staging / member).resolve().is_relative_to(staging_root):
@@ -221,6 +278,97 @@ def _download_and_extract_skill(skill: str, dest_dir: Path) -> Path:
     return skill_dir
 
 
+def _download_skill_archive(skill: str) -> tuple[str, bytes]:
+    name = skill.strip("/")
+    response = _download_skill_response(name)
+    if response.status_code == 200 and _looks_like_zip(response.content):
+        return name, response.content
+
+    resolved_name = _resolve_skill_download_name(name)
+    if resolved_name and resolved_name != name:
+        response = _download_skill_response(resolved_name)
+        if response.status_code == 200 and _looks_like_zip(response.content):
+            return resolved_name, response.content
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Failed to download skill '{skill}': HTTP {response.status_code}"
+        )
+    raise RuntimeError(
+        f"Failed to download skill '{skill}': response is not a zip archive"
+    )
+
+
+def _download_skill_response(name: str) -> httpx.Response:
+    url = f"{SKILL_HUB_DOWNLOAD_URL.rstrip('/')}/{name}"
+    logger.info(f"Downloading skill '{name}' from {url}")
+    return httpx.get(url, timeout=60, follow_redirects=True)
+
+
+def _looks_like_zip(content: bytes) -> bool:
+    return content.startswith(b"PK\x03\x04") or content.startswith(b"PK\x05\x06")
+
+
+def _resolve_skill_download_name(name: str) -> str | None:
+    if "/" in name:
+        return None
+
+    query = urlencode({"query": name, "pageNumber": 1, "pageSize": 10})
+    url = f"{SKILL_HUB_SEARCH_URL.rstrip('/')}?{query}"
+    try:
+        response = httpx.get(url, timeout=30, follow_redirects=True)
+        if response.status_code != 200:
+            return None
+        data = response.json()
+    except Exception:
+        return None
+
+    for item in _skill_search_items(data):
+        slug = _skill_item_text(item, "Slug")
+        if slug and _skill_item_matches(name, item):
+            logger.info(f"Resolved skill short name '{name}' to '{slug}'")
+            return slug.strip("/")
+    return None
+
+
+def _skill_search_items(data: object) -> list[dict[str, object]]:
+    if not isinstance(data, dict):
+        return []
+    items = data.get("Skills") or data.get("Items") or data.get("skills")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _skill_item_matches(name: str, item: dict[str, object]) -> bool:
+    normalized = _normalize_skill_token(name)
+    tokens = {
+        _normalize_skill_token(_skill_item_text(item, "Name")),
+        _normalize_skill_token(_skill_item_text(item, "Slug")),
+        _normalize_skill_token(_skill_item_text(item, "Slug").rsplit("/", 1)[-1]),
+        _normalize_skill_token(_skill_item_text(item, "SourceRepo")),
+        _normalize_skill_token(_skill_item_text(item, "SourceRepo").rsplit("/", 1)[-1]),
+    }
+    return normalized in tokens
+
+
+def _skill_item_text(item: dict[str, object], key: str) -> str:
+    value = item.get(key) or item.get(key.lower())
+    return value if isinstance(value, str) else ""
+
+
+def _normalize_skill_token(value: str) -> str:
+    return value.strip().lower().replace("_", "-")
+
+
+def _is_skill_center_space_ref(skill: str) -> bool:
+    return skill.strip().startswith(_SKILL_CENTER_SPACE_PREFIX)
+
+
+def _skill_center_space_id(skill: str) -> str:
+    return skill.strip().removeprefix(_SKILL_CENTER_SPACE_PREFIX).strip()
+
+
 class SkillLoadError(RuntimeError):
     """A skill failed to download or load (e.g. a malformed ``SKILL.md``).
 
@@ -232,13 +380,18 @@ class SkillLoadError(RuntimeError):
 def build_skill_toolset(
     skills: list[str], download_dir: Path | None = None
 ) -> SkillToolset | None:
-    """Download each skill from the hub and load them as a single ADK toolset.
+    """Download each skill source and load them as a single ADK toolset.
 
-    Skills are downloaded into ``download_dir`` (a fresh temp dir when omitted)
-    and loaded via ``load_skill_from_dir``. The directory is **not** cleaned up
-    here: a skill's scripts/assets are read from disk while the agent runs, so
-    the caller owns the directory's lifetime (the base agent keeps its skills for
-    the server's lifetime; a per-invoke override cleans up after the run).
+    Plain entries are treated as SkillHub skill names/slugs. Entries prefixed
+    with ``space:`` are treated as AgentKit skills-center space ids and loaded
+    via ``_load_skills_from_space_id``.
+
+    Materialized skills are stored under ``download_dir`` (a fresh temp dir when
+    omitted) and loaded via ``load_skill_from_dir``. The directory is **not**
+    cleaned up here: a skill's scripts/assets are read from disk while the agent
+    runs, so the caller owns the directory's lifetime (the base agent keeps its
+    skills for the server's lifetime; a per-invoke override cleans up after the
+    run).
 
     Fast-fail: if *any* skill fails to download or load (e.g. a ``SKILL.md`` whose
     description exceeds ADK's limit), a :class:`SkillLoadError` is raised naming
@@ -255,9 +408,29 @@ def build_skill_toolset(
     loaded_skills = []
     for skill in skills:
         try:
-            loaded_skills.append(
-                load_skill_from_dir(_download_and_extract_skill(skill, download_dir))
-            )
+            if _is_skill_center_space_ref(skill):
+                skill_space_id = _skill_center_space_id(skill)
+                if not skill_space_id:
+                    raise RuntimeError("skills-center space id is empty")
+
+                remote_skills = _load_skills_from_space_id(skill_space_id)
+                if not remote_skills:
+                    raise RuntimeError(
+                        f"No skills found in skills-center space '{skill_space_id}'"
+                    )
+
+                for remote_skill in remote_skills:
+                    skill_dir = materialize_remote_skill(
+                        remote_skill,
+                        cache_dir=download_dir,
+                    )
+                    loaded_skills.append(load_skill_from_dir(skill_dir))
+            else:
+                loaded_skills.append(
+                    load_skill_from_dir(
+                        _download_and_extract_skill(skill, download_dir)
+                    )
+                )
         except Exception as e:
             raise SkillLoadError(f"Skill '{skill}' failed to load: {e}") from e
     return SkillToolset(skills=loaded_skills)
@@ -290,6 +463,26 @@ def _assemble_agent(config: HarnessConfig) -> tuple[Agent, ShortTermMemory]:
         if skill_toolset is not None:
             tools.append(skill_toolset)
 
+    registry_config = None
+    if config.registry_type:
+        from veadk.a2a.registry_client import AgentKitA2ARegistryConfig
+        from veadk.tools.builtin_tools.a2a_registry import (
+            build_a2a_registry_tools,
+        )
+
+        logger.info(f"Mounting A2A registry tools: type={config.registry_type}")
+        registry_config = AgentKitA2ARegistryConfig(
+            space_id=config.registry_space_id,
+            endpoint=config.registry_endpoint,
+            version=config.registry_version,
+            service_name=config.registry_service_name,
+            region=config.registry_region,
+            top_k=config.registry_top_k,
+            timeout_ms=config.registry_timeout_ms,
+            poll_interval_ms=config.registry_poll_interval_ms,
+        )
+        tools.extend(build_a2a_registry_tools(registry_config))
+
     knowledgebase = None
     if config.knowledgebase_type:
         logger.info(
@@ -320,15 +513,20 @@ def _assemble_agent(config: HarnessConfig) -> tuple[Agent, ShortTermMemory]:
     )
 
     agent = Agent(
-        name="harness_agent",
+        name=agent_name_from_harness(config.app_name),
         model_name=config.model_name,
         instruction=config.system_prompt,
+        description=config.description,
         tools=tools,
         runtime=config.runtime,
+        enable_responses=config.structured_tool_calls,
+        enable_responses_cache=not config.include_tools_every_turn,
         knowledgebase=knowledgebase,
         long_term_memory=long_term_memory,
         short_term_memory=short_term_memory,
     )
+    if registry_config is not None:
+        setattr(agent, _REGISTRY_CONFIG_ATTR, registry_config)
     return agent, short_term_memory
 
 
@@ -392,6 +590,95 @@ def _add_incremental_skills(
     agent.tools.append(SkillToolset(skills=existing_skills + new_skills))
 
 
+def _remove_a2a_registry_tools(agent: Agent) -> None:
+    agent.tools = [
+        tool for tool in agent.tools if _tool_name(tool) not in _REGISTRY_TOOL_NAMES
+    ]
+
+
+def _apply_registry_overrides(
+    agent: Agent,
+    base_config,
+    overrides: HarnessOverrides,
+) -> None:
+    set_fields = overrides.model_fields_set
+    if not (_REGISTRY_OVERRIDE_FIELDS & set_fields):
+        return
+
+    from veadk.a2a.registry_client import AgentKitA2ARegistryConfig
+    from veadk.tools.builtin_tools.a2a_registry import build_a2a_registry_tools
+
+    config = base_config or AgentKitA2ARegistryConfig()
+    updates: dict[str, Any] = {}
+    if "registry_space_id" in set_fields:
+        updates["space_id"] = overrides.registry_space_id
+    if "registry_endpoint" in set_fields:
+        updates["endpoint"] = overrides.registry_endpoint
+    if "registry_region" in set_fields:
+        updates["region"] = overrides.registry_region
+    if "registry_top_k" in set_fields:
+        updates["top_k"] = overrides.registry_top_k
+
+    overridden_config = replace(config, **updates)
+    _remove_a2a_registry_tools(agent)
+    agent.tools.extend(build_a2a_registry_tools(overridden_config))
+    setattr(agent, _REGISTRY_CONFIG_ATTR, overridden_config)
+
+
+def _apply_registry_request_auth(
+    agent: Agent, tip_token: str = "", authorization: str = ""
+) -> None:
+    cleaned_tip_token = (tip_token or "").strip()
+    cleaned_authorization = (authorization or "").strip()
+    if not cleaned_tip_token and not cleaned_authorization:
+        return
+
+    from veadk.tools.builtin_tools.a2a_registry import build_a2a_registry_tools
+
+    config = getattr(agent, _REGISTRY_CONFIG_ATTR, None)
+    if config is None:
+        return
+
+    updated_config = replace(
+        config,
+        upstream_tip_token=cleaned_tip_token or config.upstream_tip_token,
+        upstream_authorization=cleaned_authorization or config.upstream_authorization,
+    )
+    _remove_a2a_registry_tools(agent)
+    agent.tools.extend(build_a2a_registry_tools(updated_config))
+    setattr(agent, _REGISTRY_CONFIG_ATTR, updated_config)
+
+
+def has_a2a_registry_config(agent: Agent) -> bool:
+    """Return whether ``agent`` has an AgentKit A2A registry configured."""
+
+    return getattr(agent, _REGISTRY_CONFIG_ATTR, None) is not None
+
+
+def _add_dynamic_a2a_agent_tools(agent: Agent, prompt: str) -> None:
+    registry_config = getattr(agent, _REGISTRY_CONFIG_ATTR, None)
+    if registry_config is None or not prompt or not prompt.strip():
+        return
+
+    from veadk.tools.builtin_tools.a2a_registry import build_remote_a2a_agent_tools
+
+    dynamic_tools = build_remote_a2a_agent_tools(prompt, registry_config)
+    if not dynamic_tools:
+        return
+
+    existing = {name for tool in agent.tools if (name := _tool_name(tool))}
+    attached = 0
+    for tool in dynamic_tools:
+        name = _tool_name(tool)
+        if not name or name in existing:
+            continue
+        agent.tools.append(tool)
+        existing.add(name)
+        attached += 1
+    if attached:
+        logger.info(f"Attached {attached} dynamic A2A agent tools for this turn.")
+
+
 def spawn_harness_agent(
     base_agent: Agent, overrides: HarnessOverrides, download_dir: Path | None = None
 ) -> Agent:
@@ -425,4 +712,30 @@ def spawn_harness_agent(
     if "skills" in set_fields:
         _add_incremental_skills(cloned, split_csv(overrides.skills), download_dir)
 
+    _apply_registry_overrides(
+        cloned,
+        getattr(base_agent, _REGISTRY_CONFIG_ATTR, None),
+        overrides,
+    )
+
+    return cloned
+
+
+def spawn_harness_run_agent(
+    base_agent: Agent,
+    prompt: str,
+    overrides: HarnessOverrides | None = None,
+    download_dir: Path | None = None,
+    registry_tip_token: str = "",
+    registry_authorization: str = "",
+) -> Agent:
+    """Clone a harness agent for one run and attach per-turn dynamic tools."""
+
+    if overrides is not None:
+        cloned = spawn_harness_agent(base_agent, overrides, download_dir=download_dir)
+    else:
+        cloned = base_agent.clone(update={})
+
+    _apply_registry_request_auth(cloned, registry_tip_token, registry_authorization)
+    _add_dynamic_a2a_agent_tools(cloned, prompt)
     return cloned

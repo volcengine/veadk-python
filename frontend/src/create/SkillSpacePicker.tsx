@@ -1,0 +1,234 @@
+// Volcengine AgentKit SkillSpace picker. Lists account-scoped SkillSpaces via
+// the server-side /web/skill-spaces* routes (which sign with the SERVER's AK/SK
+// so the browser never sees credentials), lists skills within a chosen space,
+// and lets the user toggle them into the draft. SKILL.md content is fetched at
+// project-generation time (downloadSkillSpaceSkill) so we don't bloat YAML
+// exports with markdown.
+
+import { useEffect, useState } from "react";
+import { Check, Cloud, ExternalLink, Info, Loader2, Plus } from "lucide-react";
+import {
+  listSkillSpaces,
+  listSkillsInSpace,
+  toHit,
+  getSkillSpaceConsoleUrl,
+  type SkillSpaceRef,
+  type SkillSpaceSkill,
+} from "./skills/skillspace";
+import type { SelectedSkill, SkillHit } from "./skills/types";
+import { displayDescription } from "./displayText";
+
+function regionLabel(region: string): string {
+  if (region === "cn-beijing") return "北京";
+  if (region === "cn-shanghai") return "上海";
+  return region;
+}
+
+export function SkillSpacePicker({
+  selected,
+  onChange,
+}: {
+  selected: SelectedSkill[];
+  onChange: (next: SelectedSkill[]) => void;
+}) {
+  const [spaces, setSpaces] = useState<SkillSpaceRef[]>([]);
+  const [skills, setSkills] = useState<SkillSpaceSkill[]>([]);
+  const [spaceId, setSpaceId] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [loadingSkills, setLoadingSkills] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const sp = await listSkillSpaces();
+        if (!cancelled) {
+          setSpaces(sp);
+          if (sp.length > 0) setSpaceId(sp[0].id);
+        }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "加载失败");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!spaceId) {
+      setSkills([]);
+      return;
+    }
+    const selectedSpace = spaces.find((s) => s.id === spaceId);
+    let cancelled = false;
+    (async () => {
+      setLoadingSkills(true);
+      setError(null);
+      try {
+        const sk = await listSkillsInSpace(spaceId, selectedSpace?.region);
+        if (!cancelled) setSkills(sk);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "加载失败");
+      } finally {
+        if (!cancelled) setLoadingSkills(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [spaceId, spaces]);
+
+  const selectedSpace = spaces.find((s) => s.id === spaceId);
+
+  const isSelected = (skillId: string, ver: string) =>
+    selected.some(
+      (s) =>
+        s.source === "skillspace" && s.skillId === skillId && (s.version || "") === ver,
+    );
+
+  const toggle = (skill: SkillSpaceSkill) => {
+    if (!selectedSpace) return;
+    if (isSelected(skill.skillId, skill.version)) {
+      onChange(
+        selected.filter(
+          (s) =>
+            !(
+              s.source === "skillspace" &&
+              s.skillId === skill.skillId &&
+              (s.version || "") === skill.version
+            ),
+        ),
+      );
+    } else {
+      const hit: SkillHit = toHit(selectedSpace, skill);
+      onChange([
+        ...selected,
+        {
+          source: "skillspace",
+          folder: hit.folder || skill.skillName,
+          name: hit.name,
+          description: hit.description,
+          skillSpaceId: hit.skillSpaceId,
+          skillSpaceName: hit.skillSpaceName,
+          skillSpaceRegion: hit.skillSpaceRegion,
+          skillId: hit.skillId,
+          version: hit.version,
+        },
+      ]);
+    }
+  };
+
+  return (
+    <div className="cw-skillspace">
+      {loading ? (
+        <p className="cw-empty-line cw-skill-loading" role="status">
+          <Loader2 className="cw-i cw-spin" /> 正在加载 AgentKit Skills 中心…
+        </p>
+      ) : error ? (
+        <div className="cw-banner">
+          <Info className="cw-i" />
+          <span>{error}</span>
+        </div>
+      ) : spaces.length === 0 ? (
+        <p className="cw-empty-line">此账号下没有 AgentKit Skills 中心。</p>
+      ) : (
+        <>
+          <div className="cw-skillspace-header">
+            <select
+              className="cw-input cw-skillspace-select"
+              value={spaceId}
+              onChange={(e) => setSpaceId(e.target.value)}
+              aria-label="选择 AgentKit Skills 中心"
+            >
+              {spaces.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name || s.id}
+                  {s.description ? ` — ${displayDescription(s.description)}` : ""}
+                </option>
+              ))}
+            </select>
+
+            {selectedSpace && (
+              <>
+                {selectedSpace.region && (
+                  <span
+                    className="cw-skillspace-region-label"
+                    title={selectedSpace.region}
+                  >
+                    {regionLabel(selectedSpace.region)}
+                  </span>
+                )}
+                <a
+                  href={getSkillSpaceConsoleUrl(selectedSpace.id, selectedSpace.region)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="cw-button cw-button-secondary cw-skillspace-console-link"
+                  title="在火山引擎控制台打开"
+                  aria-label="在火山引擎控制台打开"
+                >
+                  <ExternalLink className="cw-i cw-i-sm" />
+                </a>
+              </>
+            )}
+          </div>
+
+          {loadingSkills ? (
+            <p className="cw-empty-line cw-skill-loading" role="status">
+              <Loader2 className="cw-i cw-spin" /> 正在加载技能列表…
+            </p>
+          ) : skills.length === 0 ? (
+            <p className="cw-empty-line">此 AgentKit Skills 中心暂无技能。</p>
+          ) : (
+            <div className="cw-skill-results">
+              {skills.map((sk) => {
+                const on = isSelected(sk.skillId, sk.version);
+                return (
+                  <button
+                    key={`${sk.skillId}/${sk.version}`}
+                    type="button"
+                    className={`cw-skill-result ${on ? "is-on" : ""}`}
+                    onClick={() => toggle(sk)}
+                    aria-pressed={on}
+                  >
+                    <span className="cw-skill-result-icon" aria-hidden>
+                      {on ? (
+                        <Check className="cw-i cw-i-sm" />
+                      ) : (
+                        <Plus className="cw-i cw-i-sm" />
+                      )}
+                    </span>
+                    <span className="cw-skill-result-meta">
+                      <span className="cw-skill-result-name">
+                        {sk.skillName}
+                        {sk.version && (
+                          <span className="cw-skill-result-version">
+                            {" "}
+                            v{sk.version}
+                          </span>
+                        )}
+                      </span>
+                      {sk.skillDescription && (
+                        <span className="cw-skill-result-desc">
+                          {displayDescription(sk.skillDescription)}
+                        </span>
+                      )}
+                      <span className="cw-skill-result-repo">
+                        <Cloud className="cw-i cw-i-sm" /> {selectedSpace?.name || spaceId}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,108 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+const read = (path) =>
+  readFileSync(new URL(`../src/${path}`, import.meta.url), "utf8");
+
+const appSource = read("App.tsx");
+const clientSource = read("adk/client.ts");
+const connectionsSource = read("adk/connections.ts");
+const selectorSource = read("ui/AgentSelector.tsx");
+const myAgentsSource = read("ui/MyAgents.tsx");
+const sidebarSource = read("ui/Sidebar.tsx");
+const stylesSource = read("styles.css");
+const cliFrontendSource = readFileSync(
+  new URL("../../veadk/cli/cli_frontend.py", import.meta.url),
+  "utf8",
+);
+
+test("Studio access fails closed until the server-derived role is known", () => {
+  assert.match(clientSource, /export type StudioRole = "admin" \| "developer" \| "user"/);
+  assert.match(clientSource, /export const DEFAULT_STUDIO_ACCESS[\s\S]*?createAgents: false[\s\S]*?manageAgents: false[\s\S]*?runtimeScope: "mine"/);
+  assert.match(clientSource, /apiFetch\("\/web\/access"\)/);
+  assert.match(appSource, /if \(!access\) \{\s*return <div className="boot" \/>;\s*\}/);
+  assert.match(appSource, /setAccess\(DEFAULT_STUDIO_ACCESS\)/);
+});
+
+test("Agent workspace creation and update actions obey Studio access", () => {
+  assert.doesNotMatch(sidebarSource, /access\.capabilities\.createAgents && show\("addAgent"\)/);
+  assert.doesNotMatch(sidebarSource, /access\.capabilities\.manageAgents && show\("manageAgents"\)/);
+  assert.doesNotMatch(sidebarSource, /onManageAgents/);
+  assert.match(appSource, /const visibleCreateView = canCreateAgents \? createView : null/);
+  assert.match(appSource, /const showManageAgents = manageAgents/);
+  assert.match(appSource, /if \(!access\.capabilities\.manageAgents\) setManageAgents\(false\)/);
+  assert.match(appSource, /<AgentWorkspace[\s\S]*?canCreate=\{canCreateAgents\}[\s\S]*?canUpdate=\{canCreateAgents \|\| canManageAgents\}/);
+  assert.match(appSource, /if \(!canCreateAgents\)[\s\S]*?当前账号没有添加 Agent 的权限/);
+  assert.match(appSource, /if \(!canManageAgents && !canCreateAgents\)[\s\S]*?当前账号没有管理 Agent 的权限/);
+});
+
+test("sidebar shows the OAuth email and translated role badge", () => {
+  assert.match(sidebarSource, /admin: "管理员"/);
+  assert.match(sidebarSource, /developer: "开发者"/);
+  assert.match(sidebarSource, /user: "普通用户"/);
+  assert.match(sidebarSource, /typeof userInfo\.email === "string"/);
+  assert.match(sidebarSource, /<SidebarUser access=\{access\}/);
+  assert.match(stylesSource, /studio-role-badge--admin[\s\S]*?hsl\(271/);
+  assert.match(stylesSource, /studio-role-badge--developer[\s\S]*?hsl\(47/);
+  assert.match(stylesSource, /studio-role-badge--user[\s\S]*?hsl\(145/);
+});
+
+test("runtime selection obeys the server-granted scope", () => {
+  assert.match(selectorSource, /const \[mineOnly, setMineOnly\] = useState\(runtimeScope === "mine"\)/);
+  assert.match(selectorSource, /setMineOnly\(runtimeScope === "mine"\)/);
+  assert.match(selectorSource, /\{runtimeScope === "all" && \(/);
+  assert.match(selectorSource, /getRuntimes\(\{[\s\S]*?scope: "mine"/);
+  assert.match(myAgentsSource, /getRuntimes\(\{[\s\S]*?scope: runtimeScope/);
+  assert.match(appSource, /<MyAgents[\s\S]*?runtimeScope=\{access\.capabilities\.runtimeScope\}/);
+  assert.doesNotMatch(clientSource, /new URLSearchParams\(\{\s*author,/);
+});
+
+test("only administrators and developers receive Agent deployment controls", () => {
+  assert.match(appSource, /<MyAgents[\s\S]*?canCreate=\{canCreateAgents\}/);
+  assert.match(
+    myAgentsSource,
+    /className="my-agent-create-primary"[\s\S]*?disabled=\{!createAgent\}/,
+  );
+  assert.match(
+    myAgentsSource,
+    /\{canCreate \? \([\s\S]*?<EmptyMessage\.ActionRow>[\s\S]*?<Button/,
+  );
+});
+
+test("runtime authorization failures are not reported as unsupported", () => {
+  assert.match(clientSource, /response\.clone\(\)\.json\(\)/);
+  assert.match(clientSource, /runtime_access_denied/);
+  assert.match(clientSource, /runtime_private_endpoint_unreachable/);
+  assert.match(clientSource, /Runtime 已部署成功，但当前 Studio 无法访问私网 Runtime/);
+  assert.match(clientSource, /runtime_proxy_connect_error/);
+  assert.match(clientSource, /runtime_proxy_timeout/);
+  assert.match(clientSource, /Runtime 已部署成功，但 Studio 暂时无法连接服务/);
+  assert.match(cliFrontendSource, /endpoint_network_type == "private"[\s\S]*?runtime_private_endpoint_unreachable/);
+  assert.match(cliFrontendSource, /def _runtime_proxy_should_retry_probe[\s\S]*?normalized == "list-apps"[\s\S]*?normalized\.startswith\("web\/agent-info\/"\)/);
+  assert.match(cliFrontendSource, /parts\[0\] == "apps"[\s\S]*?parts\[2\] == "users"[\s\S]*?parts\[4\] == "sessions"/);
+  assert.match(cliFrontendSource, /endpoint_network_type == "private"[\s\S]*?return 1/);
+  assert.match(cliFrontendSource, /retry_mode == "connect"[\s\S]*?else 1/);
+  assert.match(cliFrontendSource, /runtime-proxy probe retry/);
+  assert.match(clientSource, /res\.status === 404[\s\S]*?RuntimeProbeError/);
+  assert.match(clientSource, /res\.status === 401 \|\| res\.status === 403/);
+  assert.match(clientSource, /error instanceof RuntimeAccessDeniedError \|\|[\s\S]*?error instanceof RuntimeProbeError/);
+  assert.match(selectorSource, /error instanceof RuntimeAccessDeniedError[\s\S]*?setError\(error\.message\)/);
+  assert.match(selectorSource, /error instanceof RuntimeProbeError[\s\S]*?setError\(error\.message\)/);
+  assert.match(connectionsSource, /removeRuntimeConnection\(runtimeId\)/);
+});
+
+test("selected Agent icons are optically aligned with the label", () => {
+  assert.match(stylesSource, /\.agentsel-item\s*{[^}]*align-items:\s*center/);
+  assert.match(
+    stylesSource,
+    /\.agentsel-item \.icon\s*{[^}]*width:\s*16px;[^}]*height:\s*16px;/,
+  );
+  assert.doesNotMatch(stylesSource, /\.agentsel-item \.icon[^}]*transform:/);
+});
+
+test("deployment and management requests rely on server identity, not author input", () => {
+  assert.doesNotMatch(clientSource, /author: opts\?\.author/);
+  assert.doesNotMatch(clientSource, /my-runtimes\?author=/);
+  assert.doesNotMatch(appSource, /<ManageAgentsView[\s\S]*?author=/);
+});
