@@ -58,6 +58,7 @@ def test_existing_frontend_role_gets_missing_system_policies(
     trn = ensure_frontend_role("ak", "sk")
 
     assert trn == "trn:iam::123:role/VeADKFrontendServiceRole"
+    service.set_session_token.assert_not_called()
     service.create_role.assert_not_called()
     service.update_policy.assert_called_once()
     service.create_policy.assert_not_called()
@@ -80,6 +81,31 @@ def test_existing_frontend_role_gets_missing_system_policies(
             for policy_name in FRONTEND_DEPLOY_SYSTEM_POLICIES[1:]
         ],
     ]
+
+
+def test_frontend_role_uses_session_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = MagicMock()
+    service.get_role.return_value = {
+        "Result": {"Role": {"Trn": "trn:iam::123:role/VeADKFrontendServiceRole"}}
+    }
+    service.list_attached_role_policies.return_value = {
+        "Result": {
+            "AttachedPolicyMetadata": [
+                {"PolicyName": "VeADKFrontendPolicy"},
+                *[
+                    {"PolicyName": policy_name}
+                    for policy_name in FRONTEND_DEPLOY_SYSTEM_POLICIES
+                ],
+            ]
+        }
+    }
+    service.update_policy.return_value = {"Result": {}}
+    service.get_policy.return_value = _policy_response()
+    _install_iam_service(monkeypatch, service)
+
+    ensure_frontend_role("ak", "sk", session_token="sts-token")
+
+    service.set_session_token.assert_called_once_with("sts-token")
 
 
 def test_new_frontend_role_gets_custom_and_system_policies(

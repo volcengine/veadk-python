@@ -118,6 +118,7 @@ def _attach_role_policies(service: Any) -> None:
 def ensure_serverless_application_role(
     access_key: str,
     secret_key: str,
+    session_token: str = "",
 ) -> bool:
     """Ensure Studio's VeFaaS deployment role has its required policies.
 
@@ -133,6 +134,8 @@ def ensure_serverless_application_role(
     service = IamService()
     service.set_ak(access_key)
     service.set_sk(secret_key)
+    if session_token:
+        service.set_session_token(session_token)
 
     if _get_role(service) is not None:
         logger.info(f"IAM role {ROLE_NAME} is ready.")

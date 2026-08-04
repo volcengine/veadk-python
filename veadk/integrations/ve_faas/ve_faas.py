@@ -77,7 +77,12 @@ class VeFaaS:
             volcenginesdkcore.ApiClient(configuration)
         )
 
-        self.apig_client = APIGateway(self.ak, self.sk, self.region)
+        self.apig_client = APIGateway(
+            self.ak,
+            self.sk,
+            self.region,
+            session_token=self.session_token,
+        )
 
         self.template_id = _APPLICATION_TEMPLATE_IDS.get(
             region, _APPLICATION_TEMPLATE_IDS["cn-beijing"]

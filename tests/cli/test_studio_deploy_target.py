@@ -36,13 +36,15 @@ from veadk.integrations.ve_identity.identity_client import IdentityClient
 
 @pytest.fixture(autouse=True)
 def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VOLCENGINE_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("VOLC_SESSIONTOKEN", raising=False)
     monkeypatch.delenv("SANDBOX_CHAT_CODEX", raising=False)
     monkeypatch.delenv("SANDBOX_CHAT_OPENCLAW", raising=False)
     monkeypatch.delenv("SANDBOX_CHAT_HERMES", raising=False)
     monkeypatch.delenv("SANDBOX_SKILL_CREATOR", raising=False)
     monkeypatch.setattr(
         "veadk.cli.studio_deploy_serverless_iam.ensure_serverless_application_role",
-        lambda *_: None,
+        lambda *_, **__: None,
     )
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
@@ -73,6 +75,7 @@ def test_studio_credentials_prefer_inline_environment(
     )
     monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "env-ak")
     monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "env-sk")
+    monkeypatch.setenv("VOLCENGINE_SESSION_TOKEN", "env-token")
 
     credentials = _resolve_studio_cloud_credentials(
         None,
@@ -80,7 +83,7 @@ def test_studio_credentials_prefer_inline_environment(
         credentials_path,
     )
 
-    assert credentials == ("env-ak", "env-sk")
+    assert credentials == ("env-ak", "env-sk", "env-token")
 
 
 def test_studio_credentials_fall_back_to_volc_default_profile(
@@ -89,7 +92,8 @@ def test_studio_credentials_fall_back_to_volc_default_profile(
 ) -> None:
     credentials_path = tmp_path / "credentials"
     credentials_path.write_text(
-        "[default]\naccess_key_id=file-ak\nsecret_access_key=file-sk\n",
+        "[default]\naccess_key_id=file-ak\nsecret_access_key=file-sk\n"
+        "session_token=file-token\n",
         encoding="utf-8",
     )
     monkeypatch.delenv("VOLCENGINE_ACCESS_KEY", raising=False)
@@ -101,7 +105,23 @@ def test_studio_credentials_fall_back_to_volc_default_profile(
         credentials_path,
     )
 
-    assert credentials == ("file-ak", "file-sk")
+    assert credentials == ("file-ak", "file-sk", "file-token")
+
+
+def test_studio_credentials_support_long_term_keys_without_session_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "env-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "env-sk")
+
+    credentials = _resolve_studio_cloud_credentials(
+        None,
+        None,
+        tmp_path / "missing-credentials",
+    )
+
+    assert credentials == ("env-ak", "env-sk", "")
 
 
 @pytest.mark.parametrize(
@@ -259,8 +279,8 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
             )
 
     class _FakeIdentityClient:
-        def __init__(self, **_: object) -> None:
-            pass
+        def __init__(self, **kwargs: object) -> None:
+            captured["identity_client"] = kwargs
 
         def register_callback_for_user_pool_client(self, **kwargs: object) -> None:
             captured["callback"] = kwargs
@@ -307,6 +327,8 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
             "ak",
             "--volcengine-secret-key",
             "sk",
+            "--volcengine-session-token",
+            "sts-token",
             *target_args,
         ],
     )
@@ -314,6 +336,13 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert result.exit_code == 0, result.output
     assert captured["region"] == expected_region
     assert captured["project"] == expected_project
+    assert captured["volcengine_session_token"] == "sts-token"
+    assert captured["identity_client"] == {
+        "access_key": "ak",
+        "secret_key": "sk",
+        "session_token": "sts-token",
+        "region": expected_identity_region,
+    }
     assert veadk_environments["VEIDENTITY_REGION"] == expected_identity_region
     assert "VEADK_STUDIO_ADMINS" not in veadk_environments
     assert "VEADK_STUDIO_DEVELOPERS" not in veadk_environments
@@ -530,10 +559,12 @@ def test_studio_identity_region_searches_deployment_region_first(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     checked_regions: list[str] = []
+    checked_tokens: list[str] = []
 
     class _FakeIdentityClient:
         def __init__(self, **kwargs: str) -> None:
             self.region = kwargs["region"]
+            checked_tokens.append(kwargs["session_token"])
 
         def user_pool_client_exists(self, **_: str) -> bool:
             checked_regions.append(self.region)
@@ -550,10 +581,44 @@ def test_studio_identity_region_searches_deployment_region_first(
         user_pool_id="pool-id",
         client_id="client-id",
         deployment_region="cn-shanghai",
+        session_token="sts-token",
     )
 
     assert resolved == "cn-beijing"
     assert checked_regions == ["cn-shanghai", "cn-beijing"]
+    assert checked_tokens == ["sts-token", "sts-token"]
+
+
+def test_identity_client_preserves_external_sts_token() -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        session_token="sts-token",
+    )
+    identity_client._api_client.get_user_pool_client = Mock(return_value=object())
+
+    assert identity_client.user_pool_client_exists("pool-id", "client-id")
+    assert not identity_client._is_sts_credential_expired()
+    assert (
+        identity_client._api_client.api_client.configuration.session_token
+        == "sts-token"
+    )
+
+
+def test_identity_client_refreshes_known_sts_expiration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    monkeypatch.setattr("time.time", lambda: 1_000)
+
+    identity_client._sts_credential_expires_at = 1_301
+    assert not identity_client._is_sts_credential_expired()
+
+    identity_client._sts_credential_expires_at = 1_300
+    assert identity_client._is_sts_credential_expired()
 
 
 def test_identity_region_probe_only_swallows_not_found() -> None:
