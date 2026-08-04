@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import importlib.util
+import os
 import sys
 import types
 import unittest
@@ -111,6 +112,10 @@ def _load_execute_skills_module(
     fake_runner.run_sandbox_agent = run_sandbox_agent
     fake_utils = types.ModuleType("veadk.utils")
     fake_utils.__path__ = []  # type: ignore[attr-defined]
+    fake_auth = types.ModuleType("veadk.utils.auth")
+    fake_auth.TIP_TOKEN_KEY_ENV = "TIP_TOKEN_KEY"
+    fake_auth.TIP_TOKEN_KEY_METADATA_KEY = "tip_token_key"
+    fake_auth.TIP_TOKEN_KEY_STATE_KEY = "TIP_TOKEN_KEY"
     fake_logger = types.ModuleType("veadk.utils.logger")
     fake_logger.get_logger = lambda _name: types.SimpleNamespace(
         debug=lambda *_args, **_kwargs: None,
@@ -128,6 +133,7 @@ def _load_execute_skills_module(
         "veadk.tools.builtin_tools._agentkit": fake_agentkit,
         "veadk.tools.builtin_tools.run_sandbox_agent": fake_runner,
         "veadk.utils": fake_utils,
+        "veadk.utils.auth": fake_auth,
         "veadk.utils.logger": fake_logger,
     }
 
@@ -199,6 +205,51 @@ class TestMergeExecutionEnvVars(unittest.TestCase):
         self.assertNotIn("if key not in env", code)
         self.assertIn('srv_pythonpath = env.get("SRV_PYTHONPATH")', code)
 
+    def test_redacts_tip_token_key_from_echoed_sandbox_response(self):
+        response = {
+            "Result": {"Result": "runner code contains {'TIP_TOKEN_KEY': 'secret-key'}"}
+        }
+
+        redacted = self.module._redact_sensitive_env_values(
+            response,
+            {"TIP_TOKEN_KEY": "secret-key", "CUSTOM_VALUE": "visible"},
+        )
+
+        self.assertNotIn("secret-key", str(redacted))
+        self.assertIn("<redacted>", str(redacted))
+
+    def test_redacts_tip_token_key_from_success_output(self):
+        tool_context = types.SimpleNamespace(
+            _invocation_context=types.SimpleNamespace(
+                session=types.SimpleNamespace(id="session"),
+                agent=types.SimpleNamespace(name="agent"),
+                user_id="user",
+            ),
+            state={},
+        )
+        response = {
+            "Result": {
+                "Result": (
+                    '{"success": true, "data": {"outputs": '
+                    '[{"text": "printed secret-key"}]}}'
+                )
+            }
+        }
+
+        with patch.object(
+            self.module,
+            "invoke_agentkit_run_code",
+            return_value=response,
+        ):
+            result = self.module.run_sandbox_agent(
+                workflow_prompt="do work",
+                tool_id="tool",
+                tool_context=tool_context,
+                extra_env_vars={"TIP_TOKEN_KEY": "secret-key"},
+            )
+
+        self.assertEqual(result, "printed <redacted>")
+
 
 class TestExecuteSkillsSkillApi(unittest.TestCase):
     def _tool_context(self):
@@ -206,9 +257,26 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
             session=types.SimpleNamespace(id="session-1"),
             agent=types.SimpleNamespace(name="agent"),
             user_id="user",
+            run_config=types.SimpleNamespace(
+                custom_metadata={"tip_token_key": "tip-from-metadata"}
+            ),
         )
         return types.SimpleNamespace(
-            state={"TIP_TOKEN_KEY": "tip-from-state"},
+            state={},
+            run_config=invocation_context.run_config,
+            _invocation_context=invocation_context,
+        )
+
+    def _tool_context_without_request_token(self):
+        invocation_context = types.SimpleNamespace(
+            session=types.SimpleNamespace(id="session-1"),
+            agent=types.SimpleNamespace(name="agent"),
+            user_id="user",
+            run_config=types.SimpleNamespace(custom_metadata={}),
+        )
+        return types.SimpleNamespace(
+            state={"TIP_TOKEN_KEY": "stale-session-key"},
+            run_config=invocation_context.run_config,
             _invocation_context=invocation_context,
         )
 
@@ -251,8 +319,79 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         self.assertEqual("https://sandbox.test/v1/skills/execute", request_obj.full_url)
         self.assertEqual(900, timeout)
         self.assertEqual("POST", request_obj.get_method())
-        self.assertEqual("tip-from-state", request_obj.headers["X-tip-token-key"])
+        self.assertEqual("tip-from-metadata", request_obj.headers["X-tip-token-key"])
         self.assertIn(b'"prompt": "do work"', request_obj.data)
+
+    def test_skill_api_does_not_reuse_stale_session_state_tip_token_key(self):
+        captured_requests = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return b'{"content": "api result"}'
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
+
+        with patch.object(
+            module.request,
+            "urlopen",
+            lambda request, **_kwargs: captured_requests.append(request)
+            or FakeResponse(),
+        ):
+            result = module.execute_skills(
+                "do work",
+                tool_context=self._tool_context_without_request_token(),
+            )
+
+        self.assertEqual(result, "api result")
+        self.assertNotIn(
+            "X-tip-token-key",
+            captured_requests[0].headers,
+        )
+
+    def test_skill_api_ignores_process_env_tip_token_key_by_default(self):
+        captured_requests = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return b'{"content": "api result"}'
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
+
+        with (
+            patch.dict(os.environ, {"TIP_TOKEN_KEY": "process-env-key"}),
+            patch.object(
+                module.request,
+                "urlopen",
+                lambda request, **_kwargs: captured_requests.append(request)
+                or FakeResponse(),
+            ),
+        ):
+            result = module.execute_skills(
+                "do work",
+                tool_context=self._tool_context_without_request_token(),
+            )
+
+        self.assertEqual(result, "api result")
+        self.assertNotIn(
+            "X-tip-token-key",
+            captured_requests[0].headers,
+        )
 
     def test_health_check_retries_502_until_upstream_is_ready(self):
         attempts = []
@@ -344,7 +483,41 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
 
         self.assertEqual(result, "legacy result")
         self.assertEqual(
-            {"CUSTOM_VALUE": "custom", "TOS_SKILLS_DIR": ""},
+            {
+                "CUSTOM_VALUE": "custom",
+                "TOS_SKILLS_DIR": "",
+                "TIP_TOKEN_KEY": "tip-from-metadata",
+            },
+            captured_kwargs["extra_env_vars"],
+        )
+
+    def test_legacy_runcode_execution_injects_tip_token_key_from_metadata(self):
+        captured_kwargs = {}
+
+        def fake_run_sandbox_agent(**kwargs):
+            captured_kwargs.update(kwargs)
+            return "legacy result"
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: self.fail(
+                "Skill API must not be used when env_vars are provided"
+            ),
+            run_sandbox_agent=fake_run_sandbox_agent,
+        )
+
+        result = module.execute_skills(
+            "do work",
+            tool_context=self._tool_context(),
+            env_vars={"CUSTOM_VALUE": "custom", "TIP_TOKEN_KEY": "model-provided"},
+        )
+
+        self.assertEqual(result, "legacy result")
+        self.assertEqual(
+            {
+                "CUSTOM_VALUE": "custom",
+                "TIP_TOKEN_KEY": "tip-from-metadata",
+                "TOS_SKILLS_DIR": "tos://agentkit-platform-test-account/skills/",
+            },
             captured_kwargs["extra_env_vars"],
         )
 

@@ -526,6 +526,13 @@ if __name__ == "__main__":
 - `AGENTKIT_TOOL_SERVICE_CODE`：调用 AgentKit Tools 的 ServiceCode
 - `AGENTKIT_TOOL_REGION`：调用 AgentKit Tools 的地域，默认 `cn-beijing`
 
+TIP token key 透传：
+
+- Runtime 请求支持 `X-Tip-Token-Key` 请求头，兜底读取 `auth.tip_token_key`；
+  VeADK 只在本轮工具调用中透传，不复用历史 session。
+- legacy RunCode 路径会为本次执行注入 `TIP_TOKEN_KEY`；不要写入 `agentkit.yaml`、
+  `runtime_envs` 等持久化配置，也不需要在 Skill Sandbox 内安装 `agentkit-cli`。
+
 新增的 `config.yaml` 配置项：
 
 ```yaml title="config.yaml"

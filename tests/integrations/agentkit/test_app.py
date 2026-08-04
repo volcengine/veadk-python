@@ -233,6 +233,87 @@ def test_dynamic_runner_registers_frontend_invocation_plugin(
     assert isinstance(plugins[0], FrontendInvocationPlugin)
 
 
+def test_tip_token_key_metadata_is_request_scoped_and_preserves_other_metadata() -> (
+    None
+):
+    metadata = agentkit_app._custom_metadata_with_tip_token_key(
+        {"keep": "value", "tip_token_key": "stale"},
+        "fresh-key",
+    )
+
+    assert metadata == {"keep": "value", "tip_token_key": "fresh-key"}
+
+
+def test_missing_tip_token_key_removes_stale_metadata() -> None:
+    metadata = agentkit_app._custom_metadata_with_tip_token_key(
+        {"keep": "value", "tip_token_key": "stale"},
+        None,
+    )
+
+    assert metadata == {"keep": "value"}
+
+
+def test_run_route_passes_tip_token_key_as_request_scoped_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_runs: list[dict[str, Any]] = []
+
+    class FakeRunner:
+        auto_create_session = True
+
+        async def run_async(self, **kwargs: Any):
+            captured_runs.append(kwargs)
+            yield {"ok": True}
+
+    app = FastAPI()
+    app._tmpl_attrs = {  # type: ignore[attr-defined]
+        "session_service": object(),
+        "auto_create_session": True,
+    }
+    monkeypatch.setattr(
+        agentkit_app, "_dynamic_runner", lambda *_args, **_kwargs: FakeRunner()
+    )
+    agentkit_app._configure_dynamic_a2a_routes(app, _root_agent())
+
+    payload = {
+        "app_name": "agent",
+        "user_id": "user",
+        "session_id": "session",
+        "new_message": {"role": "user", "parts": [{"text": "hello"}]},
+        "custom_metadata": {
+            "keep": "value",
+            "tip_token_key": "stale-metadata",
+            "TIP_TOKEN_KEY": "stale-state-key",
+        },
+        "auth": {"tip_token_key": "body-key"},
+    }
+    client = TestClient(app)
+
+    with_header = client.post(
+        "/run",
+        json=payload,
+        headers={"X-Tip-Token-Key": "header-key"},
+    )
+    with_body_only = client.post(
+        "/run",
+        json=payload,
+    )
+    without_token = client.post(
+        "/run",
+        json={**payload, "auth": {}},
+    )
+
+    assert with_header.status_code == 200
+    assert with_body_only.status_code == 200
+    assert without_token.status_code == 200
+    first_metadata = captured_runs[0]["run_config"].custom_metadata
+    second_metadata = captured_runs[1]["run_config"].custom_metadata
+    third_metadata = captured_runs[2]["run_config"].custom_metadata
+    assert first_metadata == {"keep": "value", "tip_token_key": "header-key"}
+    assert second_metadata == {"keep": "value", "tip_token_key": "body-key"}
+    assert third_metadata == {"keep": "value"}
+
+
 def test_agent_info_exposes_mounted_skills_and_components() -> None:
     root_agent = _root_agent()
     setattr(

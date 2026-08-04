@@ -23,7 +23,8 @@ This module provides utilities for authentication, including:
 
 import base64
 import json
-from typing import Literal, Optional
+from collections.abc import Mapping
+from typing import Any, Literal, Optional
 
 from google.adk.auth.auth_credential import (
     AuthCredential,
@@ -37,6 +38,51 @@ from google.adk.auth.auth_tool import AuthConfig
 # TIP Token Header is used for Trust Identity Propagation (TIP) tokens
 VE_TIP_TOKEN_HEADER = "X-Ve-TIP-Token"
 VE_TIP_TOKEN_CREDENTIAL_KEY = "ve_tip_token"
+
+# TIP token key is an authorization handle injected per request by AgentKit
+# Gateway/upstream identity services. It is distinct from a raw TIP token.
+TIP_TOKEN_KEY_HEADER = "X-Tip-Token-Key"
+TIP_TOKEN_KEY_ENV = "TIP_TOKEN_KEY"
+TIP_TOKEN_KEY_METADATA_KEY = "tip_token_key"
+TIP_TOKEN_KEY_STATE_KEY = "TIP_TOKEN_KEY"
+
+
+def _clean_tip_token_key(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def extract_tip_token_key_from_headers(
+    headers: Mapping[str, Any] | None,
+) -> str | None:
+    """Extract a TIP token key from request headers without accepting raw tokens."""
+    if not headers:
+        return None
+    normalized = {str(key).lower(): value for key, value in headers.items()}
+    return _clean_tip_token_key(normalized.get(TIP_TOKEN_KEY_HEADER.lower()))
+
+
+def extract_tip_token_key_from_payload(payload: Any) -> str | None:
+    """Extract a TIP token key from a JSON body ``auth.tip_token_key`` field."""
+    if not isinstance(payload, Mapping):
+        return None
+    auth = payload.get("auth")
+    if not isinstance(auth, Mapping):
+        return None
+    return _clean_tip_token_key(auth.get(TIP_TOKEN_KEY_METADATA_KEY))
+
+
+def extract_tip_token_key_from_request_parts(
+    *,
+    headers: Mapping[str, Any] | None,
+    payload: Any = None,
+) -> str | None:
+    """Resolve request-scoped TIP token key with header taking precedence."""
+    return extract_tip_token_key_from_headers(
+        headers
+    ) or extract_tip_token_key_from_payload(payload)
 
 
 def strip_bearer_prefix(token: str) -> str:
