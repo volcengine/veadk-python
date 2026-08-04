@@ -26,6 +26,9 @@ from typing import Any
 _PROJECT_NAME = "default"
 _TOOL_TYPE = "CodeEnv"
 _DEV_TOOL_TYPE = "DevEnv"
+_DEVENV_IMAGE_URL = (
+    "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/devenv:0.0.1"
+)
 STUDIO_SANDBOX_AGENT_MODEL_NAME = "doubao-seed-2-1-pro-260628"
 STUDIO_SANDBOX_BYTEPLUS_AGENT_MODEL_NAME = "seed-2-0-lite-260228"
 STUDIO_SANDBOX_MODEL_BASE_URLS = {
@@ -204,6 +207,77 @@ def ensure_studio_code_env_tool(**kwargs: Any) -> str:
 def ensure_studio_dev_env_tool(**kwargs: Any) -> str:
     """Reuse or create one Ready DevEnv Tool and return its Tool ID."""
     return _ensure_studio_environment_tool(tool_type=_DEV_TOOL_TYPE, **kwargs)
+
+
+def ensure_studio_devenv_tool(
+    *,
+    name: str,
+    access_key: str = "",
+    secret_key: str = "",
+    region: str = "cn-beijing",
+    session_token: str = "",
+    client: Any | None = None,
+    timeout_seconds: float = 600.0,
+    poll_interval: float = 5.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """Reuse or create the Ready DevEnv Tool dedicated to the Skill workbench."""
+    from agentkit.sdk.tools import types as tools_types
+    from agentkit.sdk.tools.client import AgentkitToolsClient
+
+    tools_client = client or AgentkitToolsClient(
+        access_key=access_key,
+        secret_key=secret_key,
+        region=region,
+        session_token=session_token,
+    )
+    match = _find_exact_tool(
+        tools_client,
+        tools_types,
+        name=name,
+        tool_type=_DEV_TOOL_TYPE,
+    )
+    if match is not None:
+        tool_id = (match.tool_id or "").strip()
+        if not tool_id:
+            raise RuntimeError(f"AgentKit Tool '{name}' did not return a Tool ID.")
+    else:
+        response = tools_client.create_tool(
+            tools_types.CreateToolRequest(
+                Name=name,
+                ToolType=_DEV_TOOL_TYPE,
+                ProjectName=_PROJECT_NAME,
+                ImageUrl=_DEVENV_IMAGE_URL,
+                Command="/opt/gem/run.sh",
+                Port=8080,
+                CpuMilli=4000,
+                MemoryMb=8192,
+                AuthorizerConfiguration=tools_types.AuthorizerForCreateTool(
+                    KeyAuth=tools_types.AuthorizerKeyAuthForCreateTool(
+                        ApiKeyName=f"studio-devenv-{secrets.token_hex(8)}",
+                        ApiKeyLocation="Header",
+                    )
+                ),
+                NetworkConfiguration=tools_types.NetworkForCreateTool(
+                    EnablePublicNetwork=True,
+                    EnablePrivateNetwork=False,
+                ),
+            )
+        )
+        tool_id = (response.tool_id or "").strip()
+        if not tool_id:
+            raise RuntimeError(
+                f"Creating AgentKit DevEnv Tool '{name}' did not return a Tool ID."
+            )
+    return _wait_for_ready_tool(
+        tools_client,
+        tools_types,
+        tool_id=tool_id,
+        name=name,
+        timeout_seconds=timeout_seconds,
+        poll_interval=poll_interval,
+        sleep=sleep,
+    )
 
 
 def ensure_studio_agent_tool(

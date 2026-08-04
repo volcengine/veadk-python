@@ -1271,8 +1271,18 @@ def _run_frontend_server(
         return principal.owner_id if principal else "local"
 
     from veadk.cli.frontend_skill_creator import mount_skill_creator_routes
+    from veadk.cli.frontend_skill_workbench import mount_skill_workbench_routes
 
     mount_skill_creator_routes(app, _skill_creator_owner)
+    def _skill_workbench_creator(request: Request) -> str:
+        principal = _current_principal(request)
+        return principal.display_name if principal else "local"
+
+    mount_skill_workbench_routes(
+        app,
+        _skill_creator_owner,
+        _skill_workbench_creator,
+    )
 
     from veadk.cli.frontend_coding_agents import mount_coding_agent_routes
 
@@ -7462,6 +7472,7 @@ def frontend_deploy(
     sandbox_tool_ids = {
         "codex": sandbox_chat_codex_tool_id,
         "skill_creator": sandbox_skill_creator_tool_id,
+        "skill_workbench": None,
         "openclaw": sandbox_chat_openclaw_tool_id,
         "hermes": sandbox_chat_hermes_tool_id,
     }
@@ -7474,6 +7485,7 @@ def frontend_deploy(
     sandbox_tool_labels = {
         "codex": "Codex",
         "skill_creator": "Skill Creator",
+        "skill_workbench": "Skill Workbench DevEnv",
         "openclaw": "OpenClaw",
         "hermes": "Hermes",
         "dev": "Dev Sandbox",
@@ -7481,6 +7493,7 @@ def frontend_deploy(
     sandbox_tool_purposes = {
         "codex": "chat",
         "skill_creator": "skill",
+        "skill_workbench": "skill-workbench",
         "openclaw": "openclaw",
         "hermes": "hermes",
         "dev": "dev",
@@ -7490,6 +7503,7 @@ def frontend_deploy(
         ensure_studio_agent_tool,
         ensure_studio_code_env_tool,
         ensure_studio_dev_env_tool,
+        ensure_studio_devenv_tool,
         studio_sandbox_agent_model_name,
         studio_sandbox_model_base_url,
         studio_sandbox_tool_name,
@@ -7515,7 +7529,16 @@ def frontend_deploy(
         with ThreadPoolExecutor(max_workers=len(missing_sandbox_tools)) as executor:
             tool_futures = {}
             for kind, tool_name in missing_sandbox_tools.items():
-                if kind in {"codex", "skill_creator"}:
+                if kind == "skill_workbench":
+                    future = executor.submit(
+                        ensure_studio_devenv_tool,
+                        name=tool_name,
+                        region=region,
+                        access_key=ak,
+                        secret_key=sk,
+                        session_token=session_token or "",
+                    )
+                elif kind in {"codex", "skill_creator"}:
                     future = executor.submit(
                         ensure_studio_code_env_tool,
                         name=tool_name,
@@ -7581,8 +7604,12 @@ def frontend_deploy(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         credential_futures = {}
         for kind, tool_id in resolved_sandbox_tool_ids.items():
-            if kind in {"codex", "skill_creator", "dev"}:
-                code_model_name = sandbox_agent_model_name if kind == "codex" else None
+            if kind in {"codex", "skill_creator", "skill_workbench", "dev"}:
+                code_model_name = (
+                    sandbox_agent_model_name
+                    if kind in {"codex", "skill_workbench"}
+                    else None
+                )
                 future = executor.submit(
                     ensure_skill_creator_model_credential,
                     tool_id=tool_id,
@@ -7625,6 +7652,7 @@ def frontend_deploy(
 
     chat_codex_tool_id = resolved_sandbox_tool_ids.get("codex", "")
     skill_creator_tool_id = resolved_sandbox_tool_ids.get("skill_creator", "")
+    skill_workbench_tool_id = resolved_sandbox_tool_ids.get("skill_workbench", "")
     openclaw_tool_id = resolved_sandbox_tool_ids.get("openclaw", "")
     hermes_tool_id = resolved_sandbox_tool_ids.get("hermes", "")
     dev_tool_id = resolved_sandbox_tool_ids.get("dev", "")
@@ -7670,6 +7698,10 @@ def frontend_deploy(
         veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
     veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
+    veadk_environments["SANDBOX_SKILL_WORKBENCH"] = skill_workbench_tool_id
+    veadk_environments["VEADK_SKILL_DEVENV_IMAGE"] = (
+        "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/devenv:0.0.1"
+    )
     veadk_environments["SANDBOX_CHAT_OPENCLAW"] = openclaw_tool_id
     veadk_environments["SANDBOX_CHAT_HERMES"] = hermes_tool_id
     if provider_id == "volcengine":

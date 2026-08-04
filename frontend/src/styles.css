@@ -4249,6 +4249,29 @@ body {
   flex-direction: column;
   padding: 0;
 }
+.skillcenter-page-head {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.skillcenter-page-head h1 { margin: 0; font-size: 20px; font-weight: 650; }
+.skillcenter-page-head p { margin: 4px 0 0; color: hsl(var(--muted-foreground)); font-size: 12.5px; }
+.skillcenter-primary-action {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid hsl(var(--primary));
+  border-radius: 7px;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.skill-detail-actions { display: flex; align-items: center; gap: 8px; }
 .skillcenter-regions {
   display: grid;
   padding: 2px;

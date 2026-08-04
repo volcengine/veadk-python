@@ -14,6 +14,7 @@ import {
   type CloudProvider,
 } from "../adk/cloudProvider";
 import { Markdown } from "./Markdown";
+import type { SkillCenterOptimizationSource } from "./skill-workbench/types";
 
 const SPACE_PAGE_SIZE = 6;
 const SKILL_PAGE_SIZE = 7;
@@ -79,7 +80,7 @@ function skillMarkdownBody(value: string): string {
 }
 
 /** Hand-drawn Skill Space mark: two connected shelves for a skill collection. */
-function SkillSpaceIcon({ className = "icon" }: { className?: string }) {
+export function SkillSpaceIcon({ className = "icon" }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden>
       <path d="M5.25 7.5h5.25v5.25H5.25zM13.5 7.5h5.25v5.25H13.5zM9.38 15.75h5.24v3H9.38z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
@@ -167,6 +168,7 @@ function SkillDetailDialog({
   loading,
   error,
   onClose,
+  onOptimize,
 }: {
   skill: SkillSpaceSkill;
   space: SkillSpaceRef;
@@ -176,6 +178,7 @@ function SkillDetailDialog({
   loading: boolean;
   error: string;
   onClose: () => void;
+  onOptimize?: (source: SkillCenterOptimizationSource) => void;
 }) {
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -202,9 +205,29 @@ function SkillDetailDialog({
               <p>{detail?.description || skill.skillDescription || "暂无描述"}</p>
             </div>
           </div>
-          <button type="button" className="skill-detail-close" onClick={onClose} aria-label="关闭技能详情">
-            <CloseIcon />
-          </button>
+          <div className="skill-detail-actions">
+            {onOptimize ? (
+              <button
+                type="button"
+                className="skillcenter-primary-action"
+                onClick={() => onOptimize({
+                  kind: "skill-center",
+                  skillId: skill.skillId,
+                  version: detail?.version || skill.version,
+                  region,
+                  projectName: space.projectName,
+                  skillSpaceId: space.id,
+                  name: detail?.name || skill.skillName,
+                  description: detail?.description || skill.skillDescription,
+                })}
+              >
+                优化 Skill
+              </button>
+            ) : null}
+            <button type="button" className="skill-detail-close" onClick={onClose} aria-label="关闭技能详情">
+              <CloseIcon />
+            </button>
+          </div>
         </header>
 
         <dl className="skill-detail-meta">
@@ -250,8 +273,12 @@ export function SkillCenterButton({ onClick }: { onClick: () => void }) {
 /** Native AgentKit Skill space browser. */
 export function SkillCenterView({
   cloudProvider = "volcengine",
+  onCreate,
+  onOptimize,
 }: {
   cloudProvider?: CloudProvider;
+  onCreate?: () => void;
+  onOptimize?: (source: SkillCenterOptimizationSource) => void;
 }) {
   const regionOptions = cloudRegionOptions(cloudProvider);
   const [region, setRegion] = useState<SkillRegion>(
@@ -393,6 +420,17 @@ export function SkillCenterView({
 
   return (
     <section className="skillcenter">
+      {onCreate ? (
+        <header className="skillcenter-page-head">
+          <div>
+            <h1>技能中心</h1>
+            <p>浏览已有 Skill，或进入工作台创建和优化。</p>
+          </div>
+          <button type="button" className="skillcenter-primary-action" onClick={onCreate}>
+            创建 Skill
+          </button>
+        </header>
+      ) : null}
       <div className="skillcenter-browser">
           <section className="skillcenter-panel" aria-label="技能空间列表">
             <header className="skillcenter-panel-head">
@@ -494,6 +532,7 @@ export function SkillCenterView({
           loading={detailLoading}
           error={detailError}
           onClose={closeDetail}
+          onOptimize={onOptimize}
         />
       )}
     </section>

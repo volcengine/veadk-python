@@ -27,6 +27,7 @@ import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
 import { AgentFaceIcon } from "./AgentFaceIcon";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
+import { SkillSpaceIcon } from "./SkillCenter";
 import defaultSiteLogo from "../assets/logo.svg";
 import byteplusLogo from "../assets/byteplus.svg";
 
@@ -303,9 +304,8 @@ export function Sidebar({
   version,
   onLogout,
 }: SidebarProps) {
-  // Creation and Skill Center live outside the #748-style sidebar.
+  // Agent creation still lives outside the #748-style sidebar.
   void onQuickCreate;
-  void onSkillCenter;
   void onAddAgent;
   // Per-module feature gates; a missing flag defaults to shown.
   const show = (k: keyof NonNullable<typeof features>) => features?.[k] !== false;
@@ -403,6 +403,17 @@ export function Sidebar({
           <AgentFaceIcon />
           <span className="sidebar-nav-label">智能体</span>
         </button>
+        {show("skillCenter") && (
+          <button
+            className="new-chat new-chat--skills"
+            onClick={onSkillCenter}
+            aria-label="技能中心"
+            title="技能中心"
+          >
+            <SkillSpaceIcon />
+            <span className="sidebar-nav-label">技能中心</span>
+          </button>
+        )}
         {show("search") && (
           <SearchButton active={activePage === "search"} onClick={onSearch} />
         )}

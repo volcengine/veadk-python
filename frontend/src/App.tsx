@@ -79,6 +79,8 @@ import {
 import { Sidebar, type SidebarPage } from "./ui/Sidebar";
 import { AgentInfoPanel } from "./ui/AgentTopology";
 import { SkillCenterView } from "./ui/SkillCenter";
+import { SkillWorkbench } from "./ui/skill-workbench/SkillWorkbench";
+import type { SkillCenterOptimizationSource } from "./ui/skill-workbench/types";
 import { AddAgentKitView } from "./ui/AddAgentKit";
 import { AgentWorkspace } from "./ui/AgentWorkspace";
 import {
@@ -1145,6 +1147,9 @@ export default function App() {
   // flashing the notice in the common, configured case).
   const [hasCreds, setHasCreds] = useState(true);
   const [skillCenter, setSkillCenter] = useState(false);
+  const [skillWorkbenchOpen, setSkillWorkbenchOpen] = useState(false);
+  const [skillWorkbenchSource, setSkillWorkbenchSource] =
+    useState<SkillCenterOptimizationSource | null>(null);
   const [addAgent, setAddAgent] = useState(false);
   // The "添加 Agent" chooser (two cards: AgentKit / 从 0 快速创建).
   const [addMenu, setAddMenu] = useState(false);
@@ -1733,6 +1738,8 @@ export default function App() {
           setAppName("");
           setCreateView(null);
           setSkillCenter(false);
+          setSkillWorkbenchOpen(false);
+          setSkillWorkbenchSource(null);
           setAddAgent(false);
           setAddMenu(false);
           setSearchView(false);
@@ -4192,7 +4199,7 @@ export default function App() {
         ? "search"
         : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
           ? "agents"
-          : sessionId || createView || skillCenter || addAgent || addMenu
+          : sessionId || createView || skillCenter || skillWorkbenchOpen || addAgent || addMenu
             ? null
             : "new-chat";
 
@@ -4214,6 +4221,8 @@ export default function App() {
           if (sandboxSession) exitSandboxSession();
           setCreateView(null);
           setSkillCenter(false);
+          setSkillWorkbenchOpen(false);
+          setSkillWorkbenchSource(null);
           setAddAgent(false);
           setAddMenu(false);
           setManageAgents(false);
@@ -4235,6 +4244,8 @@ export default function App() {
           viewSidRef.current = "";
           setSessionId("");
           setSkillCenter(false);
+          setSkillWorkbenchOpen(false);
+          setSkillWorkbenchSource(null);
           setAddAgent(false);
           setSearchView(false);
           setManageAgents(false);
@@ -4261,6 +4272,8 @@ export default function App() {
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
           setApplicationsView(null);
+          setSkillWorkbenchOpen(false);
+          setSkillWorkbenchSource(null);
           setSkillCenter(true);
           setError("");
         }}
@@ -4303,6 +4316,8 @@ export default function App() {
           setPlatformFeedbackOrigin(null);
           setCreateView(null);
           setSkillCenter(false);
+          setSkillWorkbenchOpen(false);
+          setSkillWorkbenchSource(null);
           setAddAgent(false);
           setAddMenu(false);
           setSearchView(false);
@@ -4820,8 +4835,33 @@ export default function App() {
                 }}
                 onCancel={() => setAddAgent(false)}
               />
+            ) : skillWorkbenchOpen ? (
+              <SkillWorkbench
+                initialSource={skillWorkbenchSource}
+                onBack={() => {
+                  setSkillWorkbenchOpen(false);
+                  setSkillWorkbenchSource(null);
+                  setSkillCenter(true);
+                }}
+                onChooseCenterSource={() => {
+                  setSkillWorkbenchOpen(false);
+                  setSkillCenter(true);
+                }}
+              />
             ) : skillCenter ? (
-              <SkillCenterView cloudProvider={cloudProvider} />
+              <SkillCenterView
+                cloudProvider={cloudProvider}
+                onCreate={() => {
+                  setSkillWorkbenchSource(null);
+                  setSkillCenter(false);
+                  setSkillWorkbenchOpen(true);
+                }}
+                onOptimize={(source) => {
+                  setSkillWorkbenchSource(source);
+                  setSkillCenter(false);
+                  setSkillWorkbenchOpen(true);
+                }}
+              />
             ) : visibleCreateView !== null && !hasCreds ? (
               <div
                 style={{

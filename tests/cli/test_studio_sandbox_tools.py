@@ -26,6 +26,7 @@ from veadk.cli.studio_sandbox_tools import (
     ensure_studio_agent_tool,
     ensure_studio_code_env_tool,
     ensure_studio_dev_env_tool,
+    ensure_studio_devenv_tool,
     studio_sandbox_agent_model_name,
     studio_sandbox_model_base_url,
 )
@@ -109,6 +110,33 @@ def test_ensure_studio_dev_env_tool_creates_ready_dev_env() -> None:
         == "dev-tool"
     )
     assert getattr(requests[0], "tool_type") == "DevEnv"
+
+
+def test_ensure_studio_devenv_tool_creates_verified_dev_environment() -> None:
+    requests: list[object] = []
+    client = SimpleNamespace(
+        list_tools=lambda _: SimpleNamespace(tools=[], next_token=None),
+        get_tool=lambda _: SimpleNamespace(status="Ready"),
+        create_tool=lambda request: (
+            requests.append(request) or SimpleNamespace(tool_id="tool-devenv")
+        ),
+    )
+
+    assert (
+        ensure_studio_devenv_tool(
+            name="veadk-studio-demo-skill-workbench-12345678",
+            client=client,
+            timeout_seconds=0,
+        )
+        == "tool-devenv"
+    )
+    request = requests[0]
+    assert request.tool_type == "DevEnv"
+    assert request.image_url.endswith("/devenv:0.0.1")
+    assert request.command == "/opt/gem/run.sh"
+    assert request.port == 8080
+    assert request.cpu_milli == 4000
+    assert request.memory_mb == 8192
 
 
 @pytest.mark.parametrize(
