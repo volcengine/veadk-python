@@ -1274,6 +1274,7 @@ def _run_frontend_server(
     from veadk.cli.frontend_skill_workbench import mount_skill_workbench_routes
 
     mount_skill_creator_routes(app, _skill_creator_owner)
+
     def _skill_workbench_creator(request: Request) -> str:
         principal = _current_principal(request)
         return principal.display_name if principal else "local"
@@ -7804,17 +7805,51 @@ def frontend_deploy(
             f"Deploying frontend to VeFaaS as '{vefaas_app_name}' "
             f"in {region}/{project}…"
         )
-        app = engine.deploy(
+        from veadk.cli.studio_update import find_studio_deployments
+        from veadk.cloud.cloud_app import CloudApp
+
+        existing_targets = find_studio_deployments(
+            access_key=ak,
+            secret_key=sk,
             application_name=vefaas_app_name,
-            path=tmp,
-            gateway_name=gateway_name,
-            gateway_service_name=gateway_service_name,
-            gateway_upstream_name=gateway_upstream_name,
-            use_adk_web=False,
-            auth_method="none",
-            enable_mcp_session=False,
-            keep_failed_deploy=keep_failed_deploy,
+            region=region,
+            project=project,
         )
+        if len(existing_targets) > 1:
+            raise click.ClickException(
+                f"Multiple VeFaaS Applications named '{vefaas_app_name}' were found "
+                f"in {region}/{project}; refusing an ambiguous update."
+            )
+        if existing_targets:
+            target = existing_targets[0]
+            click.echo(
+                f"Existing application found; updating Function {target.function_id} "
+                "and preserving its public URL…"
+            )
+            url = engine._vefaas_service.update_application_code_bundle(
+                application_id=target.application_id,
+                function_id=target.function_id,
+                path=tmp,
+                environment_overrides=dict(veadk_environments),
+            )
+            app = CloudApp(
+                vefaas_application_name=vefaas_app_name,
+                vefaas_endpoint=url,
+                vefaas_application_id=target.application_id,
+            )
+            app.vefaas_function_id = target.function_id
+        else:
+            app = engine.deploy(
+                application_name=vefaas_app_name,
+                path=tmp,
+                gateway_name=gateway_name,
+                gateway_service_name=gateway_service_name,
+                gateway_upstream_name=gateway_upstream_name,
+                use_adk_web=False,
+                auth_method="none",
+                enable_mcp_session=False,
+                keep_failed_deploy=keep_failed_deploy,
+            )
         url = (app.vefaas_endpoint or "").rstrip("/")
         redirect_uri = f"{url}/oauth2/callback"
 

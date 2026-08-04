@@ -81,6 +81,10 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda *_args, **_kwargs: "",
     )
     monkeypatch.setattr(
+        "veadk.cli.studio_update.find_studio_deployments",
+        lambda **_: [],
+    )
+    monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
         lambda **_: None,
     )
