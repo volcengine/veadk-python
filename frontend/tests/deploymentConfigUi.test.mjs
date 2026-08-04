@@ -73,8 +73,8 @@ test("reuses the build canvas as a read-only expandable deployment preview", () 
     /className="pp-flow-dialog"[\s\S]*?<AgentBuildCanvas[\s\S]*?interactivePreview/,
   );
   assert.doesNotMatch(projectPreviewSource, /Agent 拓扑|pp-topology-pane/);
-  assert.match(projectPreviewSource, /导出配置文件/);
-  assert.match(projectPreviewSource, />\s*导出源码\s*</);
+  assert.match(projectPreviewSource, /导出 YAML/);
+  assert.match(projectPreviewSource, />\s*下载源代码\s*</);
   assert.match(
     projectPreviewSource,
     /className="pp-release-description"[\s\S]*?title=\{agentDraft\.description\}/,

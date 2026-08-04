@@ -237,6 +237,7 @@ export interface ProjectCodeBrowserProps {
   project: AgentProject;
   onChange: (project: AgentProject) => void;
   className?: string;
+  label?: string;
 }
 
 /** A compact source trigger intended for topology and deploy-card headers. */
@@ -244,6 +245,7 @@ export function ProjectCodeBrowser({
   project,
   onChange,
   className = "",
+  label = "查看源码",
 }: ProjectCodeBrowserProps) {
   const [open, setOpen] = useState(false);
 
@@ -254,10 +256,10 @@ export function ProjectCodeBrowser({
         className={`code-browser-trigger ${className}`.trim()}
         onClick={() => setOpen(true)}
         aria-label="查看和编辑项目源码"
-        title="查看源码"
+        title={label}
       >
         <Code2 aria-hidden="true" />
-        <span>查看源码</span>
+        <span>{label}</span>
       </button>
       <CodeBrowserDialog
         project={project}
