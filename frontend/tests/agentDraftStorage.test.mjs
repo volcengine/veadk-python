@@ -1,0 +1,151 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import ts from "typescript";
+
+const source = readFileSync(
+  new URL("../src/create/agentDraftStorage.ts", import.meta.url),
+  "utf8",
+);
+const { outputText } = ts.transpileModule(source, {
+  compilerOptions: {
+    module: ts.ModuleKind.ES2022,
+    target: ts.ScriptTarget.ES2022,
+  },
+});
+const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
+const {
+  loadWorkspaceDrafts,
+  sanitizeAgentDraftForStorage,
+  workspaceDraftsKey,
+  writeWorkspaceDrafts,
+} = await import(moduleUrl);
+
+function draft(overrides = {}) {
+  return {
+    name: "draft_agent",
+    description: "draft",
+    instruction: "help",
+    tools: [],
+    skills: [],
+    memory: { shortTerm: false, longTerm: false },
+    knowledgebase: false,
+    tracing: false,
+    subAgents: [],
+    ...overrides,
+  };
+}
+
+function memoryStorage(initial = {}) {
+  const values = new Map(Object.entries(initial));
+  return {
+    getItem(key) {
+      return values.get(key) ?? null;
+    },
+    setItem(key, value) {
+      values.set(key, value);
+    },
+    removeItem(key) {
+      values.delete(key);
+    },
+    value(key) {
+      return values.get(key);
+    },
+  };
+}
+
+test("removes secrets from every persisted Agent draft branch", () => {
+  const sourceDraft = draft({
+    mcpTools: [{ name: "root", transport: "http", authToken: "root-secret" }],
+    deployment: { feishuEnabled: true, envValues: { FEISHU_APP_SECRET: "secret" } },
+    subAgents: [
+      draft({
+        name: "child",
+        mcpTools: [{ name: "child", transport: "http", authToken: "child-secret" }],
+        deployment: { feishuEnabled: false, envValues: { API_KEY: "child-key" } },
+      }),
+    ],
+    workflow: {
+      type: "sequential",
+      edges: [],
+      nodes: [
+        {
+          id: "workflow-node",
+          agent: draft({
+            name: "workflow_agent",
+            mcpTools: [
+              { name: "workflow", transport: "http", authToken: "workflow-secret" },
+            ],
+          }),
+        },
+      ],
+    },
+  });
+
+  const sanitized = sanitizeAgentDraftForStorage(sourceDraft);
+
+  assert.equal(sanitized.mcpTools[0].authToken, undefined);
+  assert.equal(sanitized.deployment.envValues, undefined);
+  assert.equal(sanitized.subAgents[0].mcpTools[0].authToken, undefined);
+  assert.equal(sanitized.subAgents[0].deployment.envValues, undefined);
+  assert.equal(sanitized.workflow.nodes[0].agent.mcpTools[0].authToken, undefined);
+  assert.equal(sourceDraft.mcpTools[0].authToken, "root-secret");
+});
+
+test("writes a versioned user-scoped payload without secrets", () => {
+  const storage = memoryStorage();
+  writeWorkspaceDrafts(storage, "alice@example.com", [
+    {
+      id: "draft-1",
+      updatedAt: 123,
+      draft: draft({
+        mcpTools: [{ name: "server", transport: "http", authToken: "secret" }],
+      }),
+    },
+  ]);
+
+  const payload = JSON.parse(storage.value(workspaceDraftsKey("alice@example.com")));
+  assert.equal(payload.version, 1);
+  assert.equal(payload.drafts[0].id, "draft-1");
+  assert.equal(payload.drafts[0].draft.mcpTools[0].authToken, undefined);
+});
+
+test("loads both legacy arrays and the current versioned payload", () => {
+  const key = workspaceDraftsKey("alice");
+  const legacyDraft = { id: "legacy", updatedAt: 1, draft: draft() };
+  const legacyStorage = memoryStorage({ [key]: JSON.stringify([legacyDraft]) });
+  assert.deepEqual(loadWorkspaceDrafts(legacyStorage, "alice"), [legacyDraft]);
+
+  const currentStorage = memoryStorage({
+    [key]: JSON.stringify({ version: 1, drafts: [legacyDraft] }),
+  });
+  assert.deepEqual(loadWorkspaceDrafts(currentStorage, "alice"), [legacyDraft]);
+});
+
+test("rejects unsupported or malformed persisted payloads", () => {
+  const key = workspaceDraftsKey("alice");
+  assert.throws(
+    () => loadWorkspaceDrafts(memoryStorage({ [key]: "not-json" }), "alice"),
+    /无法读取本机草稿/,
+  );
+  assert.throws(
+    () =>
+      loadWorkspaceDrafts(
+        memoryStorage({ [key]: JSON.stringify({ version: 2, drafts: [] }) }),
+        "alice",
+      ),
+    /版本暂不受支持/,
+  );
+});
+
+test("reports browser storage write failures with a recovery action", () => {
+  const storage = memoryStorage();
+  storage.setItem = () => {
+    throw new DOMException("quota", "QuotaExceededError");
+  };
+
+  assert.throws(
+    () => writeWorkspaceDrafts(storage, "alice", []),
+    /删除不需要的草稿或清理此站点的浏览器存储后重试/,
+  );
+});

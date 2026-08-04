@@ -16,8 +16,11 @@ import {
   type SandboxSession,
 } from "../adk/sandbox";
 import { formatRequestError } from "../adk/requestError";
+import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { AgentFaceIcon } from "./AgentFaceIcon";
 import { SandboxAgentIcon } from "./icons/SandboxAgentIcons";
+import type { DeploymentTaskUpdate } from "./ProjectPreview";
+import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import "./MyAgents.css";
 
 export interface MyAgentCardData {
@@ -36,6 +39,7 @@ export interface MyAgentCardData {
     canDelete: boolean;
   };
   sandbox?: SandboxSession;
+  draft?: WorkspaceAgentDraft;
 }
 
 export type AgentType = "general" | "codex" | "openclaw" | "hermes";
@@ -149,6 +153,18 @@ function sandboxToAgent(session: SandboxSession): MyAgentCardData {
   };
 }
 
+function draftToAgent(item: WorkspaceAgentDraft): MyAgentCardData {
+  return {
+    id: item.id,
+    name: item.draft.name || "未命名 Agent",
+    description: item.draft.description?.trim() || "暂无描述",
+    createdAt: formatCreatedAt(new Date(item.updatedAt).toISOString()),
+    specificationLabel: "存储位置",
+    specification: "当前浏览器",
+    draft: item,
+  };
+}
+
 async function loadRuntimeAgents(
   runtimeScope: RuntimeScope,
   nextToken: string,
@@ -191,6 +207,10 @@ function AgentCard({
   connecting,
   connected,
   showOwnership,
+  deploymentTask,
+  onViewDeploymentTask,
+  onEditDraft,
+  onDeleteDraft,
 }: {
   agent: MyAgentCardData;
   onUse?: (agent: MyAgentCardData) => Promise<void>;
@@ -198,6 +218,10 @@ function AgentCard({
   connecting?: boolean;
   connected?: boolean;
   showOwnership?: boolean;
+  deploymentTask?: DeploymentTaskUpdate;
+  onViewDeploymentTask?: (task: DeploymentTaskUpdate) => void;
+  onEditDraft?: (draft: WorkspaceAgentDraft) => void;
+  onDeleteDraft?: (draft: WorkspaceAgentDraft) => void;
 }) {
   const actionable = Boolean(agent.runtime || agent.sandbox);
   return (
@@ -212,7 +236,11 @@ function AgentCard({
               </span>
             ) : null}
           </div>
-          {agent.sandbox ? (
+          {agent.draft ? (
+            <span className="my-agent-draft-badge">
+              {deploymentTask ? "部署中" : "草稿"}
+            </span>
+          ) : agent.sandbox ? (
             <span
               className="my-agent-status-label"
               data-ready={agent.sandbox.status.toLowerCase() === "ready" || undefined}
@@ -221,6 +249,9 @@ function AgentCard({
             </span>
           ) : agent.runtime ? (
             <div className="my-agent-card-badges">
+              {deploymentTask ? (
+                <span className="my-agent-deploying-badge">部署中</span>
+              ) : null}
               <span className="my-agent-region-badge">
                 {formatRuntimeRegion(agent.runtime.region)}
               </span>
@@ -235,7 +266,7 @@ function AgentCard({
         ) : null}
         <dl className="my-agent-meta">
           <div className="my-agent-created-at">
-            <dt>创建时间</dt>
+            <dt>{agent.draft ? "更新时间" : "创建时间"}</dt>
             <dd>{agent.createdAt}</dd>
           </div>
           <div className="my-agent-region">
@@ -245,30 +276,61 @@ function AgentCard({
         </dl>
       </div>
       <footer className="my-agent-actions">
-        <button
-          type="button"
-          className="my-agent-details"
-          disabled={!actionable}
-          aria-label={`查看 ${agent.name} 详情`}
-          onClick={() => onViewDetails?.(agent)}
-        >
-          查看详情
-        </button>
-        <button
-          type="button"
-          className={`my-agent-use${connected ? " is-connected" : ""}`}
-          disabled={!actionable || connecting || connected}
-          aria-busy={connecting || undefined}
-          aria-label={connected ? `${agent.name} 已连接` : `使用 ${agent.name}`}
-          onClick={() => void onUse?.(agent)}
-        >
-          {connecting ? (
-            <>
-              <span className="my-agent-use-spinner" aria-hidden="true" />
-              <span>连接中</span>
-            </>
-          ) : connected ? "已连接" : "使用"}
-        </button>
+        {agent.draft ? (
+          <>
+            <button
+              type="button"
+              className="my-agent-details"
+              aria-label={deploymentTask
+                ? `查看 ${agent.name} 部署进度`
+                : `编辑草稿 ${agent.name}`}
+              onClick={() => deploymentTask
+                ? onViewDeploymentTask?.(deploymentTask)
+                : onEditDraft?.(agent.draft!)}
+            >
+              {deploymentTask ? "查看进度" : "编辑"}
+            </button>
+            <button
+              type="button"
+              className="my-agent-delete"
+              aria-label={`删除草稿 ${agent.name}`}
+              onClick={() => onDeleteDraft?.(agent.draft!)}
+            >
+              删除
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="my-agent-details"
+              disabled={!actionable}
+              aria-label={deploymentTask
+                ? `查看 ${agent.name} 部署进度`
+                : `查看 ${agent.name} 详情`}
+              onClick={() => deploymentTask
+                ? onViewDeploymentTask?.(deploymentTask)
+                : onViewDetails?.(agent)}
+            >
+              {deploymentTask ? "查看进度" : "查看详情"}
+            </button>
+            <button
+              type="button"
+              className={`my-agent-use${connected ? " is-connected" : ""}`}
+              disabled={!actionable || connecting || connected}
+              aria-busy={connecting || undefined}
+              aria-label={connected ? `${agent.name} 已连接` : `使用 ${agent.name}`}
+              onClick={() => void onUse?.(agent)}
+            >
+              {connecting ? (
+                <>
+                  <span className="my-agent-use-spinner" aria-hidden="true" />
+                  <span>连接中</span>
+                </>
+              ) : connected ? "已连接" : "使用"}
+            </button>
+          </>
+        )}
       </footer>
     </article>
   );
@@ -286,6 +348,12 @@ export interface MyAgentsProps {
   sandboxRefreshKey?: number;
   connectedRuntimeId?: string;
   hiddenRuntimeIds?: ReadonlySet<string>;
+  drafts?: WorkspaceAgentDraft[];
+  deploymentTasks?: DeploymentTaskUpdate[];
+  draftDeploymentTaskIds?: Readonly<Record<string, string>>;
+  onViewDeploymentTask?: (task: DeploymentTaskUpdate) => void;
+  onEditDraft?: (draft: WorkspaceAgentDraft) => void;
+  onDeleteDraft?: (draft: WorkspaceAgentDraft) => void;
 }
 
 export function MyAgents({
@@ -300,6 +368,12 @@ export function MyAgents({
   sandboxRefreshKey = 0,
   connectedRuntimeId = "",
   hiddenRuntimeIds = EMPTY_RUNTIME_IDS,
+  drafts = [],
+  deploymentTasks = [],
+  draftDeploymentTaskIds = {},
+  onViewDeploymentTask,
+  onEditDraft,
+  onDeleteDraft,
 }: MyAgentsProps) {
   const resultsRef = useRef<HTMLElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
@@ -316,6 +390,33 @@ export function MyAgents({
   const [loadingSandboxAgents, setLoadingSandboxAgents] = useState(false);
   const [sandboxError, setSandboxError] = useState("");
   const [connectingAgentId, setConnectingAgentId] = useState("");
+  const [draftToDelete, setDraftToDelete] = useState<WorkspaceAgentDraft | null>(null);
+  const draftAgents = useMemo(() => drafts.map(draftToAgent), [drafts]);
+  const activeDeploymentTasks = useMemo(() => {
+    const byId = new Map<string, DeploymentTaskUpdate>();
+    const byRuntimeId = new Map<string, DeploymentTaskUpdate>();
+    for (const task of deploymentTasks) {
+      if (task.status !== "running") continue;
+      byId.set(task.id, task);
+      if (!task.runtimeId) continue;
+      const previous = byRuntimeId.get(task.runtimeId);
+      if (!previous || task.startedAt > previous.startedAt) {
+        byRuntimeId.set(task.runtimeId, task);
+      }
+    }
+    return { byId, byRuntimeId };
+  }, [deploymentTasks]);
+
+  const deploymentTaskForAgent = useCallback((agent: MyAgentCardData) => {
+    if (agent.draft) {
+      const taskId = draftDeploymentTaskIds[agent.draft.id];
+      return taskId ? activeDeploymentTasks.byId.get(taskId) : undefined;
+    }
+    const runtimeId = agent.runtime?.runtimeId;
+    return runtimeId
+      ? activeDeploymentTasks.byRuntimeId.get(runtimeId)
+      : undefined;
+  }, [activeDeploymentTasks, draftDeploymentTaskIds]);
 
   const fetchRuntimePage = useCallback((token: string, reset: boolean) => {
     const requestId = ++runtimeRequestRef.current;
@@ -444,7 +545,9 @@ export function MyAgents({
 
   const visibleAgents = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
-    const source = activeType === "general" ? runtimeAgents : sandboxAgents;
+    const source = activeType === "general"
+      ? [...draftAgents, ...runtimeAgents]
+      : sandboxAgents;
     const matchingAgents = normalizedQuery
       ? source.filter((agent) =>
           agent.name.toLocaleLowerCase().includes(normalizedQuery),
@@ -468,6 +571,7 @@ export function MyAgents({
   }, [
     activeType,
     connectedRuntimeId,
+    draftAgents,
     hiddenRuntimeIds,
     query,
     runtimeAgents,
@@ -477,7 +581,7 @@ export function MyAgents({
   const activeTypeInfo = AGENT_TYPES.find((type) => type.id === activeType);
   const activeLabel = activeTypeInfo?.label ?? "智能体";
   const showInitialLoading = activeType === "general"
-    ? loadingRuntimes && runtimeAgents.length === 0
+    ? loadingRuntimes && runtimeAgents.length === 0 && draftAgents.length === 0
     : loadingSandboxAgents && sandboxAgents.length === 0;
   const showEmpty = !showInitialLoading && visibleAgents.length === 0;
   const createAgent = canCreate
@@ -550,7 +654,7 @@ export function MyAgents({
             <span className="my-agent-loading-mark" aria-hidden="true" />
             <span>正在加载智能体</span>
           </div>
-        ) : (activeType === "general" ? runtimeError : sandboxError) ? (
+        ) : (activeType === "general" ? runtimeError : sandboxError) && visibleAgents.length === 0 ? (
           <div className="my-agent-empty" role="alert">
             <p>{activeType === "general" ? runtimeError : sandboxError}</p>
             <button
@@ -624,25 +728,39 @@ export function MyAgents({
             </div>
           )
         ) : (
-          <div className="my-agent-grid">
-            {visibleAgents.map((agent) => (
-              <AgentCard
-                key={agent.id}
-                agent={agent}
-                onUse={useAgent}
-                onViewDetails={(agent) => {
-                  if (agent.sandbox) {
-                    onViewSandboxAgentDetails(agent.sandbox);
-                  } else {
-                    onViewAgentDetails(agent);
-                  }
-                }}
-                connecting={agent.id === connectingAgentId}
-                connected={agent.runtime?.runtimeId === connectedRuntimeId}
-                showOwnership={runtimeScope === "all"}
-              />
-            ))}
-          </div>
+          <>
+            {activeType === "general" && runtimeError ? (
+              <div className="my-agent-inline-error" role="alert">
+                <span>{runtimeError}</span>
+                <button type="button" onClick={() => void fetchRuntimePage("", true)}>
+                  重新加载
+                </button>
+              </div>
+            ) : null}
+            <div className="my-agent-grid">
+              {visibleAgents.map((agent) => (
+                <AgentCard
+                  key={agent.id}
+                  agent={agent}
+                  deploymentTask={deploymentTaskForAgent(agent)}
+                  onViewDeploymentTask={onViewDeploymentTask}
+                  onUse={useAgent}
+                  onViewDetails={(agent) => {
+                    if (agent.sandbox) {
+                      onViewSandboxAgentDetails(agent.sandbox);
+                    } else {
+                      onViewAgentDetails(agent);
+                    }
+                  }}
+                  connecting={agent.id === connectingAgentId}
+                  connected={agent.runtime?.runtimeId === connectedRuntimeId}
+                  showOwnership={runtimeScope === "all"}
+                  onEditDraft={onEditDraft}
+                  onDeleteDraft={setDraftToDelete}
+                />
+              ))}
+            </div>
+          </>
         )}
 
         {activeType === "general" && !runtimeError && !showInitialLoading &&
@@ -661,6 +779,19 @@ export function MyAgents({
           </div>
         )}
       </section>
+      {draftToDelete ? (
+        <StudioConfirmDialog
+          title="删除草稿？"
+          description={`删除后将无法恢复“${draftToDelete.draft.name || "未命名 Agent"}”。`}
+          confirmLabel="删除草稿"
+          variant="danger"
+          onCancel={() => setDraftToDelete(null)}
+          onConfirm={() => {
+            onDeleteDraft?.(draftToDelete);
+            setDraftToDelete(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

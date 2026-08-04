@@ -70,10 +70,7 @@ import { Sidebar, type SidebarPage } from "./ui/Sidebar";
 import { AgentInfoPanel } from "./ui/AgentTopology";
 import { SkillCenterView } from "./ui/SkillCenter";
 import { AddAgentKitView } from "./ui/AddAgentKit";
-import {
-  AgentWorkspace,
-  type WorkspaceAgentDraft,
-} from "./ui/AgentWorkspace";
+import { AgentWorkspace } from "./ui/AgentWorkspace";
 import {
   MyAgents,
   invalidateRuntimeAgentCache,
@@ -103,6 +100,12 @@ import { WorkflowCreate } from "./create/WorkflowCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
 import { FileArchive } from "lucide-react";
 import type { AgentDraft } from "./create/types";
+import {
+  loadWorkspaceDrafts,
+  workspaceDraftsKey,
+  writeWorkspaceDrafts,
+  type WorkspaceAgentDraft,
+} from "./create/agentDraftStorage";
 import type { DeployResult, DeploymentTaskUpdate } from "./ui/ProjectPreview";
 import { createSkillJob, deleteSkillJob } from "./ui/skill-create/api";
 import { SkillCreateWorkspace } from "./ui/skill-create/SkillCreateWorkspace";
@@ -191,15 +194,12 @@ type CreateView = "menu" | CreateMode | null;
 
 // Persist the last view so a page refresh restores where the user was.
 const LS = { app: "veadk.appName", view: "veadk.view", session: "veadk.sessionId" } as const;
+const DRAFT_AUTOSAVE_DELAY_MS = 600;
 const EMPTY_STRING_SET: Set<string> = new Set<string>();
 const EMPTY_STRING_ARR: string[] = [];
 
 function emptyInvocation(): FrontendInvocation {
   return { skills: [] };
-}
-
-function workspaceDraftsKey(userId: string): string {
-  return `veadk.agentDrafts.${encodeURIComponent(userId)}`;
 }
 
 function activeWorkspaceDraftKey(userId: string): string {
@@ -208,16 +208,6 @@ function activeWorkspaceDraftKey(userId: string): string {
 
 function workspaceAgentOrderKey(userId: string): string {
   return `veadk.agentOrder.${encodeURIComponent(userId)}`;
-}
-
-function loadWorkspaceDrafts(userId: string): WorkspaceAgentDraft[] {
-  if (!userId) return [];
-  try {
-    const value = JSON.parse(localStorage.getItem(workspaceDraftsKey(userId)) || "[]");
-    return Array.isArray(value) ? value : [];
-  } catch {
-    return [];
-  }
 }
 
 function loadWorkspaceAgentOrder(userId: string): string[] {
@@ -755,6 +745,7 @@ export default function App() {
   // banner (per-session transcripts/topology don't need it).
   const viewSidRef = useRef("");
   const [error, setError] = useState("");
+  const [draftStorageError, setDraftStorageError] = useState("");
   const [feedbackPendingIds, setFeedbackPendingIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -962,6 +953,9 @@ export default function App() {
   const [deploymentTasks, setDeploymentTasks] = useState<
     DeploymentTaskUpdate[]
   >([]);
+  const [draftDeploymentTaskIds, setDraftDeploymentTaskIds] = useState<
+    Record<string, string>
+  >({});
   const updateDeploymentTask = useCallback((task: DeploymentTaskUpdate) => {
     setDeploymentTasks((current) => {
       const existingIndex = current.findIndex((item) => item.id === task.id);
@@ -982,6 +976,9 @@ export default function App() {
   // A draft imported from YAML, used to pre-fill the custom wizard once.
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
   const [savedAgentDrafts, setSavedAgentDrafts] = useState<WorkspaceAgentDraft[]>([]);
+  const savedAgentDraftsRef = useRef<WorkspaceAgentDraft[]>([]);
+  const pendingWorkspaceDraftRef = useRef<WorkspaceAgentDraft | null>(null);
+  const workspaceDraftTimerRef = useRef<number | null>(null);
   const [workspaceAgentOrder, setWorkspaceAgentOrder] = useState<string[]>([]);
   const [editingDraftId, setEditingDraftId] = useState("");
   const editingDraftBaselineRef = useRef<WorkspaceAgentDraft | null>(null);
@@ -1039,6 +1036,44 @@ export default function App() {
   const restoredRef = useRef(false);
   const agentSelectionClearedRef = useRef(false);
 
+  const commitWorkspaceDrafts = useCallback(
+    (next: WorkspaceAgentDraft[]): boolean => {
+      if (!userId) return false;
+      try {
+        writeWorkspaceDrafts(localStorage, userId, next);
+      } catch (cause) {
+        setDraftStorageError(
+          cause instanceof Error ? cause.message : "浏览器拒绝保存草稿，请稍后重试。",
+        );
+        return false;
+      }
+      savedAgentDraftsRef.current = next;
+      setSavedAgentDrafts(next);
+      setDraftStorageError("");
+      return true;
+    },
+    [userId],
+  );
+
+  const cancelPendingWorkspaceDraft = useCallback((id?: string) => {
+    if (id && pendingWorkspaceDraftRef.current?.id !== id) return;
+    pendingWorkspaceDraftRef.current = null;
+    if (workspaceDraftTimerRef.current !== null) {
+      window.clearTimeout(workspaceDraftTimerRef.current);
+      workspaceDraftTimerRef.current = null;
+    }
+  }, []);
+
+  const flushPendingWorkspaceDraft = useCallback(() => {
+    const pending = pendingWorkspaceDraftRef.current;
+    if (!pending) return;
+    cancelPendingWorkspaceDraft();
+    commitWorkspaceDrafts([
+      pending,
+      ...savedAgentDraftsRef.current.filter((item) => item.id !== pending.id),
+    ]);
+  }, [cancelPendingWorkspaceDraft, commitWorkspaceDrafts]);
+
   const saveWorkspaceDraft = useCallback(
     (
       id: string,
@@ -1046,38 +1081,52 @@ export default function App() {
       deploymentTarget?: WorkspaceAgentDraft["deploymentTarget"],
     ) => {
       if (!id || !userId) return;
-      setSavedAgentDrafts((current) => {
-        const nextItem: WorkspaceAgentDraft = {
-          id,
-          draft,
-          updatedAt: Date.now(),
-          deploymentTarget,
-        };
-        const next = [nextItem, ...current.filter((item) => item.id !== id)];
-        localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
-        return next;
-      });
+      if (
+        pendingWorkspaceDraftRef.current &&
+        pendingWorkspaceDraftRef.current.id !== id
+      ) {
+        flushPendingWorkspaceDraft();
+      }
+      pendingWorkspaceDraftRef.current = {
+        id,
+        draft,
+        updatedAt: Date.now(),
+        deploymentTarget,
+      };
+      if (workspaceDraftTimerRef.current !== null) {
+        window.clearTimeout(workspaceDraftTimerRef.current);
+      }
+      workspaceDraftTimerRef.current = window.setTimeout(
+        flushPendingWorkspaceDraft,
+        DRAFT_AUTOSAVE_DELAY_MS,
+      );
     },
-    [userId],
+    [flushPendingWorkspaceDraft, userId],
   );
 
   const removeWorkspaceDraft = useCallback((id: string) => {
     if (!id || !userId) return;
-    setSavedAgentDrafts((current) => {
-      const next = current.filter((item) => item.id !== id);
-      localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
-      return next;
-    });
-  }, [userId]);
+    cancelPendingWorkspaceDraft(id);
+    commitWorkspaceDrafts(
+      savedAgentDraftsRef.current.filter((item) => item.id !== id),
+    );
+  }, [cancelPendingWorkspaceDraft, commitWorkspaceDrafts, userId]);
 
   const deleteWorkspaceDrafts = useCallback((draftsToDelete: WorkspaceAgentDraft[]) => {
     if (!userId || draftsToDelete.length === 0) return;
     const deletedDraftIds = new Set(draftsToDelete.map((item) => item.id));
-    setSavedAgentDrafts((current) => {
-      const next = current.filter((item) => !deletedDraftIds.has(item.id));
-      localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
-      return next;
-    });
+    if (
+      pendingWorkspaceDraftRef.current &&
+      deletedDraftIds.has(pendingWorkspaceDraftRef.current.id)
+    ) {
+      cancelPendingWorkspaceDraft();
+    }
+    commitWorkspaceDrafts(
+      savedAgentDraftsRef.current.filter((item) => !deletedDraftIds.has(item.id)),
+    );
+    setDraftDeploymentTaskIds((current) => Object.fromEntries(
+      Object.entries(current).filter(([id]) => !deletedDraftIds.has(id)),
+    ));
     if (deletedDraftIds.has(editingDraftId)) {
       setEditingDraftId("");
       setImportedDraft(null);
@@ -1085,31 +1134,53 @@ export default function App() {
       editingDraftBaselineRef.current = null;
       localStorage.removeItem(activeWorkspaceDraftKey(userId));
     }
-  }, [editingDraftId, userId]);
+  }, [cancelPendingWorkspaceDraft, commitWorkspaceDrafts, editingDraftId, userId]);
 
   const restoreWorkspaceDraftBaseline = useCallback((id: string) => {
     if (!id || !userId) return;
+    cancelPendingWorkspaceDraft(id);
     const baseline = editingDraftBaselineRef.current;
-    setSavedAgentDrafts((current) => {
-      const remaining = current.filter((item) => item.id !== id);
-      const next = baseline?.id === id ? [baseline, ...remaining] : remaining;
-      localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
-      return next;
-    });
-  }, [userId]);
+    const remaining = savedAgentDraftsRef.current.filter((item) => item.id !== id);
+    commitWorkspaceDrafts(
+      baseline?.id === id ? [baseline, ...remaining] : remaining,
+    );
+  }, [cancelPendingWorkspaceDraft, commitWorkspaceDrafts, userId]);
+
+  useEffect(() => {
+    window.addEventListener("pagehide", flushPendingWorkspaceDraft);
+    return () => {
+      window.removeEventListener("pagehide", flushPendingWorkspaceDraft);
+    };
+  }, [flushPendingWorkspaceDraft]);
 
   useEffect(() => {
     if (!userId) {
+      cancelPendingWorkspaceDraft();
+      savedAgentDraftsRef.current = [];
       setSavedAgentDrafts([]);
       setWorkspaceAgentOrder([]);
       setEditingDraftId("");
+      setDraftStorageError("");
       editingDraftBaselineRef.current = null;
       return;
     }
-    const nextDrafts = loadWorkspaceDrafts(userId);
+    let nextDrafts: WorkspaceAgentDraft[] = [];
+    let activeId = "";
+    try {
+      nextDrafts = loadWorkspaceDrafts(localStorage, userId);
+      if (localStorage.getItem(workspaceDraftsKey(userId)) !== null) {
+        writeWorkspaceDrafts(localStorage, userId, nextDrafts);
+      }
+      activeId = localStorage.getItem(activeWorkspaceDraftKey(userId)) || "";
+      setDraftStorageError("");
+    } catch (cause) {
+      setDraftStorageError(
+        cause instanceof Error ? cause.message : "无法读取本机草稿，请稍后重试。",
+      );
+    }
+    savedAgentDraftsRef.current = nextDrafts;
     setSavedAgentDrafts(nextDrafts);
     setWorkspaceAgentOrder(loadWorkspaceAgentOrder(userId));
-    const activeId = localStorage.getItem(activeWorkspaceDraftKey(userId)) || "";
     const activeDraft = nextDrafts.find((item) => item.id === activeId);
     editingDraftBaselineRef.current = activeDraft ?? null;
     if (createView === "custom" && activeDraft) {
@@ -1119,15 +1190,21 @@ export default function App() {
     }
     // Restore only when identity changes; later edits are already in state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId]);
+  }, [cancelPendingWorkspaceDraft, userId]);
 
   useEffect(() => {
     if (!userId) return;
     const key = activeWorkspaceDraftKey(userId);
-    if (createView === "custom" && editingDraftId) {
-      localStorage.setItem(key, editingDraftId);
-    } else {
-      localStorage.removeItem(key);
+    try {
+      if (createView === "custom" && editingDraftId) {
+        localStorage.setItem(key, editingDraftId);
+      } else {
+        localStorage.removeItem(key);
+      }
+    } catch {
+      setDraftStorageError(
+        "浏览器拒绝保存当前草稿位置，请检查站点存储权限后重试。",
+      );
     }
   }, [createView, editingDraftId, userId]);
 
@@ -1193,17 +1270,13 @@ export default function App() {
         }
         return next;
       });
-      setSavedAgentDrafts((current) => {
-        const next = current.filter(
+      commitWorkspaceDrafts(
+        savedAgentDraftsRef.current.filter(
           (item) =>
             !item.deploymentTarget?.runtimeId ||
             !deletedRuntimeIds.has(item.deploymentTarget.runtimeId),
-        );
-        if (userId) {
-          localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
-        }
-        return next;
-      });
+        ),
+      );
       const deletedCurrentSelection = selectedRuntimeId
         ? deletedRuntimeIds.has(selectedRuntimeId)
         : targets.some((agent) => agent.id === appName);
@@ -1252,7 +1325,7 @@ export default function App() {
       const suffix = failures.length > 3 ? `；另有 ${failures.length - 3} 个失败` : "";
       throw new Error(`${failures.length} 个 Agent 删除失败：${shown}${suffix}`);
     }
-  }, [agentDetailTarget, appName, connections, userId]);
+  }, [agentDetailTarget, appName, commitWorkspaceDrafts, connections, userId]);
 
   const refreshAgentLibrary = useCallback(async () => {
     setAgentLibraryLoading(true);
@@ -1299,6 +1372,7 @@ export default function App() {
     console.log("Agent added, navigating to:", agentId, agentName);
     setConnections(loadConnections()); // Refresh connections to pick up the new agent
     setLibraryRuntimeIds(null);
+    invalidateRuntimeAgentCache();
     removeWorkspaceDraft(editingDraftId);
     setEditingDraftId("");
     editingDraftBaselineRef.current = null;
@@ -1315,6 +1389,7 @@ export default function App() {
   const openDeploymentDetail = useCallback((task: DeploymentTaskUpdate) => {
     setCreateView(null);
     setAddMenu(false);
+    setMyAgents(false);
     setAgentDetailTarget(null);
     setManageAgents(true);
     setFocusedWorkspaceAgentId("");
@@ -1322,6 +1397,16 @@ export default function App() {
     setFocusedDeploymentTaskId(task.id);
     setError("");
   }, []);
+
+  const startDeployment = useCallback((task: DeploymentTaskUpdate) => {
+    if (editingDraftId) {
+      setDraftDeploymentTaskIds((current) => ({
+        ...current,
+        [editingDraftId]: task.id,
+      }));
+    }
+    openDeploymentDetail(task);
+  }, [editingDraftId, openDeploymentDetail]);
 
   const finishDeployment = useCallback(
     async (result: DeployResult) => {
@@ -1343,8 +1428,15 @@ export default function App() {
         next.add(result.runtimeId!);
         return next;
       });
+      invalidateRuntimeAgentCache();
       setRuntimeUpdateTarget(null);
       removeWorkspaceDraft(editingDraftId);
+      setDraftDeploymentTaskIds((current) => {
+        if (!editingDraftId || !current[editingDraftId]) return current;
+        const next = { ...current };
+        delete next[editingDraftId];
+        return next;
+      });
       setEditingDraftId("");
       editingDraftBaselineRef.current = null;
       setFocusedWorkspaceAgentId(agentId);
@@ -3192,7 +3284,9 @@ export default function App() {
   const visibleCreateView = canCreateAgents ? createView : null;
   const showAddMenu = canCreateAgents && addMenu;
   const showAddAgent = canCreateAgents && addAgent;
-  const showManageAgents = manageAgents;
+  const showManageAgents = manageAgents && Boolean(
+    agentDetailTarget || focusedDeploymentTaskId || focusedWorkspaceAgentId,
+  );
   const agentEntries = buildAgentEntries(apps, connections);
   const workspaceAgentEntries: AgentEntry[] = agentEntries
     .filter(
@@ -3849,7 +3943,12 @@ export default function App() {
         return (
           <section className="main-shell">
             <main className={`main${sandboxSession ? " is-sandbox-session" : ""}`}>
-            {error && <div className="error">{error}</div>}
+            {error && <div className="error" role="alert">{error}</div>}
+            {draftStorageError && (
+              <div className="error" role="alert">
+                {draftStorageError}
+              </div>
+            )}
             {loadingSession && (
               <div className="session-loading">
                 <Loader2 className="icon spin" /> 加载会话…
@@ -3895,6 +3994,22 @@ export default function App() {
                 sandboxRefreshKey={sandboxAgentRefreshKey}
                 connectedRuntimeId={connectedRuntimeId}
                 hiddenRuntimeIds={hiddenRuntimeIds}
+                drafts={savedAgentDrafts}
+                deploymentTasks={deploymentTasks}
+                draftDeploymentTaskIds={draftDeploymentTaskIds}
+                onViewDeploymentTask={openDeploymentDetail}
+                onEditDraft={(item) => {
+                  setMyAgents(false);
+                  setImportedDraft(item.draft);
+                  setEditingDraftId(item.id);
+                  editingDraftBaselineRef.current = item;
+                  setRuntimeUpdateTarget(item.deploymentTarget ?? null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setCreateView("custom");
+                  setError("");
+                }}
+                onDeleteDraft={(item) => deleteWorkspaceDrafts([item])}
               />
             ) : showManageAgents ? (
               <AgentWorkspace
@@ -3916,7 +4031,7 @@ export default function App() {
                 focusedAgentSection={focusedWorkspaceAgentSection}
                 focusedCaseKind={focusedWorkspaceCaseKind}
                 feedbackCasePreview={feedbackCasePreview}
-                detailOnly={!!detailAgentEntry || !!focusedDeploymentTaskId}
+                detailOnly
                 onRetryAgents={() => void refreshAgentLibrary()}
                 onAgentOrderChange={saveWorkspaceAgentOrder}
                 onDeleteAgents={deleteWorkspaceAgents}
@@ -4133,7 +4248,7 @@ export default function App() {
                   setManageAgents(true);
                   setError("");
                 } : undefined}
-                onDeploymentStarted={openDeploymentDetail}
+                onDeploymentStarted={startDeployment}
                 onDeploymentComplete={finishDeployment}
               />
             ) : visibleCreateView === "template" ? (
@@ -4148,7 +4263,7 @@ export default function App() {
                 }}
                 onAgentAdded={onAgentAdded}
                 onDeploymentTaskChange={updateDeploymentTask}
-                onDeploymentStarted={openDeploymentDetail}
+                onDeploymentStarted={startDeployment}
                 onDeploymentComplete={finishDeployment}
                 initialDeployRegion={newRuntimeRegion}
               />
