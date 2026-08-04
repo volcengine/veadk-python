@@ -436,7 +436,10 @@ test("debug workspace compares multiple configurations behind one shared input",
     createSource,
     /function DebugComparisonWorkspace[\s\S]*?aria-label="A\/B 调试工作台"/,
   );
-  assert.match(createSource, /className="cw-ab-add"[\s\S]*?添加对照组/);
+  assert.match(
+    createSource,
+    /className="cw-ab-composer"[\s\S]*?className="cw-btn cw-btn-soft cw-ab-add"[\s\S]*?添加对照组/,
+  );
   assert.doesNotMatch(createSource, /快速调试|同一条输入将同时发送到全部对照组/);
   assert.match(createSource, /className="cw-ab-config-trigger"[\s\S]*?测试配置/);
   assert.match(createSource, /cw-ab-card-inner\$\{variant\.configOpen \? " is-flipped" : ""\}/);
@@ -471,7 +474,11 @@ test("debug workspace compares multiple configurations behind one shared input",
   assert.match(createStyles, /\.cw-ab-card-face\s*\{[\s\S]*?border:\s*1px dashed/);
   assert.match(
     createStyles,
-    /\.cw-ab-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/,
+    /\.cw-ab-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(var\(--cw-ab-column-count\), minmax\(0, 1fr\)\)/,
+  );
+  assert.match(
+    createSource,
+    /--cw-ab-column-count": variants\.length/,
   );
   assert.match(
     createStyles,
@@ -485,7 +492,11 @@ test("debug workspace compares multiple configurations behind one shared input",
   );
   assert.match(
     createStyles,
-    /\.cw-ab-composer\s*\{[\s\S]*?position:\s*relative;[\s\S]*?min-width:\s*0;/,
+    /\.cw-ab-composer\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) auto;/,
+  );
+  assert.doesNotMatch(
+    createSource,
+    /<div className="cw-ab-grid">[\s\S]*?className="cw-ab-add"/,
   );
   assert.doesNotMatch(createStyles, /\.cw-ab-head|\.cw-ab-overlay/);
 });

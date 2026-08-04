@@ -1873,7 +1873,14 @@ function DebugComparisonWorkspace({
         {!enabled ? (
           <div className="cw-debug-empty">{disabledReason}</div>
         ) : (
-          <div className="cw-ab-grid">
+          <div
+            className="cw-ab-grid"
+            style={
+              {
+                "--cw-ab-column-count": variants.length,
+              } as CSSProperties
+            }
+          >
             {variants.map((variant, variantIndex) => {
               const modelName = variant.modelName.trim();
               const description = variant.description.trim();
@@ -2161,13 +2168,6 @@ function DebugComparisonWorkspace({
               );
             })}
 
-            {variants.length < 3 && (
-              <button type="button" className="cw-ab-add" onClick={onAddVariant}>
-                <Plus className="cw-i" />
-                <strong>添加对照组</strong>
-                <span>最多同时创建 3 个测试组</span>
-              </button>
-            )}
           </div>
         )}
       </div>
@@ -2207,6 +2207,16 @@ function DebugComparisonWorkspace({
             )}
           </button>
         </div>
+        {enabled && variants.length < 3 && (
+          <button
+            type="button"
+            className="cw-btn cw-btn-soft cw-ab-add"
+            onClick={onAddVariant}
+          >
+            <Plus className="cw-i" />
+            添加对照组
+          </button>
+        )}
       </div>
     </section>
   );

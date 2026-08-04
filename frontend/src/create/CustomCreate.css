@@ -1153,16 +1153,10 @@
 .cw-ab-grid {
   min-height: 100%;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--cw-ab-column-count), minmax(0, 1fr));
   grid-auto-rows: minmax(420px, 1fr);
   align-items: stretch;
   gap: 12px;
-}
-.cw-ab-add {
-  min-height: 420px;
-  border: 1px dashed hsl(var(--foreground) / 0.2);
-  border-radius: 16px;
-  background: hsl(var(--background));
 }
 .cw-ab-card {
   min-width: 0;
@@ -1566,35 +1560,20 @@
   opacity: 0.42;
 }
 .cw-ab-add {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  min-height: 48px;
+  align-self: stretch;
   justify-content: center;
-  gap: 7px;
-  color: hsl(var(--muted-foreground));
-  cursor: pointer;
-  font: inherit;
-  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
-}
-.cw-ab-add:hover {
-  border-color: hsl(var(--foreground) / 0.38);
-  background: hsl(var(--secondary) / 0.24);
-  color: hsl(var(--foreground));
-}
-.cw-ab-add .cw-i {
-  width: 22px;
-  height: 22px;
-}
-.cw-ab-add strong {
-  font-size: 13px;
-}
-.cw-ab-add span {
-  font-size: 10.5px;
+  padding-inline: 18px;
+  white-space: nowrap;
 }
 .cw-ab-composer {
   position: relative;
   z-index: 2;
   min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 12px;
   padding: 18px var(--cw-workspace-gutter) 18px;
   background: hsl(var(--background));
 }
@@ -4158,7 +4137,7 @@
     padding: 8px var(--cw-workspace-gutter);
   }
   .cw-ab-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(var(--cw-ab-column-count), minmax(0, 1fr));
   }
   .cw-ab-composer {
     padding-inline: var(--cw-workspace-gutter);
@@ -4236,7 +4215,11 @@
     grid-template-columns: minmax(0, 1fr);
   }
   .cw-ab-composer {
+    grid-template-columns: minmax(0, 1fr);
     padding-bottom: 12px;
+  }
+  .cw-ab-add {
+    width: 100%;
   }
   .cw-dataset-summary > div + div {
     border-top: 1px solid hsl(var(--border));

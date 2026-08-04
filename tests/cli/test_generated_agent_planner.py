@@ -300,6 +300,12 @@ def test_planner_schema_excludes_hidden_create_capabilities() -> None:
     assert "knowledgebase" not in PLANNER_INSTRUCTION.lower()
 
 
+def test_planner_prefers_a_flexible_llm_root_agent() -> None:
+    assert "Prefer an llm Agent as rootAgent" in PLANNER_INSTRUCTION
+    assert "Do not choose an orchestrator merely because" in PLANNER_INSTRUCTION
+    assert "strict workflow control is essential" in PLANNER_INSTRUCTION
+
+
 def test_planner_draft_disables_hidden_capabilities() -> None:
     plan = GeneratedAgentDraftPlan.model_validate(
         {
