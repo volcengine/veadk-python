@@ -19,6 +19,7 @@ import { formatRequestError } from "../adk/requestError";
 import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { AgentFaceIcon } from "./AgentFaceIcon";
 import { SandboxAgentIcon } from "./icons/SandboxAgentIcons";
+import type { DeploymentTaskUpdate } from "./ProjectPreview";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import "./MyAgents.css";
 
@@ -206,6 +207,8 @@ function AgentCard({
   connecting,
   connected,
   showOwnership,
+  deploymentTask,
+  onViewDeploymentTask,
   onEditDraft,
   onDeleteDraft,
 }: {
@@ -215,6 +218,8 @@ function AgentCard({
   connecting?: boolean;
   connected?: boolean;
   showOwnership?: boolean;
+  deploymentTask?: DeploymentTaskUpdate;
+  onViewDeploymentTask?: (task: DeploymentTaskUpdate) => void;
   onEditDraft?: (draft: WorkspaceAgentDraft) => void;
   onDeleteDraft?: (draft: WorkspaceAgentDraft) => void;
 }) {
@@ -232,7 +237,9 @@ function AgentCard({
             ) : null}
           </div>
           {agent.draft ? (
-            <span className="my-agent-draft-badge">草稿</span>
+            <span className="my-agent-draft-badge">
+              {deploymentTask ? "部署中" : "草稿"}
+            </span>
           ) : agent.sandbox ? (
             <span
               className="my-agent-status-label"
@@ -242,6 +249,9 @@ function AgentCard({
             </span>
           ) : agent.runtime ? (
             <div className="my-agent-card-badges">
+              {deploymentTask ? (
+                <span className="my-agent-deploying-badge">部署中</span>
+              ) : null}
               <span className="my-agent-region-badge">
                 {formatRuntimeRegion(agent.runtime.region)}
               </span>
@@ -271,10 +281,14 @@ function AgentCard({
             <button
               type="button"
               className="my-agent-details"
-              aria-label={`编辑草稿 ${agent.name}`}
-              onClick={() => onEditDraft?.(agent.draft!)}
+              aria-label={deploymentTask
+                ? `查看 ${agent.name} 部署进度`
+                : `编辑草稿 ${agent.name}`}
+              onClick={() => deploymentTask
+                ? onViewDeploymentTask?.(deploymentTask)
+                : onEditDraft?.(agent.draft!)}
             >
-              编辑
+              {deploymentTask ? "查看进度" : "编辑"}
             </button>
             <button
               type="button"
@@ -291,10 +305,14 @@ function AgentCard({
               type="button"
               className="my-agent-details"
               disabled={!actionable}
-              aria-label={`查看 ${agent.name} 详情`}
-              onClick={() => onViewDetails?.(agent)}
+              aria-label={deploymentTask
+                ? `查看 ${agent.name} 部署进度`
+                : `查看 ${agent.name} 详情`}
+              onClick={() => deploymentTask
+                ? onViewDeploymentTask?.(deploymentTask)
+                : onViewDetails?.(agent)}
             >
-              查看详情
+              {deploymentTask ? "查看进度" : "查看详情"}
             </button>
             <button
               type="button"
@@ -331,6 +349,9 @@ export interface MyAgentsProps {
   connectedRuntimeId?: string;
   hiddenRuntimeIds?: ReadonlySet<string>;
   drafts?: WorkspaceAgentDraft[];
+  deploymentTasks?: DeploymentTaskUpdate[];
+  draftDeploymentTaskIds?: Readonly<Record<string, string>>;
+  onViewDeploymentTask?: (task: DeploymentTaskUpdate) => void;
   onEditDraft?: (draft: WorkspaceAgentDraft) => void;
   onDeleteDraft?: (draft: WorkspaceAgentDraft) => void;
 }
@@ -348,6 +369,9 @@ export function MyAgents({
   connectedRuntimeId = "",
   hiddenRuntimeIds = EMPTY_RUNTIME_IDS,
   drafts = [],
+  deploymentTasks = [],
+  draftDeploymentTaskIds = {},
+  onViewDeploymentTask,
   onEditDraft,
   onDeleteDraft,
 }: MyAgentsProps) {
@@ -368,6 +392,31 @@ export function MyAgents({
   const [connectingAgentId, setConnectingAgentId] = useState("");
   const [draftToDelete, setDraftToDelete] = useState<WorkspaceAgentDraft | null>(null);
   const draftAgents = useMemo(() => drafts.map(draftToAgent), [drafts]);
+  const activeDeploymentTasks = useMemo(() => {
+    const byId = new Map<string, DeploymentTaskUpdate>();
+    const byRuntimeId = new Map<string, DeploymentTaskUpdate>();
+    for (const task of deploymentTasks) {
+      if (task.status !== "running") continue;
+      byId.set(task.id, task);
+      if (!task.runtimeId) continue;
+      const previous = byRuntimeId.get(task.runtimeId);
+      if (!previous || task.startedAt > previous.startedAt) {
+        byRuntimeId.set(task.runtimeId, task);
+      }
+    }
+    return { byId, byRuntimeId };
+  }, [deploymentTasks]);
+
+  const deploymentTaskForAgent = useCallback((agent: MyAgentCardData) => {
+    if (agent.draft) {
+      const taskId = draftDeploymentTaskIds[agent.draft.id];
+      return taskId ? activeDeploymentTasks.byId.get(taskId) : undefined;
+    }
+    const runtimeId = agent.runtime?.runtimeId;
+    return runtimeId
+      ? activeDeploymentTasks.byRuntimeId.get(runtimeId)
+      : undefined;
+  }, [activeDeploymentTasks, draftDeploymentTaskIds]);
 
   const fetchRuntimePage = useCallback((token: string, reset: boolean) => {
     const requestId = ++runtimeRequestRef.current;
@@ -693,6 +742,8 @@ export function MyAgents({
                 <AgentCard
                   key={agent.id}
                   agent={agent}
+                  deploymentTask={deploymentTaskForAgent(agent)}
+                  onViewDeploymentTask={onViewDeploymentTask}
                   onUse={useAgent}
                   onViewDetails={(agent) => {
                     if (agent.sandbox) {

@@ -98,7 +98,7 @@ test("passes the selected region and network to AgentKit deployment", () => {
 });
 
 test("uses the shared deployment lifecycle for uploaded packages", () => {
-  assert.match(appSource, /<CodePackageCreate[\s\S]*?onDeploymentStarted=\{openDeploymentDetail\}/);
+  assert.match(appSource, /<CodePackageCreate[\s\S]*?onDeploymentStarted=\{startDeployment\}/);
   assert.match(appSource, /<CodePackageCreate[\s\S]*?onDeploymentComplete=\{finishDeployment\}/);
   assert.match(packageCreateSource, /onDeploymentStarted\?: \(task: DeploymentTaskUpdate\)/);
   assert.match(packageCreateSource, /onDeploymentComplete\?: \(result: DeployResult\)/);

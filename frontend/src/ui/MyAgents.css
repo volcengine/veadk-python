@@ -284,7 +284,8 @@
   line-height: 1;
 }
 
-.my-agent-draft-badge {
+.my-agent-draft-badge,
+.my-agent-deploying-badge {
   min-height: 22px;
   display: inline-flex;
   flex: 0 0 auto;

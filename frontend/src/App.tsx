@@ -953,6 +953,9 @@ export default function App() {
   const [deploymentTasks, setDeploymentTasks] = useState<
     DeploymentTaskUpdate[]
   >([]);
+  const [draftDeploymentTaskIds, setDraftDeploymentTaskIds] = useState<
+    Record<string, string>
+  >({});
   const updateDeploymentTask = useCallback((task: DeploymentTaskUpdate) => {
     setDeploymentTasks((current) => {
       const existingIndex = current.findIndex((item) => item.id === task.id);
@@ -1121,6 +1124,9 @@ export default function App() {
     commitWorkspaceDrafts(
       savedAgentDraftsRef.current.filter((item) => !deletedDraftIds.has(item.id)),
     );
+    setDraftDeploymentTaskIds((current) => Object.fromEntries(
+      Object.entries(current).filter(([id]) => !deletedDraftIds.has(id)),
+    ));
     if (deletedDraftIds.has(editingDraftId)) {
       setEditingDraftId("");
       setImportedDraft(null);
@@ -1383,6 +1389,7 @@ export default function App() {
   const openDeploymentDetail = useCallback((task: DeploymentTaskUpdate) => {
     setCreateView(null);
     setAddMenu(false);
+    setMyAgents(false);
     setAgentDetailTarget(null);
     setManageAgents(true);
     setFocusedWorkspaceAgentId("");
@@ -1390,6 +1397,16 @@ export default function App() {
     setFocusedDeploymentTaskId(task.id);
     setError("");
   }, []);
+
+  const startDeployment = useCallback((task: DeploymentTaskUpdate) => {
+    if (editingDraftId) {
+      setDraftDeploymentTaskIds((current) => ({
+        ...current,
+        [editingDraftId]: task.id,
+      }));
+    }
+    openDeploymentDetail(task);
+  }, [editingDraftId, openDeploymentDetail]);
 
   const finishDeployment = useCallback(
     async (result: DeployResult) => {
@@ -1414,6 +1431,12 @@ export default function App() {
       invalidateRuntimeAgentCache();
       setRuntimeUpdateTarget(null);
       removeWorkspaceDraft(editingDraftId);
+      setDraftDeploymentTaskIds((current) => {
+        if (!editingDraftId || !current[editingDraftId]) return current;
+        const next = { ...current };
+        delete next[editingDraftId];
+        return next;
+      });
       setEditingDraftId("");
       editingDraftBaselineRef.current = null;
       setFocusedWorkspaceAgentId(agentId);
@@ -3261,7 +3284,9 @@ export default function App() {
   const visibleCreateView = canCreateAgents ? createView : null;
   const showAddMenu = canCreateAgents && addMenu;
   const showAddAgent = canCreateAgents && addAgent;
-  const showManageAgents = manageAgents;
+  const showManageAgents = manageAgents && Boolean(
+    agentDetailTarget || focusedDeploymentTaskId || focusedWorkspaceAgentId,
+  );
   const agentEntries = buildAgentEntries(apps, connections);
   const workspaceAgentEntries: AgentEntry[] = agentEntries
     .filter(
@@ -3970,6 +3995,9 @@ export default function App() {
                 connectedRuntimeId={connectedRuntimeId}
                 hiddenRuntimeIds={hiddenRuntimeIds}
                 drafts={savedAgentDrafts}
+                deploymentTasks={deploymentTasks}
+                draftDeploymentTaskIds={draftDeploymentTaskIds}
+                onViewDeploymentTask={openDeploymentDetail}
                 onEditDraft={(item) => {
                   setMyAgents(false);
                   setImportedDraft(item.draft);
@@ -4003,7 +4031,7 @@ export default function App() {
                 focusedAgentSection={focusedWorkspaceAgentSection}
                 focusedCaseKind={focusedWorkspaceCaseKind}
                 feedbackCasePreview={feedbackCasePreview}
-                detailOnly={!!detailAgentEntry || !!focusedDeploymentTaskId}
+                detailOnly
                 onRetryAgents={() => void refreshAgentLibrary()}
                 onAgentOrderChange={saveWorkspaceAgentOrder}
                 onDeleteAgents={deleteWorkspaceAgents}
@@ -4220,7 +4248,7 @@ export default function App() {
                   setManageAgents(true);
                   setError("");
                 } : undefined}
-                onDeploymentStarted={openDeploymentDetail}
+                onDeploymentStarted={startDeployment}
                 onDeploymentComplete={finishDeployment}
               />
             ) : visibleCreateView === "template" ? (
@@ -4235,7 +4263,7 @@ export default function App() {
                 }}
                 onAgentAdded={onAgentAdded}
                 onDeploymentTaskChange={updateDeploymentTask}
-                onDeploymentStarted={openDeploymentDetail}
+                onDeploymentStarted={startDeployment}
                 onDeploymentComplete={finishDeployment}
                 initialDeployRegion={newRuntimeRegion}
               />

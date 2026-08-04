@@ -36,7 +36,7 @@ const connectionsSource = readFileSync(
   "utf8",
 );
 
-test("Agent navigation opens the PR 748 workspace with creation and evaluation", () => {
+test("Agent navigation uses the card page and keeps only detail workspace routes", () => {
   assert.match(appSource, /import \{[\s\S]*?AgentWorkspace[\s\S]*?\} from "\.\/ui\/AgentWorkspace"/);
   assert.match(
     appSource,
@@ -44,10 +44,11 @@ test("Agent navigation opens the PR 748 workspace with creation and evaluation",
   );
   assert.doesNotMatch(appSource, /<Navbar\b/);
   assert.doesNotMatch(appSource, /showManageAgents\s*\?\s*"智能体"/);
-  assert.match(workspaceSource, /智能体库/);
-  assert.match(workspaceSource, /评测/);
-  assert.match(workspaceSource, /view === "library" \? "新建 Agent" : "新建评测组"/);
-  assert.match(workspaceSource, /开始评测/);
+  assert.match(appSource, /myAgents \? \([\s\S]*?<MyAgents/);
+  assert.match(
+    appSource,
+    /const showManageAgents = manageAgents && Boolean\([\s\S]*?agentDetailTarget \|\| focusedDeploymentTaskId \|\| focusedWorkspaceAgentId/,
+  );
 });
 
 test("workspace drafts stay wired to custom Agent creation", () => {
@@ -68,7 +69,7 @@ test("workspace drafts stay wired to custom Agent creation", () => {
   );
 });
 
-test("workspace layout keeps the library and evaluation panes available", () => {
+test("legacy workspace library chrome is unreachable from App", () => {
   assert.match(workspaceStyles, /\.aw-view-tabs/);
   assert.match(workspaceStyles, /\.aw-view-tabs button\s*\{[\s\S]*?font-size:\s*14px;/);
   assert.match(workspaceStyles, /\.aw-workspace-frame/);
@@ -76,6 +77,7 @@ test("workspace layout keeps the library and evaluation panes available", () => 
   assert.doesNotMatch(workspaceSource, /只读预览，可拖动与缩放/);
   assert.match(workspaceStyles, /\.aw-canvas\s*\{[\s\S]*?height:\s*220px;/);
   assert.doesNotMatch(workspaceStyles, /\.aw-canvas-card\s*\{[^}]*min-height:\s*330px/);
+  assert.match(appSource, /<AgentWorkspace[\s\S]*?detailOnly\s+[\s\S]*?onRetryAgents=/);
 });
 
 test("focused agent details can render without the workspace tabs or list sidebar", () => {
@@ -85,7 +87,7 @@ test("focused agent details can render without the workspace tabs or list sideba
   assert.match(workspaceStyles, /\.aw-root\.is-detail-only \.aw-workspace\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(
     appSource,
-    /focusedAgentId=\{detailAgentEntry\?\.id \?\? focusedWorkspaceAgentId\}[\s\S]*?detailOnly=\{!!detailAgentEntry \|\| !!focusedDeploymentTaskId\}/,
+    /focusedAgentId=\{detailAgentEntry\?\.id \?\? focusedWorkspaceAgentId\}[\s\S]*?detailOnly/,
   );
   assert.match(appSource, /runtimeApp: detailConnection\?\.apps\[0\]/);
   assert.match(workspaceSource, /const knownApp = selectedAgent\?\.runtimeApp \?\? ""[\s\S]*?getRuntimeAgentInfo\([\s\S]*?knownApp/);
@@ -156,6 +158,8 @@ test("workspace uses cached runtime data and prefetches likely next views", () =
 
 test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => {
   assert.match(appSource, /const openDeploymentDetail = useCallback/);
+  assert.match(appSource, /const startDeployment = useCallback/);
+  assert.match(appSource, /setMyAgents\(false\)[\s\S]*?setFocusedDeploymentTaskId\(task\.id\)/);
   assert.match(appSource, /setFocusedDeploymentTaskId\(task\.id\)/);
   assert.match(appSource, /setAgentDetailTarget\(null\)[\s\S]*?setFocusedDeploymentTaskId\(task\.id\)/);
   assert.match(appSource, /const finishDeployment = useCallback/);
@@ -170,7 +174,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
     appSource,
     /const finishDeployment = useCallback[\s\S]*?removeWorkspaceDraft\(editingDraftId\)[\s\S]*?setFocusedWorkspaceAgentId\(agentId\)[\s\S]*?setManageAgents\(true\)/,
   );
-  assert.match(appSource, /onDeploymentStarted=\{openDeploymentDetail\}/);
+  assert.match(appSource, /onDeploymentStarted=\{startDeployment\}/);
   assert.match(appSource, /onDeploymentComplete=\{finishDeployment\}/);
 
   assert.match(customCreateSource, /onDeploymentComplete\?: \(result: DeployResult\)/);
