@@ -5928,6 +5928,7 @@ def _resolve_studio_identity_region(
     user_pool_id: str,
     client_id: str,
     deployment_region: str,
+    session_token: str = "",
 ) -> str:
     """Locate a Studio user-pool client across supported Identity regions."""
     from veadk.integrations.ve_identity.identity_client import IdentityClient
@@ -5940,6 +5941,7 @@ def _resolve_studio_identity_region(
         identity_client = IdentityClient(
             access_key=access_key,
             secret_key=secret_key,
+            session_token=session_token,
             region=candidate_region,
         )
         if identity_client.user_pool_client_exists(
@@ -5956,14 +5958,20 @@ def _resolve_studio_cloud_credentials(
     access_key: str | None,
     secret_key: str | None,
     credentials_path: Path | None = None,
-) -> tuple[str, str]:
-    """Resolve Studio deploy credentials from CLI, environment, or ~/.volc."""
+    session_token: str | None = None,
+) -> tuple[str, str, str]:
+    """Resolve Studio deploy credentials as AK, SK, and token."""
     import configparser
 
     resolved_access_key = access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
     resolved_secret_key = secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
+    resolved_session_token = (
+        session_token
+        or os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+        or os.getenv("VOLC_SESSIONTOKEN", "")
+    )
     if resolved_access_key and resolved_secret_key:
-        return resolved_access_key, resolved_secret_key
+        return resolved_access_key, resolved_secret_key, resolved_session_token
 
     path = credentials_path or Path.home() / ".volc" / "credentials"
     if path.is_file():
@@ -5983,9 +5991,13 @@ def _resolve_studio_cloud_credentials(
             resolved_secret_key
             or str(default_profile.get("secret_access_key", "")).strip()
         )
+        resolved_session_token = (
+            resolved_session_token
+            or str(default_profile.get("session_token", "")).strip()
+        )
 
     if resolved_access_key and resolved_secret_key:
-        return resolved_access_key, resolved_secret_key
+        return resolved_access_key, resolved_secret_key, resolved_session_token
     raise click.ClickException(
         "Volcengine credentials required: pass --volcengine-access-key/"
         "--volcengine-secret-key, set VOLCENGINE_ACCESS_KEY/"
@@ -6044,6 +6056,7 @@ def _resolve_studio_cloud_credentials(
 @click.option("--gateway-upstream-name", default="")
 @click.option("--volcengine-access-key", default=None)
 @click.option("--volcengine-secret-key", default=None)
+@click.option("--volcengine-session-token", default=None)
 @click.option(
     "--veadk-version",
     default="",
@@ -6150,6 +6163,7 @@ def frontend_deploy(
     gateway_upstream_name: str,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
+    volcengine_session_token: str | None,
     veadk_version: str,
     from_source: bool,
     site_logo: str | None,
@@ -6181,9 +6195,10 @@ def frontend_deploy(
     except ValueError as error:
         raise click.ClickException(str(error)) from error
 
-    ak, sk = _resolve_studio_cloud_credentials(
+    ak, sk, session_token = _resolve_studio_cloud_credentials(
         volcengine_access_key,
         volcengine_secret_key,
+        session_token=volcengine_session_token,
     )
 
     identity_region = _resolve_studio_identity_region(
@@ -6192,6 +6207,7 @@ def frontend_deploy(
         user_pool_id=user_pool_id,
         client_id=allowed_client_id,
         deployment_region=region,
+        session_token=session_token,
     )
     if identity_region != region:
         click.secho(
@@ -6206,7 +6222,7 @@ def frontend_deploy(
         ensure_serverless_application_role,
     )
 
-    ensure_serverless_application_role(ak, sk)
+    ensure_serverless_application_role(ak, sk, session_token=session_token)
 
     # 2) Ensure the IAM role the function runs as (auto-create unless provided).
     if iam_role:
@@ -6216,16 +6232,13 @@ def frontend_deploy(
         from veadk.cli.frontend_deploy_iam import ensure_frontend_role
 
         click.echo("Ensuring IAM role + policy…")
-        role_trn = ensure_frontend_role(ak, sk)
+        role_trn = ensure_frontend_role(ak, sk, session_token=session_token)
         click.echo(f"IAM role ready: {role_trn}")
     # Consumed by VeFaaS._create_function as the function's Role (STS creds are
     # then injected into the instance); read via getenv from os.environ, NOT
     # shipped as a plain env var.
     os.environ["IAM_ROLE"] = role_trn
 
-    session_token = os.getenv("VOLCENGINE_SESSION_TOKEN") or os.getenv(
-        "VOLC_SESSIONTOKEN"
-    )
     sandbox_tool_ids = {
         "codex": sandbox_chat_codex_tool_id,
         "skill_creator": sandbox_skill_creator_tool_id,
@@ -6411,7 +6424,7 @@ def frontend_deploy(
     from veadk.integrations.ve_apig.ve_apig import APIGateway
 
     if not gateway_name:
-        apig = APIGateway(ak, sk, region)
+        apig = APIGateway(ak, sk, region, session_token=session_token)
         gw = apig.find_serverless_gateway()
         if gw is not None:
             gateway_name = getattr(gw, "name")
@@ -6454,6 +6467,7 @@ def frontend_deploy(
         engine = CloudAgentEngine(
             volcengine_access_key=ak,
             volcengine_secret_key=sk,
+            volcengine_session_token=session_token,
             region=region,
             project=project,
         )
@@ -6484,7 +6498,10 @@ def frontend_deploy(
                 )
 
                 IdentityClient(
-                    access_key=ak, secret_key=sk, region=identity_region
+                    access_key=ak,
+                    secret_key=sk,
+                    session_token=session_token,
+                    region=identity_region,
                 ).register_callback_for_user_pool_client(
                     user_pool_uid=user_pool_id,
                     client_uid=allowed_client_id,

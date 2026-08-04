@@ -201,7 +201,7 @@ class IdentityClient:
             True if credential is expired or will expire within 5 minutes, False otherwise.
         """
         if self._sts_credential_expires_at is None:
-            return True
+            return False
 
         import time
 
