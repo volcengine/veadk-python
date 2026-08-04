@@ -22,7 +22,6 @@ from opentelemetry import trace as trace_api
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import override
 
@@ -160,28 +159,31 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         for each exporter, and ensures proper resource attribution. It also handles
         duplicate exporter detection and in-memory span collection setup.
         """
-        # set provider anyway, then get global provider
-        trace_api.set_tracer_provider(
-            trace_sdk.TracerProvider(
-                span_limits=SpanLimits(
-                    max_attributes=4096,
-                )
+        global_tracer_provider = trace_api.get_tracer_provider()
+        have_global_tracer_provider = not isinstance(
+            global_tracer_provider, trace_api.ProxyTracerProvider
+        )
+
+        if not have_global_tracer_provider:
+            provider = trace_sdk.TracerProvider(
+                span_limits=SpanLimits(max_attributes=4096)
             )
-        )
-        global_tracer_provider: TracerProvider = trace_api.get_tracer_provider()  # type: ignore
+            trace_api.set_tracer_provider(provider)
+            global_tracer_provider = trace_api.get_tracer_provider()
 
-        span_processors = global_tracer_provider._active_span_processor._span_processors
-        have_apmplus_exporter = any(
-            isinstance(p, (BatchSpanProcessor, SimpleSpanProcessor))
-            and hasattr(p.span_exporter, "_endpoint")
-            and "apmplus" in p.span_exporter._endpoint
-            for p in span_processors
-        )
+        global_tracer_provider: TracerProvider
+        self._apmplus_managed_externally = have_global_tracer_provider
 
-        if have_apmplus_exporter:
+        if self._apmplus_managed_externally:
+            exporter_count = len(self.exporters)
             self.exporters = [
                 e for e in self.exporters if not isinstance(e, APMPlusExporter)
             ]
+            if len(self.exporters) != exporter_count:
+                logger.info(
+                    "Reuse existing global TracerProvider and skip registering "
+                    "APMPlusExporter."
+                )
 
         for exporter in self.exporters:
             processor = exporter.processor
@@ -229,6 +231,11 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         )
 
         init_global_meter_uploader_from_exporters(self.exporters)
+
+    @property
+    def apmplus_managed_externally(self) -> bool:
+        """Whether a global provider existed before this tracer was initialized."""
+        return self._apmplus_managed_externally
 
     @property
     def trace_file_path(self) -> str:
