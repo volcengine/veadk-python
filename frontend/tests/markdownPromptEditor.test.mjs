@@ -451,6 +451,14 @@ test("debug workspace compares multiple configurations behind one shared input",
     /const completeDebugVariantConfig = \(id: string\) => \{[\s\S]*?if \(id === "baseline"\)[\s\S]*?void startDebugVariant\(id\);/,
   );
   assert.match(createSource, /完成并启动/);
+  assert.match(
+    createSource,
+    /className="cw-ab-config-head-actions"[\s\S]*?className="cw-icon-btn cw-icon-danger cw-ab-config-remove"[\s\S]*?aria-label=\{`删除\$\{variant\.name\}`\}[\s\S]*?onClick=\{\(\) => onRemoveVariant\(variant\.id\)\}/,
+  );
+  assert.match(
+    createSource,
+    /const removeDebugVariant = async \(id: string\) => \{[\s\S]*?await cleanupDebugVariantRun\(id\);[\s\S]*?current\.filter\(\(variant\) => variant\.id !== id\)[\s\S]*?setSelectedVariantId\("baseline"\)/,
+  );
   assert.match(createSource, /targets\.map\(async \(variant\)/);
   assert.match(createSource, /modelName: variant\.modelName \|\| draft\.modelName/);
   assert.match(createSource, /variants\.length < 3/);
@@ -486,6 +494,10 @@ test("debug workspace compares multiple configurations behind one shared input",
   );
   assert.match(createStyles, /\.cw-ab-card-inner\.is-flipped\s*\{[\s\S]*?rotateY\(180deg\)/);
   assert.match(createStyles, /\.cw-ab-config\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.match(
+    createStyles,
+    /\.cw-ab-config-head \.cw-ab-config-done-tip\s*\{[\s\S]*?background:\s*hsl\(var\(--foreground\)\);[\s\S]*?color:\s*#fff;/,
+  );
   assert.match(
     createStyles,
     /\.cw-ab-workspace\s*\{[\s\S]*?display:\s*grid;[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\) auto;/,

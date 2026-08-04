@@ -263,6 +263,26 @@ function DebugRunIcon({ className }: { className?: string }) {
   );
 }
 
+function DebugVariantDeleteIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4.75 7.25h14.5" />
+      <path d="M9.1 4.75h5.8l.75 2.5h-7.3l.75-2.5Z" />
+      <path d="m6.75 7.25.75 12h9l.75-12" />
+      <path d="M10 10.25v5.75M14 10.25v5.75" />
+    </svg>
+  );
+}
+
 function A2aSelectChevronIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -1961,7 +1981,7 @@ function DebugComparisonWorkspace({
                               disabled={variant.configOpen || busy}
                               onClick={() => onRemoveVariant(variant.id)}
                             >
-                              <Trash2 className="cw-i" />
+                              <DebugVariantDeleteIcon className="cw-i" />
                             </button>
                           )}
                         </div>
@@ -2076,26 +2096,40 @@ function DebugComparisonWorkspace({
                           <strong>测试配置</strong>
                           <span>{variant.name}</span>
                         </div>
-                        <span
-                          className={`cw-ab-config-done-wrap${disabledReason ? " is-disabled" : ""}`}
-                          tabIndex={disabledReason ? 0 : undefined}
-                        >
-                          <button
-                            type="button"
-                            className="cw-ab-config-done"
-                            disabled={
-                              !variant.configOpen || configurationUnavailable
-                            }
-                            onClick={() => onCompleteConfig(variant.id)}
-                          >
-                            {variant.id === "baseline" ? "完成配置" : "完成并启动"}
-                          </button>
-                          {disabledReason && (
-                            <span className="cw-ab-config-done-tip" role="tooltip">
-                              {disabledReason}
-                            </span>
+                        <div className="cw-ab-config-head-actions">
+                          {variant.id !== "baseline" && (
+                            <button
+                              type="button"
+                              className="cw-icon-btn cw-icon-danger cw-ab-config-remove"
+                              aria-label={`删除${variant.name}`}
+                              title="删除配置组"
+                              disabled={busy}
+                              onClick={() => onRemoveVariant(variant.id)}
+                            >
+                              <DebugVariantDeleteIcon className="cw-i cw-i-sm" />
+                            </button>
                           )}
-                        </span>
+                          <span
+                            className={`cw-ab-config-done-wrap${disabledReason ? " is-disabled" : ""}`}
+                            tabIndex={disabledReason ? 0 : undefined}
+                          >
+                            <button
+                              type="button"
+                              className="cw-ab-config-done"
+                              disabled={
+                                !variant.configOpen || configurationUnavailable
+                              }
+                              onClick={() => onCompleteConfig(variant.id)}
+                            >
+                              {variant.id === "baseline" ? "完成配置" : "完成并启动"}
+                            </button>
+                            {disabledReason && (
+                              <span className="cw-ab-config-done-tip" role="tooltip">
+                                {disabledReason}
+                              </span>
+                            )}
+                          </span>
+                        </div>
                       </header>
                       <div className="cw-ab-config">
                         <label>

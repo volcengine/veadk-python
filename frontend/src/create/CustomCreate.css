@@ -1289,6 +1289,17 @@
   color: hsl(var(--muted-foreground));
   font-size: 12px;
 }
+.cw-ab-config-head > .cw-ab-config-head-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+.cw-ab-config-head-actions .cw-ab-config-remove {
+  width: 32px;
+  height: 32px;
+}
 .cw-ab-config-done {
   min-height: 32px;
   padding: 0 11px;
@@ -1312,7 +1323,7 @@
   color: hsl(var(--muted-foreground) / 0.68);
   cursor: not-allowed;
 }
-.cw-ab-config-done-tip {
+.cw-ab-config-head .cw-ab-config-done-tip {
   position: absolute;
   z-index: 8;
   right: 0;
@@ -1323,7 +1334,7 @@
   padding: 6px 8px;
   border-radius: 7px;
   background: hsl(var(--foreground));
-  color: hsl(var(--background));
+  color: #fff;
   font-size: 11px;
   font-weight: 400;
   line-height: 1.4;
