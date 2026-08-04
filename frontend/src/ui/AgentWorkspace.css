@@ -873,6 +873,128 @@
   gap: 16px;
 }
 
+.aw-integration-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.aw-integration-intro h3,
+.aw-integration-intro p,
+.aw-integration-card h3,
+.aw-integration-card dl,
+.aw-integration-card dd {
+  margin: 0;
+}
+
+.aw-integration-intro h3 {
+  font-size: 15px;
+  font-weight: 620;
+}
+
+.aw-integration-intro p {
+  margin-top: 4px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12.5px;
+}
+
+.aw-integration-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.aw-integration-card {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--panel));
+}
+
+.aw-integration-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.aw-integration-card h3 {
+  color: hsl(var(--foreground));
+  font-size: 14px;
+  font-weight: 620;
+}
+
+.aw-integration-card header > span {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.aw-integration-card header > span.is-available {
+  background: hsl(142 55% 94%);
+  color: hsl(142 62% 30%);
+}
+
+.aw-integration-card dl {
+  display: grid;
+  gap: 12px;
+}
+
+.aw-integration-card dl > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.aw-integration-card dt {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.aw-integration-card dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: hsl(var(--foreground));
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.aw-integration-loading,
+.aw-integration-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: 12.5px;
+}
+
+.aw-integration-error {
+  justify-content: space-between;
+  color: hsl(var(--destructive));
+}
+
+.aw-integration-error button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  font: inherit;
+}
+
 .aw-canvas-card,
 .aw-details-card {
   min-width: 0;
@@ -2212,6 +2334,10 @@
   }
 
   .aw-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .aw-integration-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 

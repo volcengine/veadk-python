@@ -554,12 +554,14 @@ def test_runtime_proxy_accepts_post_delete_override(
         ("public", "?region=cn-beijing", 1),
     ],
 )
+@pytest.mark.parametrize("probe_path", ["list-apps", ".well-known/agent-card.json"])
 def test_runtime_proxy_probe_retry_policy(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     network_type: str,
     query: str,
     expected_attempts: int,
+    probe_path: str,
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
 
@@ -621,7 +623,7 @@ def test_runtime_proxy_probe_retry_policy(
     monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
 
     with TestClient(app) as client:
-        response = client.get(f"/web/runtime-proxy/runtime-1/list-apps{query}")
+        response = client.get(f"/web/runtime-proxy/runtime-1/{probe_path}{query}")
 
     assert response.status_code == 502
     assert attempts == expected_attempts

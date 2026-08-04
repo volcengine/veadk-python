@@ -128,6 +128,30 @@ test("agent details show capability badges and deployment state before the flow"
   assert.match(workspaceStyles, /\.aw-canvas-loading\s*\{[\s\S]*?align-items:\s*center;/);
 });
 
+test("agent details expose detected integration methods without inventing unavailable endpoints", () => {
+  assert.match(workspaceSource, /type AgentSection = "basic" \| "integrations" \| "evaluations"/);
+  assert.match(workspaceSource, /\{ id: "integrations", label: "被集成" \}/);
+  assert.match(workspaceSource, /role="tablist"/);
+  assert.match(workspaceSource, /role="tab"/);
+  assert.match(workspaceSource, /role="tabpanel"/);
+  assert.match(workspaceSource, /section !== "integrations"/);
+  assert.match(workspaceSource, /probeRuntimeApps/);
+  assert.match(workspaceSource, /probeRuntimeA2a/);
+  assert.match(workspaceSource, /title="API Server"/);
+  assert.match(workspaceSource, /title="A2A"/);
+  assert.match(workspaceSource, /\/list-apps/);
+  assert.match(workspaceSource, /\/run_sse/);
+  assert.match(workspaceSource, /\.well-known\/agent-card\.json/);
+  assert.match(workspaceSource, /"暂无"/);
+  assert.match(clientSource, /export interface RuntimeA2aIntegration/);
+  assert.match(clientSource, /export async function probeRuntimeA2a/);
+  assert.match(clientSource, /\.well-known\/agent-card\.json/);
+  assert.match(clientSource, /endpoint: string/);
+  assert.match(clientSource, /authType: "none" \| "key_auth" \| "custom_jwt" \| "unknown"/);
+  assert.match(workspaceStyles, /\.aw-integration-grid/);
+  assert.match(workspaceStyles, /\.aw-integration-card/);
+});
+
 test("workspace uses cached runtime data and prefetches likely next views", () => {
   assert.match(clientSource, /const RUNTIME_METADATA_CACHE_TTL_MS = 5 \* 60 \* 1000/);
   assert.match(clientSource, /const FEEDBACK_CASES_CACHE_TTL_MS = 60 \* 1000/);
