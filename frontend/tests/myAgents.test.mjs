@@ -101,7 +101,7 @@ test("keeps a primary create action visible above the scrolling results", () => 
 
 test("agent cards show the archived metadata hierarchy and two-action footer", () => {
   assert.match(pageSource, /<h3>\{agent\.name\}<\/h3>/);
-  assert.match(pageSource, /<dt>创建时间<\/dt>/);
+  assert.match(pageSource, /<dt>\{agent\.draft \? "更新时间" : "创建时间"\}<\/dt>/);
   assert.match(pageSource, /<dt>\{agent\.specificationLabel\}<\/dt>[\s\S]*?<dd>\{agent\.specification\}<\/dd>/);
   assert.match(pageSource, /className="my-agent-session-id"[\s\S]*?\{agent\.sandbox\.id\}/);
   assert.doesNotMatch(pageSource, /Session ID：/);
@@ -110,12 +110,45 @@ test("agent cards show the archived metadata hierarchy and two-action footer", (
   assert.match(pageSource, /className="my-agent-description">\{agent\.description\}/);
   assert.match(pageSource, /className="my-agent-actions"/);
   assert.match(pageSource, /aria-label=\{connected \? `\$\{agent\.name\} 已连接` : `使用 \$\{agent\.name\}`\}/);
-  assert.match(pageSource, /onClick=\{\(\) => onViewDetails\?\.\(agent\)\}/);
-  assert.match(pageSource, />\s*查看详情\s*<\/button>/);
+  assert.match(pageSource, /: onViewDetails\?\.\(agent\)/);
+  assert.match(pageSource, /deploymentTask \? "查看进度" : "查看详情"/);
   assert.match(pageSource, /connected \? "已连接" : "使用"/);
   assert.ok(pageSource.indexOf("my-agent-details") < pageSource.indexOf("my-agent-use"));
   assert.doesNotMatch(pageSource, /<small|<code/);
   assert.doesNotMatch(pageStyles, /font-family/);
+});
+
+test("shows browser-local drafts with edit and confirmed delete actions", () => {
+  assert.match(pageSource, /drafts\?: WorkspaceAgentDraft\[\]/);
+  assert.match(pageSource, /function draftToAgent\(item: WorkspaceAgentDraft\)/);
+  assert.match(pageSource, /specification: "当前浏览器"/);
+  assert.match(pageSource, /\? \[\.\.\.draftAgents, \.\.\.runtimeAgents\]/);
+  assert.match(
+    pageSource,
+    /className="my-agent-draft-badge">[\s\S]*?deploymentTask \? "部署中" : "草稿"/,
+  );
+  assert.match(pageSource, /: `编辑草稿 \$\{agent\.name\}`/);
+  assert.match(pageSource, /aria-label=\{`删除草稿 \$\{agent\.name\}`\}/);
+  assert.match(pageSource, /title="删除草稿？"[\s\S]*?confirmLabel="删除草稿"/);
+  assert.match(appSource, /<MyAgents[\s\S]*?drafts=\{savedAgentDrafts\}/);
+  assert.match(appSource, /onDeleteDraft=\{\(item\) => deleteWorkspaceDrafts\(\[item\]\)\}/);
+  assert.match(pageStyles, /\.my-agent-draft-badge,[\s\S]*?\.my-agent-deploying-badge\s*\{/);
+  assert.match(pageStyles, /\.my-agent-actions \.my-agent-delete\s*\{/);
+});
+
+test("reopens running deployment progress from draft and Runtime cards", () => {
+  assert.match(pageSource, /deploymentTasks\?: DeploymentTaskUpdate\[\]/);
+  assert.match(pageSource, /draftDeploymentTaskIds\?: Readonly<Record<string, string>>/);
+  assert.match(pageSource, /task\.status !== "running"/);
+  assert.match(pageSource, /draftDeploymentTaskIds\[agent\.draft\.id\]/);
+  assert.match(pageSource, /activeDeploymentTasks\.byRuntimeId\.get\(runtimeId\)/);
+  assert.match(pageSource, /\{deploymentTask \? "部署中" : "草稿"\}/);
+  assert.match(pageSource, /deploymentTask \? "查看进度" : "编辑"/);
+  assert.match(pageSource, /deploymentTask \? "查看进度" : "查看详情"/);
+  assert.match(appSource, /const \[draftDeploymentTaskIds, setDraftDeploymentTaskIds\]/);
+  assert.match(appSource, /\[editingDraftId\]: task\.id/);
+  assert.match(appSource, /deploymentTasks=\{deploymentTasks\}/);
+  assert.match(appSource, /onViewDeploymentTask=\{openDeploymentDetail\}/);
 });
 
 test("uses a responsive two-layer card layout without an empty fixed-height gap", () => {
@@ -299,7 +332,7 @@ test("defers conversation data-plane requests until leaving the Agent list", () 
 
 test("wires card details and connect actions into App navigation", () => {
   assert.match(pageSource, /onClick=\{\(\) => void onUse\?\.\(agent\)\}/);
-  assert.match(pageSource, /onClick=\{\(\) => onViewDetails\?\.\(agent\)\}/);
+  assert.match(pageSource, /: onViewDetails\?\.\(agent\)/);
   assert.match(
     appSource,
     /const connectMyAgent[\s\S]*?connectRuntime[\s\S]*?await refreshCurrentAgentAndStartNewChat\(agentId\)/,

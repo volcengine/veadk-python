@@ -42,6 +42,7 @@ import {
 import type { AgentEntry } from "../adk/connections";
 import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
 import { emptyDraft, type AgentDraft } from "../create/types";
+import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
@@ -93,19 +94,6 @@ interface EvaluationGroup {
   metrics: string[];
   concurrency: string;
   history: EvaluationRun[];
-}
-
-export interface WorkspaceAgentDraft {
-  id: string;
-  draft: AgentDraft;
-  updatedAt: number;
-  deploymentTarget?: {
-    runtimeId: string;
-    name: string;
-    region: string;
-    appName?: string;
-    currentVersion?: number | null;
-  };
 }
 
 const DEFAULT_CASES: AgentCase[] = [
