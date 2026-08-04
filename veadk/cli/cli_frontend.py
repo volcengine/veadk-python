@@ -3729,6 +3729,28 @@ def _run_frontend_server(
 
         try:
             r = _authorized_runtime(request, runtimeId, region)
+            network_configurations = list(
+                getattr(r, "network_configurations", None) or []
+            )
+            endpoint = ""
+            for item in network_configurations:
+                candidate = getattr(item, "endpoint", "") or ""
+                if not candidate:
+                    continue
+                if not endpoint:
+                    endpoint = candidate
+                if getattr(item, "network_type", "") == "public":
+                    endpoint = candidate
+                    break
+            authorizer = getattr(r, "authorizer_configuration", None)
+            if getattr(authorizer, "key_auth", None):
+                auth_type = "key_auth"
+            elif getattr(authorizer, "custom_jwt_authorizer", None):
+                auth_type = "custom_jwt"
+            elif authorizer is None:
+                auth_type = "none"
+            else:
+                auth_type = "unknown"
             envs = [
                 {"key": e.key, "value": _mask(e.key or "", e.value or "")}
                 for e in (getattr(r, "envs", None) or [])
@@ -3761,15 +3783,42 @@ def _run_frontend_server(
                 "artifactType": getattr(r, "artifact_type", "") or "",
                 "networkTypes": [
                     getattr(item, "network_type", "") or ""
-                    for item in (getattr(r, "network_configurations", None) or [])
+                    for item in network_configurations
                     if getattr(item, "network_type", "")
                 ],
+                "endpoint": endpoint,
+                "authType": auth_type,
             }
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"get runtime detail failed: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail=str(e))
+
+    @app.post("/web/runtime-api-key/reveal")
+    async def _web_runtime_api_key_reveal(
+        request: Request,
+        response: Response,
+        runtimeId: str = "",
+        region: str = "cn-beijing",
+    ):
+        """Return one authorized Runtime API Key after an explicit UI action.
+
+        The regular Runtime detail payload deliberately excludes credentials. This
+        endpoint is separate so the browser only receives the key when the user
+        asks to reveal it, and the response is never cacheable.
+        """
+        if not runtimeId:
+            raise HTTPException(status_code=400, detail="runtimeId is required")
+        runtime = _authorized_runtime(request, runtimeId, region)
+        authorizer = getattr(runtime, "authorizer_configuration", None)
+        key_auth = getattr(authorizer, "key_auth", None) if authorizer else None
+        api_key = getattr(key_auth, "api_key", "") or ""
+        if not api_key:
+            raise HTTPException(status_code=404, detail="Runtime API Key not found")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        return {"apiKey": api_key}
 
     _runtime_list_cache_ttl_seconds = 30.0
     _runtime_list_cache: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
@@ -4032,7 +4081,11 @@ def _run_frontend_server(
         if method.upper() != "GET":
             return False
         normalized = path.strip("/")
-        if normalized == "list-apps" or normalized.startswith("web/agent-info/"):
+        if (
+            normalized == "list-apps"
+            or normalized == ".well-known/agent-card.json"
+            or normalized.startswith("web/agent-info/")
+        ):
             return True
         parts = normalized.split("/")
         return (

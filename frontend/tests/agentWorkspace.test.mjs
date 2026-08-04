@@ -128,6 +128,79 @@ test("agent details show capability badges and deployment state before the flow"
   assert.match(workspaceStyles, /\.aw-canvas-loading\s*\{[\s\S]*?align-items:\s*center;/);
 });
 
+test("agent details expose detected integration methods without inventing unavailable endpoints", () => {
+  assert.match(workspaceSource, /type AgentSection = "basic" \| "integrations" \| "evaluations"/);
+  assert.match(
+    workspaceSource,
+    /\{ id: "basic", label: "基本信息" \},\s*\{ id: "evaluations", label: "评测集" \},\s*\{ id: "integrations", label: "接入方法" \}/,
+  );
+  assert.match(workspaceSource, /role="tablist"/);
+  assert.match(workspaceSource, /role="tab"/);
+  assert.match(workspaceSource, /role="tabpanel"/);
+  assert.match(workspaceSource, /section !== "integrations"/);
+  assert.match(workspaceSource, /probeRuntimeApps/);
+  assert.match(workspaceSource, /probeRuntimeA2a/);
+  assert.match(workspaceSource, /type IntegrationProtocol = "api-server" \| "a2a"/);
+  assert.match(workspaceSource, /aria-label="接入协议"/);
+  assert.match(workspaceSource, /role="tab"/);
+  assert.match(workspaceSource, /aria-controls=\{`integration-\$\{protocol\.id\}-panel`\}/);
+  assert.match(workspaceSource, /setIntegrationProtocol/);
+  assert.match(workspaceSource, /API Server/);
+  assert.match(workspaceSource, /A2A/);
+  assert.match(workspaceSource, /\/list-apps/);
+  assert.match(workspaceSource, /\/run_sse/);
+  assert.match(workspaceSource, /\.well-known\/agent-card\.json/);
+  assert.match(workspaceSource, /message\/send/);
+  assert.match(workspaceSource, /function apiServerPythonExample/);
+  assert.match(workspaceSource, /function a2aPythonExample/);
+  assert.match(workspaceSource, /function normalizeRuntimeA2aEndpoint/);
+  assert.match(workspaceSource, /\["localhost", "127\.0\.0\.1", "::1"\]/);
+  assert.match(workspaceSource, /agentUrl\.port = publicUrl\.port/);
+  assert.match(workspaceSource, /const a2aEndpoint = normalizeRuntimeA2aEndpoint/);
+  assert.match(workspaceSource, /<Markdown/);
+  assert.match(workspaceSource, /<API_KEY>/);
+  assert.match(workspaceSource, /revealRuntimeApiKey/);
+  assert.match(workspaceSource, /aria-label=\{visible \? "隐藏 API Key" : "显示 API Key"\}/);
+  assert.match(workspaceSource, /visible && value \? value : "\*\*\*\*"/);
+  assert.match(workspaceSource, /"暂无"/);
+  assert.match(
+    workspaceSource,
+    /section === "integrations" && integrationLoading[\s\S]*?className="aw-detail-loading"/,
+  );
+  assert.doesNotMatch(workspaceSource, /className="aw-integration-loading"/);
+  assert.doesNotMatch(workspaceSource, /className=\{available \? "is-available" : ""\}/);
+  assert.match(clientSource, /export interface RuntimeA2aIntegration/);
+  assert.match(clientSource, /export async function probeRuntimeA2a/);
+  assert.match(clientSource, /export async function revealRuntimeApiKey/);
+  assert.match(clientSource, /method: "POST"/);
+  assert.match(clientSource, /cache: "no-store"/);
+  assert.match(clientSource, /\.well-known\/agent-card\.json/);
+  assert.match(clientSource, /endpoint: string/);
+  assert.match(clientSource, /authType: "none" \| "key_auth" \| "custom_jwt" \| "unknown"/);
+  assert.match(workspaceStyles, /\.aw-integration-protocol-tabs/);
+  assert.match(workspaceStyles, /\.aw-integration-protocol-slider/);
+  assert.match(
+    workspaceStyles,
+    /\.aw-integration-protocol-tabs\s*\{[\s\S]*?width:\s*min\(240px, 100%\);[\s\S]*?height:\s*36px;/,
+  );
+  assert.match(
+    workspaceStyles,
+    /\.aw-integration-protocol-tabs button\s*\{[\s\S]*?min-height:\s*28px;[\s\S]*?font-size:\s*12px;/,
+  );
+  assert.doesNotMatch(workspaceStyles, /\.aw-integration-panel header > span\.is-available/);
+  assert.match(workspaceStyles, /\.aw-integration-secret-toggle/);
+  assert.match(workspaceStyles, /\.aw-integration-example/);
+  assert.match(
+    workspaceStyles,
+    /\.aw-integration-panel\.has-example\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-direction:\s*column;/,
+  );
+  const integrationPanelLayout = workspaceStyles.match(
+    /\.aw-integration-panel\.has-example\s*\{([^}]*)\}/,
+  )?.[1] ?? "";
+  assert.doesNotMatch(integrationPanelLayout, /grid-template-columns:/);
+  assert.match(workspaceStyles, /prefers-reduced-motion:\s*reduce/);
+});
+
 test("workspace uses cached runtime data and prefetches likely next views", () => {
   assert.match(clientSource, /const RUNTIME_METADATA_CACHE_TTL_MS = 5 \* 60 \* 1000/);
   assert.match(clientSource, /const FEEDBACK_CASES_CACHE_TTL_MS = 60 \* 1000/);
