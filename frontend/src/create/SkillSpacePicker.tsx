@@ -18,6 +18,12 @@ import {
 import type { SelectedSkill, SkillHit } from "./skills/types";
 import { displayDescription } from "./displayText";
 
+function regionLabel(region: string): string {
+  if (region === "cn-beijing") return "北京";
+  if (region === "cn-shanghai") return "上海";
+  return region;
+}
+
 export function SkillSpacePicker({
   selected,
   onChange,
@@ -121,7 +127,7 @@ export function SkillSpacePicker({
   return (
     <div className="cw-skillspace">
       {loading ? (
-        <p className="cw-empty-line">
+        <p className="cw-empty-line cw-skill-loading" role="status">
           <Loader2 className="cw-i cw-spin" /> 正在加载 AgentKit Skills 中心…
         </p>
       ) : error ? (
@@ -143,27 +149,37 @@ export function SkillSpacePicker({
               {spaces.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name || s.id}
-                  {s.region ? ` [${s.region}]` : ""}
                   {s.description ? ` — ${displayDescription(s.description)}` : ""}
                 </option>
               ))}
             </select>
 
             {selectedSpace && (
-              <a
-                href={getSkillSpaceConsoleUrl(selectedSpace.id, selectedSpace.region)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="cw-button cw-button-secondary cw-skillspace-console-link"
-                title="在火山引擎控制台打开"
-              >
-                <ExternalLink className="cw-i cw-i-sm" />
-              </a>
+              <>
+                {selectedSpace.region && (
+                  <span
+                    className="cw-skillspace-region-label"
+                    title={selectedSpace.region}
+                  >
+                    {regionLabel(selectedSpace.region)}
+                  </span>
+                )}
+                <a
+                  href={getSkillSpaceConsoleUrl(selectedSpace.id, selectedSpace.region)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="cw-button cw-button-secondary cw-skillspace-console-link"
+                  title="在火山引擎控制台打开"
+                  aria-label="在火山引擎控制台打开"
+                >
+                  <ExternalLink className="cw-i cw-i-sm" />
+                </a>
+              </>
             )}
           </div>
 
           {loadingSkills ? (
-            <p className="cw-empty-line">
+            <p className="cw-empty-line cw-skill-loading" role="status">
               <Loader2 className="cw-i cw-spin" /> 正在加载技能列表…
             </p>
           ) : skills.length === 0 ? (

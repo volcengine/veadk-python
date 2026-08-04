@@ -8,9 +8,29 @@ const source = readFileSync(
 );
 
 test("proxies the session trace API in development", () => {
-  assert.match(source, /["']\/dev["']\s*:\s*API_TARGET/);
+  assert.match(source, /["']\/dev["']\s*:\s*localApiProxy\(\)/);
 });
 
 test("proxies session capability APIs in development", () => {
-  assert.match(source, /["']\/harness["']\s*:\s*API_TARGET/);
+  assert.match(source, /["']\/harness["']\s*:\s*localApiProxy\(\)/);
+});
+
+test("local API proxy strips browser origin headers before forwarding", () => {
+  assert.match(
+    source,
+    /function localApiProxy\(\): ProxyOptions[\s\S]*?proxy\.on\(["']proxyReq["'][\s\S]*?removeHeader\(["']origin["']\)[\s\S]*?removeHeader\(["']referer["']\)/,
+  );
+  for (const route of [
+    "/list-apps",
+    "/apps",
+    "/run_sse",
+    "/run",
+    "/harness",
+    "/debug",
+    "/dev",
+    "/oauth2",
+    "/web",
+  ]) {
+    assert.match(source, new RegExp(`['"]${route}['"]\\s*:\\s*localApiProxy\\(\\)`));
+  }
 });

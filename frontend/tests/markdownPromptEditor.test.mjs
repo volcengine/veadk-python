@@ -22,6 +22,14 @@ const localPickerSource = readFileSync(
   new URL("../src/create/LocalPicker.tsx", import.meta.url),
   "utf8",
 );
+const skillHubPickerSource = readFileSync(
+  new URL("../src/create/SkillHubPicker.tsx", import.meta.url),
+  "utf8",
+);
+const skillSpacePickerSource = readFileSync(
+  new URL("../src/create/SkillSpacePicker.tsx", import.meta.url),
+  "utf8",
+);
 const localSkillSource = readFileSync(
   new URL("../src/create/skills/local.ts", import.meta.url),
   "utf8",
@@ -428,7 +436,10 @@ test("debug workspace compares multiple configurations behind one shared input",
     createSource,
     /function DebugComparisonWorkspace[\s\S]*?aria-label="A\/B 调试工作台"/,
   );
-  assert.match(createSource, /className="cw-ab-add"[\s\S]*?添加对照组/);
+  assert.match(
+    createSource,
+    /className="cw-ab-composer"[\s\S]*?className="cw-btn cw-btn-soft cw-ab-add"[\s\S]*?添加对照组/,
+  );
   assert.doesNotMatch(createSource, /快速调试|同一条输入将同时发送到全部对照组/);
   assert.match(createSource, /className="cw-ab-config-trigger"[\s\S]*?测试配置/);
   assert.match(createSource, /cw-ab-card-inner\$\{variant\.configOpen \? " is-flipped" : ""\}/);
@@ -440,6 +451,14 @@ test("debug workspace compares multiple configurations behind one shared input",
     /const completeDebugVariantConfig = \(id: string\) => \{[\s\S]*?if \(id === "baseline"\)[\s\S]*?void startDebugVariant\(id\);/,
   );
   assert.match(createSource, /完成并启动/);
+  assert.match(
+    createSource,
+    /className="cw-ab-config-head-actions"[\s\S]*?className="cw-icon-btn cw-icon-danger cw-ab-config-remove"[\s\S]*?aria-label=\{`删除\$\{variant\.name\}`\}[\s\S]*?onClick=\{\(\) => onRemoveVariant\(variant\.id\)\}/,
+  );
+  assert.match(
+    createSource,
+    /const removeDebugVariant = async \(id: string\) => \{[\s\S]*?await cleanupDebugVariantRun\(id\);[\s\S]*?current\.filter\(\(variant\) => variant\.id !== id\)[\s\S]*?setSelectedVariantId\("baseline"\)/,
+  );
   assert.match(createSource, /targets\.map\(async \(variant\)/);
   assert.match(createSource, /modelName: variant\.modelName \|\| draft\.modelName/);
   assert.match(createSource, /variants\.length < 3/);
@@ -463,7 +482,11 @@ test("debug workspace compares multiple configurations behind one shared input",
   assert.match(createStyles, /\.cw-ab-card-face\s*\{[\s\S]*?border:\s*1px dashed/);
   assert.match(
     createStyles,
-    /\.cw-ab-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/,
+    /\.cw-ab-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(var\(--cw-ab-column-count\), minmax\(0, 1fr\)\)/,
+  );
+  assert.match(
+    createSource,
+    /--cw-ab-column-count": variants\.length/,
   );
   assert.match(
     createStyles,
@@ -473,11 +496,19 @@ test("debug workspace compares multiple configurations behind one shared input",
   assert.match(createStyles, /\.cw-ab-config\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);
   assert.match(
     createStyles,
+    /\.cw-ab-config-head \.cw-ab-config-done-tip\s*\{[\s\S]*?background:\s*hsl\(var\(--foreground\)\);[\s\S]*?color:\s*#fff;/,
+  );
+  assert.match(
+    createStyles,
     /\.cw-ab-workspace\s*\{[\s\S]*?display:\s*grid;[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\) auto;/,
   );
   assert.match(
     createStyles,
-    /\.cw-ab-composer\s*\{[\s\S]*?position:\s*relative;[\s\S]*?min-width:\s*0;/,
+    /\.cw-ab-composer\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) auto;/,
+  );
+  assert.doesNotMatch(
+    createSource,
+    /<div className="cw-ab-grid">[\s\S]*?className="cw-ab-add"/,
   );
   assert.doesNotMatch(createStyles, /\.cw-ab-head|\.cw-ab-overlay/);
 });
@@ -695,6 +726,41 @@ test("local Skill folders and ZIP archives support drag and drop", () => {
   assert.match(
     createStyles,
     /\.cw-local-dropzone\.is-dragging\s*\{[\s\S]*?border-color:/,
+  );
+});
+
+test("Skill picker states fill the dialog without clipping content", () => {
+  assert.match(
+    createStyles,
+    /\.cw-local\s*\{[\s\S]*?height:\s*100%;[\s\S]*?display:\s*flex;[\s\S]*?flex-direction:\s*column;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-local-dropzone\s*\{[\s\S]*?flex:\s*1;[\s\S]*?justify-content:\s*center;/,
+  );
+  assert.match(skillSpacePickerSource, /className="cw-empty-line cw-skill-loading"/);
+  assert.match(skillHubPickerSource, /className="cw-empty-line cw-skill-loading"/);
+  assert.match(
+    createStyles,
+    /\.cw-skill-loading\s*\{[\s\S]*?align-items:\s*center;[\s\S]*?justify-content:\s*center;[\s\S]*?white-space:\s*nowrap;/,
+  );
+  assert.doesNotMatch(skillSpacePickerSource, /\[\$\{s\.region\}\]/);
+  assert.match(skillSpacePickerSource, /className="cw-skillspace-region-label"/);
+  assert.match(
+    createStyles,
+    /\.cw-skill-input:focus[\s\S]*?background:\s*hsl\(var\(--background\)\);[\s\S]*?box-shadow:\s*none;/,
+  );
+  assert.doesNotMatch(
+    createStyles,
+    /\.cw-skill-result\s*\{[^}]*max-height:\s*72px;/,
+  );
+  assert.doesNotMatch(
+    createStyles,
+    /\.cw-skill-result\s*\{[^}]*overflow:\s*hidden;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-skill-result\s*\{[^}]*flex-shrink:\s*0;/,
   );
 });
 
