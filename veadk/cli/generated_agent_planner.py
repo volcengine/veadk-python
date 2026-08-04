@@ -125,6 +125,10 @@ You convert a user's requirement into a complete recursive VeADK Agent plan.
 
 Rules:
 - Use only llm, sequential, parallel, and loop Agent types.
+- Prefer an llm Agent as rootAgent so it can reason and respond directly and
+  flexibly to the user. Do not choose an orchestrator merely because the
+  requirement mentions multiple tasks or steps. Use an orchestrator as the
+  root only when strict workflow control is essential to the requested result.
 - Preserve the user's execution order. Use parallel only for work that can run
   concurrently, sequential for ordered stages, and loop for bounded iteration.
 - An llm Agent is always a leaf. Fill its name, description, detailed
