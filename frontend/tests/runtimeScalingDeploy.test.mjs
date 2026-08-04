@@ -61,7 +61,7 @@ test("renders editable Runtime instance inputs with memory-aware defaults", () =
 test("renders the Runtime update progress step conditionally", () => {
   assert.match(
     projectPreviewSource,
-    /needsInstanceUpdate[\s\S]*?\[\.\.\.baseDeploymentSteps, INSTANCE_UPDATE_STEP\][\s\S]*?: baseDeploymentSteps/,
+    /needsInstanceUpdate[\s\S]*?\[\.\.\.\w+, INSTANCE_UPDATE_STEP\][\s\S]*?: \w+DeploymentSteps/,
   );
   assert.match(
     workspaceSource,

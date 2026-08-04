@@ -1672,6 +1672,31 @@ export interface DeployAgentkitResult {
   };
 }
 
+export interface GithubCicdPipelineResult {
+  pipelineId?: string;
+  status?: string;
+  phase?: string;
+  updatedAt?: string;
+  runtimeId?: string;
+  region?: string;
+  github?: {
+    owner?: string;
+    repo?: string;
+    baseBranch?: string;
+    branch?: string;
+    commitSha?: string;
+    pullRequestUrl?: string;
+    pullRequestNumber?: number;
+  };
+}
+
+export interface GithubCicdPipelineErrorDetail {
+  message: string;
+  phase?: string;
+  runtimeId?: string;
+  logPath?: string;
+}
+
 export interface DeployBuildLogSnapshot {
   source: "code-pipeline";
   status: "running" | "complete" | "error";
@@ -1708,6 +1733,121 @@ interface DeployFrame extends Partial<DeployAgentkitResult> {
 }
 
 const deploymentControllers = new Map<string, AbortController>();
+
+function parseGithubCicdErrorDetail(detail: unknown): GithubCicdPipelineErrorDetail | null {
+  if (typeof detail === "string") return detail ? { message: detail } : null;
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return null;
+  const record = detail as Record<string, unknown>;
+  const message =
+    typeof record.message === "string"
+      ? record.message
+      : typeof record.error === "string"
+        ? record.error
+        : "";
+  if (!message) return null;
+  return {
+    message,
+    phase: typeof record.phase === "string" ? record.phase : undefined,
+    runtimeId: typeof record.runtimeId === "string" ? record.runtimeId : undefined,
+    logPath: typeof record.logPath === "string" ? record.logPath : undefined,
+  };
+}
+
+export class GithubCicdPipelineError extends Error {
+  constructor(readonly detail: GithubCicdPipelineErrorDetail) {
+    super(detail.message);
+    this.name = "GithubCicdPipelineError";
+  }
+}
+
+async function githubCicdErrorFromResponse(
+  res: Response,
+): Promise<GithubCicdPipelineError> {
+  const text = await res.text().catch(() => "");
+  if (text) {
+    try {
+      const data = JSON.parse(text) as { detail?: unknown; error?: unknown };
+      const detail = parseGithubCicdErrorDetail(data.detail ?? data.error);
+      if (detail) return new GithubCicdPipelineError(detail);
+    } catch {
+      return new GithubCicdPipelineError({ message: text });
+    }
+  }
+  return new GithubCicdPipelineError({ message: `创建持续交付失败 (${res.status})` });
+}
+
+export async function createGithubCicdPipeline(params: {
+  project: { name: string; files: { path: string; content: string }[] };
+  githubUrl: string;
+  githubToken: string;
+  baseBranch: string;
+  region: string;
+}): Promise<GithubCicdPipelineResult> {
+  const res = await apiFetch(
+    "/web/github-cicd/pipelines",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: params.project,
+        githubUrl: params.githubUrl,
+        githubToken: params.githubToken,
+        baseBranch: params.baseBranch,
+        region: params.region,
+      }),
+    },
+    {},
+    0,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubCicdPipelineResult>;
+}
+
+export async function getGithubCicdRuntimeBinding(
+  runtimeId: string,
+): Promise<GithubCicdPipelineResult | null> {
+  const res = await apiFetch(
+    `/web/github-cicd/runtime-binding?runtimeId=${encodeURIComponent(runtimeId)}`,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  const data = (await res.json()) as GithubCicdPipelineResult;
+  return data.pipelineId ? data : null;
+}
+
+export async function bindGithubCicdRuntime(params: {
+  pipelineId: string;
+  runtimeId: string;
+  region: string;
+}): Promise<GithubCicdPipelineResult> {
+  const res = await apiFetch("/web/github-cicd/runtime-binding", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubCicdPipelineResult>;
+}
+
+export async function syncGithubCicdRuntime(params: {
+  runtimeId: string;
+  project: { name: string; files: { path: string; content: string }[] };
+}): Promise<GithubCicdPipelineResult> {
+  const res = await apiFetch(
+    "/web/github-cicd/runtime-sync",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtimeId: params.runtimeId,
+        project: params.project,
+      }),
+    },
+    {},
+    0,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubCicdPipelineResult>;
+}
 
 /** Deploy to AgentKit, consuming the server's SSE progress stream. `onStage`
  *  is called for each build/deploy/publish step; resolves with the connection

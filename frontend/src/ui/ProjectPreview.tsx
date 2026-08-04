@@ -4,6 +4,7 @@ import {
   type ReactNode,
   useEffect,
   useLayoutEffect,
+  useCallback,
   useMemo,
   useRef,
   useState,
@@ -67,15 +68,19 @@ import {
   runtimeEnvVars,
 } from "../create/deploymentEnv";
 import {
+  bindGithubCicdRuntime,
+  syncGithubCicdRuntime,
   RuntimeProbeError,
   type DeployBuildLogSnapshot,
   type DeployStage,
+  type GithubCicdPipelineResult,
 } from "../adk/client";
 import feishuLogo from "../assets/feishu-logo.svg";
 import { buildZip } from "./zip";
 import { ProjectCodeBrowser } from "./CodeBrowserDialog";
 import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
 import { mergeDeployBuildLog } from "./deployBuildLog";
+import { GithubCicdPanel } from "./GithubCicdPanel";
 import "./ProjectPreview.css";
 
 const CodeEditor = lazy(() => import("./CodeEditor"));
@@ -265,6 +270,7 @@ const DEPLOY_STEPS: { phase: string; label: string }[] = [
   { phase: "deploy", label: "部署" },
   { phase: "publish", label: "发布" },
 ];
+const GITHUB_SYNC_STEP = { phase: "github", label: "同步 PR" };
 
 const CODE_PACKAGE_DEPLOY_STEPS: { phase: string; label: string }[] = [
   { phase: "upload", label: "上传代码包" },
@@ -556,6 +562,8 @@ export function ProjectPreview({
   const [feishuUpdating, setFeishuUpdating] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
+  const [githubCicdBinding, setGithubCicdBinding] =
+    useState<GithubCicdPipelineResult | null>(null);
   // Latest progress frame per deploy phase + the phase currently in flight,
   // driving the build/deploy/publish stepper.
   const [stageMap, setStageMap] = useState<Record<string, DeployStage>>({});
@@ -579,9 +587,13 @@ export function ProjectPreview({
   const baseDeploymentSteps = deploymentPrimaryPane
     ? CODE_PACKAGE_DEPLOY_STEPS
     : DEPLOY_STEPS;
+  const githubAwareDeploymentSteps =
+    deploymentRuntimeId && githubCicdBinding?.pipelineId
+      ? [GITHUB_SYNC_STEP, ...baseDeploymentSteps]
+      : baseDeploymentSteps;
   const deploymentSteps = needsInstanceUpdate
-    ? [...baseDeploymentSteps, INSTANCE_UPDATE_STEP]
-    : baseDeploymentSteps;
+    ? [...githubAwareDeploymentSteps, INSTANCE_UPDATE_STEP]
+    : githubAwareDeploymentSteps;
 
   useEffect(() => {
     if (!deploymentActionTargetId) {
@@ -808,6 +820,13 @@ export function ProjectPreview({
     }
   }
 
+  const handleGithubCicdBindingChange = useCallback(
+    (binding: GithubCicdPipelineResult | null) => {
+      setGithubCicdBinding(binding);
+    },
+    [],
+  );
+
   async function requestDeploymentConfirmation() {
     if (!onDeploy || deploying || deployDisabled) return;
     if (!instanceRange.valid) {
@@ -918,6 +937,46 @@ export function ProjectPreview({
       return latestBuildLog;
     };
     try {
+      if (deploymentRuntimeId && githubCicdBinding?.pipelineId) {
+        const githubSyncStage: DeployStage = {
+          level: "info",
+          phase: "github",
+          message: "正在同步当前源码到 GitHub PR",
+          pct: 0,
+        };
+        if (mountedRef.current) {
+          setStageMap((prev) => ({ ...prev, github: githubSyncStage }));
+          setActivePhase("github");
+        }
+        onDeploymentTaskChange?.({
+          id: taskId,
+          runtimeName: taskRuntimeName,
+          runtimeId: deploymentRuntimeId,
+          region: deployRegion,
+          startedAt: taskStartedAt,
+          status: "running",
+          phase: "github",
+          label: "同步 GitHub PR",
+          message: githubSyncStage.message,
+          pct: 0,
+        });
+        const synced = await syncGithubCicdRuntime({
+          runtimeId: deploymentRuntimeId,
+          project,
+        });
+        if (mountedRef.current) {
+          setGithubCicdBinding(synced);
+          setStageMap((prev) => ({
+            ...prev,
+            github: {
+              level: "success",
+              phase: "github",
+              message: "GitHub PR 已同步",
+              pct: 100,
+            },
+          }));
+        }
+      }
       const result = await onDeploy(
         project,
         (s) => {
@@ -968,6 +1027,24 @@ export function ProjectPreview({
       if (mountedRef.current) {
         setDeployResult(result);
         setActivePhase(null);
+      }
+      if (!deploymentRuntimeId && githubCicdBinding?.pipelineId && result.runtimeId) {
+        try {
+          const bound = await bindGithubCicdRuntime({
+            pipelineId: githubCicdBinding.pipelineId,
+            runtimeId: result.runtimeId,
+            region: result.region || deployRegion,
+          });
+          if (mountedRef.current) setGithubCicdBinding(bound);
+        } catch (error) {
+          if (mountedRef.current) {
+            setDeployError(
+              `部署成功，但绑定 GitHub 失败：${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
+        }
       }
       onDeploymentTaskChange?.({
         id: taskId,
@@ -1426,6 +1503,21 @@ export function ProjectPreview({
                   <div className="pp-config-label">发布区域</div>
                   {deploymentRegionPicker(false)}
                 </section>
+              )}
+
+              {!deploymentPrimaryPane && (
+                <GithubCicdPanel
+                  project={project}
+                  region={deployRegion}
+                  runtimeId={deploymentRuntimeId}
+                  onBindingChange={handleGithubCicdBindingChange}
+                  disabled={
+                    deploying ||
+                    feishuUpdating ||
+                    deployDisabled ||
+                    !!deployDisabledReason
+                  }
+                />
               )}
 
               {!deploymentPrimaryPane && (
