@@ -146,6 +146,7 @@ def ensure_frontend_role(
     secret_key: str,
     role_name: str = DEFAULT_ROLE_NAME,
     policy_name: str = DEFAULT_POLICY_NAME,
+    session_token: str = "",
 ) -> str:
     """Get-or-create the frontend's IAM role and return its TRN.
 
@@ -158,6 +159,8 @@ def ensure_frontend_role(
     svc = IamService()
     svc.set_ak(access_key)
     svc.set_sk(secret_key)
+    if session_token:
+        svc.set_session_token(session_token)
     _ensure_custom_policy(svc, policy_name)
 
     # Reuse an existing role if present.

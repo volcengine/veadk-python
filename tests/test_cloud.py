@@ -22,6 +22,7 @@ os.environ["VOLCENGINE_ACCESS_KEY"] = "test_access_key"
 os.environ["VOLCENGINE_SECRET_KEY"] = "test_secret_key"
 
 from veadk.cloud.cloud_agent_engine import CloudAgentEngine
+from veadk.integrations.ve_apig.ve_apig import APIGateway
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
 
@@ -41,6 +42,34 @@ def test_vefaas_create_function_uses_configured_project() -> None:
 
     request = service.client.create_function.call_args.args[0]
     assert request.project_name == "studio-project"
+
+
+def test_apig_uses_session_token() -> None:
+    gateway = APIGateway(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        session_token="test_session_token",
+    )
+
+    assert gateway.session_token == "test_session_token"
+    assert gateway.api_client.configuration.session_token == "test_session_token"
+
+
+def test_vefaas_passes_session_token_to_apig() -> None:
+    with patch("veadk.integrations.ve_faas.ve_faas.APIGateway") as apig:
+        VeFaaS(
+            access_key="test_access_key",
+            secret_key="test_secret_key",
+            session_token="test_session_token",
+            region="cn-shanghai",
+        )
+
+    apig.assert_called_once_with(
+        "test_access_key",
+        "test_secret_key",
+        "cn-shanghai",
+        session_token="test_session_token",
+    )
 
 
 def test_vefaas_code_upload_callback_uses_configured_region() -> None:
@@ -129,10 +158,12 @@ async def test_cloud():
                     project="studio-project",
                     volcengine_access_key="test_access_key",
                     volcengine_secret_key="test_secret_key",
+                    volcengine_session_token="test_session_token",
                 )
                 mock_vefaas_class.assert_called_once_with(
                     access_key="test_access_key",
                     secret_key="test_secret_key",
+                    session_token="test_session_token",
                     region="cn-beijing",
                     project_name="studio-project",
                 )

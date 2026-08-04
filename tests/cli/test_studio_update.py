@@ -180,7 +180,7 @@ def test_application_template_matches_deployment_region(
     )
     monkeypatch.setattr(
         "veadk.integrations.ve_faas.ve_faas.APIGateway",
-        lambda *_: object(),
+        lambda *_, **__: object(),
     )
 
     service = VeFaaS("ak", "sk", region="cn-shanghai")

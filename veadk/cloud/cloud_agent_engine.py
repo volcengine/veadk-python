@@ -70,6 +70,9 @@ class CloudAgentEngine(BaseModel):
     volcengine_secret_key: str = getenv(
         "VOLCENGINE_SECRET_KEY", "", allow_false_values=True
     )
+    volcengine_session_token: str = getenv(
+        "VOLCENGINE_SESSION_TOKEN", "", allow_false_values=True
+    ) or getenv("VOLC_SESSIONTOKEN", "", allow_false_values=True)
     region: str = "cn-beijing"
     project: str = "default"
 
@@ -91,6 +94,7 @@ class CloudAgentEngine(BaseModel):
         self._vefaas_service = VeFaaS(
             access_key=self.volcengine_access_key,
             secret_key=self.volcengine_secret_key,
+            session_token=self.volcengine_session_token,
             region=self.region,
             project_name=self.project,
         )
@@ -98,10 +102,12 @@ class CloudAgentEngine(BaseModel):
             access_key=self.volcengine_access_key,
             secret_key=self.volcengine_secret_key,
             region=self.region,
+            session_token=self.volcengine_session_token,
         )
         self._veidentity_service = IdentityClient(
             access_key=self.volcengine_access_key,
             secret_key=self.volcengine_secret_key,
+            session_token=self.volcengine_session_token,
             region=self.region,
         )
 

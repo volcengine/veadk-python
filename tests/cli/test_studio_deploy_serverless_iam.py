@@ -48,10 +48,23 @@ def test_existing_role_is_reused(monkeypatch: pytest.MonkeyPatch) -> None:
     created = ensure_serverless_application_role("ak", "sk")
 
     assert created is False
+    service.set_session_token.assert_not_called()
     service.get_policy.assert_not_called()
     service.create_policy.assert_not_called()
     service.create_role.assert_not_called()
     service.attach_role_policy.assert_not_called()
+
+
+def test_serverless_role_uses_session_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MagicMock()
+    service.get_role.return_value = {"Result": {"Role": {"RoleName": ROLE_NAME}}}
+    _install_iam_service(monkeypatch, service)
+
+    ensure_serverless_application_role("ak", "sk", session_token="sts-token")
+
+    service.set_session_token.assert_called_once_with("sts-token")
 
 
 def test_missing_role_is_created_with_all_policies(
@@ -131,7 +144,7 @@ def test_role_lookup_permission_error_fails_fast(
 def test_studio_deploy_checks_serverless_role_with_custom_function_role(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    checked_credentials: list[tuple[str, str]] = []
+    checked_credentials: list[tuple[str, str, str]] = []
 
     class _FakeCloudAgentEngine:
         def __init__(self, **_: object) -> None:
@@ -146,8 +159,8 @@ def test_studio_deploy_checks_serverless_role_with_custom_function_role(
 
     monkeypatch.setattr(
         "veadk.cli.studio_deploy_serverless_iam.ensure_serverless_application_role",
-        lambda access_key, secret_key: checked_credentials.append(
-            (access_key, secret_key)
+        lambda access_key, secret_key, session_token="": checked_credentials.append(
+            (access_key, secret_key, session_token)
         ),
     )
     monkeypatch.setattr(
@@ -196,4 +209,4 @@ def test_studio_deploy_checks_serverless_role_with_custom_function_role(
     )
 
     assert result.exit_code == 0, result.output
-    assert checked_credentials == [("ak", "sk")]
+    assert checked_credentials == [("ak", "sk", "")]
