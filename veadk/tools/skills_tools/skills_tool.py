@@ -536,39 +536,16 @@ class SkillsTool(BaseTool):
     def _upload_skill_metrics(self, span: _Span, skill_name: str, result: str) -> None:
         """Upload skill metrics to the telemetry system."""
         try:
-            import time
-            from veadk.tracing.telemetry.telemetry import meter_uploader
+            from veadk.tracing.telemetry.metric_uploader import (
+                metric_uploader_registry,
+            )
 
-            if meter_uploader:
-                # 初始化属性，包含技能相关信息
-                skill = self.skills.get(skill_name)
-                attributes = {
-                    "skill_name": skill_name,
-                    "tool_name": self.name,
-                    "skill_space_id": (
-                        skill.skill_space_id if skill and skill.skill_space_id else ""
-                    ),
-                    "skill_id": skill.id if skill and skill.id else "",
-                    "gen_ai.operation.name": "execute_skill",
-                    "error_type": (
-                        "skill_execution_error" if result.startswith("Error:") else ""
-                    ),
-                }
-
-                # 计算 span 执行耗时（秒）
-                latency_seconds = 0
-                if hasattr(span, "start_time"):
-                    # 计算耗时（秒）
-                    latency_seconds = (time.time_ns() - span.start_time) / 1e9  # type: ignore
-
-                # 记录技能执行延迟
-                if hasattr(meter_uploader, "skill_invoke_latency"):
-                    # 使用 skill_invoke_latency 记录技能执行延迟（秒）
-                    meter_uploader.skill_invoke_latency.record(
-                        latency_seconds, attributes
-                    )
-                    logger.debug(
-                        f"Uploaded skill metrics for {skill_name} with latency {latency_seconds:.4f}s and attributes {attributes}"
-                    )
+            metric_uploader_registry.record_skill_call(
+                span,
+                skill_name,
+                self.name,
+                self.skills.get(skill_name),
+                result,
+            )
         except Exception as e:
             logger.warning(f"Failed to upload skill metrics: {e}")

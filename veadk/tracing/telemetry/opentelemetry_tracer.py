@@ -28,6 +28,7 @@ from veadk.tracing.base_tracer import BaseTracer
 from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.tracing.telemetry.exporters.inmemory_exporter import InMemoryExporter
+from veadk.tracing.telemetry.metric_uploader import metric_uploader_registry
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import get_agent_dir
 from veadk.utils.patches import patch_google_adk_telemetry
@@ -160,7 +161,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         self._apmplus_managed_externally = have_global_tracer_provider
 
         for exporter in self.exporters:
-            self._register_exporter(exporter)
+            self._activate_exporter(exporter)
 
         self._inmemory_exporter = InMemoryExporter()
         if self._inmemory_exporter.processor:
@@ -181,12 +182,11 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
             f"Init OpentelemetryTracer with {len(self._processors)} exporter(s)."
         )
 
-        # Initialize global meter_uploader from exporters
-        from veadk.tracing.telemetry.telemetry import (
-            init_global_meter_uploader_from_exporters,
-        )
-
-        init_global_meter_uploader_from_exporters(self.exporters)
+    def _activate_exporter(self, exporter: BaseExporter) -> bool:
+        metric_uploader = exporter.get_metric_uploader()
+        if metric_uploader:
+            metric_uploader_registry.register(metric_uploader)
+        return self._register_exporter(exporter)
 
     def _register_exporter(self, exporter: BaseExporter) -> bool:
         if isinstance(exporter, APMPlusExporter) and self.apmplus_managed_externally:
@@ -219,14 +219,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         if not any(existing is exporter for existing in self.exporters):
             self.exporters.append(exporter)
 
-        registered = self._register_exporter(exporter)
-
-        from veadk.tracing.telemetry.telemetry import (
-            init_global_meter_uploader_from_exporters,
-        )
-
-        init_global_meter_uploader_from_exporters(self.exporters)
-        return registered
+        return self._activate_exporter(exporter)
 
     @property
     def trace_file_path(self) -> str:
@@ -266,6 +259,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         for processor in self._processors:
             time.sleep(0.05)
             processor.force_flush()
+        metric_uploader_registry.force_flush()
 
     @override
     def dump(

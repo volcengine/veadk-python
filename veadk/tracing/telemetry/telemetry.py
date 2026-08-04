@@ -30,29 +30,11 @@ from veadk.tracing.telemetry.attributes.extractors.types import (
     ToolAttributesParams,
 )
 from veadk.tracing.telemetry.content_tracing import should_trace_content
+from veadk.tracing.telemetry.metric_uploader import metric_uploader_registry
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import safe_json_serialize
 
 logger = get_logger(__name__)
-
-meter_uploader = None
-
-
-def init_global_meter_uploader_from_exporters(exporters):
-    """Initialize global meter_uploader from a list of exporters.
-
-    Args:
-        exporters: List of exporter instances to search for meter_uploader
-    """
-    global meter_uploader
-    for exporter in exporters:
-        if hasattr(exporter, "meter_uploader") and exporter.meter_uploader:
-            meter_uploader = exporter.meter_uploader
-            logger.debug(
-                "Global meter_uploader initialized from exporter: %s",
-                exporter.__class__.__name__,
-            )
-            break
 
 
 def _upload_call_llm_metrics(
@@ -63,8 +45,7 @@ def _upload_call_llm_metrics(
 ) -> None:
     """Upload LLM call metrics to configured meter uploaders.
 
-    This function extracts meter uploaders from agent tracers and records
-    LLM call metrics including token usage, latency, and request/response details.
+    This function records metrics through the process-level uploader registry.
 
     Args:
         invocation_context: Context containing agent, session, and user information
@@ -72,18 +53,9 @@ def _upload_call_llm_metrics(
         llm_request: The request sent to the language model
         llm_response: The response received from the language model
     """
-    from veadk.agent import Agent
-
-    if isinstance(invocation_context.agent, Agent):
-        tracers = invocation_context.agent.tracers
-        for tracer in tracers:
-            for exporter in getattr(tracer, "exporters", []):
-                if getattr(exporter, "meter_uploader", None):
-                    global meter_uploader
-                    meter_uploader = exporter.meter_uploader
-                    exporter.meter_uploader.record_call_llm(
-                        invocation_context, event_id, llm_request, llm_response
-                    )
+    metric_uploader_registry.record_call_llm(
+        invocation_context, event_id, llm_request, llm_response
+    )
 
 
 def _upload_tool_call_metrics(
@@ -91,7 +63,7 @@ def _upload_tool_call_metrics(
     args: dict[str, Any],
     function_response_event: Event,
 ):
-    """Upload tool call metrics to the global meter uploader.
+    """Upload tool call metrics to all registered meter uploaders.
 
     Records tool execution metrics including function name, arguments,
     execution time, and response details for observability and debugging.
@@ -101,15 +73,12 @@ def _upload_tool_call_metrics(
         args: Arguments passed to the tool function
         function_response_event: Event containing the tool's response data
 
-    Note:
-        - Requires global meter_uploader to be initialized
     """
-    global meter_uploader
-    if meter_uploader:
-        meter_uploader.record_tool_call(tool, args, function_response_event)
+    if metric_uploader_registry.uploaders:
+        metric_uploader_registry.record_tool_call(tool, args, function_response_event)
     else:
         logger.debug(
-            "Meter uploader is not initialized yet. Skip recording tool call metrics."
+            "No meter uploader is registered. Skip recording tool call metrics."
         )
 
 
