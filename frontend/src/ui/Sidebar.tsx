@@ -1,4 +1,10 @@
-import { type CSSProperties, useEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type SVGProps,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Info,
   LogOut,
@@ -24,7 +30,25 @@ import volcengineLogo from "../assets/volcengine.svg";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 
-export type SidebarPage = "new-chat" | "agents" | "search" | null;
+export type SidebarPage = "new-chat" | "agents" | "applications" | "search" | null;
+
+function ApplicationsIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      aria-hidden="true"
+      {...props}
+    >
+      <circle cx="7" cy="7" r="2.25" />
+      <circle cx="17" cy="7" r="2.25" />
+      <circle cx="7" cy="17" r="2.25" />
+      <circle cx="17" cy="17" r="2.25" />
+    </svg>
+  );
+}
 
 export interface SidebarProps {
   branding: SiteBranding;
@@ -43,6 +67,7 @@ export interface SidebarProps {
   onSkillCenter: () => void;
   onAddAgent: () => void;
   onMyAgents: () => void;
+  onApplications: () => void;
   onPickSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   userInfo?: Record<string, unknown>;
@@ -256,6 +281,7 @@ export function Sidebar({
   onSkillCenter,
   onAddAgent,
   onMyAgents,
+  onApplications,
   onPickSession,
   onDeleteSession,
   userInfo,
@@ -360,6 +386,18 @@ export function Sidebar({
         >
           <AgentFaceIcon />
           <span className="sidebar-nav-label">智能体</span>
+        </button>
+        <button
+          className={`new-chat new-chat--applications${
+            activePage === "applications" ? " is-active" : ""
+          }`}
+          onClick={onApplications}
+          aria-label="自动化"
+          aria-current={activePage === "applications" ? "page" : undefined}
+          title="自动化"
+        >
+          <ApplicationsIcon className="icon" />
+          <span className="sidebar-nav-label">自动化</span>
         </button>
         {show("search") && (
           <SearchButton active={activePage === "search"} onClick={onSearch} />

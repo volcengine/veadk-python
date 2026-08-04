@@ -76,6 +76,8 @@ import {
   invalidateRuntimeAgentCache,
   type MyAgentCardData,
 } from "./ui/MyAgents";
+import { Applications } from "./ui/Applications";
+import { GitHubIntegration } from "./ui/GitHubIntegration";
 import { SearchView } from "./ui/Search";
 import {
   buildAgentEntries,
@@ -996,6 +998,8 @@ export default function App() {
   const [feedbackCasePreview, setFeedbackCasePreview] =
     useState<AgentFeedbackCase | null>(null);
   const [myAgents, setMyAgents] = useState(false);
+  const [applicationsView, setApplicationsView] =
+    useState<"catalog" | "github" | null>(null);
   // A search result may belong to a different agent; remember it so the
   // agent-switch effect opens it instead of resetting to a fresh chat.
   const pendingOpenRef = useRef<{ app: string; sid: string } | null>(null);
@@ -2664,6 +2668,7 @@ export default function App() {
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
+    setApplicationsView(null);
     startNewChat();
   }
 
@@ -3562,6 +3567,25 @@ export default function App() {
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId("");
     setMyAgents(true);
+    setApplicationsView(null);
+    setError("");
+  };
+
+  const openApplicationsPage = () => {
+    if (sandboxSession) exitSandboxSession();
+    viewSidRef.current = "";
+    setSessionId("");
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setAgentDetailTarget(null);
+    setSandboxAgentDetailTarget(null);
+    setSandboxAgentWorkspace(null);
+    setMyAgents(false);
+    setApplicationsView("catalog");
     setError("");
   };
 
@@ -3605,8 +3629,10 @@ export default function App() {
       }
     : null;
 
-  const sidebarActivePage: SidebarPage = searchView
-    ? "search"
+  const sidebarActivePage: SidebarPage = applicationsView
+    ? "applications"
+    : searchView
+      ? "search"
     : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
       ? "agents"
       : sessionId || createView || skillCenter || addAgent || addMenu
@@ -3635,6 +3661,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setApplicationsView(null);
           setSearchView(true);
           setError("");
         }}
@@ -3655,6 +3682,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setApplicationsView(null);
           setCreateView(null);
           setImportedDraft(null);
           setNewRuntimeRegion("cn-beijing");
@@ -3672,6 +3700,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setApplicationsView(null);
           setSkillCenter(true);
           setError("");
         }}
@@ -3690,12 +3719,14 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setApplicationsView(null);
           setSessionId("");
           setAddMenu(false);
           setAddAgent(true);
           setError("");
         }}
         onMyAgents={openMyAgentsPage}
+        onApplications={openApplicationsPage}
         onPickSession={(id) => {
           setCreateView(null);
           setSkillCenter(false);
@@ -3707,6 +3738,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setApplicationsView(null);
           setError("");
           pickSession(id);
         }}
@@ -3969,7 +4001,11 @@ export default function App() {
                 </div>
               )}
 
-            {sandboxAgentWorkspace ? (
+            {applicationsView === "github" ? (
+              <GitHubIntegration onBack={() => setApplicationsView("catalog")} />
+            ) : applicationsView === "catalog" ? (
+              <Applications onOpenGitHub={() => setApplicationsView("github")} />
+            ) : sandboxAgentWorkspace ? (
               <SandboxAgentWorkspace
                 workspace={sandboxAgentWorkspace}
                 onBack={openMyAgentsPage}

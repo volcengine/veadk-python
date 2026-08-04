@@ -44,6 +44,11 @@ server that `veadk frontend` launches — no separate backend.
   Hermes expose their main interface and Terminal through Studio.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
+- **Applications directory**: browse development integrations from the Studio
+  sidebar. The GitHub integration can create a reviewable Pull Request that
+  adds or updates an AgentKit Runtime publishing workflow. Repository tokens
+  are used only for that request and are never persisted in the browser,
+  generated workflow, or server logs; cloud credentials remain GitHub Secrets.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
 - **Message feedback**: rate persisted Runtime replies with accessible,
   repository-drawn like/dislike controls. Studio identifies the final ADK Event,
