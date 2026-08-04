@@ -79,8 +79,9 @@ server that `veadk frontend` launches — no separate backend.
   prompts scroll within bounded editors, while the sidebar stays pinned to the
   viewport. On narrow desktop windows, the structure, configuration, and debug
   panels stack vertically instead of squeezing the form. The deployment page
-  pairs an inspectable Agent topology with configuration export, source download,
-  and a code browser/editor dialog, while keeping region, message channel,
+  pairs an inspectable Agent topology with a vertically aligned action rail for
+  YAML export, source download, and the code browser/editor dialog, while keeping
+  region, message channel,
   network, and environment settings primary. Local skills accept a dropped
   folder or ZIP and detect the format automatically. Component forms omit
   credentials that VeADK can resolve automatically, while the Studio server

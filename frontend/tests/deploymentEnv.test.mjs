@@ -287,14 +287,37 @@ test("summarizes the Agent above the deployment configuration", () => {
   assert.match(projectPreviewSource, /className="pp-flow-thumbnail"/);
   assert.match(projectPreviewSource, /<AgentBuildCanvas[\s\S]*?readOnly/);
   assert.match(projectPreviewSource, /Agent 数量/);
-  assert.match(projectPreviewSource, />\s*导出配置文件\s*</);
+  assert.match(projectPreviewSource, />\s*导出 YAML\s*</);
   assert.match(projectPreviewSource, /<ProjectCodeBrowser[\s\S]*?pp-artifact-source/);
-  assert.match(projectPreviewSource, />\s*导出源码\s*</);
+  assert.match(projectPreviewSource, />\s*下载源代码\s*</);
   assert.match(
     projectPreviewStyles,
     /grid-template-rows:\s*auto auto/,
   );
   assert.match(projectPreviewStyles, /\.pp-release-preview\s*\{[\s\S]*?box-sizing:\s*border-box/);
+});
+
+test("keeps artifact actions beside the embedded publish canvas", () => {
+  assert.match(
+    projectPreviewSource,
+    /className={`pp-release-preview\$\{embedded \? " is-embedded" : ""\}`}/,
+  );
+  assert.match(projectPreviewSource, /\{embedded && artifactActions\}/);
+  assert.match(projectPreviewSource, />\s*导出 YAML\s*</);
+  assert.match(projectPreviewSource, /label="查看源代码"/);
+  assert.match(projectPreviewSource, />\s*下载源代码\s*</);
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-release-preview\.is-embedded\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) 132px/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-artifact-actions\.is-rail\s*\{[\s\S]*?flex-direction:\s*column/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-artifact-actions\.is-rail \.pp-secondary,[\s\S]*?flex:\s*1 1 0;[\s\S]*?justify-content:\s*center/,
+  );
 });
 
 test("enlarges the read-only execution canvas without topology configuration", () => {
@@ -306,8 +329,8 @@ test("enlarges the read-only execution canvas without topology configuration", (
   assert.doesNotMatch(projectPreviewSource, /pp-topology-pane|inspectedAgent/);
 });
 
-test("uses an unboxed 查看源码 trigger", () => {
-  assert.match(codeBrowserSource, /<span>查看源码<\/span>/);
+test("uses an unboxed source trigger", () => {
+  assert.match(codeBrowserSource, /<span>\{label\}<\/span>/);
   assert.match(
     codeBrowserStyles,
     /\.code-browser-trigger\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;/,
