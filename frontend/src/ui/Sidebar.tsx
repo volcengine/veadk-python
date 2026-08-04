@@ -392,12 +392,12 @@ export function Sidebar({
             activePage === "applications" ? " is-active" : ""
           }`}
           onClick={onApplications}
-          aria-label="应用"
+          aria-label="自动化"
           aria-current={activePage === "applications" ? "page" : undefined}
-          title="应用"
+          title="自动化"
         >
           <ApplicationsIcon className="icon" />
-          <span className="sidebar-nav-label">应用</span>
+          <span className="sidebar-nav-label">自动化</span>
         </button>
         {show("search") && (
           <SearchButton active={activePage === "search"} onClick={onSearch} />

@@ -114,67 +114,37 @@
 
 .application-card {
   min-width: 0;
-  overflow: hidden;
-  border-radius: 12px;
-  background: hsl(var(--secondary) / 0.82);
-  animation: application-card-enter 180ms ease-out both;
-  transition: transform 160ms ease;
-}
-
-.application-card:hover { transform: translateY(-1px); }
-
-.application-card-body {
-  min-height: 132px;
+  min-height: 96px;
   display: flex;
-  gap: 14px;
+  align-items: flex-start;
+  gap: 16px;
   box-sizing: border-box;
-  padding: 17px;
+  padding: 16px 18px;
   border: 1px solid hsl(var(--border));
   border-radius: 12px;
   background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
   box-shadow: 0 1px 2px hsl(var(--foreground) / 0.035);
+  animation: application-card-enter 180ms ease-out both;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
 }
 
+.application-card:hover { border-color: hsl(var(--foreground) / 0.2); background: hsl(var(--secondary) / 0.24); box-shadow: 0 4px 14px hsl(var(--foreground) / 0.06); }
+.application-card:focus-visible { outline: 2px solid hsl(var(--ring) / 0.35); outline-offset: 2px; }
+
 .application-card-icon {
-  width: 42px;
-  height: 42px;
-  flex: 0 0 42px;
-  display: grid;
-  place-items: center;
-  border: 1px solid hsl(var(--border));
-  border-radius: 11px;
-  background: hsl(var(--secondary) / 0.68);
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
   color: hsl(var(--foreground));
 }
 
-.application-card-icon svg { width: 23px; height: 23px; }
 .application-card-copy { min-width: 0; }
-.application-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.application-card-heading h2 { margin: 0; font-size: 15px; font-weight: 620; line-height: 1.4; }
-.application-card-heading span { min-height: 22px; display: inline-flex; align-items: center; padding: 0 8px; border: 1px solid hsl(var(--border)); border-radius: 999px; color: hsl(var(--muted-foreground)); font-size: 10px; font-weight: 600; }
-.application-card-copy p { display: -webkit-box; margin: 11px 0 0; overflow: hidden; color: hsl(var(--muted-foreground)); font-size: 12.5px; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-
-.application-card > button {
-  width: 100%;
-  min-height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 12px 7px;
-  border: 0;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 550;
-  transition: color 160ms ease;
-}
-
-.application-card > button:hover { color: hsl(var(--foreground)); }
-.application-card > button:focus-visible { outline: 2px solid hsl(var(--ring) / 0.35); outline-offset: -3px; }
-.application-card > button svg { width: 14px; height: 14px; }
+.application-card-copy h2 { margin: 1px 0 0; font-size: 15px; font-weight: 620; line-height: 1.4; }
+.application-card-copy p { display: -webkit-box; margin: 7px 0 0; overflow: hidden; color: hsl(var(--muted-foreground)); font-size: 12.5px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 
 .applications-empty { min-height: 260px; display: grid; place-items: center; align-content: center; text-align: center; color: hsl(var(--muted-foreground)); }
 .applications-empty svg { width: 32px; height: 32px; margin-bottom: 12px; }
@@ -192,4 +162,3 @@
 @media (prefers-reduced-motion: reduce) {
   .application-card { animation: none; transition: none; }
 }
-
