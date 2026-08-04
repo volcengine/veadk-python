@@ -217,8 +217,8 @@ const DEFAULT_EVALUATION_GROUPS: EvaluationGroup[] = [
 
 const AGENT_SECTIONS: Array<{ id: AgentSection; label: string }> = [
   { id: "basic", label: "基本信息" },
-  { id: "integrations", label: "被集成" },
   { id: "evaluations", label: "评测集" },
+  { id: "integrations", label: "接入方法" },
 ];
 
 const INTEGRATION_PROTOCOLS: Array<{
@@ -242,6 +242,26 @@ interface RevealedApiKey {
 
 function endpointPath(endpoint: string, path: string): string {
   return endpoint ? `${endpoint.replace(/\/+$/, "")}${path}` : "";
+}
+
+function normalizeRuntimeA2aEndpoint(
+  endpoint: string,
+  runtimeEndpoint: string,
+): string {
+  const value = endpoint.trim();
+  if (!value || !runtimeEndpoint) return value;
+  try {
+    const agentUrl = new URL(value);
+    const hostname = agentUrl.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    if (!["localhost", "127.0.0.1", "::1"].includes(hostname)) return value;
+    const publicUrl = new URL(runtimeEndpoint);
+    agentUrl.protocol = publicUrl.protocol;
+    agentUrl.hostname = publicUrl.hostname;
+    agentUrl.port = publicUrl.port;
+    return agentUrl.toString();
+  } catch {
+    return value;
+  }
 }
 
 function authTypeLabel(authType?: RuntimeDetail["authType"]): string {
@@ -415,14 +435,12 @@ function IntegrationPanel({
   protocol,
   title,
   available,
-  loading,
   fields,
   example,
 }: {
   protocol: IntegrationProtocol;
   title: string;
   available: boolean;
-  loading: boolean;
   fields: Array<{ label: string; value: ReactNode }>;
   example: string;
 }) {
@@ -435,9 +453,6 @@ function IntegrationPanel({
     >
       <header>
         <h3>{title}</h3>
-        <span className={available ? "is-available" : ""}>
-          {loading ? "检测中" : available ? "可用" : "暂无"}
-        </span>
       </header>
       <dl>
         {fields.map((field) => (
@@ -1040,6 +1055,10 @@ export function AgentWorkspace({
   const apiIntegrationAppName =
     selectedIntegrationProbe?.apiApps?.[0] ?? selectedAgentAppName;
   const runtimeEndpoint = runtimeDetail?.endpoint ?? "";
+  const a2aEndpoint = normalizeRuntimeA2aEndpoint(
+    selectedIntegrationProbe?.a2a?.endpoint ?? "",
+    runtimeEndpoint,
+  );
   const updateCapabilityRequestKey = JSON.stringify([
     selectedAgent?.runtimeId ?? "",
     selectedAgent?.region ?? "",
@@ -2300,6 +2319,17 @@ export function AgentWorkspace({
                 </div>
               </div>
             )}
+            {section === "integrations" && integrationLoading && (
+              <div className="aw-detail-loading" role="status" aria-live="polite">
+                <div className="aw-detail-loading-card">
+                  <span className="loading-gap-spinner" aria-hidden="true" />
+                  <span>
+                    <strong>正在探测接入方式</strong>
+                    <small>正在确认 API Server 与 A2A…</small>
+                  </span>
+                </div>
+              </div>
+            )}
             <div className="aw-agent-head">
               <div>
                 <div className="aw-agent-title-row">
@@ -2522,12 +2552,6 @@ export function AgentWorkspace({
                     <h3>接入方式</h3>
                     <p>仅展示当前 Runtime 可确认的公开协议与地址。</p>
                   </div>
-                  {integrationLoading && (
-                    <div className="aw-integration-loading" role="status">
-                      <span className="loading-gap-spinner" aria-hidden="true" />
-                      正在探测接入方式…
-                    </div>
-                  )}
                   {integrationError && (
                     <div className="aw-integration-error" role="alert">
                       <span>{integrationError}</span>
@@ -2596,7 +2620,6 @@ export function AgentWorkspace({
                           protocol="api-server"
                           title="API Server"
                           available={apiIntegrationAvailable}
-                          loading={integrationLoading}
                           fields={[
                             {
                               label: "Agent",
@@ -2650,7 +2673,6 @@ export function AgentWorkspace({
                           protocol="a2a"
                           title="A2A"
                           available={a2aIntegrationAvailable}
-                          loading={integrationLoading}
                           fields={[
                             {
                               label: "Agent",
@@ -2667,7 +2689,7 @@ export function AgentWorkspace({
                             },
                             {
                               label: "调用地址",
-                              value: selectedIntegrationProbe?.a2a?.endpoint ?? "",
+                              value: a2aEndpoint,
                             },
                             {
                               label: "鉴权方式",
@@ -2692,7 +2714,7 @@ export function AgentWorkspace({
                           ]}
                           example={a2aIntegrationAvailable
                             ? a2aPythonExample(
-                                selectedIntegrationProbe?.a2a?.endpoint ?? "",
+                                a2aEndpoint,
                                 runtimeDetail?.authType,
                               )
                             : ""}

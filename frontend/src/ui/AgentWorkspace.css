@@ -909,12 +909,12 @@
 .aw-integration-protocol-tabs {
   position: relative;
   display: grid;
-  width: min(360px, 100%);
-  height: 44px;
+  width: min(240px, 100%);
+  height: 36px;
   box-sizing: border-box;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px;
-  padding: 4px;
+  gap: 3px;
+  padding: 3px;
   border: 1px solid hsl(var(--border));
   border-radius: 10px;
   background: hsl(var(--secondary));
@@ -923,10 +923,10 @@
 .aw-integration-protocol-slider {
   position: absolute;
   z-index: 0;
-  top: 4px;
-  bottom: 4px;
-  left: 4px;
-  width: calc((100% - 12px) / 2);
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 9px) / 2);
   border: 1px solid hsl(var(--border));
   border-radius: 7px;
   background: hsl(var(--panel));
@@ -935,22 +935,22 @@
 }
 
 .aw-integration-protocol-tabs.is-a2a .aw-integration-protocol-slider {
-  transform: translateX(calc(100% + 4px));
+  transform: translateX(calc(100% + 3px));
 }
 
 .aw-integration-protocol-tabs button {
   position: relative;
   z-index: 1;
   min-width: 0;
-  min-height: 34px;
-  padding: 0 12px;
+  min-height: 28px;
+  padding: 0 8px;
   border: 0;
   border-radius: 7px;
   background: transparent;
   color: hsl(var(--muted-foreground));
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 550;
   transition:
     background-color 160ms ease,
@@ -981,17 +981,14 @@
 }
 
 .aw-integration-panel.has-example {
-  display: grid;
-  grid-template-columns: minmax(240px, 0.78fr) minmax(0, 1.22fr);
-  gap: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
 .aw-integration-panel header {
   display: flex;
-  grid-column: 1 / -1;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
   margin-bottom: 4px;
 }
 
@@ -999,21 +996,6 @@
   color: hsl(var(--foreground));
   font-size: 14px;
   font-weight: 620;
-}
-
-.aw-integration-panel header > span {
-  flex: 0 0 auto;
-  padding: 3px 7px;
-  border-radius: 999px;
-  background: hsl(var(--muted));
-  color: hsl(var(--muted-foreground));
-  font-size: 10.5px;
-  font-weight: 600;
-}
-
-.aw-integration-panel header > span.is-available {
-  background: hsl(142 55% 94%);
-  color: hsl(142 62% 30%);
 }
 
 .aw-integration-panel dl {
@@ -1129,7 +1111,6 @@
   line-height: 1.55;
 }
 
-.aw-integration-loading,
 .aw-integration-error {
   display: flex;
   align-items: center;
@@ -2497,10 +2478,6 @@
   }
 
   .aw-facts {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .aw-integration-panel.has-example {
     grid-template-columns: minmax(0, 1fr);
   }
 
