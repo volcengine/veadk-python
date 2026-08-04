@@ -49,22 +49,12 @@ def test_parse_github_repo_url_accepts_common_forms() -> None:
     )
 
 
-def test_create_github_cicd_pipeline_commits_pr_and_creates_runtime(
+def test_create_github_cicd_pipeline_commits_pr_without_creating_runtime(
     tmp_path: Path,
 ) -> None:
     from veadk.cli.github_cicd import create_github_cicd_pipeline
 
     github = FakeGitHubClient()
-    deploy_calls: list[dict[str, Any]] = []
-
-    def deployer(**kwargs: Any) -> dict[str, Any]:
-        deploy_calls.append(kwargs)
-        return {
-            "runtimeId": "rt-first",
-            "agentName": kwargs["project"]["name"],
-            "region": kwargs["region"],
-            "version": 1,
-        }
 
     result = create_github_cicd_pipeline(
         project=PROJECT,
@@ -73,7 +63,6 @@ def test_create_github_cicd_pipeline_commits_pr_and_creates_runtime(
         base_branch="main",
         region="cn-beijing",
         github_client=github,
-        deployer=deployer,
         state_path=tmp_path / "state.json",
     )
 
@@ -81,18 +70,10 @@ def test_create_github_cicd_pipeline_commits_pr_and_creates_runtime(
     assert result["github"]["branch"] == "studio/demo-agent"
     assert result["github"]["commitSha"] == "commit-1"
     assert result["github"]["pullRequestUrl"] == "https://github.com/acme/demo/pull/1"
-    assert result["deployment"]["runtimeId"] == "rt-first"
     assert result["status"] == "succeeded"
     assert result["phase"] == "ready"
     assert isinstance(result["updatedAt"], str)
-    assert deploy_calls == [
-        {
-            "project": PROJECT,
-            "region": "cn-beijing",
-            "runtime_id": "",
-            "description": "GitHub CI/CD deployment from acme/demo@studio/demo-agent",
-        }
-    ]
+    assert "deployment" not in result
     assert github.created_branch == ("main-sha", "studio/demo-agent")
     assert github.committed_files == PROJECT["files"]
     assert github.pull_request == ("studio/demo-agent", "main")
@@ -100,21 +81,14 @@ def test_create_github_cicd_pipeline_commits_pr_and_creates_runtime(
     state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
     assert state["github-acme-demo-studio-demo-agent"]["status"] == "succeeded"
     assert state["github-acme-demo-studio-demo-agent"]["phase"] == "ready"
-    assert state["github-acme-demo-studio-demo-agent"]["runtimeId"] == "rt-first"
+    assert state["github-acme-demo-studio-demo-agent"]["runtimeId"] == ""
+    assert state["github-acme-demo-studio-demo-agent"]["githubToken"] == "ghp_secret"
 
 
 def test_create_github_cicd_pipeline_reports_progress(tmp_path: Path) -> None:
     from veadk.cli.github_cicd import create_github_cicd_pipeline
 
     events: list[str] = []
-
-    def deployer(**kwargs: Any) -> dict[str, Any]:
-        return {
-            "runtimeId": kwargs["runtime_id"] or "rt-created",
-            "agentName": kwargs["project"]["name"],
-            "region": kwargs["region"],
-            "version": 1,
-        }
 
     create_github_cicd_pipeline(
         project=PROJECT,
@@ -123,7 +97,6 @@ def test_create_github_cicd_pipeline_reports_progress(tmp_path: Path) -> None:
         base_branch="main",
         region="cn-beijing",
         github_client=FakeGitHubClient(),
-        deployer=deployer,
         state_path=tmp_path / "state.json",
         progress=events.append,
     )
@@ -135,57 +108,55 @@ def test_create_github_cicd_pipeline_reports_progress(tmp_path: Path) -> None:
         "Ensuring Studio branch studio/demo-agent...",
         "Committing 2 file(s) to studio/demo-agent...",
         "Ensuring pull request studio/demo-agent -> main...",
-        "Deploying AgentKit Runtime...",
         "Saving GitHub CI/CD pipeline state...",
         "GitHub CI/CD pipeline ready.",
     ]
 
 
-def test_default_deployer_uses_shared_studio_agentkit_deploy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from veadk.cli import github_cicd
-
-    captured: dict[str, Any] = {}
-
-    def deploy_agentkit_project(**kwargs: Any) -> dict[str, Any]:
-        captured.update(kwargs)
-        return {"runtimeId": "rt-shared"}
-
-    monkeypatch.setattr(
-        "veadk.cli.studio_agentkit_deploy.deploy_agentkit_project",
-        deploy_agentkit_project,
-    )
-
-    result = github_cicd._default_deployer(
-        project=PROJECT,
-        region="cn-beijing",
-        runtime_id="",
-        description="demo",
-    )
-
-    assert result == {"runtimeId": "rt-shared"}
-    assert captured["project"] == PROJECT
-
-
-def test_create_github_cicd_pipeline_reuses_runtime_on_next_run(
+def test_bind_github_cicd_pipeline_to_runtime(
     tmp_path: Path,
 ) -> None:
-    from veadk.cli.github_cicd import create_github_cicd_pipeline
+    from veadk.cli.github_cicd import (
+        bind_github_cicd_runtime,
+        create_github_cicd_pipeline,
+    )
+
+    state_path = tmp_path / "state.json"
+    create_github_cicd_pipeline(
+        project=PROJECT,
+        github_url="https://github.com/acme/demo",
+        github_token="ghp_secret",
+        base_branch="main",
+        region="cn-beijing",
+        github_client=FakeGitHubClient(),
+        state_path=state_path,
+    )
+
+    binding = bind_github_cicd_runtime(
+        pipeline_id="github-acme-demo-studio-demo-agent",
+        runtime_id="rt-created",
+        region="cn-beijing",
+        state_path=state_path,
+    )
+
+    assert binding["runtimeId"] == "rt-created"
+    assert binding["github"]["pullRequestUrl"] == "https://github.com/acme/demo/pull/1"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["github-acme-demo-studio-demo-agent"]["runtimeId"] == "rt-created"
+
+
+def test_sync_github_cicd_runtime_updates_bound_pr(
+    tmp_path: Path,
+) -> None:
+    from veadk.cli.github_cicd import (
+        bind_github_cicd_runtime,
+        create_github_cicd_pipeline,
+        sync_github_cicd_runtime,
+    )
 
     state_path = tmp_path / "state.json"
     first_github = FakeGitHubClient(commit_sha="commit-1")
     second_github = FakeGitHubClient(commit_sha="commit-2")
-    runtime_ids: list[str] = []
-
-    def deployer(**kwargs: Any) -> dict[str, Any]:
-        runtime_ids.append(kwargs["runtime_id"])
-        return {
-            "runtimeId": kwargs["runtime_id"] or "rt-created",
-            "agentName": kwargs["project"]["name"],
-            "region": kwargs["region"],
-            "version": 1 if not kwargs["runtime_id"] else 2,
-        }
 
     create_github_cicd_pipeline(
         project=PROJECT,
@@ -194,70 +165,41 @@ def test_create_github_cicd_pipeline_reuses_runtime_on_next_run(
         base_branch="main",
         region="cn-beijing",
         github_client=first_github,
-        deployer=deployer,
         state_path=state_path,
     )
-    result = create_github_cicd_pipeline(
-        project=PROJECT,
-        github_url="https://github.com/acme/demo",
-        github_token="ghp_secret",
-        base_branch="main",
+    bind_github_cicd_runtime(
+        pipeline_id="github-acme-demo-studio-demo-agent",
+        runtime_id="rt-created",
         region="cn-beijing",
-        github_client=second_github,
-        deployer=deployer,
         state_path=state_path,
     )
 
-    assert runtime_ids == ["", "rt-created"]
+    result = sync_github_cicd_runtime(
+        runtime_id="rt-created",
+        project=PROJECT,
+        github_client=second_github,
+        state_path=state_path,
+    )
+
     assert result["github"]["commitSha"] == "commit-2"
-    assert result["deployment"]["runtimeId"] == "rt-created"
-    assert result["deployment"]["version"] == 2
+    assert result["runtimeId"] == "rt-created"
+    assert second_github.committed_files == PROJECT["files"]
 
 
-def test_create_github_cicd_pipeline_persists_failed_deploy_state(
+def test_sync_github_cicd_runtime_requires_bound_runtime(
     tmp_path: Path,
 ) -> None:
-    from veadk.cli.github_cicd import GitHubCicdError, create_github_cicd_pipeline
-
-    def deployer(**_kwargs: Any) -> dict[str, Any]:
-        raise GitHubCicdError(
-            "Runtime status is Error. Initialization failed",
-            phase="deploy",
-            runtime_id="rt-failed",
-            log_path="/tmp/runtime.log",
-        )
+    from veadk.cli.github_cicd import GitHubCicdError, sync_github_cicd_runtime
 
     with pytest.raises(GitHubCicdError) as exc:
-        create_github_cicd_pipeline(
+        sync_github_cicd_runtime(
+            runtime_id="rt-missing",
             project=PROJECT,
-            github_url="https://github.com/acme/demo",
-            github_token="ghp_secret",
-            base_branch="main",
-            region="cn-beijing",
-            github_client=FakeGitHubClient(),
-            deployer=deployer,
             state_path=tmp_path / "state.json",
         )
 
-    assert exc.value.phase == "deploy"
-    assert exc.value.runtime_id == "rt-failed"
-    assert exc.value.to_response() == {
-        "status": "failed",
-        "phase": "deploy",
-        "message": "Runtime status is Error. Initialization failed",
-        "runtimeId": "rt-failed",
-        "logPath": "/tmp/runtime.log",
-    }
-    state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
-    failed = state["github-acme-demo-studio-demo-agent"]
-    assert failed["status"] == "failed"
-    assert failed["phase"] == "deploy"
-    assert failed["runtimeId"] == "rt-failed"
-    assert failed["latestCommitSha"] == "commit-1"
-    assert failed["pullRequestUrl"] == "https://github.com/acme/demo/pull/1"
-    assert failed["lastError"]["message"] == (
-        "Runtime status is Error. Initialization failed"
-    )
+    assert exc.value.phase == "binding"
+    assert "not bound" in str(exc.value)
 
 
 def test_github_cicd_pipeline_cli_reads_project_json_and_runs_github_cicd(
@@ -274,7 +216,6 @@ def test_github_cicd_pipeline_cli_reads_project_json_and_runs_github_cicd(
             "status": "succeeded",
             "phase": "ready",
             "github": {"pullRequestUrl": "https://github.com/acme/demo/pull/1"},
-            "deployment": {"runtimeId": "rt-1"},
         }
 
     monkeypatch.setattr(
@@ -328,7 +269,6 @@ def test_studio_endpoint_creates_github_cicd_pipeline(
             "status": "succeeded",
             "phase": "ready",
             "github": {"branch": "studio/demo-agent"},
-            "deployment": {"runtimeId": "rt-1"},
         }
 
     monkeypatch.setattr(
@@ -357,6 +297,44 @@ def test_studio_endpoint_creates_github_cicd_pipeline(
     assert captured["github_token"] == "ghp_secret"
     assert captured["base_branch"] == "main"
     assert captured["region"] == "cn-beijing"
+
+
+def test_studio_endpoint_syncs_bound_github_cicd_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    captured: dict[str, Any] = {}
+
+    def fake_sync_github_cicd_runtime(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {
+            "pipelineId": "github-acme-demo-studio-demo-agent",
+            "status": "succeeded",
+            "phase": "ready",
+            "runtimeId": "rt-1",
+            "github": {"branch": "studio/demo-agent"},
+        }
+
+    monkeypatch.setattr(
+        "veadk.cli.github_cicd.sync_github_cicd_runtime",
+        fake_sync_github_cicd_runtime,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/github-cicd/runtime-sync",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "runtimeId": "rt-1",
+                "project": PROJECT,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["runtimeId"] == "rt-1"
+    assert captured["runtime_id"] == "rt-1"
+    assert captured["project"] == PROJECT
 
 
 def test_studio_endpoint_returns_structured_github_cicd_errors(

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""CLI wrapper for Studio GitHub CI/CD pipelines."""
+"""CLI wrapper for Studio GitHub CI/CD pull request setup."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def github_cicd_pipeline(
     project_json: Path,
     region: str,
 ) -> None:
-    """Create a GitHub CI/CD link and deploy the generated Agent project."""
+    """Create or update the GitHub PR for the generated Agent project."""
 
     def progress(message: str) -> None:
         click.echo(f"[github-cicd] {message}")

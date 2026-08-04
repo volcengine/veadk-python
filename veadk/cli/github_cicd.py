@@ -97,11 +97,10 @@ def create_github_cicd_pipeline(
     base_branch: str = "main",
     region: str = "cn-beijing",
     github_client: Any | None = None,
-    deployer: Callable[..., dict[str, Any]] | None = None,
     state_path: str | Path | None = None,
     progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
-    """Create/update the GitHub branch and run the first AgentKit deployment."""
+    """Create/update the GitHub branch and pull request for an Agent project."""
     _emit(progress, "Validating AgentProject...")
     project = _validate_project(project)
     token = github_token.strip()
@@ -118,73 +117,17 @@ def create_github_cicd_pipeline(
     state = _load_state(state_file)
     studio_branch = f"studio/{_slug(project['name'])}"
     pipeline_id = _pipeline_id(owner, repo, studio_branch)
-    pipeline_state = state.get(pipeline_id, {})
+    existing = state.get(pipeline_id, {})
 
-    client.ensure_repository_access(owner, repo)
-    _emit(progress, f"Reading base branch {base_branch}...")
-    source_sha = client.get_branch_head(owner, repo, base_branch)
-    _emit(progress, f"Ensuring Studio branch {studio_branch}...")
-    client.ensure_branch(
-        owner,
-        repo,
-        branch=studio_branch,
-        source_sha=source_sha,
-    )
-    _emit(progress, f"Committing {len(project['files'])} file(s) to {studio_branch}...")
-    commit_sha = client.commit_files(
-        owner,
-        repo,
-        branch=studio_branch,
-        files=project["files"],
-        message=f"Studio: update {project['name']} Agent project",
-    )
-    _emit(progress, f"Ensuring pull request {studio_branch} -> {base_branch}...")
-    pr = client.ensure_pull_request(
-        owner,
-        repo,
-        head_branch=studio_branch,
+    github = _sync_github_pr(
+        client=client,
+        owner=owner,
+        repo=repo,
+        project=project,
         base_branch=base_branch,
-        title=f"Update {project['name']} from Studio",
-        body=(
-            "Studio generated this Agent project and triggered a GitHub CI/CD "
-            "deployment to AgentKit Runtime."
-        ),
+        studio_branch=studio_branch,
+        progress=progress,
     )
-
-    runtime_id = str(pipeline_state.get("runtimeId") or "")
-    deploy = deployer or _default_deployer
-    deploy_kwargs = {
-        "project": project,
-        "region": region,
-        "runtime_id": runtime_id,
-        "description": f"GitHub CI/CD deployment from {owner}/{repo}@{studio_branch}",
-    }
-    if progress is not None:
-        deploy_kwargs["progress"] = progress
-    _emit(progress, "Deploying AgentKit Runtime...")
-    try:
-        deployment = deploy(**deploy_kwargs)
-    except GitHubCicdError as error:
-        failed_runtime_id = error.runtime_id or runtime_id
-        _save_pipeline_state(
-            state_file,
-            state,
-            pipeline_id=pipeline_id,
-            github_url=github_url,
-            owner=owner,
-            repo=repo,
-            base_branch=base_branch,
-            studio_branch=studio_branch,
-            pull_request_url=pr.url,
-            runtime_id=failed_runtime_id,
-            region=region,
-            latest_commit_sha=commit_sha,
-            status="failed",
-            phase=error.phase,
-            last_error=error.to_response(),
-        )
-        raise
-    runtime_id = str(deployment.get("runtimeId") or runtime_id)
 
     _emit(progress, "Saving GitHub CI/CD pipeline state...")
     updated_at = _save_pipeline_state(
@@ -196,10 +139,12 @@ def create_github_cicd_pipeline(
         repo=repo,
         base_branch=base_branch,
         studio_branch=studio_branch,
-        pull_request_url=pr.url,
-        runtime_id=runtime_id,
+        pull_request_url=github["pullRequestUrl"],
+        pull_request_number=int(github.get("pullRequestNumber") or 0),
+        runtime_id=str(existing.get("runtimeId") or ""),
         region=region,
-        latest_commit_sha=commit_sha,
+        latest_commit_sha=github["commitSha"],
+        github_token=token,
         status="succeeded",
         phase="ready",
         last_error=None,
@@ -211,17 +156,128 @@ def create_github_cicd_pipeline(
         "status": "succeeded",
         "phase": "ready",
         "updatedAt": updated_at,
-        "github": {
-            "owner": owner,
-            "repo": repo,
-            "baseBranch": base_branch,
-            "branch": studio_branch,
-            "commitSha": commit_sha,
-            "pullRequestUrl": pr.url,
-            "pullRequestNumber": pr.number,
-        },
-        "deployment": deployment,
+        "github": github,
     }
+
+
+def bind_github_cicd_runtime(
+    *,
+    pipeline_id: str,
+    runtime_id: str,
+    region: str = "cn-beijing",
+    state_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Bind an existing GitHub CI/CD pipeline record to an AgentKit Runtime."""
+    pipeline_id = pipeline_id.strip()
+    runtime_id = runtime_id.strip()
+    if not pipeline_id:
+        raise GitHubCicdError("GitHub CI/CD pipelineId is required", phase="binding")
+    if not runtime_id:
+        raise GitHubCicdError("Runtime ID is required", phase="binding")
+    state_file = Path(state_path) if state_path is not None else DEFAULT_STATE_PATH
+    state = _load_state(state_file)
+    record = state.get(pipeline_id)
+    if not isinstance(record, dict):
+        raise GitHubCicdError(
+            f"GitHub CI/CD pipeline is not found: {pipeline_id}",
+            phase="binding",
+        )
+    record["runtimeId"] = runtime_id
+    record["region"] = region
+    record["status"] = "bound"
+    record["phase"] = "ready"
+    record["updatedAt"] = datetime.now(UTC).isoformat()
+    _save_state(state_file, state)
+    return _state_to_response(record)
+
+
+def get_github_cicd_runtime_binding(
+    *,
+    runtime_id: str,
+    state_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Return the GitHub CI/CD binding for a Runtime, or an empty object."""
+    runtime_id = runtime_id.strip()
+    if not runtime_id:
+        raise GitHubCicdError("Runtime ID is required", phase="binding")
+    state_file = Path(state_path) if state_path is not None else DEFAULT_STATE_PATH
+    record = _find_state_by_runtime_id(_load_state(state_file), runtime_id)
+    return _state_to_response(record) if record else {}
+
+
+def sync_github_cicd_runtime(
+    *,
+    runtime_id: str,
+    project: object,
+    github_token: str = "",
+    github_client: Any | None = None,
+    state_path: str | Path | None = None,
+    progress: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    """Sync the current Agent project to the PR bound to ``runtime_id``."""
+    runtime_id = runtime_id.strip()
+    if not runtime_id:
+        raise GitHubCicdError("Runtime ID is required", phase="binding")
+    _emit(progress, "Checking GitHub CI/CD binding...")
+    project = _validate_project(project)
+    state_file = Path(state_path) if state_path is not None else DEFAULT_STATE_PATH
+    state = _load_state(state_file)
+    record = _find_state_by_runtime_id(state, runtime_id)
+    if record is None:
+        raise GitHubCicdError(
+            f"Runtime is not bound to GitHub CI/CD: {runtime_id}",
+            phase="binding",
+            runtime_id=runtime_id,
+        )
+    token = github_token.strip() or str(record.get("githubToken") or "").strip()
+    if not token:
+        raise GitHubCicdError(
+            "GitHub token is required to sync this Runtime",
+            phase="github",
+            runtime_id=runtime_id,
+        )
+    owner = str(record.get("owner") or "")
+    repo = str(record.get("repo") or "")
+    base_branch = str(record.get("baseBranch") or "main")
+    studio_branch = str(record.get("branch") or "")
+    if not owner or not repo or not studio_branch:
+        raise GitHubCicdError(
+            "GitHub CI/CD binding is incomplete",
+            phase="binding",
+            runtime_id=runtime_id,
+        )
+    client = github_client or GitHubClient(token)
+    github = _sync_github_pr(
+        client=client,
+        owner=owner,
+        repo=repo,
+        project=project,
+        base_branch=base_branch,
+        studio_branch=studio_branch,
+        progress=progress,
+    )
+    updated_at = _save_pipeline_state(
+        state_file,
+        state,
+        pipeline_id=str(record["pipelineId"]),
+        github_url=str(record.get("githubUrl") or f"https://github.com/{owner}/{repo}"),
+        owner=owner,
+        repo=repo,
+        base_branch=base_branch,
+        studio_branch=studio_branch,
+        pull_request_url=github["pullRequestUrl"],
+        pull_request_number=int(github.get("pullRequestNumber") or 0),
+        runtime_id=runtime_id,
+        region=str(record.get("region") or "cn-beijing"),
+        latest_commit_sha=github["commitSha"],
+        github_token=token,
+        status="succeeded",
+        phase="ready",
+        last_error=None,
+    )
+    result = _state_to_response(state[str(record["pipelineId"])])
+    result["updatedAt"] = updated_at
+    return result
 
 
 class GitHubClient:
@@ -378,21 +434,55 @@ class GitHubClient:
         return response.json()
 
 
-def _default_deployer(**kwargs: Any) -> dict[str, Any]:
-    from veadk.cli.studio_agentkit_deploy import (
-        StudioAgentkitDeployError,
-        deploy_agentkit_project,
+def _sync_github_pr(
+    *,
+    client: Any,
+    owner: str,
+    repo: str,
+    project: dict[str, Any],
+    base_branch: str,
+    studio_branch: str,
+    progress: ProgressCallback | None,
+) -> dict[str, Any]:
+    client.ensure_repository_access(owner, repo)
+    _emit(progress, f"Reading base branch {base_branch}...")
+    source_sha = client.get_branch_head(owner, repo, base_branch)
+    _emit(progress, f"Ensuring Studio branch {studio_branch}...")
+    client.ensure_branch(
+        owner,
+        repo,
+        branch=studio_branch,
+        source_sha=source_sha,
     )
-
-    try:
-        return deploy_agentkit_project(**kwargs)
-    except StudioAgentkitDeployError as error:
-        raise GitHubCicdError(
-            str(error),
-            phase=error.phase,
-            runtime_id=error.runtime_id,
-            log_path=error.log_path,
-        ) from error
+    _emit(progress, f"Committing {len(project['files'])} file(s) to {studio_branch}...")
+    commit_sha = client.commit_files(
+        owner,
+        repo,
+        branch=studio_branch,
+        files=project["files"],
+        message=f"Studio: update {project['name']} Agent project",
+    )
+    _emit(progress, f"Ensuring pull request {studio_branch} -> {base_branch}...")
+    pr = client.ensure_pull_request(
+        owner,
+        repo,
+        head_branch=studio_branch,
+        base_branch=base_branch,
+        title=f"Update {project['name']} from Studio",
+        body=(
+            "Studio generated this Agent project. The bound AgentKit Runtime "
+            "is updated through Studio deployment."
+        ),
+    )
+    return {
+        "owner": owner,
+        "repo": repo,
+        "baseBranch": base_branch,
+        "branch": studio_branch,
+        "commitSha": commit_sha,
+        "pullRequestUrl": pr.url,
+        "pullRequestNumber": pr.number,
+    }
 
 
 def _emit(progress: ProgressCallback | None, message: str) -> None:
@@ -463,9 +553,11 @@ def _save_pipeline_state(
     base_branch: str,
     studio_branch: str,
     pull_request_url: str,
+    pull_request_number: int,
     runtime_id: str,
     region: str,
     latest_commit_sha: str,
+    github_token: str,
     status: str,
     phase: str,
     last_error: dict[str, Any] | None,
@@ -479,9 +571,11 @@ def _save_pipeline_state(
         "baseBranch": base_branch,
         "branch": studio_branch,
         "pullRequestUrl": pull_request_url,
+        "pullRequestNumber": pull_request_number,
         "runtimeId": runtime_id,
         "region": region,
         "latestCommitSha": latest_commit_sha,
+        "githubToken": github_token,
         "status": status,
         "phase": phase,
         "updatedAt": updated_at,
@@ -502,12 +596,49 @@ def _load_state(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _find_state_by_runtime_id(
+    state: dict[str, Any],
+    runtime_id: str,
+) -> dict[str, Any] | None:
+    for record in state.values():
+        if (
+            isinstance(record, dict)
+            and str(record.get("runtimeId") or "") == runtime_id
+        ):
+            return record
+    return None
+
+
+def _state_to_response(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "pipelineId": str(record.get("pipelineId") or ""),
+        "status": str(record.get("status") or ""),
+        "phase": str(record.get("phase") or ""),
+        "updatedAt": str(record.get("updatedAt") or ""),
+        "runtimeId": str(record.get("runtimeId") or ""),
+        "region": str(record.get("region") or ""),
+        "github": {
+            "owner": str(record.get("owner") or ""),
+            "repo": str(record.get("repo") or ""),
+            "baseBranch": str(record.get("baseBranch") or ""),
+            "branch": str(record.get("branch") or ""),
+            "commitSha": str(record.get("latestCommitSha") or ""),
+            "pullRequestUrl": str(record.get("pullRequestUrl") or ""),
+            "pullRequestNumber": int(record.get("pullRequestNumber") or 0),
+        },
+    }
+
+
 def _save_state(path: Path, state: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def _redact(text: str, *secrets: str) -> str:

@@ -2324,7 +2324,7 @@ def _run_frontend_server(
 
     @app.post("/web/github-cicd/pipelines")
     async def _create_github_cicd_pipeline(request: Request):
-        """Create a GitHub CI/CD link and run the first AgentKit deployment."""
+        """Create or update the GitHub PR for Studio-generated Agent source."""
         _require_agent_management(request)
         data = await request.json()
         try:
@@ -2344,6 +2344,70 @@ def _run_frontend_server(
             raise HTTPException(status_code=400, detail=error.to_response()) from error
         except Exception as error:
             logger.exception("Failed to create GitHub CI/CD pipeline")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(
+                    error,
+                    secrets=(str(data.get("githubToken") or ""),),
+                ),
+            ) from error
+
+    @app.get("/web/github-cicd/runtime-binding")
+    async def _get_github_cicd_runtime_binding(
+        request: Request,
+        runtimeId: str = "",
+    ):
+        """Return the GitHub CI/CD binding for a Runtime, when present."""
+        _require_agent_management(request)
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                get_github_cicd_runtime_binding,
+            )
+
+            return get_github_cicd_runtime_binding(runtime_id=runtimeId)
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+
+    @app.post("/web/github-cicd/runtime-binding")
+    async def _bind_github_cicd_runtime(request: Request):
+        """Bind a GitHub CI/CD pipeline record to an AgentKit Runtime."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                bind_github_cicd_runtime,
+            )
+
+            return bind_github_cicd_runtime(
+                pipeline_id=str(data.get("pipelineId") or ""),
+                runtime_id=str(data.get("runtimeId") or ""),
+                region=str(data.get("region") or "cn-beijing"),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+
+    @app.post("/web/github-cicd/runtime-sync")
+    async def _sync_github_cicd_runtime(request: Request):
+        """Sync current AgentProject files to the PR bound to a Runtime."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                sync_github_cicd_runtime,
+            )
+
+            return sync_github_cicd_runtime(
+                runtime_id=str(data.get("runtimeId") or ""),
+                project=data.get("project") or {},
+                github_token=str(data.get("githubToken") or ""),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except Exception as error:
+            logger.exception("Failed to sync GitHub CI/CD pipeline")
             raise HTTPException(
                 status_code=502,
                 detail=_safe_exception_detail(
