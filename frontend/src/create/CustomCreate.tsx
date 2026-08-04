@@ -18,6 +18,7 @@ import {
   ChevronRight,
   Cpu,
   Database,
+  ExternalLink,
   FolderUp,
   Globe,
   Info,
@@ -53,7 +54,9 @@ import {
   type EnvVar,
 } from "./veadkCatalog";
 import {
+  firstInvalidRuntimeEnv,
   runtimeEnvConfiguration,
+  runtimeEnvJsonError,
   runtimeEnvVars,
   type RuntimeEnvConfiguration,
   type RuntimeEnvSelection,
@@ -473,25 +476,74 @@ function RuntimeEnvFields({
   }
   return (
     <div className="cw-env-fields">
-      {env.map((item) => (
-        <label className="cw-env-field" key={item.key}>
-          <span className="cw-env-field-head">
-            <span className="cw-env-field-label">
-              {item.comment || item.key}
-              {item.required && <span className="cw-req">*</span>}
+      {env.map((item) => {
+        const value = values[item.key] ?? item.defaultValue ?? "";
+        const jsonError = runtimeEnvJsonError(item, values);
+        const controlId = `cw-env-${item.key}`;
+        return (
+          <label className="cw-env-field" key={item.key} htmlFor={controlId}>
+            <span className="cw-env-field-head">
+              <span className="cw-env-field-title">
+                <span className="cw-env-field-label">
+                  {item.comment || item.key}
+                  {item.required && <span className="cw-req">*</span>}
+                </span>
+                {item.help && (
+                  <span
+                    className="cw-env-help"
+                    tabIndex={0}
+                    data-help={item.help}
+                    aria-label={`${item.comment || item.key}说明：${item.help}`}
+                  >
+                    ?
+                    <span className="cw-env-help-popover" role="tooltip">
+                      {item.help}
+                    </span>
+                  </span>
+                )}
+                {item.link && (
+                  <a
+                    className="cw-env-link"
+                    href={item.link.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={`打开 OpenViking ${item.link.label}`}
+                    aria-label={`打开 OpenViking ${item.link.label}`}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <ExternalLink aria-hidden="true" />
+                  </a>
+                )}
+              </span>
+              {item.comment && <code title={item.key}>{item.key}</code>}
             </span>
-            {item.comment && <code title={item.key}>{item.key}</code>}
-          </span>
-          <input
-            className="cw-input"
-            type={isSensitiveEnv(item.key) ? "password" : "text"}
-            value={values[item.key] ?? ""}
-            placeholder={item.placeholder || "请输入参数值"}
-            autoComplete="off"
-            onChange={(event) => onChange(item.key, event.currentTarget.value)}
-          />
-        </label>
-      ))}
+            {item.multiline || item.format === "json" ? (
+              <textarea
+                id={controlId}
+                className="cw-input cw-env-textarea"
+                value={value}
+                placeholder={item.placeholder || "请输入参数值"}
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={!!jsonError}
+                onChange={(event) => onChange(item.key, event.currentTarget.value)}
+              />
+            ) : (
+              <input
+                id={controlId}
+                className="cw-input"
+                type={isSensitiveEnv(item.key) ? "password" : "text"}
+                value={value}
+                placeholder={item.placeholder || "请输入参数值"}
+                autoComplete="off"
+                aria-invalid={!!jsonError}
+                onChange={(event) => onChange(item.key, event.currentTarget.value)}
+              />
+            )}
+            {jsonError && <span className="cw-env-error">{jsonError}</span>}
+          </label>
+        );
+      })}
     </div>
   );
 }
@@ -2872,6 +2924,17 @@ export function CustomCreate({
     if (!(await confirmLeaveDebug())) return;
     setBuildErr("");
     if (!requireCompleteDraft()) {
+      setWorkspaceMode("build");
+      return;
+    }
+    const invalidEnv = firstInvalidRuntimeEnv(
+      deploymentEnv.specs,
+      draft.deployment?.envValues ?? {},
+    );
+    if (invalidEnv) {
+      setBuildErr(
+        `${invalidEnv.spec.comment || invalidEnv.spec.key}：${invalidEnv.error}`,
+      );
       setWorkspaceMode("build");
       return;
     }

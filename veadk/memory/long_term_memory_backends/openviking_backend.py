@@ -19,7 +19,7 @@ import json
 import re
 import uuid
 from collections.abc import Callable
-from typing import Any, ClassVar
+from typing import Any
 
 from openviking_sdk import SyncHTTPClient
 from pydantic import Field
@@ -53,13 +53,6 @@ class OpenVikingLTMBackend(BaseLongTermMemoryBackend):
     memory_policy: dict[str, Any] | None = None
     peer_id_resolver: Callable[[str, str], str] | None = None
     timeout: float = 30
-
-    _PEER_MEMORY_TYPES: ClassVar[list[str]] = ["entities", "events", "preferences"]
-    _DEFAULT_MEMORY_POLICY: ClassVar[dict[str, Any]] = {
-        "self": {"enabled": False},
-        "peer": {"enabled": True},
-        "memory_types": _PEER_MEMORY_TYPES,
-    }
 
     def model_post_init(self, __context: Any, /) -> None:
         self.url = (self.url or self.openviking_config.url).rstrip("/")
@@ -95,8 +88,6 @@ class OpenVikingLTMBackend(BaseLongTermMemoryBackend):
             if self.memory_policy is not None
             else self.openviking_config.memory_policy
         )
-        if self.memory_policy is None:
-            self.memory_policy = json.loads(json.dumps(self._DEFAULT_MEMORY_POLICY))
         if not self.peer_id_resolver:
             self.peer_id_resolver = default_peer_id_resolver
 
@@ -215,10 +206,10 @@ class OpenVikingLTMBackend(BaseLongTermMemoryBackend):
 
     def _create_session(self, *, client: SyncHTTPClient, session_id: str) -> None:
         try:
-            client.create_session(
-                session_id=session_id,
-                memory_policy=self.memory_policy,
-            )
+            kwargs: dict[str, Any] = {"session_id": session_id}
+            if self.memory_policy is not None:
+                kwargs["memory_policy"] = self.memory_policy
+            client.create_session(**kwargs)
         except Exception as e:
             if self._is_existing_session_error(e):
                 logger.debug(f"OpenViking session already exists, continue: {e}")

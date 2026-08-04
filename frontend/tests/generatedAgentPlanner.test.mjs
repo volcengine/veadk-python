@@ -45,6 +45,10 @@ test("removes hidden capabilities from every generated Agent", () => {
   );
 });
 
+test("keeps OpenViking long-term memory when normalizing imported drafts", () => {
+  assert.match(normalizeSource, /"openviking"/);
+});
+
 test("feeds supported generated tool ids into the checklist selection", () => {
   assert.match(createSource, /items=\{CREATE_BUILTIN_TOOLS\}/);
   assert.match(createSource, /selected=\{builtinTools\}/);

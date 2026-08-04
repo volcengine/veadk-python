@@ -73,6 +73,7 @@ EXPECTED_LTM_EXTRAS = {
     "opensearch": {"extensions"},
     "redis": {"extensions"},
     "viking": set(),
+    "openviking": set(),
     "mem0": {"database"},
 }
 
@@ -307,6 +308,28 @@ def test_every_long_term_memory_backend_generates_code_env_and_dependency(
         EXPECTED_LTM_EXTRAS[backend.id]
     )
     _assert_python_files_compile(project)
+
+
+def test_openviking_long_term_memory_generates_required_runtime_env() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="ltm-openviking",
+            memory=MemoryConfig(longTerm=True),
+            longTermBackend="openviking",
+        )
+    )
+    files = _files(project)
+
+    assert (
+        'LongTermMemory(backend="openviking"' in files["agents/ltm_openviking/agent.py"]
+    )
+    assert _env_keys(files[".env.example"]) == _catalog_env_keys(
+        MODEL_ENV,
+        next(item.env for item in LTM_BACKENDS if item.id == "openviking"),
+    )
+    assert "DATABASE_OPENVIKING_MEMORY_POLICY=\n" in files[".env.example"]
+    assert "不填写时使用官方默认策略" in files[".env.example"]
+    assert files["requirements.txt"].splitlines()[0] == _veadk_requirement(set())
 
 
 @pytest.mark.parametrize("backend", KB_BACKENDS, ids=lambda item: item.id)

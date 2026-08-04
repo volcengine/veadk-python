@@ -8,7 +8,14 @@ import {
 import { CREATE_BUILTIN_TOOLS, DEFAULT_KB_BACKEND } from "./veadkCatalog";
 
 const STM_IDS = new Set(["local", "sqlite", "mysql", "postgresql"]);
-const LTM_IDS = new Set(["local", "opensearch", "redis", "viking", "mem0"]);
+const LTM_IDS = new Set([
+  "local",
+  "opensearch",
+  "redis",
+  "viking",
+  "openviking",
+  "mem0",
+]);
 const KB_IDS = new Set(["opensearch", "viking", "context_search"]);
 const EXPORTER_IDS = new Set(["apmplus", "cozeloop", "tls"]);
 const TOOL_IDS = new Set([

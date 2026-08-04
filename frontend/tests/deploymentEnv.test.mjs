@@ -13,9 +13,11 @@ async function loadTypeScriptModule(relativePath) {
 }
 
 const {
+  firstInvalidRuntimeEnv,
   firstMissingRuntimeEnv,
   runtimeEnvConfiguration,
   runtimeEnvDisplayRows,
+  runtimeEnvJsonError,
   runtimeEnvVars,
 } = await loadTypeScriptModule("../src/create/deploymentEnv.ts");
 const {
@@ -44,6 +46,9 @@ const projectPreviewStyles = readFileSync(
   new URL("../src/ui/ProjectPreview.css", import.meta.url),
   "utf8",
 );
+const openvikingConsoleUrl = "https://console.volcengine.com/vikingdb/openviking";
+const openvikingSessionsDocUrl =
+  "https://github.com/volcengine/OpenViking/blob/main/docs/zh/api/05-sessions.md";
 const codeBrowserSource = readFileSync(
   new URL("../src/ui/CodeBrowserDialog.tsx", import.meta.url),
   "utf8",
@@ -94,6 +99,25 @@ test("maps active feature settings to VeADK runtime env rows", () => {
   );
 });
 
+test("keeps runtime env comments on deployment summary rows", () => {
+  const rows = runtimeEnvDisplayRows(
+    [
+      {
+        key: "DATABASE_OPENVIKING_USER_ID",
+        required: false,
+        comment:
+          "OpenViking 记忆归属用户 / 场景 ID，对应 URI viking://user/<此值>/peers/<请求用户>/memories 中的 user 段",
+      },
+    ],
+    {},
+  );
+
+  assert.equal(
+    rows[0].comment,
+    "OpenViking 记忆归属用户 / 场景 ID，对应 URI viking://user/<此值>/peers/<请求用户>/memories 中的 user 段",
+  );
+});
+
 test("reports the first missing required runtime setting", () => {
   const specs = [
     { key: "FEISHU_APP_ID", required: true },
@@ -109,6 +133,71 @@ test("reports the first missing required runtime setting", () => {
       FEISHU_APP_SECRET: "secret",
     }),
     undefined,
+  );
+  assert.equal(
+    firstMissingRuntimeEnv(
+      [
+        {
+          key: "DATABASE_OPENVIKING_URL",
+          required: true,
+          defaultValue: "https://default",
+        },
+      ],
+      { DATABASE_OPENVIKING_URL: "" },
+    )?.key,
+    "DATABASE_OPENVIKING_URL",
+  );
+});
+
+test("uses copyable default runtime values and validates JSON settings", () => {
+  const specs = [
+    {
+      key: "DATABASE_OPENVIKING_URL",
+      required: true,
+      defaultValue: "https://default-openviking",
+    },
+    {
+      key: "DATABASE_OPENVIKING_MEMORY_POLICY",
+      required: false,
+      defaultValue: '{"peer":{"enabled":true}}',
+      format: "json",
+    },
+  ];
+
+  assert.deepEqual(runtimeEnvDisplayRows(specs, {}), [
+    {
+      key: "DATABASE_OPENVIKING_URL",
+      required: true,
+      defaultValue: "https://default-openviking",
+      value: "https://default-openviking",
+    },
+    {
+      key: "DATABASE_OPENVIKING_MEMORY_POLICY",
+      required: false,
+      defaultValue: '{"peer":{"enabled":true}}',
+      format: "json",
+      value: '{"peer":{"enabled":true}}',
+    },
+  ]);
+  assert.deepEqual(runtimeEnvVars(specs, {}), [
+    { key: "DATABASE_OPENVIKING_URL", value: "https://default-openviking" },
+    {
+      key: "DATABASE_OPENVIKING_MEMORY_POLICY",
+      value: '{"peer":{"enabled":true}}',
+    },
+  ]);
+  assert.equal(runtimeEnvJsonError(specs[1], {}), undefined);
+  assert.equal(
+    runtimeEnvJsonError(specs[1], {
+      DATABASE_OPENVIKING_MEMORY_POLICY: "{bad-json",
+    }),
+    "JSON 格式不正确",
+  );
+  assert.deepEqual(
+    firstInvalidRuntimeEnv(specs, {
+      DATABASE_OPENVIKING_MEMORY_POLICY: "{bad-json",
+    }),
+    { spec: specs[1], error: "JSON 格式不正确" },
   );
 });
 
@@ -149,6 +238,97 @@ test("declares the Mem0 runtime configuration and database dependency", () => {
     mem0.env.map((env) => env.key),
     ["DATABASE_MEM0_API_KEY", "DATABASE_MEM0_BASE_URL"],
   );
+});
+
+test("declares the OpenViking long-term memory runtime configuration", () => {
+  const openviking = LTM_BACKENDS.find((option) => option.id === "openviking");
+
+  assert.ok(openviking);
+  assert.equal(openviking.label, "OpenViking Memory");
+  const openvikingUrl = openviking.env.find(
+    (env) => env.key === "DATABASE_OPENVIKING_URL",
+  );
+  const openvikingApiKey = openviking.env.find(
+    (env) => env.key === "DATABASE_OPENVIKING_API_KEY",
+  );
+  const openvikingPolicy = openviking.env.find(
+    (env) => env.key === "DATABASE_OPENVIKING_MEMORY_POLICY",
+  );
+  assert.deepEqual(
+    openviking.env.map((env) => [env.key, env.required, env.placeholder ?? ""]),
+    [
+      [
+        "DATABASE_OPENVIKING_URL",
+        true,
+        "https://api.vikingdb.cn-beijing.volces.com/openviking",
+      ],
+      ["DATABASE_OPENVIKING_API_KEY", true, ""],
+      ["DATABASE_OPENVIKING_USER_ID", false, "default"],
+      [
+        "DATABASE_OPENVIKING_MEMORY_POLICY",
+        false,
+        '{\n  "self": {"enabled": true},\n  "peer": {"enabled": true},\n  "working_memory": {"enabled": true},\n  "memory_types": null\n}',
+      ],
+    ],
+  );
+  assert.equal(openvikingUrl?.defaultValue, undefined);
+  assert.equal(
+    firstMissingRuntimeEnv(openviking.env, {
+      DATABASE_OPENVIKING_API_KEY: "test-api-key",
+    })?.key,
+    "DATABASE_OPENVIKING_URL",
+  );
+  assert.equal(openvikingPolicy?.defaultValue, undefined);
+  assert.deepEqual(
+    runtimeEnvVars(openviking.env, {
+      DATABASE_OPENVIKING_URL: "https://openviking.local",
+      DATABASE_OPENVIKING_API_KEY: "test-api-key",
+    }),
+    [
+      {
+        key: "DATABASE_OPENVIKING_URL",
+        value: "https://openviking.local",
+      },
+      { key: "DATABASE_OPENVIKING_API_KEY", value: "test-api-key" },
+    ],
+  );
+  assert.equal(openvikingPolicy?.comment, "记忆策略");
+  assert.equal(openvikingPolicy?.multiline, true);
+  assert.equal(openvikingPolicy?.format, "json");
+  assert.match(
+    openviking.env.find((env) => env.key === "DATABASE_OPENVIKING_USER_ID")
+      ?.help ?? "",
+    /viking:\/\/user\/<此值>\/peers\/<请求用户>\/memories/,
+  );
+  assert.equal(
+    openvikingPolicy?.help,
+    "记忆的抽取策略和隔离策略,不填写时使用官方默认策略。",
+  );
+  assert.equal(openvikingUrl?.link?.url, openvikingConsoleUrl);
+  assert.equal(openvikingApiKey?.link?.url, openvikingConsoleUrl);
+  assert.equal(openvikingPolicy?.link?.url, openvikingSessionsDocUrl);
+  assert.match(customCreateSource, /className="cw-input cw-env-textarea"/);
+  assert.match(customCreateSource, /runtimeEnvJsonError\(item, values\)/);
+  assert.match(customCreateSource, /firstInvalidRuntimeEnv\(/);
+  assert.match(projectPreviewSource, /className="pp-env-value pp-env-json-value"/);
+  assert.match(projectPreviewSource, /runtimeEnvJsonError\(\s*row,/);
+  assert.match(projectPreviewSource, /firstInvalidRuntimeEnv\(/);
+  assert.match(customCreateSource, /className="cw-env-help"/);
+  assert.match(customCreateSource, /className="cw-env-link"/);
+  assert.match(customCreateSource, /title=\{`打开 OpenViking \$\{item\.link\.label\}`\}/);
+  assert.match(customCreateSource, /data-help=\{item\.help\}/);
+  assert.match(customCreateSource, /className="cw-env-help-popover"/);
+  assert.match(projectPreviewSource, /className="pp-env-help"/);
+  assert.match(projectPreviewSource, /className="pp-env-link"/);
+  assert.match(projectPreviewSource, /title=\{`打开 OpenViking \$\{row\.link\.label\}`\}/);
+  assert.match(projectPreviewSource, /data-help=\{row\.help \|\| row\.comment\}/);
+  assert.match(projectPreviewSource, /className="pp-env-help-popover"/);
+  assert.match(projectPreviewStyles, /\.pp-env-key-cell\s*\{/);
+  assert.match(projectPreviewStyles, /\.pp-env-help\s*\{/);
+  assert.match(projectPreviewStyles, /\.pp-env-link\s*\{/);
+  assert.match(projectPreviewStyles, /cursor:\s*default;/);
+  assert.match(projectPreviewStyles, /\.pp-env-help-popover\s*\{[\s\S]*?user-select:\s*text;/);
+  assert.match(projectPreviewStyles, /\.pp-env-help:hover \.pp-env-help-popover/);
 });
 
 test("does not request auto-resolved credentials per component", () => {
