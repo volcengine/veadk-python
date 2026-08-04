@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
+import json
 import time
+from collections.abc import Hashable
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,7 +25,7 @@ from google.adk.events import Event
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.tools import BaseTool
-from opentelemetry import metrics, trace
+from opentelemetry import trace
 from opentelemetry import metrics as metrics_api
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -36,6 +39,10 @@ from typing_extensions import override
 
 from veadk.config import settings
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
+from veadk.tracing.telemetry.metric_uploader import (
+    MetricUploader as MetricUploaderProtocol,
+    metric_uploader_registry,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -111,6 +118,25 @@ _GEN_AI_CLIENT_TOKEN_USAGE_BUCKETS = [
 ]
 
 
+def _metric_registration_key(
+    endpoint: str,
+    headers: dict,
+    resource_attributes: dict,
+) -> tuple[str, str]:
+    """Build a stable digest without exposing authentication headers in logs."""
+    payload = json.dumps(
+        {
+            "endpoint": endpoint,
+            "headers": headers,
+            "resource_attributes": resource_attributes,
+        },
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+    return "apmplus", hashlib.sha256(payload.encode()).hexdigest()
+
+
 @dataclass
 class Meters:
     """Metric names and identifiers for OpenTelemetry instrumentation.
@@ -182,7 +208,7 @@ class MeterUploader:
     ) -> None:
         """Initialize the meter uploader with APMPlus configuration.
 
-        Sets up the global metrics provider, creates metric instruments,
+        Sets up a private metrics provider, creates metric instruments,
         and configures OTLP export to APMPlus endpoints with proper
         resource attribution and authentication.
 
@@ -192,9 +218,14 @@ class MeterUploader:
             headers: Authentication headers including APMPlus app key
             resource_attributes: Service metadata for metric attribution
         """
-        # global_metrics_provider -> global_tracer_provider
-        # exporter -> exporter
-        # metric_reader -> processor
+        self._registration_key = _metric_registration_key(
+            endpoint, headers, resource_attributes
+        )
+        self._shutdown = False
+
+        # Reuse global resource attributes when available, but keep the reader
+        # and provider private so an existing zero-reader global provider cannot
+        # suppress APMPlus metrics.
         global_metrics_provider = metrics_api.get_meter_provider()
 
         # 1. init resource
@@ -206,15 +237,19 @@ class MeterUploader:
         resource = global_resource.merge(Resource.create(resource_attributes))
 
         # 2. init exporter and reader
-        exporter = OTLPMetricExporter(endpoint=endpoint, headers=headers)
+        exporter = OTLPMetricExporter(
+            endpoint=endpoint,
+            headers=headers,
+            insecure=True,
+        )
         metric_reader = PeriodicExportingMetricReader(exporter)
 
-        metrics_api.set_meter_provider(
-            metrics_sdk.MeterProvider(metric_readers=[metric_reader], resource=resource)
+        self._provider = metrics_sdk.MeterProvider(
+            metric_readers=[metric_reader], resource=resource
         )
 
         # 3. init meter
-        self.meter: Meter = metrics.get_meter(name=name)
+        self.meter: Meter = self._provider.get_meter(name=name)
 
         # create meter attributes
         self.llm_invoke_counter = self.meter.create_counter(
@@ -277,6 +312,24 @@ class MeterUploader:
             unit="s",
             explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_OPERATION_DURATION_BUCKETS,
         )
+
+    @property
+    def registration_key(self) -> Hashable:
+        return self._registration_key
+
+    @property
+    def provider(self) -> metrics_sdk.MeterProvider:
+        return self._provider
+
+    def force_flush(self) -> bool:
+        if self._shutdown:
+            return False
+        return self._provider.force_flush()
+
+    def shutdown(self) -> None:
+        if not self._shutdown:
+            self._provider.shutdown()
+            self._shutdown = True
 
     def record_call_llm(
         self,
@@ -452,6 +505,36 @@ class MeterUploader:
                     tool_token_usage_output, attributes=output_tool_token_attributes
                 )
 
+    def record_skill_call(
+        self,
+        span: Any,
+        skill_name: str,
+        tool_name: str,
+        skill: Any,
+        result: str,
+    ) -> None:
+        """Record latency and result attributes for a skill invocation."""
+        attributes = {
+            "skill_name": skill_name,
+            "tool_name": tool_name,
+            "skill_space_id": (
+                skill.skill_space_id
+                if skill and getattr(skill, "skill_space_id", None)
+                else ""
+            ),
+            "skill_id": skill.id if skill and getattr(skill, "id", None) else "",
+            "gen_ai.operation.name": "execute_skill",
+            "error_type": (
+                "skill_execution_error" if result.startswith("Error:") else ""
+            ),
+        }
+
+        latency_seconds = 0.0
+        if hasattr(span, "start_time"):
+            latency_seconds = (time.time_ns() - span.start_time) / 1e9
+
+        self.skill_invoke_latency.record(latency_seconds, attributes)
+
 
 class APMPlusExporterConfig(BaseModel):
     """Configuration model for APMPlus exporter settings.
@@ -545,12 +628,27 @@ class APMPlusExporter(BaseExporter):
         )
         self.processor = BatchSpanProcessor(self._exporter)
 
-        self.meter_uploader = MeterUploader(
-            name="apmplus_meter",
-            endpoint=self.config.endpoint,
-            headers=self.headers,
-            resource_attributes=self.resource_attributes,
+    def get_metric_uploader(self) -> MetricUploaderProtocol:
+        """Lazily create and process-deduplicate the APMPlus metric pipeline."""
+        registration_key = _metric_registration_key(
+            self.config.endpoint,
+            self.headers,
+            self.resource_attributes,
         )
+        return metric_uploader_registry.get_or_create(
+            registration_key,
+            lambda: MeterUploader(
+                name="apmplus_meter",
+                endpoint=self.config.endpoint,
+                headers=self.headers,
+                resource_attributes=self.resource_attributes,
+            ),
+        )
+
+    @property
+    def meter_uploader(self) -> MetricUploaderProtocol:
+        """Compatibility accessor for the lazily registered uploader."""
+        return self.get_metric_uploader()
 
     @override
     def export(self) -> None:
@@ -567,6 +665,16 @@ class APMPlusExporter(BaseExporter):
         """
         if self._exporter:
             self._exporter.force_flush()
+
+            metric_uploader = metric_uploader_registry.get(
+                _metric_registration_key(
+                    self.config.endpoint,
+                    self.headers,
+                    self.resource_attributes,
+                )
+            )
+            if metric_uploader:
+                metric_uploader.force_flush()
 
             logger.info(
                 f"APMPlusExporter exports data to {self.config.endpoint}, service name: {self.config.service_name}"

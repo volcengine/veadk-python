@@ -22,6 +22,7 @@ from veadk.config import settings
 from veadk.tracing.telemetry import telemetry
 from veadk.tracing.telemetry.content_tracing import should_trace_content
 from veadk.tracing.telemetry.exporters.apmplus_exporter import MeterUploader
+from veadk.tracing.telemetry.metric_uploader import metric_uploader_registry
 
 
 @dataclass
@@ -144,7 +145,7 @@ def _event_names(span):
 
 
 def setup_function():
-    telemetry.meter_uploader = None
+    metric_uploader_registry.clear()
 
 
 def test_trace_call_llm_records_content_by_default(monkeypatch):
