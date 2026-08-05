@@ -861,6 +861,7 @@ export function ProjectPreview({
   const [addingAgent, setAddingAgent] = useState(false);
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
   const [regionMenuOpen, setRegionMenuOpen] = useState(false);
+  const deploymentRegionHelpId = useId();
   const [authenticationType, setAuthenticationType] =
     useState<DeployAuthentication["type"]>("api_key");
   const [userPoolUid, setUserPoolUid] = useState("");
@@ -909,6 +910,7 @@ export function ProjectPreview({
         aria-label="部署区域"
         aria-haspopup="listbox"
         aria-expanded={regionMenuOpen}
+        aria-describedby={isRuntimeUpdate ? deploymentRegionHelpId : undefined}
         disabled={deploying || isRuntimeUpdate || !onDeployRegionChange}
         onClick={() => setRegionMenuOpen((open) => !open)}
       >
@@ -947,6 +949,11 @@ export function ProjectPreview({
             })}
           </div>
         </>
+      )}
+      {isRuntimeUpdate && (
+        <span id={deploymentRegionHelpId} className="pp-region-help">
+          更新时沿用现有 Runtime 的部署区域，无法修改。
+        </span>
       )}
     </div>
   );

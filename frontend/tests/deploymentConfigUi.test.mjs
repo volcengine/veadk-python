@@ -238,6 +238,14 @@ test("uses a flipping Feishu channel card instead of a switch", () => {
   assert.match(projectPreviewSource, /deploymentRegionPicker\(false\)/);
   assert.match(
     projectPreviewStyles,
+    /\.pp-region-trigger:disabled\s*\{[\s\S]*?cursor:\s*not-allowed;[\s\S]*?opacity:\s*0\.58;/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-region-help\s*\{[\s\S]*?font-size:\s*12px;[\s\S]*?line-height:\s*1\.5;/,
+  );
+  assert.match(
+    projectPreviewStyles,
     /\.pp-channel-remove\s*\{[\s\S]*?background:\s*hsl\(var\(--destructive\) \/ 0\.07\);[\s\S]*?color:\s*hsl\(0 46% 36%\);/,
   );
 });

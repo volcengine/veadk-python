@@ -265,6 +265,14 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /onDeploymentStarted\?: \(task: DeploymentTaskUpdate\)/);
   assert.match(projectPreviewSource, /onDeploymentComplete\?: \(result: DeployResult\)/);
   assert.match(projectPreviewSource, /const isRuntimeUpdate = deploymentActionLabel\.includes\("更新"\)/);
+  assert.match(
+    projectPreviewSource,
+    /aria-describedby=\{isRuntimeUpdate \? deploymentRegionHelpId : undefined\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /更新时沿用现有 Runtime 的部署区域，无法修改。/,
+  );
   assert.match(projectPreviewSource, /onDeploymentStarted\?\.\(initialTask\)/);
   assert.match(projectPreviewSource, /RuntimeProbeError/);
   assert.match(projectPreviewSource, /import \{ mergeDeployBuildLog \} from "\.\/deployBuildLog"/);
