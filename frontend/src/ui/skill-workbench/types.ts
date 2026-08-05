@@ -56,6 +56,16 @@ export interface SkillWorkbenchTask {
   error?: string;
 }
 
+export interface SkillWorkbenchProvisioningTask {
+  jobId: string;
+  operation: SkillWorkbenchOperation;
+  intent: string;
+  revision: 1;
+  state: "provisioning";
+  stage: "provisioning";
+  createdAt: number;
+}
+
 export interface SkillWorkbenchTaskSummary {
   jobId: string;
   operation: SkillWorkbenchOperation;
@@ -67,6 +77,10 @@ export interface SkillWorkbenchTaskSummary {
   name?: string;
   sourceName?: string;
 }
+
+export type SkillWorkbenchTaskListItem =
+  | SkillWorkbenchProvisioningTask
+  | SkillWorkbenchTaskSummary;
 
 export interface SkillWorkbenchCapability {
   enabled: boolean;

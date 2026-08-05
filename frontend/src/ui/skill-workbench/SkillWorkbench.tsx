@@ -4,7 +4,6 @@ import { SkillConversationStream } from "../skill-create/SkillConversationStream
 import { StudioConfirmDialog } from "../StudioConfirmDialog";
 import { TextShimmer } from "../text-shimmer/TextShimmer";
 import {
-  createSkillWorkbenchTask,
   deleteSkillWorkbenchTask,
   downloadSkillWorkbenchTask,
   getSkillWorkbenchCapability,
@@ -15,8 +14,10 @@ import type {
   SkillCenterOptimizationSource,
   SkillWorkbenchCapability,
   SkillWorkbenchOperation,
+  SkillWorkbenchProvisioningTask,
   SkillWorkbenchTask,
 } from "./types";
+import type { StartSkillWorkbenchTaskArgs } from "./useSkillWorkbenchTasks";
 import "./skill-workbench.css";
 
 const TERMINAL = new Set(["ready", "failed", "cancelled", "expired", "published"]);
@@ -24,10 +25,13 @@ const TERMINAL = new Set(["ready", "failed", "cancelled", "expired", "published"
 export interface SkillWorkbenchProps {
   initialSource?: SkillCenterOptimizationSource | null;
   task: SkillWorkbenchTask | null;
+  provisioningTask: SkillWorkbenchProvisioningTask | null;
   taskLoading: boolean;
   taskError: string;
+  onStartTask: (args: StartSkillWorkbenchTaskArgs) => Promise<SkillWorkbenchTask>;
   onTaskChanged: (task: SkillWorkbenchTask) => void;
   onTaskDeleted: (jobId: string) => void;
+  onCancelProvisioning: (jobId: string) => Promise<void>;
   onRetryTask: () => void;
   onStartOver: () => void;
   onBack: () => void;
@@ -47,10 +51,13 @@ function stageLabel(task: SkillWorkbenchTask): string {
 export function SkillWorkbench({
   initialSource = null,
   task,
+  provisioningTask,
   taskLoading,
   taskError,
+  onStartTask,
   onTaskChanged,
   onTaskDeleted,
+  onCancelProvisioning,
   onRetryTask,
   onStartOver,
   onBack,
@@ -96,13 +103,12 @@ export function SkillWorkbench({
     setBusy(true);
     setError("");
     try {
-      const next = await createSkillWorkbenchTask({
+      await onStartTask({
         operation,
         intent: intent.trim(),
         ...(source ? { source } : {}),
         ...(file ? { file } : {}),
       });
-      if (requestRef.current === run) onTaskChanged(next);
     } catch (cause) {
       if (requestRef.current === run) {
         setError(cause instanceof Error ? cause.message : String(cause));
@@ -176,6 +182,44 @@ export function SkillWorkbench({
       setSource(null);
       setFile(null);
     }
+  }
+
+  if (provisioningTask) {
+    return (
+      <section className="skill-workbench" aria-label="Skill 工作台">
+        <header className="skill-workbench__head">
+          <div>
+            <button type="button" className="skill-workbench__back" onClick={onBack}>返回技能中心</button>
+            <h1>{provisioningTask.operation === "create" ? "创建 Skill" : "优化 Skill"}</h1>
+          </div>
+          <button type="button" className="skill-workbench__danger" onClick={() => void onCancelProvisioning(provisioningTask.jobId)}>
+            取消并清理
+          </button>
+        </header>
+        {taskError ? <div className="skill-workbench__error" role="alert">{taskError}</div> : null}
+        <div className="skill-workbench__run-grid">
+          <section className="skill-workbench__timeline" aria-live="polite">
+            <div className="skill-workbench__state is-running">
+              <TextShimmer duration={2.2} spread={16}>正在创建 DevEnv</TextShimmer>
+              <span>{provisioningTask.intent}</span>
+            </div>
+            <ol className="skill-workbench__provisioning-steps">
+              <li className="is-done">任务已受理</li>
+              <li className="is-active">正在创建 DevEnv</li>
+              <li>准备 Skill 工作区</li>
+              <li>Codex 开始生成</li>
+            </ol>
+          </section>
+          <section className="skill-workbench__result" aria-label="Skill 结果">
+            <div className="skill-workbench__result-empty">
+              <strong>DevEnv 准备完成后将自动开始创建</strong>
+              <span>可以离开当前页面，稍后从左侧“Skill 任务”继续查看进度。</span>
+              <button type="button" onClick={onBack}>安全离开</button>
+            </div>
+          </section>
+        </div>
+      </section>
+    );
   }
 
   if (!task && (taskLoading || taskError)) {

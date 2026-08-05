@@ -28,7 +28,7 @@ import { SearchButton } from "./Search";
 import { AgentFaceIcon } from "./AgentFaceIcon";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
 import { SkillSpaceIcon } from "./SkillCenter";
-import type { SkillWorkbenchTaskSummary } from "./skill-workbench/types";
+import type { SkillWorkbenchTaskListItem } from "./skill-workbench/types";
 import defaultSiteLogo from "../assets/logo.svg";
 import byteplusLogo from "../assets/byteplus.svg";
 
@@ -74,7 +74,7 @@ export interface SidebarProps {
   streamingSids?: Set<string>;
   /** Session ids whose latest reply is currently being evaluated. */
   evaluatingSids?: Set<string>;
-  skillTasks?: SkillWorkbenchTaskSummary[];
+  skillTasks?: SkillWorkbenchTaskListItem[];
   skillTasksLoading?: boolean;
   skillTasksError?: string;
   activeSkillTaskId?: string;
@@ -331,7 +331,7 @@ export function Sidebar({
   const sorted = [...sessions].sort(
     (a, b) => (b.lastUpdateTime ?? 0) - (a.lastUpdateTime ?? 0),
   );
-  const runningSkillTasks = skillTasks.filter((task) => task.state === "running").length;
+  const runningSkillTasks = skillTasks.filter((task) => task.state === "running" || task.state === "provisioning").length;
   const skillCenterLabel = runningSkillTasks > 0
     ? `技能中心，${runningSkillTasks} 个 Skill 任务进行中`
     : "技能中心";
@@ -474,8 +474,10 @@ export function Sidebar({
               <div className="sidebar-skill-tasks__empty">暂无 Skill 任务</div>
             ) : (
               skillTasks.map((task) => {
-                const title = task.name || task.intent || (task.operation === "create" ? "创建 Skill" : "优化 Skill");
-                const status = task.state === "running"
+                const title = ("name" in task ? task.name : "") || task.intent || (task.operation === "create" ? "创建 Skill" : "优化 Skill");
+                const status = task.state === "provisioning"
+                  ? "准备 DevEnv"
+                  : task.state === "running"
                   ? task.stage === "validating"
                     ? "校验中"
                     : task.stage === "packaging"
@@ -497,7 +499,7 @@ export function Sidebar({
                   >
                     <span className="sidebar-skill-task__title">{title}</span>
                     <span className="sidebar-skill-task__meta">
-                      {task.state === "running" ? <span className="sidebar-skill-task__live" aria-hidden="true" /> : null}
+                      {task.state === "running" || task.state === "provisioning" ? <span className="sidebar-skill-task__live" aria-hidden="true" /> : null}
                       {task.operation === "create" ? "创建" : "优化"} · {status}
                     </span>
                   </button>

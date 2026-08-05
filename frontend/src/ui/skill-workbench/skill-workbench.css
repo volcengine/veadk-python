@@ -115,6 +115,37 @@
 .skill-workbench__recovery { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .skill-workbench__result-empty { display: grid; place-items: center; align-content: center; height: 100%; gap: 8px; text-align: center; color: hsl(var(--muted-foreground)); }
 
+.skill-workbench__provisioning-steps {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.skill-workbench__provisioning-steps li {
+  position: relative;
+  padding-left: 22px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12.5px;
+}
+.skill-workbench__provisioning-steps li::before {
+  position: absolute;
+  left: 0;
+  top: 4px;
+  width: 9px;
+  height: 9px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 50%;
+  content: "";
+}
+.skill-workbench__provisioning-steps li.is-done { color: hsl(var(--foreground)); }
+.skill-workbench__provisioning-steps li.is-done::before { border-color: hsl(var(--primary)); background: hsl(var(--primary)); }
+.skill-workbench__provisioning-steps li.is-active { color: hsl(var(--foreground)); font-weight: 600; }
+.skill-workbench__provisioning-steps li.is-active::before {
+  border-color: hsl(var(--primary));
+  box-shadow: 0 0 0 3px hsl(var(--primary) / .12);
+}
+
 @media (max-width: 980px) {
   .skill-workbench__run-grid { grid-template-columns: 1fr; overflow-y: auto; }
   .skill-workbench__timeline,

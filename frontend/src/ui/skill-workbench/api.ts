@@ -171,7 +171,21 @@ export async function getSkillWorkbenchCapability(
   };
 }
 
+export async function reserveSkillWorkbenchTask(
+  signal?: AbortSignal,
+): Promise<{ jobId: string; reservedAt: number }> {
+  const value = record(await json(
+    await request("/tasks/reservations", { method: "POST", signal }),
+    "创建 Skill 任务引用失败",
+  ), "Skill 任务引用");
+  if (typeof value.jobId !== "string" || typeof value.reservedAt !== "number") {
+    throw new Error("Skill 任务引用格式错误。");
+  }
+  return { jobId: value.jobId, reservedAt: value.reservedAt };
+}
+
 export async function createSkillWorkbenchTask(args: {
+  jobId?: string;
   operation: SkillWorkbenchOperation;
   intent: string;
   source?: SkillCenterOptimizationSource;
@@ -180,6 +194,7 @@ export async function createSkillWorkbenchTask(args: {
 }): Promise<SkillWorkbenchTask> {
   if (args.file) {
     const params = new URLSearchParams({ operation: "optimize", intent: args.intent });
+    if (args.jobId) params.set("job_id", args.jobId);
     const response = await request(
       `/tasks/from-upload?${params}`,
       {
@@ -198,6 +213,7 @@ export async function createSkillWorkbenchTask(args: {
     body: JSON.stringify({
       operation: args.operation,
       intent: args.intent,
+      ...(args.jobId ? { jobId: args.jobId } : {}),
       ...(args.source ? {
         source: {
           kind: "skill-center",

@@ -177,6 +177,58 @@ def test_capabilities_require_ready_devenv_and_optional_image(
     assert value["maxUploadBytes"] == 5 * 1024 * 1024
 
 
+def test_reserve_task_returns_owner_bound_id_without_agentkit() -> None:
+    service = SkillWorkbenchService(
+        tool_id="tool",
+        tools_client_factory=lambda region: pytest.fail("AgentKit must not be called"),
+    )
+
+    reservation = service.reserve_task("alice")
+
+    assert reservation["reservedAt"] > 0
+    SkillWorkbenchService._validate_job_owner(str(reservation["jobId"]), "alice")
+
+
+def test_supplied_job_id_is_validated_before_source_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    def resolve_source(source):
+        pytest.fail("source must not be resolved")
+
+    monkeypatch.setattr(service, "_resolve_center_source", resolve_source)
+    body = CreateSkillTaskBody.model_validate({
+        "operation": "optimize",
+        "intent": "Improve it",
+        "source": {
+            "kind": "skill-center",
+            "skillId": "skill",
+            "version": "1",
+        },
+        "jobId": SkillWorkbenchService._new_job_id("bob"),
+    })
+
+    with pytest.raises(SkillWorkbenchError) as caught:
+        service.create_task(body, "alice", "Alice")
+
+    assert caught.value.code == "SKILL_TASK_NOT_FOUND"
+
+
+def test_supplied_durable_job_id_returns_existing_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    service = SkillWorkbenchService(
+        tool_id="tool",
+        tools_client_factory=lambda region: pytest.fail("must not create Session"),
+    )
+    existing = {"jobId": job_id, "state": "running"}
+    monkeypatch.setattr(service, "get_task", lambda requested, owner: existing)
+    body = CreateSkillTaskBody(operation="create", intent="Create", jobId=job_id)
+
+    assert service.create_task(body, "alice", "Alice") is existing
+
+
 def test_job_id_hides_cross_owner_resources() -> None:
     job_id = SkillWorkbenchService._new_job_id("alice")
 

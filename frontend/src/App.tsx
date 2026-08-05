@@ -4869,10 +4869,13 @@ export default function App() {
               <SkillWorkbench
                 initialSource={skillWorkbenchSource}
                 task={skillWorkbenchTasks.activeTask}
+                provisioningTask={skillWorkbenchTasks.activeProvisioningTask}
                 taskLoading={skillWorkbenchTasks.activeTaskLoading}
                 taskError={skillWorkbenchTasks.activeTaskError}
+                onStartTask={skillWorkbenchTasks.startTask}
                 onTaskChanged={skillWorkbenchTasks.upsertTask}
                 onTaskDeleted={skillWorkbenchTasks.removeTask}
+                onCancelProvisioning={skillWorkbenchTasks.cancelProvisioning}
                 onRetryTask={() => void skillWorkbenchTasks.refreshActiveTask()}
                 onStartOver={() => skillWorkbenchTasks.clearActiveTask()}
                 onBack={() => {

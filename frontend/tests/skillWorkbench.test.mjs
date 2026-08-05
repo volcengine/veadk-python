@@ -82,6 +82,7 @@ test("keeps the Skill Center discoverable and shows recoverable task progress", 
   assert.match(sidebar, /Skill 任务/);
   assert.match(sidebar, /正在读取任务/);
   assert.match(sidebar, /任务列表加载失败/);
+  assert.match(sidebar, /准备 DevEnv/);
   assert.match(sidebar, /生成中/);
   assert.match(sidebar, /校验中/);
   assert.match(sidebar, /打包中/);
@@ -101,7 +102,14 @@ test("keeps Skill task polling above the workbench and supports safe reopening",
   assert.match(controller, /setTimeout\(poll, DETAIL_POLL_INTERVAL_MS\)/);
   assert.doesNotMatch(workbench, /setTimeout\(poll/);
   assert.match(workbench, /左侧“Skill 任务”继续查看进度/);
-  assert.doesNotMatch(controller, /localStorage|sessionStorage/);
+  assert.match(controller, /reserveSkillWorkbenchTask/);
+  assert.match(controller, /state: "provisioning"/);
+  assert.match(controller, /PROVISIONING_TTL_SECONDS/);
+  assert.match(controller, /cancelRequested/);
+  assert.match(controller, /saveProvisioningReferences/);
+  assert.match(controller, /jobId: reference\.jobId/);
+  assert.match(controller, /reservedAt: reference\.reservedAt/);
+  assert.doesNotMatch(controller, /localStorage\.setItem\([^\n]*(intent|source|file|activities)/);
 });
 
 

@@ -128,6 +128,9 @@ class CreateSkillTaskBody(BaseModel):
     operation: Literal["create", "optimize"]
     intent: str = Field(min_length=1, max_length=_MAX_INTENT_CHARS)
     source: SkillCenterSource | None = None
+    job_id: str | None = Field(default=None, alias="jobId")
+
+    model_config = {"populate_by_name": True}
 
     @model_validator(mode="after")
     def validate_source(self) -> CreateSkillTaskBody:
@@ -441,6 +444,13 @@ class SkillWorkbenchService:
             "maxUploadBytes": _MAX_ARCHIVE_BYTES,
         }
 
+    def reserve_task(self, owner_id: str) -> dict[str, object]:
+        """Issue an owner-bound id before provisioning starts."""
+        job_id = self._new_job_id(owner_id)
+        reserved_at = int(time.time())
+        logger.info("Reserved Skill workbench task job_id=%s", job_id)
+        return {"jobId": job_id, "reservedAt": reserved_at}
+
     def create_task(
         self,
         body: CreateSkillTaskBody,
@@ -449,6 +459,15 @@ class SkillWorkbenchService:
         *,
         uploaded_archive: bytes | None = None,
     ) -> dict[str, object]:
+        job_id = body.job_id or self._new_job_id(owner_id)
+        self._validate_job_owner(job_id, owner_id)
+        if body.job_id:
+            try:
+                return self.get_task(job_id, owner_id)
+            except SkillWorkbenchError as error:
+                if error.code != "SKILL_TASK_NOT_FOUND":
+                    raise
+
         source_archive: SkillArchive | None = None
         source_meta: dict[str, object] | None = None
         if uploaded_archive is not None:
@@ -466,7 +485,6 @@ class SkillWorkbenchService:
             source_archive, source_meta = self._resolve_center_source(body.source)
 
         tool_id = self._validated_tool_id()
-        job_id = self._new_job_id(owner_id)
         request_payload: dict[str, object] = {
             "jobId": job_id,
             "operation": body.operation,
@@ -1189,6 +1207,12 @@ def mount_skill_workbench_routes(
         owner_resolver(request)
         return await run_in_threadpool(service.capabilities)
 
+    @app.post("/web/skill-workbench/tasks/reservations")
+    async def reserve_task(request: Request) -> dict[str, object]:
+        return await run_in_threadpool(
+            service.reserve_task, owner_resolver(request)
+        )
+
     @app.get("/web/skill-workbench/tasks")
     async def list_tasks(request: Request) -> dict[str, list[dict[str, object]]]:
         try:
@@ -1217,11 +1241,14 @@ def mount_skill_workbench_routes(
         request: Request,
         operation: Literal["optimize"] = Query(default="optimize"),
         intent: str = Query(min_length=1, max_length=_MAX_INTENT_CHARS),
+        job_id: str | None = Query(default=None),
     ) -> dict[str, object]:
         del operation
         content = await request.body()
         try:
-            body = CreateSkillTaskBody(operation="optimize", intent=intent)
+            body = CreateSkillTaskBody(
+                operation="optimize", intent=intent, jobId=job_id
+            )
             return await run_in_threadpool(
                 service.create_task,
                 body,
