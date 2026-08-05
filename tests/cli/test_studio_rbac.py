@@ -1045,9 +1045,14 @@ def test_runtime_update_capability_distinguishes_incompatible_and_network_errors
     assert network_error.json()["detail"] == "runtime_json_connect_error"
 
 
+@pytest.mark.parametrize(
+    "evaluation_error",
+    [None, "evaluation workspace unavailable"],
+)
 def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    evaluation_error: str | None,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
@@ -1117,13 +1122,15 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
     monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
 
-    async def fail_evaluation_set_initialization(**kwargs: Any) -> list[str]:
+    async def initialize_evaluation_sets(**kwargs: Any) -> list[str]:
         evaluation_set_calls.append(kwargs)
-        raise RuntimeError("evaluation workspace unavailable")
+        if evaluation_error:
+            raise RuntimeError(evaluation_error)
+        return ["updated-agent_good_case", "updated-agent_bad_case"]
 
     monkeypatch.setattr(
         "frontend.server.evaluation_automation.datasets.ensure_feedback_sets",
-        fail_evaluation_set_initialization,
+        initialize_evaluation_sets,
     )
     app = _create_studio_app(
         monkeypatch,
@@ -1163,9 +1170,24 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert frames[-1]["success"] is True
     assert frames[-1]["runtimeId"] == runtime.runtime_id
     assert frames[-1]["version"] == 4
-    assert frames[-1]["warnings"] == [
-        "Runtime 已部署，但评测集创建失败：evaluation workspace unavailable"
+    evaluation_frames = [
+        frame for frame in frames if frame.get("phase") == "evaluation"
     ]
+    assert evaluation_frames[0]["message"] == ("正在创建 Good Case 和 Bad Case 评测集")
+    if evaluation_error:
+        assert evaluation_frames[-1]["level"] == "warning"
+        assert evaluation_frames[-1]["message"] == (
+            "Good Case 和 Bad Case 评测集创建失败"
+        )
+        assert frames[-1]["warnings"] == [
+            "Runtime 已部署，但评测集创建失败：evaluation workspace unavailable"
+        ]
+    else:
+        assert evaluation_frames[-1]["level"] == "success"
+        assert evaluation_frames[-1]["message"] == (
+            "Good Case 和 Bad Case 评测集已创建"
+        )
+        assert "warnings" not in frames[-1]
     assert len(evaluation_set_calls) == 1
     assert callable(evaluation_set_calls[0]["openapi_post"])
     assert evaluation_set_calls[0] | {"openapi_post": None} == {
@@ -1254,6 +1276,7 @@ def test_new_deployment_only_updates_non_default_instance_range(
                 "sessionStorage": session_storage,
                 "minInstance": min_instance,
                 "maxInstance": max_instance,
+                "createEvaluationSets": False,
                 "files": [{"path": "app.py", "content": "app = object()\n"}],
                 "config": {"region": "cn-beijing", "projectName": "default"},
             },
@@ -1267,6 +1290,7 @@ def test_new_deployment_only_updates_non_default_instance_range(
     assert response.status_code == 200
     assert frames[-1]["success"] is True
     assert captured_config["launch_types"]["cloud"]["runtime_auth_type"] == ("key_auth")
+    assert not any(frame.get("phase") == "evaluation" for frame in frames)
     assert bool(update_requests) is expects_update
     assert any(frame.get("phase") == "update" for frame in frames) is expects_update
     if expects_update:

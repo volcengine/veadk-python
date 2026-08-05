@@ -629,6 +629,11 @@ const DEPLOYMENT_STEPS = [
   { phase: "publish", label: "发布服务", description: "等待服务就绪并生成访问地址" },
   { phase: "complete", label: "部署完成", description: "智能体已可以正常使用" },
 ] as const;
+const EVALUATION_SET_STEP = {
+  phase: "evaluation",
+  label: "创建评测集",
+  description: "自动创建 Good Case 和 Bad Case 评测集",
+} as const;
 function instanceUpdateStep(range: { min: number; max: number }) {
   return {
     phase: "update",
@@ -639,13 +644,20 @@ function instanceUpdateStep(range: { min: number; max: number }) {
 const BUILD_STEP_INDEX = DEPLOYMENT_STEPS.findIndex((step) => step.phase === "build");
 
 function deploymentSteps(task: DeploymentTaskUpdate) {
-  return task.instanceRange
+  const steps = task.instanceRange
     ? [
         ...DEPLOYMENT_STEPS.slice(0, -1),
         instanceUpdateStep(task.instanceRange),
         DEPLOYMENT_STEPS[DEPLOYMENT_STEPS.length - 1],
       ]
     : DEPLOYMENT_STEPS;
+  return task.createEvaluationSets
+    ? [
+        ...steps.slice(0, -1),
+        EVALUATION_SET_STEP,
+        steps[steps.length - 1],
+      ]
+    : steps;
 }
 
 function deploymentStepIndex(task: DeploymentTaskUpdate): number {
@@ -656,6 +668,7 @@ function deploymentStepIndex(task: DeploymentTaskUpdate): number {
     构建镜像: "build",
     部署: "deploy",
     发布: "publish",
+    创建评测集: "evaluation",
     部署完成: "complete",
   } as Record<string, string>)[task.label];
   const index = steps.findIndex((step) => step.phase === phase);

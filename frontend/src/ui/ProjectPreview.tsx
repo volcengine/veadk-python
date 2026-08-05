@@ -559,6 +559,11 @@ const INSTANCE_UPDATE_STEP = {
   label: "更新实例配置",
 } as const;
 
+const EVALUATION_SET_STEP = {
+  phase: "evaluation",
+  label: "创建评测集",
+} as const;
+
 function usesInMemorySession(agentDraft?: AgentDraft): boolean {
   if (!agentDraft) return false;
   return (
@@ -627,6 +632,8 @@ export interface DeploymentTaskUpdate {
   buildLog?: DeployBuildLogSnapshot;
   /** Instance range applied through UpdateRuntime after creation. */
   instanceRange?: { min: number; max: number };
+  /** Whether this deployment initializes the Studio feedback evaluation sets. */
+  createEvaluationSets?: boolean;
   /** Draft used to render the Agent detail while its Runtime is still publishing. */
   agentDraft?: AgentDraft;
   /** Re-runs the same project/config as a new deployment task. */
@@ -866,9 +873,12 @@ export function ProjectPreview({
   const baseDeploymentSteps = deploymentPrimaryPane
     ? CODE_PACKAGE_DEPLOY_STEPS
     : DEPLOY_STEPS;
-  const deploymentSteps = needsInstanceUpdate
+  const deploymentStepsWithInstanceUpdate = needsInstanceUpdate
     ? [...baseDeploymentSteps, INSTANCE_UPDATE_STEP]
     : baseDeploymentSteps;
+  const deploymentSteps = createEvaluationSets
+    ? [...deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP]
+    : deploymentStepsWithInstanceUpdate;
 
   useEffect(() => {
     if (!deploymentActionTargetId) {
@@ -1168,6 +1178,7 @@ export function ProjectPreview({
       instanceRange: needsInstanceUpdate
         ? { min: instanceRange.min, max: instanceRange.max }
         : undefined,
+      createEvaluationSets,
     };
     onDeploymentTaskChange?.(initialTask);
     onDeploymentStarted?.(initialTask);
@@ -1991,8 +2002,10 @@ export function ProjectPreview({
                     }
                   />
                   <span>
-                    <strong>创建评测集</strong>
-                    <small>部署成功后自动创建 good case 和 bad case。</small>
+                    <strong>自动创建评测集</strong>
+                    <small>
+                      部署成功后，自动创建 Good Case 和 Bad Case 评测集。
+                    </small>
                   </span>
                 </label>
               </section>

@@ -2835,7 +2835,7 @@ def _run_frontend_server(
 
         Body: {name, files:[{path,content}], config:{region,projectName}}.
         While building/deploying, streams `data: {level, phase, message, pct?}`
-        frames (phase = build|deploy|publish); ends with a terminal
+        frames (phase = build|deploy|publish|evaluation); ends with a terminal
         `data: {done:true, success, agentName?, url?, apikey?, runtimeId?,
         consoleUrl?, error?, phase?}` frame. Uses the AgentKit SDK in-process
         (no CLI subprocess) and tags the runtime with the deploying user.
@@ -3672,6 +3672,17 @@ def _run_frontend_server(
                             }
                         )
                         if create_evaluation_sets:
+                            evaluation_start = {
+                                "level": "info",
+                                "phase": "evaluation",
+                                "message": ("正在创建 Good Case 和 Bad Case 评测集"),
+                                "pct": 95,
+                            }
+                            yield (
+                                "data: "
+                                f"{_json.dumps(evaluation_start, ensure_ascii=False)}"
+                                "\n\n"
+                            )
                             try:
                                 from frontend.server.evaluation_automation.datasets import (
                                     ensure_feedback_sets,
@@ -3682,6 +3693,17 @@ def _run_frontend_server(
                                     region=region,
                                     project_name=project_name,
                                     agent_name=agent_name,
+                                )
+                                evaluation_complete = {
+                                    "level": "success",
+                                    "phase": "evaluation",
+                                    "message": ("Good Case 和 Bad Case 评测集已创建"),
+                                    "pct": 100,
+                                }
+                                yield (
+                                    "data: "
+                                    f"{_json.dumps(evaluation_complete, ensure_ascii=False)}"
+                                    "\n\n"
                                 )
                             except Exception as e:  # noqa: BLE001 - optional setup.
                                 warning = _redact_debug_text(str(e).strip())
@@ -3694,6 +3716,17 @@ def _run_frontend_server(
                                 final["warnings"] = [
                                     f"Runtime 已部署，但评测集创建失败：{warning}"
                                 ]
+                                evaluation_warning = {
+                                    "level": "warning",
+                                    "phase": "evaluation",
+                                    "message": ("Good Case 和 Bad Case 评测集创建失败"),
+                                    "pct": 100,
+                                }
+                                yield (
+                                    "data: "
+                                    f"{_json.dumps(evaluation_warning, ensure_ascii=False)}"
+                                    "\n\n"
+                                )
                         if runtime_id:
                             _rt_conn_cache.pop((region, runtime_id), None)
                         try:

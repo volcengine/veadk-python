@@ -30,10 +30,6 @@ const catalogSource = readFileSync(
   new URL("../src/create/veadkCatalog.ts", import.meta.url),
   "utf8",
 );
-const adkClientSource = readFileSync(
-  new URL("../src/adk/client.ts", import.meta.url),
-  "utf8",
-);
 
 test("offers code execution with its sandbox configuration", () => {
   assert.match(
@@ -379,7 +375,7 @@ test("requires explicit confirmation before starting deployment", () => {
 test("creates feedback evaluation sets by default and sends the deployment choice", () => {
   assert.match(
     projectPreviewSource,
-    /useState\(true\)[\s\S]*?创建评测集[\s\S]*?good case 和 bad case/,
+    /useState\(true\)[\s\S]*?<strong>自动创建评测集<\/strong>[\s\S]*?部署成功后，自动创建 Good Case 和 Bad Case 评测集。/,
   );
   assert.match(
     projectPreviewSource,
@@ -396,5 +392,13 @@ test("creates feedback evaluation sets by default and sends the deployment choic
   assert.match(
     projectPreviewSource,
     /deployResult\.warnings[\s\S]*?role="status"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /createEvaluationSets[\s\S]*?\[\.\.\.deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP\][\s\S]*?: deploymentStepsWithInstanceUpdate/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /const initialTask: DeploymentTaskUpdate =[\s\S]*?createEvaluationSets,\s*\n\s*};/,
   );
 });
