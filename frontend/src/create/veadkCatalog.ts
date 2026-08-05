@@ -10,7 +10,12 @@ export interface EnvVar {
   /** Whether the feature is non-functional without it (still emitted, but flagged). */
   required: boolean;
   placeholder?: string;
+  defaultValue?: string;
   comment?: string;
+  help?: string;
+  link?: { label: string; url: string };
+  multiline?: boolean;
+  format?: "json";
 }
 
 export interface ToolOption {
@@ -65,6 +70,18 @@ const EMBEDDING_ENV: EnvVar[] = [
 // Studio owns the Volcengine credential chain and forwards it to debug runs and
 // AgentKit runtimes. Components must not ask users to duplicate AK/SK settings.
 const VOLC_ENV: EnvVar[] = [];
+const OPENVIKING_CONSOLE_LINK = {
+  label: "控制台",
+  url: "https://console.volcengine.com/vikingdb/openviking",
+};
+const OPENVIKING_SESSIONS_DOC_LINK = {
+  label: "文档",
+  url: "https://github.com/volcengine/OpenViking/blob/main/docs/zh/api/05-sessions.md",
+};
+const OPENVIKING_DEFAULT_URL =
+  "https://api.vikingdb.cn-beijing.volces.com/openviking";
+const OPENVIKING_MEMORY_POLICY_PLACEHOLDER =
+  '{\n  "self": {"enabled": true},\n  "peer": {"enabled": true},\n  "working_memory": {"enabled": true},\n  "memory_types": null\n}';
 
 /** Feishu Channel runtime credentials. */
 export const FEISHU_ENV: EnvVar[] = [
@@ -304,6 +321,43 @@ export const LTM_BACKENDS: BackendOption[] = [
     label: "VikingDB Memory",
     desc: "火山 VikingDB 记忆库（支持用户画像）。",
     env: VOLC_ENV,
+  },
+  {
+    id: "openviking",
+    label: "OpenViking Memory",
+    desc: "OpenViking 长期记忆，按用户维度保存和检索偏好、事件与实体。",
+    env: [
+      {
+        key: "DATABASE_OPENVIKING_URL",
+        required: true,
+        placeholder: OPENVIKING_DEFAULT_URL,
+        comment: "OpenViking 服务地址",
+        link: OPENVIKING_CONSOLE_LINK,
+      },
+      {
+        key: "DATABASE_OPENVIKING_API_KEY",
+        required: true,
+        comment: "OpenViking API Key",
+        link: OPENVIKING_CONSOLE_LINK,
+      },
+      {
+        key: "DATABASE_OPENVIKING_USER_ID",
+        required: false,
+        placeholder: "default",
+        comment: "记忆归属 ID",
+        help: "对应 viking://user/<此值>/peers/<请求用户>/memories 中的 user 段；用于隔离 Agent、租户或业务场景，默认 default。",
+      },
+      {
+        key: "DATABASE_OPENVIKING_MEMORY_POLICY",
+        required: false,
+        placeholder: OPENVIKING_MEMORY_POLICY_PLACEHOLDER,
+        comment: "记忆策略",
+        multiline: true,
+        format: "json",
+        help: "记忆的抽取策略和隔离策略,不填写时使用官方默认策略。",
+        link: OPENVIKING_SESSIONS_DOC_LINK,
+      },
+    ],
   },
   {
     id: "mem0",

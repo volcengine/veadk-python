@@ -49,14 +49,13 @@ def _install_fake_openviking_sdk(
         def close(self):
             pass
 
-        def create_session(self, *, session_id=None, memory_policy=None, **kwargs):
+        def create_session(self, *, session_id=None, **kwargs):
             calls.append(
                 {
                     "method": "create_session",
                     "actor_peer_id": self.kwargs.get("actor_peer_id"),
                     "payload": {
                         "session_id": session_id,
-                        "memory_policy": memory_policy,
                         **kwargs,
                     },
                 }
@@ -150,12 +149,11 @@ def _install_loop_sensitive_openviking_sdk(
         def close(self):
             self._record("close")
 
-        def create_session(self, *, session_id=None, memory_policy=None, **kwargs):
+        def create_session(self, *, session_id=None, **kwargs):
             self._record(
                 "create_session",
                 {
                     "session_id": session_id,
-                    "memory_policy": memory_policy,
                     **kwargs,
                 },
             )
@@ -215,6 +213,7 @@ def test_openviking_backend_writes_peer_messages_and_commits(monkeypatch):
         api_key="owner-key",
         openviking_user_id="agent_scene",
     )
+    assert backend.memory_policy is None
 
     assert backend.save_memory(
         user_id="alice",
@@ -242,14 +241,7 @@ def test_openviking_backend_writes_peer_messages_and_commits(monkeypatch):
     assert calls[0] == {
         "method": "create_session",
         "actor_peer_id": None,
-        "payload": {
-            "session_id": openviking_session_id,
-            "memory_policy": {
-                "self": {"enabled": False},
-                "peer": {"enabled": True},
-                "memory_types": ["entities", "events", "preferences"],
-            },
-        },
+        "payload": {"session_id": openviking_session_id},
     }
     assert calls[1] == {
         "method": "add_message",
@@ -276,6 +268,7 @@ def test_openviking_backend_sdk_create_payload(monkeypatch):
         api_key="owner-key",
         openviking_user_id="agent_scene",
     )
+    assert backend.memory_policy is None
     client = backend._new_client()
 
     backend._create_session(client=client, session_id="sa1")
@@ -284,14 +277,7 @@ def test_openviking_backend_sdk_create_payload(monkeypatch):
         {
             "method": "create_session",
             "actor_peer_id": None,
-            "payload": {
-                "session_id": "sa1",
-                "memory_policy": {
-                    "self": {"enabled": False},
-                    "peer": {"enabled": True},
-                    "memory_types": ["entities", "events", "preferences"],
-                },
-            },
+            "payload": {"session_id": "sa1"},
         }
     ]
 

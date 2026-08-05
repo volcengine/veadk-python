@@ -1,6 +1,13 @@
 export interface RuntimeEnvSpec {
   key: string;
   required: boolean;
+  comment?: string;
+  placeholder?: string;
+  defaultValue?: string;
+  help?: string;
+  link?: { label: string; url: string };
+  multiline?: boolean;
+  format?: "json";
 }
 
 export interface RuntimeEnvSelection {
@@ -15,6 +22,13 @@ export interface RuntimeEnvConfiguration {
 
 export interface RuntimeEnvDisplayRow extends RuntimeEnvSpec {
   value: string;
+}
+
+function runtimeEnvValue(
+  spec: RuntimeEnvSpec,
+  values: Record<string, string>,
+): string {
+  return values[spec.key] ?? spec.defaultValue ?? "";
 }
 
 /** Merge active component settings and derive selected exporter enable flags. */
@@ -49,7 +63,7 @@ export function runtimeEnvDisplayRows(
   const deduped = runtimeEnvConfiguration([{ env: specs }]).specs;
   return deduped.map((spec) => ({
     ...spec,
-    value: values[spec.key] ?? "",
+    value: runtimeEnvValue(spec, values),
   }));
 }
 
@@ -60,7 +74,7 @@ export function runtimeEnvVars(
 ): { key: string; value: string }[] {
   const env = new Map<string, string>();
   for (const spec of specs) {
-    const value = values[spec.key] ?? "";
+    const value = runtimeEnvValue(spec, values);
     if (value.trim()) env.set(spec.key, value);
   }
   return [...env].map(([key, value]) => ({ key, value }));
@@ -70,5 +84,33 @@ export function firstMissingRuntimeEnv(
   specs: RuntimeEnvSpec[],
   values: Record<string, string>,
 ): RuntimeEnvSpec | undefined {
-  return specs.find((spec) => spec.required && !values[spec.key]?.trim());
+  return specs.find(
+    (spec) => spec.required && !runtimeEnvValue(spec, values).trim(),
+  );
+}
+
+export function runtimeEnvJsonError(
+  spec: RuntimeEnvSpec,
+  values: Record<string, string>,
+): string | undefined {
+  if (spec.format !== "json") return undefined;
+  const value = runtimeEnvValue(spec, values).trim();
+  if (!value) return undefined;
+  try {
+    JSON.parse(value);
+    return undefined;
+  } catch {
+    return "JSON 格式不正确";
+  }
+}
+
+export function firstInvalidRuntimeEnv(
+  specs: RuntimeEnvSpec[],
+  values: Record<string, string>,
+): { spec: RuntimeEnvSpec; error: string } | undefined {
+  for (const spec of specs) {
+    const error = runtimeEnvJsonError(spec, values);
+    if (error) return { spec, error };
+  }
+  return undefined;
 }
