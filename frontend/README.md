@@ -45,7 +45,12 @@ server that `veadk frontend` launches — no separate backend.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
 - **Automation directory**: browse development and message-channel integrations
-  from the Studio sidebar. GitHub-backed automations can add a basic AgentKit
+  from the Studio sidebar. The local Coding Agents integration detects Trae,
+  Claude Code, and Codex across macOS, Linux, and Windows, then globally installs
+  the bundled VeADK development and AgentKit platform-operation Skills. The
+  browser can select only fixed client and Skill identifiers; arbitrary shell
+  commands, filesystem targets, and Skill content are never accepted. GitHub-backed
+  automations can add a basic AgentKit
   project, configure Runtime continuous delivery, or add automatic Pull Request
   review. The browser creates GitHub branches, files, and Pull Requests directly;
   repository tokens stay in the current form state and are never persisted. The
