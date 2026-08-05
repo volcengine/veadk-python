@@ -14,15 +14,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter
 from pydantic import BaseModel, ConfigDict, Field
-
-if TYPE_CHECKING:
-    from veadk.tracing.telemetry.metric_uploader import MetricUploader
 
 
 class BaseExporter(BaseModel):
@@ -64,7 +59,3 @@ class BaseExporter(BaseModel):
     def export(self) -> None:
         """Force export of telemetry data."""
         pass
-
-    def get_metric_uploader(self) -> MetricUploader | None:
-        """Return this exporter's optional metric uploader."""
-        return None
