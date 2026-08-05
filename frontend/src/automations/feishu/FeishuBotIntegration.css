@@ -1,0 +1,240 @@
+.feishu-integration-page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 28px 32px 0;
+  background: hsl(var(--background));
+}
+
+.feishu-integration-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 24px;
+}
+
+.feishu-back {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  flex: 0 0 32px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--panel));
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.feishu-back:hover:not(:disabled) { background: hsl(var(--secondary)); color: hsl(var(--foreground)); }
+.feishu-back:focus-visible { outline: 2px solid hsl(var(--ring) / 0.35); outline-offset: 2px; }
+.feishu-back:disabled { cursor: not-allowed; opacity: 0.5; }
+.feishu-back svg { width: 16px; height: 16px; }
+.feishu-integration-logo { width: 30px; height: 30px; flex: 0 0 30px; object-fit: contain; }
+.feishu-integration-header h1 { margin: 0; font-size: 20px; font-weight: 650; line-height: 1.3; letter-spacing: -0.02em; }
+.feishu-integration-header p { margin: 4px 0 0; color: hsl(var(--muted-foreground)); font-size: 12.5px; line-height: 1.5; }
+
+.feishu-integration-layout {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 56px;
+  scrollbar-gutter: stable;
+}
+
+.feishu-section-panel { width: 100%; min-width: 0; }
+.feishu-panel-description { margin: 0; color: hsl(var(--muted-foreground)); font-size: 13px; line-height: 1.6; }
+.feishu-form { margin-top: 24px; }
+.feishu-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 16px; }
+.feishu-field { min-width: 0; display: flex; flex-direction: column; }
+.feishu-field > label { margin-bottom: 7px; color: hsl(var(--foreground)); font-size: 13px; font-weight: 600; }
+
+.feishu-field input {
+  width: 100%;
+  height: 36px;
+  box-sizing: border-box;
+  padding: 0 11px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  outline: 0;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 14px;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.feishu-field input::placeholder { color: hsl(var(--muted-foreground)); }
+.feishu-field input:focus { border-color: hsl(var(--ring) / 0.62); box-shadow: 0 0 0 2px hsl(var(--ring) / 0.12); }
+.feishu-field input[aria-invalid="true"] { border-color: hsl(var(--destructive) / 0.62); }
+.feishu-field input:disabled { cursor: not-allowed; opacity: 0.62; }
+.feishu-field-help { min-height: 18px; margin-top: 5px; color: hsl(var(--muted-foreground)); font-size: 12px; line-height: 1.5; }
+.feishu-field-error { margin-top: 2px; color: hsl(var(--destructive)); font-size: 12px; line-height: 1.5; }
+
+.feishu-region-picker { position: relative; min-width: 0; }
+.feishu-region-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 36px;
+  min-height: 36px;
+  gap: 8px;
+  padding: 0 10px 0 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  transition: border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+}
+
+.feishu-region-trigger:hover:not(:disabled) { border-color: hsl(var(--foreground) / 0.24); background-color: hsl(var(--muted) / 0.18); }
+.feishu-region-trigger[aria-expanded="true"] { border-color: hsl(var(--ring) / 0.42); box-shadow: 0 0 0 3px hsl(var(--ring) / 0.1); }
+.feishu-region-trigger:focus-visible { outline: none; box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12); }
+.feishu-region-trigger:disabled { cursor: not-allowed; opacity: 0.5; }
+.feishu-region-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feishu-region-trigger > svg { width: 18px; height: 18px; flex-shrink: 0; color: hsl(var(--muted-foreground)); transition: transform 160ms ease; }
+.feishu-region-trigger[aria-expanded="true"] > svg { transform: rotate(180deg); }
+
+.feishu-region-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 100%;
+  box-sizing: border-box;
+  max-height: 238px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  box-shadow: 0 8px 24px hsl(var(--foreground) / 0.08);
+}
+
+.feishu-region-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.feishu-region-option:hover,
+.feishu-region-option:focus-visible { outline: none; background: hsl(var(--muted) / 0.5); }
+.feishu-region-option.is-selected { background: hsl(var(--primary) / 0.08); }
+
+.feishu-secret-input { position: relative; }
+.feishu-secret-input input { padding-right: 54px; }
+.feishu-secret-input > button {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+}
+.feishu-secret-input > button:hover:not(:disabled) { background: hsl(var(--muted) / 0.5); color: hsl(var(--foreground)); }
+.feishu-secret-input > button:focus-visible { outline: 2px solid hsl(var(--ring) / 0.28); outline-offset: -2px; }
+.feishu-secret-input > button:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.feishu-deployment-status {
+  margin-top: 20px;
+  padding: 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--secondary) / 0.38);
+}
+.feishu-deployment-status.is-succeeded { border-color: hsl(145 40% 42% / 0.32); background: hsl(145 40% 96%); }
+.feishu-deployment-status.is-failed { border-color: hsl(var(--destructive) / 0.25); background: hsl(var(--destructive) / 0.045); }
+.feishu-deployment-heading { min-height: 20px; color: hsl(var(--foreground)); font-size: 13px; line-height: 1.5; }
+.feishu-deployment-heading strong { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.feishu-deployment-heading svg { width: 16px; height: 16px; color: hsl(145 55% 29%); }
+
+.feishu-deployment-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.feishu-deployment-steps li { display: flex; align-items: center; gap: 6px; min-width: 0; color: hsl(var(--muted-foreground)); font-size: 12px; line-height: 1.4; }
+.feishu-deployment-steps li > span { width: 18px; height: 18px; display: grid; flex: 0 0 18px; place-items: center; border: 1px solid hsl(var(--border)); border-radius: 999px; background: hsl(var(--background)); font-size: 10px; }
+.feishu-deployment-steps li > span svg { width: 12px; height: 12px; }
+.feishu-deployment-steps li.is-active { color: hsl(var(--foreground)); font-weight: 550; }
+.feishu-deployment-steps li.is-active > span { border-color: hsl(var(--foreground) / 0.3); }
+.feishu-deployment-steps li.is-done > span { border-color: hsl(145 45% 37% / 0.4); color: hsl(145 55% 29%); }
+.feishu-deployment-error { margin: 10px 0 0; color: hsl(var(--destructive)); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+.feishu-deployment-result { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 10px; color: hsl(var(--muted-foreground)); font-size: 12px; }
+.feishu-deployment-result > span:first-child { color: hsl(var(--foreground)); font-weight: 600; }
+.feishu-deployment-result a { display: inline-flex; align-items: center; gap: 4px; color: hsl(var(--foreground)); font-weight: 550; text-decoration: none; }
+.feishu-deployment-result a:hover { text-decoration: underline; }
+.feishu-deployment-result a svg { width: 14px; height: 14px; }
+
+.feishu-form-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid hsl(var(--border));
+}
+.feishu-secrets-note { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.feishu-secrets-note strong { font-size: 12.5px; font-weight: 600; }
+.feishu-secrets-note span { color: hsl(var(--muted-foreground)); font-size: 12px; line-height: 1.5; }
+.feishu-action-buttons { display: flex; flex: 0 0 auto; gap: 8px; }
+.feishu-submit,
+.feishu-cancel { height: 36px; padding: 0 15px; border-radius: 7px; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.feishu-submit { border: 1px solid hsl(var(--foreground)); background: hsl(var(--foreground)); color: hsl(var(--background)); }
+.feishu-submit:hover:not(:disabled) { opacity: 0.88; }
+.feishu-submit:disabled { cursor: not-allowed; opacity: 0.45; }
+.feishu-cancel { border: 1px solid hsl(var(--border)); background: hsl(var(--panel)); color: hsl(var(--foreground)); }
+.feishu-cancel:hover { background: hsl(var(--secondary)); }
+.feishu-submit:focus-visible,
+.feishu-cancel:focus-visible { outline: 2px solid hsl(var(--ring) / 0.35); outline-offset: 2px; }
+
+@media (max-width: 760px) {
+  .feishu-integration-page { padding: 24px 20px 0; }
+  .feishu-field-grid { grid-template-columns: 1fr; }
+  .feishu-deployment-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .feishu-form-actions { align-items: stretch; flex-direction: column; }
+  .feishu-action-buttons { justify-content: flex-end; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .feishu-back,
+  .feishu-field input,
+  .feishu-region-trigger,
+  .feishu-region-trigger > svg { transition: none; }
+}
