@@ -1001,11 +1001,17 @@ def _run_frontend_server(
     from google.adk.cli.utils.agent_loader import AgentLoader
     import httpx
 
-    from veadk.cli.studio_rbac import (
-        StudioAccessPolicy,
-        StudioPrincipal,
-        StudioRole,
-        runtime_belongs_to,
+    from frontend.server.evaluation_automation import (
+        EvaluationAutomationService,
+        RunSseActivity,
+        RunSseObservation,
+        observed_sse_stream,
+    )
+    from frontend.server.evaluation_automation import (
+        create_service as create_evaluation_automation_service,
+    )
+    from frontend.server.evaluation_automation import (
+        mount_routes as mount_evaluation_automation_routes,
     )
     from veadk.agent_metadata import (
         agent_component_summaries,
@@ -1013,6 +1019,12 @@ def _run_frontend_server(
         agent_skill_summaries,
     )
     from veadk.agent_search import search_agent_component
+    from veadk.cli.studio_rbac import (
+        StudioAccessPolicy,
+        StudioPrincipal,
+        StudioRole,
+        runtime_belongs_to,
+    )
     from veadk.multimodal.api import mount_media_routes
     from veadk.multimodal.service import MediaService
     from veadk.multimodal.storage import create_media_storage
@@ -2823,7 +2835,7 @@ def _run_frontend_server(
 
         Body: {name, files:[{path,content}], config:{region,projectName}}.
         While building/deploying, streams `data: {level, phase, message, pct?}`
-        frames (phase = build|deploy|publish); ends with a terminal
+        frames (phase = build|deploy|publish|evaluation); ends with a terminal
         `data: {done:true, success, agentName?, url?, apikey?, runtimeId?,
         consoleUrl?, error?, phase?}` frame. Uses the AgentKit SDK in-process
         (no CLI subprocess) and tags the runtime with the deploying user.
@@ -2844,12 +2856,18 @@ def _run_frontend_server(
         files = data.get("files", [])
         config = data.get("config", {})
         task_id = str(data.get("taskId") or f"deploy-{id(request)}").strip()
+        create_evaluation_sets = data.get("createEvaluationSets", True)
         author = principal.display_name if principal else ""
         owner_id = principal.owner_id if principal else ""
         if not agent_name:
             raise HTTPException(status_code=400, detail="Agent name is required")
         if not files:
             raise HTTPException(status_code=400, detail="No files provided")
+        if not isinstance(create_evaluation_sets, bool):
+            raise HTTPException(
+                status_code=400,
+                detail="createEvaluationSets must be a boolean",
+            )
 
         min_instance = data.get("minInstance", 1)
         max_instance = data.get("maxInstance", 5)
@@ -3653,6 +3671,62 @@ def _run_frontend_server(
                                 "region": region,
                             }
                         )
+                        if create_evaluation_sets:
+                            evaluation_start = {
+                                "level": "info",
+                                "phase": "evaluation",
+                                "message": ("正在创建 Good Case 和 Bad Case 评测集"),
+                                "pct": 95,
+                            }
+                            yield (
+                                "data: "
+                                f"{_json.dumps(evaluation_start, ensure_ascii=False)}"
+                                "\n\n"
+                            )
+                            try:
+                                from frontend.server.evaluation_automation.datasets import (
+                                    ensure_feedback_sets,
+                                )
+
+                                await ensure_feedback_sets(
+                                    openapi_post=_agentkit_openapi_post,
+                                    region=region,
+                                    project_name=project_name,
+                                    agent_name=agent_name,
+                                )
+                                evaluation_complete = {
+                                    "level": "success",
+                                    "phase": "evaluation",
+                                    "message": ("Good Case 和 Bad Case 评测集已创建"),
+                                    "pct": 100,
+                                }
+                                yield (
+                                    "data: "
+                                    f"{_json.dumps(evaluation_complete, ensure_ascii=False)}"
+                                    "\n\n"
+                                )
+                            except Exception as e:  # noqa: BLE001 - optional setup.
+                                warning = _redact_debug_text(str(e).strip())
+                                warning = warning or "未知错误"
+                                logger.warning(
+                                    "Runtime deployed but evaluation-set initialization "
+                                    "failed: %s",
+                                    warning,
+                                )
+                                final["warnings"] = [
+                                    f"Runtime 已部署，但评测集创建失败：{warning}"
+                                ]
+                                evaluation_warning = {
+                                    "level": "warning",
+                                    "phase": "evaluation",
+                                    "message": ("Good Case 和 Bad Case 评测集创建失败"),
+                                    "pct": 100,
+                                }
+                                yield (
+                                    "data: "
+                                    f"{_json.dumps(evaluation_warning, ensure_ascii=False)}"
+                                    "\n\n"
+                                )
                         if runtime_id:
                             _rt_conn_cache.pop((region, runtime_id), None)
                         try:
@@ -4349,6 +4423,50 @@ def _run_frontend_server(
             dict(request.headers), apikey, validated_authorization
         )
 
+    evaluation_automation: EvaluationAutomationService | None = None
+    if studio:
+        from contextlib import asynccontextmanager
+
+        async def _evaluation_automation_openapi_post(
+            *,
+            region: str,
+            action: str,
+            payload: dict[str, Any],
+            query: dict[str, str] | None = None,
+        ) -> dict[str, Any]:
+            return await _agentkit_openapi_post(
+                region=region,
+                action=action,
+                payload=payload,
+                query=query,
+            )
+
+        evaluation_automation = create_evaluation_automation_service(
+            openapi_post=_evaluation_automation_openapi_post,
+        )
+        app.state.evaluation_automation = evaluation_automation
+        original_lifespan = app.router.lifespan_context
+
+        @asynccontextmanager
+        async def _evaluation_automation_lifespan(current_app: Any):
+            async with original_lifespan(current_app):
+                try:
+                    yield
+                finally:
+                    await evaluation_automation.close()
+
+        app.router.lifespan_context = _evaluation_automation_lifespan
+        mount_evaluation_automation_routes(
+            app,
+            evaluation_automation,
+            lambda request, runtime_id, region: _authorized_runtime(
+                request,
+                runtime_id,
+                region,
+                coded_access_error=True,
+            ),
+        )
+
     @app.api_route(
         "/web/runtime-proxy/{runtime_id}/{path:path}",
         methods=["GET", "HEAD", "POST", "PATCH", "DELETE"],
@@ -4411,6 +4529,7 @@ def _run_frontend_server(
             auth_type=auth_type,
         )
         body = await request.body()
+        run_sse_activity: RunSseActivity | None = None
         if request.method == "POST" and path in {"run_sse", "harness/run_sse"}:
             try:
                 payload = json.loads(body)
@@ -4423,15 +4542,35 @@ def _run_frontend_server(
                     status_code=400, detail="run_sse request body must be an object"
                 )
             try:
-                body = json.dumps(
-                    await resolve_runtime_media(payload, media_service)
-                ).encode("utf-8")
+                payload = await resolve_runtime_media(payload, media_service)
+                body = json.dumps(payload).encode("utf-8")
             except FileNotFoundError as error:
                 raise HTTPException(
                     status_code=404, detail="Media not found."
                 ) from error
             except ValueError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
+            if evaluation_automation is not None:
+                try:
+                    run_sse_activity = RunSseActivity.from_proxy(
+                        payload,
+                        runtime_id=runtime_id,
+                        region=region,
+                        project_name=str(
+                            getattr(runtime, "project_name", "") or "default"
+                        ),
+                        runtime_endpoint=endpoint,
+                        runtime_authorization=headers.get("Authorization", ""),
+                    )
+                except ValueError as error:
+                    logger.info(
+                        "automatic evaluation skipped runtime_id=%s path=%s reason=%s",
+                        runtime_id,
+                        path,
+                        error,
+                    )
+                else:
+                    evaluation_automation.session_started(run_sse_activity)
 
         from fastapi.responses import StreamingResponse
 
@@ -4567,10 +4706,24 @@ def _run_frontend_server(
                 media_type=media,
             )
 
+        observation = (
+            RunSseObservation(run_sse_activity)
+            if run_sse_activity is not None
+            else None
+        )
+
         async def _body():
             try:
-                async for chunk in upstream.aiter_raw():
-                    yield chunk
+                if observation is None or evaluation_automation is None:
+                    async for chunk in upstream.aiter_raw():
+                        yield chunk
+                else:
+                    async for chunk in observed_sse_stream(
+                        upstream.aiter_raw(),
+                        observation,
+                        evaluation_automation.session_completed,
+                    ):
+                        yield chunk
             finally:
                 await upstream.aclose()
                 await client.aclose()
@@ -5398,13 +5551,21 @@ def _run_frontend_server(
         )
         agent_info_path = f"web/agent-info/{quote(appName, safe='')}"
         try:
-            agent_info = await _runtime_json_request(
-                request,
-                runtime=runtime,
-                runtime_id=runtimeId,
-                region=region,
-                method="GET",
-                path=agent_info_path,
+            try:
+                agent_info = await _runtime_json_request(
+                    request,
+                    runtime=runtime,
+                    runtime_id=runtimeId,
+                    region=region,
+                    method="GET",
+                    path=agent_info_path,
+                )
+            except HTTPException as error:
+                if error.status_code != 404:
+                    raise
+                agent_info = {"name": appName}
+            from frontend.server.evaluation_automation.repository import (
+                AgentKitAutoEvaluationRepository,
             )
             from veadk.integrations.agentkit.evaluation import (
                 AgentKitEvaluationDatasetsClient,
@@ -5479,7 +5640,27 @@ def _run_frontend_server(
                             "evaluationSetId": evaluation_set.id,
                             "evaluationSetName": evaluation_set.name,
                             "workspaceId": evaluation_set.workspace_id,
+                            "source": "user",
+                            "score": None,
+                            "reason": "",
                         }
+                    )
+            if studio:
+                automatic = AgentKitAutoEvaluationRepository(
+                    _evaluation_post,
+                    project_name=project_name,
+                )
+                automatic_cases = await automatic.list_cases(
+                    agent_name=agent_name,
+                    page_size=page_size,
+                )
+                response_items.extend(
+                    case.model_dump(mode="json", by_alias=True)
+                    for case in automatic_cases
+                )
+                for item in response_sets:
+                    item["itemCount"] = sum(
+                        case["kind"] == item["kind"] for case in response_items
                     )
             return {
                 "agentName": agent_name,
@@ -5520,13 +5701,21 @@ def _run_frontend_server(
         )
         agent_info_path = f"web/agent-info/{quote(deletion.app_name, safe='')}"
         try:
-            agent_info = await _runtime_json_request(
-                request,
-                runtime=runtime,
-                runtime_id=deletion.runtime_id,
-                region=deletion.region,
-                method="GET",
-                path=agent_info_path,
+            try:
+                agent_info = await _runtime_json_request(
+                    request,
+                    runtime=runtime,
+                    runtime_id=deletion.runtime_id,
+                    region=deletion.region,
+                    method="GET",
+                    path=agent_info_path,
+                )
+            except HTTPException as error:
+                if error.status_code != 404:
+                    raise
+                agent_info = {"name": deletion.app_name}
+            from frontend.server.evaluation_automation.repository import (
+                AgentKitAutoEvaluationRepository,
             )
             from veadk.integrations.agentkit.evaluation import (
                 AgentKitEvaluationDatasetsClient,
@@ -5576,6 +5765,26 @@ def _run_frontend_server(
                         item_id=item.id,
                     )
 
+            automatic_deleted = 0
+            if studio:
+                automatic = AgentKitAutoEvaluationRepository(
+                    _evaluation_post,
+                    project_name=project_name,
+                )
+                automatic_cases = await automatic.list_cases(
+                    agent_name=agent_name,
+                    page_size=200,
+                )
+                for case in automatic_cases:
+                    if case.id not in requested_ids:
+                        continue
+                    await evaluation.delete_item(
+                        evaluation_set_id=case.evaluation_set_id,
+                        workspace_id=case.workspace_id,
+                        item_id=case.id,
+                    )
+                    automatic_deleted += 1
+
             for _set_id, _workspace_id, fields in matched:
                 session_id = str(fields.get("session_id") or "")
                 message_id = str(fields.get("message_id") or "")
@@ -5619,7 +5828,7 @@ def _run_frontend_server(
                         "was deleted but message state could not be cleared",
                         deletion.runtime_id,
                     )
-            return {"deletedCount": len(matched)}
+            return {"deletedCount": len(matched) + automatic_deleted}
         except HTTPException:
             raise
         except ValueError as error:

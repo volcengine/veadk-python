@@ -40,6 +40,7 @@ def _create_frontend_app(
     *,
     site_logo: str | None = None,
     site_title: str | None = None,
+    studio: bool = False,
 ) -> FastAPI:
     captured: dict[str, Any] = {}
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
@@ -69,6 +70,7 @@ def _create_frontend_app(
         auth_mode="frontend",
         generated_agent_test_run_ttl=60,
         open_browser=False,
+        studio=studio,
     )
     return captured["app"]
 
@@ -798,3 +800,144 @@ def test_runtime_proxy_resolves_studio_media_before_forwarding(
     assert "fileData" not in forwarded_part
     assert base64.b64decode(forwarded_part["inlineData"]["data"]) == png
     assert forwarded_part["partMetadata"]["veadkMedia"]["uri"] == media["uri"]
+
+
+@pytest.mark.parametrize(
+    ("upstream_path", "status_code", "chunks", "expected_completions"),
+    [
+        (
+            "run_sse",
+            200,
+            [b'data: {"id":"event-1","author":"agent"}\n\n'],
+            1,
+        ),
+        (
+            "harness/run_sse",
+            200,
+            [b'data: {"id":"event-1","author":"agent"}\n\n'],
+            1,
+        ),
+        ("run_sse", 200, [b'data: {"error":"model failed"}\n\n'], 0),
+        ("run_sse", 200, [b": keep-alive\n\ndata: [DONE]\n\n"], 0),
+        ("run_sse", 500, [b'{"detail":"upstream failed"}'], 0),
+    ],
+)
+def test_studio_runtime_proxy_only_schedules_successful_completed_sse(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    upstream_path: str,
+    status_code: int,
+    chunks: list[bytes],
+    expected_completions: int,
+) -> None:
+    class _Automation:
+        def __init__(self) -> None:
+            self.started: list[Any] = []
+            self.completed: list[Any] = []
+            self.closed = False
+
+        def session_started(self, activity: Any) -> None:
+            self.started.append(activity)
+
+        def session_completed(self, activity: Any) -> None:
+            self.completed.append(activity)
+
+        def get_optimizations(self, runtime_id: str, app_name: str) -> None:
+            del runtime_id, app_name
+
+        async def close(self) -> None:
+            self.closed = True
+
+    automation = _Automation()
+    monkeypatch.setattr(
+        "frontend.server.evaluation_automation.create_service",
+        lambda **kwargs: automation,
+    )
+    app = _create_frontend_app(monkeypatch, tmp_path, studio=True)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                project_name="support",
+                tags=[],
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example", network_type="public"
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                    custom_jwt_authorizer=None,
+                ),
+            )
+
+    class _FakeUpstreamResponse:
+        def __init__(self) -> None:
+            self.status_code = status_code
+            self.headers = {"content-type": "text/event-stream"}
+
+        async def aiter_raw(self):
+            for chunk in chunks:
+                yield chunk
+
+        async def aclose(self) -> None:
+            pass
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def build_request(self, *args: Any, **kwargs: Any) -> object:
+            del args, kwargs
+            return object()
+
+        async def send(self, request: object, *, stream: bool) -> _FakeUpstreamResponse:
+            del request, stream
+            return _FakeUpstreamResponse()
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
+    )
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/web/runtime-proxy/runtime-1/{upstream_path}?region=cn-beijing",
+            headers={"X-VeADK-Local-User": "user-1"},
+            json={
+                "app_name": "agent",
+                "user_id": "user-1",
+                "session_id": "session-1",
+                "new_message": {
+                    "role": "user",
+                    "parts": [{"text": "hello"}],
+                },
+            },
+        )
+        optimizations = client.get(
+            "/web/evaluation/optimizations",
+            headers={"X-VeADK-Local-User": "user-1"},
+            params={
+                "runtimeId": "runtime-1",
+                "region": "cn-beijing",
+                "appName": "agent",
+            },
+        )
+
+    assert response.status_code == status_code
+    assert optimizations.status_code == 200
+    assert optimizations.json()["groups"] == []
+    assert len(automation.started) == 1
+    assert len(automation.completed) == expected_completions
+    assert automation.closed
+    assert automation.started[0].project_name == "support"
+    assert automation.started[0].runtime_authorization.get_secret_value() == (
+        "Bearer runtime-api-key"
+    )

@@ -61,7 +61,7 @@ test("renders editable Runtime instance inputs with memory-aware defaults", () =
 test("renders the Runtime update progress step conditionally", () => {
   assert.match(
     projectPreviewSource,
-    /needsInstanceUpdate[\s\S]*?\[\.\.\.baseDeploymentSteps, INSTANCE_UPDATE_STEP\][\s\S]*?: baseDeploymentSteps/,
+    /needsInstanceUpdate[\s\S]*?\[\.\.\.baseDeploymentSteps, INSTANCE_UPDATE_STEP\][\s\S]*?: baseDeploymentSteps[\s\S]*?createEvaluationSets/,
   );
   assert.match(
     workspaceSource,
@@ -70,6 +70,21 @@ test("renders the Runtime update progress step conditionally", () => {
   assert.match(
     workspaceSource,
     /phase: "update"[\s\S]*?label: "更新实例配置"[\s\S]*?将 Runtime 实例数调整为 \$\{range\.min\}～\$\{range\.max\}/,
+  );
+});
+
+test("renders the evaluation-set progress step only when selected", () => {
+  assert.match(
+    projectPreviewSource,
+    /phase: "evaluation"[\s\S]*?label: "创建评测集"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /createEvaluationSets[\s\S]*?\[\.\.\.deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP\][\s\S]*?: deploymentStepsWithInstanceUpdate/,
+  );
+  assert.match(
+    workspaceSource,
+    /task\.createEvaluationSets[\s\S]*?EVALUATION_SET_STEP/,
   );
 });
 
@@ -84,10 +99,10 @@ test("draws complete native radio and checkbox states after the global reset", (
   );
   assert.match(
     projectPreviewStyles,
-    /\.pp-network-check input\s*\{[\s\S]*?appearance:\s*none;[\s\S]*?border-radius:\s*4px/,
+    /\.pp-network-check input,\s*\.pp-evaluation-set-option input\s*\{[\s\S]*?appearance:\s*none;[\s\S]*?border-radius:\s*4px/,
   );
   assert.match(
     projectPreviewStyles,
-    /\.pp-network-check input:checked::before\s*\{[\s\S]*?rotate\(45deg\)/,
+    /\.pp-network-check input:checked::before,\s*\.pp-evaluation-set-option input:checked::before\s*\{[\s\S]*?rotate\(45deg\)/,
   );
 });
