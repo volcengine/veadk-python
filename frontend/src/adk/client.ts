@@ -395,6 +395,15 @@ async function apiFetch(
   return response;
 }
 
+/** Same-origin Studio request with the active local or OAuth identity attached. */
+export function studioFetch(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  return apiFetch(path, init, {}, timeoutMs);
+}
+
 function formatErrorDetail(detail: unknown): string {
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) {

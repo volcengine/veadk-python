@@ -161,6 +161,10 @@
   font-weight: 600;
   line-height: 1.2;
 }
+.application-card-badge.is-success {
+  background: hsl(145 52% 44% / 0.12);
+  color: hsl(145 55% 29%);
+}
 .application-card-copy p { display: -webkit-box; margin: 7px 0 0; overflow: hidden; color: hsl(var(--muted-foreground)); font-size: 12.5px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 
 .applications-empty { min-height: 260px; display: grid; place-items: center; align-content: center; text-align: center; color: hsl(var(--muted-foreground)); }

@@ -104,8 +104,9 @@ test("renders category-filtered automations from independent capability modules"
   assert.match(applicationsSource, /className="application-card"[\s\S]*?onClick=\{\(\) => onOpen\(application\.id\)\}/);
   assert.match(applicationsSource, /<GitHubLogo className="application-card-icon"/);
   assert.match(applicationsSource, /feishu-logo\.svg/);
-  assert.match(applicationsSource, /className="application-card-badge"/);
+  assert.match(applicationsSource, /application-card-badge is-\$\{application\.badgeTone \|\| "default"\}/);
   assert.match(applicationsStyles, /\.application-card-badge\s*\{[\s\S]*?background: hsl\(var\(--destructive\)\);[\s\S]*?color: hsl\(0 0% 100%\)/);
+  assert.match(applicationsStyles, /\.application-card-badge\.is-success\s*\{[\s\S]*?background: hsl\(145 52% 44% \/ 0\.12\);[\s\S]*?color: hsl\(145 55% 29%\)/);
   assert.doesNotMatch(applicationsSource, /查看集成|application-card-heading/);
   assert.doesNotMatch(applicationsStyles, /\.application-card > button/);
   assert.match(applicationsStyles, /\.application-card \{[\s\S]*?min-height: 96px/);

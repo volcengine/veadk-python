@@ -79,6 +79,7 @@ import {
 import { Applications, type ApplicationId } from "./ui/Applications";
 import { GitHubIntegration } from "./ui/GitHubIntegration";
 import { FeishuBotIntegration } from "./automations/feishu/FeishuBotIntegration";
+import { CodingAgentsIntegration } from "./automations/coding-agents/CodingAgentsIntegration";
 import { SearchView } from "./ui/Search";
 import {
   buildAgentEntries,
@@ -4081,7 +4082,11 @@ export default function App() {
                 </div>
               )}
 
-            {applicationsView === "feishu" ? (
+            {applicationsView === "coding-agents" ? (
+              <CodingAgentsIntegration
+                onBack={() => setApplicationsView("catalog")}
+              />
+            ) : applicationsView === "feishu" ? (
               <FeishuBotIntegration
                 onBack={() => setApplicationsView("catalog")}
               />

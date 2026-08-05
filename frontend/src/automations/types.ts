@@ -7,9 +7,10 @@ export type AutomationId =
   | "template"
   | "delivery"
   | "review"
-  | "feishu";
+  | "feishu"
+  | "coding-agents";
 
-export type GitHubAutomationId = Exclude<AutomationId, "feishu">;
+export type GitHubAutomationId = Exclude<AutomationId, "feishu" | "coding-agents">;
 
 export type AutomationCategoryId = "development" | "channels";
 
@@ -47,9 +48,10 @@ export interface AutomationFieldDefinition {
 export interface AutomationCardDefinition {
   id: AutomationId;
   category: AutomationCategoryId;
-  icon: "github" | "feishu";
+  icon: "github" | "feishu" | "coding-agents";
   name: string;
   badge?: string;
+  badgeTone?: "default" | "success";
   description: string;
 }
 
@@ -75,6 +77,12 @@ export interface FeishuAutomationDefinition extends AutomationCardDefinition {
   kind: "feishu";
 }
 
+export interface CodingAgentAutomationDefinition extends AutomationCardDefinition {
+  id: "coding-agents";
+  kind: "coding-agent";
+}
+
 export type AutomationDefinition =
   | GitHubAutomationDefinition
-  | FeishuAutomationDefinition;
+  | FeishuAutomationDefinition
+  | CodingAgentAutomationDefinition;
