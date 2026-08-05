@@ -224,6 +224,36 @@ LTM_BACKENDS = (
     ),
     BackendOption("viking", env=VOLC_ENV),
     BackendOption(
+        "openviking",
+        env=(
+            EnvVar(
+                "DATABASE_OPENVIKING_URL",
+                True,
+                "https://api.vikingdb.cn-beijing.volces.com/openviking",
+                "OpenViking 服务地址",
+            ),
+            EnvVar(
+                "DATABASE_OPENVIKING_API_KEY",
+                True,
+                "",
+                "OpenViking API Key",
+            ),
+            EnvVar(
+                "DATABASE_OPENVIKING_USER_ID",
+                False,
+                "default",
+                "记忆归属 ID；对应 viking://user/<此值>/peers/<请求用户>/memories，"
+                "默认 default",
+            ),
+            EnvVar(
+                "DATABASE_OPENVIKING_MEMORY_POLICY",
+                False,
+                "",
+                "记忆策略；不填写时使用官方默认策略，可指定记忆的抽取策略和隔离策略",
+            ),
+        ),
+    ),
+    BackendOption(
         "mem0",
         env=(
             EnvVar("DATABASE_MEM0_API_KEY", True),

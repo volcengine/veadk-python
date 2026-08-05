@@ -63,8 +63,10 @@ import {
   type EnvVar,
 } from "../create/veadkCatalog";
 import {
+  firstInvalidRuntimeEnv,
   firstMissingRuntimeEnv,
   runtimeEnvDisplayRows,
+  runtimeEnvJsonError,
   runtimeEnvVars,
 } from "../create/deploymentEnv";
 import {
@@ -1132,6 +1134,16 @@ export function ProjectPreview({
       setDeployError(`请返回配置页填写 ${env?.comment || env?.key}（${env?.key}）。`);
       return;
     }
+    const invalidFeatureEnv = firstInvalidRuntimeEnv(
+      deploymentEnv,
+      deploymentEnvValues,
+    );
+    if (invalidFeatureEnv) {
+      setDeployError(
+        `${invalidFeatureEnv.spec.comment || invalidFeatureEnv.spec.key}：${invalidFeatureEnv.error}`,
+      );
+      return;
+    }
     if (feishuEnabled) {
       const missingFeishuEnv = firstMissingRuntimeEnv(
         FEISHU_ENV,
@@ -2051,35 +2063,98 @@ export function ProjectPreview({
                         </div>
                         {automaticEnvRows.map((row) => {
                           const fixed = row.key.startsWith("ENABLE_");
+                          const jsonError = runtimeEnvJsonError(
+                            row,
+                            deploymentEnvValues,
+                          );
+                          const multiline = row.multiline || row.format === "json";
                           return (
                             <div
-                              className="pp-env-row pp-env-row-derived"
+                              className={`pp-env-row pp-env-row-derived${multiline ? " is-multiline" : ""}`}
                               key={row.key}
                             >
-                              <input
-                                className="pp-env-key-fixed"
-                                value={row.key}
-                                readOnly
-                                disabled={deploying}
+                              <div
+                                className="pp-env-key-fixed pp-env-key-cell"
                                 aria-label={`${row.key} 环境变量名`}
-                              />
-                              <input
-                                type={fixed || showEnvValues ? "text" : "password"}
-                                value={row.value}
-                                placeholder={row.required ? "必填，尚未填写" : "可选，尚未填写"}
-                                readOnly={fixed}
-                                disabled={
-                                  deploying || (!fixed && !onDeploymentEnvChange)
-                                }
-                                autoComplete="off"
-                                aria-label={`${row.key} 环境变量值`}
-                                onChange={(event) =>
-                                  onDeploymentEnvChange?.(
-                                    row.key,
-                                    event.currentTarget.value,
-                                  )
-                                }
-                              />
+                                aria-disabled={deploying}
+                              >
+                                <span title={row.key}>{row.key}</span>
+                                {(row.help || row.comment) && (
+                                  <span
+                                    className="pp-env-help"
+                                    tabIndex={0}
+                                    data-help={row.help || row.comment}
+                                    aria-label={`${row.key}说明：${row.help || row.comment}`}
+                                  >
+                                    ?
+                                    <span className="pp-env-help-popover" role="tooltip">
+                                      {row.help || row.comment}
+                                    </span>
+                                  </span>
+                                )}
+                                {row.link && (
+                                  <a
+                                    className="pp-env-link"
+                                    href={row.link.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title={`打开 OpenViking ${row.link.label}`}
+                                    aria-label={`${row.key}：打开 OpenViking ${row.link.label}`}
+                                  >
+                                    <ExternalLink aria-hidden="true" />
+                                  </a>
+                                )}
+                              </div>
+                              <div className="pp-env-value-wrap">
+                                {multiline ? (
+                                  <textarea
+                                    className="pp-env-value pp-env-json-value"
+                                    value={row.value}
+                                    placeholder={
+                                      row.required ? "必填，尚未填写" : "可选，尚未填写"
+                                    }
+                                    readOnly={fixed}
+                                    disabled={
+                                      deploying || (!fixed && !onDeploymentEnvChange)
+                                    }
+                                    autoComplete="off"
+                                    spellCheck={false}
+                                    aria-invalid={!!jsonError}
+                                    aria-label={`${row.key} 环境变量值`}
+                                    onChange={(event) =>
+                                      onDeploymentEnvChange?.(
+                                        row.key,
+                                        event.currentTarget.value,
+                                      )
+                                    }
+                                  />
+                                ) : (
+                                  <input
+                                    className="pp-env-value"
+                                    type={fixed || showEnvValues ? "text" : "password"}
+                                    value={row.value}
+                                    placeholder={
+                                      row.required ? "必填，尚未填写" : "可选，尚未填写"
+                                    }
+                                    readOnly={fixed}
+                                    disabled={
+                                      deploying || (!fixed && !onDeploymentEnvChange)
+                                    }
+                                    autoComplete="off"
+                                    aria-invalid={!!jsonError}
+                                    aria-label={`${row.key} 环境变量值`}
+                                    onChange={(event) =>
+                                      onDeploymentEnvChange?.(
+                                        row.key,
+                                        event.currentTarget.value,
+                                      )
+                                    }
+                                  />
+                                )}
+                                {jsonError && (
+                                  <span className="pp-env-error">{jsonError}</span>
+                                )}
+                              </div>
                               <span className="pp-env-source">
                                 {fixed ? "自动" : "同步"}
                               </span>
