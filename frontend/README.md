@@ -300,6 +300,20 @@ open until the server finishes or the caller explicitly cancels them.
 client's skip-consent setting when it registers the deployed callback URL. This
 avoids presenting a second authorization confirmation after login.
 
+## Issue feedback
+
+Assistant responses expose an issue-feedback action, and the sidebar provides a
+platform feedback page. Both flows submit through `POST /web/issue-feedback`.
+The Studio server redacts credentials, includes the selected Runtime ID and
+available conversation/trace context, then posts anonymously to the matching
+public Lark form. Runtime deployments enable APMPlus by default; remote feedback
+queries APMPlus by Session ID on the server, while local feedback uses the
+in-memory development trace endpoint. Trace lookup failures do not block the
+feedback submission. Form records store their submission time in Beijing time.
+This path does not require TOS credentials, a Lark application, or `lark-cli`.
+A successful request returns `{ "submitted": true }`; the UI shows an accessible
+success state instead of exposing an internal trace ID.
+
 ## Multimodal media
 
 The composer accepts PNG, JPEG, WebP, GIF, TXT, Markdown, PDF, MP4, WebM, and

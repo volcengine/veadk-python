@@ -90,7 +90,7 @@ test("global sidebar can collapse to a compact icon rail", () => {
 test("sidebar persistently highlights only the current top-level page", () => {
   assert.match(
     sidebarSource,
-    /export type SidebarPage = "new-chat" \| "agents" \| "applications" \| "search" \| null/,
+    /export type SidebarPage\s*=[\s\S]*?"new-chat"[\s\S]*?"agents"[\s\S]*?"applications"[\s\S]*?"search"[\s\S]*?"feedback"[\s\S]*?null/,
   );
   assert.match(sidebarSource, /activePage: SidebarPage/);
   assert.match(

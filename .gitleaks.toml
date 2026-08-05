@@ -83,4 +83,6 @@ paths = ["requirements.txt", "tests", "veadk/realtime/client.py", "veadk/realtim
 # token-transformer-id-pattern, but these are library identifiers, not secrets.
 regexes = [
   '''tokenizer''',
+  # Public Lark form endpoint used for anonymous issue-feedback submission.
+  '''https://bytedance\.larkoffice\.com''',
 ]

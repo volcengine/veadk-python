@@ -814,6 +814,83 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
     assert deleted == ["runtime-developer", "runtime-other"]
 
 
+def test_runtime_trace_reads_apmplus_and_explains_missing_observability(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime = _runtime("runtime-developer", "developer")
+    runtime.project_name = "default"
+    calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: runtime,
+    )
+
+    def load_trace(**kwargs: Any) -> list[dict[str, Any]]:
+        calls.append(kwargs)
+        if kwargs["session_id"] == "session-without-trace":
+            return []
+        return [
+            {
+                "operation_name": "invocation",
+                "span_id": "span-1",
+                "trace_id": "trace-1",
+                "parent_span_id": "",
+                "start_time_microsecond": 1_000,
+                "duration_microseconds": 250,
+                "tags": {"gen_ai.session.id": kwargs["session_id"]},
+            }
+        ]
+
+    monkeypatch.setattr(
+        "veadk.cli.frontend_apmplus_trace.load_apmplus_trace",
+        load_trace,
+    )
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+    )
+    headers = {"X-VeADK-Local-User": "developer"}
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-trace",
+            params={
+                "runtimeId": "runtime-developer",
+                "sessionId": "session-1",
+                "region": "cn-beijing",
+                "endTimeMs": 1_800_000_000_000,
+            },
+            headers=headers,
+        )
+        missing = client.get(
+            "/web/runtime-trace",
+            params={
+                "runtimeId": "runtime-developer",
+                "sessionId": "session-without-trace",
+                "region": "cn-beijing",
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert response.json()[0]["name"] == "invocation"
+    assert response.json()[0]["start_time"] == 1_000_000
+    assert calls[0]["runtime_id"] == "runtime-developer"
+    assert calls[0]["session_id"] == "session-1"
+    assert calls[0]["project_name"] == "default"
+    assert calls[0]["now_ms"] == 1_800_000_000_000
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == (
+        "该 Agent 暂未开启链路观测，请到控制台打开后使用。"
+    )
+
+
 def test_runtime_update_capability_supports_owned_unmanaged_runtime(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1262,9 +1339,11 @@ def test_new_deployment_only_updates_non_default_instance_range(
 
     runtime_id = "r-new-runtime"
     update_requests: list[Any] = []
+    create_requests: list[Any] = []
     captured_config: dict[str, Any] = {}
 
-    def create_runtime(_self: Any, _request: Any) -> SimpleNamespace:
+    def create_runtime(_self: Any, request: Any) -> SimpleNamespace:
+        create_requests.append(request)
         return SimpleNamespace(runtime_id=runtime_id)
 
     def update_runtime(_self: Any, request: Any) -> SimpleNamespace:
@@ -1321,9 +1400,15 @@ def test_new_deployment_only_updates_non_default_instance_range(
 
     assert response.status_code == 200
     assert frames[-1]["success"] is True
+    assert create_requests[0].apmplus_enable is True
     assert captured_config["launch_types"]["cloud"]["runtime_auth_type"] == ("key_auth")
+    runtime_envs = captured_config["launch_types"]["cloud"]["runtime_envs"]
+    assert "OTEL_SDK_DISABLED" not in runtime_envs
+    assert "ENABLE_APMPLUS" not in runtime_envs
+    assert "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY" not in runtime_envs
     assert not any(frame.get("phase") == "evaluation" for frame in frames)
     assert bool(update_requests) is expects_update
+    assert all(request.apmplus_enable is True for request in update_requests)
     assert any(frame.get("phase") == "update" for frame in frames) is expects_update
     if expects_update:
         request = update_requests[0]

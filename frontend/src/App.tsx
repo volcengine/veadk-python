@@ -27,6 +27,7 @@ import {
   downloadArtifact,
   previewArtifact,
   getAgentInfo,
+  getSessionTrace,
   getSessionCapabilities,
   getSession,
   getStudioAccess,
@@ -37,6 +38,7 @@ import {
   removeSessionCapability,
   runSSE,
   refreshAgentFeedbackCases,
+  submitIssueFeedback,
   submitMessageFeedback,
   upsertCachedAgentFeedbackCase,
   uploadMedia,
@@ -57,6 +59,12 @@ import {
   type StudioAccess,
   type UiFeatures,
 } from "./adk/client";
+import {
+  issueFeedbackToolCalls,
+  traceForInvocation,
+  type IssueFeedbackIssue,
+  type IssueFeedbackModule,
+} from "./adk/issueFeedback";
 import { requiresSessionCapabilityRunner } from "./adk/sessionCapabilities";
 import {
   applyEvent,
@@ -160,7 +168,23 @@ import defaultSiteLogo from "./assets/volcengine.svg";
 import {
   FeedbackDownIcon,
   FeedbackUpIcon,
+  IssueFeedbackIcon,
 } from "./ui/icons/FeedbackIcons";
+
+interface IssueFeedbackTarget {
+  turn: Turn;
+  input: string;
+}
+
+function issueFeedbackModuleForPage(page: string): IssueFeedbackModule {
+  if (page === "agents") return "agents";
+  if (page === "applications") return "applications";
+  if (page === "search") return "search";
+  if (["conversation", "new-chat", "sandbox"].includes(page)) {
+    return "conversation";
+  }
+  return "other";
+}
 
 interface NewChatCapabilitiesState {
   agentId?: string;
@@ -258,6 +282,8 @@ function loadView(): CreateView {
 import { TraceDrawer } from "./ui/TraceDrawer";
 import { LoginPage } from "./ui/LoginPage";
 import { AuthExpiredDialog } from "./ui/AuthExpiredDialog";
+import { IssueFeedbackDialog } from "./ui/IssueFeedbackDialog";
+import { PlatformFeedback } from "./ui/PlatformFeedback";
 import { Markdown } from "./ui/Markdown";
 import {
   clearLocalUser,
@@ -811,7 +837,12 @@ export default function App() {
   const [feedbackPendingIds, setFeedbackPendingIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [issueFeedbackTarget, setIssueFeedbackTarget] =
+    useState<IssueFeedbackTarget | null>(null);
+  const [platformFeedbackOrigin, setPlatformFeedbackOrigin] =
+    useState<string | null>(null);
   const [traceOpen, setTraceOpen] = useState(false);
+  const [traceEndTimeMs, setTraceEndTimeMs] = useState<number>();
   const [greeting, setGreeting] = useState(pickGreeting);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [authExpired, setAuthExpired] = useState(false);
@@ -2739,6 +2770,7 @@ export default function App() {
   }
 
   function openNewChat() {
+    setPlatformFeedbackOrigin(null);
     setCreateView(null);
     setSkillCenter(false);
     setAddAgent(false);
@@ -3419,6 +3451,75 @@ export default function App() {
       ) ?? agentInfo?.appName ?? currentConn.apps[0] ?? currentConn.name
     : "";
 
+  const submitIssueFeedbackForTurn = async (feedback: {
+    issues: IssueFeedbackIssue[];
+    description: string;
+  }): Promise<void> => {
+    const target = issueFeedbackTarget;
+    const sid = sessionId;
+    if (!target || !sid) throw new Error("当前会话不可用，请关闭后重试。");
+    const invocationId = target.turn.meta?.invocationId ?? "";
+    const sessionTrace = connectedRuntimeId
+      ? []
+      : await getSessionTrace(appName, sid).catch(() => []);
+    await submitIssueFeedback({
+      source: "agent_exec",
+      module: "conversation",
+      issues: feedback.issues,
+      problem: "",
+      description: feedback.description,
+      page: "conversation",
+      appName: currentRuntimeAppName || appName,
+      runtimeId: connectedRuntimeId,
+      region: currentRuntime?.region ?? "cn-beijing",
+      sessionId: sid,
+      eventId: target.turn.meta?.eventId ?? target.turn.meta?.localId ?? "",
+      invocationId,
+      input: target.input,
+      output: turnText(target.turn),
+      toolCalls: issueFeedbackToolCalls(target.turn),
+      trace: traceForInvocation(sessionTrace, invocationId),
+    });
+  };
+
+  const submitPlatformIssueFeedback = async (feedback: {
+    module: IssueFeedbackModule;
+    issues: IssueFeedbackIssue[];
+    description: string;
+  }): Promise<void> => {
+    const sid = sandboxSession ? "" : sessionId;
+    const contextTurns = sandboxSession || sid ? turns : [];
+    const sessionTrace = sid && appName && !connectedRuntimeId
+      ? await getSessionTrace(appName, sid).catch(() => [])
+      : [];
+    await submitIssueFeedback({
+      source: "platform",
+      module: feedback.module,
+      issues: feedback.issues,
+      problem: "",
+      description: feedback.description,
+      page: platformFeedbackOrigin ?? "unknown",
+      appName: currentRuntimeAppName || appName,
+      runtimeId: connectedRuntimeId,
+      region: currentRuntime?.region ?? "cn-beijing",
+      sessionId: sid,
+      eventId: "",
+      invocationId: "",
+      input: contextTurns
+        .filter((turn) => turn.role === "user")
+        .map(turnText)
+        .filter(Boolean)
+        .join("\n\n"),
+      output: contextTurns
+        .filter((turn) => turn.role === "assistant")
+        .map(turnText)
+        .filter(Boolean)
+        .join("\n\n"),
+      toolCalls: contextTurns.flatMap(issueFeedbackToolCalls),
+      trace: sessionTrace,
+    });
+  };
+
   const rateAssistantTurn = async (
     turn: Turn,
     rating: MessageFeedbackRating | null,
@@ -3633,6 +3734,7 @@ export default function App() {
   };
 
   const openMyAgentsPage = () => {
+    setPlatformFeedbackOrigin(null);
     if (sandboxSession) exitSandboxSession();
     viewSidRef.current = "";
     setSessionId("");
@@ -3653,6 +3755,7 @@ export default function App() {
   };
 
   const openApplicationsPage = () => {
+    setPlatformFeedbackOrigin(null);
     if (sandboxSession) exitSandboxSession();
     viewSidRef.current = "";
     setSessionId("");
@@ -3710,15 +3813,17 @@ export default function App() {
       }
     : null;
 
-  const sidebarActivePage: SidebarPage = applicationsView
-    ? "applications"
-    : searchView
-      ? "search"
-    : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
-      ? "agents"
-      : sessionId || createView || skillCenter || addAgent || addMenu
-        ? null
-        : "new-chat";
+  const sidebarActivePage: SidebarPage = platformFeedbackOrigin !== null
+    ? "feedback"
+    : applicationsView
+      ? "applications"
+      : searchView
+        ? "search"
+        : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
+          ? "agents"
+          : sessionId || createView || skillCenter || addAgent || addMenu
+            ? null
+            : "new-chat";
 
   return (
     <div className="layout">
@@ -3732,6 +3837,7 @@ export default function App() {
         streamingSids={streamingSids}
         onNewChat={openNewChat}
         onSearch={() => {
+          setPlatformFeedbackOrigin(null);
           if (sandboxSession) exitSandboxSession();
           setCreateView(null);
           setSkillCenter(false);
@@ -3808,7 +3914,20 @@ export default function App() {
         }}
         onMyAgents={openMyAgentsPage}
         onApplications={openApplicationsPage}
+        onIssueFeedback={() => {
+          if (platformFeedbackOrigin !== null) return;
+          setPlatformFeedbackOrigin(
+            sidebarActivePage ??
+              (sandboxSession
+                ? "sandbox"
+                : sessionId
+                  ? "conversation"
+                  : "workspace"),
+          );
+          setError("");
+        }}
         onPickSession={(id) => {
+          setPlatformFeedbackOrigin(null);
           setCreateView(null);
           setSkillCenter(false);
           setAddAgent(false);
@@ -4082,7 +4201,12 @@ export default function App() {
                 </div>
               )}
 
-            {applicationsView === "coding-agents" ? (
+            {platformFeedbackOrigin !== null ? (
+              <PlatformFeedback
+                initialModule={issueFeedbackModuleForPage(platformFeedbackOrigin)}
+                onSubmit={submitPlatformIssueFeedback}
+              />
+            ) : applicationsView === "coding-agents" ? (
               <CodingAgentsIntegration
                 onBack={() => setApplicationsView("catalog")}
               />
@@ -4641,13 +4765,33 @@ export default function App() {
                             </>
                           )}
                           {!sandboxSession && (
-                            <button
-                              className="icon-btn"
-                              title="Tracing 火焰图"
-                              onClick={() => setTraceOpen(true)}
-                            >
-                              <TraceIcon />
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                className="icon-btn"
+                                aria-label="问题反馈"
+                                title="问题反馈"
+                                onClick={() => setIssueFeedbackTarget({
+                                  turn,
+                                  input: previousUserTurnText(turns, i),
+                                })}
+                              >
+                                <IssueFeedbackIcon className="icon" />
+                              </button>
+                              <button
+                                type="button"
+                                className="icon-btn"
+                                title="Tracing 火焰图"
+                                onClick={() => {
+                                  setTraceEndTimeMs(
+                                    turn.meta?.ts ? turn.meta.ts * 1000 : Date.now(),
+                                  );
+                                  setTraceOpen(true);
+                                }}
+                              >
+                                <TraceIcon />
+                              </button>
+                            </>
                           )}
                           <CopyButton text={turnText(turn)} />
                         </div>
@@ -4686,10 +4830,18 @@ export default function App() {
         );
       })()}
 
+      {issueFeedbackTarget && sessionId && (
+        <IssueFeedbackDialog
+          onClose={() => setIssueFeedbackTarget(null)}
+          onSubmit={submitIssueFeedbackForTurn}
+        />
+      )}
+
       {traceOpen && sessionId && (
         <TraceDrawer
           appName={appName}
           sessionId={sessionId}
+          endTimeMs={traceEndTimeMs}
           onClose={() => setTraceOpen(false)}
         />
       )}

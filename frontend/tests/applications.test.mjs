@@ -69,7 +69,10 @@ const sidebarSource = readFileSync(
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
 test("adds the Automation destination with a repository-owned four-circle icon", () => {
-  assert.match(sidebarSource, /SidebarPage = "new-chat" \| "agents" \| "applications" \| "search"/);
+  assert.match(
+    sidebarSource,
+    /SidebarPage\s*=\s*[\s\S]*?"new-chat"[\s\S]*?"agents"[\s\S]*?"applications"[\s\S]*?"search"[\s\S]*?"feedback"/,
+  );
   assert.match(sidebarSource, /onApplications: \(\) => void/);
   assert.match(sidebarSource, /function ApplicationsIcon/);
   assert.equal((sidebarSource.match(/<circle /g) ?? []).length >= 4, true);

@@ -19,6 +19,7 @@ import {
 } from "./timeout";
 import type { AgentProject } from "../create/project";
 import type { AgentDraft } from "../create/types";
+import type { IssueFeedbackReport } from "./issueFeedback";
 
 /** An ADK event as serialised over `/run_sse` (camelCase, by_alias=True). */
 export interface AdkUsage {
@@ -65,12 +66,12 @@ export interface AdkEvent {
 /** A single OpenTelemetry span as returned by /debug/trace/session/{id}. */
 export interface TraceSpan {
   name: string;
-  span_id: number;
-  trace_id: number;
+  span_id: string | number;
+  trace_id: string | number;
   start_time: number; // nanoseconds
   end_time: number; // nanoseconds
   attributes: Record<string, unknown>;
-  parent_span_id: number | null;
+  parent_span_id: string | number | null;
 }
 
 export interface AdkSession {
@@ -1123,14 +1124,31 @@ export function mediaContentUrl(appName: string, uri: string): string {
 export async function getSessionTrace(
   appName: string,
   sessionId: string,
+  endTimeMs?: number,
 ): Promise<TraceSpan[]> {
   const { app, ep } = resolve(appName);
-  const res = await apiFetch(
-    `/dev/apps/${encodeURIComponent(app)}/debug/trace/session/${encodeURIComponent(sessionId)}`,
-    {},
-    ep,
-  );
-  if (!res.ok) throw new Error(`trace failed: ${res.status}`);
+  let res: Response;
+  if (ep.runtimeId) {
+    const params = new URLSearchParams({
+      runtimeId: ep.runtimeId,
+      sessionId,
+      region: ep.region ?? "cn-beijing",
+    });
+    if (endTimeMs) params.set("endTimeMs", String(Math.round(endTimeMs)));
+    res = await apiFetch(`/web/runtime-trace?${params.toString()}`);
+    if (res.status === 404) {
+      throw new Error("该 Agent 暂未开启链路观测，请到控制台打开后使用。");
+    }
+  } else {
+    res = await apiFetch(
+      `/dev/apps/${encodeURIComponent(app)}/debug/trace/session/${encodeURIComponent(sessionId)}`,
+      {},
+      ep,
+    );
+  }
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "加载调用链路失败"));
+  }
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
     const responseType = contentType.split(";", 1)[0] || "Content-Type 缺失";
@@ -1141,6 +1159,24 @@ export async function getSessionTrace(
   const spans = (await res.json()) as unknown;
   if (!Array.isArray(spans)) throw new Error("trace failed: 返回格式无效");
   return spans as TraceSpan[];
+}
+
+export async function submitIssueFeedback(
+  report: IssueFeedbackReport,
+): Promise<{ submitted: true }> {
+  const res = await apiFetch("/web/issue-feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(report),
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "问题反馈上报失败"));
+  }
+  const result = (await res.json()) as { submitted?: unknown };
+  if (result.submitted !== true) {
+    throw new Error("问题反馈上报失败：服务端未确认提交结果");
+  }
+  return { submitted: true };
 }
 
 /** The agent-type vocabulary shared with the create wizard. */
