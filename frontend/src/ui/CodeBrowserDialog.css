@@ -230,6 +230,17 @@
   white-space: nowrap;
 }
 
+.code-browser-path .code-browser-readonly {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-family: inherit;
+  font-size: 10px;
+}
+
 .code-browser-main {
   flex: 1;
   min-width: 0;

@@ -13,8 +13,17 @@ import {
   formatCloudRegion,
   type CloudProvider,
 } from "../adk/cloudProvider";
-import { Markdown } from "./Markdown";
-import type { SkillCenterOptimizationSource } from "./skill-workbench/types";
+import { CodeBrowserWorkspace } from "./CodeBrowserDialog";
+import { isImeCompositionEvent } from "./composerKeyboard";
+import { getSkillWorkbenchCapability } from "./skill-workbench/api";
+import type {
+  SkillCenterOptimizationSource,
+  SkillWorkbenchCapability,
+  SkillWorkbenchOperation,
+  SkillWorkbenchPublishResult,
+  SkillWorkbenchTask,
+} from "./skill-workbench/types";
+import type { StartSkillWorkbenchTaskArgs } from "./skill-workbench/useSkillWorkbenchTasks";
 
 const SPACE_PAGE_SIZE = 6;
 const SKILL_PAGE_SIZE = 7;
@@ -68,15 +77,6 @@ function updatedAtLabel(value?: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
-}
-
-function skillMarkdownBody(value: string): string {
-  const normalized = value.replace(/\r\n/g, "\n");
-  if (!normalized.startsWith("---\n")) return value;
-  const closingDelimiter = normalized.indexOf("\n---\n", 4);
-  return closingDelimiter >= 0
-    ? normalized.slice(closingDelimiter + 5).trimStart()
-    : value;
 }
 
 /** Hand-drawn Skill Space mark: two connected shelves for a skill collection. */
@@ -157,6 +157,205 @@ function Pager({
 
 function EmptyState({ children }: { children: string }) {
   return <div className="skillcenter-empty">{children}</div>;
+}
+
+function ComposerSendIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M12 18V6m0 0-4.5 4.5M12 6l4.5 4.5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ComposerUploadIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M12 16.5V5m0 0L8.5 8.5M12 5l3.5 3.5M5.5 14.5v3.25c0 .97.78 1.75 1.75 1.75h9.5c.97 0 1.75-.78 1.75-1.75V14.5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function SkillCenterComposer({
+  operation,
+  setOperation,
+  source,
+  setSource,
+  file,
+  setFile,
+  intent,
+  setIntent,
+  capability,
+  busy,
+  error,
+  onError,
+  composerRef,
+  onStartTask,
+}: {
+  operation: SkillWorkbenchOperation;
+  setOperation: (operation: SkillWorkbenchOperation) => void;
+  source: SkillCenterOptimizationSource | null;
+  setSource: (source: SkillCenterOptimizationSource | null) => void;
+  file: File | null;
+  setFile: (file: File | null) => void;
+  intent: string;
+  setIntent: (intent: string) => void;
+  capability: SkillWorkbenchCapability | null;
+  busy: boolean;
+  error: string;
+  onError: (message: string) => void;
+  composerRef: React.RefObject<HTMLTextAreaElement | null>;
+  onStartTask?: (args: StartSkillWorkbenchTaskArgs) => Promise<SkillWorkbenchTask>;
+}) {
+  const hasSource = Boolean(source || file);
+  const canSubmit = Boolean(
+    onStartTask &&
+    capability?.enabled &&
+    intent.trim() &&
+    (operation === "create" || hasSource) &&
+    !busy,
+  );
+
+  const submit = () => {
+    if (!canSubmit || !onStartTask) return;
+    void onStartTask({
+      operation,
+      intent: intent.trim(),
+      ...(source ? { source } : {}),
+      ...(file ? { file } : {}),
+    }).catch(() => {
+      // The persistent task controller exposes the same failure in the workbench.
+    });
+  };
+
+  return (
+    <section className="skillcenter-composer-wrap" aria-label="创建或优化 Skill">
+      <div className="skillcenter-composer-head">
+        <h1>技能中心</h1>
+        <div className="skillcenter-composer-modes" role="radiogroup" aria-label="Skill 操作">
+          {(["create", "optimize"] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={operation === value}
+              className={operation === value ? "is-active" : ""}
+              onClick={() => {
+                setOperation(value);
+                if (value === "create") {
+                  setSource(null);
+                  setFile(null);
+                }
+                requestAnimationFrame(() => composerRef.current?.focus());
+              }}
+            >
+              {value === "create" ? "创建 Skill" : "优化 Skill"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="composer composer--new-chat skillcenter-composer">
+        <div className="composer-box">
+          {operation === "optimize" ? (
+            <div className="skillcenter-composer-source">
+              {source ? (
+                <button
+                  type="button"
+                  className="skillcenter-source-chip"
+                  onClick={() => setSource(null)}
+                  title="移除所选 Skill"
+                >
+                  <SkillIcon />
+                  <span>{source.name}</span>
+                  <small>v{source.version}</small>
+                  <CloseIcon />
+                </button>
+              ) : file ? (
+                <button
+                  type="button"
+                  className="skillcenter-source-chip"
+                  onClick={() => setFile(null)}
+                  title="移除 ZIP"
+                >
+                  <ComposerUploadIcon />
+                  <span>{file.name}</span>
+                  <CloseIcon />
+                </button>
+              ) : (
+                <span>选择下方 Skill，或上传 ZIP</span>
+              )}
+            </div>
+          ) : null}
+          <div className="composer-input-stack">
+            <textarea
+              ref={composerRef}
+              className="comp-input scroll"
+              rows={4}
+              maxLength={20_000}
+              value={intent}
+              disabled={busy || capability?.enabled === false}
+              placeholder={operation === "create"
+                ? "描述你希望创建的 Skill…"
+                : "描述希望如何优化这个 Skill…"}
+              onChange={(event) => setIntent(event.target.value)}
+              onKeyDown={(event) => {
+                if (isImeCompositionEvent(event.nativeEvent)) return;
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  submit();
+                }
+              }}
+            />
+          </div>
+          {operation === "optimize" ? (
+            <label className="skillcenter-composer-upload" title="上传 ZIP">
+              <ComposerUploadIcon />
+              <span>上传 ZIP</span>
+              <input
+                type="file"
+                accept=".zip,application/zip"
+                disabled={busy}
+                onChange={(event) => {
+                  const nextFile = event.target.files?.[0] ?? null;
+                  if (
+                    nextFile &&
+                    capability?.maxUploadBytes &&
+                    nextFile.size > capability.maxUploadBytes
+                  ) {
+                    const limitMiB = capability.maxUploadBytes / (1024 * 1024);
+                    onError(`Skill ZIP 不能超过 ${limitMiB} MiB`);
+                    event.target.value = "";
+                    return;
+                  }
+                  setFile(nextFile);
+                  if (nextFile) {
+                    setSource(null);
+                    onError("");
+                  }
+                  event.target.value = "";
+                  requestAnimationFrame(() => composerRef.current?.focus());
+                }}
+              />
+            </label>
+          ) : null}
+          <button
+            type="button"
+            className="comp-send"
+            disabled={!canSubmit}
+            onClick={submit}
+            aria-label={operation === "create" ? "开始创建 Skill" : "开始优化 Skill"}
+          >
+            <ComposerSendIcon />
+          </button>
+        </div>
+      </div>
+      {capability?.enabled === false ? (
+        <div className="skillcenter-composer-error" role="alert">{capability.reason || "DevEnv 暂不可用"}</div>
+      ) : error ? (
+        <div className="skillcenter-composer-error" role="alert">{error}</div>
+      ) : null}
+    </section>
+  );
 }
 
 function SkillDetailDialog({
@@ -240,16 +439,19 @@ function SkillDetailDialog({
         </dl>
 
         <div className="skill-detail-content">
-          <div className="skill-detail-content-title">SKILL.md</div>
           {loading ? (
             <div className="skillcenter-loading"><LoadingMark />正在读取技能内容…</div>
           ) : error ? (
             <div className="skillcenter-error">{error}</div>
           ) : detail?.skillMd ? (
-            <Markdown
-              text={skillMarkdownBody(detail.skillMd)}
-              className="skill-detail-markdown"
-              allowRawHtml={false}
+            <CodeBrowserWorkspace
+              project={{
+                name: detail.name || skill.skillName,
+                files: detail.files?.length
+                  ? detail.files
+                  : [{ path: "SKILL.md", content: detail.skillMd }],
+              }}
+              readOnly
             />
           ) : (
             <EmptyState>该技能暂无 SKILL.md 内容</EmptyState>
@@ -273,16 +475,25 @@ export function SkillCenterButton({ onClick }: { onClick: () => void }) {
 /** Native AgentKit Skill space browser. */
 export function SkillCenterView({
   cloudProvider = "volcengine",
-  onCreate,
-  onOptimize,
+  onStartTask,
+  focus,
+  onFocusHandled,
 }: {
   cloudProvider?: CloudProvider;
-  onCreate?: () => void;
-  onOptimize?: (source: SkillCenterOptimizationSource) => void;
+  onStartTask?: (args: StartSkillWorkbenchTaskArgs) => Promise<SkillWorkbenchTask>;
+  focus?: SkillWorkbenchPublishResult | null;
+  onFocusHandled?: () => void;
 }) {
+  const [operation, setOperation] = useState<SkillWorkbenchOperation>("create");
+  const [source, setSource] = useState<SkillCenterOptimizationSource | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [intent, setIntent] = useState("");
+  const [capability, setCapability] = useState<SkillWorkbenchCapability | null>(null);
+  const [composerBusy, setComposerBusy] = useState(false);
+  const [composerError, setComposerError] = useState("");
   const regionOptions = cloudRegionOptions(cloudProvider);
   const [region, setRegion] = useState<SkillRegion>(
-    defaultCloudRegion(cloudProvider),
+    focus?.region ?? defaultCloudRegion(cloudProvider),
   );
   const [spaces, setSpaces] = useState<SkillSpaceRef[]>([]);
   const [spacePage, setSpacePage] = useState(1);
@@ -300,6 +511,32 @@ export function SkillCenterView({
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const detailRequest = useRef(0);
+  const handledFocus = useRef("");
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void getSkillWorkbenchCapability(controller.signal)
+      .then(setCapability)
+      .catch((cause) => {
+        if (!controller.signal.aborted) {
+          setComposerError(cause instanceof Error ? cause.message : String(cause));
+        }
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!focus) return;
+    const key = `${focus.region}:${focus.skillSpaceIds[0] || ""}:${focus.skillId}:${focus.version}`;
+    if (handledFocus.current === key) return;
+    setRegion(focus.region);
+    setSpacePage(1);
+    setSkillPage(1);
+    setSelectedSpace(null);
+    setSkills([]);
+    closeDetail();
+  }, [focus]);
 
   useEffect(() => {
     if (regionOptions.some((option) => option.value === region)) return;
@@ -321,7 +558,13 @@ export function SkillCenterView({
         const items = result.items || [];
         setSpaces(items);
         setSpaceTotal(result.totalCount || 0);
-        setSelectedSpace((current) => items.find((space) => space.id === current?.id) || null);
+        setSelectedSpace((current) => {
+          const focusedSpaceId = focus?.region === region ? focus.skillSpaceIds[0] : "";
+          return items.find((space) => space.id === focusedSpaceId)
+            || items.find((space) => space.id === current?.id)
+            || items[0]
+            || null;
+        });
       })
       .catch((error: unknown) => {
         if (!active) return;
@@ -334,7 +577,7 @@ export function SkillCenterView({
         if (active) setSpacesLoading(false);
       });
     return () => { active = false; };
-  }, [region, spacePage]);
+  }, [focus, region, spacePage]);
 
   useEffect(() => {
     if (!selectedSpace) {
@@ -418,19 +661,57 @@ export function SkillCenterView({
     }
   };
 
+  useEffect(() => {
+    if (!focus || !selectedSpace || selectedSpace.id !== focus.skillSpaceIds[0]) return;
+    const key = `${focus.region}:${selectedSpace.id}:${focus.skillId}:${focus.version}`;
+    if (handledFocus.current === key) return;
+    const skill = skills.find((item) => item.skillId === focus.skillId);
+    if (!skill) return;
+    handledFocus.current = key;
+    void openDetail(skill);
+    onFocusHandled?.();
+  }, [focus, onFocusHandled, selectedSpace, skills]);
+
+  const chooseOptimizationSource = (nextSource: SkillCenterOptimizationSource) => {
+    setOperation("optimize");
+    setSource(nextSource);
+    setFile(null);
+    closeDetail();
+    requestAnimationFrame(() => composerRef.current?.focus());
+  };
+
+  const startTask = async (args: StartSkillWorkbenchTaskArgs) => {
+    if (!onStartTask || composerBusy) throw new Error("Skill 会话当前不可用。");
+    setComposerBusy(true);
+    setComposerError("");
+    try {
+      return await onStartTask(args);
+    } catch (cause) {
+      setComposerError(cause instanceof Error ? cause.message : String(cause));
+      throw cause;
+    } finally {
+      setComposerBusy(false);
+    }
+  };
+
   return (
     <section className="skillcenter">
-      {onCreate ? (
-        <header className="skillcenter-page-head">
-          <div>
-            <h1>技能中心</h1>
-            <p>浏览已有 Skill，或进入工作台创建和优化。</p>
-          </div>
-          <button type="button" className="skillcenter-primary-action" onClick={onCreate}>
-            创建 Skill
-          </button>
-        </header>
-      ) : null}
+      <SkillCenterComposer
+        operation={operation}
+        setOperation={setOperation}
+        source={source}
+        setSource={setSource}
+        file={file}
+        setFile={setFile}
+        intent={intent}
+        setIntent={setIntent}
+        capability={capability}
+        busy={composerBusy}
+        error={composerError}
+        onError={setComposerError}
+        composerRef={composerRef}
+        onStartTask={startTask}
+      />
       <div className="skillcenter-browser">
           <section className="skillcenter-panel" aria-label="技能空间列表">
             <header className="skillcenter-panel-head">
@@ -532,7 +813,7 @@ export function SkillCenterView({
           loading={detailLoading}
           error={detailError}
           onClose={closeDetail}
-          onOptimize={onOptimize}
+          onOptimize={chooseOptimizationSource}
         />
       )}
     </section>

@@ -42,8 +42,15 @@ server that `veadk frontend` launches — no separate backend.
   the normal conversation renderer; leaving the conversation only disconnects
   it, so the Agent remains available until the user deletes it. OpenClaw and
   Hermes expose their main interface and Terminal through Studio.
-- **AgentKit Skill center**: browse Skill Spaces and their skills with
-  server-side pagination by region, then inspect the selected Skill content.
+- **AgentKit Skill center**: browse Skill Spaces and complete Skill packages
+  with server-side pagination by region. A new-chat-style composer starts
+  create or optimize conversations directly from the center, using either a
+  selected Skill or an uploaded ZIP as the optimization source. Skill
+  conversations share the normal sidebar history, preserve DevEnv progress
+  across navigation, and expose the complete generated file tree in a
+  read-only browser. Publishing streams each AgentKit stage, requires a
+  concrete Skill Space destination, and links the completed version back to
+  that destination in the center.
 - **Automation directory**: browse development and message-channel integrations
   from the Studio sidebar. The local Coding Agents integration detects Trae,
   Claude Code, and Codex across macOS, Linux, and Windows, then globally installs

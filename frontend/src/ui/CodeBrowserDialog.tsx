@@ -59,42 +59,31 @@ export interface CodeBrowserDialogProps {
   onChange: (project: AgentProject) => void;
 }
 
-/** Browse and edit generated project files without leaving the deploy view. */
-export function CodeBrowserDialog({
+export interface CodeBrowserWorkspaceProps {
+  project: AgentProject;
+  onChange?: (project: AgentProject) => void;
+  readOnly?: boolean;
+  className?: string;
+}
+
+/** Reusable file tree and editor surface for editable projects and read-only artifacts. */
+export function CodeBrowserWorkspace({
   project,
-  open,
-  onClose,
   onChange,
-}: CodeBrowserDialogProps) {
+  readOnly = false,
+  className = "",
+}: CodeBrowserWorkspaceProps) {
   const [selected, setSelected] = useState<string | null>(
     project.files[0]?.path ?? null,
   );
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const tree = useMemo(() => buildTree(project.files), [project.files]);
   const selectedFile = project.files.find((file) => file.path === selected) ?? null;
-
-  useEffect(() => {
-    if (!open) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    closeButtonRef.current?.focus();
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [onClose, open]);
 
   useEffect(() => {
     if (selectedFile || project.files.length === 0) return;
     setSelected(project.files[0].path);
   }, [project.files, selectedFile]);
-
-  if (!open) return null;
 
   function toggleFolder(key: string) {
     setCollapsed((previous) => {
@@ -148,7 +137,7 @@ export function CodeBrowserDialog({
   }
 
   function handleEdit(content: string) {
-    if (!selectedFile) return;
+    if (!selectedFile || readOnly || !onChange) return;
     onChange({
       ...project,
       files: project.files.map((file) =>
@@ -156,6 +145,74 @@ export function CodeBrowserDialog({
       ),
     });
   }
+
+  return (
+    <div className={`code-browser-workspace ${className}`.trim()}>
+      <aside className="code-browser-sidebar" aria-label="项目文件">
+        <div className="code-browser-sidebar-head">
+          文件 <span>{project.files.length}</span>
+        </div>
+        <div className="code-browser-tree">
+          {project.files.length > 0 ? (
+            renderNode(tree, 0, "")
+          ) : (
+            <div className="code-browser-empty">暂无项目文件</div>
+          )}
+        </div>
+      </aside>
+
+      <main className="code-browser-main">
+        <div className="code-browser-path">
+          <FileCode2 aria-hidden="true" />
+          <span>{selectedFile?.path ?? "未选择文件"}</span>
+          {readOnly ? <span className="code-browser-readonly">只读</span> : null}
+        </div>
+        <div className="code-browser-editor">
+          {selectedFile ? (
+            <Suspense
+              fallback={<div className="code-browser-empty">正在加载编辑器…</div>}
+            >
+              <CodeEditor
+                value={selectedFile.content}
+                path={selectedFile.path}
+                onChange={handleEdit}
+                readOnly={readOnly}
+              />
+            </Suspense>
+          ) : (
+            <div className="code-browser-empty">从左侧选择文件以查看代码</div>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+/** Browse and edit generated project files without leaving the deploy view. */
+export function CodeBrowserDialog({
+  project,
+  open,
+  onClose,
+  onChange,
+}: CodeBrowserDialogProps) {
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeButtonRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose, open]);
+
+  if (!open) return null;
 
   return createPortal(
     <div
@@ -191,42 +248,7 @@ export function CodeBrowserDialog({
           </button>
         </header>
 
-        <div className="code-browser-workspace">
-          <aside className="code-browser-sidebar" aria-label="项目文件">
-            <div className="code-browser-sidebar-head">
-              文件 <span>{project.files.length}</span>
-            </div>
-            <div className="code-browser-tree">
-              {project.files.length > 0 ? (
-                renderNode(tree, 0, "")
-              ) : (
-                <div className="code-browser-empty">暂无项目文件</div>
-              )}
-            </div>
-          </aside>
-
-          <main className="code-browser-main">
-            <div className="code-browser-path">
-              <FileCode2 aria-hidden="true" />
-              <span>{selectedFile?.path ?? "未选择文件"}</span>
-            </div>
-            <div className="code-browser-editor">
-              {selectedFile ? (
-                <Suspense
-                  fallback={<div className="code-browser-empty">正在加载编辑器…</div>}
-                >
-                  <CodeEditor
-                    value={selectedFile.content}
-                    path={selectedFile.path}
-                    onChange={handleEdit}
-                  />
-                </Suspense>
-              ) : (
-                <div className="code-browser-empty">从左侧选择文件以查看代码</div>
-              )}
-            </div>
-          </main>
-        </div>
+        <CodeBrowserWorkspace project={project} onChange={onChange} />
       </section>
     </div>,
     document.body,

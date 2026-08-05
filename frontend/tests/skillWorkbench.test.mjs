@@ -22,104 +22,120 @@ const controller = readFileSync(
   new URL("../src/ui/skill-workbench/useSkillWorkbenchTasks.ts", import.meta.url),
   "utf8",
 );
+const browser = readFileSync(
+  new URL("../src/ui/CodeBrowserDialog.tsx", import.meta.url),
+  "utf8",
+);
+const editor = readFileSync(
+  new URL("../src/ui/CodeEditor.tsx", import.meta.url),
+  "utf8",
+);
 
-
-test("adds the workbench without replacing the existing Skill creation flow", () => {
+test("preserves the existing A/B Skill creator beside the DevEnv conversation flow", () => {
   assert.match(app, /<SkillCreateWorkspace initialJob=\{skillJob\}/);
   assert.match(app, /<SkillWorkbench/);
   assert.match(app, /<SkillCenterView/);
   assert.match(app, /skillWorkbenchOpen/);
 });
 
-
-test("provides unified Create and Optimize paths from the Skill Center", () => {
+test("starts Create and Optimize conversations directly from the Skill Center composer", () => {
+  assert.match(center, /function SkillCenterComposer/);
+  assert.match(center, /className="composer composer--new-chat skillcenter-composer"/);
+  assert.match(center, /role="radiogroup"/);
   assert.match(center, /创建 Skill/);
   assert.match(center, /优化 Skill/);
-  assert.match(center, /onOptimize\(\{/);
-  assert.match(workbench, /role="tablist"/);
-  assert.match(workbench, /aria-selected=\{operation === "create"\}/);
-  assert.match(workbench, /aria-selected=\{operation === "optimize"\}/);
-  assert.match(workbench, /从技能中心选择/);
-  assert.match(workbench, /上传 ZIP/);
+  assert.match(center, /上传 ZIP/);
+  assert.match(center, /isImeCompositionEvent/);
+  assert.match(center, /event\.nativeEvent/);
+  assert.match(center, /event\.target\.value = ""/);
+  assert.match(center, /onStartTask/);
+  assert.doesNotMatch(center, /进入工作台创建和优化/);
 });
 
+test("keeps Skill Center source selection in the same conversation composer", () => {
+  assert.match(center, /setOperation\("optimize"\)/);
+  assert.match(center, /setSource\(nextSource\)/);
+  assert.match(center, /composerRef\.current\?\.focus\(\)/);
+  assert.match(center, /选择下方 Skill/);
+  assert.match(center, /onOptimize=\{chooseOptimizationSource\}/);
+  assert.doesNotMatch(workbench, /从技能中心选择/);
+});
 
-test("keeps every asynchronous state recoverable and avoids dead ends", () => {
-  for (const label of [
-    "返回技能中心",
-    "取消并清理",
-    "修改意图后重试",
-    "更换来源",
-    "下载 ZIP",
-    "继续调整",
-    "提交调整",
-    "发布为新 Skill",
-    "更新原 Skill",
-    "安全离开",
-    "取消并返回",
-  ]) assert.match(workbench, new RegExp(label));
+test("renders a conversation process beside a complete read-only artifact browser", () => {
+  assert.match(workbench, /SkillConversationStream/);
+  assert.match(workbench, /<CodeBrowserWorkspace/);
+  assert.match(workbench, /artifact\.files/);
+  assert.match(workbench, /readOnly/);
+  assert.match(api, /\/artifact/);
+  assert.match(browser, /export function CodeBrowserWorkspace/);
+  assert.match(editor, /readOnly\?: boolean/);
+  assert.match(editor, /editable: !readOnly/);
+  assert.doesNotMatch(workbench, /<pre><code>\{task\.skillMd\}/);
+  assert.doesNotMatch(workbench, /skill-workbench__tabs/);
+});
+
+test("uses contextual deletion and never offers cancellation after success", () => {
+  assert.match(workbench, /skill-workbench__more/);
+  assert.match(workbench, /取消并删除会话/);
+  assert.match(workbench, /task\.state !== "ready"/);
+  assert.match(workbench, /task\.state !== "published"/);
   assert.match(workbench, /StudioConfirmDialog/);
-  assert.match(workbench, /role="alert"/);
-  assert.match(workbench, /aria-live="polite"/);
-  assert.match(workbench, /event\.target\.value = ""/);
+  assert.doesNotMatch(workbench, /skill-workbench__danger/);
+  assert.match(sidebar, /onDeleteSkillConversation/);
 });
 
-
-test("uses server-owned APIs with timeouts and cancellation", () => {
-  assert.match(api, /\/web\/skill-workbench/);
-  assert.match(api, /requestSignal\(init\.signal, timeout\)/);
-  assert.match(api, /TRANSFER_REQUEST_TIMEOUT_MS/);
-  assert.match(api, /\/tasks\/from-upload/);
-  assert.match(api, /method: "DELETE"/);
-  assert.match(api, /URL\.revokeObjectURL/);
+test("merges Skill runs into the normal conversation list with delete controls", () => {
+  assert.match(sidebar, /mergeSidebarConversations/);
+  assert.match(sidebar, /conversation\.kind === "skill"/);
+  assert.match(sidebar, /onOpenSkillConversation/);
+  assert.match(sidebar, /onDeleteSkillConversation/);
+  assert.match(sidebar, />会话</);
+  assert.doesNotMatch(sidebar, /sidebar-skill-tasks/);
+  assert.doesNotMatch(sidebar, /Skill 任务/);
+  assert.match(app, /deleteSkillConversation/);
 });
 
-
-test("keeps the Skill Center discoverable and shows recoverable task progress", () => {
-  assert.match(sidebar, /show\("skillCenter"\)/);
-  assert.match(sidebar, /onClick=\{onSkillCenter\}/);
-  assert.match(sidebar, /<SkillSpaceIcon/);
-  assert.match(sidebar, /Skill 任务/);
-  assert.match(sidebar, /正在读取任务/);
-  assert.match(sidebar, /任务列表加载失败/);
-  assert.match(sidebar, /准备 DevEnv/);
-  assert.match(sidebar, /生成中/);
-  assert.match(sidebar, /校验中/);
-  assert.match(sidebar, /打包中/);
-  assert.match(sidebar, /已完成/);
-  assert.match(sidebar, /失败/);
-  assert.match(sidebar, /sidebar-skill-count/);
-  assert.match(app, /skillTasks=\{skillWorkbenchTasks\.tasks\}/);
-  assert.match(app, /onOpenSkillTask=/);
+test("sidebar deletion marks an in-flight provisioning request before cleanup", () => {
+  assert.match(
+    controller,
+    /const deleteTask[\s\S]*referencesRef\.current\.some[\s\S]*cancelProvisioning/,
+  );
 });
 
+test("streams publish stages and returns a concrete destination", () => {
+  assert.match(api, /\/publish-stream/);
+  assert.match(api, /application\/x-ndjson/);
+  assert.match(api, /getReader\(\)/);
+  assert.match(api, /timeout,\s*0|request\([\s\S]*?,\s*0\)/);
+  assert.match(workbench, /publishProgress/);
+  assert.match(workbench, /<TextShimmer/);
+  assert.match(workbench, /在技能中心查看/);
+  assert.match(workbench, /onViewPublished/);
+  assert.match(workbench, /skillSpaceIds/);
+});
 
-test("keeps Skill task polling above the workbench and supports safe reopening", () => {
+test("keeps task polling above the workbench and supports safe reopening", () => {
   assert.match(app, /useSkillWorkbenchTasks/);
   assert.match(controller, /listSkillWorkbenchTasks/);
   assert.match(controller, /visibilitychange/);
   assert.match(controller, /setTimeout\(poll, LIST_POLL_INTERVAL_MS\)/);
   assert.match(controller, /setTimeout\(poll, DETAIL_POLL_INTERVAL_MS\)/);
   assert.doesNotMatch(workbench, /setTimeout\(poll/);
-  assert.match(workbench, /左侧“Skill 任务”继续查看进度/);
   assert.match(controller, /reserveSkillWorkbenchTask/);
   assert.match(controller, /state: "provisioning"/);
   assert.match(controller, /PROVISIONING_TTL_SECONDS/);
   assert.match(controller, /cancelRequested/);
   assert.match(controller, /saveProvisioningReferences/);
-  assert.match(controller, /jobId: reference\.jobId/);
-  assert.match(controller, /reservedAt: reference\.reservedAt/);
   assert.doesNotMatch(controller, /localStorage\.setItem\([^\n]*(intent|source|file|activities)/);
 });
 
-
-test("uses bounded desktop layout and reduced motion support", () => {
+test("uses wider Skill Center space, a narrower reasoning rail, and reduced motion", () => {
+  assert.match(styles, /grid-template-columns:\s*minmax\(260px,\s*\.58fr\)\s+minmax\(480px,\s*1\.42fr\)/);
   assert.match(styles, /min-height:\s*0/);
   assert.match(styles, /overflow-y:\s*auto/);
   assert.match(styles, /@media \(max-width: 980px\)/);
   assert.match(styles, /prefers-reduced-motion: reduce/);
-  assert.match(styles, /hsl\(var\(--border\)\)/);
-  assert.match(shellStyles, /sidebar-skill-tasks/);
-  assert.match(shellStyles, /sidebar-skill-task__live/);
-  assert.match(shellStyles, /prefers-reduced-motion: reduce/);
+  assert.match(shellStyles, /\.skillcenter-regions button\s*\{[^}]*min-width:\s*52px;[^}]*height:\s*32px;/);
+  assert.match(shellStyles, /\.skillcenter-browser\s*\{[^}]*grid-template-columns:\s*minmax\(300px,\s*\.72fr\)\s+minmax\(0,\s*1\.78fr\)/);
+  assert.doesNotMatch(shellStyles, /sidebar-skill-task__live/);
 });

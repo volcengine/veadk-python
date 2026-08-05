@@ -152,6 +152,10 @@ def test_studio_deploy_bundles_logo_and_optional_title(
         lambda **kwargs: f"auto-{kwargs['name']}",
     )
     monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_devenv_tool",
+        lambda **kwargs: f"auto-{kwargs['name']}",
+    )
+    monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_tool",
         lambda **kwargs: f"auto-{kwargs['name']}",
     )

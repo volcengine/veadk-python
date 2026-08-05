@@ -11,6 +11,7 @@ interface CodeEditorProps {
   value: string;
   path: string;
   onChange: (value: string) => void;
+  readOnly?: boolean;
 }
 
 function languageFor(path: string): Extension[] {
@@ -31,11 +32,18 @@ function languageFor(path: string): Extension[] {
   return [];
 }
 
-export default function CodeEditor({ value, path, onChange }: CodeEditorProps) {
+export default function CodeEditor({
+  value,
+  path,
+  onChange,
+  readOnly = false,
+}: CodeEditorProps) {
   const extensions = useMemo(() => languageFor(path), [path]);
+  const editorOptions = { editable: !readOnly };
 
   return (
     <CodeMirror
+      {...editorOptions}
       value={value}
       height="100%"
       theme="light"

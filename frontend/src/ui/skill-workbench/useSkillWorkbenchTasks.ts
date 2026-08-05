@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createSkillWorkbenchTask,
   deleteSkillWorkbenchTask,
+  getSkillWorkbenchArtifact,
   getSkillWorkbenchTask,
   listSkillWorkbenchTasks,
   reserveSkillWorkbenchTask,
@@ -9,6 +10,7 @@ import {
 } from "./api";
 import type {
   SkillCenterOptimizationSource,
+  SkillWorkbenchArtifact,
   SkillWorkbenchOperation,
   SkillWorkbenchProvisioningTask,
   SkillWorkbenchTask,
@@ -114,10 +116,15 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   const [activeTask, setActiveTask] = useState<SkillWorkbenchTask | null>(null);
   const [activeTaskLoading, setActiveTaskLoading] = useState(false);
   const [activeTaskError, setActiveTaskError] = useState("");
+  const [activeArtifact, setActiveArtifact] = useState<SkillWorkbenchArtifact | null>(null);
+  const [activeArtifactLoading, setActiveArtifactLoading] = useState(false);
+  const [activeArtifactError, setActiveArtifactError] = useState("");
+  const [startingTask, setStartingTask] = useState(false);
   const [startError, setStartError] = useState("");
   const generationRef = useRef(0);
   const listRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
+  const artifactRequestRef = useRef(0);
   const referencesRef = useRef<ProvisioningReference[]>([]);
 
   const persistReferences = useCallback((next: ProvisioningReference[]) => {
@@ -210,7 +217,10 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     setActiveJobId("");
     setActiveTask(null);
     setActiveTaskError("");
+    setActiveArtifact(null);
+    setActiveArtifactError("");
     setStartError("");
+    setStartingTask(false);
     if (!enabled || !identityKey) return;
     const controller = new AbortController();
     void refreshTasks(controller.signal);
@@ -261,6 +271,36 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   }, [activeIsProvisioning, activeJobId, activeTask?.state, refreshActiveTask]);
 
   useEffect(() => {
+    if (
+      !activeJobId ||
+      !activeTask ||
+      (activeTask.state !== "ready" && activeTask.state !== "published")
+    ) {
+      artifactRequestRef.current += 1;
+      setActiveArtifact(null);
+      setActiveArtifactLoading(false);
+      setActiveArtifactError("");
+      return;
+    }
+    const request = ++artifactRequestRef.current;
+    const controller = new AbortController();
+    setActiveArtifactLoading(true);
+    setActiveArtifactError("");
+    void getSkillWorkbenchArtifact(activeJobId, controller.signal)
+      .then((artifact) => {
+        if (request === artifactRequestRef.current) setActiveArtifact(artifact);
+      })
+      .catch((cause) => {
+        if (controller.signal.aborted || request !== artifactRequestRef.current) return;
+        setActiveArtifactError(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => {
+        if (request === artifactRequestRef.current) setActiveArtifactLoading(false);
+      });
+    return () => controller.abort();
+  }, [activeJobId, activeTask]);
+
+  useEffect(() => {
     if (!enabled || !identityKey) return;
     const refreshVisible = () => {
       if (document.visibilityState === "visible") void refreshTasks();
@@ -292,6 +332,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   }, [persistReferences]);
 
   const startTask = useCallback(async (args: StartSkillWorkbenchTaskArgs) => {
+    setStartingTask(true);
     setStartError("");
     const generation = generationRef.current;
     let reservation: { jobId: string; reservedAt: number };
@@ -299,15 +340,23 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       reservation = await reserveSkillWorkbenchTask();
     } catch (cause) {
       if (cause instanceof SkillWorkbenchApiError && cause.status === 404) {
-        const task = await createSkillWorkbenchTask(args);
-        if (generation === generationRef.current) upsertTask(task);
-        return task;
+        try {
+          const task = await createSkillWorkbenchTask(args);
+          if (generation === generationRef.current) upsertTask(task);
+          return task;
+        } finally {
+          if (generation === generationRef.current) setStartingTask(false);
+        }
       }
       const message = cause instanceof Error ? cause.message : String(cause);
       setStartError(message);
+      setStartingTask(false);
       throw cause;
     }
-    if (generation !== generationRef.current) throw new Error("用户身份已变化，请重新创建任务。");
+    if (generation !== generationRef.current) {
+      setStartingTask(false);
+      throw new Error("用户身份已变化，请重新创建任务。");
+    }
     const reference: ProvisioningReference = reservation;
     persistReferences([...referencesRef.current.filter((item) => item.jobId !== reference.jobId), reference]);
     const placeholder: SkillWorkbenchProvisioningTask = {
@@ -322,6 +371,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     setTasks((current) => [placeholder, ...current.filter((item) => item.jobId !== reference.jobId)]);
     setActiveJobId(reference.jobId);
     setActiveTask(null);
+    setStartingTask(false);
     try {
       const task = await createSkillWorkbenchTask({ ...args, jobId: reference.jobId });
       if (generation !== generationRef.current) return task;
@@ -362,6 +412,15 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     setActiveTask((current) => current?.jobId === jobId ? null : current);
   }, [persistReferences]);
 
+  const deleteTask = useCallback(async (jobId: string) => {
+    if (referencesRef.current.some((item) => item.jobId === jobId)) {
+      await cancelProvisioning(jobId);
+      return;
+    }
+    await deleteSkillWorkbenchTask(jobId);
+    removeTask(jobId);
+  }, [cancelProvisioning, removeTask]);
+
   return {
     tasks,
     tasksLoading,
@@ -374,6 +433,10 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     ) ?? null,
     activeTaskLoading,
     activeTaskError,
+    activeArtifact,
+    activeArtifactLoading,
+    activeArtifactError,
+    startingTask,
     startError,
     selectTask,
     clearActiveTask: () => selectTask(""),
@@ -381,6 +444,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     cancelProvisioning,
     upsertTask,
     removeTask,
+    deleteTask,
     refreshTasks,
     refreshActiveTask,
   };

@@ -13,11 +13,15 @@
 # limitations under the License.
 
 import io
+import json
 import stat
 import zipfile
 from types import SimpleNamespace
 
 import pytest
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from veadk.cli.frontend_skill_workbench import (
     CreateSkillTaskBody,
@@ -25,6 +29,7 @@ from veadk.cli.frontend_skill_workbench import (
     SkillWorkbenchError,
     SkillWorkbenchService,
     build_delegation_brief,
+    mount_skill_workbench_routes,
     validate_skill_archive,
 )
 
@@ -34,15 +39,16 @@ def skill_zip(
     *,
     description: str = "Create concise release notes.",
     extra: dict[str, str] | None = None,
+    member_prefix: str = "",
 ) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(
-            f"{name}/SKILL.md",
+            f"{member_prefix}{name}/SKILL.md",
             f"---\nname: {name}\ndescription: {description}\n---\n\n# Instructions\n",
         )
         for path, content in (extra or {}).items():
-            archive.writestr(f"{name}/{path}", content)
+            archive.writestr(f"{member_prefix}{name}/{path}", content)
     return output.getvalue()
 
 
@@ -63,24 +69,30 @@ def test_delegation_brief_delegates_outcome_without_dictating_steps() -> None:
     assert "cat >" not in brief
 
 
-@pytest.mark.parametrize(
-    ("operation", "source", "message"),
-    [
-        (
-            "create",
-            {"kind": "skill-center", "skillId": "s", "version": "1"},
-            "不接受来源",
-        ),
-        ("optimize", None, "必须选择来源"),
-    ],
-)
-def test_request_requires_source_only_for_optimization(
-    operation: str, source: dict[str, str] | None, message: str
-) -> None:
-    with pytest.raises(ValueError, match=message):
+def test_create_request_rejects_an_optimization_source() -> None:
+    with pytest.raises(ValueError, match="不接受来源"):
         CreateSkillTaskBody.model_validate(
-            {"operation": operation, "intent": "Improve it", "source": source}
+            {
+                "operation": "create",
+                "intent": "Create it",
+                "source": {
+                    "kind": "skill-center",
+                    "skillId": "s",
+                    "version": "1",
+                },
+            }
         )
+
+
+def test_optimization_requires_a_center_source_or_uploaded_archive() -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    body = CreateSkillTaskBody(operation="optimize", intent="Improve it")
+
+    with pytest.raises(SkillWorkbenchError, match="必须选择来源或上传 ZIP") as caught:
+        service.create_task(body, "alice", "Alice")
+
+    assert caught.value.code == "SKILL_SOURCE_REQUIRED"
+    assert caught.value.status_code == 422
 
 
 def test_validate_skill_archive_returns_normalized_metadata() -> None:
@@ -174,7 +186,7 @@ def test_capabilities_require_ready_devenv_and_optional_image(
 
     assert value["enabled"] is True
     assert value["reason"] == ""
-    assert value["maxUploadBytes"] == 5 * 1024 * 1024
+    assert value["maxUploadBytes"] == 20 * 1024 * 1024
 
 
 def test_reserve_task_returns_owner_bound_id_without_agentkit() -> None:
@@ -185,7 +197,9 @@ def test_reserve_task_returns_owner_bound_id_without_agentkit() -> None:
 
     reservation = service.reserve_task("alice")
 
-    assert reservation["reservedAt"] > 0
+    reserved_at = reservation["reservedAt"]
+    assert isinstance(reserved_at, int)
+    assert reserved_at > 0
     SkillWorkbenchService._validate_job_owner(str(reservation["jobId"]), "alice")
 
 
@@ -193,20 +207,23 @@ def test_supplied_job_id_is_validated_before_source_side_effects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = SkillWorkbenchService(tool_id="tool")
+
     def resolve_source(source):
         pytest.fail("source must not be resolved")
 
     monkeypatch.setattr(service, "_resolve_center_source", resolve_source)
-    body = CreateSkillTaskBody.model_validate({
-        "operation": "optimize",
-        "intent": "Improve it",
-        "source": {
-            "kind": "skill-center",
-            "skillId": "skill",
-            "version": "1",
-        },
-        "jobId": SkillWorkbenchService._new_job_id("bob"),
-    })
+    body = CreateSkillTaskBody.model_validate(
+        {
+            "operation": "optimize",
+            "intent": "Improve it",
+            "source": {
+                "kind": "skill-center",
+                "skillId": "skill",
+                "version": "1",
+            },
+            "jobId": SkillWorkbenchService._new_job_id("bob"),
+        }
+    )
 
     with pytest.raises(SkillWorkbenchError) as caught:
         service.create_task(body, "alice", "Alice")
@@ -434,3 +451,305 @@ def test_publish_rejects_stale_revision(monkeypatch: pytest.MonkeyPatch) -> None
         service.publish(service._new_job_id("alice"), "alice", body)
 
     assert caught.value.code == "SKILL_TASK_REVISION_CONFLICT"
+
+
+def test_upload_route_accepts_a_valid_skill_zip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    service = mount_skill_workbench_routes(
+        app,
+        lambda request: "alice",
+        lambda request: "Alice",
+    )
+    captured: dict[str, object] = {}
+
+    def create_task(body, owner_id, creator_name, *, uploaded_archive=None):
+        captured.update(
+            body=body,
+            owner_id=owner_id,
+            creator_name=creator_name,
+            uploaded_archive=uploaded_archive,
+        )
+        return {
+            "jobId": SkillWorkbenchService._new_job_id(owner_id),
+            "operation": body.operation,
+            "intent": body.intent,
+            "revision": 1,
+            "state": "running",
+            "stage": "generating",
+            "activities": [],
+            "files": [],
+        }
+
+    monkeypatch.setattr(service, "create_task", create_task)
+    archive = skill_zip(extra={"references/checklist.md": "# Checklist\n"})
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/web/skill-workbench/tasks/from-upload",
+            params={"intent": "Improve error guidance"},
+            content=archive,
+            headers={"content-type": "application/zip"},
+        )
+
+    assert response.status_code == 200
+    assert captured["owner_id"] == "alice"
+    assert captured["creator_name"] == "Alice"
+    assert captured["uploaded_archive"] == archive
+    body = captured["body"]
+    assert isinstance(body, CreateSkillTaskBody)
+    assert body.operation == "optimize"
+    assert body.source is None
+
+
+def test_upload_route_accepts_archive_at_size_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    service = mount_skill_workbench_routes(
+        app,
+        lambda request: "alice",
+        lambda request: "Alice",
+    )
+    content = b"x" * (20 * 1024 * 1024)
+    captured: dict[str, object] = {}
+
+    def create_task(body, owner_id, creator_name, *, uploaded_archive=None):
+        captured["uploaded_archive"] = uploaded_archive
+        return {
+            "jobId": SkillWorkbenchService._new_job_id(owner_id),
+            "operation": body.operation,
+            "intent": body.intent,
+            "revision": 1,
+            "state": "running",
+            "stage": "generating",
+            "activities": [],
+            "files": [],
+        }
+
+    monkeypatch.setattr(service, "create_task", create_task)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/web/skill-workbench/tasks/from-upload",
+            params={"intent": "Improve error guidance"},
+            content=content,
+            headers={"content-type": "application/zip"},
+        )
+
+    assert response.status_code == 200
+    assert captured["uploaded_archive"] == content
+
+
+@pytest.mark.parametrize(
+    ("intent", "content", "status_code", "error_code"),
+    [
+        (" ", b"not-a-zip", 422, "SKILL_INTENT_REQUIRED"),
+        (
+            "Improve error guidance",
+            b"x" * (20 * 1024 * 1024 + 1),
+            413,
+            "SKILL_ARCHIVE_TOO_LARGE",
+        ),
+    ],
+    ids=["blank-intent", "oversized-archive"],
+)
+def test_upload_route_rejects_invalid_input_before_starting_a_task(
+    monkeypatch: pytest.MonkeyPatch,
+    intent: str,
+    content: bytes,
+    status_code: int,
+    error_code: str,
+) -> None:
+    app = FastAPI()
+    service = mount_skill_workbench_routes(
+        app,
+        lambda request: "alice",
+        lambda request: "Alice",
+    )
+    monkeypatch.setattr(
+        service,
+        "create_task",
+        lambda *args, **kwargs: pytest.fail("invalid uploads must not start a task"),
+    )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/web/skill-workbench/tasks/from-upload",
+            params={"intent": intent},
+            content=content,
+            headers={"content-type": "application/zip"},
+        )
+
+    assert response.status_code == status_code
+    assert response.json()["detail"]["code"] == error_code
+
+
+def test_upload_route_rejects_chunked_content_above_size_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    service = mount_skill_workbench_routes(
+        app,
+        lambda request: "alice",
+        lambda request: "Alice",
+    )
+    monkeypatch.setattr(
+        service,
+        "create_task",
+        lambda *args, **kwargs: pytest.fail("oversized uploads must not start a task"),
+    )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/web/skill-workbench/tasks/from-upload",
+            params={"intent": "Improve error guidance"},
+            content=iter([b"x" * (20 * 1024 * 1024), b"x"]),
+            headers={"content-type": "application/zip"},
+        )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == {
+        "code": "SKILL_ARCHIVE_TOO_LARGE",
+        "message": "Skill ZIP 不能超过 20 MiB",
+        "retryable": False,
+    }
+
+
+def test_artifact_returns_every_validated_nested_text_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    content = skill_zip(
+        extra={
+            "references/checklist.md": "# Checklist\n",
+            "scripts/render.py": "print('ready')\n",
+        },
+        member_prefix="./",
+    )
+    monkeypatch.setattr(
+        service,
+        "download",
+        lambda job_id, owner_id: (content, "release-notes.zip"),
+    )
+
+    artifact = service.artifact(
+        SkillWorkbenchService._new_job_id("alice"),
+        "alice",
+    )
+
+    assert artifact == {
+        "name": "release-notes",
+        "description": "Create concise release notes.",
+        "files": [
+            {
+                "path": "SKILL.md",
+                "size": len(
+                    (
+                        "---\n"
+                        "name: release-notes\n"
+                        "description: Create concise release notes.\n"
+                        "---\n\n"
+                        "# Instructions\n"
+                    ).encode("utf-8")
+                ),
+                "content": (
+                    "---\n"
+                    "name: release-notes\n"
+                    "description: Create concise release notes.\n"
+                    "---\n\n"
+                    "# Instructions\n"
+                ),
+            },
+            {
+                "path": "references/checklist.md",
+                "size": len("# Checklist\n".encode("utf-8")),
+                "content": "# Checklist\n",
+            },
+            {
+                "path": "scripts/render.py",
+                "size": len("print('ready')\n".encode("utf-8")),
+                "content": "print('ready')\n",
+            },
+        ],
+    }
+
+
+def test_publish_stream_reports_progress_and_destination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    service = mount_skill_workbench_routes(
+        app,
+        lambda request: "alice",
+        lambda request: "Alice",
+    )
+    job_id = SkillWorkbenchService._new_job_id("alice")
+
+    def publish(requested_job_id, owner_id, body, report_progress=None):
+        assert requested_job_id == job_id
+        assert owner_id == "alice"
+        assert body.region == "cn-shanghai"
+        assert report_progress is not None
+        report_progress(
+            {
+                "phase": "uploading",
+                "message": "正在上传 Skill 包",
+            }
+        )
+        report_progress(
+            {
+                "phase": "activating",
+                "message": "正在等待版本生效",
+            }
+        )
+        return {
+            "skillId": "skill-1",
+            "version": "2",
+            "skillSpaceIds": ["space-1"],
+            "disposition": "create-new",
+            "region": "cn-shanghai",
+            "projectName": "default",
+        }
+
+    monkeypatch.setattr(service, "publish", publish)
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/web/skill-workbench/tasks/{job_id}/publish-stream",
+            json={
+                "disposition": "create-new",
+                "skillSpaceIds": ["space-1"],
+                "projectName": "default",
+                "region": "cn-shanghai",
+                "expectedRevision": 1,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    events = [json.loads(line) for line in response.text.splitlines() if line]
+    assert events == [
+        {
+            "type": "progress",
+            "phase": "uploading",
+            "message": "正在上传 Skill 包",
+        },
+        {
+            "type": "progress",
+            "phase": "activating",
+            "message": "正在等待版本生效",
+        },
+        {
+            "type": "complete",
+            "result": {
+                "skillId": "skill-1",
+                "version": "2",
+                "skillSpaceIds": ["space-1"],
+                "disposition": "create-new",
+                "region": "cn-shanghai",
+                "projectName": "default",
+            },
+        },
+    ]

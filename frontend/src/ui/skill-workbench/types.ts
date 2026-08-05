@@ -39,6 +39,30 @@ export interface SkillWorkbenchFile {
   size: number;
 }
 
+export interface SkillWorkbenchArtifactFile extends SkillWorkbenchFile {
+  content: string;
+}
+
+export interface SkillWorkbenchArtifact {
+  name: string;
+  description: string;
+  files: SkillWorkbenchArtifactFile[];
+}
+
+export interface SkillWorkbenchPublishProgress {
+  phase: "preparing" | "uploading" | "registering" | "activating" | "publishing";
+  message: string;
+}
+
+export interface SkillWorkbenchPublishResult {
+  skillId: string;
+  version: string;
+  skillSpaceIds: string[];
+  disposition: "create-new" | "update-source";
+  region: "cn-beijing" | "cn-shanghai";
+  projectName: string;
+}
+
 export interface SkillWorkbenchTask {
   jobId: string;
   operation: SkillWorkbenchOperation;

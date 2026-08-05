@@ -1,143 +1,211 @@
 import { useEffect, useRef, useState } from "react";
-import type { SkillSpaceRef, SkillSpaceSkill } from "../../create/skills/skillspace";
+import {
+  listSkillSpacesPage,
+  type SkillSpaceRef,
+} from "../../create/skills/skillspace";
+import { CodeBrowserWorkspace } from "../CodeBrowserDialog";
+import { isImeCompositionEvent } from "../composerKeyboard";
 import { SkillConversationStream } from "../skill-create/SkillConversationStream";
 import { StudioConfirmDialog } from "../StudioConfirmDialog";
 import { TextShimmer } from "../text-shimmer/TextShimmer";
 import {
-  deleteSkillWorkbenchTask,
   downloadSkillWorkbenchTask,
-  getSkillWorkbenchCapability,
   publishSkillWorkbenchTask,
   refineSkillWorkbenchTask,
 } from "./api";
 import type {
-  SkillCenterOptimizationSource,
-  SkillWorkbenchCapability,
-  SkillWorkbenchOperation,
+  SkillWorkbenchArtifact,
   SkillWorkbenchProvisioningTask,
+  SkillWorkbenchPublishProgress,
+  SkillWorkbenchPublishResult,
   SkillWorkbenchTask,
 } from "./types";
-import type { StartSkillWorkbenchTaskArgs } from "./useSkillWorkbenchTasks";
 import "./skill-workbench.css";
+
+type SkillRegion = "cn-beijing" | "cn-shanghai";
+type Action = "delete" | "publish" | "refine" | null;
 
 const TERMINAL = new Set(["ready", "failed", "cancelled", "expired", "published"]);
 
 export interface SkillWorkbenchProps {
-  initialSource?: SkillCenterOptimizationSource | null;
   task: SkillWorkbenchTask | null;
   provisioningTask: SkillWorkbenchProvisioningTask | null;
   taskLoading: boolean;
   taskError: string;
-  onStartTask: (args: StartSkillWorkbenchTaskArgs) => Promise<SkillWorkbenchTask>;
+  artifact: SkillWorkbenchArtifact | null;
+  artifactLoading: boolean;
+  artifactError: string;
   onTaskChanged: (task: SkillWorkbenchTask) => void;
-  onTaskDeleted: (jobId: string) => void;
+  onDeleteTask: (jobId: string) => Promise<void>;
   onCancelProvisioning: (jobId: string) => Promise<void>;
   onRetryTask: () => void;
-  onStartOver: () => void;
   onBack: () => void;
-  onChooseCenterSource: () => void;
-  onPublished?: () => void;
+  onViewPublished: (result: SkillWorkbenchPublishResult) => void;
+}
+
+function MoreIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle cx="5.5" cy="12" r="1.25" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.25" fill="currentColor" />
+      <circle cx="18.5" cy="12" r="1.25" fill="currentColor" />
+    </svg>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M12 4.5v10m0 0-3.5-3.5M12 14.5l3.5-3.5M5.5 17.5v1.25c0 .97.78 1.75 1.75 1.75h9.5c.97 0 1.75-.78 1.75-1.75V17.5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function SendIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M12 18V6m0 0-4.5 4.5M12 6l4.5 4.5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
 function stageLabel(task: SkillWorkbenchTask): string {
+  if (task.state === "published") return "Skill 已发布";
   if (task.state === "ready") return "Skill 已就绪";
-  if (task.state === "failed") return "任务执行失败";
+  if (task.state === "failed") return "会话执行失败";
+  if (task.state === "cancelled") return "会话已取消";
   if (task.state === "expired") return "DevEnv Session 已过期";
   if (task.stage === "validating") return "正在校验 Skill";
   if (task.stage === "packaging") return "正在打包 Skill";
-  return "Codex 正在处理任务";
+  return "Codex 正在处理";
+}
+
+function regionLabel(region: SkillRegion): string {
+  return region === "cn-shanghai" ? "上海" : "北京";
+}
+
+function LoadingConversation({
+  operation,
+  intent,
+}: {
+  operation: "create" | "optimize";
+  intent: string;
+}) {
+  return (
+    <div className="skill-workbench__run-grid">
+      <section className="skill-workbench__timeline" aria-live="polite">
+        <div className="skill-workbench__state is-running">
+          <TextShimmer duration={2.2} spread={16}>正在创建 DevEnv</TextShimmer>
+          <span className="skill-workbench__user-intent">{intent}</span>
+        </div>
+        <ol className="skill-workbench__provisioning-steps">
+          <li className="is-done">会话已建立</li>
+          <li className="is-active">正在创建 DevEnv</li>
+          <li>准备 Skill 工作区</li>
+          <li>{operation === "create" ? "开始创建 Skill" : "开始优化 Skill"}</li>
+        </ol>
+      </section>
+      <section className="skill-workbench__result" aria-label="Skill 产物">
+        <div className="skill-workbench__result-empty">
+          <strong>产物将在生成后显示</strong>
+          <span>可以离开当前页面，稍后从会话列表继续查看。</span>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 export function SkillWorkbench({
-  initialSource = null,
   task,
   provisioningTask,
   taskLoading,
   taskError,
-  onStartTask,
+  artifact,
+  artifactLoading,
+  artifactError,
   onTaskChanged,
-  onTaskDeleted,
+  onDeleteTask,
   onCancelProvisioning,
   onRetryTask,
-  onStartOver,
   onBack,
-  onChooseCenterSource,
+  onViewPublished,
 }: SkillWorkbenchProps) {
-  const [operation, setOperation] = useState<SkillWorkbenchOperation>(
-    initialSource ? "optimize" : "create",
-  );
-  const [source, setSource] = useState(initialSource);
-  const [file, setFile] = useState<File | null>(null);
-  const [intent, setIntent] = useState("");
-  const [capability, setCapability] = useState<SkillWorkbenchCapability | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [action, setAction] = useState<Action>(null);
   const [error, setError] = useState("");
-  const [confirmCancel, setConfirmCancel] = useState(false);
   const [refinement, setRefinement] = useState("");
-  const [publishResult, setPublishResult] = useState("");
-  const requestRef = useRef(0);
+  const [publishRegion, setPublishRegion] = useState<SkillRegion>(
+    task?.source?.region === "cn-shanghai" ? "cn-shanghai" : "cn-beijing",
+  );
+  const [publishSpaces, setPublishSpaces] = useState<SkillSpaceRef[]>([]);
+  const [publishSpacesLoading, setPublishSpacesLoading] = useState(false);
+  const [publishSpacesError, setPublishSpacesError] = useState("");
+  const [selectedPublishSpaceId, setSelectedPublishSpaceId] = useState("");
+  const [publishProgress, setPublishProgress] =
+    useState<SkillWorkbenchPublishProgress | null>(null);
+  const [publishResult, setPublishResult] =
+    useState<SkillWorkbenchPublishResult | null>(null);
+  const publishControllerRef = useRef<AbortController | null>(null);
+
+  const ready = task?.state === "ready" || task?.state === "published";
+  const canDeleteFromHeader = task
+    ? task.state !== "ready" && task.state !== "published"
+    : Boolean(provisioningTask);
 
   useEffect(() => {
-    setSource(initialSource);
-    if (initialSource) setOperation("optimize");
-  }, [initialSource]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void getSkillWorkbenchCapability(controller.signal)
-      .then(setCapability)
-      .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
-    return () => controller.abort();
-  }, []);
-
-  const hasSource = Boolean(source || file);
-  const canSubmit =
-    capability?.enabled === true &&
-    intent.trim().length > 0 &&
-    (operation === "create" || hasSource) &&
-    !busy;
-
-  async function submit() {
-    if (!canSubmit) return;
-    const run = ++requestRef.current;
-    setBusy(true);
-    setError("");
-    try {
-      await onStartTask({
-        operation,
-        intent: intent.trim(),
-        ...(source ? { source } : {}),
-        ...(file ? { file } : {}),
+    if (!ready) return;
+    let active = true;
+    setPublishSpacesLoading(true);
+    setPublishSpacesError("");
+    void listSkillSpacesPage({
+      region: publishRegion,
+      page: 1,
+      pageSize: 100,
+    })
+      .then((response) => {
+        if (!active) return;
+        setPublishSpaces(response.items);
+        setSelectedPublishSpaceId((current) =>
+          response.items.some((space) => space.id === current)
+            ? current
+            : response.items[0]?.id ?? ""
+        );
+      })
+      .catch((cause) => {
+        if (!active) return;
+        setPublishSpaces([]);
+        setSelectedPublishSpaceId("");
+        setPublishSpacesError(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => {
+        if (active) setPublishSpacesLoading(false);
       });
-    } catch (cause) {
-      if (requestRef.current === run) {
-        setError(cause instanceof Error ? cause.message : String(cause));
-      }
-    } finally {
-      if (requestRef.current === run) setBusy(false);
-    }
-  }
+    return () => { active = false; };
+  }, [publishRegion, ready]);
 
-  async function cleanup() {
-    if (!task) return;
-    setBusy(true);
+  useEffect(() => () => publishControllerRef.current?.abort(), []);
+
+  async function deleteConversation() {
+    const jobId = task?.jobId ?? provisioningTask?.jobId;
+    if (!jobId || action) return;
+    setAction("delete");
     setError("");
     try {
-      await deleteSkillWorkbenchTask(task.jobId);
-      onTaskDeleted(task.jobId);
-      setIntent("");
-      setConfirmCancel(false);
+      if (provisioningTask) await onCancelProvisioning(jobId);
+      else await onDeleteTask(jobId);
+      setConfirmDelete(false);
       onBack();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setBusy(false);
+      setAction(null);
     }
   }
 
   async function refine() {
-    if (!task || !refinement.trim() || busy) return;
-    setBusy(true);
+    if (!task || !refinement.trim() || action) return;
+    setAction("refine");
     setError("");
     try {
       const next = await refineSkillWorkbenchTask({
@@ -147,135 +215,144 @@ export function SkillWorkbench({
       });
       onTaskChanged(next);
       setRefinement("");
+      setPublishResult(null);
+      setPublishProgress(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setBusy(false);
+      setAction(null);
     }
   }
 
   async function publish(disposition: "create-new" | "update-source") {
-    if (!task || busy) return;
-    setBusy(true);
+    if (!task || action) return;
+    const selectedSpace = publishSpaces.find(
+      (space) => space.id === selectedPublishSpaceId,
+    );
+    if (disposition === "create-new" && !selectedSpace) {
+      setError("请选择发布目标 Skill 空间。");
+      return;
+    }
+    const controller = new AbortController();
+    publishControllerRef.current = controller;
+    setAction("publish");
     setError("");
+    setPublishResult(null);
+    setPublishProgress({ phase: "preparing", message: "正在准备发布" });
+    const skillSpaceIds = disposition === "update-source"
+      ? task.source?.skillSpaceId ? [task.source.skillSpaceId] : []
+      : [selectedSpace!.id];
     try {
       const result = await publishSkillWorkbenchTask({
         jobId: task.jobId,
         expectedRevision: task.revision,
         disposition,
-        projectName: task.source?.projectName,
-        skillSpaceIds: task.source?.skillSpaceId ? [task.source.skillSpaceId] : [],
+        skillSpaceIds,
+        region: disposition === "update-source"
+          ? task.source?.region === "cn-shanghai" ? "cn-shanghai" : "cn-beijing"
+          : publishRegion,
+        projectName: disposition === "update-source"
+          ? task.source?.projectName
+          : selectedSpace?.projectName,
+        signal: controller.signal,
+        onProgress: setPublishProgress,
       });
-      setPublishResult(`已发布版本 ${result.version}`);
+      setPublishResult(result);
+      setPublishProgress(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (!controller.signal.aborted) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        setPublishProgress(null);
+      }
     } finally {
-      setBusy(false);
+      if (publishControllerRef.current === controller) {
+        publishControllerRef.current = null;
+        setAction(null);
+      }
     }
   }
 
-  function changeOperation(next: SkillWorkbenchOperation) {
-    if (task || next === operation) return;
-    setOperation(next);
-    setError("");
-    if (next === "create") {
-      setSource(null);
-      setFile(null);
-    }
-  }
+  const submitRefinement = () => {
+    if (refinement.trim() && !action) void refine();
+  };
 
-  if (provisioningTask) {
-    return (
-      <section className="skill-workbench" aria-label="Skill 工作台">
-        <header className="skill-workbench__head">
-          <div>
-            <button type="button" className="skill-workbench__back" onClick={onBack}>返回技能中心</button>
-            <h1>{provisioningTask.operation === "create" ? "创建 Skill" : "优化 Skill"}</h1>
-          </div>
-          <button type="button" className="skill-workbench__danger" onClick={() => void onCancelProvisioning(provisioningTask.jobId)}>
-            取消并清理
+  const deleteLabel = provisioningTask || task?.state === "running"
+    ? "取消并删除会话"
+    : "删除会话";
+  const title = provisioningTask?.operation === "optimize" || task?.operation === "optimize"
+    ? "优化 Skill"
+    : "创建 Skill";
+
+  return (
+    <section className="skill-workbench" aria-label="Skill 会话">
+      <header className="skill-workbench__head">
+        <div>
+          <button type="button" className="skill-workbench__back" onClick={onBack}>
+            返回技能中心
           </button>
-        </header>
-        {taskError ? <div className="skill-workbench__error" role="alert">{taskError}</div> : null}
-        <div className="skill-workbench__run-grid">
-          <section className="skill-workbench__timeline" aria-live="polite">
-            <div className="skill-workbench__state is-running">
-              <TextShimmer duration={2.2} spread={16}>正在创建 DevEnv</TextShimmer>
-              <span>{provisioningTask.intent}</span>
-            </div>
-            <ol className="skill-workbench__provisioning-steps">
-              <li className="is-done">任务已受理</li>
-              <li className="is-active">正在创建 DevEnv</li>
-              <li>准备 Skill 工作区</li>
-              <li>Codex 开始生成</li>
-            </ol>
-          </section>
-          <section className="skill-workbench__result" aria-label="Skill 结果">
-            <div className="skill-workbench__result-empty">
-              <strong>DevEnv 准备完成后将自动开始创建</strong>
-              <span>可以离开当前页面，稍后从左侧“Skill 任务”继续查看进度。</span>
-              <button type="button" onClick={onBack}>安全离开</button>
-            </div>
-          </section>
+          <h1>{title}</h1>
         </div>
-      </section>
-    );
-  }
-
-  if (!task && (taskLoading || taskError)) {
-    return (
-      <section className="skill-workbench" aria-label="Skill 工作台">
-        <header className="skill-workbench__head">
-          <div>
-            <button type="button" className="skill-workbench__back" onClick={onBack}>
-              返回技能中心
+        {canDeleteFromHeader ? (
+          <div className="skill-workbench__more">
+            <button
+              type="button"
+              className="skill-workbench__icon-button"
+              aria-label="会话操作"
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen((value) => !value)}
+            >
+              <MoreIcon />
             </button>
-            <h1>Skill 任务</h1>
-          </div>
-        </header>
-        <div className="skill-workbench__start" aria-live="polite">
-          {taskLoading && !taskError ? <TextShimmer duration={2.2} spread={16}>正在读取任务进度</TextShimmer> : null}
-          {taskError ? (
-            <div className="skill-workbench__notice" role="alert">
-              <strong>无法读取 Skill 任务</strong>
-              <span>{taskError}</span>
-              <div className="skill-workbench__actions">
-                <button type="button" onClick={onRetryTask}>重试</button>
-                <button type="button" onClick={onBack}>返回技能中心</button>
-              </div>
-            </div>
-          ) : null}
-        </div>
-      </section>
-    );
-  }
-
-  if (task) {
-    return (
-      <section className="skill-workbench" aria-label="Skill 工作台">
-        <header className="skill-workbench__head">
-          <div>
-            <button type="button" className="skill-workbench__back" onClick={onBack}>
-              返回技能中心
-            </button>
-            <h1>{task.operation === "create" ? "创建 Skill" : "优化 Skill"}</h1>
-          </div>
-          <button
-            type="button"
-            className="skill-workbench__danger"
-            onClick={() => setConfirmCancel(true)}
-          >
-            取消并清理
-          </button>
-        </header>
-
-        {error ? <div className="skill-workbench__error" role="alert">{error}</div> : null}
-        {taskError ? (
-          <div className="skill-workbench__error" role="alert">
-            {taskError} <button type="button" onClick={onRetryTask}>重试更新</button>
+            {menuOpen ? (
+              <>
+                <button
+                  type="button"
+                  className="skill-workbench__menu-scrim"
+                  aria-label="关闭会话操作"
+                  onClick={() => setMenuOpen(false)}
+                />
+                <div className="skill-workbench__menu">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setConfirmDelete(true);
+                    }}
+                  >
+                    {deleteLabel}
+                  </button>
+                </div>
+              </>
+            ) : null}
           </div>
         ) : null}
+      </header>
 
+      {error ? <div className="skill-workbench__error" role="alert">{error}</div> : null}
+      {taskError ? (
+        <div className="skill-workbench__error" role="alert">
+          <span>{taskError}</span>
+          <button type="button" onClick={onRetryTask}>重试</button>
+        </div>
+      ) : null}
+
+      {provisioningTask ? (
+        <LoadingConversation
+          operation={provisioningTask.operation}
+          intent={provisioningTask.intent}
+        />
+      ) : !task ? (
+        <div className="skill-workbench__loading" aria-live="polite">
+          {taskLoading ? (
+            <TextShimmer duration={2.2} spread={16}>正在读取会话</TextShimmer>
+          ) : (
+            <>
+              <strong>会话不存在或已删除</strong>
+              <button type="button" onClick={onBack}>返回技能中心</button>
+            </>
+          )}
+        </div>
+      ) : (
         <div className="skill-workbench__run-grid">
           <section className="skill-workbench__timeline" aria-live="polite">
             <div className={`skill-workbench__state is-${task.state}`}>
@@ -284,211 +361,214 @@ export function SkillWorkbench({
               ) : (
                 <TextShimmer duration={2.2} spread={16}>{stageLabel(task)}</TextShimmer>
               )}
-              <span>{task.intent}</span>
+              <span className="skill-workbench__user-intent">{task.intent}</span>
             </div>
-            <SkillConversationStream activities={task.activities} />
-            {task.error ? <div className="skill-workbench__error" role="alert">{task.error}</div> : null}
-            {task.state === "failed" || task.state === "expired" ? (
-              <div className="skill-workbench__recovery">
-                <button type="button" onClick={onStartOver}>修改意图后重试</button>
-                {operation === "optimize" ? (
-                  <button type="button" onClick={() => { onStartOver(); onChooseCenterSource(); }}>
-                    更换来源
+            <div className="skill-workbench__activity">
+              <SkillConversationStream activities={task.activities} />
+              {task.error ? (
+                <div className="skill-workbench__error" role="alert">{task.error}</div>
+              ) : null}
+              {task.state === "failed" || task.state === "expired" ? (
+                <div className="skill-workbench__recovery">
+                  <p>返回技能中心后可以调整意图或重新选择来源，再开始一段新会话。</p>
+                  <button type="button" onClick={onBack}>返回技能中心</button>
+                </div>
+              ) : null}
+            </div>
+            {ready ? (
+              <div className="composer composer--new-chat skill-workbench__composer">
+                <div className="composer-box">
+                  <div className="composer-input-stack">
+                    <textarea
+                      className="comp-input scroll"
+                      rows={4}
+                      maxLength={20_000}
+                      value={refinement}
+                      disabled={Boolean(action)}
+                      placeholder="继续告诉 Codex 需要调整什么…"
+                      onChange={(event) => setRefinement(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (isImeCompositionEvent(event.nativeEvent)) return;
+                        if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault();
+                          submitRefinement();
+                        }
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="comp-send"
+                    disabled={!refinement.trim() || Boolean(action)}
+                    onClick={submitRefinement}
+                    aria-label="提交调整"
+                  >
+                    <SendIcon />
                   </button>
-                ) : null}
-                <button type="button" onClick={onBack}>返回技能中心</button>
+                </div>
               </div>
             ) : null}
           </section>
 
-          <section className="skill-workbench__result" aria-label="Skill 结果">
-            {task.state === "ready" || task.state === "published" ? (
+          <section className="skill-workbench__result" aria-label="Skill 产物">
+            {ready ? (
               <>
-                <div className="skill-workbench__summary">
-                  <span>Skill</span>
-                  <strong>{task.name ?? "未命名 Skill"}</strong>
-                  <span>文件</span>
-                  <strong>{task.files.length}</strong>
-                  <span>校验</span>
-                  <strong>{task.validation?.valid === false ? "未通过" : "已通过"}</strong>
-                </div>
-                {task.description ? <p>{task.description}</p> : null}
-                {task.skillMd ? <pre><code>{task.skillMd}</code></pre> : null}
-                <label className="skill-workbench__intent skill-workbench__refine">
-                  <span>继续调整</span>
-                  <textarea
-                    value={refinement}
-                    rows={4}
-                    maxLength={20_000}
-                    placeholder="描述下一轮希望达到的结果，Codex 会基于当前 Skill 自主完成调整"
-                    onChange={(event) => setRefinement(event.target.value)}
-                  />
-                </label>
-                <div className="skill-workbench__actions">
-                  <button type="button" className="is-primary" disabled={!refinement.trim() || busy} onClick={() => void refine()}>
-                    {busy ? "处理中…" : "提交调整"}
-                  </button>
-                  {task.source?.kind === "skill-center" && task.source.skillId ? (
-                    <button type="button" disabled={busy} onClick={() => void publish("update-source")}>
-                      更新原 Skill
-                    </button>
-                  ) : null}
-                  <button type="button" disabled={busy} onClick={() => void publish("create-new")}>
-                    发布为新 Skill
-                  </button>
+                <header className="skill-workbench__artifact-head">
+                  <div>
+                    <strong>{artifact?.name || task.name || "Skill 产物"}</strong>
+                    <span>
+                      {artifact?.description || task.description || "已完成生成与校验"}
+                    </span>
+                  </div>
                   <button
                     type="button"
+                    className="skill-workbench__download"
                     onClick={() => void downloadSkillWorkbenchTask(task.jobId).catch((cause) =>
                       setError(cause instanceof Error ? cause.message : String(cause))
                     )}
+                    title="下载 ZIP"
                   >
-                    下载 ZIP
+                    <DownloadIcon />
+                    <span>下载 ZIP</span>
                   </button>
-                  <button type="button" onClick={onBack}>返回技能中心</button>
+                </header>
+
+                <div className="skill-workbench__artifact">
+                  {artifactLoading ? (
+                    <div className="skill-workbench__result-empty">
+                      <TextShimmer duration={2.2} spread={16}>正在读取完整产物</TextShimmer>
+                    </div>
+                  ) : artifactError ? (
+                    <div className="skill-workbench__result-empty" role="alert">
+                      <strong>无法读取文件预览</strong>
+                      <span>{artifactError}</span>
+                      <button type="button" onClick={onRetryTask}>重试</button>
+                    </div>
+                  ) : artifact ? (
+                    <CodeBrowserWorkspace
+                      project={{
+                        name: artifact.name,
+                        files: artifact.files.map((file) => ({
+                          path: file.path,
+                          content: file.content,
+                        })),
+                      }}
+                      readOnly
+                    />
+                  ) : (
+                    <div className="skill-workbench__result-empty">
+                      <strong>暂无可预览文件</strong>
+                    </div>
+                  )}
                 </div>
-                {publishResult ? <div className="skill-workbench__notice" role="status">{publishResult}</div> : null}
+
+                <footer className="skill-workbench__publish">
+                  {publishResult ? (
+                    <div className="skill-workbench__publish-success" role="status">
+                      <div>
+                        <strong>Skill 已发布</strong>
+                        <span>
+                          {regionLabel(publishResult.region)} · {publishResult.projectName}
+                          {" · "}{publishResult.skillSpaceIds[0] || "未关联空间"}
+                          {" · "}v{publishResult.version}
+                        </span>
+                        <small title={publishResult.skillId}>{publishResult.skillId}</small>
+                      </div>
+                      <button type="button" onClick={() => onViewPublished(publishResult)}>
+                        在技能中心查看
+                      </button>
+                    </div>
+                  ) : publishProgress ? (
+                    <div className="skill-workbench__publish-progress" role="status">
+                      <TextShimmer duration={2.2} spread={16}>
+                        {publishProgress.message}
+                      </TextShimmer>
+                      <span>发布会持续到 AgentKit 版本生效，请保持当前会话打开。</span>
+                    </div>
+                  ) : (
+                    <div className="skill-workbench__publish-controls">
+                      <div className="skill-workbench__publish-target">
+                        <div className="skill-workbench__publish-regions" aria-label="发布地域">
+                          {(["cn-beijing", "cn-shanghai"] as const).map((region) => (
+                            <button
+                              key={region}
+                              type="button"
+                              className={publishRegion === region ? "is-active" : ""}
+                              disabled={Boolean(action)}
+                              onClick={() => setPublishRegion(region)}
+                            >
+                              {regionLabel(region)}
+                            </button>
+                          ))}
+                        </div>
+                        <select
+                          aria-label="发布目标 Skill 空间"
+                          value={selectedPublishSpaceId}
+                          disabled={publishSpacesLoading || Boolean(action)}
+                          onChange={(event) => setSelectedPublishSpaceId(event.target.value)}
+                        >
+                          {publishSpaces.length === 0 ? (
+                            <option value="">
+                              {publishSpacesLoading ? "正在读取 Skill 空间…" : "暂无可用 Skill 空间"}
+                            </option>
+                          ) : publishSpaces.map((space) => (
+                            <option key={space.id} value={space.id}>
+                              {space.name} · {space.projectName || "default"}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="skill-workbench__publish-actions">
+                        {task.source?.kind === "skill-center" && task.source.skillId ? (
+                          <button
+                            type="button"
+                            disabled={Boolean(action)}
+                            onClick={() => void publish("update-source")}
+                          >
+                            更新原 Skill
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="is-primary"
+                          disabled={!selectedPublishSpaceId || publishSpacesLoading || Boolean(action)}
+                          onClick={() => void publish("create-new")}
+                        >
+                          发布为新 Skill
+                        </button>
+                      </div>
+                      {publishSpacesError ? (
+                        <span className="skill-workbench__publish-error" role="alert">
+                          {publishSpacesError}
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
+                </footer>
               </>
             ) : (
               <div className="skill-workbench__result-empty">
-                <strong>结果将在完成后显示</strong>
-                <span>可以离开当前页面，稍后从左侧“Skill 任务”继续查看进度。</span>
-                <button type="button" onClick={onBack}>安全离开</button>
+                <strong>产物将在生成后显示</strong>
+                <span>可以离开当前页面，稍后从会话列表继续查看。</span>
               </div>
             )}
           </section>
         </div>
+      )}
 
-        {confirmCancel ? (
-          <StudioConfirmDialog
-            title="取消并清理 Skill 任务？"
-            description="这会删除对应的 DevEnv Session。已完成的结果请先下载。"
-            confirmLabel="确认取消并清理"
-            variant="danger"
-            busy={busy}
-            onCancel={() => setConfirmCancel(false)}
-            onConfirm={() => void cleanup()}
-          />
-        ) : null}
-      </section>
-    );
-  }
-
-  return (
-    <section className="skill-workbench" aria-label="Skill 工作台">
-      <header className="skill-workbench__head">
-        <div>
-          <button type="button" className="skill-workbench__back" onClick={onBack}>
-            返回技能中心
-          </button>
-          <h1>Skill 工作台</h1>
-        </div>
-      </header>
-
-      <div className="skill-workbench__start">
-        <div className="skill-workbench__tabs" role="tablist" aria-label="Skill 操作">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={operation === "create"}
-            className={operation === "create" ? "is-active" : ""}
-            onClick={() => changeOperation("create")}
-          >
-            创建 Skill
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={operation === "optimize"}
-            className={operation === "optimize" ? "is-active" : ""}
-            onClick={() => changeOperation("optimize")}
-          >
-            优化 Skill
-          </button>
-        </div>
-
-        {capability && !capability.enabled ? (
-          <div className="skill-workbench__notice" role="alert">
-            <strong>DevEnv 暂不可用</strong>
-            <span>{capability.reason}</span>
-            <div><button type="button" onClick={onBack}>返回技能中心</button></div>
-          </div>
-        ) : null}
-
-        {operation === "optimize" ? (
-          <section className="skill-workbench__source" aria-label="优化来源">
-            <div className="skill-workbench__source-actions">
-              <button type="button" onClick={onChooseCenterSource}>从技能中心选择</button>
-              <label className="skill-workbench__upload">
-                上传 ZIP
-                <input
-                  type="file"
-                  accept=".zip,application/zip"
-                  onChange={(event) => {
-                    const next = event.target.files?.[0] ?? null;
-                    setFile(next);
-                    if (next) setSource(null);
-                    event.target.value = "";
-                  }}
-                />
-              </label>
-            </div>
-            {source ? (
-              <div className="skill-workbench__source-card">
-                <strong>{source.name}</strong>
-                <span>版本 {source.version} · {source.region}</span>
-                <button type="button" onClick={onChooseCenterSource}>更换来源</button>
-              </div>
-            ) : file ? (
-              <div className="skill-workbench__source-card">
-                <strong>{file.name}</strong>
-                <span>{file.size.toLocaleString()} bytes</span>
-                <button type="button" onClick={() => setFile(null)}>移除</button>
-              </div>
-            ) : (
-              <p>请选择一个已有 Skill 或上传 ZIP。选择后仍可更换，不会立即创建 DevEnv。</p>
-            )}
-          </section>
-        ) : null}
-
-        <label className="skill-workbench__intent">
-          <span>{operation === "create" ? "描述你希望 Skill 完成的工作" : "描述希望如何优化这个 Skill"}</span>
-          <textarea
-            value={intent}
-            rows={7}
-            maxLength={20_000}
-            placeholder={operation === "create"
-              ? "例如：创建一个能把发布记录整理为面向用户的更新说明的 Skill"
-              : "例如：保留现有能力，并让错误处理更清晰、步骤更可复用"}
-            onChange={(event) => setIntent(event.target.value)}
-          />
-          <small>{intent.length.toLocaleString()} / 20,000</small>
-        </label>
-
-        {error ? <div className="skill-workbench__error" role="alert">{error}</div> : null}
-        <footer className="skill-workbench__start-actions">
-          <button type="button" onClick={onBack}>取消并返回</button>
-          <button type="button" className="is-primary" disabled={!canSubmit} onClick={() => void submit()}>
-            {busy ? "正在创建 DevEnv…" : operation === "create" ? "开始创建" : "开始优化"}
-          </button>
-        </footer>
-      </div>
+      {confirmDelete ? (
+        <StudioConfirmDialog
+          title={`${deleteLabel}？`}
+          description={task?.state === "running" || provisioningTask
+            ? "这会停止当前处理、删除临时 DevEnv，并从会话列表移除。"
+            : "这会删除临时 DevEnv，并从会话列表移除。"}
+          confirmLabel={action === "delete" ? "正在删除…" : deleteLabel}
+          variant="danger"
+          busy={action === "delete"}
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => void deleteConversation()}
+        />
+      ) : null}
     </section>
   );
-}
-
-export function skillSourceFromCenter(
-  space: SkillSpaceRef,
-  skill: SkillSpaceSkill,
-  region: string,
-): SkillCenterOptimizationSource {
-  return {
-    kind: "skill-center",
-    skillId: skill.skillId,
-    version: skill.version,
-    region,
-    projectName: space.projectName,
-    skillSpaceId: space.id,
-    name: skill.skillName,
-    description: skill.skillDescription,
-  };
 }

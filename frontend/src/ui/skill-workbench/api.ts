@@ -8,8 +8,11 @@ import {
 import type {
   SkillCenterOptimizationSource,
   SkillWorkbenchActivity,
+  SkillWorkbenchArtifact,
   SkillWorkbenchCapability,
   SkillWorkbenchOperation,
+  SkillWorkbenchPublishProgress,
+  SkillWorkbenchPublishResult,
   SkillWorkbenchTask,
   SkillWorkbenchTaskSummary,
 } from "./types";
@@ -276,6 +279,35 @@ export async function getSkillWorkbenchTask(
   ));
 }
 
+export async function getSkillWorkbenchArtifact(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<SkillWorkbenchArtifact> {
+  const artifact = record(await json(
+    await request(`/tasks/${encodeURIComponent(jobId)}/artifact`, { signal }),
+    "读取 Skill 产物失败",
+  ), "Skill 产物");
+  if (
+    typeof artifact.name !== "string" ||
+    typeof artifact.description !== "string" ||
+    !Array.isArray(artifact.files)
+  ) throw new Error("Skill 产物格式错误。");
+  const files = artifact.files.map((item) => {
+    const file = record(item, "Skill 产物文件");
+    if (
+      typeof file.path !== "string" ||
+      typeof file.size !== "number" ||
+      typeof file.content !== "string"
+    ) throw new Error("Skill 产物文件格式错误。");
+    return { path: file.path, size: file.size, content: file.content };
+  });
+  return {
+    name: artifact.name,
+    description: artifact.description,
+    files,
+  };
+}
+
 export async function refineSkillWorkbenchTask(args: {
   jobId: string;
   intent: string;
@@ -298,22 +330,100 @@ export async function publishSkillWorkbenchTask(args: {
   disposition: "create-new" | "update-source";
   skillSpaceIds?: string[];
   projectName?: string;
-}): Promise<{ skillId: string; version: string }> {
-  const response = await request(`/tasks/${encodeURIComponent(args.jobId)}/publish`, {
+  region?: "cn-beijing" | "cn-shanghai";
+  signal?: AbortSignal;
+  onProgress?: (progress: SkillWorkbenchPublishProgress) => void;
+}): Promise<SkillWorkbenchPublishResult> {
+  const response = await request(`/tasks/${encodeURIComponent(args.jobId)}/publish-stream`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/x-ndjson",
+    },
     body: JSON.stringify({
       disposition: args.disposition,
       expectedRevision: args.expectedRevision,
       skillSpaceIds: args.skillSpaceIds ?? [],
       projectName: args.projectName,
+      region: args.region,
     }),
-  }, TRANSFER_REQUEST_TIMEOUT_MS);
-  const value = record(await json(response, "发布 Skill 失败"), "发布结果");
-  if (typeof value.skillId !== "string" || typeof value.version !== "string") {
-    throw new Error("发布结果格式错误。");
+    signal: args.signal,
+  }, 0);
+  if (!response.ok) throw await errorFrom(response, "发布 Skill 失败");
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/x-ndjson")) {
+    throw new Error("发布 Skill 失败：服务端返回了非 NDJSON 响应。");
   }
-  return { skillId: value.skillId, version: value.version };
+  if (!response.body) throw new Error("发布 Skill 失败：服务端没有返回进度流。");
+
+  const phases = new Set([
+    "preparing",
+    "uploading",
+    "registering",
+    "activating",
+    "publishing",
+  ]);
+  let result: SkillWorkbenchPublishResult | null = null;
+  let buffered = "";
+  const decoder = new TextDecoder();
+  const reader = response.body.getReader();
+
+  const consumeLine = (line: string) => {
+    if (!line.trim()) return;
+    const event = record(JSON.parse(line), "发布进度");
+    if (event.type === "progress") {
+      if (
+        typeof event.phase !== "string" ||
+        !phases.has(event.phase) ||
+        typeof event.message !== "string"
+      ) throw new Error("发布进度格式错误。");
+      args.onProgress?.({
+        phase: event.phase as SkillWorkbenchPublishProgress["phase"],
+        message: event.message,
+      });
+      return;
+    }
+    if (event.type === "error") {
+      const detail = record(event.error, "发布错误");
+      throw new SkillWorkbenchApiError(
+        typeof detail.message === "string" ? detail.message : "发布 Skill 失败",
+        500,
+        typeof detail.code === "string" ? detail.code : "SKILL_PUBLISH_FAILED",
+        detail.retryable === true,
+      );
+    }
+    if (event.type !== "complete") throw new Error("未知的发布进度事件。");
+    const value = record(event.result, "发布结果");
+    if (
+      typeof value.skillId !== "string" ||
+      typeof value.version !== "string" ||
+      !Array.isArray(value.skillSpaceIds) ||
+      !value.skillSpaceIds.every((item) => typeof item === "string") ||
+      (value.disposition !== "create-new" && value.disposition !== "update-source") ||
+      (value.region !== "cn-beijing" && value.region !== "cn-shanghai") ||
+      typeof value.projectName !== "string"
+    ) throw new Error("发布结果格式错误。");
+    result = {
+      skillId: value.skillId,
+      version: value.version,
+      skillSpaceIds: value.skillSpaceIds,
+      disposition: value.disposition,
+      region: value.region,
+      projectName: value.projectName,
+    };
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffered += decoder.decode(value, { stream: !done });
+    const lines = buffered.split("\n");
+    buffered = lines.pop() ?? "";
+    lines.forEach(consumeLine);
+    if (done) break;
+  }
+  consumeLine(buffered);
+  if (!result) throw new Error("发布进度流提前结束，请重试。");
+  return result;
 }
 
 export async function deleteSkillWorkbenchTask(jobId: string): Promise<void> {

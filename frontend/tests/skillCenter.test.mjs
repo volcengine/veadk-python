@@ -10,10 +10,6 @@ const skillspaceSource = readFileSync(
   new URL("../src/create/skills/skillspace.ts", import.meta.url),
   "utf8",
 );
-const markdownSource = readFileSync(
-  new URL("../src/ui/Markdown.tsx", import.meta.url),
-  "utf8",
-);
 const stylesSource = readFileSync(
   new URL("../src/styles.css", import.meta.url),
   "utf8",
@@ -23,13 +19,20 @@ test("skill center defaults to paged AgentKit Skill space browsing", () => {
   assert.match(skillCenterSource, /defaultCloudRegion\(cloudProvider\)/);
   assert.match(skillCenterSource, /cloudRegionOptions\(cloudProvider\)/);
   assert.match(skillCenterSource, /changeRegion\(option\.value\)/);
+  assert.match(
+    skillCenterSource,
+    /focus\?\.region \?\? defaultCloudRegion\(cloudProvider\)/,
+  );
   assert.doesNotMatch(skillCenterSource, /changeRegion\("all"\)/);
   assert.match(
     skillCenterSource,
     /<h2>技能空间<\/h2>\s*<span className="skillcenter-count-badge">\{spaceTotal\}<\/span>[\s\S]*?<div className="skillcenter-regions"/,
   );
   assert.match(skillCenterSource, /点击 Skill 空间以查看详情/);
-  assert.doesNotMatch(skillCenterSource, /items\[0\]/);
+  assert.match(
+    skillCenterSource,
+    /items\.find\(\(space\) => space\.id === current\?\.id\)\s*\|\| items\[0\]\s*\|\| null/,
+  );
 });
 
 test("space and skill requests are paged server-side without exposing credentials", () => {
@@ -50,17 +53,21 @@ test("SkillSpace downloads prefer full package files over SKILL.md only", () => 
   );
 });
 
-test("skill details render external markdown with raw HTML disabled", () => {
-  assert.match(markdownSource, /allowRawHtml = true/);
-  assert.match(
-    markdownSource,
-    /rehypePlugins=\{allowRawHtml \? \[rehypeRaw, rehypeHighlight\] : \[rehypeHighlight\]\}/,
-  );
+test("ZIP selection rejects files above the server-advertised upload limit", () => {
   assert.match(
     skillCenterSource,
-    /text=\{skillMarkdownBody\(detail\.skillMd\)\}/,
+    /nextFile\.size > capability\.maxUploadBytes/,
   );
-  assert.match(skillCenterSource, /function skillMarkdownBody/);
+  assert.match(skillCenterSource, /Skill ZIP 不能超过/);
+  assert.match(skillCenterSource, /setComposerError/);
+});
+
+test("skill details show the complete package in a read-only file browser", () => {
+  assert.match(skillCenterSource, /<CodeBrowserWorkspace/);
+  assert.match(skillCenterSource, /detail\.files\?\.length/);
+  assert.match(skillCenterSource, /\[\{ path: "SKILL\.md", content: detail\.skillMd \}\]/);
+  assert.match(skillCenterSource, /readOnly/);
+  assert.doesNotMatch(skillCenterSource, /allowRawHtml/);
   assert.match(skillCenterSource, /numeric \* 1000/);
   assert.match(skillCenterSource, /detailRequest\.current/);
   assert.match(skillCenterSource, /closeDetail\(\);\s*setRegion/);

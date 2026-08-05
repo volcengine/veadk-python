@@ -21,6 +21,7 @@ configured separately so a normal CodeEnv can never be selected by accident.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import io
@@ -33,7 +34,7 @@ import textwrap
 import time
 import uuid
 import zipfile
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
@@ -50,7 +51,7 @@ from agentkit.toolkit.cli.sandbox.sandbox_client import (
 )
 from fastapi import HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from veadk.cli.agentkit_sandbox_region import (
@@ -78,13 +79,28 @@ _LEGACY_TOOL_ID_ENV = "SANDBOX_SKILL_CREATOR"
 _EXPECTED_TOOL_TYPE = "DevEnv"
 _SESSION_TTL_SECONDS = 3600
 _MAX_INTENT_CHARS = 20_000
-_MAX_ARCHIVE_BYTES = 5 * 1024 * 1024
+_MAX_ARCHIVE_MIB = 20
+_MAX_ARCHIVE_BYTES = _MAX_ARCHIVE_MIB * 1024 * 1024
+_ARCHIVE_TOO_LARGE_MESSAGE = f"Skill ZIP 不能超过 {_MAX_ARCHIVE_MIB} MiB"
 _MAX_EXPANDED_BYTES = 2 * 1024 * 1024
 _MAX_FILES = 100
 _MAX_PATH_LENGTH = 512
 _JOB_ID_RE = re.compile(r"^sw-[0-9a-f]{12}-[0-9a-f]{24}$")
 _SKILL_NAME_RE = re.compile(r"^[a-z0-9-]+$")
 _TERMINAL_STATES = {"ready", "failed", "cancelled", "expired", "published"}
+
+
+def _json_int(value: object, default: int) -> int:
+    candidate = value or default
+    if isinstance(candidate, (int, float, str)):
+        return int(candidate)
+    raise TypeError(f"Expected a JSON number, got {type(candidate).__name__}")
+
+
+def _json_object(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
 
 
 class SkillWorkbenchError(RuntimeError):
@@ -136,8 +152,6 @@ class CreateSkillTaskBody(BaseModel):
     def validate_source(self) -> CreateSkillTaskBody:
         if self.operation == "create" and self.source is not None:
             raise ValueError("创建 Skill 不接受来源")
-        if self.operation == "optimize" and self.source is None:
-            raise ValueError("优化 Skill 必须选择来源")
         self.intent = self.intent.strip()
         if not self.intent:
             raise ValueError("请描述希望 Skill 达成的目标")
@@ -155,6 +169,7 @@ class PublishSkillTaskBody(BaseModel):
     disposition: Literal["create-new", "update-source"]
     skill_space_ids: list[str] = Field(default_factory=list, alias="skillSpaceIds")
     project_name: str | None = Field(default=None, alias="projectName", max_length=256)
+    region: Literal["cn-beijing", "cn-shanghai"] | None = None
     expected_revision: int = Field(alias="expectedRevision", ge=1)
 
     model_config = {"populate_by_name": True}
@@ -215,7 +230,7 @@ def validate_skill_archive(content: bytes) -> SkillArchive:
     if len(content) > _MAX_ARCHIVE_BYTES:
         raise SkillWorkbenchError(
             "SKILL_ARCHIVE_TOO_LARGE",
-            "Skill ZIP 不能超过 5 MiB",
+            _ARCHIVE_TOO_LARGE_MESSAGE,
             status_code=413,
         )
     try:
@@ -483,6 +498,12 @@ class SkillWorkbenchService:
             }
         elif body.source is not None:
             source_archive, source_meta = self._resolve_center_source(body.source)
+        elif body.operation == "optimize":
+            raise SkillWorkbenchError(
+                "SKILL_SOURCE_REQUIRED",
+                "优化 Skill 必须选择来源或上传 ZIP",
+                status_code=422,
+            )
 
         tool_id = self._validated_tool_id()
         request_payload: dict[str, object] = {
@@ -651,7 +672,7 @@ class SkillWorkbenchService:
                     if next_token is None:
                         self._region = region
                         tasks.sort(
-                            key=lambda item: int(item.get("createdAt") or 0),
+                            key=lambda item: _json_int(item.get("createdAt"), 0),
                             reverse=True,
                         )
                         return {"tasks": tasks}
@@ -716,7 +737,7 @@ class SkillWorkbenchService:
 
     @staticmethod
     def _task_summary(task: dict[str, object]) -> dict[str, object]:
-        source = task.get("source") if isinstance(task.get("source"), dict) else {}
+        source = _json_object(task.get("source"))
         summary: dict[str, object] = {
             "jobId": task.get("jobId"),
             "operation": task.get("operation"),
@@ -746,7 +767,7 @@ class SkillWorkbenchService:
                 "只有已完成的 Skill 可以继续调整",
                 status_code=409,
             )
-        revision = int(task.get("revision") or 1)
+        revision = _json_int(task.get("revision"), 1)
         if body.expected_revision != revision:
             raise SkillWorkbenchError(
                 "SKILL_TASK_REVISION_CONFLICT",
@@ -770,8 +791,19 @@ class SkillWorkbenchService:
             request_data.pop(key, None)
         request_data["intent"] = body.intent.strip()
         request_data["revision"] = next_revision
+        raw_operation = task.get("operation")
+        if raw_operation == "create":
+            operation: Literal["create", "optimize"] = "create"
+        elif raw_operation == "optimize":
+            operation = "optimize"
+        else:
+            raise SkillWorkbenchError(
+                "SKILL_TASK_STATE_INVALID",
+                "Skill 任务状态格式错误",
+                status_code=502,
+            )
         brief = build_delegation_brief(
-            str(task["operation"]),
+            operation,
             body.intent,
             source_path=f"{self._remote_dir(job_id)}/work",
             revision=next_revision,
@@ -824,26 +856,67 @@ class SkillWorkbenchService:
         archive = validate_skill_archive(response.content)
         return archive.content, f"{archive.name}.zip"
 
+    def artifact(self, job_id: str, owner_id: str) -> dict[str, object]:
+        """Return every validated text file for the read-only artifact browser."""
+        content, _ = self.download(job_id, owner_id)
+        archive = validate_skill_archive(content)
+        files: list[dict[str, object]] = []
+        with zipfile.ZipFile(io.BytesIO(archive.content)) as source:
+            root = archive.name
+            members = {
+                PurePosixPath(info.filename).as_posix(): info
+                for info in source.infolist()
+                if not info.is_dir()
+            }
+            for item in archive.files:
+                relative = str(item["path"])
+                path = f"{root}/{relative}"
+                member = members.get(path)
+                if member is None:
+                    raise SkillWorkbenchError(
+                        "SKILL_ARTIFACT_INVALID",
+                        "Skill 产物文件索引不一致",
+                        status_code=502,
+                    )
+                files.append(
+                    {
+                        **item,
+                        "content": source.read(member).decode("utf-8"),
+                    }
+                )
+        return {
+            "name": archive.name,
+            "description": archive.description,
+            "files": files,
+        }
+
     def publish(
         self,
         job_id: str,
         owner_id: str,
         body: PublishSkillTaskBody,
+        report_progress: Callable[[dict[str, str]], None] | None = None,
     ) -> dict[str, object]:
         """Publish a validated output explicitly as new or to its trusted source."""
+
+        def report(phase: str, message: str) -> None:
+            if report_progress is not None:
+                report_progress({"phase": phase, "message": message})
+
+        report("preparing", "正在校验 Skill 产物")
         task = self.get_task(job_id, owner_id)
         if task.get("state") != "ready":
             raise SkillWorkbenchError(
                 "SKILL_TASK_NOT_READY", "Skill 尚未生成完成", status_code=409
             )
-        revision = int(task.get("revision") or 1)
+        revision = _json_int(task.get("revision"), 1)
         if body.expected_revision != revision:
             raise SkillWorkbenchError(
                 "SKILL_TASK_REVISION_CONFLICT",
                 "Skill 已被其他操作更新，请刷新后重试",
                 status_code=409,
             )
-        source = task.get("source") if isinstance(task.get("source"), dict) else {}
+        source = _json_object(task.get("source"))
         source_skill_id = str(source.get("skillId") or "")
         if body.disposition == "update-source" and not source_skill_id:
             raise SkillWorkbenchError(
@@ -863,6 +936,13 @@ class SkillWorkbenchService:
         from agentkit.toolkit.volcengine.services.tos_service import TOSService
 
         config = GlobalConfigManager().load()
+        source_region = str(source.get("region") or "")
+        effective_region = (
+            source_region
+            if body.disposition == "update-source"
+            and source_region in {"cn-beijing", "cn-shanghai"}
+            else body.region or self._region
+        )
         configured_bucket = (
             os.getenv("VEADK_SKILL_CREATOR_TOS_BUCKET") or config.tos.bucket or ""
         ).strip()
@@ -875,11 +955,12 @@ class SkillWorkbenchService:
         _ensure_bucket_ready(
             bucket_name=bucket,
             prefix=prefix,
-            region=self._region,
+            region=effective_region,
             auto_bucket=not bool(configured_bucket),
             assume_yes=True,
             assume_no=False,
         )
+        report("uploading", "正在上传 Skill 包")
         with tempfile.TemporaryDirectory(prefix="veadk-skill-publish-") as directory:
             archive_path = Path(directory) / f"{archive.name}.zip"
             archive_path.write_bytes(archive.content)
@@ -887,9 +968,10 @@ class SkillWorkbenchService:
                 str(archive_path), archive.name, directory
             )
             tos_url = _tos_upload(
-                hashed_path, bucket, prefix, self._region, verify_bucket=False
+                hashed_path, bucket, prefix, effective_region, verify_bucket=False
             )
-        client = self._skills_client_factory(self._region)
+        report("registering", "正在写入 AgentKit Skill")
+        client = self._skills_client_factory(effective_region)
         effective_project = (
             body.project_name
             or str(source.get("projectName") or "")
@@ -926,6 +1008,7 @@ class SkillWorkbenchService:
             raise SkillWorkbenchError(
                 "SKILL_PUBLISH_FAILED", "AgentKit 未返回 Skill ID", status_code=502
             )
+        report("activating", "正在等待 Skill 版本生效")
         latest = _wait_for_running_version(
             client=client,
             skill_id=effective_skill_id,
@@ -934,6 +1017,7 @@ class SkillWorkbenchService:
         )
         version = str(latest.version or "")
         if body.skill_space_ids:
+            report("publishing", "正在发布到技能空间")
             client.publish_skill_to_skill_space(
                 skills_types.PublishSkillToSkillSpaceRequest(
                     SkillSpaces=body.skill_space_ids,
@@ -956,6 +1040,8 @@ class SkillWorkbenchService:
             "version": version,
             "skillSpaceIds": body.skill_space_ids,
             "disposition": body.disposition,
+            "region": effective_region,
+            "projectName": effective_project or "default",
         }
 
     def delete_task(self, job_id: str, owner_id: str) -> None:
@@ -1209,16 +1295,12 @@ def mount_skill_workbench_routes(
 
     @app.post("/web/skill-workbench/tasks/reservations")
     async def reserve_task(request: Request) -> dict[str, object]:
-        return await run_in_threadpool(
-            service.reserve_task, owner_resolver(request)
-        )
+        return await run_in_threadpool(service.reserve_task, owner_resolver(request))
 
     @app.get("/web/skill-workbench/tasks")
     async def list_tasks(request: Request) -> dict[str, list[dict[str, object]]]:
         try:
-            return await run_in_threadpool(
-                service.list_tasks, owner_resolver(request)
-            )
+            return await run_in_threadpool(service.list_tasks, owner_resolver(request))
         except SkillWorkbenchError as error:
             raise http_error(error) from error
 
@@ -1244,7 +1326,47 @@ def mount_skill_workbench_routes(
         job_id: str | None = Query(default=None),
     ) -> dict[str, object]:
         del operation
-        content = await request.body()
+        owner_id = owner_resolver(request)
+        creator_name = creator_resolver(request)
+        if not intent.strip():
+            raise http_error(
+                SkillWorkbenchError(
+                    "SKILL_INTENT_REQUIRED",
+                    "请描述希望 Skill 达成的目标",
+                    status_code=422,
+                )
+            )
+        declared_length = request.headers.get("content-length")
+        if declared_length:
+            try:
+                if int(declared_length) > _MAX_ARCHIVE_BYTES:
+                    raise http_error(
+                        SkillWorkbenchError(
+                            "SKILL_ARCHIVE_TOO_LARGE",
+                            _ARCHIVE_TOO_LARGE_MESSAGE,
+                            status_code=413,
+                        )
+                    )
+            except ValueError as error:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "SKILL_CONTENT_LENGTH_INVALID",
+                        "message": "Skill ZIP 大小格式无效",
+                        "retryable": False,
+                    },
+                ) from error
+        content = bytearray()
+        async for chunk in request.stream():
+            if len(content) + len(chunk) > _MAX_ARCHIVE_BYTES:
+                raise http_error(
+                    SkillWorkbenchError(
+                        "SKILL_ARCHIVE_TOO_LARGE",
+                        _ARCHIVE_TOO_LARGE_MESSAGE,
+                        status_code=413,
+                    )
+                )
+            content.extend(chunk)
         try:
             body = CreateSkillTaskBody(
                 operation="optimize", intent=intent, jobId=job_id
@@ -1252,9 +1374,9 @@ def mount_skill_workbench_routes(
             return await run_in_threadpool(
                 service.create_task,
                 body,
-                owner_resolver(request),
-                creator_resolver(request),
-                uploaded_archive=content,
+                owner_id,
+                creator_name,
+                uploaded_archive=bytes(content),
             )
         except SkillWorkbenchError as error:
             raise http_error(error) from error
@@ -1296,6 +1418,80 @@ def mount_skill_workbench_routes(
             content=content,
             media_type="application/zip",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @app.get("/web/skill-workbench/tasks/{job_id}/artifact")
+    async def artifact(job_id: str, request: Request) -> dict[str, object]:
+        try:
+            return await run_in_threadpool(
+                service.artifact, job_id, owner_resolver(request)
+            )
+        except SkillWorkbenchError as error:
+            raise http_error(error) from error
+
+    @app.post("/web/skill-workbench/tasks/{job_id}/publish-stream")
+    async def publish_task_stream(
+        job_id: str,
+        body: PublishSkillTaskBody,
+        request: Request,
+    ) -> StreamingResponse:
+        owner_id = owner_resolver(request)
+        progress_queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def report_progress(event: dict[str, str]) -> None:
+            progress_event: dict[str, object] = {"type": "progress", **event}
+            loop.call_soon_threadsafe(
+                progress_queue.put_nowait,
+                progress_event,
+            )
+
+        async def run_publish() -> None:
+            try:
+                result = await run_in_threadpool(
+                    service.publish,
+                    job_id,
+                    owner_id,
+                    body,
+                    report_progress,
+                )
+                await progress_queue.put({"type": "complete", "result": result})
+            except SkillWorkbenchError as error:
+                await progress_queue.put({"type": "error", "error": error.detail()})
+            except Exception:
+                logger.exception(
+                    "Skill publish stream failed job_id=%s disposition=%s",
+                    job_id,
+                    body.disposition,
+                )
+                await progress_queue.put(
+                    {
+                        "type": "error",
+                        "error": {
+                            "code": "SKILL_PUBLISH_FAILED",
+                            "message": "发布 Skill 失败，请稍后重试",
+                            "retryable": True,
+                        },
+                    }
+                )
+            finally:
+                await progress_queue.put(None)
+
+        task = asyncio.create_task(run_publish())
+
+        async def stream_events() -> AsyncIterator[str]:
+            try:
+                while True:
+                    event = await progress_queue.get()
+                    if event is None:
+                        break
+                    yield json.dumps(event, ensure_ascii=False) + "\n"
+            finally:
+                await task
+
+        return StreamingResponse(
+            stream_events(),
+            media_type="application/x-ndjson",
         )
 
     @app.post("/web/skill-workbench/tasks/{job_id}/publish")
