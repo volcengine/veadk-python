@@ -7764,6 +7764,7 @@ def frontend_deploy(
                 requirements = build_local_studio_requirements(
                     repo_root,
                     Path(tmp),
+                    frontend_assets=repo_root / "veadk" / "webui",
                     provider=provider_id,
                 )
             except ValueError as error:

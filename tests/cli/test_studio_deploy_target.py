@@ -1484,6 +1484,10 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
 
     def _fake_build(command: list[str], check: bool) -> None:
         assert check is True
+        wheel_source = Path(command[3])
+        assert wheel_source.name == "wheel-source"
+        assert (wheel_source / "veadk" / "webui" / "index.html").is_file()
+        assert not (wheel_source / "build").exists()
         output_dir = Path(command[-1])
         (output_dir / "veadk_python-test-py3-none-any.whl").write_bytes(b"wheel")
 
