@@ -30,10 +30,12 @@ interface TNode {
   children: TNode[];
 }
 
+type SpanId = TraceSpan["span_id"];
+
 function buildTree(spans: TraceSpan[]) {
-  const byId = new Map<number, TraceSpan>();
+  const byId = new Map<SpanId, TraceSpan>();
   spans.forEach((s) => byId.set(s.span_id, s));
-  const kids = new Map<number, TraceSpan[]>();
+  const kids = new Map<SpanId, TraceSpan[]>();
   const roots: TraceSpan[] = [];
   for (const s of spans) {
     if (s.parent_span_id != null && byId.has(s.parent_span_id)) {
@@ -54,7 +56,7 @@ function buildTree(spans: TraceSpan[]) {
   return { rootNodes, min, total: max - min || 1 };
 }
 
-function flatten(roots: TNode[], collapsed: Set<number>): TNode[] {
+function flatten(roots: TNode[], collapsed: Set<SpanId>): TNode[] {
   const out: TNode[] = [];
   const walk = (n: TNode) => {
     out.push(n);
@@ -93,6 +95,7 @@ type TraceSource =
 
 export type TraceDrawerProps = TraceSource & {
   sessionId: string;
+  endTimeMs?: number;
   onClose: () => void;
   title?: string;
 };
@@ -101,13 +104,14 @@ export function TraceDrawer({
   appName,
   testRunId,
   sessionId,
+  endTimeMs,
   onClose,
   title = "调用链路观测",
 }: TraceDrawerProps) {
   const [spans, setSpans] = useState<TraceSpan[] | null>(null);
   const [err, setErr] = useState("");
-  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<SpanId>>(new Set());
+  const [selectedId, setSelectedId] = useState<SpanId | null>(null);
 
   useEffect(() => {
     setSpans(null);
@@ -116,7 +120,7 @@ export function TraceDrawer({
     if (testRunId) {
       request = getGeneratedAgentTestTrace(testRunId, sessionId);
     } else if (appName) {
-      request = getSessionTrace(appName, sessionId);
+      request = getSessionTrace(appName, sessionId, endTimeMs);
     } else {
       setErr("缺少调用链路来源");
       return;
@@ -126,15 +130,15 @@ export function TraceDrawer({
         setSpans(s);
         setSelectedId(s.length ? s.reduce((a, b) => (a.start_time <= b.start_time ? a : b)).span_id : null);
       })
-      .catch((e) => setErr(String(e)));
-  }, [appName, sessionId, testRunId]);
+      .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+  }, [appName, endTimeMs, sessionId, testRunId]);
 
   const { rootNodes, min, total } = useMemo(() => buildTree(spans ?? []), [spans]);
   const rows = useMemo(() => flatten(rootNodes, collapsed), [rootNodes, collapsed]);
   const selected = spans?.find((s) => s.span_id === selectedId) ?? null;
   const totalMs = total / 1e6;
 
-  const toggle = (id: number) =>
+  const toggle = (id: SpanId) =>
     setCollapsed((c) => {
       const n = new Set(c);
       n.has(id) ? n.delete(id) : n.add(id);

@@ -26,11 +26,18 @@ import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
 import { AgentFaceIcon } from "./AgentFaceIcon";
+import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
 import volcengineLogo from "../assets/volcengine.svg";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 
-export type SidebarPage = "new-chat" | "agents" | "applications" | "search" | null;
+export type SidebarPage =
+  | "new-chat"
+  | "agents"
+  | "applications"
+  | "search"
+  | "feedback"
+  | null;
 
 function ApplicationsIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -68,6 +75,7 @@ export interface SidebarProps {
   onAddAgent: () => void;
   onMyAgents: () => void;
   onApplications: () => void;
+  onIssueFeedback: () => void;
   onPickSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   userInfo?: Record<string, unknown>;
@@ -282,6 +290,7 @@ export function Sidebar({
   onAddAgent,
   onMyAgents,
   onApplications,
+  onIssueFeedback,
   onPickSession,
   onDeleteSession,
   userInfo,
@@ -398,6 +407,7 @@ export function Sidebar({
         >
           <ApplicationsIcon className="icon" />
           <span className="sidebar-nav-label">自动化</span>
+          <span className="sidebar-beta-badge">Beta</span>
         </button>
         {show("search") && (
           <SearchButton active={activePage === "search"} onClick={onSearch} />
@@ -472,11 +482,27 @@ export function Sidebar({
       </div>
       )}
 
-      <SidebarUser access={access}
-        userInfo={userInfo}
-        version={version}
-        onLogout={onLogout}
-      />
+      <div className="sidebar-footer">
+        <button
+          type="button"
+          className={`sidebar-feedback${
+            activePage === "feedback" ? " is-active" : ""
+          }`}
+          onClick={onIssueFeedback}
+          aria-label="问题反馈"
+          aria-current={activePage === "feedback" ? "page" : undefined}
+          title="问题反馈"
+        >
+          <IssueFeedbackIcon className="icon" />
+          <span className="sidebar-nav-label">问题反馈</span>
+        </button>
+        <SidebarUser
+          access={access}
+          userInfo={userInfo}
+          version={version}
+          onLogout={onLogout}
+        />
+      </div>
     </aside>
   );
 }

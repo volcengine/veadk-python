@@ -1090,6 +1090,108 @@ def _run_frontend_server(
             raise HTTPException(status_code=401, detail="Studio identity is required")
         return access_policy.role_for(principal)
 
+    from veadk.cli.frontend_issue_feedback import mount_issue_feedback_route
+
+    async def _load_runtime_apmplus_trace(
+        runtime: Any,
+        *,
+        runtime_id: str,
+        region: str,
+        session_id: str,
+        invocation_id: str = "",
+        end_time_ms: int | None = None,
+    ) -> list[dict]:
+        access_key, secret_key, session_token = _resolve_ve_credentials()
+        from veadk.cli.frontend_apmplus_trace import load_apmplus_trace
+
+        return await asyncio.to_thread(
+            load_apmplus_trace,
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token or "",
+            region=region,
+            project_name=str(getattr(runtime, "project_name", "") or "default"),
+            runtime_id=runtime_id,
+            session_id=session_id,
+            invocation_id=invocation_id,
+            now_ms=end_time_ms,
+        )
+
+    async def _load_issue_feedback_trace(report: Any, request: Request) -> list[dict]:
+        runtime = _authorized_runtime(
+            request,
+            report.runtime_id,
+            report.region,
+            coded_access_error=True,
+        )
+        try:
+            return await _load_runtime_apmplus_trace(
+                runtime,
+                runtime_id=report.runtime_id,
+                region=report.region,
+                session_id=report.session_id,
+                invocation_id=report.invocation_id,
+            )
+        except Exception as error:  # noqa: BLE001 - feedback must remain usable
+            logger.warning(
+                "APMPlus issue-feedback trace query failed runtime_id=%s: %s",
+                report.runtime_id,
+                _redact_debug_text(str(error)),
+            )
+            return []
+
+    @app.get("/web/runtime-trace")
+    async def _web_runtime_trace(
+        request: Request,
+        runtimeId: str = "",
+        sessionId: str = "",
+        region: str = "cn-beijing",
+        endTimeMs: int | None = None,
+    ) -> list[dict]:
+        if not runtimeId or not sessionId:
+            raise HTTPException(
+                status_code=400,
+                detail="runtimeId and sessionId are required",
+            )
+        runtime = _authorized_runtime(
+            request,
+            runtimeId,
+            region,
+            coded_access_error=True,
+        )
+        try:
+            spans = await _load_runtime_apmplus_trace(
+                runtime,
+                runtime_id=runtimeId,
+                region=region,
+                session_id=sessionId,
+                end_time_ms=endTimeMs,
+            )
+        except Exception as error:
+            logger.warning(
+                "APMPlus Studio trace query failed runtime_id=%s: %s",
+                runtimeId,
+                _redact_debug_text(str(error)),
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="加载调用链路失败，请稍后重试。",
+            ) from error
+        if not spans:
+            raise HTTPException(
+                status_code=404,
+                detail="该 Agent 暂未开启链路观测，请到控制台打开后使用。",
+            )
+        from veadk.cli.frontend_apmplus_trace import normalize_apmplus_trace
+
+        return normalize_apmplus_trace(spans)
+
+    mount_issue_feedback_route(
+        app,
+        authorize=_request_role,
+        trace_loader=_load_issue_feedback_trace,
+    )
+
     def _require_agent_management(request: Request) -> StudioPrincipal | None:
         principal = _current_principal(request)
         if access_policy.enabled and principal is None:
@@ -1367,17 +1469,7 @@ def _run_frontend_server(
                     "set MODEL_AGENT_API_KEY in .env/config.yaml before deploying.",
                     e,
                 )
-        out["OTEL_SDK_DISABLED"] = "true"
         out["VEADK_DISABLE_EXPIRE_AT"] = "true"
-        # Force telemetry exporters off. The AgentKit runner sets
-        # apmplus_enable=True on every created runtime, which makes the
-        # platform inject ENABLE_APMPLUS=true into the container; pre-seeding
-        # the APMPlus api-key env with a harmless sentinel short-circuits the
-        # cached_property before it calls get_apmplus_token().
-        out["ENABLE_APMPLUS"] = "false"
-        out["ENABLE_COZELOOP"] = "false"
-        out["ENABLE_TLS"] = "false"
-        out["OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY"] = "tracing-disabled"
         return out
 
     def _model_name(model: object) -> str:
@@ -3511,6 +3603,7 @@ def _run_frontend_server(
                 # can filter by author. Restored right after.
                 rt_client = None
                 orig_create = None
+                orig_update = None
                 try:
                     from agentkit.sdk.runtime.client import (
                         AgentkitRuntimeClient as rt_client,
@@ -3518,6 +3611,7 @@ def _run_frontend_server(
                     from agentkit.sdk.runtime import types as _rt
 
                     orig_create = rt_client.create_runtime
+                    orig_update = rt_client.update_runtime
                     extra = [
                         _rt.TagsItemForCreateRuntime.model_validate(
                             {"Key": "veadk:managed", "Value": "true"}
@@ -3540,11 +3634,7 @@ def _run_frontend_server(
                         if task_state["cancel_event"].is_set():
                             raise RuntimeError("Deployment cancelled")
                         req.tags = [*(req.tags or []), *_extra]
-                        # The AgentKit runner hard-codes apmplus_enable=True on
-                        # every runtime; force it off so the container doesn't
-                        # try to fetch an APMPlus app-key with the deployer's
-                        # AK/SK at boot (breaks for STS temp credentials).
-                        req.apmplus_enable = False
+                        req.apmplus_enable = True
                         created = _create_runtime_with_description_fallback(
                             _orig, self, req
                         )
@@ -3564,7 +3654,12 @@ def _run_frontend_server(
                             raise RuntimeError("Deployment cancelled")
                         return created
 
+                    def _apmplus_update(self, req, _orig=orig_update):
+                        req.apmplus_enable = True
+                        return _orig(self, req)
+
                     rt_client.create_runtime = _tagged_create
+                    rt_client.update_runtime = _apmplus_update
                 except Exception as e:
                     logger.error("Could not prepare Runtime ownership tags: %s", e)
                     result_box["error"] = str(e)
@@ -3629,6 +3724,8 @@ def _run_frontend_server(
                 finally:
                     if rt_client is not None and orig_create is not None:
                         rt_client.create_runtime = orig_create
+                    if rt_client is not None and orig_update is not None:
+                        rt_client.update_runtime = orig_update
                     if task_state["cancel_event"].is_set():
                         try:
                             _destroy_deploy_task_runtime(task_state)

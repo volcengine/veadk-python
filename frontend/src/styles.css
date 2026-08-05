@@ -216,6 +216,17 @@ body {
 .new-chat .icon { width: 18px; height: 18px; }
 .new-chat:hover,
 .new-chat.is-active { background: hsl(var(--foreground) / 0.05); }
+.sidebar-beta-badge {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid hsl(39 88% 43% / 0.28);
+  border-radius: 999px;
+  background: hsl(47 96% 52% / 0.16);
+  color: hsl(39 91% 31%);
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.3;
+}
 
 .new-chat--conversation > .icon {
   transform-origin: center;
@@ -308,6 +319,9 @@ body {
   white-space: nowrap;
 }
 .sidebar.is-collapsed .sidebar-nav-label {
+  display: none;
+}
+.sidebar.is-collapsed .sidebar-beta-badge {
   display: none;
 }
 .sidebar.is-collapsed .sidebar-history {
@@ -2170,8 +2184,10 @@ body {
 .drawer-body { flex: 1; overflow: auto; padding: 16px 18px; }
 .drawer-loading, .drawer-empty {
   display: flex; align-items: center; gap: 8px;
-  color: hsl(var(--muted-foreground)); font-size: 14px; padding: 20px 0;
+  color: hsl(var(--muted-foreground)); font-size: 14px;
 }
+.drawer-loading { flex: 1; justify-content: center; padding: 24px; }
+.drawer-empty { padding: 20px 0; }
 
 /* ---------- trace viewer: span tree (left) + detail (right) ---------- */
 .drawer--trace { width: min(1080px, 96vw); }
@@ -4032,10 +4048,42 @@ body {
 }
 
 /* ---------- sidebar account footer ---------- */
+.sidebar-footer {
+  flex-shrink: 0;
+  margin-top: auto;
+}
+.sidebar-feedback {
+  width: calc(100% - 20px);
+  height: 36px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 9px;
+  margin: 0 10px;
+  padding: 0 10px 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  transition: background 120ms ease;
+}
+.sidebar-feedback:hover {
+  background: hsl(48 100% 95%);
+}
+.sidebar-feedback > .icon {
+  justify-self: center;
+}
+.sidebar-feedback:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px hsl(var(--ring) / 0.3);
+}
 .sidebar-user {
   position: relative;
   flex-shrink: 0;
-  margin-top: auto; /* pin to the bottom of the sidebar */
   padding: 8px 10px 12px;
 }
 .sidebar-user-btn {
@@ -4117,6 +4165,15 @@ body {
   justify-content: center;
   gap: 0;
   padding: 2px;
+  overflow: hidden;
+}
+.sidebar.is-collapsed .sidebar-feedback {
+  width: 36px;
+  margin-inline: 10px;
+  grid-template-columns: 1fr;
+  justify-content: center;
+  column-gap: 0;
+  padding: 9px;
   overflow: hidden;
 }
 .sidebar.is-collapsed .sidebar-user-identity {
