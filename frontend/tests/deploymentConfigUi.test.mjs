@@ -130,6 +130,17 @@ test("lets the whole publish page scroll with builder-style deployment cards", (
   );
 });
 
+test("lets deployment dropdowns escape rounded configuration cards", () => {
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-config-section:has\(\.pp-network-region\)\s*\{[^}]*overflow:\s*visible;/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-config-section:has\(\.pp-network-region\) > \.pp-config-label\s*\{[^}]*border-radius:\s*17px 17px 0 0;/,
+  );
+});
+
 test("aligns the publish overview and deployment settings to one restrained content width", () => {
   assert.match(
     projectPreviewStyles,

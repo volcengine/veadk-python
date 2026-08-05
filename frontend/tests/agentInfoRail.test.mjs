@@ -147,6 +147,14 @@ test("places the rail on the right and protects the conversation column", () => 
   assert.match(railStyles, /@media \(max-width:\s*1279px\)/);
 });
 
+test("keeps global errors above the conversation information rail", () => {
+  assert.match(
+    stylesSource,
+    /\.error\s*\{[^}]*position:\s*relative;[^}]*z-index:\s*3;[^}]*overflow-wrap:\s*anywhere;/,
+  );
+  assert.match(railStyles, /\.topo\s*\{[\s\S]*?z-index:\s*2;/);
+});
+
 test("keeps Agent information in the conversation rail without a title trigger", () => {
   assert.match(navbarSource, /titleLeading\?: ReactNode/);
   assert.match(navbarSource, /\{titleLeading\}/);

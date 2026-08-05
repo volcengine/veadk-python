@@ -838,6 +838,14 @@
     0 8px 28px hsl(var(--foreground) / 0.045);
 }
 
+.pp-config-section:has(.pp-network-region) {
+  overflow: visible;
+}
+
+.pp-config-section:has(.pp-network-region) > .pp-config-label {
+  border-radius: 17px 17px 0 0;
+}
+
 .pp-env-section,
 .pp-progress-section,
 .pp-deploy-result,

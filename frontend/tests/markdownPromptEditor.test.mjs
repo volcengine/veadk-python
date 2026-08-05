@@ -191,6 +191,17 @@ test("build workspace uses a narrow 60-percent canvas and grouped configuration 
   assert.doesNotMatch(toggleRule, /border-bottom:/);
 });
 
+test("lets searchable configuration menus escape rounded sections", () => {
+  assert.match(
+    createStyles,
+    /\.cw-section:has\(\.cw-a2a-space-picker\)\s*\{[^}]*overflow:\s*visible;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-section:has\(\.cw-a2a-space-picker\) > \.cw-sec-head\s*\{[^}]*border-radius:\s*17px 17px 0 0;/,
+  );
+});
+
 test("build-stage intelligent generation sits before next in the footer", () => {
   assert.match(createSource, /assistant\?: React\.ReactNode/);
   assert.match(
