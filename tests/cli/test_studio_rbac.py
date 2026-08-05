@@ -1072,6 +1072,13 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     )
     runtime.role_name = "runtime-role"
     runtime.current_version_number = 3
+    runtime.envs = [
+        SimpleNamespace(
+            key="MCP_UPDATED_AGENT_ORDERS_AUTH_TOKEN",
+            value="preserved-secret",
+        ),
+        SimpleNamespace(key="REPLACED_ENV", value="old-value"),
+    ]
     captured_config: dict[str, Any] = {}
     get_calls = 0
     evaluation_set_calls: list[dict[str, Any]] = []
@@ -1160,6 +1167,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
                 "files": [{"path": "app.py", "content": "app = object()\n"}],
                 "config": {"region": "cn-beijing", "projectName": "default"},
                 "authentication": {"type": "api_key"},
+                "envs": [{"key": "REPLACED_ENV", "value": "new-value"}],
             },
         ) as response:
             frames = [
@@ -1208,6 +1216,10 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         "https://studio.example.com/.well-known/openid-configuration"
     )
     assert cloud["runtime_jwt_allowed_clients"] == ["studio-client"]
+    assert cloud["runtime_envs"]["MCP_UPDATED_AGENT_ORDERS_AUTH_TOKEN"] == (
+        "preserved-secret"
+    )
+    assert cloud["runtime_envs"]["REPLACED_ENV"] == "new-value"
     assert "runtime_network" not in cloud
     assert captured_config["common"]["description"] == "Updated description"
 

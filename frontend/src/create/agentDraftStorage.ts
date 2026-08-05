@@ -1,4 +1,5 @@
 import type { AgentDraft } from "./types";
+import { prepareMcpAuth } from "./mcpAuth";
 
 const WORKSPACE_DRAFT_STORAGE_VERSION = 1;
 
@@ -43,26 +44,21 @@ export function workspaceDraftsKey(userId: string): string {
 }
 
 export function sanitizeAgentDraftForStorage(draft: AgentDraft): AgentDraft {
-  const mcpTools = draft.mcpTools?.map((tool) => {
-    const sanitized = { ...tool };
-    delete sanitized.authToken;
-    return sanitized;
-  });
-  const deployment = draft.deployment
-    ? { ...draft.deployment }
+  const prepared = prepareMcpAuth(draft).draft;
+  const deployment = prepared.deployment
+    ? { ...prepared.deployment }
     : undefined;
   if (deployment) delete deployment.envValues;
 
   return {
-    ...draft,
-    subAgents: draft.subAgents.map(sanitizeAgentDraftForStorage),
-    ...(mcpTools ? { mcpTools } : {}),
+    ...prepared,
+    subAgents: prepared.subAgents.map(sanitizeAgentDraftForStorage),
     ...(deployment ? { deployment } : {}),
-    ...(draft.workflow
+    ...(prepared.workflow
       ? {
           workflow: {
-            ...draft.workflow,
-            nodes: draft.workflow.nodes.map((node) => ({
+            ...prepared.workflow,
+            nodes: prepared.workflow.nodes.map((node) => ({
               ...node,
               agent: sanitizeAgentDraftForStorage(node.agent),
             })),

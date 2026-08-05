@@ -90,8 +90,11 @@ server that `veadk frontend` launches — no separate backend.
   system-prompt editor (including heading and list shortcuts), then debug with
   expandable, copyable runner error details, per-result Trace inspection, and
   review. In-progress drafts are stored only in the current browser and scoped
-  to the signed-in user. MCP tokens and deployment environment values are never
-  persisted and must be entered again after a reload. Long descriptions and
+  to the signed-in user. MCP tokens are converted to Runtime environment
+  variables: generated source, YAML, and browser drafts retain only the
+  `${ENV_NAME}` reference. Runtime updates preserve the existing secret value;
+  entering a replacement Token overrides it for the next deployment. Other
+  deployment environment values are never persisted. Long descriptions and
   prompts scroll within bounded editors, while the sidebar stays pinned to the
   viewport. On narrow desktop windows, the structure, configuration, and debug
   panels stack vertically instead of squeezing the form. The deployment page

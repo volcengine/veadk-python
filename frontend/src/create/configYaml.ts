@@ -5,6 +5,7 @@
 import { parse, stringify } from "yaml";
 import { A2A_REGISTRY_DEFAULTS } from "./veadkCatalog";
 import { normalizeDraft } from "./normalizeDraft";
+import { prepareMcpAuth } from "./mcpAuth";
 import type { AgentDraft } from "./types";
 
 /** Build a clean, minimal config object (omit empty/false fields). */
@@ -47,7 +48,7 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
         transport: m.transport,
       };
       if (m.url?.trim()) e.url = m.url.trim();
-      if (m.authToken?.trim()) e.authToken = m.authToken.trim();
+      if (m.authTokenEnv?.trim()) e.authTokenEnv = m.authTokenEnv.trim();
       if (m.command?.trim()) e.command = m.command.trim();
       if (m.args?.length) e.args = m.args;
       return e;
@@ -104,10 +105,11 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
 }
 
 export function draftToYaml(draft: AgentDraft): string {
+  const prepared = prepareMcpAuth(draft).draft;
   return (
     "# VeADK Agent 结构配置\n" +
     "# 可在「创建 Agent」页通过「导入 YAML」重新载入。\n" +
-    stringify(toConfig(draft))
+    stringify(toConfig(prepared))
   );
 }
 

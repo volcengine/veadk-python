@@ -216,6 +216,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
             transport: transport as "http" | "stdio",
             url: asString(mo.url),
             authToken: asString(mo.authToken),
+            authTokenEnv: asString(mo.authTokenEnv),
             command: asString(mo.command),
             args: asStringArray(mo.args),
           };

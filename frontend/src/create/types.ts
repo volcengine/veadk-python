@@ -21,6 +21,8 @@ export interface McpTool {
   url?: string;
   /** http transport: optional bearer token -> Authorization header. */
   authToken?: string;
+  /** Environment variable used by generated code for the bearer token. */
+  authTokenEnv?: string;
   /** stdio transport: the command to launch (e.g. "npx"). */
   command?: string;
   /** stdio transport: command args (e.g. ["-y", "@playwright/mcp@latest"]). */

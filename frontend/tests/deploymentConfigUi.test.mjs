@@ -55,7 +55,7 @@ test("offers code execution with its sandbox configuration", () => {
   );
   assert.match(
     customCreateSource,
-    /createGeneratedAgentTestRun\([\s\S]*?debugRuntimeDraft\(variantDraft\)/,
+    /createGeneratedAgentTestRun\([\s\S]*?debugRuntimeDraft\(variantDraft\)[\s\S]*?runtimeId: deploymentTarget\.runtimeId[\s\S]*?region: deploymentTarget\.region/,
   );
   assert.match(
     customCreateSource,

@@ -2397,6 +2397,24 @@ def _run_frontend_server(
                 data,
                 debug=True,
             )
+            runtime_envs: dict[str, str] = {}
+            runtime_id = str(data.get("runtimeId") or "").strip()
+            if runtime_id:
+                runtime_region = (
+                    str(data.get("runtimeRegion") or "cn-beijing").strip()
+                    or "cn-beijing"
+                )
+                runtime = _authorized_runtime(
+                    request,
+                    runtime_id,
+                    runtime_region,
+                    coded_access_error=True,
+                )
+                runtime_envs = {
+                    str(item.key): str(item.value or "")
+                    for item in (getattr(runtime, "envs", None) or [])
+                    if getattr(item, "key", None)
+                }
             temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
             app_name = _write_generated_project(project, temp_dir)
             port = _free_local_port()
@@ -2415,6 +2433,7 @@ def _run_frontend_server(
                 str(port),
             ]
             runner_env = _safe_runner_env()
+            runner_env.update(runtime_envs)
             runner_env.update(debug_runtime_env_from_draft(draft))
             with stdout_path.open("w", encoding="utf-8") as stdout_file:
                 with stderr_path.open("w", encoding="utf-8") as stderr_file:
@@ -3013,6 +3032,11 @@ def _run_frontend_server(
         # agent needs at boot. User-provided envs (from the UI) take priority
         # over our defaults.
         runtime_envs = _collect_runtime_envs()
+        if existing_runtime is not None:
+            for item in getattr(existing_runtime, "envs", None) or []:
+                key = str(getattr(item, "key", "") or "").strip()
+                if key:
+                    runtime_envs[key] = str(getattr(item, "value", "") or "")
         for k, v in extra_runtime_envs.items():
             runtime_envs[k] = v
         if feishu_enabled:

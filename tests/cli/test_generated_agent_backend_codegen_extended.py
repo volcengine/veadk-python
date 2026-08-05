@@ -21,6 +21,7 @@ import secrets
 import socket
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar, Literal
 
 import pytest
@@ -65,7 +66,7 @@ from veadk.cli.generated_agent_skills import (
 _MINIMAL_FRONTEND_GOLDEN = {
     "app.py": "3a5838b3c702202c0a26d8560e396e3c3c46e223b99e2e1d74eb434d653474df",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
-    "agents/demo_agent/agent.py": "f4867047f9cb0e700a7c3e1b1ef5c6376af6637855f49d846b47d42cb253a63b",
+    "agents/demo_agent/agent.py": "3c28f3e63f185d1ee8402d58b62c8654cf18fe4180a1f348abaa63547d91446c",
     "agents/demo_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/demo_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "ec3258da9bef4e74333376d8554c265ccb12a4a1e5d4e1e1b0acdf5c9ae93ab6",
@@ -76,10 +77,10 @@ _MINIMAL_FRONTEND_GOLDEN = {
 _FULL_FRONTEND_GOLDEN = {
     "app.py": "56183a125e505c543294356fc9c7662a5eedb3b8661070f6be1df9b579e35ed4",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
-    "agents/full_agent/agent.py": "1b706ef02dfbe38620fc242cf46e7e8af645c3758f8425f42a8ad56b22e5c031",
+    "agents/full_agent/agent.py": "e355eea82be49e735b5ea740ed9115980d05c5b1b083a19a8b75b3242f5f00bb",
     "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/full_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
-    ".env.example": "054a10f8bc0e046158349ebccdc67a1182c22c4c63ee5b51bf7c2c1674abe052",
+    ".env.example": "3e6a5c1ee1c96ed7394240f9c0503c295552cb497ad51c68dd867dd4945f750b",
     "requirements.txt": "4a941e1bf7efb43d57f608649ac238f2e5ea833f9e0aae92f8bc3fef67b8874e",
     "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
 }
@@ -198,6 +199,33 @@ def test_full_project_matches_frontend_codegen_golden() -> None:
     assert "skills_agent" in root_agent_block.split("tools=[", 1)[1].split("]", 1)[0]
     assert "[a2ui]" not in files["requirements.txt"]
     assert _content_hashes(project) == _FULL_FRONTEND_GOLDEN
+
+
+def test_mcp_token_is_generated_as_runtime_environment_reference() -> None:
+    draft = AgentDraft(
+        name="sales-agent",
+        mcpTools=[
+            McpTool(
+                name="orders",
+                transport="http",
+                url="https://mcp.example.com/mcp",
+                authToken="plain-text-secret",
+            )
+        ],
+        deployment=DeploymentConfig(envValues={"UNRELATED_API_KEY": "another-secret"}),
+    )
+
+    project = generate_project_from_draft(draft)
+    files = _file_map(project)
+    agent_py = files["agents/sales_agent/agent.py"]
+
+    assert "plain-text-secret" not in json.dumps(files)
+    assert "another-secret" not in json.dumps(files)
+    assert 'os.environ["MCP_SALES_AGENT_ORDERS_AUTH_TOKEN"]' in agent_py
+    assert "'authTokenEnv': 'MCP_SALES_AGENT_ORDERS_AUTH_TOKEN'" in agent_py
+    assert "'authToken':" not in agent_py
+    assert "MCP_SALES_AGENT_ORDERS_AUTH_TOKEN=" in files[".env.example"]
+    assert draft.mcpTools[0].authToken == "plain-text-secret"
 
 
 def test_retired_a2ui_option_is_accepted_but_not_generated() -> None:
@@ -919,6 +947,26 @@ def test_generated_project_and_debug_run_api_lifecycle(
     monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
     monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
 
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime = SimpleNamespace(
+        runtime_id="runtime-debug",
+        tags=[],
+        envs=[
+            SimpleNamespace(
+                key="MCP_DEMO_AGENT_ORDERS_AUTH_TOKEN",
+                value="runtime-mcp-token",
+            ),
+            SimpleNamespace(key="AGENTKIT_TOOL_REGION", value="cn-beijing"),
+            SimpleNamespace(key="RUNTIME_ONLY_ENV", value="runtime-value"),
+        ],
+    )
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: runtime,
+    )
+
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         "uvicorn.run",
@@ -987,7 +1035,11 @@ def test_generated_project_and_debug_run_api_lifecycle(
 
         run_response = client.post(
             "/web/generated-agent-test-runs",
-            json={"draft": draft},
+            json={
+                "draft": draft,
+                "runtimeId": "runtime-debug",
+                "runtimeRegion": "cn-shanghai",
+            },
         )
         assert run_response.status_code == 200
         run = run_response.json()
@@ -1016,6 +1068,8 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert process.env["VOLCENGINE_SECRET_KEY"] == "test-sk"
         assert process.env["AGENTKIT_TOOL_ID"] == "t-debug"
         assert process.env["AGENTKIT_TOOL_REGION"] == "cn-shanghai"
+        assert process.env["MCP_DEMO_AGENT_ORDERS_AUTH_TOKEN"] == "runtime-mcp-token"
+        assert process.env["RUNTIME_ONLY_ENV"] == "runtime-value"
         assert process.env["OTEL_SDK_DISABLED"] == "false"
         assert "DATABASE_MYSQL_PASSWORD" not in process.env
         generated_files = {

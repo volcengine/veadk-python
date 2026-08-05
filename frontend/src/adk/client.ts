@@ -2603,11 +2603,16 @@ export async function generateAgentDraftFromRequirement(
 
 export async function createGeneratedAgentTestRun(
   draft: AgentDraft,
+  runtime?: { runtimeId: string; region: string },
 ): Promise<GeneratedAgentTestRun> {
   const res = await apiFetch("/web/generated-agent-test-runs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ draft }),
+    body: JSON.stringify({
+      draft,
+      runtimeId: runtime?.runtimeId,
+      runtimeRegion: runtime?.region,
+    }),
   });
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, "创建调试运行失败"));

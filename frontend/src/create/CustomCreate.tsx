@@ -72,6 +72,12 @@ import { displayDescription } from "./displayText";
 import { localPickerMatches } from "./localPickerSearch";
 import { draftToYaml } from "./configYaml";
 import {
+  mcpAuthTokenInputValue,
+  mcpUrlNeedsPathWarning,
+  prepareMcpAuth,
+  updateMcpAuthTokenInput,
+} from "./mcpAuth";
+import {
   normalizeDraft,
   sanitizeGeneratedDraftCapabilities,
 } from "./normalizeDraft";
@@ -1059,11 +1065,28 @@ function McpToolEditor({
                       placeholder="MCP 服务地址（StreamableHTTP）"
                       onChange={(e) => update(i, { url: e.target.value })}
                     />
+                    {mcpUrlNeedsPathWarning(t.url ?? "") && (
+                      <p className="cw-mcp-warning">
+                        <Info aria-hidden="true" />
+                        <span>
+                          当前地址不是以 /mcp 结尾，请确认它是实际的 MCP
+                          Endpoint。Studio 会保留该地址，不会自动补充路径。
+                        </span>
+                      </p>
+                    )}
                     <input
                       className="cw-input"
-                      value={t.authToken ?? ""}
+                      value={mcpAuthTokenInputValue(t)}
                       placeholder="Bearer Token（可选）"
-                      onChange={(e) => update(i, { authToken: e.target.value })}
+                      onChange={(e) =>
+                        onChange(
+                          tools.map((tool, index) =>
+                            index === i
+                              ? updateMcpAuthTokenInput(tool, e.target.value)
+                              : tool,
+                          ),
+                        )
+                      }
                     />
                   </>
                 ) : (
@@ -1544,12 +1567,26 @@ function countDraftAgents(root: AgentDraft): number {
 
 /** Collect only settings used by active components across the Agent tree. */
 function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
+  const prepared = prepareMcpAuth(root);
   const selections: RuntimeEnvSelection[] = [];
-  const fixedValues: Record<string, string> = {};
+  const fixedValues: Record<string, string> = { ...prepared.envValues };
   const visit = (node: AgentDraft) => {
     for (const toolId of node.builtinTools ?? []) {
       const tool = BUILTIN_TOOLS.find((item) => item.id === toolId);
       if (tool) selections.push({ env: tool.env });
+    }
+    for (const mcpTool of node.mcpTools ?? []) {
+      if (mcpTool.authTokenEnv) {
+        selections.push({
+          env: [
+            {
+              key: mcpTool.authTokenEnv,
+              required: false,
+              comment: `${mcpTool.name.trim() || "MCP"} Bearer Token`,
+            },
+          ],
+        });
+      }
     }
     if (node.a2aRegistry?.enabled) {
       selections.push({ env: A2A_REGISTRY_ENV });
@@ -1598,7 +1635,7 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
     }
     node.subAgents.forEach(visit);
   };
-  visit(root);
+  visit(prepared.draft);
   const config = runtimeEnvConfiguration(selections);
   return {
     specs: config.specs,
@@ -1821,8 +1858,9 @@ interface DebugTraceTarget {
 }
 
 function codegenDraft(draft: AgentDraft): AgentDraft {
+  const prepared = prepareMcpAuth(draft).draft;
   return {
-    ...draft,
+    ...prepared,
     deployment: {
       feishuEnabled: !!draft.deployment?.feishuEnabled,
     },
@@ -3013,6 +3051,12 @@ export function CustomCreate({
       };
       createdRun = await createGeneratedAgentTestRun(
         debugRuntimeDraft(variantDraft),
+        deploymentTarget
+          ? {
+              runtimeId: deploymentTarget.runtimeId,
+              region: deploymentTarget.region,
+            }
+          : undefined,
       );
       rememberDebugTestRun(createdRun.runId);
       const sessionId = await createGeneratedAgentTestSession(

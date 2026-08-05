@@ -1,19 +1,20 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import ts from "typescript";
+import { build } from "esbuild";
 
-const source = readFileSync(
-  new URL("../src/create/agentDraftStorage.ts", import.meta.url),
-  "utf8",
-);
-const { outputText } = ts.transpileModule(source, {
-  compilerOptions: {
-    module: ts.ModuleKind.ES2022,
-    target: ts.ScriptTarget.ES2022,
-  },
+const result = await build({
+  entryPoints: [
+    fileURLToPath(new URL("../src/create/agentDraftStorage.ts", import.meta.url)),
+  ],
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node20",
+  write: false,
 });
-const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
+const moduleUrl = `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].contents).toString("base64")}`;
 const {
   loadWorkspaceDrafts,
   sanitizeAgentDraftForStorage,
@@ -85,8 +86,13 @@ test("removes secrets from every persisted Agent draft branch", () => {
   const sanitized = sanitizeAgentDraftForStorage(sourceDraft);
 
   assert.equal(sanitized.mcpTools[0].authToken, undefined);
+  assert.equal(sanitized.mcpTools[0].authTokenEnv, "MCP_DRAFT_AGENT_ROOT_AUTH_TOKEN");
   assert.equal(sanitized.deployment.envValues, undefined);
   assert.equal(sanitized.subAgents[0].mcpTools[0].authToken, undefined);
+  assert.equal(
+    sanitized.subAgents[0].mcpTools[0].authTokenEnv,
+    "MCP_CHILD_CHILD_AUTH_TOKEN",
+  );
   assert.equal(sanitized.subAgents[0].deployment.envValues, undefined);
   assert.equal(sanitized.workflow.nodes[0].agent.mcpTools[0].authToken, undefined);
   assert.equal(sourceDraft.mcpTools[0].authToken, "root-secret");
@@ -108,6 +114,10 @@ test("writes a versioned user-scoped payload without secrets", () => {
   assert.equal(payload.version, 1);
   assert.equal(payload.drafts[0].id, "draft-1");
   assert.equal(payload.drafts[0].draft.mcpTools[0].authToken, undefined);
+  assert.equal(
+    payload.drafts[0].draft.mcpTools[0].authTokenEnv,
+    "MCP_DRAFT_AGENT_SERVER_AUTH_TOKEN",
+  );
 });
 
 test("loads both legacy arrays and the current versioned payload", () => {
