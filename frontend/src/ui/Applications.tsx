@@ -24,6 +24,19 @@ function SearchIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function CodingAgentsIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 36 36" fill="none" aria-hidden="true" {...props}>
+      <rect x="3.5" y="5" width="18" height="18" rx="5" fill="currentColor" opacity="0.1" />
+      <rect x="3.5" y="5" width="18" height="18" rx="5" stroke="currentColor" strokeWidth="1.6" />
+      <path d="m9.2 11.2-2.8 2.7 2.8 2.7M12.1 17.4h4.3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="26.5" cy="12" r="3" fill="hsl(var(--background))" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="27" cy="26.5" r="3" fill="hsl(var(--background))" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M21.5 12h2M19.3 21l5.6 3.8M27 15v8.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function Applications({ onOpen }: ApplicationsProps) {
   const [activeCategory, setActiveCategory] = useState("development");
   const [query, setQuery] = useState("");
@@ -91,6 +104,8 @@ export function Applications({ onOpen }: ApplicationsProps) {
                     alt=""
                     aria-hidden="true"
                   />
+                ) : application.icon === "coding-agents" ? (
+                  <CodingAgentsIcon className="application-card-icon" />
                 ) : (
                   <GitHubLogo className="application-card-icon" />
                 )}
@@ -98,7 +113,7 @@ export function Applications({ onOpen }: ApplicationsProps) {
                   <div className="application-card-title">
                     <h2>{application.name}</h2>
                     {application.badge ? (
-                      <span className="application-card-badge">{application.badge}</span>
+                      <span className={`application-card-badge is-${application.badgeTone || "default"}`}>{application.badge}</span>
                     ) : null}
                   </div>
                   <p>{application.description}</p>

@@ -1108,6 +1108,13 @@ def _run_frontend_server(
 
     mount_skill_creator_routes(app, _skill_creator_owner)
 
+    from veadk.cli.frontend_coding_agents import mount_coding_agent_routes
+
+    mount_coding_agent_routes(
+        app,
+        authorize=_require_agent_management,
+    )
+
     @app.get("/web/access")
     async def _web_access(request: Request):
         principal = _current_principal(request)
