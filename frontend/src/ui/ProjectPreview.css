@@ -1425,6 +1425,18 @@
   box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12);
 }
 
+.pp-region-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+  background: hsl(var(--muted) / 0.32);
+}
+
+.pp-region-help {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .pp-region-chevron {
   width: 15px;
   height: 15px;

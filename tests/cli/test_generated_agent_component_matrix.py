@@ -35,6 +35,7 @@ from veadk.cli.generated_agent_codegen import (
     AgentDraft,
     DeploymentConfig,
     GeneratedProject,
+    McpTool,
     MemoryConfig,
     debug_runtime_env_from_draft,
     generate_project_from_draft,
@@ -181,6 +182,25 @@ def test_debug_runtime_forwards_active_tracing_env_and_enable_flag(
         **env_values,
         exporter.enable_flag: "true",
     }
+
+
+def test_debug_runtime_materializes_mcp_token_env_without_mutating_draft() -> None:
+    draft = AgentDraft(
+        name="debug-agent",
+        mcpTools=[
+            McpTool(
+                name="orders",
+                transport="http",
+                url="https://mcp.example.com/mcp",
+                authToken="debug-secret",
+            )
+        ],
+    )
+
+    assert debug_runtime_env_from_draft(draft) == {
+        "MCP_DEBUG_AGENT_ORDERS_AUTH_TOKEN": "debug-secret"
+    }
+    assert draft.mcpTools[0].authToken == "debug-secret"
 
 
 def test_debug_runtime_materializes_nested_a2a_registry_defaults() -> None:

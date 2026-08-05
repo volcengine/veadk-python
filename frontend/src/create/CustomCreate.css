@@ -3223,6 +3223,25 @@
   line-height: 1.5;
   color: hsl(var(--muted-foreground));
 }
+.cw-mcp-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid #b4530940;
+  border-radius: 8px;
+  background: #b453091a;
+  color: #b45309;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.cw-mcp-warning svg {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+}
 .cw-mcp .cw-add-sub {
   margin-top: 0;
 }

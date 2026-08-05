@@ -2397,6 +2397,24 @@ def _run_frontend_server(
                 data,
                 debug=True,
             )
+            runtime_envs: dict[str, str] = {}
+            runtime_id = str(data.get("runtimeId") or "").strip()
+            if runtime_id:
+                runtime_region = (
+                    str(data.get("runtimeRegion") or "cn-beijing").strip()
+                    or "cn-beijing"
+                )
+                runtime = _authorized_runtime(
+                    request,
+                    runtime_id,
+                    runtime_region,
+                    coded_access_error=True,
+                )
+                runtime_envs = {
+                    str(item.key): str(item.value or "")
+                    for item in (getattr(runtime, "envs", None) or [])
+                    if getattr(item, "key", None)
+                }
             temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
             app_name = _write_generated_project(project, temp_dir)
             port = _free_local_port()
@@ -2415,6 +2433,7 @@ def _run_frontend_server(
                 str(port),
             ]
             runner_env = _safe_runner_env()
+            runner_env.update(runtime_envs)
             runner_env.update(debug_runtime_env_from_draft(draft))
             with stdout_path.open("w", encoding="utf-8") as stdout_file:
                 with stderr_path.open("w", encoding="utf-8") as stderr_file:
@@ -3013,6 +3032,11 @@ def _run_frontend_server(
         # agent needs at boot. User-provided envs (from the UI) take priority
         # over our defaults.
         runtime_envs = _collect_runtime_envs()
+        if existing_runtime is not None:
+            for item in getattr(existing_runtime, "envs", None) or []:
+                key = str(getattr(item, "key", "") or "").strip()
+                if key:
+                    runtime_envs[key] = str(getattr(item, "value", "") or "")
         for k, v in extra_runtime_envs.items():
             runtime_envs[k] = v
         if feishu_enabled:
@@ -3916,18 +3940,11 @@ def _run_frontend_server(
         """Control-plane detail for one runtime (used by the '管理 Agent' view).
 
         Returns config/status metadata from GetRuntime. This is NOT the in-container
-        agent graph (that lives on the runtime's data plane); env-var values that
-        look like secrets are masked before leaving the server.
+        agent graph (that lives on the runtime's data plane). Runtime visibility
+        authorization also grants access to its environment-variable values.
         """
         if not runtimeId:
             raise HTTPException(status_code=400, detail="runtimeId is required")
-
-        def _mask(key: str, value: str) -> str:
-            if not value:
-                return value
-            if any(s in key.upper() for s in ("KEY", "SECRET", "TOKEN", "PASSWORD")):
-                return (value[:3] + "***") if len(value) > 3 else "***"
-            return value
 
         try:
             r = _authorized_runtime(request, runtimeId, region)
@@ -3954,7 +3971,7 @@ def _run_frontend_server(
             else:
                 auth_type = "unknown"
             envs = [
-                {"key": e.key, "value": _mask(e.key or "", e.value or "")}
+                {"key": e.key, "value": e.value or ""}
                 for e in (getattr(r, "envs", None) or [])
             ]
             return {
@@ -5156,6 +5173,14 @@ def _run_frontend_server(
             "region": region,
             "currentVersion": getattr(runtime, "current_version_number", None),
             "managed": tags.get("veadk:managed") == "true",
+            "envs": [
+                {
+                    "key": str(getattr(item, "key", "") or ""),
+                    "value": str(getattr(item, "value", "") or ""),
+                }
+                for item in (getattr(runtime, "envs", None) or [])
+                if getattr(item, "key", None)
+            ],
         }
 
     def _runtime_update_result(

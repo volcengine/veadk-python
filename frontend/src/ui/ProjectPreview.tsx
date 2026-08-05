@@ -18,8 +18,6 @@ import {
   ChevronRight,
   Download,
   ExternalLink,
-  Eye,
-  EyeOff,
   File,
   FileDown,
   FilePlus,
@@ -862,8 +860,8 @@ export function ProjectPreview({
   const [activePhase, setActivePhase] = useState<string | null>(null);
   const [addingAgent, setAddingAgent] = useState(false);
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
-  const [showEnvValues, setShowEnvValues] = useState(false);
   const [regionMenuOpen, setRegionMenuOpen] = useState(false);
+  const deploymentRegionHelpId = useId();
   const [authenticationType, setAuthenticationType] =
     useState<DeployAuthentication["type"]>("api_key");
   const [userPoolUid, setUserPoolUid] = useState("");
@@ -912,6 +910,7 @@ export function ProjectPreview({
         aria-label="部署区域"
         aria-haspopup="listbox"
         aria-expanded={regionMenuOpen}
+        aria-describedby={isRuntimeUpdate ? deploymentRegionHelpId : undefined}
         disabled={deploying || isRuntimeUpdate || !onDeployRegionChange}
         onClick={() => setRegionMenuOpen((open) => !open)}
       >
@@ -950,6 +949,11 @@ export function ProjectPreview({
             })}
           </div>
         </>
+      )}
+      {isRuntimeUpdate && (
+        <span id={deploymentRegionHelpId} className="pp-region-help">
+          更新时沿用现有 Runtime 的部署区域，无法修改。
+        </span>
       )}
     </div>
   );
@@ -2059,14 +2063,6 @@ export function ProjectPreview({
                       组件配置会自动同步到这里，部署前可核对最终值。
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    className="pp-icon-btn"
-                    title={showEnvValues ? "隐藏值" : "显示值"}
-                    onClick={() => setShowEnvValues((value) => !value)}
-                  >
-                    {showEnvValues ? <EyeOff className="pp-ic" /> : <Eye className="pp-ic" />}
-                  </button>
                 </div>
                 <button
                   type="button"
@@ -2155,7 +2151,7 @@ export function ProjectPreview({
                                 ) : (
                                   <input
                                     className="pp-env-value"
-                                    type={fixed || showEnvValues ? "text" : "password"}
+                                    type="text"
                                     value={row.value}
                                     placeholder={
                                       row.required ? "必填，尚未填写" : "可选，尚未填写"
@@ -2203,7 +2199,7 @@ export function ProjectPreview({
                           onChange={(e) => updateEnvRow(row.id, { key: e.currentTarget.value })}
                         />
                         <input
-                          type={showEnvValues ? "text" : "password"}
+                          type="text"
                           value={row.value}
                           placeholder="值"
                           disabled={deploying}

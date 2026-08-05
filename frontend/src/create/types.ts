@@ -21,6 +21,8 @@ export interface McpTool {
   url?: string;
   /** http transport: optional bearer token -> Authorization header. */
   authToken?: string;
+  /** Environment variable used by generated code for the bearer token. */
+  authTokenEnv?: string;
   /** stdio transport: the command to launch (e.g. "npx"). */
   command?: string;
   /** stdio transport: command args (e.g. ["-y", "@playwright/mcp@latest"]). */
@@ -63,7 +65,7 @@ export interface DeploymentConfig {
   feishuEnabled: boolean;
   network?: NetworkConfig;
   /** Values entered for feature-specific runtime configuration.
-   *  These are deployment-only and must not be exported to source/YAML. */
+   *  Draft and YAML persistence intentionally preserve these values. */
   envValues?: Record<string, string>;
 }
 

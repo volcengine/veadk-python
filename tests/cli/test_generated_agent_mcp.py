@@ -43,9 +43,9 @@ class _FakeMcpToolset:
 
 
 @pytest.mark.asyncio
-async def test_debug_mcp_appends_standard_mcp_path(monkeypatch) -> None:
+async def test_debug_mcp_keeps_configured_path_without_rewriting(monkeypatch) -> None:
     _FakeMcpToolset.attempted_urls = []
-    _FakeMcpToolset.working_urls = {"https://mcp.example.com/mcp"}
+    _FakeMcpToolset.working_urls = {"https://mcp.example.com/custom-endpoint"}
     monkeypatch.setattr(
         "veadk.cli.generated_agent_mcp.MCPToolset",
         _FakeMcpToolset,
@@ -58,7 +58,7 @@ async def test_debug_mcp_appends_standard_mcp_path(monkeypatch) -> None:
             McpTool(
                 name="sequentialthinking",
                 transport="http",
-                url="https://mcp.example.com",
+                url="https://mcp.example.com/custom-endpoint",
                 authToken="secret-token",
             )
         ],
@@ -66,9 +66,9 @@ async def test_debug_mcp_appends_standard_mcp_path(monkeypatch) -> None:
 
     resolved = await resolve_debug_mcp_endpoints(draft)
 
-    assert _FakeMcpToolset.attempted_urls == ["https://mcp.example.com/mcp"]
-    assert resolved.mcpTools[0].url == "https://mcp.example.com/mcp"
-    assert draft.mcpTools[0].url == "https://mcp.example.com"
+    assert _FakeMcpToolset.attempted_urls == ["https://mcp.example.com/custom-endpoint"]
+    assert resolved.mcpTools[0].url == "https://mcp.example.com/custom-endpoint"
+    assert draft.mcpTools[0].url == "https://mcp.example.com/custom-endpoint"
 
 
 @pytest.mark.asyncio
@@ -129,6 +129,6 @@ async def test_debug_mcp_reports_discovery_failure_without_credentials(
     message = str(exc_info.value)
     assert "sequentialthinking" in message
     assert "Streamable HTTP" in message
-    assert "/mcp" in message
+    assert "MCP Endpoint" in message
     assert "secret-token" not in message
     assert "Bearer" not in message

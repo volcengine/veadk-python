@@ -4201,8 +4201,21 @@ export default function App() {
                     setError("Runtime 缺少智能体名称，无法更新。");
                     return;
                   }
+                  const runtimeEnvValues = Object.fromEntries(
+                    capability.runtime.envs.map(({ key, value }) => [key, value]),
+                  );
+                  const hydratedDraft: AgentDraft = {
+                    ...nextDraft,
+                    deployment: {
+                      ...(nextDraft.deployment ?? { feishuEnabled: false }),
+                      envValues: {
+                        ...runtimeEnvValues,
+                        ...(nextDraft.deployment?.envValues ?? {}),
+                      },
+                    },
+                  };
                   setManageAgents(false);
-                  setImportedDraft(nextDraft);
+                  setImportedDraft(hydratedDraft);
                   const nextDraftId = `runtime-${capability.runtime.runtimeId}`;
                   setEditingDraftId(nextDraftId);
                   editingDraftBaselineRef.current =
