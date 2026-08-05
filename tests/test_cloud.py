@@ -17,6 +17,7 @@ import tempfile
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+import requests
 
 os.environ["VOLCENGINE_ACCESS_KEY"] = "test_access_key"
 os.environ["VOLCENGINE_SECRET_KEY"] = "test_secret_key"
@@ -116,6 +117,38 @@ def test_vefaas_passes_session_token_to_apig() -> None:
         session_token="test_session_token",
         provider="volcengine",
     )
+
+
+def test_vefaas_code_upload_failure_logs_safe_diagnostics() -> None:
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        region="cn-beijing",
+    )
+    service.client = Mock()
+    service.client.get_code_upload_address.return_value = Mock(
+        upload_address="https://uploads.example.com/path?signature=top-secret"
+    )
+
+    with (
+        patch(
+            "veadk.integrations.ve_faas.ve_faas.zip_and_encode_folder",
+            return_value=(b"archive", 7, None),
+        ),
+        patch(
+            "veadk.integrations.ve_faas.ve_faas.requests.put",
+            side_effect=requests.ConnectionError("signed URL must stay private"),
+        ),
+        patch("veadk.integrations.ve_faas.ve_faas.logger.error") as log_error,
+    ):
+        with pytest.raises(ValueError, match="ConnectionError.*uploads.example.com"):
+            service._upload_and_mount_code("function-id", ".")
+
+    logged = " ".join(str(value) for call in log_error.call_args_list for value in call.args)
+    assert "ConnectionError" in logged
+    assert "uploads.example.com" in logged
+    assert "top-secret" not in logged
+    assert "signed URL must stay private" not in logged
 
 
 def test_vefaas_code_upload_callback_uses_configured_region() -> None:

@@ -19,6 +19,7 @@ import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit
 from cookiecutter.main import cookiecutter
 import veadk.integrations.ve_faas as vefaas
 from veadk.version import VERSION
@@ -157,7 +158,11 @@ class VeFaaS:
             path (str): Local project path.
         """
         # Get zipped code data
-        code_zip_data, code_zip_size, error = zip_and_encode_folder(path)
+        code_zip_data, code_zip_size, zip_error = zip_and_encode_folder(path)
+        if zip_error is not None:
+            raise ValueError(
+                f"Failed to package Function code: {type(zip_error).__name__}."
+            ) from None
         logger.info(
             f"Zipped project size: {code_zip_size / 1024 / 1024:.2f} MB",
         )
@@ -168,6 +173,14 @@ class VeFaaS:
         )
         response = self.client.get_code_upload_address(req)
         upload_url = response.upload_address
+        upload_host = urlsplit(upload_url).hostname or "unknown-host"
+        logger.info(
+            "Uploading Function code bundle function_id=%s size_bytes=%s host=%s "
+            "connect_timeout_seconds=30 read_timeout_seconds=300",
+            function_id,
+            code_zip_size,
+            upload_host,
+        )
 
         headers = {
             "Content-Type": "application/zip",
@@ -179,12 +192,37 @@ class VeFaaS:
                 headers=headers,
                 timeout=(30, 300),
             )
-        except requests.RequestException:
-            raise ValueError("Function code upload request failed.") from None
+        except requests.RequestException as error:
+            error_type = type(error).__name__
+            logger.error(
+                "Function code upload request failed function_id=%s size_bytes=%s "
+                "host=%s error_type=%s",
+                function_id,
+                code_zip_size,
+                upload_host,
+                error_type,
+            )
+            raise ValueError(
+                f"Function code upload request failed ({error_type}, host={upload_host})."
+            ) from None
         if not (200 <= response.status_code < 300):
+            logger.error(
+                "Function code upload returned non-success function_id=%s "
+                "size_bytes=%s host=%s status_code=%s",
+                function_id,
+                code_zip_size,
+                upload_host,
+                response.status_code,
+            )
             raise ValueError(
                 f"Function code upload failed with status code {response.status_code}."
             )
+        logger.info(
+            "Function code bundle upload completed function_id=%s size_bytes=%s host=%s",
+            function_id,
+            code_zip_size,
+            upload_host,
+        )
 
         # Mount the TOS bucket to function instance
         res = signed_request(
