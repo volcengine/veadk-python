@@ -1,0 +1,106 @@
+from __future__ import annotations
+
+import asyncio
+from unittest.mock import Mock, patch
+
+from veadk.a2a.remote_ve_agent import RemoteVeAgent
+
+
+def _agent_card(url: str) -> dict:
+    return {
+        "name": "skill-agent",
+        "description": "Skill sandbox agent",
+        "url": url,
+        "version": "1.0.0",
+        "capabilities": {"streaming": True},
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text"],
+        "skills": [
+            {
+                "id": "chat",
+                "name": "chat",
+                "description": "Chat with the skill agent",
+                "tags": ["chat"],
+            }
+        ],
+    }
+
+
+def _build_agent(endpoint: str, card_url: str) -> tuple[RemoteVeAgent, Mock]:
+    response = Mock()
+    response.json.return_value = _agent_card(card_url)
+    with patch("veadk.a2a.remote_ve_agent.requests.get", return_value=response) as get:
+        agent = RemoteVeAgent(name="remote", url=endpoint)
+    return agent, get
+
+
+def _close(agent: RemoteVeAgent) -> None:
+    asyncio.run(agent._httpx_client.aclose())
+
+
+def test_remote_agent_preserves_a2a_path_from_agent_card() -> None:
+    agent, get = _build_agent("https://sandbox.test", "https://sandbox.test/a2a")
+    try:
+        assert agent._agent_card.url == "https://sandbox.test/a2a"
+        assert get.call_args.args[0] == (
+            "https://sandbox.test/.well-known/agent-card.json"
+        )
+    finally:
+        _close(agent)
+
+
+def test_remote_agent_preserves_same_origin_session_authorization_query() -> None:
+    agent, get = _build_agent(
+        "https://sandbox.test/?faasInstanceName=inst&Authorization=key",
+        "https://sandbox.test/a2a",
+    )
+    try:
+        assert get.call_args.args[0] == (
+            "https://sandbox.test/.well-known/agent-card.json"
+        )
+        assert get.call_args.kwargs["params"] == {
+            "faasInstanceName": "inst",
+            "Authorization": "key",
+        }
+        assert dict(agent._httpx_client.params) == {
+            "faasInstanceName": "inst",
+            "Authorization": "key",
+        }
+    finally:
+        _close(agent)
+
+
+def test_remote_agent_does_not_forward_session_query_to_different_origin() -> None:
+    agent, _ = _build_agent(
+        "https://sandbox.test/?Authorization=key",
+        "https://different.test/a2a",
+    )
+    try:
+        assert agent._agent_card.url == "https://different.test/a2a"
+        assert "Authorization" not in dict(agent._httpx_client.params)
+    finally:
+        _close(agent)
+
+
+def test_remote_agent_keeps_explicit_query_auth_for_different_origin() -> None:
+    response = Mock()
+    response.json.return_value = _agent_card("https://different.test/a2a")
+    with patch("veadk.a2a.remote_ve_agent.requests.get", return_value=response):
+        agent = RemoteVeAgent(
+            name="remote",
+            url="https://sandbox.test",
+            auth_token="explicit-token",
+            auth_method="querystring",
+        )
+    try:
+        assert dict(agent._httpx_client.params) == {"token": "explicit-token"}
+    finally:
+        _close(agent)
+
+
+def test_remote_agent_replaces_loopback_host_but_keeps_card_path() -> None:
+    agent, _ = _build_agent("https://sandbox.test", "http://localhost:8000/a2a")
+    try:
+        assert agent._agent_card.url == "https://sandbox.test/a2a"
+    finally:
+        _close(agent)

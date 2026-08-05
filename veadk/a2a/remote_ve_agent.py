@@ -12,33 +12,101 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 import functools
+import json
 from typing import AsyncGenerator, Literal, Optional
+from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
 
-from a2a.client.base_client import BaseClient
 import httpx
 import requests
+from a2a.client.base_client import BaseClient
 from a2a.types import AgentCard
+from google.adk.agents.invocation_context import InvocationContext
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
+from google.adk.events.event import Event
+from google.adk.utils.context_utils import Aclosing
 
 from veadk.integrations.ve_identity.utils import generate_headers
 from veadk.utils.auth import VE_TIP_TOKEN_CREDENTIAL_KEY, VE_TIP_TOKEN_HEADER
 from veadk.utils.logger import get_logger
-from google.adk.utils.context_utils import Aclosing
-from google.adk.events.event import Event
-from google.adk.agents.invocation_context import InvocationContext
-
 
 logger = get_logger(__name__)
 
 AGENT_CARD_WELL_KNOWN_PATH = "/.well-known/agent-card.json"
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def _convert_agent_card_dict_to_obj(agent_card_dict: dict) -> AgentCard:
     agent_card_json_str = json.dumps(agent_card_dict, ensure_ascii=False, indent=2)
     agent_card_object = AgentCard.model_validate_json(str(agent_card_json_str))
     return agent_card_object
+
+
+def _endpoint_parts(url: str):
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        raise ValueError(f"Invalid A2A endpoint URL: {url}")
+    if parts.username or parts.password or parts.fragment:
+        raise ValueError("A2A endpoint URL must not contain userinfo or a fragment")
+    return parts
+
+
+def _agent_card_discovery_url(endpoint: str) -> str:
+    parts = _endpoint_parts(endpoint)
+    base_path = parts.path.rstrip("/")
+    return urlunsplit(
+        (
+            parts.scheme,
+            parts.netloc,
+            f"{base_path}{AGENT_CARD_WELL_KNOWN_PATH}",
+            "",
+            "",
+        )
+    )
+
+
+def _endpoint_query_params(endpoint: str) -> dict[str, str]:
+    return dict(parse_qsl(_endpoint_parts(endpoint).query, keep_blank_values=True))
+
+
+def _origin(parts) -> tuple[str, str, int | None]:
+    return parts.scheme.lower(), (parts.hostname or "").lower(), parts.port
+
+
+def _resolve_agent_card_rpc_url(card_url: str | None, endpoint: str) -> str:
+    endpoint_parts = _endpoint_parts(endpoint)
+    clean_endpoint = urlunsplit(
+        (
+            endpoint_parts.scheme,
+            endpoint_parts.netloc,
+            endpoint_parts.path or "/",
+            "",
+            "",
+        )
+    )
+    if not card_url:
+        return clean_endpoint
+
+    resolved_url = urljoin(clean_endpoint, card_url)
+    card_parts = _endpoint_parts(resolved_url)
+    if (
+        card_parts.hostname in _LOOPBACK_HOSTS
+        and endpoint_parts.hostname not in _LOOPBACK_HOSTS
+    ):
+        resolved_url = urlunsplit(
+            (
+                endpoint_parts.scheme,
+                endpoint_parts.netloc,
+                card_parts.path,
+                card_parts.query,
+                "",
+            )
+        )
+    return resolved_url
+
+
+def _is_same_origin(first_url: str, second_url: str) -> bool:
+    return _origin(_endpoint_parts(first_url)) == _origin(_endpoint_parts(second_url))
 
 
 class RemoteVeAgent(RemoteA2aAgent):
@@ -168,13 +236,16 @@ class RemoteVeAgent(RemoteA2aAgent):
                     f"Unsupported auth method {auth_method}, use `header` or `querystring` instead."
                 )
 
+        endpoint_query_params = _endpoint_query_params(effective_url)
+        discovery_params = {**endpoint_query_params, **req_params}
         agent_card_dict = requests.get(
-            effective_url + AGENT_CARD_WELL_KNOWN_PATH,
+            _agent_card_discovery_url(effective_url),
             headers=req_headers,
-            params=req_params,
+            params=discovery_params,
         ).json()
-        # replace agent_card_url with actual host
-        agent_card_dict["url"] = effective_url
+        agent_card_dict["url"] = _resolve_agent_card_rpc_url(
+            agent_card_dict.get("url"), effective_url
+        )
 
         agent_card_object = _convert_agent_card_dict_to_obj(agent_card_dict)
 
@@ -184,27 +255,31 @@ class RemoteVeAgent(RemoteA2aAgent):
         client_to_use = httpx_client
 
         if client_was_provided:
-            # If a client was provided, update it with auth info
-            if auth_token:
-                if auth_method == "header":
-                    client_to_use.headers.update(req_headers)
-                elif auth_method == "querystring":
-                    new_params = dict(client_to_use.params)
-                    new_params.update(req_params)
-                    client_to_use.params = new_params
+            if auth_token and auth_method == "header":
+                client_to_use.headers.update(req_headers)
         else:
-            # If no client was provided, create a new one with auth info
-            if auth_token:
-                if auth_method == "header":
-                    client_to_use = httpx.AsyncClient(
-                        base_url=effective_url, headers=req_headers, timeout=600
-                    )
-                elif auth_method == "querystring":
-                    client_to_use = httpx.AsyncClient(
-                        base_url=effective_url, params=req_params, timeout=600
-                    )
-            else:  # No auth, no client provided
-                client_to_use = httpx.AsyncClient(base_url=effective_url, timeout=600)
+            endpoint_parts = _endpoint_parts(effective_url)
+            clean_base_url = urlunsplit(
+                (
+                    endpoint_parts.scheme,
+                    endpoint_parts.netloc,
+                    endpoint_parts.path or "/",
+                    "",
+                    "",
+                )
+            )
+            client_to_use = httpx.AsyncClient(
+                base_url=clean_base_url,
+                headers=req_headers,
+                timeout=600,
+            )
+
+        new_params = dict(client_to_use.params)
+        new_params.update(req_params)
+        if _is_same_origin(agent_card_dict["url"], effective_url):
+            new_params.update(discovery_params)
+        if new_params:
+            client_to_use.params = new_params
 
         super().__init__(
             name=name, agent_card=agent_card_object, httpx_client=client_to_use
@@ -327,8 +402,9 @@ class RemoteVeAgent(RemoteA2aAgent):
             return
 
         try:
-            from veadk.utils.auth import build_auth_config
             from google.adk.agents.callback_context import CallbackContext
+
+            from veadk.utils.auth import build_auth_config
 
             # Inject TIP token via header
             workload_auth_config = build_auth_config(
