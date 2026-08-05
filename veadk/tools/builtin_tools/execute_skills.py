@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections.abc import Iterable
+import uuid
 from typing import Optional
 from urllib import error, request
 from urllib.parse import urlsplit, urlunsplit
@@ -31,23 +31,22 @@ from veadk.tools.builtin_tools._agentkit import (
 )
 from veadk.tools.builtin_tools.run_sandbox_agent import run_sandbox_agent
 
-
 _SKILL_API_UPGRADE_STATUS_CODES = frozenset({404, 405})
 _SKILL_API_TRANSIENT_STATUS_CODES = frozenset({502, 503, 504})
 _SKILL_API_TIMEOUT = 900
 _SKILL_API_HEALTH_TIMEOUT = 30.0
 _SKILL_API_HEALTH_POLL_INTERVAL = 1.0
 _SKILL_API_HEALTH_REQUEST_TIMEOUT = 5.0
+_SKILL_INVOCATION_MODE_ENV = "AGENTKIT_SKILL_INVOCATION_MODE"
+_SKILL_INVOCATION_MODES = frozenset(
+    {"execute", "skill_api", "run_sse", "a2a", "python_agent"}
+)
 
 
-def _skill_api_upgrade_hint(path: str) -> str:
-    api_path = (
-        "/v1/skills/stream"
-        if path.rstrip("/").endswith("/stream")
-        else "/v1/skills/execute"
-    )
+def _skill_api_upgrade_hint() -> str:
     return (
-        f"提示：当前 Skill 沙箱镜像未实现 {api_path} 接口，可能是旧版沙箱镜像。"
+        "提示：当前 Skill 沙箱镜像未实现 /v1/skills/execute 接口，"
+        "可能是旧版沙箱镜像。"
         "请升级 Skill 沙箱镜像或切换到支持 Skill HTTP API 的新版沙箱。"
     )
 
@@ -82,6 +81,21 @@ def _skill_api_url(endpoint: str, path: str) -> str:
     )
 
 
+def _resolve_skill_invocation_mode(mode: str | None = None) -> str:
+    # 默认保持 /v1/skills/execute；新沙箱可通过参数或环境变量显式切换后端。
+    resolved = (mode or os.getenv(_SKILL_INVOCATION_MODE_ENV) or "execute").strip()
+    if not resolved:
+        return "execute"
+    normalized = resolved.lower().replace("-", "_")
+    if normalized not in _SKILL_INVOCATION_MODES:
+        raise ValueError(
+            "Unsupported AgentKit Skill invocation mode "
+            f"{resolved!r}. Expected one of: "
+            "execute, run_sse, a2a, python_agent."
+        )
+    return "execute" if normalized == "skill_api" else normalized
+
+
 def _post_skill_api_json(
     *,
     endpoint: str,
@@ -89,11 +103,10 @@ def _post_skill_api_json(
     payload: dict[str, object],
     tip_token_key: str | None,
     timeout: int,
-    stream: bool,
 ) -> str:
     headers = {
         "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
+        "Accept": "application/json",
     }
     if tip_token_key:
         headers["X-Tip-Token-Key"] = tip_token_key
@@ -106,14 +119,11 @@ def _post_skill_api_json(
     )
     try:
         with request.urlopen(req, timeout=timeout) as response:
-            if stream:
-                return _parse_skill_stream_response(response)
             return _parse_skill_execute_response(response.read())
     except error.HTTPError as exc:
         if exc.code in _SKILL_API_UPGRADE_STATUS_CODES:
             raise RuntimeError(
-                f"Skill HTTP API returned HTTP {exc.code}. "
-                f"{_skill_api_upgrade_hint(path)}"
+                f"Skill HTTP API returned HTTP {exc.code}. {_skill_api_upgrade_hint()}"
             ) from exc
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(
@@ -122,6 +132,34 @@ def _post_skill_api_json(
     except error.URLError as exc:
         raise RuntimeError(
             f"Skill HTTP API endpoint is not reachable: {exc.reason}"
+        ) from exc
+
+
+def _post_json(
+    *,
+    endpoint: str,
+    path: str,
+    payload: dict[str, object],
+    timeout: int,
+    accept: str = "application/json",
+) -> bytes:
+    req = request.Request(
+        _skill_api_url(endpoint, path),
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": accept},
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=timeout) as response:
+            return response.read()
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"AgentKit Skill {path} request failed with HTTP {exc.code}: {detail}"
+        ) from exc
+    except error.URLError as exc:
+        raise RuntimeError(
+            f"AgentKit Skill {path} endpoint is not reachable: {exc.reason}"
         ) from exc
 
 
@@ -183,50 +221,169 @@ def _parse_skill_execute_response(raw: bytes) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def _parse_skill_stream_response(raw: bytes | Iterable[bytes]) -> str:
+def _run_request_payload(workflow_prompt: str, tool_context: ToolContext) -> dict:
+    invocation_context = tool_context._invocation_context
+    return {
+        "app_name": invocation_context.agent.name,
+        "user_id": invocation_context.user_id,
+        "session_id": invocation_context.session.id,
+        "new_message": {
+            "role": "user",
+            "parts": [{"text": workflow_prompt}],
+        },
+        "streaming": True,
+    }
+
+
+def _extract_text_from_parts(parts: object) -> str:
+    if not isinstance(parts, list):
+        return ""
     chunks: list[str] = []
-    event_name = "message"
-    data_lines: list[str] = []
-
-    def flush_event() -> None:
-        nonlocal event_name, data_lines
-        if not data_lines:
-            event_name = "message"
-            return
-        data = "\n".join(data_lines)
-        try:
-            payload = json.loads(data)
-        except json.JSONDecodeError:
-            payload = {}
-
-        if event_name == "error":
-            content = payload.get("content") if isinstance(payload, dict) else None
-            if isinstance(content, str):
-                raise RuntimeError(content)
-            raise RuntimeError(data)
-        if isinstance(payload, dict) and payload.get("type") == "text":
-            content = payload.get("content")
-            if isinstance(content, str):
-                chunks.append(content)
-
-        event_name = "message"
-        data_lines = []
-
-    raw_lines = raw.splitlines() if isinstance(raw, bytes) else raw
-    for raw_line in raw_lines:
-        line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
-        if not line:
-            flush_event()
+    for part in parts:
+        if not isinstance(part, dict):
             continue
-        if line.startswith(":"):
+        text = part.get("text")
+        if isinstance(text, str):
+            chunks.append(text)
             continue
-        if line.startswith("event:"):
-            event_name = line[len("event:") :].strip()
-        elif line.startswith("data:"):
-            data_lines.append(line[len("data:") :].strip())
-
-    flush_event()
+        text_part = part.get("textPart")
+        if isinstance(text_part, dict) and isinstance(text_part.get("text"), str):
+            chunks.append(text_part["text"])
     return "".join(chunks)
+
+
+def _extract_text_from_a2a_result(result: object) -> str:
+    if not isinstance(result, dict):
+        return ""
+    if result.get("kind") == "message":
+        return _extract_text_from_parts(result.get("parts"))
+    artifacts = result.get("artifacts")
+    if isinstance(artifacts, list):
+        chunks = [
+            _extract_text_from_parts(artifact.get("parts"))
+            for artifact in artifacts
+            if isinstance(artifact, dict)
+        ]
+        text = "".join(chunks)
+        if text:
+            return text
+    history = result.get("history")
+    if isinstance(history, list):
+        for message in reversed(history):
+            if isinstance(message, dict) and message.get("role") in {
+                "agent",
+                "assistant",
+            }:
+                text = _extract_text_from_parts(message.get("parts"))
+                if text:
+                    return text
+    return ""
+
+
+def _parse_run_sse_response(raw: bytes) -> str:
+    chunks: list[str] = []
+    for raw_line in raw.splitlines():
+        line = raw_line.decode("utf-8", errors="replace")
+        if not line.startswith("data:"):
+            continue
+        data = line[len("data:") :].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            event = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and isinstance(event.get("error"), str):
+            raise RuntimeError(event["error"])
+        if not isinstance(event, dict):
+            continue
+        content = event.get("content")
+        if isinstance(content, dict):
+            text = _extract_text_from_parts(content.get("parts"))
+            if text:
+                chunks.append(text)
+    return "".join(chunks)
+
+
+def _execute_skills_via_run_sse(
+    *,
+    workflow_prompt: str,
+    endpoint: str,
+    tool_context: ToolContext,
+    timeout: int,
+) -> str:
+    # run_sse 复用 ADK 运行入口，适配只暴露 ADK Runtime 接口的 Skill 沙箱。
+    raw = _post_json(
+        endpoint=endpoint,
+        path="/run_sse",
+        payload=_run_request_payload(workflow_prompt, tool_context),
+        timeout=timeout,
+        accept="text/event-stream",
+    )
+    return _parse_run_sse_response(raw)
+
+
+def _execute_skills_via_a2a(
+    *,
+    workflow_prompt: str,
+    endpoint: str,
+    tool_context: ToolContext,
+    timeout: int,
+) -> str:
+    invocation_context = tool_context._invocation_context
+    # A2A 沙箱使用 JSON-RPC message/send，同步等待最终结果。
+    payload = {
+        "jsonrpc": "2.0",
+        "id": uuid.uuid4().hex,
+        "method": "message/send",
+        "params": {
+            "message": {
+                "kind": "message",
+                "messageId": uuid.uuid4().hex,
+                "role": "user",
+                "parts": [{"kind": "text", "text": workflow_prompt}],
+            },
+            "metadata": {
+                "user_id": invocation_context.user_id,
+                "session_id": invocation_context.session.id,
+            },
+            "configuration": {"blocking": True},
+        },
+    }
+    raw = _post_json(endpoint=endpoint, path="/a2a", payload=payload, timeout=timeout)
+    response = json.loads(raw.decode("utf-8"))
+    if isinstance(response, dict) and response.get("error"):
+        raise RuntimeError(json.dumps(response["error"], ensure_ascii=False))
+    result = response.get("result") if isinstance(response, dict) else None
+    text = _extract_text_from_a2a_result(result)
+    if text:
+        return text
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _execute_skills_via_python_agent(
+    *,
+    workflow_prompt: str,
+    tool_id: str,
+    tool_context: ToolContext,
+    timeout: int,
+    env_vars: Optional[dict[str, str]] = None,
+) -> str:
+    # python_agent 是旧版 RunCode 路径，本质是在沙箱内执行 python agent.py。
+    account_id = get_agentkit_account_id(tool_context.state)
+    extra_env_vars = dict(env_vars or {})
+    if account_id:
+        extra_env_vars.setdefault(
+            "TOS_SKILLS_DIR",
+            f"tos://agentkit-platform-{account_id}/skills/",
+        )
+    return run_sandbox_agent(
+        workflow_prompt=workflow_prompt,
+        tool_id=tool_id,
+        tool_context=tool_context,
+        timeout=timeout,
+        extra_env_vars=extra_env_vars,
+    )
 
 
 def _execute_skills_via_skill_api(
@@ -234,8 +391,8 @@ def _execute_skills_via_skill_api(
     workflow_prompt: str,
     tool_id: str,
     tool_context: ToolContext,
-    prefer_stream: bool,
     timeout: int,
+    invocation_mode: str,
 ) -> str:
     try:
         endpoint = ensure_agentkit_session_endpoint(
@@ -249,15 +406,29 @@ def _execute_skills_via_skill_api(
         raise RuntimeError(
             f"AgentKit session endpoint is not available: {exc}"
         ) from exc
+
+    if invocation_mode == "run_sse":
+        return _execute_skills_via_run_sse(
+            workflow_prompt=workflow_prompt,
+            endpoint=endpoint,
+            tool_context=tool_context,
+            timeout=timeout,
+        )
+    if invocation_mode == "a2a":
+        return _execute_skills_via_a2a(
+            workflow_prompt=workflow_prompt,
+            endpoint=endpoint,
+            tool_context=tool_context,
+            timeout=timeout,
+        )
+
     _wait_for_skill_api_health(endpoint=endpoint)
-    path = "/v1/skills/stream" if prefer_stream else "/v1/skills/execute"
     return _post_skill_api_json(
         endpoint=endpoint,
-        path=path,
+        path="/v1/skills/execute",
         payload={"prompt": workflow_prompt},
         tip_token_key=_tip_token_key(tool_context),
         timeout=timeout,
-        stream=prefer_stream,
     )
 
 
@@ -265,7 +436,7 @@ def execute_skills(
     workflow_prompt: str,
     tool_context: ToolContext = None,
     env_vars: Optional[dict[str, str]] = None,
-    prefer_stream: bool = False,
+    invocation_mode: Optional[str] = None,
 ) -> str:
     """Execute skills in a sandbox and return the output.
 
@@ -276,6 +447,9 @@ def execute_skills(
         env_vars (Optional[dict[str, str]]): Environment variables passed to the
             skill agent process for this execution only. Requests with custom
             environment variables use the legacy RunCode execution path.
+        invocation_mode (Optional[str]): AgentKit Skill sandbox invocation backend.
+            Supported values are "execute" (default), "run_sse", "a2a", and
+            "python_agent". It can also be set with AGENTKIT_SKILL_INVOCATION_MODE.
 
     Returns:
         str: The output of the code execution.
@@ -285,25 +459,28 @@ def execute_skills(
 
     tool_id = resolve_agentkit_tool_id("AGENTKIT_TOOL_ID_SKILLS")
     if env_vars:
-        account_id = get_agentkit_account_id(tool_context.state)
-        extra_env_vars = dict(env_vars)
-        if account_id:
-            extra_env_vars.setdefault(
-                "TOS_SKILLS_DIR",
-                f"tos://agentkit-platform-{account_id}/skills/",
-            )
-        return run_sandbox_agent(
+        # env_vars 依赖进程级环境变量注入，只能走 legacy python agent.py 路径。
+        return _execute_skills_via_python_agent(
             workflow_prompt=workflow_prompt,
             tool_id=tool_id,
             tool_context=tool_context,
             timeout=_SKILL_API_TIMEOUT,
-            extra_env_vars=extra_env_vars,
+            env_vars=env_vars,
+        )
+
+    mode = _resolve_skill_invocation_mode(invocation_mode)
+    if mode == "python_agent":
+        return _execute_skills_via_python_agent(
+            workflow_prompt=workflow_prompt,
+            tool_id=tool_id,
+            tool_context=tool_context,
+            timeout=_SKILL_API_TIMEOUT,
         )
 
     return _execute_skills_via_skill_api(
         workflow_prompt=workflow_prompt,
         tool_id=tool_id,
         tool_context=tool_context,
-        prefer_stream=prefer_stream,
         timeout=_SKILL_API_TIMEOUT,
+        invocation_mode=mode,
     )
