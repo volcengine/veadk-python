@@ -72,6 +72,13 @@ def cp_openapi_host(region: str, provider: CloudProvider) -> str:
     return "open.volcengineapi.com"
 
 
+def iam_openapi_host(provider: CloudProvider) -> str:
+    """Return the IAM OpenAPI host for a provider."""
+    if provider == "byteplus":
+        return "iam.byteplusapi.com"
+    return "iam.volcengineapi.com"
+
+
 def agentkit_openapi_base(region: str, provider: CloudProvider) -> str:
     """Return the AgentKit OpenAPI base URL used by Studio proxy helpers."""
     if provider == "byteplus":

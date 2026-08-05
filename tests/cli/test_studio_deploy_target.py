@@ -789,11 +789,43 @@ def test_studio_deploy_byteplus_skips_sandbox_auto_provisioning(
     assert veadk_environments["SANDBOX_CHAT_HERMES"] == ""
 
 
-def test_studio_deploy_byteplus_requires_existing_iam_role(
+def test_studio_deploy_byteplus_auto_creates_function_role(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def _fail_serverless_role(*_: object) -> None:
         raise AssertionError("BytePlus deploy must not create Volcengine role setup")
+
+    captured: dict[str, object] = {}
+
+    class _FakeCloudAgentEngine:
+        def __init__(self, **kwargs: object) -> None:
+            captured["engine"] = kwargs
+
+        def deploy(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                vefaas_endpoint="https://studio.byteplus.example.com",
+                vefaas_application_id="app-id",
+                vefaas_function_id="",
+            )
+
+    class _FakeIdentityClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured["identity"] = kwargs
+
+        def register_callback_for_user_pool_client(self, **kwargs: object) -> None:
+            captured["callback"] = kwargs
+
+    def _ensure_frontend_role(
+        access_key: str,
+        secret_key: str,
+        session_token: str = "",
+        provider: str = "volcengine",
+    ) -> str:
+        captured["role_access_key"] = access_key
+        captured["role_secret_key"] = secret_key
+        captured["role_session_token"] = session_token
+        captured["role_provider"] = provider
+        return "trn:iam::3001037806:role/VeADKFrontendServiceRole"
 
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._resolve_studio_identity_region",
@@ -802,6 +834,17 @@ def test_studio_deploy_byteplus_requires_existing_iam_role(
     monkeypatch.setattr(
         "veadk.cli.studio_deploy_serverless_iam.ensure_serverless_application_role",
         _fail_serverless_role,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_deploy_iam.ensure_frontend_role",
+        _ensure_frontend_role,
+    )
+    monkeypatch.setattr(
+        "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        _FakeIdentityClient,
     )
 
     result = CliRunner().invoke(
@@ -827,8 +870,14 @@ def test_studio_deploy_byteplus_requires_existing_iam_role(
         ],
     )
 
-    assert result.exit_code == 1
-    assert "BytePlus Studio deployment requires --iam-role" in result.output
+    assert result.exit_code == 0, result.output
+    assert captured["role_access_key"] == "byteplus-ak"
+    assert captured["role_secret_key"] == "byteplus-sk"
+    assert captured["role_session_token"] == ""
+    assert captured["role_provider"] == "byteplus"
+    assert "IAM role ready: trn:iam::3001037806:role/VeADKFrontendServiceRole" in (
+        result.output
+    )
 
 
 def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(

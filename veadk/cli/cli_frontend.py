@@ -7235,15 +7235,15 @@ def frontend_deploy(
         role_trn = iam_role
         click.echo(f"Using provided IAM role: {role_trn}")
     else:
-        if provider_id == "byteplus":
-            raise click.ClickException(
-                "BytePlus Studio deployment requires --iam-role. Automatic "
-                "BytePlus IAM role creation is not available yet."
-            )
         from veadk.cli.frontend_deploy_iam import ensure_frontend_role
 
         click.echo("Ensuring IAM role + policy…")
-        role_trn = ensure_frontend_role(ak, sk, session_token=session_token)
+        role_trn = ensure_frontend_role(
+            ak,
+            sk,
+            session_token=session_token,
+            provider=provider_id,
+        )
         click.echo(f"IAM role ready: {role_trn}")
     # Consumed by VeFaaS._create_function as the function's Role (STS creds are
     # then injected into the instance); read via getenv from os.environ, NOT

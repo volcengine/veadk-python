@@ -108,6 +108,33 @@ def test_frontend_role_uses_session_token(monkeypatch: pytest.MonkeyPatch) -> No
     service.set_session_token.assert_called_once_with("sts-token")
 
 
+def test_frontend_role_uses_byteplus_iam_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MagicMock()
+    service.get_role.return_value = {
+        "Result": {"Role": {"Trn": "trn:iam::123:role/VeADKFrontendServiceRole"}}
+    }
+    service.list_attached_role_policies.return_value = {
+        "Result": {
+            "AttachedPolicyMetadata": [
+                {"PolicyName": "VeADKFrontendPolicy"},
+                *[
+                    {"PolicyName": policy_name}
+                    for policy_name in FRONTEND_DEPLOY_SYSTEM_POLICIES
+                ],
+            ]
+        }
+    }
+    service.update_policy.return_value = {"Result": {}}
+    service.get_policy.return_value = _policy_response()
+    _install_iam_service(monkeypatch, service)
+
+    ensure_frontend_role("ak", "sk", provider="byteplus")
+
+    service.set_host.assert_called_once_with("iam.byteplusapi.com")
+
+
 def test_new_frontend_role_gets_custom_and_system_policies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
