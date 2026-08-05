@@ -46,7 +46,6 @@ from veadk.tracing.telemetry.exporters.tls_exporter import (
     TLSExporter,
     TLSExporterConfig,
 )
-from veadk.tracing.telemetry.metric_uploader import metric_uploader_registry
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 
 APP_NAME = "app"
@@ -98,7 +97,6 @@ def gen_span_processor(endpoint: str):
 @pytest.fixture
 def fresh_global_tracer_provider(monkeypatch):
     """Give each test an isolated OpenTelemetry global provider."""
-    metric_uploader_registry.clear()
     monkeypatch.setattr(trace_api, "_TRACER_PROVIDER", None)
     monkeypatch.setattr(trace_api, "_TRACER_PROVIDER_SET_ONCE", Once())
 
@@ -107,31 +105,12 @@ def fresh_global_tracer_provider(monkeypatch):
     tracer_provider = trace_api.get_tracer_provider()
     if isinstance(tracer_provider, trace_sdk.TracerProvider):
         tracer_provider.shutdown()
-    metric_uploader_registry.clear()
 
 
 @pytest.fixture
 def controlled_apmplus_exporter(monkeypatch):
     """Provide an APMPlus exporter without network or global meter side effects."""
     constructed_exporters = []
-
-    class ControlledMetricUploader:
-        registration_key = ("apmplus", "controlled")
-
-        def __init__(self):
-            self.force_flush_calls = 0
-
-        def record_call_llm(self, *args): ...
-
-        def record_tool_call(self, *args): ...
-
-        def record_skill_call(self, *args): ...
-
-        def force_flush(self):
-            self.force_flush_calls += 1
-            return True
-
-        def shutdown(self): ...
 
     class ControlledAPMPlusExporter(APMPlusExporter):
         def __init__(self):
@@ -146,11 +125,7 @@ def controlled_apmplus_exporter(monkeypatch):
         def model_post_init(self, context):
             self._exporter = OTelInMemorySpanExporter()
             self.processor = SimpleSpanProcessor(self._exporter)
-            self._controlled_meter_uploader = ControlledMetricUploader()
             constructed_exporters.append(self)
-
-        def get_metric_uploader(self):
-            return self._controlled_meter_uploader
 
     monkeypatch.setattr(
         apmplus_exporter_module,
@@ -213,7 +188,6 @@ def test_apmplus_enable_provider_and_manual_exporter_matrix(
     if not should_create_tracer:
         assert final_provider is initial_provider
         assert constructed_exporters == []
-        assert metric_uploader_registry.uploaders == ()
         return
 
     tracer = agent.tracers[0]
@@ -240,12 +214,6 @@ def test_apmplus_enable_provider_and_manual_exporter_matrix(
     assert registered_apmplus_processors == int(should_register_apmplus)
     assert len(span_processors) == 1 + int(should_register_apmplus)
     assert tracer.apmplus_managed_externally is provider_preconfigured
-    expected_uploaders = (
-        (constructed_exporters[0].get_metric_uploader(),)
-        if should_construct_apmplus
-        else ()
-    )
-    assert metric_uploader_registry.uploaders == expected_uploaders
 
 
 def test_add_exporter_registers_after_tracer_initialization(
@@ -276,17 +244,21 @@ def test_add_exporter_is_idempotent(fresh_global_tracer_provider):
     assert sum(processor is exporter.processor for processor in tracer._processors) == 1
 
 
-def test_force_export_flushes_metric_uploader_registry(
+def test_force_export_flushes_portal_metrics(
     fresh_global_tracer_provider,
-    controlled_apmplus_exporter,
+    monkeypatch,
 ):
-    controlled_exporter_class, _ = controlled_apmplus_exporter
-    exporter = controlled_exporter_class()
-    tracer = OpentelemetryTracer(exporters=[exporter])
+    flush_calls = []
+    monkeypatch.setattr(
+        opentelemetry_tracer_module,
+        "portal_metric_recorder",
+        SimpleNamespace(force_flush=lambda: flush_calls.append(True) or True),
+    )
+    tracer = OpentelemetryTracer()
 
     tracer.force_export()
 
-    assert exporter.get_metric_uploader().force_flush_calls == 1
+    assert flush_calls == [True]
 
 
 def test_tracing_registers_apmplus_without_global_provider(
@@ -317,9 +289,6 @@ def test_tracing_skips_apmplus_for_preconfigured_provider(
     assert apmplus_exporter in tracer.exporters
     assert apmplus_exporter.processor not in span_processors
     assert len(span_processors) == 1  # VeADK in-memory processor only
-    assert metric_uploader_registry.uploaders == (
-        apmplus_exporter.get_metric_uploader(),
-    )
 
 
 def test_add_exporter_skips_apmplus_for_preconfigured_provider(
@@ -336,12 +305,9 @@ def test_add_exporter_skips_apmplus_for_preconfigured_provider(
     assert apmplus_exporter in tracer.exporters
     assert apmplus_exporter.processor not in span_processors
     assert len(span_processors) == 1  # VeADK in-memory processor only
-    assert metric_uploader_registry.uploaders == (
-        apmplus_exporter.get_metric_uploader(),
-    )
 
 
-def test_agent_env_keeps_metrics_only_apmplus_for_preconfigured_provider(
+def test_agent_env_keeps_apmplus_for_preconfigured_provider(
     fresh_global_tracer_provider,
     controlled_apmplus_exporter,
     monkeypatch,
@@ -362,7 +328,6 @@ def test_agent_env_keeps_metrics_only_apmplus_for_preconfigured_provider(
     assert isinstance(exporter, controlled_exporter_class)
     assert exporter in tracer.exporters
     assert exporter.processor not in span_processors
-    assert metric_uploader_registry.uploaders == (exporter.get_metric_uploader(),)
     assert len(span_processors) == 1  # VeADK in-memory processor only
 
 
@@ -386,7 +351,8 @@ async def test_tracing_with_global_provider(fresh_global_tracer_provider):
     trace_api.set_tracer_provider(tracer_provider)
     tracer = OpentelemetryTracer(exporters=exporters)
 
-    # APMPlus is retained for metrics but its span processor is not registered.
+    # APMPlus is retained so it can ensure a global metric pipeline, while its
+    # span processor is not registered.
     assert len(tracer.exporters) == 4
 
 

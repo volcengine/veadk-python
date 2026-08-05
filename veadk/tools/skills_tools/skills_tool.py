@@ -530,11 +530,9 @@ class SkillsTool(BaseTool):
     def _upload_skill_metrics(self, span: _Span, skill_name: str, result: str) -> None:
         """Upload skill metrics to the telemetry system."""
         try:
-            from veadk.tracing.telemetry.metric_uploader import (
-                metric_uploader_registry,
-            )
+            from veadk.tracing.telemetry import portal_metrics
 
-            metric_uploader_registry.record_skill_call(
+            portal_metrics.portal_metric_recorder.record_skill_call(
                 span,
                 skill_name,
                 self.name,

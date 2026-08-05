@@ -28,7 +28,7 @@ from veadk.tracing.base_tracer import BaseTracer
 from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.tracing.telemetry.exporters.inmemory_exporter import InMemoryExporter
-from veadk.tracing.telemetry.metric_uploader import metric_uploader_registry
+from veadk.tracing.telemetry.portal_metrics import portal_metric_recorder
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import get_agent_dir
 from veadk.utils.patches import patch_google_adk_telemetry
@@ -183,9 +183,6 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         )
 
     def _activate_exporter(self, exporter: BaseExporter) -> bool:
-        metric_uploader = exporter.get_metric_uploader()
-        if metric_uploader:
-            metric_uploader_registry.register(metric_uploader)
         return self._register_exporter(exporter)
 
     def _register_exporter(self, exporter: BaseExporter) -> bool:
@@ -259,7 +256,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         for processor in self._processors:
             time.sleep(0.05)
             processor.force_flush()
-        metric_uploader_registry.force_flush()
+        portal_metric_recorder.force_flush()
 
     @override
     def dump(

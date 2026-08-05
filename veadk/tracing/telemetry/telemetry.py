@@ -30,7 +30,7 @@ from veadk.tracing.telemetry.attributes.extractors.types import (
     ToolAttributesParams,
 )
 from veadk.tracing.telemetry.content_tracing import should_trace_content
-from veadk.tracing.telemetry.metric_uploader import metric_uploader_registry
+from veadk.tracing.telemetry import portal_metrics
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import safe_json_serialize
 
@@ -43,9 +43,10 @@ def _upload_call_llm_metrics(
     llm_request: LlmRequest,
     llm_response: LlmResponse,
 ) -> None:
-    """Upload LLM call metrics to configured meter uploaders.
+    """Record LLM call metrics through the global MeterProvider.
 
-    This function records metrics through the process-level uploader registry.
+    Recording is independent from exporter configuration. OpenTelemetry's
+    default proxy instruments remain no-op until a real provider is installed.
 
     Args:
         invocation_context: Context containing agent, session, and user information
@@ -53,7 +54,7 @@ def _upload_call_llm_metrics(
         llm_request: The request sent to the language model
         llm_response: The response received from the language model
     """
-    metric_uploader_registry.record_call_llm(
+    portal_metrics.portal_metric_recorder.record_call_llm(
         invocation_context, event_id, llm_request, llm_response
     )
 
@@ -63,7 +64,7 @@ def _upload_tool_call_metrics(
     args: dict[str, Any],
     function_response_event: Event,
 ):
-    """Upload tool call metrics to all registered meter uploaders.
+    """Record tool call metrics through the global MeterProvider.
 
     Records tool execution metrics including function name, arguments,
     execution time, and response details for observability and debugging.
@@ -74,12 +75,9 @@ def _upload_tool_call_metrics(
         function_response_event: Event containing the tool's response data
 
     """
-    if metric_uploader_registry.uploaders:
-        metric_uploader_registry.record_tool_call(tool, args, function_response_event)
-    else:
-        logger.debug(
-            "No meter uploader is registered. Skip recording tool call metrics."
-        )
+    portal_metrics.portal_metric_recorder.record_tool_call(
+        tool, args, function_response_event
+    )
 
 
 def _set_agent_input_attribute(
