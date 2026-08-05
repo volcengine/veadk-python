@@ -77,6 +77,11 @@ import {
   type DeployStage,
   type IdentityUserPool,
 } from "../adk/client";
+import {
+  trackAgentDeployFailed,
+  trackAgentDeploySucceeded,
+  type DeploymentTelemetrySource,
+} from "../adk/telemetryEvents";
 import feishuLogo from "../assets/feishu-logo.svg";
 import { buildZip } from "./zip";
 import { ProjectCodeBrowser } from "./CodeBrowserDialog";
@@ -700,6 +705,8 @@ export interface ProjectPreviewProps {
   deployRegion?: string;
   /** Called when the user changes the deploy region. */
   onDeployRegionChange?: (region: string) => void;
+  /** Creation entry used to group Studio deployment telemetry. */
+  deploymentTelemetrySource?: DeploymentTelemetrySource;
   /** Deploy-page toolbar actions. */
   onBack?: () => void;
   backLabel?: string;
@@ -825,6 +832,7 @@ export function ProjectPreview({
   onNetworkChange,
   deployRegion = "cn-beijing",
   onDeployRegionChange,
+  deploymentTelemetrySource = "unknown",
   onBack,
   backLabel = "返回配置",
   onExportYaml,
@@ -987,6 +995,13 @@ export function ProjectPreview({
   const selectedFile =
     project.files.find((f) => f.path === selected) ?? null;
   const networkMode = network?.mode ?? "public";
+  const deploymentTelemetryBase = () => ({
+    source: deploymentTelemetrySource,
+    action: deploymentRuntimeId ? "update" as const : "create" as const,
+    region: deployRegion,
+    networkType: networkMode,
+    feishuEnabled,
+  });
   const automaticEnvRows = runtimeEnvDisplayRows(
     feishuEnabled ? [...deploymentEnv, ...FEISHU_ENV] : deploymentEnv,
     deploymentEnvValues,
@@ -1299,6 +1314,10 @@ export function ProjectPreview({
         setDeployResult(result);
         setActivePhase(null);
       }
+      trackAgentDeploySucceeded({
+        ...deploymentTelemetryBase(),
+        runtimeId: result.runtimeId || deploymentRuntimeId || "",
+      });
       onDeploymentTaskChange?.({
         id: taskId,
         runtimeName: result.agentName || taskRuntimeName,
@@ -1351,6 +1370,11 @@ export function ProjectPreview({
       if (mountedRef.current) setDeployError(message);
       const buildLog = mergeBuildFailureLog(message);
       const failedInBuild = Boolean(buildLog);
+      trackAgentDeployFailed({
+        ...deploymentTelemetryBase(),
+        phase: latestPhase,
+        error: err,
+      });
       onDeploymentTaskChange?.({
         id: taskId,
         runtimeName: taskRuntimeName,

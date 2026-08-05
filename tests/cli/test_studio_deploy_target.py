@@ -20,17 +20,25 @@ from uuid import uuid4
 
 import pytest
 from click.testing import CliRunner
-from volcenginesdkcore.rest import ApiException
+from typing_extensions import Self
 from volcenginesdkcore.interceptor.interceptors.build_request_interceptor import (
     sanitize_for_serialization,
 )
+from volcenginesdkcore.rest import ApiException
 
 from veadk.cli.cli_frontend import (
     _resolve_studio_cloud_credentials,
     _resolve_studio_identity_region,
     studio,
 )
+from veadk.cli.studio_telemetry import (
+    studio_apmplus_environment_from_options,
+)
 from veadk.config import veadk_environments
+from veadk.consts import (
+    STUDIO_APMPLUS_DOMAIN,
+    STUDIO_APMPLUS_ENV,
+)
 from veadk.integrations.ve_identity.identity_client import IdentityClient
 
 
@@ -367,6 +375,160 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert isinstance(callback, dict)
     assert callback["dismiss_login_page_enabled"] is False
     assert callback["skip_consent_enabled"] is True
+
+
+def test_studio_deploy_persists_telemetry_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeVefaasService:
+        def update_function_envs_and_release(
+            self,
+            function_id: str,
+            environment: dict[str, str],
+        ) -> None:
+            captured["release_function_id"] = function_id
+            captured["release_environment"] = environment
+
+    class _FakeCloudAgentEngine:
+        def __init__(self, **_: object) -> None:
+            self._vefaas_service = _FakeVefaasService()
+
+        def deploy(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                vefaas_endpoint="https://studio.example.com",
+                vefaas_application_id="app-id",
+                vefaas_function_id="function-id",
+            )
+
+    monkeypatch.setattr(
+        "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_studio_identity_region",
+        lambda **_: "cn-beijing",
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.register_callback_for_user_pool_client",
+        lambda *_args, **_kwargs: None,
+    )
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+            "--sandbox-chat-codex-tool-id",
+            "chat-code-env-id",
+            "--sandbox-chat-openclaw-tool-id",
+            "openclaw-tool-id",
+            "--sandbox-chat-hermes-tool-id",
+            "hermes-tool-id",
+            "--sandbox-skill-creator-tool-id",
+            "skill-code-env-id",
+            "--iam-role",
+            "trn:iam::role/test",
+            "--gateway-name",
+            "gateway",
+            "--volcengine-access-key",
+            "ak-for-deployer",
+            "--volcengine-secret-key",
+            "sk-for-deployer",
+            "--apmplus-aid",
+            "12345",
+            "--apmplus-token",
+            "client-token",
+            "--apmplus-domain",
+            "apmplus.example.com",
+            "--apmplus-env",
+            "test",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    deploy_id = veadk_environments["VEADK_STUDIO_DEPLOY_ID"]
+    assert deploy_id.startswith("stddep_")
+    assert veadk_environments["VEADK_STUDIO_USER_POOL_ID"] == "pool-id"
+    assert veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] == "cn-beijing"
+    assert veadk_environments["VEADK_STUDIO_APMPLUS_AID"] == "12345"
+    assert veadk_environments["VEADK_STUDIO_APMPLUS_TOKEN"] == "client-token"
+    assert veadk_environments["VEADK_STUDIO_APMPLUS_DOMAIN"] == ("apmplus.example.com")
+    assert veadk_environments["VEADK_STUDIO_APMPLUS_ENV"] == "test"
+
+    assert captured["release_function_id"] == "function-id"
+    release_environment = captured["release_environment"]
+    assert isinstance(release_environment, dict)
+    assert release_environment["OAUTH2_REDIRECT_URI"] == (
+        "https://studio.example.com/oauth2/callback"
+    )
+    assert release_environment["VEADK_STUDIO_DEPLOY_ID"] == deploy_id
+    assert release_environment["VEADK_STUDIO_USER_POOL_ID"] == "pool-id"
+    assert release_environment["VEADK_STUDIO_APMPLUS_AID"] == "12345"
+    assert release_environment["VEADK_STUDIO_APPLICATION_ID"] == "app-id"
+    assert release_environment["VEADK_STUDIO_FUNCTION_ID"] == "function-id"
+
+
+def test_studio_apmplus_options_are_empty_without_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_AID", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_TOKEN", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_DOMAIN", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_ENV", raising=False)
+
+    values = studio_apmplus_environment_from_options(
+        apmplus_aid="",
+        apmplus_token="",
+        apmplus_domain="",
+        apmplus_env="",
+    )
+
+    assert values == {}
+
+
+def test_studio_apmplus_options_require_aid_with_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_AID", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_TOKEN", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_DOMAIN", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_ENV", raising=False)
+
+    with pytest.raises(Exception, match="requires both --apmplus-aid"):
+        studio_apmplus_environment_from_options(
+            apmplus_aid="",
+            apmplus_token="client-token",
+            apmplus_domain="",
+            apmplus_env="",
+        )
+
+
+def test_studio_apmplus_options_use_fixed_domain_and_production_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_AID", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_TOKEN", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_DOMAIN", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_ENV", raising=False)
+
+    values = studio_apmplus_environment_from_options(
+        apmplus_aid="12345",
+        apmplus_token="client-token",
+        apmplus_domain="",
+        apmplus_env="",
+    )
+
+    assert values == {
+        "VEADK_STUDIO_APMPLUS_AID": "12345",
+        "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
+        "VEADK_STUDIO_APMPLUS_DOMAIN": STUDIO_APMPLUS_DOMAIN,
+        "VEADK_STUDIO_APMPLUS_ENV": STUDIO_APMPLUS_ENV,
+    }
 
 
 def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
@@ -796,7 +958,7 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
         (output_dir / "veadk_python-test-py3-none-any.whl").write_bytes(b"wheel")
 
     class _FakeWheelResponse:
-        def __enter__(self) -> "_FakeWheelResponse":
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *_: object) -> None:

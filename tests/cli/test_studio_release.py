@@ -26,6 +26,11 @@ from veadk.cli.studio_dependencies import (
     stage_studio_dependency_wheels,
     write_studio_dependency_manifest,
 )
+from veadk.cli.studio_package import (
+    STUDIO_RELEASE_ENVIRONMENT_FILENAME,
+    read_studio_release_environment,
+    write_studio_package,
+)
 from veadk.cli.studio_release import (
     StudioReleaseError,
     StudioReleaseManifest,
@@ -314,7 +319,27 @@ def test_write_dependency_manifest_uses_pinned_wheel_metadata(
     }
 
 
-def test_publish_workflow_sends_only_release_metadata() -> None:
+def test_studio_package_carries_release_environment(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+
+    write_studio_package(
+        package,
+        requirements="veadk-python\n",
+        site_logo=None,
+        release_environment={
+            "VEADK_STUDIO_APMPLUS_AID": "12345",
+            "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
+        },
+    )
+
+    assert read_studio_release_environment(package, remove=True) == {
+        "VEADK_STUDIO_APMPLUS_AID": "12345",
+        "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
+    }
+    assert not (package / STUDIO_RELEASE_ENVIRONMENT_FILENAME).exists()
+
+
+def test_publish_workflow_sends_release_request_to_server() -> None:
     workflow = (
         Path(__file__).parents[2] / ".github/workflows/publish-studio-release.yaml"
     ).read_text(encoding="utf-8")
@@ -323,6 +348,18 @@ def test_publish_workflow_sends_only_release_metadata() -> None:
     assert "sourceKey" not in workflow
     assert '"Accept": "text/event-stream"' in workflow
     assert 'source_root = Path(os.environ["GITHUB_WORKSPACE"])' in workflow
+
+
+def test_publish_workflow_sends_studio_apmplus_release_config() -> None:
+    workflow = (
+        Path(__file__).parents[2] / ".github/workflows/publish-studio-release.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "STUDIO_APMPLUS_AID: ${{ vars.STUDIO_APMPLUS_AID }}" in workflow
+    assert "STUDIO_APMPLUS_TOKEN: ${{ secrets.STUDIO_APMPLUS_TOKEN }}" in workflow
+    assert 'payload_data["studioApmplus"]' in workflow
+    assert '"domain"' not in workflow
+    assert '"env"' not in workflow
 
 
 def test_build_release_uses_prepared_frontend_and_wheels(
@@ -336,7 +373,7 @@ def test_build_release_uses_prepared_frontend_and_wheels(
     (frontend_assets / "index.html").write_text("studio", encoding="utf-8")
     dependency_wheels = tmp_path / "prepared-wheels"
     dependency_wheels.mkdir()
-    captured: dict[str, Path | None] = {}
+    captured: dict[str, object] = {}
 
     def fail_frontend_build(*_args: object) -> None:
         raise AssertionError("Prepared frontend must skip npm build")
@@ -359,8 +396,10 @@ def test_build_release_uses_prepared_frontend_and_wheels(
         *,
         requirements: str,
         site_logo: object,
+        release_environment: dict[str, str],
     ) -> None:
         del site_logo
+        captured["release_environment"] = release_environment
         (package_dir / "requirements.txt").write_text(
             requirements,
             encoding="utf-8",
@@ -378,6 +417,8 @@ def test_build_release_uses_prepared_frontend_and_wheels(
         "veadk.cli.studio_package.write_studio_package",
         write_package,
     )
+    monkeypatch.setenv("VEADK_STUDIO_APMPLUS_AID", "12345")
+    monkeypatch.setenv("VEADK_STUDIO_APMPLUS_TOKEN", "client-token")
 
     bundle, manifest = build_studio_release(
         source_root=source_root,
@@ -393,4 +434,8 @@ def test_build_release_uses_prepared_frontend_and_wheels(
     assert captured == {
         "frontend": frontend_assets,
         "wheels": dependency_wheels,
+        "release_environment": {
+            "VEADK_STUDIO_APMPLUS_AID": "12345",
+            "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
+        },
     }

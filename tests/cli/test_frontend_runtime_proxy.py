@@ -19,7 +19,7 @@ import json
 from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 import pytest
@@ -29,9 +29,10 @@ from fastapi.testclient import TestClient
 from veadk.cli.cli_frontend import (
     _build_agentkit_proxy_headers,
     _frontend_allow_origins,
-    _runtime_regions,
     _run_frontend_server,
+    _runtime_regions,
 )
+from veadk.consts import STUDIO_APMPLUS_DOMAIN, STUDIO_APMPLUS_ENV
 
 
 def _create_frontend_app(
@@ -144,6 +145,79 @@ def test_ui_config_serves_custom_branding(
     assert logo_response.status_code == 200
     assert logo_response.headers["content-type"].startswith("image/png")
     assert logo_response.content == logo
+
+
+def test_ui_config_serves_studio_telemetry_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("VEADK_STUDIO_APMPLUS_AID", "12345")
+    monkeypatch.setenv("VEADK_STUDIO_APMPLUS_TOKEN", "client-token")
+    monkeypatch.setenv("VEADK_STUDIO_APMPLUS_DOMAIN", "apmplus.example.com")
+    monkeypatch.setenv("VEADK_STUDIO_APMPLUS_ENV", "test")
+    monkeypatch.setenv("VEADK_STUDIO_DEPLOY_ID", "stddep_test")
+    monkeypatch.setenv("VEADK_STUDIO_USER_POOL_ID", "pool-id")
+    monkeypatch.setenv("VEADK_STUDIO_APPLICATION_ID", "app-id")
+    monkeypatch.setenv("VEADK_STUDIO_FUNCTION_ID", "func-id")
+    monkeypatch.setenv("VEADK_STUDIO_DEPLOY_REGION", "cn-beijing")
+    monkeypatch.setenv("VEADK_STUDIO_PROJECT", "studio-project")
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get("/web/ui-config")
+
+    assert response.status_code == 200
+    telemetry = response.json()["telemetry"]
+    assert telemetry["enabled"] is True
+    assert telemetry["provider"] == "apmplus"
+    assert telemetry["apmplus"] == {
+        "aid": 12345,
+        "token": "client-token",
+        "domain": "apmplus.example.com",
+        "env": "test",
+    }
+    assert telemetry["studio"]["deployId"] == "stddep_test"
+    assert telemetry["studio"]["userPoolId"] == "pool-id"
+    assert telemetry["studio"]["applicationId"] == "app-id"
+    assert telemetry["studio"]["functionId"] == "func-id"
+    assert telemetry["studio"]["region"] == "cn-beijing"
+    assert telemetry["studio"]["project"] == "studio-project"
+
+
+def test_ui_config_uses_fixed_studio_apmplus_domain_and_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("VEADK_STUDIO_APMPLUS_AID", "12345")
+    monkeypatch.setenv("VEADK_STUDIO_APMPLUS_TOKEN", "client-token")
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_DOMAIN", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_ENV", raising=False)
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get("/web/ui-config")
+
+    assert response.status_code == 200
+    assert response.json()["telemetry"]["apmplus"] == {
+        "aid": 12345,
+        "token": "client-token",
+        "domain": STUDIO_APMPLUS_DOMAIN,
+        "env": STUDIO_APMPLUS_ENV,
+    }
+
+
+def test_ui_config_disables_studio_telemetry_without_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_AID", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_TOKEN", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_DOMAIN", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_ENV", raising=False)
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get("/web/ui-config")
+
+    assert response.status_code == 200
+    assert response.json()["telemetry"] == {"enabled": False}
 
 
 def test_runtime_list_paginates_across_regions(
@@ -424,7 +498,7 @@ def test_runtime_proxy_uses_authorizer_credential(
 
     class _FakeUpstreamResponse:
         status_code = 200
-        headers = {"content-type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"content-type": "application/json"}
 
         async def aiter_raw(self):
             yield b'["demo_agent"]'
@@ -503,7 +577,7 @@ def test_runtime_proxy_accepts_post_delete_override(
 
     class _FakeUpstreamResponse:
         status_code = 200
-        headers = {"content-type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"content-type": "application/json"}
 
         async def aiter_raw(self):
             yield b"{}"
@@ -725,7 +799,7 @@ def test_runtime_proxy_resolves_studio_media_before_forwarding(
 
     class _FakeUpstreamResponse:
         status_code = 200
-        headers = {"content-type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"content-type": "application/json"}
 
         async def aiter_raw(self):
             yield b"{}"

@@ -188,6 +188,31 @@ def _request(request_id: str = "12345-1") -> ReleaseRequest:
     )
 
 
+def test_release_request_accepts_studio_apmplus_config() -> None:
+    request = ReleaseRequest(
+        repository="volcengine/veadk-python",
+        gitSha="a" * 40,
+        requestId="12345-1",
+        changelog=("发布 Studio 更新",),
+        studioApmplus={"aid": " 12345 ", "token": " client-token "},
+    )
+
+    assert request.studio_apmplus is not None
+    assert request.studio_apmplus.aid == "12345"
+    assert request.studio_apmplus.token == "client-token"
+
+
+def test_release_request_rejects_invalid_studio_apmplus_config() -> None:
+    with pytest.raises(ValueError, match="Studio APMPlus aid"):
+        ReleaseRequest(
+            repository="volcengine/veadk-python",
+            gitSha="a" * 40,
+            requestId="12345-1",
+            changelog=("发布 Studio 更新",),
+            studioApmplus={"aid": "not-an-aid", "token": "client-token"},
+        )
+
+
 def _service() -> ReleaseService:
     settings = _settings()
     source_store = _MemorySourceStore()
@@ -421,6 +446,51 @@ def test_builder_prefers_domestic_source_and_node_mirrors() -> None:
         "https://registry.npmmirror.com/-/binary/node/v22.17.0/node.tar.xz",
         "https://nodejs.org/dist/v22.17.0/node.tar.xz",
     )
+
+
+def test_builder_passes_studio_apmplus_to_publisher_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = ReleaseRequest(
+        repository="volcengine/veadk-python",
+        gitSha="a" * 40,
+        requestId="12345-1",
+        changelog=("发布 Studio 更新",),
+        studioApmplus={"aid": "12345", "token": "client-token"},
+    )
+    captured: dict[str, dict[str, str]] = {}
+
+    monkeypatch.setattr(
+        release_builder,
+        "resolve_credentials",
+        lambda: SimpleNamespace(
+            access_key="release-ak",
+            secret_key="release-sk",
+            session_token="release-sts",
+        ),
+    )
+
+    def _run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+        captured["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(release_builder.subprocess, "run", _run)
+    builder = StudioReleaseBuilder(_settings())
+
+    builder._run_publisher(
+        request=request,
+        source_root=tmp_path,
+        output_dir=tmp_path / "dist",
+        version="20260805170000",
+        node_bin=None,
+        uv=Path("/bin/uv"),
+        frontend_assets=None,
+        dependency_wheels=None,
+    )
+
+    assert captured["env"]["VEADK_STUDIO_APMPLUS_AID"] == "12345"
+    assert captured["env"]["VEADK_STUDIO_APMPLUS_TOKEN"] == "client-token"
+    assert captured["env"]["VOLCENGINE_ACCESS_KEY"] == "release-ak"
 
 
 def test_builder_shallow_clones_only_main_build_files(

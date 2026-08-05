@@ -271,6 +271,15 @@ import {
   authenticationRestored,
   isAuthenticationPending,
 } from "./adk/authSession";
+import {
+  identifyStudioTelemetryUser,
+  initStudioTelemetry,
+} from "./adk/telemetry";
+import {
+  trackSandboxCreateFailed,
+  trackSandboxCreateSucceeded,
+  trackStudioLoaded,
+} from "./adk/telemetryEvents";
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
 import { buildSurfaces } from "./a2ui/Surface";
 
@@ -1725,6 +1734,8 @@ export default function App() {
   // chat; privileged pages remain explicit navigation destinations.
   useEffect(() => {
     getUiConfig().then((cfg) => {
+      initStudioTelemetry(cfg.telemetry);
+      trackStudioLoaded({ agentsSource: cfg.agentsSource });
       setFeatures(cfg.features);
       setAgentsSource(cfg.agentsSource);
       setSiteBranding(cfg.branding);
@@ -1732,6 +1743,15 @@ export default function App() {
       setUiConfigLoaded(true);
     });
   }, []);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !userInfo || !access) return;
+    identifyStudioTelemetryUser({
+      userId: access.telemetry.userId,
+      role: access.role,
+      local: localMode,
+    });
+  }, [access, authStatus, localMode, userInfo]);
 
   useEffect(() => {
     if (!access) return;
@@ -2066,6 +2086,11 @@ export default function App() {
             signal: controller.signal,
           });
       if (sandboxLaunchAbortRef.current !== controller) return;
+      trackSandboxCreateSucceeded({
+        kind: sandboxLaunchKind,
+        source: sandboxLaunchFromAgents ? "my_agents" : "new_chat",
+        sessionId: createdSession.id,
+      });
       if (sandboxLaunchFromAgents) {
         setSandboxAgentRefreshKey((current) => current + 1);
         setSandboxLaunchOpen(false);
@@ -2105,6 +2130,11 @@ export default function App() {
     } catch (launchError) {
       if ((launchError as Error)?.name === "AbortError") return;
       if (sandboxLaunchAbortRef.current !== controller) return;
+      trackSandboxCreateFailed({
+        kind: sandboxLaunchKind,
+        source: sandboxLaunchFromAgents ? "my_agents" : "new_chat",
+        error: launchError,
+      });
       setSandboxLaunchError(
         launchError instanceof Error
           ? launchError.message
