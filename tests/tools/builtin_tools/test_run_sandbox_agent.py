@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import importlib.util
+import json
 import sys
 import types
 import unittest
@@ -348,6 +349,154 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
             captured_kwargs["extra_env_vars"],
         )
 
+    def test_python_agent_mode_uses_legacy_runcode_execution(self):
+        captured_kwargs = {}
+
+        def fake_run_sandbox_agent(**kwargs):
+            captured_kwargs.update(kwargs)
+            return "legacy result"
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: self.fail(
+                "Session endpoint must not be used in python_agent mode"
+            ),
+            run_sandbox_agent=fake_run_sandbox_agent,
+        )
+
+        result = module.execute_skills(
+            "do work",
+            tool_context=self._tool_context(),
+            invocation_mode="python_agent",
+        )
+
+        self.assertEqual(result, "legacy result")
+        self.assertEqual("do work", captured_kwargs["workflow_prompt"])
+        self.assertEqual("test-tool", captured_kwargs["tool_id"])
+
+    def test_invocation_mode_can_be_read_from_environment(self):
+        captured_kwargs = {}
+
+        def fake_run_sandbox_agent(**kwargs):
+            captured_kwargs.update(kwargs)
+            return "legacy result"
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: self.fail(
+                "Session endpoint must not be used in python_agent mode"
+            ),
+            run_sandbox_agent=fake_run_sandbox_agent,
+        )
+
+        with patch.dict(
+            module.os.environ,
+            {"AGENTKIT_SKILL_INVOCATION_MODE": "python_agent"},
+        ):
+            result = module.execute_skills("do work", tool_context=self._tool_context())
+
+        self.assertEqual(result, "legacy result")
+        self.assertEqual("do work", captured_kwargs["workflow_prompt"])
+
+    def test_run_sse_mode_posts_run_sse_and_aggregates_event_text(self):
+        captured_requests = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return (
+                    b'data: {"content":{"parts":[{"text":"hello "}]}}\n\n'
+                    b'data: {"content":{"parts":[{"text":"world"}]}}\n\n'
+                    b"data: [DONE]\n\n"
+                )
+
+        def fake_urlopen(request, timeout=None):
+            captured_requests.append((request, timeout))
+            return FakeResponse()
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
+
+        with patch.object(module.request, "urlopen", fake_urlopen):
+            result = module.execute_skills(
+                "do work",
+                tool_context=self._tool_context(),
+                invocation_mode="run_sse",
+            )
+
+        self.assertEqual(result, "hello world")
+        request_obj, timeout = captured_requests[0]
+        self.assertEqual("https://sandbox.test/run_sse", request_obj.full_url)
+        self.assertEqual(900, timeout)
+        self.assertIn(b'"app_name": "agent"', request_obj.data)
+        self.assertIn(b'"session_id": "session-1"', request_obj.data)
+        self.assertIn(b'"text": "do work"', request_obj.data)
+
+    def test_a2a_mode_posts_message_send_and_returns_text(self):
+        captured_requests = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "req",
+                        "result": {
+                            "kind": "message",
+                            "role": "agent",
+                            "parts": [{"kind": "text", "text": "a2a result"}],
+                        },
+                    }
+                ).encode()
+
+        def fake_urlopen(request, timeout=None):
+            captured_requests.append((request, timeout))
+            return FakeResponse()
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
+
+        with patch.object(module.request, "urlopen", fake_urlopen):
+            result = module.execute_skills(
+                "do work",
+                tool_context=self._tool_context(),
+                invocation_mode="a2a",
+            )
+
+        self.assertEqual(result, "a2a result")
+        request_obj, timeout = captured_requests[0]
+        payload = json.loads(request_obj.data.decode())
+        self.assertEqual("https://sandbox.test/a2a", request_obj.full_url)
+        self.assertEqual(900, timeout)
+        self.assertEqual("message/send", payload["method"])
+        self.assertEqual("do work", payload["params"]["message"]["parts"][0]["text"])
+        self.assertTrue(payload["params"]["configuration"]["blocking"])
+
+    def test_unsupported_invocation_mode_raises_value_error(self):
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: self.fail(
+                "Invalid mode must be rejected before endpoint resolution"
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "Unsupported AgentKit Skill"):
+            module.execute_skills(
+                "do work",
+                tool_context=self._tool_context(),
+                invocation_mode="stream",
+            )
+
     def test_skill_api_url_preserves_agentkit_endpoint_query_auth(self):
         module = _load_execute_skills_module(
             ensure_agentkit_session_endpoint=lambda **_kwargs: "",
@@ -464,86 +613,6 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         with patch.object(module.request, "urlopen", fake_urlopen):
             with self.assertRaisesRegex(RuntimeError, "HTTP 500: internal error"):
                 module.execute_skills("do work", tool_context=self._tool_context())
-
-    def test_stream_mode_aggregates_text_chunks_from_skill_api_sse(self):
-        sse_body = (
-            "event: chunk\n"
-            'data: {"request_id":"req_1","type":"progress","content":"started","metadata":{}}\n\n'
-            "event: chunk\n"
-            'data: {"request_id":"req_1","type":"text","content":"hello ","metadata":{}}\n\n'
-            "event: chunk\n"
-            'data: {"request_id":"req_1","type":"text","content":"world","metadata":{}}\n\n'
-            "event: done\n"
-            'data: {"request_id":"req_1","type":"progress","content":"done","metadata":{}}\n\n'
-        ).encode()
-
-        class FakeResponse:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return None
-
-            def read(self):
-                raise AssertionError("stream response must not be buffered with read()")
-
-            def __iter__(self):
-                return iter(sse_body.splitlines(keepends=True))
-
-        captured_urls = []
-
-        def fake_urlopen(request, **_kwargs):
-            captured_urls.append(request.full_url)
-            return FakeResponse()
-
-        module = _load_execute_skills_module(
-            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test/",
-        )
-
-        with patch.object(module.request, "urlopen", fake_urlopen):
-            result = module.execute_skills(
-                "do work",
-                tool_context=self._tool_context(),
-                prefer_stream=True,
-            )
-
-        self.assertEqual(result, "hello world")
-        self.assertEqual(["https://sandbox.test/v1/skills/stream"], captured_urls)
-
-    def test_stream_mode_raises_skill_api_error_event(self):
-        sse_body = (
-            "event: error\n"
-            'data: {"request_id":"req_1","type":"text","content":"skill failed","metadata":{}}\n\n'
-        ).encode()
-
-        class FakeResponse:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return None
-
-            def read(self):
-                raise AssertionError("stream response must not be buffered with read()")
-
-            def __iter__(self):
-                return iter(sse_body.splitlines(keepends=True))
-
-        module = _load_execute_skills_module(
-            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
-        )
-
-        with patch.object(
-            module.request,
-            "urlopen",
-            lambda *_args, **_kwargs: FakeResponse(),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "skill failed"):
-                module.execute_skills(
-                    "do work",
-                    tool_context=self._tool_context(),
-                    prefer_stream=True,
-                )
 
 
 if __name__ == "__main__":
