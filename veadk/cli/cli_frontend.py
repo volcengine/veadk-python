@@ -2322,6 +2322,100 @@ def _run_frontend_server(
         project = await _generate_project_from_request(data, debug=False)
         return project.model_dump()
 
+    @app.post("/web/github-cicd/pipelines")
+    async def _create_github_cicd_pipeline(request: Request):
+        """Create or update the GitHub PR for Studio-generated Agent source."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                create_github_cicd_pipeline,
+            )
+
+            return create_github_cicd_pipeline(
+                project=data.get("project") or {},
+                github_url=str(data.get("githubUrl") or ""),
+                github_token=str(data.get("githubToken") or ""),
+                base_branch=str(data.get("baseBranch") or "main"),
+                region=str(data.get("region") or "cn-beijing"),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except Exception as error:
+            logger.exception("Failed to create GitHub CI/CD pipeline")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(
+                    error,
+                    secrets=(str(data.get("githubToken") or ""),),
+                ),
+            ) from error
+
+    @app.get("/web/github-cicd/runtime-binding")
+    async def _get_github_cicd_runtime_binding(
+        request: Request,
+        runtimeId: str = "",
+    ):
+        """Return the GitHub CI/CD binding for a Runtime, when present."""
+        _require_agent_management(request)
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                get_github_cicd_runtime_binding,
+            )
+
+            return get_github_cicd_runtime_binding(runtime_id=runtimeId)
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+
+    @app.post("/web/github-cicd/runtime-binding")
+    async def _bind_github_cicd_runtime(request: Request):
+        """Bind a GitHub CI/CD pipeline record to an AgentKit Runtime."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                bind_github_cicd_runtime,
+            )
+
+            return bind_github_cicd_runtime(
+                pipeline_id=str(data.get("pipelineId") or ""),
+                runtime_id=str(data.get("runtimeId") or ""),
+                region=str(data.get("region") or "cn-beijing"),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+
+    @app.post("/web/github-cicd/runtime-sync")
+    async def _sync_github_cicd_runtime(request: Request):
+        """Sync current AgentProject files to the PR bound to a Runtime."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                sync_github_cicd_runtime,
+            )
+
+            return sync_github_cicd_runtime(
+                runtime_id=str(data.get("runtimeId") or ""),
+                project=data.get("project") or {},
+                github_token=str(data.get("githubToken") or ""),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except Exception as error:
+            logger.exception("Failed to sync GitHub CI/CD pipeline")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(
+                    error,
+                    secrets=(str(data.get("githubToken") or ""),),
+                ),
+            ) from error
+
     @app.post("/web/generated-agent-drafts")
     async def _generate_agent_draft(request: Request):
         _require_agent_management(request)
@@ -3332,73 +3426,20 @@ def _run_frontend_server(
         result_box: dict = {}
 
         def _run():
-            from agentkit.toolkit import sdk
             from agentkit.toolkit.models import PreflightMode
+            from veadk.cli.studio_agentkit_deploy import (
+                launch_agentkit_config,
+                runtime_tags,
+            )
+
+            def _record_runtime_created(runtime_id: str, _created: object) -> None:
+                with _deploy_tasks_lock:
+                    task_state["runtime_id"] = runtime_id
+
+            def _destroy_cancelled_runtime(_runtime_id: str, _created: object) -> None:
+                _destroy_deploy_task_runtime(task_state)
 
             with _deploy_lock:
-                # Tag the created runtime with the deploying user so "管理 Agent"
-                # can filter by author. Restored right after.
-                rt_client = None
-                orig_create = None
-                try:
-                    from agentkit.sdk.runtime.client import (
-                        AgentkitRuntimeClient as rt_client,
-                    )
-                    from agentkit.sdk.runtime import types as _rt
-
-                    orig_create = rt_client.create_runtime
-                    extra = [
-                        _rt.TagsItemForCreateRuntime.model_validate(
-                            {"Key": "veadk:managed", "Value": "true"}
-                        )
-                    ]
-                    if author:
-                        extra.append(
-                            _rt.TagsItemForCreateRuntime.model_validate(
-                                {"Key": "veadk:author", "Value": author}
-                            )
-                        )
-                    if owner_id:
-                        extra.append(
-                            _rt.TagsItemForCreateRuntime.model_validate(
-                                {"Key": "veadk:owner", "Value": owner_id}
-                            )
-                        )
-
-                    def _tagged_create(self, req, _orig=orig_create, _extra=extra):
-                        if task_state["cancel_event"].is_set():
-                            raise RuntimeError("Deployment cancelled")
-                        req.tags = [*(req.tags or []), *_extra]
-                        # The AgentKit runner hard-codes apmplus_enable=True on
-                        # every runtime; force it off so the container doesn't
-                        # try to fetch an APMPlus app-key with the deployer's
-                        # AK/SK at boot (breaks for STS temp credentials).
-                        req.apmplus_enable = False
-                        created = _create_runtime_with_description_fallback(
-                            _orig, self, req
-                        )
-                        runtime_id = str(
-                            getattr(created, "runtime_id", "")
-                            or getattr(
-                                getattr(created, "agent_kit_runtime", None),
-                                "runtime_id",
-                                "",
-                            )
-                        )
-                        if runtime_id:
-                            with _deploy_tasks_lock:
-                                task_state["runtime_id"] = runtime_id
-                        if task_state["cancel_event"].is_set():
-                            _destroy_deploy_task_runtime(task_state)
-                            raise RuntimeError("Deployment cancelled")
-                        return created
-
-                    rt_client.create_runtime = _tagged_create
-                except Exception as e:
-                    logger.error("Could not prepare Runtime ownership tags: %s", e)
-                    result_box["error"] = str(e)
-                    return
-
                 try:
                     result = None
                     for attempt in range(1, 3):
@@ -3412,10 +3453,17 @@ def _run_frontend_server(
                                     f"({attempt}/2)..."
                                 ),
                             )
-                        result = sdk.launch(
+                        result = launch_agentkit_config(
                             config_file=str(base / "agentkit.yaml"),
                             preflight_mode=PreflightMode.WARN,
                             reporter=_QReporter(),
+                            runtime_tags=runtime_tags(
+                                author=author,
+                                owner_id=owner_id,
+                            ),
+                            should_cancel=lambda: task_state["cancel_event"].is_set(),
+                            on_runtime_created=_record_runtime_created,
+                            on_cancel_created=_destroy_cancelled_runtime,
                         )
                         if getattr(result, "success", False):
                             break
@@ -3456,8 +3504,6 @@ def _run_frontend_server(
                     logger.error(f"AgentKit launch error: {e}", exc_info=True)
                     result_box["error"] = str(e)
                 finally:
-                    if rt_client is not None and orig_create is not None:
-                        rt_client.create_runtime = orig_create
                     if task_state["cancel_event"].is_set():
                         try:
                             _destroy_deploy_task_runtime(task_state)

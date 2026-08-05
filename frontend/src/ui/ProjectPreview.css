@@ -878,6 +878,188 @@
   line-height: 1.5;
 }
 
+.pp-github-cicd-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pp-github-cicd-copy {
+  margin: -4px 0 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.pp-github-cicd-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: hsl(var(--primary));
+  font-size: 11.5px;
+  font-weight: 560;
+  white-space: nowrap;
+}
+
+.pp-github-cicd-status .pp-ic {
+  width: 13px;
+  height: 13px;
+}
+
+.pp-github-cicd-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.84fr);
+  gap: 10px;
+}
+
+.pp-github-cicd-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12.5px;
+}
+
+.pp-github-cicd-field:first-child {
+  grid-column: 1 / -1;
+}
+
+.pp-github-cicd-field > span {
+  color: hsl(var(--foreground));
+  font-weight: 560;
+}
+
+.pp-github-cicd-submit {
+  grid-column: 1 / -1;
+  align-self: end;
+  min-width: 0;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid hsl(var(--primary));
+  border-radius: 6px;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 620;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pp-github-cicd-submit:disabled {
+  opacity: 0.52;
+  cursor: default;
+}
+
+.pp-github-cicd-result,
+.pp-github-cicd-error {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid hsl(var(--border) / 0.72);
+}
+
+.pp-github-cicd-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.pp-github-cicd-result-head strong,
+.pp-github-cicd-error strong {
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.pp-github-cicd-result-head span {
+  color: hsl(var(--primary));
+  font-size: 11.5px;
+  font-weight: 620;
+}
+
+.pp-github-cicd-result-grid,
+.pp-github-cicd-error dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.pp-github-cicd-result-grid div,
+.pp-github-cicd-error dl div {
+  min-width: 0;
+}
+
+.pp-github-cicd-result dt,
+.pp-github-cicd-error dt {
+  margin-bottom: 3px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+}
+
+.pp-github-cicd-result dd,
+.pp-github-cicd-error dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: hsl(var(--foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.pp-github-cicd-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.pp-github-cicd-links a {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.pp-github-cicd-error {
+  color: hsl(var(--destructive));
+}
+
+.pp-github-cicd-error p {
+  margin: 6px 0 10px;
+  color: hsl(var(--destructive));
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.pp-github-cicd-error dd {
+  color: hsl(var(--destructive));
+}
+
+.pp-github-cicd-bound-note {
+  margin: 10px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .pp-instance-note {
   margin: 10px 0 0;
   color: hsl(42 96% 43%);
@@ -909,6 +1091,7 @@
 
 .pp-config-select,
 .pp-channel-fields input,
+.pp-github-cicd-field input,
 .pp-instance-fields input,
 .pp-network-fields input,
 .pp-env-row input {
@@ -937,6 +1120,7 @@
 
 .pp-config-select:focus,
 .pp-channel-fields input:focus,
+.pp-github-cicd-field input:focus,
 .pp-instance-fields input:focus,
 .pp-network-fields input:focus,
 .pp-env-row input:focus {
@@ -946,6 +1130,7 @@
 
 .pp-config-select:disabled,
 .pp-channel-fields input:disabled,
+.pp-github-cicd-field input:disabled,
 .pp-instance-fields input:disabled,
 .pp-network-fields input:disabled,
 .pp-env-row input:disabled {
@@ -1822,6 +2007,16 @@
 }
 
 @media (max-width: 520px) {
+  .pp-github-cicd-form,
+  .pp-github-cicd-result-grid,
+  .pp-github-cicd-error dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pp-github-cicd-submit {
+    width: 100%;
+  }
+
   .pp-network-layout {
     grid-template-columns: minmax(0, 1fr);
     gap: 16px;
