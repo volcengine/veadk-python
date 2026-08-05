@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import hashlib
-import json
 import time
 from collections.abc import Hashable
 from dataclasses import dataclass
@@ -29,7 +27,7 @@ from opentelemetry import trace
 from opentelemetry import metrics as metrics_api
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.metrics._internal import Meter
+from opentelemetry.metrics._internal import Meter, _ProxyMeterProvider
 from opentelemetry.sdk import metrics as metrics_sdk
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
@@ -118,23 +116,7 @@ _GEN_AI_CLIENT_TOKEN_USAGE_BUCKETS = [
 ]
 
 
-def _metric_registration_key(
-    endpoint: str,
-    headers: dict,
-    resource_attributes: dict,
-) -> tuple[str, str]:
-    """Build a stable digest without exposing authentication headers in logs."""
-    payload = json.dumps(
-        {
-            "endpoint": endpoint,
-            "headers": headers,
-            "resource_attributes": resource_attributes,
-        },
-        sort_keys=True,
-        default=str,
-        separators=(",", ":"),
-    )
-    return "apmplus", hashlib.sha256(payload.encode()).hexdigest()
+_APMPLUS_PORTAL_METRIC_KEY = ("apmplus", "portal-metrics")
 
 
 @dataclass
@@ -208,9 +190,8 @@ class MeterUploader:
     ) -> None:
         """Initialize the meter uploader with APMPlus configuration.
 
-        Sets up a private metrics provider, creates metric instruments,
-        and configures OTLP export to APMPlus endpoints with proper
-        resource attribution and authentication.
+        Creates Portal metric instruments on the global MeterProvider. If no
+        global provider exists yet, it installs one with an APMPlus OTLP reader.
 
         Args:
             name: Meter name for identification and organization
@@ -218,37 +199,34 @@ class MeterUploader:
             headers: Authentication headers including APMPlus app key
             resource_attributes: Service metadata for metric attribution
         """
-        self._registration_key = _metric_registration_key(
-            endpoint, headers, resource_attributes
-        )
+        self._registration_key = _APMPLUS_PORTAL_METRIC_KEY
         self._shutdown = False
+        self._owns_provider = False
 
-        # Reuse global resource attributes when available, but keep the reader
-        # and provider private so an existing zero-reader global provider cannot
-        # suppress APMPlus metrics.
         global_metrics_provider = metrics_api.get_meter_provider()
 
-        # 1. init resource
-        if hasattr(global_metrics_provider, "_sdk_config"):
-            global_resource = global_metrics_provider._sdk_config.resource  # type: ignore
-        else:
-            global_resource = Resource.create()
+        if isinstance(global_metrics_provider, _ProxyMeterProvider):
+            exporter = OTLPMetricExporter(
+                endpoint=endpoint,
+                headers=headers,
+                insecure=True,
+            )
+            metric_reader = PeriodicExportingMetricReader(exporter)
+            provider = metrics_sdk.MeterProvider(
+                metric_readers=[metric_reader],
+                resource=Resource.create(resource_attributes),
+            )
+            metrics_api.set_meter_provider(provider)
+            global_metrics_provider = metrics_api.get_meter_provider()
 
-        resource = global_resource.merge(Resource.create(resource_attributes))
+            if global_metrics_provider is provider:
+                self._owns_provider = True
+            else:
+                # Another component won the set-once race. Its global provider
+                # owns metric export, so close the unused APMPlus pipeline.
+                provider.shutdown()
 
-        # 2. init exporter and reader
-        exporter = OTLPMetricExporter(
-            endpoint=endpoint,
-            headers=headers,
-            insecure=True,
-        )
-        metric_reader = PeriodicExportingMetricReader(exporter)
-
-        self._provider = metrics_sdk.MeterProvider(
-            metric_readers=[metric_reader], resource=resource
-        )
-
-        # 3. init meter
+        self._provider = global_metrics_provider
         self.meter: Meter = self._provider.get_meter(name=name)
 
         # create meter attributes
@@ -318,17 +296,19 @@ class MeterUploader:
         return self._registration_key
 
     @property
-    def provider(self) -> metrics_sdk.MeterProvider:
+    def provider(self) -> metrics_api.MeterProvider:
         return self._provider
 
     def force_flush(self) -> bool:
         if self._shutdown:
             return False
-        return self._provider.force_flush()
+        force_flush = getattr(self._provider, "force_flush", None)
+        return bool(force_flush()) if force_flush else True
 
     def shutdown(self) -> None:
         if not self._shutdown:
-            self._provider.shutdown()
+            if self._owns_provider:
+                self._provider.shutdown()  # type: ignore[attr-defined]
             self._shutdown = True
 
     def record_call_llm(
@@ -629,14 +609,9 @@ class APMPlusExporter(BaseExporter):
         self.processor = BatchSpanProcessor(self._exporter)
 
     def get_metric_uploader(self) -> MetricUploaderProtocol:
-        """Lazily create and process-deduplicate the APMPlus metric pipeline."""
-        registration_key = _metric_registration_key(
-            self.config.endpoint,
-            self.headers,
-            self.resource_attributes,
-        )
+        """Enable Portal metric recording once for the process."""
         return metric_uploader_registry.get_or_create(
-            registration_key,
+            _APMPLUS_PORTAL_METRIC_KEY,
             lambda: MeterUploader(
                 name="apmplus_meter",
                 endpoint=self.config.endpoint,
@@ -666,13 +641,7 @@ class APMPlusExporter(BaseExporter):
         if self._exporter:
             self._exporter.force_flush()
 
-            metric_uploader = metric_uploader_registry.get(
-                _metric_registration_key(
-                    self.config.endpoint,
-                    self.headers,
-                    self.resource_attributes,
-                )
-            )
+            metric_uploader = metric_uploader_registry.get(_APMPLUS_PORTAL_METRIC_KEY)
             if metric_uploader:
                 metric_uploader.force_flush()
 

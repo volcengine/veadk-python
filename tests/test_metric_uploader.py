@@ -77,10 +77,86 @@ def preconfigured_zero_reader_meter_provider(monkeypatch):
     provider.shutdown()
 
 
-def test_meter_uploader_uses_private_provider_when_global_provider_exists(
+@pytest.fixture
+def preconfigured_meter_provider(monkeypatch):
+    monkeypatch.setattr(metrics_internal, "_METER_PROVIDER", None)
+    monkeypatch.setattr(metrics_internal, "_METER_PROVIDER_SET_ONCE", Once())
+    reader = InMemoryMetricReader()
+    provider = metrics_sdk.MeterProvider(metric_readers=[reader])
+    metrics_api.set_meter_provider(provider)
+    yield provider, reader
+    provider.shutdown()
+
+
+def test_meter_uploader_records_to_preconfigured_global_provider(
+    monkeypatch,
+    preconfigured_meter_provider,
+):
+    provider, reader = preconfigured_meter_provider
+
+    def fail_if_apmplus_reader_is_created(**kwargs):
+        raise AssertionError(
+            "APMPlus must not add a metric pipeline to an existing global provider"
+        )
+
+    monkeypatch.setattr(
+        apmplus_exporter_module,
+        "OTLPMetricExporter",
+        fail_if_apmplus_reader_is_created,
+    )
+
+    uploader = MeterUploader(
+        name="test-meter",
+        endpoint="http://localhost:4319",
+        headers={"x-byteapm-appkey": "test"},
+        resource_attributes={"service.name": "test-service"},
+    )
+    uploader.llm_invoke_counter.add(1)
+
+    assert metrics_api.get_meter_provider() is provider
+    assert uploader.provider is provider
+    assert uploader.force_flush()
+    assert reader.get_metrics_data() is not None
+
+    uploader.shutdown()
+    assert provider._shutdown is False
+
+
+def test_meter_uploader_keeps_preconfigured_zero_reader_global_provider(
     monkeypatch,
     preconfigured_zero_reader_meter_provider,
 ):
+    def fail_if_apmplus_reader_is_created(**kwargs):
+        raise AssertionError(
+            "APMPlus must not add a metric pipeline to an existing global provider"
+        )
+
+    monkeypatch.setattr(
+        apmplus_exporter_module,
+        "OTLPMetricExporter",
+        fail_if_apmplus_reader_is_created,
+    )
+
+    uploader = MeterUploader(
+        name="test-meter",
+        endpoint="http://localhost:4319",
+        headers={"x-byteapm-appkey": "test"},
+        resource_attributes={"service.name": "test-service"},
+    )
+    uploader.llm_invoke_counter.add(1)
+
+    assert uploader.provider is preconfigured_zero_reader_meter_provider
+    assert uploader.provider._sdk_config.metric_readers == ()
+
+    uploader.shutdown()
+    assert preconfigured_zero_reader_meter_provider._shutdown is False
+
+
+def test_meter_uploader_installs_apmplus_global_provider_when_none_exists(
+    monkeypatch,
+):
+    monkeypatch.setattr(metrics_internal, "_METER_PROVIDER", None)
+    monkeypatch.setattr(metrics_internal, "_METER_PROVIDER_SET_ONCE", Once())
     reader = InMemoryMetricReader()
     exporter_kwargs = {}
     monkeypatch.setattr(
@@ -102,8 +178,7 @@ def test_meter_uploader_uses_private_provider_when_global_provider_exists(
     )
     uploader.llm_invoke_counter.add(1)
 
-    assert metrics_api.get_meter_provider() is preconfigured_zero_reader_meter_provider
-    assert uploader.provider is not preconfigured_zero_reader_meter_provider
+    assert metrics_api.get_meter_provider() is uploader.provider
     assert len(uploader.provider._sdk_config.metric_readers) == 1
     assert exporter_kwargs["insecure"] is True
     assert uploader.force_flush()
