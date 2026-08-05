@@ -32,6 +32,7 @@ from zoneinfo import ZoneInfo
 _VERSION_PATTERN = re.compile(r"^\d{14}$")
 _GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+STUDIO_RELEASE_REGION = "cn-beijing"
 DEFAULT_RELEASE_PREFIX = "veadk/studio/main"
 MAX_STUDIO_BUNDLE_BYTES = 300 * 1024 * 1024
 MAX_STUDIO_RELEASES = 50
@@ -444,7 +445,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", required=True)
     parser.add_argument("--git-sha", required=True)
     parser.add_argument("--bucket", required=True)
-    parser.add_argument("--region", default="cn-beijing")
+    parser.add_argument("--region", default=STUDIO_RELEASE_REGION)
     parser.add_argument("--prefix", default=DEFAULT_RELEASE_PREFIX)
     parser.add_argument("--changelog", action="append", default=[])
     parser.add_argument("--frontend-assets", type=Path)
