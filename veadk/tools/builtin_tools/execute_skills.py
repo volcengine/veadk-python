@@ -82,6 +82,7 @@ def _skill_api_url(endpoint: str, path: str) -> str:
 
 
 def _resolve_skill_invocation_mode(mode: str | None = None) -> str:
+    # 默认保持 /v1/skills/execute；新沙箱可通过参数或环境变量显式切换后端。
     resolved = (mode or os.getenv(_SKILL_INVOCATION_MODE_ENV) or "execute").strip()
     if not resolved:
         return "execute"
@@ -311,6 +312,7 @@ def _execute_skills_via_run_sse(
     tool_context: ToolContext,
     timeout: int,
 ) -> str:
+    # run_sse 复用 ADK 运行入口，适配只暴露 ADK Runtime 接口的 Skill 沙箱。
     raw = _post_json(
         endpoint=endpoint,
         path="/run_sse",
@@ -329,6 +331,7 @@ def _execute_skills_via_a2a(
     timeout: int,
 ) -> str:
     invocation_context = tool_context._invocation_context
+    # A2A 沙箱使用 JSON-RPC message/send，同步等待最终结果。
     payload = {
         "jsonrpc": "2.0",
         "id": uuid.uuid4().hex,
@@ -366,6 +369,7 @@ def _execute_skills_via_python_agent(
     timeout: int,
     env_vars: Optional[dict[str, str]] = None,
 ) -> str:
+    # python_agent 是旧版 RunCode 路径，本质是在沙箱内执行 python agent.py。
     account_id = get_agentkit_account_id(tool_context.state)
     extra_env_vars = dict(env_vars or {})
     if account_id:
@@ -455,6 +459,7 @@ def execute_skills(
 
     tool_id = resolve_agentkit_tool_id("AGENTKIT_TOOL_ID_SKILLS")
     if env_vars:
+        # env_vars 依赖进程级环境变量注入，只能走 legacy python agent.py 路径。
         return _execute_skills_via_python_agent(
             workflow_prompt=workflow_prompt,
             tool_id=tool_id,

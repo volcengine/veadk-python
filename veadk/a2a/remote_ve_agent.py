@@ -45,6 +45,7 @@ def _convert_agent_card_dict_to_obj(agent_card_dict: dict) -> AgentCard:
 def _agent_card_discovery_url(endpoint: str) -> str:
     parts = urlsplit(endpoint)
     base_path = parts.path.rstrip("/")
+    # AgentKit Skill 沙箱的 RPC 地址通常是 /a2a，但 Agent Card 暴露在根路径。
     if base_path == "/a2a":
         base_path = ""
     return urlunsplit(
@@ -68,6 +69,7 @@ def _resolve_agent_card_rpc_url(card_url: str | None, endpoint: str) -> str:
     if not card_url:
         return clean_endpoint
 
+    # 保留 Agent Card 声明的 RPC path，避免把 /a2a 覆盖成沙箱根地址。
     resolved_url = urljoin(clean_endpoint, card_url)
     card_parts = urlsplit(resolved_url)
     if (
@@ -281,6 +283,7 @@ class RemoteVeAgent(RemoteA2aAgent):
                 client_to_use = httpx.AsyncClient(base_url=effective_url, timeout=600)
 
         if _is_same_origin(agent_card_dict["url"], effective_url):
+            # 同源 RPC 继续携带 session query 鉴权；跨域 Card URL 不透传用户查询参数。
             new_params = dict(client_to_use.params)
             new_params.update(discovery_params)
             client_to_use.params = new_params
