@@ -34,7 +34,6 @@ logger = get_logger(__name__)
 
 AGENT_CARD_WELL_KNOWN_PATH = "/.well-known/agent-card.json"
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
-_A2A_RPC_PATHS = frozenset({"/a2a", "/a2a/"})
 
 
 def _convert_agent_card_dict_to_obj(agent_card_dict: dict) -> AgentCard:
@@ -43,19 +42,10 @@ def _convert_agent_card_dict_to_obj(agent_card_dict: dict) -> AgentCard:
     return agent_card_object
 
 
-def _endpoint_parts(url: str):
-    parts = urlsplit(url)
-    if parts.scheme not in {"http", "https"} or not parts.hostname:
-        raise ValueError(f"Invalid A2A endpoint URL: {url}")
-    if parts.username or parts.password or parts.fragment:
-        raise ValueError("A2A endpoint URL must not contain userinfo or a fragment")
-    return parts
-
-
 def _agent_card_discovery_url(endpoint: str) -> str:
-    parts = _endpoint_parts(endpoint)
+    parts = urlsplit(endpoint)
     base_path = parts.path.rstrip("/")
-    if parts.path in _A2A_RPC_PATHS:
+    if base_path == "/a2a":
         base_path = ""
     return urlunsplit(
         (
@@ -69,29 +59,17 @@ def _agent_card_discovery_url(endpoint: str) -> str:
 
 
 def _endpoint_query_params(endpoint: str) -> dict[str, str]:
-    return dict(parse_qsl(_endpoint_parts(endpoint).query, keep_blank_values=True))
-
-
-def _origin(parts) -> tuple[str, str, int | None]:
-    return parts.scheme.lower(), (parts.hostname or "").lower(), parts.port
+    return dict(parse_qsl(urlsplit(endpoint).query, keep_blank_values=True))
 
 
 def _resolve_agent_card_rpc_url(card_url: str | None, endpoint: str) -> str:
-    endpoint_parts = _endpoint_parts(endpoint)
-    clean_endpoint = urlunsplit(
-        (
-            endpoint_parts.scheme,
-            endpoint_parts.netloc,
-            endpoint_parts.path or "/",
-            "",
-            "",
-        )
-    )
+    endpoint_parts = urlsplit(endpoint)
+    clean_endpoint = urlunsplit(endpoint_parts._replace(query="", fragment=""))
     if not card_url:
         return clean_endpoint
 
     resolved_url = urljoin(clean_endpoint, card_url)
-    card_parts = _endpoint_parts(resolved_url)
+    card_parts = urlsplit(resolved_url)
     if (
         card_parts.hostname in _LOOPBACK_HOSTS
         and endpoint_parts.hostname not in _LOOPBACK_HOSTS
@@ -109,37 +87,17 @@ def _resolve_agent_card_rpc_url(card_url: str | None, endpoint: str) -> str:
 
 
 def _is_same_origin(first_url: str, second_url: str) -> bool:
-    return _origin(_endpoint_parts(first_url)) == _origin(_endpoint_parts(second_url))
-
-
-def _fetch_agent_card_dict(
-    *,
-    discovery_url: str,
-    headers: dict[str, str],
-    params: dict[str, str],
-) -> dict:
-    try:
-        response = requests.get(discovery_url, headers=headers, params=params)
-        response.raise_for_status()
-    except requests.HTTPError as exc:
-        status_code = (
-            exc.response.status_code if exc.response is not None else "unknown"
-        )
-        reason = exc.response.reason if exc.response is not None else ""
-        detail = f" {reason}" if reason else ""
-        raise RuntimeError(
-            f"Failed to fetch A2A Agent Card: HTTP {status_code}{detail}"
-        ) from exc
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Failed to fetch A2A Agent Card: {exc}") from exc
-
-    try:
-        agent_card_dict = response.json()
-    except ValueError as exc:
-        raise RuntimeError("Failed to parse A2A Agent Card response as JSON") from exc
-    if not isinstance(agent_card_dict, dict):
-        raise RuntimeError("A2A Agent Card response must be a JSON object")
-    return agent_card_dict
+    first = urlsplit(first_url)
+    second = urlsplit(second_url)
+    return (
+        first.scheme.lower(),
+        (first.hostname or "").lower(),
+        first.port,
+    ) == (
+        second.scheme.lower(),
+        (second.hostname or "").lower(),
+        second.port,
+    )
 
 
 class RemoteVeAgent(RemoteA2aAgent):
@@ -271,11 +229,23 @@ class RemoteVeAgent(RemoteA2aAgent):
 
         endpoint_query_params = _endpoint_query_params(effective_url)
         discovery_params = {**endpoint_query_params, **req_params}
-        agent_card_dict = _fetch_agent_card_dict(
-            discovery_url=_agent_card_discovery_url(effective_url),
+        response = requests.get(
+            _agent_card_discovery_url(effective_url),
             headers=req_headers,
             params=discovery_params,
         )
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            status_code = (
+                exc.response.status_code if exc.response is not None else "unknown"
+            )
+            reason = exc.response.reason if exc.response is not None else ""
+            detail = f" {reason}" if reason else ""
+            raise RuntimeError(
+                f"Failed to fetch A2A Agent Card: HTTP {status_code}{detail}"
+            ) from exc
+        agent_card_dict = response.json()
         agent_card_dict["url"] = _resolve_agent_card_rpc_url(
             agent_card_dict.get("url"), effective_url
         )
@@ -288,30 +258,31 @@ class RemoteVeAgent(RemoteA2aAgent):
         client_to_use = httpx_client
 
         if client_was_provided:
-            if auth_token and auth_method == "header":
-                client_to_use.headers.update(req_headers)
+            # If a client was provided, update it with auth info
+            if auth_token:
+                if auth_method == "header":
+                    client_to_use.headers.update(req_headers)
+                elif auth_method == "querystring":
+                    new_params = dict(client_to_use.params)
+                    new_params.update(req_params)
+                    client_to_use.params = new_params
         else:
-            endpoint_parts = _endpoint_parts(effective_url)
-            clean_base_url = urlunsplit(
-                (
-                    endpoint_parts.scheme,
-                    endpoint_parts.netloc,
-                    endpoint_parts.path or "/",
-                    "",
-                    "",
-                )
-            )
-            client_to_use = httpx.AsyncClient(
-                base_url=clean_base_url,
-                headers=req_headers,
-                timeout=600,
-            )
+            # If no client was provided, create a new one with auth info
+            if auth_token:
+                if auth_method == "header":
+                    client_to_use = httpx.AsyncClient(
+                        base_url=effective_url, headers=req_headers, timeout=600
+                    )
+                elif auth_method == "querystring":
+                    client_to_use = httpx.AsyncClient(
+                        base_url=effective_url, params=req_params, timeout=600
+                    )
+            else:  # No auth, no client provided
+                client_to_use = httpx.AsyncClient(base_url=effective_url, timeout=600)
 
-        new_params = dict(client_to_use.params)
-        new_params.update(req_params)
         if _is_same_origin(agent_card_dict["url"], effective_url):
+            new_params = dict(client_to_use.params)
             new_params.update(discovery_params)
-        if new_params:
             client_to_use.params = new_params
 
         super().__init__(

@@ -132,8 +132,3 @@ def test_remote_agent_raises_clear_error_for_agent_card_http_failure() -> None:
             match="Failed to fetch A2A Agent Card: HTTP 503 Service Unavailable",
         ):
             RemoteVeAgent(name="remote", url="https://sandbox.test")
-
-
-def test_remote_agent_rejects_invalid_endpoint_scheme() -> None:
-    with pytest.raises(ValueError, match="Invalid A2A endpoint URL"):
-        RemoteVeAgent(name="remote", url="ftp://sandbox.test")
