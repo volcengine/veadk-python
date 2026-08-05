@@ -1,4 +1,6 @@
 import {
+  useEffect,
+  useRef,
   useState,
   type FormEvent,
   type KeyboardEvent,
@@ -6,28 +8,24 @@ import {
 } from "react";
 
 import {
-  createGitHubPullRequest,
-  type GitHubPullRequestInput,
   type GitHubPullRequestResult,
 } from "../adk/githubIntegration";
+import { getGitHubAutomation } from "../automations/registry";
+import type {
+  AutomationFieldDefinition,
+  AutomationFieldName,
+  AutomationFormValues,
+  GitHubAutomationId,
+} from "../automations/types";
 import { GitHubLogo } from "./GitHubLogo";
 import "./GitHubIntegration.css";
 
 interface GitHubIntegrationProps {
+  automation: GitHubAutomationId;
   onBack: () => void;
 }
 
-type FieldName = keyof GitHubPullRequestInput;
-
-const INITIAL_FORM: GitHubPullRequestInput = {
-  repository: "",
-  baseBranch: "main",
-  projectPath: ".",
-  runtimeName: "",
-  runtimeId: "",
-  region: "cn-beijing",
-  token: "",
-};
+type FieldName = AutomationFieldName | "region" | "token";
 
 function BackIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -71,10 +69,9 @@ function CheckIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function validateField(name: FieldName, value: string): string {
+function validateField(name: FieldName, value: string, required: boolean): string {
   const text = value.trim();
-  if (!text && (name === "baseBranch" || name === "projectPath")) return "";
-  if (!text) return "此项不能为空";
+  if (!text) return required ? "此项不能为空" : "";
   if (name === "repository" && !/^(?:https:\/\/github\.com\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(text)) {
     return "请输入 owner/repository 或完整 GitHub Repo URL";
   }
@@ -90,17 +87,39 @@ function validateField(name: FieldName, value: string): string {
   if (name === "runtimeId" && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(text)) {
     return "Runtime ID 格式不正确";
   }
+  if (name === "sandboxToolId" && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(text)) {
+    return "Sandbox Tool ID 格式不正确";
+  }
+  if (name === "modelName" && !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(text)) {
+    return "模型名称格式不正确";
+  }
+  if (name === "modelBaseUrl") {
+    try {
+      const url = new URL(text);
+      if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+        return "请输入不含凭据、查询参数或锚点的 HTTPS 地址";
+      }
+    } catch {
+      return "请输入有效的 HTTPS 地址";
+    }
+  }
   return "";
 }
 
-export function GitHubIntegration({ onBack }: GitHubIntegrationProps) {
-  const [form, setForm] = useState<GitHubPullRequestInput>(INITIAL_FORM);
+export function GitHubIntegration({ automation, onBack }: GitHubIntegrationProps) {
+  const definition = getGitHubAutomation(automation);
+  const [form, setForm] = useState<AutomationFormValues>(() => ({
+    ...definition.initialValues,
+  }));
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<FieldName, string>>>({});
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [regionMenuOpen, setRegionMenuOpen] = useState(false);
   const [result, setResult] = useState<GitHubPullRequestResult | null>(null);
+  const submitAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => submitAbortRef.current?.abort(), []);
 
   const updateField = (name: FieldName, value: string) => {
     setForm((current) => ({ ...current, [name]: value }));
@@ -110,40 +129,45 @@ export function GitHubIntegration({ onBack }: GitHubIntegrationProps) {
   };
 
   const blurField = (name: FieldName) => {
-    const error = validateField(name, form[name]);
+    const required = name === "token"
+      || definition.fields.find((field) => field.name === name)?.required === true;
+    const error = validateField(name, form[name], required);
     setFieldErrors((current) => ({ ...current, [name]: error }));
   };
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const errors: Partial<Record<FieldName, string>> = {};
-    for (const name of Object.keys(form) as FieldName[]) {
-      if (name === "region") continue;
-      const error = validateField(name, form[name]);
-      if (error) errors[name] = error;
+    for (const field of definition.fields) {
+      const error = validateField(field.name, form[field.name], field.required);
+      if (error) errors[field.name] = error;
+    }
+    const tokenError = validateField("token", form.token, true);
+    if (tokenError) {
+      errors.token = tokenError;
     }
     setFieldErrors(errors);
     if (Object.keys(errors).length) return;
 
+    submitAbortRef.current?.abort();
+    const controller = new AbortController();
+    submitAbortRef.current = controller;
     setSubmitting(true);
     setSubmitError("");
     setResult(null);
     try {
-      const nextResult = await createGitHubPullRequest({
-        ...form,
-        repository: form.repository.trim(),
-        baseBranch: form.baseBranch.trim() || "main",
-        projectPath: form.projectPath.trim() || ".",
-        runtimeName: form.runtimeName.trim(),
-        runtimeId: form.runtimeId.trim(),
-        token: form.token.trim(),
-      });
+      const nextResult = await definition.submit(form, controller.signal);
+      if (submitAbortRef.current !== controller) return;
       setResult(nextResult);
       setForm((current) => ({ ...current, token: "" }));
     } catch (error) {
+      if (controller.signal.aborted || submitAbortRef.current !== controller) return;
       setSubmitError(error instanceof Error ? error.message : String(error));
     } finally {
-      setSubmitting(false);
+      if (submitAbortRef.current === controller) {
+        submitAbortRef.current = null;
+        setSubmitting(false);
+      }
     }
   };
 
@@ -154,33 +178,32 @@ export function GitHubIntegration({ onBack }: GitHubIntegrationProps) {
   };
 
   const field = (
-    name: Exclude<FieldName, "region" | "token">,
-    label: string,
-    placeholder: string,
-    help: string,
-    required: boolean,
-  ) => (
-    <div className="github-field">
-      <label htmlFor={`github-${name}`}>
-        <span>{label}</span>
-        <span className={`github-field-requirement${required ? " is-required" : ""}`}>
-          {required ? "必填" : "可选"}
-        </span>
-      </label>
-      <input
-        id={`github-${name}`}
-        value={form[name]}
-        onChange={(event) => updateField(name, event.target.value)}
-        onBlur={() => blurField(name)}
-        placeholder={placeholder}
-        required={required}
-        aria-invalid={Boolean(fieldErrors[name])}
-        aria-describedby={`github-${name}-help${fieldErrors[name] ? ` github-${name}-error` : ""}`}
-      />
-      <span id={`github-${name}-help`} className="github-field-help">{help}</span>
-      {fieldErrors[name] ? <span id={`github-${name}-error`} className="github-field-error" role="alert">{fieldErrors[name]}</span> : null}
-    </div>
-  );
+    fieldDefinition: AutomationFieldDefinition,
+  ) => {
+    const { name, label, placeholder, help, required } = fieldDefinition;
+    return (
+      <div className="github-field" key={name}>
+        <label htmlFor={`github-${name}`}>
+          <span>{label}</span>
+          <span className={`github-field-requirement${required ? " is-required" : ""}`}>
+            {required ? "必填" : "可选"}
+          </span>
+        </label>
+        <input
+          id={`github-${name}`}
+          value={form[name]}
+          onChange={(event) => updateField(name, event.target.value)}
+          onBlur={() => blurField(name)}
+          placeholder={placeholder}
+          required={required}
+          aria-invalid={Boolean(fieldErrors[name])}
+          aria-describedby={`github-${name}-help${fieldErrors[name] ? ` github-${name}-error` : ""}`}
+        />
+        <span id={`github-${name}-help`} className="github-field-help">{help}</span>
+        {fieldErrors[name] ? <span id={`github-${name}-error`} className="github-field-error" role="alert">{fieldErrors[name]}</span> : null}
+      </div>
+    );
+  };
 
   return (
     <div className="github-integration-page">
@@ -190,26 +213,19 @@ export function GitHubIntegration({ onBack }: GitHubIntegrationProps) {
         </button>
         <GitHubLogo className="github-integration-logo" />
         <div>
-          <h1>AgentKit Runtime 持续交付</h1>
-          <p>用 Pull Request 把持续发布配置安全地加入代码仓库</p>
+          <h1>{definition.title}</h1>
+          <p>{definition.subtitle}</p>
         </div>
       </header>
 
       <div className="github-integration-layout">
-        <section
-          id="github-panel-release"
-          className="github-section-panel"
-        >
+        <section id={`github-panel-${automation}`} className="github-section-panel">
           <div className="github-panel-heading">
-            <p>提交后将在目标仓库创建发布分支，并发起包含 GitHub Actions 工作流的 PR。</p>
+            <p>{definition.panel}</p>
           </div>
           <form className="github-release-form" onSubmit={onSubmit} onKeyDown={stopComposingSubmit} noValidate>
             <div className="github-field-grid">
-              {field("repository", "GitHub Repo", "owner/repository", "支持 owner/repository 或完整 github.com URL", true)}
-              {field("baseBranch", "目标分支", "main", "留空时使用 main，PR 将以此分支为 base", false)}
-              {field("projectPath", "Agent 项目目录", ".", "留空时使用仓库根目录；目录内需包含 app.py，导出由 create_agentkit_app(root_agent, …) 创建的顶层 ASGI 变量 app，并在 python -m app 时调用 run_agentkit_app(app) 启动服务", false)}
-              {field("runtimeName", "Runtime 名称", "support-agent", "用于 AgentKit 发布配置", true)}
-              {field("runtimeId", "Runtime ID", "rt-xxxxxxxx", "持续更新的目标 AgentKit Runtime", true)}
+              {definition.fields.map(field)}
               <div className="github-field">
                 <label id="github-region-label">
                   <span>地域</span>
@@ -236,10 +252,10 @@ export function GitHubIntegration({ onBack }: GitHubIntegrationProps) {
                     <>
                       <div className="menu-scrim" onClick={() => setRegionMenuOpen(false)} />
                       <div className="pp-region-menu" role="listbox" aria-label="地域">
-                        {[
+                        {([
                           { value: "cn-beijing", label: "华北 2（北京）" },
                           { value: "cn-shanghai", label: "华东 2（上海）" },
-                        ].map((region) => {
+                        ] as const).map((region) => {
                           const selected = region.value === form.region;
                           return (
                             <button
@@ -262,7 +278,9 @@ export function GitHubIntegration({ onBack }: GitHubIntegrationProps) {
                     </>
                   ) : null}
                 </div>
-                <span className="github-field-help">必须与目标 Runtime 所在地域一致</span>
+                <span className="github-field-help">
+                  {definition.regionHelp}
+                </span>
               </div>
             </div>
 
@@ -273,7 +291,7 @@ export function GitHubIntegration({ onBack }: GitHubIntegrationProps) {
                   <span className="github-field-requirement is-required">必填</span>
                 </label>
                 <a
-                  href="https://github.com/settings/personal-access-tokens/new?name=VeADK%20Studio&description=Create%20an%20AgentKit%20release%20workflow%20pull%20request&contents=write&pull_requests=write"
+                  href="https://github.com/settings/personal-access-tokens/new?name=VeADK%20Studio&description=Create%20a%20GitHub%20automation%20pull%20request&contents=write&pull_requests=write"
                   target="_blank"
                   rel="noreferrer"
                 >
@@ -318,11 +336,10 @@ export function GitHubIntegration({ onBack }: GitHubIntegrationProps) {
             <div className="github-form-actions">
               <div className="github-secrets-note">
                 <strong>合并 PR 前，请在仓库的 GitHub Actions Secrets 中配置：</strong>
-                <span>VOLCENGINE_ACCESS_KEY、VOLCENGINE_SECRET_KEY（必填）</span>
-                <span>VOLCENGINE_SESSION_TOKEN（使用临时凭据时必填）</span>
+                {definition.secrets.map((secret) => <span key={secret}>{secret}</span>)}
               </div>
               <button type="submit" disabled={submitting}>
-                {submitting ? "提交 PR 中…" : "确定并提交 PR"}
+                {submitting ? "提交 PR 中…" : definition.submitLabel}
               </button>
             </div>
           </form>

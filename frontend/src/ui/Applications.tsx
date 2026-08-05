@@ -1,20 +1,19 @@
 import { useDeferredValue, useMemo, useState, type SVGProps } from "react";
 
+import {
+  AUTOMATION_CATEGORIES,
+  AUTOMATIONS,
+  type AutomationId,
+} from "../automations/registry";
+import feishuLogo from "../assets/feishu-logo.svg";
 import { GitHubLogo } from "./GitHubLogo";
 import "./Applications.css";
 
 interface ApplicationsProps {
-  onOpenGitHub: () => void;
+  onOpen: (automation: AutomationId) => void;
 }
 
-const CATEGORIES = [{ id: "development", label: "研发" }] as const;
-const APPLICATIONS = [
-  {
-    id: "github",
-    name: "AgentKit Runtime 持续交付",
-    description: "为您的仓库添加持续交付到 AgentKit Runtime 的自动化工作流。",
-  },
-] as const;
+export type ApplicationId = AutomationId;
 
 function SearchIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -25,16 +24,21 @@ function SearchIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-export function Applications({ onOpenGitHub }: ApplicationsProps) {
+export function Applications({ onOpen }: ApplicationsProps) {
   const [activeCategory, setActiveCategory] = useState("development");
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const visibleApplications = useMemo(() => {
     const normalized = deferredQuery.trim().toLocaleLowerCase();
-    return APPLICATIONS.filter((application) =>
-      !normalized || `${application.name} ${application.description}`.toLocaleLowerCase().includes(normalized)
+    return AUTOMATIONS.filter(
+      (application) => application.category === activeCategory,
+    ).filter((application) =>
+      !normalized || `${application.name} ${application.description}`.toLocaleLowerCase().includes(normalized),
     );
-  }, [deferredQuery]);
+  }, [activeCategory, deferredQuery]);
+  const activeCategoryLabel = AUTOMATION_CATEGORIES.find(
+    (category) => category.id === activeCategory,
+  )?.label;
 
   return (
     <div className="applications-page">
@@ -56,7 +60,7 @@ export function Applications({ onOpenGitHub }: ApplicationsProps) {
       </header>
 
       <nav className="applications-categories" aria-label="自动化分类">
-        {CATEGORIES.map((category) => (
+        {AUTOMATION_CATEGORIES.map((category) => (
           <button
             type="button"
             key={category.id}
@@ -69,7 +73,7 @@ export function Applications({ onOpenGitHub }: ApplicationsProps) {
         ))}
       </nav>
 
-      <section className="applications-results" aria-label="研发自动化列表">
+      <section className="applications-results" aria-label={`${activeCategoryLabel}自动化列表`}>
         {visibleApplications.length ? (
           <div className="applications-grid">
             {visibleApplications.map((application) => (
@@ -77,12 +81,26 @@ export function Applications({ onOpenGitHub }: ApplicationsProps) {
                 type="button"
                 className="application-card"
                 key={application.id}
-                onClick={onOpenGitHub}
+                onClick={() => onOpen(application.id)}
                 aria-label={`打开${application.name}`}
               >
-                <GitHubLogo className="application-card-icon" />
+                {application.icon === "feishu" ? (
+                  <img
+                    className="application-card-icon application-card-brand-icon"
+                    src={feishuLogo}
+                    alt=""
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <GitHubLogo className="application-card-icon" />
+                )}
                 <div className="application-card-copy">
-                  <h2>{application.name}</h2>
+                  <div className="application-card-title">
+                    <h2>{application.name}</h2>
+                    {application.badge ? (
+                      <span className="application-card-badge">{application.badge}</span>
+                    ) : null}
+                  </div>
                   <p>{application.description}</p>
                 </div>
               </button>

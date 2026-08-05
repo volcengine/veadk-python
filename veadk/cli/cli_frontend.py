@@ -1098,12 +1098,6 @@ def _run_frontend_server(
 
     mount_skill_creator_routes(app, _skill_creator_owner)
 
-    from veadk.cli.frontend_github_integration import (
-        mount_github_integration_routes,
-    )
-
-    mount_github_integration_routes(app, _require_agent_management)
-
     @app.get("/web/access")
     async def _web_access(request: Request):
         principal = _current_principal(request)

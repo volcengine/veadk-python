@@ -44,11 +44,16 @@ server that `veadk frontend` launches — no separate backend.
   Hermes expose their main interface and Terminal through Studio.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
-- **Applications directory**: browse development integrations from the Studio
-  sidebar. The GitHub integration can create a reviewable Pull Request that
-  adds or updates an AgentKit Runtime publishing workflow. Repository tokens
-  are used only for that request and are never persisted in the browser,
-  generated workflow, or server logs; cloud credentials remain GitHub Secrets.
+- **Automation directory**: browse development and message-channel integrations
+  from the Studio sidebar. GitHub-backed automations can add a basic AgentKit
+  project, configure Runtime continuous delivery, or add automatic Pull Request
+  review. The browser creates GitHub branches, files, and Pull Requests directly;
+  repository tokens stay in the current form state and are never persisted. The
+  Feishu automation accepts an App ID and App Secret, generates a basic
+  Studio-compatible agent, creates a new single-instance AgentKit Runtime, and
+  enables the Feishu channel. The Feishu App Secret is used only for the current
+  deployment and never enters generated source, workflow, documentation, or
+  logs; cloud credentials remain GitHub Secrets or Runtime environment variables.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
 - **Message feedback**: rate persisted Runtime replies with accessible,
   repository-drawn like/dislike controls. Studio identifies the final ADK Event,
