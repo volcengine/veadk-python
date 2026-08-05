@@ -144,7 +144,9 @@ def test_vefaas_code_upload_failure_logs_safe_diagnostics() -> None:
         with pytest.raises(ValueError, match="ConnectionError.*uploads.example.com"):
             service._upload_and_mount_code("function-id", ".")
 
-    logged = " ".join(str(value) for call in log_error.call_args_list for value in call.args)
+    logged = " ".join(
+        str(value) for call in log_error.call_args_list for value in call.args
+    )
     assert "ConnectionError" in logged
     assert "uploads.example.com" in logged
     assert "top-secret" not in logged
