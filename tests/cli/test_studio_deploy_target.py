@@ -132,6 +132,53 @@ def test_studio_credentials_support_long_term_keys_without_session_token(
     assert credentials == ("env-ak", "env-sk", "")
 
 
+def test_studio_byteplus_credentials_prefer_byteplus_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    credentials_path = tmp_path / "credentials"
+    credentials_path.write_text(
+        "[default]\naccess_key_id=file-ak\nsecret_access_key=file-sk\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "byteplus-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "byteplus-sk")
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "volc-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "volc-sk")
+
+    credentials = _resolve_studio_cloud_credentials(
+        None,
+        None,
+        credentials_path,
+        provider="byteplus",
+    )
+
+    assert credentials == ("byteplus-ak", "byteplus-sk", "")
+
+
+def test_studio_byteplus_credentials_do_not_read_volc_credentials_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    credentials_path = tmp_path / "credentials"
+    credentials_path.write_text(
+        "[default]\naccess_key_id=file-ak\nsecret_access_key=file-sk\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("BYTEPLUS_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("VOLCENGINE_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("VOLCENGINE_SECRET_KEY", raising=False)
+
+    with pytest.raises(Exception, match="BytePlus credentials required"):
+        _resolve_studio_cloud_credentials(
+            None,
+            None,
+            credentials_path,
+            provider="byteplus",
+        )
+
+
 @pytest.mark.parametrize(
     ("stage", "expected_prefix"),
     [
@@ -350,7 +397,11 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
         "secret_key": "sk",
         "session_token": "sts-token",
         "region": expected_identity_region,
+        "provider": "volcengine",
     }
+    assert captured["provider"] == "volcengine"
+    assert veadk_environments["CLOUD_PROVIDER"] == "volcengine"
+    assert veadk_environments["AGENTKIT_CLOUD_PROVIDER"] == "volcengine"
     assert veadk_environments["VEIDENTITY_REGION"] == expected_identity_region
     assert "VEADK_STUDIO_ADMINS" not in veadk_environments
     assert "VEADK_STUDIO_DEVELOPERS" not in veadk_environments
@@ -530,6 +581,254 @@ def test_studio_apmplus_options_use_fixed_domain_and_production_env(
         "VEADK_STUDIO_APMPLUS_DOMAIN": STUDIO_APMPLUS_DOMAIN,
         "VEADK_STUDIO_APMPLUS_ENV": STUDIO_APMPLUS_ENV,
     }
+
+
+def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    credential_tool_ids: list[str] = []
+
+    class _FakeCloudAgentEngine:
+        def __init__(self, **kwargs: object) -> None:
+            captured["engine"] = kwargs
+
+        def deploy(self, **kwargs: object) -> SimpleNamespace:
+            deploy_path = Path(str(kwargs["path"]))
+            captured["run_script"] = (deploy_path / "run.sh").read_text(
+                encoding="utf-8"
+            )
+            return SimpleNamespace(
+                vefaas_endpoint="https://studio.byteplus.example.com",
+                vefaas_application_id="app-id",
+                vefaas_function_id="",
+            )
+
+    class _FakeIdentityClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured["identity"] = kwargs
+
+        def register_callback_for_user_pool_client(self, **kwargs: object) -> None:
+            captured["callback"] = kwargs
+
+    def _resolve_identity_region(**kwargs: object) -> str:
+        captured["identity_probe"] = kwargs
+        return "ap-southeast-1"
+
+    def _fail_serverless_role(*_: object) -> None:
+        raise AssertionError("BytePlus deploy must not create Volcengine role setup")
+
+    monkeypatch.setattr(
+        "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_studio_identity_region",
+        _resolve_identity_region,
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        _FakeIdentityClient,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_deploy_serverless_iam.ensure_serverless_application_role",
+        _fail_serverless_role,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
+        lambda **kwargs: credential_tool_ids.append(str(kwargs["tool_id"])),
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--provider",
+            "byteplus",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+            "--sandbox-chat-codex-tool-id",
+            "chat-code-env-id",
+            "--sandbox-chat-openclaw-tool-id",
+            "openclaw-tool-id",
+            "--sandbox-chat-hermes-tool-id",
+            "hermes-tool-id",
+            "--sandbox-skill-creator-tool-id",
+            "skill-code-env-id",
+            "--iam-role",
+            "trn:iam::role/test",
+            "--vefaas-application-template-id",
+            "byteplus-template-id",
+            "--gateway-name",
+            "gateway",
+            "--byteplus-access-key",
+            "byteplus-ak",
+            "--byteplus-secret-key",
+            "byteplus-sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    engine = captured["engine"]
+    assert isinstance(engine, dict)
+    assert engine["provider"] == "byteplus"
+    assert engine["region"] == "ap-southeast-1"
+    assert engine["project"] == "default"
+    assert engine["vefaas_application_template_id"] == "byteplus-template-id"
+    assert engine["volcengine_access_key"] == "byteplus-ak"
+    assert engine["volcengine_secret_key"] == "byteplus-sk"
+    identity_probe = captured["identity_probe"]
+    assert isinstance(identity_probe, dict)
+    assert identity_probe["provider"] == "byteplus"
+    assert identity_probe["deployment_region"] == "ap-southeast-1"
+    identity = captured["identity"]
+    assert isinstance(identity, dict)
+    assert identity["provider"] == "byteplus"
+    assert identity["region"] == "ap-southeast-1"
+    assert "--provider byteplus --auth-mode frontend" in str(captured["run_script"])
+    assert veadk_environments["CLOUD_PROVIDER"] == "byteplus"
+    assert veadk_environments["AGENTKIT_CLOUD_PROVIDER"] == "byteplus"
+    assert veadk_environments["BYTEPLUS_REGION"] == "ap-southeast-1"
+    assert veadk_environments["VEIDENTITY_REGION"] == "ap-southeast-1"
+    assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == "ap-southeast-1"
+    assert sorted(credential_tool_ids) == [
+        "chat-code-env-id",
+        "skill-code-env-id",
+    ]
+
+
+def test_studio_deploy_byteplus_skips_sandbox_auto_provisioning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeCloudAgentEngine:
+        def __init__(self, **kwargs: object) -> None:
+            captured["engine"] = kwargs
+
+        def deploy(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                vefaas_endpoint="https://studio.byteplus.example.com",
+                vefaas_application_id="app-id",
+                vefaas_function_id="",
+            )
+
+    class _FakeIdentityClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured["identity"] = kwargs
+
+        def register_callback_for_user_pool_client(self, **kwargs: object) -> None:
+            captured["callback"] = kwargs
+
+    def _fail_auto_provision(*_: object, **__: object) -> None:
+        raise AssertionError("BytePlus deploy must not auto-provision sandbox tools")
+
+    monkeypatch.setattr(
+        "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_studio_identity_region",
+        lambda **kwargs: kwargs["deployment_region"],
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        _FakeIdentityClient,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
+        _fail_auto_provision,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_agent_tool",
+        _fail_auto_provision,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
+        _fail_auto_provision,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_agent_model_credential",
+        _fail_auto_provision,
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--provider",
+            "byteplus",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+            "--iam-role",
+            "trn:iam::role/test",
+            "--vefaas-application-template-id",
+            "byteplus-template-id",
+            "--gateway-name",
+            "gateway",
+            "--byteplus-access-key",
+            "byteplus-ak",
+            "--byteplus-secret-key",
+            "byteplus-sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "Skipping AgentKit Codex Tool auto-provisioning for BytePlus" in result.output
+    )
+    assert veadk_environments["SANDBOX_CHAT_CODEX"] == ""
+    assert veadk_environments["SANDBOX_SKILL_CREATOR"] == ""
+    assert veadk_environments["SANDBOX_CHAT_OPENCLAW"] == ""
+    assert veadk_environments["SANDBOX_CHAT_HERMES"] == ""
+
+
+def test_studio_deploy_byteplus_requires_existing_iam_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail_serverless_role(*_: object) -> None:
+        raise AssertionError("BytePlus deploy must not create Volcengine role setup")
+
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_studio_identity_region",
+        lambda **kwargs: kwargs["deployment_region"],
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_deploy_serverless_iam.ensure_serverless_application_role",
+        _fail_serverless_role,
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--provider",
+            "byteplus",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+            "--vefaas-application-template-id",
+            "byteplus-template-id",
+            "--gateway-name",
+            "gateway",
+            "--byteplus-access-key",
+            "byteplus-ak",
+            "--byteplus-secret-key",
+            "byteplus-sk",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "BytePlus Studio deployment requires --iam-role" in result.output
 
 
 def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(

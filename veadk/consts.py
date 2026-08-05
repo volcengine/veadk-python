@@ -84,7 +84,7 @@ DEFAULT_NACOS_INSTANCE_NAME = "veadk"
 provider = os.getenv("CLOUD_PROVIDER")
 
 if provider and provider.lower() == "byteplus":
-    DEFAULT_MODEL_AGENT_NAME = "dola-seed-2-1-turbo-260628"
+    DEFAULT_MODEL_AGENT_NAME = "seed-2-0-lite-260228"
     DEFAULT_MODEL_AGENT_API_BASE = "https://ark.ap-southeast.bytepluses.com/api/v3"
     DEFAULT_IMAGE_EDIT_MODEL_NAME = "seededit-3-0-i2i-250628"
     DEFAULT_IMAGE_EDIT_MODEL_API_BASE = "https://ark.ap-southeast.bytepluses.com/api/v3"
@@ -97,3 +97,7 @@ if provider and provider.lower() == "byteplus":
 DEFAULT_MODEL_EMBEDDING_NAME = "doubao-embedding-vision-250615"
 DEFAULT_MODEL_EMBEDDING_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 DEFAULT_MODEL_EMBEDDING_DIM = 2048
+
+if provider and provider.lower() == "byteplus":
+    DEFAULT_MODEL_EMBEDDING_NAME = "skylark-embedding-vision-250615"
+    DEFAULT_MODEL_EMBEDDING_API_BASE = "https://ark.ap-southeast.bytepluses.com/api/v3"

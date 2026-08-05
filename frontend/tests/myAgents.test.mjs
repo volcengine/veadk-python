@@ -89,8 +89,9 @@ test("renders only account-backed Runtime and Sandbox agents", () => {
 
 test("keeps a primary create action visible above the scrolling results", () => {
   assert.match(pageSource, /canCreate: boolean/);
-  assert.match(pageSource, /activeType === "general"[\s\S]*?onCreateAgent\(DEFAULT_CREATE_REGION\)[\s\S]*?onCreateSandboxAgent\(activeType\)/);
-  assert.match(pageSource, /onCreateAgent\(DEFAULT_CREATE_REGION\)/);
+  assert.match(pageSource, /cloudProvider: CloudProvider/);
+  assert.match(pageSource, /activeType === "general"[\s\S]*?onCreateAgent\(defaultCloudRegion\(cloudProvider\)\)[\s\S]*?onCreateSandboxAgent\(activeType\)/);
+  assert.match(pageSource, /onCreateAgent\(defaultCloudRegion\(cloudProvider\)\)/);
   assert.match(pageSource, /onCreateSandboxAgent: \(kind: "codex" \| SandboxAgentKind\) => void/);
   assert.match(pageSource, /className="my-agent-create-primary"[\s\S]*?disabled=\{!createAgent\}[\s\S]*?<span>创建智能体<\/span>/);
   assert.ok(pageSource.indexOf('className="my-agent-create-primary"') < pageSource.indexOf('className="my-agent-results"'));
@@ -225,11 +226,11 @@ test("marks runtimes created by the administrator", () => {
 test("shows the Runtime region before the ownership badge in the card title", () => {
   assert.match(
     pageSource,
-    /function formatRuntimeRegion\(region: string\): string \{[\s\S]*?cn-shanghai[\s\S]*?上海[\s\S]*?cn-beijing[\s\S]*?北京/,
+    /formatCloudRegion\(agent\.runtime\.region, cloudProvider\)/,
   );
   assert.match(
     pageSource,
-    /className="my-agent-card-badges"[\s\S]*?className="my-agent-region-badge"[\s\S]*?formatRuntimeRegion\(agent\.runtime\.region\)[\s\S]*?className="runtime-owner-badge"[\s\S]*?>我创建的</,
+    /className="my-agent-card-badges"[\s\S]*?className="my-agent-region-badge"[\s\S]*?formatCloudRegion\(agent\.runtime\.region, cloudProvider\)[\s\S]*?className="runtime-owner-badge"[\s\S]*?>我创建的</,
   );
   assert.match(
     pageStyles,
@@ -386,7 +387,7 @@ test("uses the official EmptyMessage and offers a real create action for an empt
   );
   assert.match(
     pageSource,
-    /canCreate \? \([\s\S]*?<EmptyMessage\.ActionRow>[\s\S]*?<Button[\s\S]*?color="primary"[\s\S]*?onClick=\{\(\) => onCreateAgent\(DEFAULT_CREATE_REGION\)\}[\s\S]*?创建智能体/,
+    /canCreate \? \([\s\S]*?<EmptyMessage\.ActionRow>[\s\S]*?<Button[\s\S]*?color="primary"[\s\S]*?onClick=\{\(\) => onCreateAgent\(defaultCloudRegion\(cloudProvider\)\)\}[\s\S]*?创建智能体/,
   );
   assert.match(pageSource, /query\.trim\(\)[\s\S]*?<EmptyMessage\.Title>没有匹配的智能体<\/EmptyMessage\.Title>/);
   assert.match(pageSource, /className="my-agent-empty-message"[\s\S]*?<EmptyMessage fill="none">/);

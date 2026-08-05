@@ -95,6 +95,13 @@ async def parallel_web_search(
     else:
         logger.debug("Successfully get AK/SK from tool context.")
 
+    if (os.getenv("CLOUD_PROVIDER") or "").lower() == "byteplus":
+        logger.warning("parallel_web_search is disabled in BytePlus mode.")
+        return {
+            query: ["Parallel web search is not connected in BytePlus mode."]
+            for query in queries
+        }
+
     results = {}
 
     logger.info(f"Start to search {queries} in parallel.")

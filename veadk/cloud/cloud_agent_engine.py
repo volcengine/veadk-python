@@ -27,6 +27,7 @@ from veadk.config import getenv, veadk_environments
 from veadk.integrations.ve_apig.ve_apig import APIGateway
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 from veadk.integrations.ve_identity.identity_client import IdentityClient
+from veadk.utils.cloud_provider import DEFAULT_CLOUD_PROVIDER, CloudProvider
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
 
@@ -75,6 +76,7 @@ class CloudAgentEngine(BaseModel):
     ) or getenv("VOLC_SESSIONTOKEN", "", allow_false_values=True)
     region: str = "cn-beijing"
     project: str = "default"
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER
 
     def model_post_init(self, context: Any, /) -> None:
         """Initializes the internal VeFaaS service after Pydantic model validation.
@@ -97,18 +99,21 @@ class CloudAgentEngine(BaseModel):
             session_token=self.volcengine_session_token,
             region=self.region,
             project_name=self.project,
+            provider=self.provider,
         )
         self._veapig_service = APIGateway(
             access_key=self.volcengine_access_key,
             secret_key=self.volcengine_secret_key,
             region=self.region,
             session_token=self.volcengine_session_token,
+            provider=self.provider,
         )
         self._veidentity_service = IdentityClient(
             access_key=self.volcengine_access_key,
             secret_key=self.volcengine_secret_key,
             session_token=self.volcengine_session_token,
             region=self.region,
+            provider=self.provider,
         )
 
     def _prepare(self, path: str, name: str):

@@ -50,6 +50,14 @@ from veadk.cli.studio_telemetry import (
     studio_telemetry_config,
 )
 from veadk.consts import STUDIO_APMPLUS_ENV
+from veadk.utils.cloud_provider import (
+    DEFAULT_BYTEPLUS_REGION,
+    DEFAULT_CLOUD_PROVIDER,
+    CloudProvider,
+    agentkit_openapi_base,
+    default_region,
+    normalize_cloud_provider,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -105,8 +113,38 @@ def _runtime_regions(provider: str, requested_region: str) -> list[str]:
     if requested_region not in {"all", "", "*"}:
         return [requested_region]
     if provider == "byteplus":
-        return [os.getenv("BYTEPLUS_REGION") or "ap-southeast-1"]
+        return [os.getenv("BYTEPLUS_REGION") or DEFAULT_BYTEPLUS_REGION]
     return ["cn-beijing", "cn-shanghai"]
+
+
+def _vikingdb_openapi_host(provider: str) -> str:
+    """Return the Vector Database Cloud OpenAPI host."""
+    return (
+        "open.byteplusapi.com" if provider == "byteplus" else "open.volcengineapi.com"
+    )
+
+
+def _candidate_vikingdb_projects(project: str | None) -> list[str | None]:
+    """Return likely Vector Database projects to list when Studio has no picker."""
+    explicit = (project or "").strip()
+    if explicit:
+        return [explicit]
+    candidates: list[str | None] = [
+        os.getenv("DATABASE_VIKING_PROJECT"),
+        os.getenv("VEADK_STUDIO_PROJECT"),
+        "default",
+        None,
+    ]
+    result: list[str | None] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = (candidate or "").strip()
+        key = normalized or "<account-default>"
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(normalized or None)
+    return result
 
 
 def _normalize_runtime_description(value: object) -> str:
@@ -345,7 +383,7 @@ class _MessageFeedbackRequest(BaseModel):
     """One rating change for a persisted assistant Event."""
 
     runtime_id: str = Field(alias="runtimeId", min_length=1)
-    region: str = Field(default="cn-beijing", min_length=1)
+    region: str = Field(default="", min_length=0)
     app_name: str = Field(alias="appName", min_length=1)
     user_id: str = Field(alias="userId", min_length=1)
     session_id: str = Field(alias="sessionId", min_length=1)
@@ -358,7 +396,7 @@ class _DeleteFeedbackCasesRequest(BaseModel):
     """Feedback-derived evaluation cases to remove from AgentKit."""
 
     runtime_id: str = Field(alias="runtimeId", min_length=1)
-    region: str = Field(default="cn-beijing", min_length=1)
+    region: str = Field(default="", min_length=0)
     app_name: str = Field(alias="appName", min_length=1)
     item_ids: list[str] = Field(alias="itemIds", min_length=1, max_length=100)
 
@@ -1271,6 +1309,12 @@ def _run_frontend_server(
             "SECRET_KEY, or run inside a VeFaaS function with an IAM role)",
         )
 
+    def _default_cloud_region() -> str:
+        return default_region(provider)
+
+    def _coerce_cloud_region(region: str | None) -> str:
+        return (region or "").strip() or _default_cloud_region()
+
     def _require_studio_admin(request: Request) -> None:
         if _request_role(request) != StudioRole.ADMIN:
             raise HTTPException(
@@ -1561,6 +1605,7 @@ def _run_frontend_server(
         return {
             "studio": studio,
             "version": version,
+            "provider": provider,
             "branding": {
                 "title": branding_title,
                 "logoUrl": "/web/site-logo" if branding_logo is not None else "",
@@ -1650,6 +1695,12 @@ def _run_frontend_server(
 
         if not q.strip():
             return {"mounted": True, "results": []}
+        if provider == "byteplus":
+            return {
+                "mounted": False,
+                "results": [],
+                "error": "BytePlus web search is not connected in this Studio yet.",
+            }
 
         # Gate on the agent's tools only when we can introspect it locally.
         if agent is not None:
@@ -1718,6 +1769,11 @@ def _run_frontend_server(
     )
     async def _skillhub_proxy(request: Request, path: str):
         """Proxy requests to Volcengine Skill Hub API to avoid CORS issues."""
+        if provider == "byteplus":
+            raise HTTPException(
+                status_code=404,
+                detail="Volcengine Skill Hub proxy is disabled in BytePlus mode.",
+            )
         target_url = f"{SKILLHUB_TARGET}/{path}"
         if request.url.query:
             target_url += f"?{request.url.query}"
@@ -1959,6 +2015,10 @@ def _run_frontend_server(
             "VOLCENGINE_SECRET_KEY",
             "VOLCENGINE_SESSION_TOKEN",
             "VOLCENGINE_REGION",
+            "BYTEPLUS_ACCESS_KEY",
+            "BYTEPLUS_SECRET_KEY",
+            "BYTEPLUS_SESSION_TOKEN",
+            "BYTEPLUS_REGION",
             "TOOL_WEB_SEARCH_ACCESS_KEY",
             "TOOL_WEB_SEARCH_SECRET_KEY",
             "TOOL_VESPEECH_APP_ID",
@@ -1967,6 +2027,7 @@ def _run_frontend_server(
             "TOOL_WEB_SCRAPER_ENDPOINT",
             "DATABASE_MEM0_API_KEY",
             "CLOUD_PROVIDER",
+            "AGENTKIT_CLOUD_PROVIDER",
             "BYTEPLUS_WEB_SEARCH_API_KEY",
             "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY",
         ):
@@ -2203,7 +2264,8 @@ def _run_frontend_server(
             GetSkillVersionRequest,
         )
 
-        client = _skills_client(region or "cn-beijing")
+        resolved_region = _coerce_cloud_region(region)
+        client = _skills_client(resolved_region)
         try:
             resp = client.get_skill_version(
                 GetSkillVersionRequest(id=skill_id, skill_version=version)
@@ -2221,7 +2283,7 @@ def _run_frontend_server(
                 except Exception:
                     logger.error(
                         f"GetSkillVersion({skill_id}@{version}) error for region "
-                        f"{region or 'cn-beijing'}: {version_error}",
+                        f"{resolved_region}: {version_error}",
                         exc_info=True,
                     )
                     raise HTTPException(
@@ -2231,7 +2293,7 @@ def _run_frontend_server(
             else:
                 logger.error(
                     f"GetSkillVersion({skill_id}@{version}) error for region "
-                    f"{region or 'cn-beijing'}: {version_error}",
+                    f"{resolved_region}: {version_error}",
                     exc_info=True,
                 )
                 raise HTTPException(
@@ -2808,7 +2870,7 @@ def _run_frontend_server(
             if not runtime_id or task.get("destroyed") or task.get("destroying"):
                 return False
             task["destroying"] = True
-            region = str(task.get("region") or "cn-beijing")
+            region = str(task.get("region") or _default_cloud_region())
 
         try:
             _delete_agentkit_runtime(runtime_id, region)
@@ -3020,7 +3082,7 @@ def _run_frontend_server(
             min_instance != 1 or max_instance != 5
         )
 
-        region = config.get("region", "cn-beijing")
+        region = config.get("region") or _default_cloud_region()
         project_name = config.get("projectName", "default")
         existing_runtime = None
         if runtime_id:
@@ -3467,7 +3529,8 @@ def _run_frontend_server(
                     access_key=ak,
                     secret_key=sk,
                     session_token=token or "",
-                    region="cn-beijing",
+                    region=region,
+                    provider=provider,
                 )
                 workspace_id = _resolve_cp_workspace_id(cp_client)
                 pipeline_id = _resolve_cp_pipeline_id(cp_client, workspace_id)
@@ -4017,7 +4080,7 @@ def _run_frontend_server(
         _require_agent_management(request)
         data = await request.json()
         runtime_id = (data.get("runtimeId") or "").strip()
-        region = (data.get("region") or "cn-beijing").strip()
+        region = _coerce_cloud_region(data.get("region"))
         if not runtime_id:
             raise HTTPException(status_code=400, detail="runtimeId is required")
         try:
@@ -4039,7 +4102,7 @@ def _run_frontend_server(
     async def _web_runtime_detail(
         request: Request,
         runtimeId: str = "",
-        region: str = "cn-beijing",
+        region: str = "",
     ):
         """Control-plane detail for one runtime (used by the '管理 Agent' view).
 
@@ -4049,6 +4112,7 @@ def _run_frontend_server(
         """
         if not runtimeId:
             raise HTTPException(status_code=400, detail="runtimeId is required")
+        region = _coerce_cloud_region(region)
 
         try:
             r = _authorized_runtime(request, runtimeId, region)
@@ -4613,7 +4677,7 @@ def _run_frontend_server(
         ):
             raise HTTPException(status_code=400, detail="invalid method override")
         upstream_method = method_override or request.method
-        region = request.query_params.get("region", "cn-beijing")
+        region = _coerce_cloud_region(request.query_params.get("region"))
         try:
             runtime = _authorized_runtime(
                 request,
@@ -4984,12 +5048,19 @@ def _run_frontend_server(
 
     @app.get("/web/runtime-config")
     async def _web_runtime_config():
-        # Report whether Volcengine AK/SK are present in the server environment.
-        # The agent-creation workbench needs them to call Volcengine services, so
+        # Report whether cloud AK/SK are present in the server environment.
+        # The agent-creation workbench needs them to call cloud services, so
         # the SPA shows a "set AK/SK" notice when they are absent.
-        has_creds = bool(
-            os.getenv("VOLCENGINE_ACCESS_KEY") and os.getenv("VOLCENGINE_SECRET_KEY")
-        ) or os.path.exists("/var/run/secrets/iam/credential")
+        if provider == "byteplus":
+            has_creds = bool(
+                os.getenv("BYTEPLUS_ACCESS_KEY") and os.getenv("BYTEPLUS_SECRET_KEY")
+            )
+        else:
+            has_creds = bool(
+                os.getenv("VOLCENGINE_ACCESS_KEY")
+                and os.getenv("VOLCENGINE_SECRET_KEY")
+            )
+        has_creds = has_creds or os.path.exists("/var/run/secrets/iam/credential")
         return {"credentials": has_creds}
 
     @app.get("/web/identity/user-pools")
@@ -5031,7 +5102,7 @@ def _run_frontend_server(
             return "https://" + host.removeprefix("https://").removeprefix(
                 "http://"
             ).rstrip("/")
-        return f"https://agentkit.{region}.volcengineapi.com"
+        return agentkit_openapi_base(region, provider)
 
     def _agentkit_openapi_headers(
         *,
@@ -5504,9 +5575,10 @@ def _run_frontend_server(
         request: Request,
         runtimeId: str = Query(..., min_length=1),
         appName: str | None = Query(default=None, min_length=1),
-        region: str = Query(default="cn-beijing", min_length=1),
+        region: str = Query(default="", min_length=0),
     ) -> dict[str, Any]:
         _require_agent_management(request)
+        region = _coerce_cloud_region(region)
         capability, _runtime = await _runtime_update_capability_details(
             request,
             runtime_id=runtimeId,
@@ -5521,6 +5593,7 @@ def _run_frontend_server(
         request: Request,
     ) -> dict[str, Any]:
         """Persist one message rating in ADK state and AgentKit evaluation sets."""
+        feedback.region = _coerce_cloud_region(feedback.region)
         principal = _current_principal(request)
         if (
             principal is None
@@ -5723,10 +5796,11 @@ def _run_frontend_server(
         request: Request,
         runtimeId: str = Query(..., min_length=1),
         appName: str = Query(..., min_length=1),
-        region: str = Query(default="cn-beijing", min_length=1),
+        region: str = Query(default="", min_length=0),
         page_size: int = Query(default=100, ge=1, le=200),
     ) -> dict[str, Any]:
         """List AgentKit evaluation-set items created from message feedback."""
+        region = _coerce_cloud_region(region)
         runtime = _authorized_runtime(
             request,
             runtimeId,
@@ -5870,6 +5944,7 @@ def _run_frontend_server(
         request: Request,
     ) -> dict[str, Any]:
         """Remove feedback cases and clear their thumbs state without deleting chat."""
+        deletion.region = _coerce_cloud_region(deletion.region)
         requested_ids = {
             item_id.strip()
             for item_id in deletion.item_ids
@@ -6025,18 +6100,24 @@ def _run_frontend_server(
 
     @app.get("/web/a2a-spaces")
     async def _web_list_a2a_spaces(
-        region: str = "cn-beijing",
+        region: str = "",
         page_size: int = Query(default=100, ge=1, le=100),
         project: str | None = None,
     ):
         """List all AgentKit A2A Spaces visible to server credentials."""
+        region = _coerce_cloud_region(region)
         try:
             _resolve_ve_credentials()
         except HTTPException:
             raise HTTPException(
                 status_code=409,
-                detail="Server Volcengine credentials not configured "
-                "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY).",
+                detail=(
+                    "Server BytePlus credentials not configured "
+                    "(set BYTEPLUS_ACCESS_KEY/BYTEPLUS_SECRET_KEY)."
+                    if provider == "byteplus"
+                    else "Server Volcengine credentials not configured "
+                    "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY)."
+                ),
             )
 
         all_items: list[dict[str, Any]] = []
@@ -6106,8 +6187,7 @@ def _run_frontend_server(
         }
 
     def _viking_knowledgebase_host(region: str) -> tuple[str, str]:
-        cloud_provider = os.getenv("CLOUD_PROVIDER", "volces").lower()
-        if cloud_provider == "byteplus":
+        if provider == "byteplus":
             return (
                 f"api-knowledgebase.mlp.{region}.bytepluses.com",
                 "https",
@@ -6123,25 +6203,210 @@ def _run_frontend_server(
             return data.get(name, fallback)
         return fallback
 
+    def _append_unique_viking_collection_item(
+        items: list[dict[str, Any]],
+        seen: set[tuple[str, str, str, str]],
+        item: dict[str, Any],
+    ) -> None:
+        key = (
+            str(item.get("sourceKind") or ""),
+            str(item.get("projectName") or ""),
+            str(item.get("region") or ""),
+            str(item.get("id") or ""),
+        )
+        if not key[-1] or key in seen:
+            return
+        seen.add(key)
+        items.append(item)
+
+    def _agentkit_viking_index(name: str, provider_knowledge_id: str) -> str:
+        provider_id = (provider_knowledge_id or "").strip()
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,127}", provider_id):
+            return provider_id
+        return name
+
+    def _list_agentkit_viking_knowledge_bases(
+        *,
+        access_key: str,
+        secret_key: str,
+        session_token: str | None,
+        region: str,
+        project: str | None,
+    ) -> list[dict[str, Any]]:
+        from agentkit.sdk.knowledge.client import AgentkitKnowledgeClient
+        from agentkit.sdk.knowledge import types as knowledge_types
+
+        client = AgentkitKnowledgeClient(
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token or "",
+            region=region,
+        )
+        items: list[dict[str, Any]] = []
+        next_token = ""
+        seen_tokens: set[str] = set()
+        for _ in range(100):
+            request = knowledge_types.ListKnowledgeBasesRequest(
+                max_results=100,
+                next_token=next_token or None,
+                project_name=project,
+                filters=[
+                    knowledge_types.FiltersItemForListKnowledgeBases(
+                        name="provider_type",
+                        values=["VIKINGDB_KNOWLEDGE"],
+                    )
+                ],
+            )
+            response = client.list_knowledge_bases(request)
+            for knowledge in response.knowledge_bases or []:
+                name = str(getattr(knowledge, "name", "") or "").strip()
+                knowledge_id = str(getattr(knowledge, "knowledge_id", "") or "").strip()
+                provider_id = str(
+                    getattr(knowledge, "provider_knowledge_id", "") or ""
+                ).strip()
+                index = _agentkit_viking_index(name, provider_id)
+                if not index:
+                    continue
+                resource_id = provider_id if provider_id.startswith("kb-") else ""
+                if not resource_id and knowledge_id.startswith("kb-"):
+                    resource_id = knowledge_id
+                items.append(
+                    {
+                        "id": index,
+                        "name": name or index,
+                        "description": str(getattr(knowledge, "description", "") or ""),
+                        "projectName": str(
+                            getattr(knowledge, "project_name", "") or project or ""
+                        ),
+                        "region": str(getattr(knowledge, "region", "") or region),
+                        "updatedAt": str(
+                            getattr(knowledge, "last_update_time", "") or ""
+                        ),
+                        "resourceId": resource_id,
+                        "agentkitKnowledgeId": knowledge_id,
+                        "providerKnowledgeId": provider_id,
+                        "providerType": str(
+                            getattr(knowledge, "provider_type", "") or ""
+                        ),
+                        "status": str(getattr(knowledge, "status", "") or ""),
+                        "sourceKind": "agentkit",
+                        "sourceLabel": "AgentKit Knowledge Base",
+                    }
+                )
+            token = str(getattr(response, "next_token", "") or "")
+            if not token or token in seen_tokens:
+                break
+            seen_tokens.add(token)
+            next_token = token
+        return items
+
+    def _list_vikingdb_vector_collections(
+        *,
+        access_key: str,
+        secret_key: str,
+        session_token: str | None,
+        region: str,
+        project: str | None,
+    ) -> list[dict[str, Any]]:
+        from volcenginesdkcore import ApiClient
+        from volcenginesdkcore.configuration import Configuration
+        from volcenginesdkvikingdb import ListVikingdbCollectionRequest, VIKINGDBApi
+
+        config = Configuration()
+        config.ak = access_key
+        config.sk = secret_key
+        config.session_token = session_token or ""
+        config.region = region
+        config.host = _vikingdb_openapi_host(provider)
+        client = VIKINGDBApi(ApiClient(config))
+
+        items: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for project_name in _candidate_vikingdb_projects(project):
+            page_number = 1
+            page_size = 100
+            while True:
+                request = ListVikingdbCollectionRequest(
+                    page_number=page_number,
+                    page_size=page_size,
+                    project_name=project_name,
+                )
+                try:
+                    response = client.list_vikingdb_collection(request)
+                except Exception:
+                    logger.debug(
+                        "skip VikingDB vector collection project %s in %s",
+                        project_name or "<account-default>",
+                        region,
+                        exc_info=True,
+                    )
+                    break
+                collections = list(getattr(response, "collections", None) or [])
+                for collection in collections:
+                    name = str(getattr(collection, "collection_name", "") or "")
+                    if not name:
+                        continue
+                    resolved_project = str(
+                        getattr(collection, "project_name", "") or project_name or ""
+                    )
+                    key = (resolved_project, region, name)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    items.append(
+                        {
+                            "id": name,
+                            "name": name,
+                            "description": str(
+                                getattr(collection, "description", "") or ""
+                            ),
+                            "projectName": resolved_project,
+                            "region": region,
+                            "updatedAt": str(
+                                getattr(collection, "update_time", "") or ""
+                            ),
+                            "resourceId": str(
+                                getattr(collection, "resource_id", "") or ""
+                            ),
+                            "sourceKind": "vector",
+                            "sourceLabel": "Vector DB",
+                            "indexCount": getattr(collection, "index_count", None),
+                        }
+                    )
+                total_count = int(getattr(response, "total_count", 0) or 0)
+                if not collections or page_number * page_size >= total_count:
+                    break
+                page_number += 1
+        return items
+
     @app.get("/web/viking-knowledgebases")
     async def _web_list_viking_knowledgebases(
-        region: str = "cn-beijing",
-        project: str = "default",
+        region: str = "",
+        project: str = "",
     ):
         """List VikingDB KnowledgeBase collections visible to server creds."""
         from volcengine.viking_knowledgebase import VikingKnowledgeBaseService
+
+        region = _coerce_cloud_region(region)
 
         try:
             ak, sk, token = _resolve_ve_credentials()
         except HTTPException:
             raise HTTPException(
                 status_code=409,
-                detail="Server Volcengine credentials not configured "
-                "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY).",
+                detail=(
+                    "Server BytePlus credentials not configured "
+                    "(set BYTEPLUS_ACCESS_KEY/BYTEPLUS_SECRET_KEY)."
+                    if provider == "byteplus"
+                    else "Server Volcengine credentials not configured "
+                    "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY)."
+                ),
             )
 
-        project_name = (project or "").strip() or "default"
+        project_name = (project or "").strip() or None
         host, scheme = _viking_knowledgebase_host(region)
+        items: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str, str]] = set()
         try:
             client = VikingKnowledgeBaseService(
                 host=host,
@@ -6159,21 +6424,19 @@ def _run_frontend_server(
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(
+            logger.warning(
                 f"List VikingDB knowledgebases error for {region}: {e}",
                 exc_info=True,
             )
-            raise HTTPException(
-                status_code=502,
-                detail="暂时无法加载 VikingDB 知识库，请稍后重试。",
-            )
+            collections = []
 
-        items: list[dict[str, Any]] = []
         for collection in collections or []:
             name = str(_collection_attr(collection, "collection_name", "") or "")
             if not name:
                 continue
-            items.append(
+            _append_unique_viking_collection_item(
+                items,
+                seen,
                 {
                     "id": name,
                     "name": name,
@@ -6181,8 +6444,8 @@ def _run_frontend_server(
                         _collection_attr(collection, "description", "") or ""
                     ),
                     "projectName": str(
-                        _collection_attr(collection, "project", project_name)
-                        or project_name
+                        _collection_attr(collection, "project", project_name or "")
+                        or ""
                     ),
                     "region": region,
                     "docCount": _collection_attr(collection, "doc_num", None),
@@ -6192,9 +6455,57 @@ def _run_frontend_server(
                     "resourceId": str(
                         _collection_attr(collection, "resource_id", "") or ""
                     ),
-                }
+                    "sourceKind": "knowledge",
+                    "sourceLabel": "Knowledge Engine",
+                },
             )
 
+        try:
+            agentkit_items = await asyncio.to_thread(
+                _list_agentkit_viking_knowledge_bases,
+                access_key=ak,
+                secret_key=sk,
+                session_token=token,
+                region=region,
+                project=project_name,
+            )
+            for item in agentkit_items:
+                _append_unique_viking_collection_item(items, seen, item)
+        except Exception as e:
+            logger.warning(
+                f"List AgentKit Viking knowledgebases error for {region}: {e}",
+                exc_info=True,
+            )
+
+        try:
+            vector_items = await asyncio.to_thread(
+                _list_vikingdb_vector_collections,
+                access_key=ak,
+                secret_key=sk,
+                session_token=token,
+                region=region,
+                project=project_name,
+            )
+            for item in vector_items:
+                _append_unique_viking_collection_item(items, seen, item)
+        except Exception as e:
+            logger.warning(
+                f"List VikingDB vector collections error for {region}: {e}",
+                exc_info=True,
+            )
+
+        if not items:
+            raise HTTPException(
+                status_code=502,
+                detail="暂时无法加载 VikingDB 知识库或向量库，请稍后重试。",
+            )
+        items.sort(
+            key=lambda item: (
+                str(item.get("sourceKind") or ""),
+                str(item.get("projectName") or ""),
+                str(item.get("name") or ""),
+            )
+        )
         return {"items": items, "totalCount": len(items)}
 
     # SkillSpace routes run sync SDK calls in worker threads. Detail responses
@@ -6210,8 +6521,13 @@ def _run_frontend_server(
         except HTTPException:
             raise HTTPException(
                 status_code=409,
-                detail="Server Volcengine credentials not configured "
-                "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY).",
+                detail=(
+                    "Server BytePlus credentials not configured "
+                    "(set BYTEPLUS_ACCESS_KEY/BYTEPLUS_SECRET_KEY)."
+                    if provider == "byteplus"
+                    else "Server Volcengine credentials not configured "
+                    "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY)."
+                ),
             )
         return AgentkitSkillsClient(
             access_key=ak,
@@ -6227,11 +6543,16 @@ def _run_frontend_server(
         page_size: int = Query(default=50, ge=1, le=100),
         project: str | None = None,
     ):
-        """List SkillSpaces visible to the server's credentials. Fetches from
-        both cn-beijing and cn-shanghai when region=all."""
+        """List SkillSpaces visible to the server's credentials.
+
+        In Volcengine mode, region=all spans Beijing and Shanghai. In BytePlus
+        mode it resolves to the BytePlus Studio region configured for this
+        server (currently ap-southeast-1).
+        """
         from agentkit.sdk.skills.types import ListSkillSpacesRequest
 
-        regions = ["cn-beijing", "cn-shanghai"] if region == "all" else [region]
+        aggregate_regions = region in {"all", "", "*"}
+        regions = _runtime_regions(provider, region)
         all_items = []
         total_count = 0
         project_name = (project or "").strip() or None
@@ -6239,8 +6560,8 @@ def _run_frontend_server(
         for reg in regions:
             try:
                 client = _skills_client(reg)
-                request_page = 1 if region == "all" else page
-                request_page_size = 50 if region == "all" else page_size
+                request_page = 1 if aggregate_regions else page
+                request_page_size = 50 if aggregate_regions else page_size
                 resp = await asyncio.to_thread(
                     client.list_skill_spaces,
                     ListSkillSpacesRequest(
@@ -6262,7 +6583,7 @@ def _run_frontend_server(
                             "skillCount": len(s.relations or []),
                         }
                     )
-                if region != "all":
+                if not aggregate_regions:
                     total_count = (
                         resp.total_count
                         if resp.total_count is not None
@@ -6279,15 +6600,15 @@ def _run_frontend_server(
 
         return {
             "items": all_items,
-            "totalCount": len(all_items) if region == "all" else total_count,
-            "page": 1 if region == "all" else page,
-            "pageSize": 50 if region == "all" else page_size,
+            "totalCount": len(all_items) if aggregate_regions else total_count,
+            "page": 1 if aggregate_regions else page,
+            "pageSize": 50 if aggregate_regions else page_size,
         }
 
     @app.get("/web/skill-spaces/{space_id}/skills")
     async def _web_list_skills_in_space(
         space_id: str,
-        region: str = "cn-beijing",
+        region: str = "",
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=100, ge=1, le=100),
         project: str | None = None,
@@ -6297,6 +6618,7 @@ def _run_frontend_server(
         from agentkit.sdk.skills.types import ListSkillsBySkillSpaceRequest
 
         del project  # SkillSpace ID is already globally scoped by AgentKit.
+        region = _coerce_cloud_region(region)
         try:
             client = _skills_client(region)
             resp = await asyncio.to_thread(
@@ -6343,11 +6665,12 @@ def _run_frontend_server(
         space_id: str,
         skill_id: str,
         version: str | None = None,
-        region: str = "cn-beijing",
+        region: str = "",
     ):
         """Fetch a specific skill version's SKILL.md content plus package files."""
         from agentkit.sdk.skills.types import GetSkillVersionRequest
 
+        region = _coerce_cloud_region(region)
         try:
             client = _skills_client(region)
             resp = await asyncio.to_thread(
@@ -6497,11 +6820,16 @@ def _resolve_studio_identity_region(
     client_id: str,
     deployment_region: str,
     session_token: str = "",
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
 ) -> str:
     """Locate a Studio user-pool client across supported Identity regions."""
     from veadk.integrations.ve_identity.identity_client import IdentityClient
 
-    supported_regions = ("cn-beijing", "cn-shanghai")
+    supported_regions = (
+        (default_region(provider),)
+        if provider == "byteplus"
+        else ("cn-beijing", "cn-shanghai")
+    )
     candidate_regions = (deployment_region,) + tuple(
         region for region in supported_regions if region != deployment_region
     )
@@ -6511,12 +6839,17 @@ def _resolve_studio_identity_region(
             secret_key=secret_key,
             session_token=session_token,
             region=candidate_region,
+            provider=provider,
         )
         if identity_client.user_pool_client_exists(
             user_pool_uid=user_pool_id,
             client_uid=client_id,
         ):
             return candidate_region
+    if provider == "byteplus":
+        raise click.ClickException(
+            f"Agent Identity user pool/client not found in {deployment_region}."
+        )
     raise click.ClickException(
         "VeIdentity user pool/client not found in cn-beijing or cn-shanghai."
     )
@@ -6527,19 +6860,46 @@ def _resolve_studio_cloud_credentials(
     secret_key: str | None,
     credentials_path: Path | None = None,
     session_token: str | None = None,
+    *,
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
 ) -> tuple[str, str, str]:
     """Resolve Studio deploy credentials as AK, SK, and token."""
     import configparser
 
-    resolved_access_key = access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
-    resolved_secret_key = secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
-    resolved_session_token = (
-        session_token
-        or os.getenv("VOLCENGINE_SESSION_TOKEN", "")
-        or os.getenv("VOLC_SESSIONTOKEN", "")
-    )
+    if provider == "byteplus":
+        resolved_access_key = (
+            access_key
+            or os.getenv("BYTEPLUS_ACCESS_KEY", "")
+            or os.getenv("VOLCENGINE_ACCESS_KEY", "")
+        )
+        resolved_secret_key = (
+            secret_key
+            or os.getenv("BYTEPLUS_SECRET_KEY", "")
+            or os.getenv("VOLCENGINE_SECRET_KEY", "")
+        )
+        resolved_session_token = (
+            session_token
+            or os.getenv("BYTEPLUS_SESSION_TOKEN", "")
+            or os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+            or os.getenv("VOLC_SESSIONTOKEN", "")
+        )
+    else:
+        resolved_access_key = access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
+        resolved_secret_key = secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
+        resolved_session_token = (
+            session_token
+            or os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+            or os.getenv("VOLC_SESSIONTOKEN", "")
+        )
     if resolved_access_key and resolved_secret_key:
         return resolved_access_key, resolved_secret_key, resolved_session_token
+
+    if provider == "byteplus":
+        raise click.ClickException(
+            "BytePlus credentials required: pass --byteplus-access-key/"
+            "--byteplus-secret-key, or set BYTEPLUS_ACCESS_KEY/"
+            "BYTEPLUS_SECRET_KEY."
+        )
 
     path = credentials_path or Path.home() / ".volc" / "credentials"
     if path.is_file():
@@ -6578,12 +6938,12 @@ def _resolve_studio_cloud_credentials(
 @click.option(
     "--user-pool-id",
     required=True,
-    help="VeIdentity User Pool UID that gates access (the gateway does SSO against it).",
+    help="Identity User Pool UID that gates access (the gateway does SSO against it).",
 )
 @click.option(
     "--allowed-client-id",
     required=True,
-    help="VeIdentity client UID used for the SSO login at the gateway.",
+    help="Identity client UID used for the SSO login at the gateway.",
 )
 @click.option(
     "--client-secret",
@@ -6596,17 +6956,23 @@ def _resolve_studio_cloud_credentials(
     help="VeFaaS application/function name (4-64 chars, letters/digits/-, no underscore).",
 )
 @click.option(
-    "--region",
-    default="cn-beijing",
+    "--provider",
+    type=click.Choice(["volcengine", "byteplus"]),
+    default="volcengine",
     show_default=True,
-    type=click.Choice(["cn-beijing", "cn-shanghai"]),
-    help="Volcengine region for Studio deployment.",
+    help="Cloud provider for Studio deployment.",
+)
+@click.option(
+    "--region",
+    default=None,
+    type=click.Choice(["cn-beijing", "cn-shanghai", DEFAULT_BYTEPLUS_REGION]),
+    help="Cloud region for Studio deployment. Defaults to the provider region.",
 )
 @click.option(
     "--project",
     default="default",
     show_default=True,
-    help="Volcengine project for the VeFaaS function.",
+    help="Cloud project for the VeFaaS function.",
 )
 @click.option(
     "--iam-role",
@@ -6625,6 +6991,9 @@ def _resolve_studio_cloud_credentials(
 @click.option("--volcengine-access-key", default=None)
 @click.option("--volcengine-secret-key", default=None)
 @click.option("--volcengine-session-token", default=None)
+@click.option("--byteplus-access-key", default=None, envvar="BYTEPLUS_ACCESS_KEY")
+@click.option("--byteplus-secret-key", default=None, envvar="BYTEPLUS_SECRET_KEY")
+@click.option("--byteplus-session-token", default=None, envvar="BYTEPLUS_SESSION_TOKEN")
 @click.option(
     "--veadk-version",
     default="",
@@ -6741,7 +7110,8 @@ def frontend_deploy(
     allowed_client_id: str,
     client_secret: str,
     vefaas_app_name: str,
-    region: str,
+    provider: str,
+    region: str | None,
     project: str,
     iam_role: str | None,
     gateway_name: str,
@@ -6750,6 +7120,9 @@ def frontend_deploy(
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
     volcengine_session_token: str | None,
+    byteplus_access_key: str | None,
+    byteplus_secret_key: str | None,
+    byteplus_session_token: str | None,
     veadk_version: str,
     from_source: bool,
     site_logo: str | None,
@@ -6770,13 +7143,20 @@ def frontend_deploy(
     """Deploy the SSO web frontend to VeFaaS.
 
     Builds a minimal function that runs `veadk studio --auth-mode frontend`,
-    with in-app SSO bound to the given VeIdentity user pool + client, and prints
+    with in-app SSO bound to the given Identity user pool + client, and prints
     the public URL. Inside the function the frontend uses the bound IAM role's
     STS credentials to manage AgentKit runtimes.
     """
     import shutil
 
     from veadk.config import veadk_environments
+
+    provider_id = normalize_cloud_provider(provider)
+    region = region or default_region(provider_id)
+    os.environ["CLOUD_PROVIDER"] = provider_id
+    os.environ["AGENTKIT_CLOUD_PROVIDER"] = provider_id
+    if provider_id == "byteplus":
+        os.environ.setdefault("BYTEPLUS_REGION", region)
 
     try:
         branding_title = normalize_site_title(site_title)
@@ -6794,10 +7174,20 @@ def frontend_deploy(
         raise click.ClickException(str(error)) from error
 
     ak, sk, session_token = _resolve_studio_cloud_credentials(
-        volcengine_access_key,
-        volcengine_secret_key,
-        session_token=volcengine_session_token,
+        byteplus_access_key if provider_id == "byteplus" else volcengine_access_key,
+        byteplus_secret_key if provider_id == "byteplus" else volcengine_secret_key,
+        session_token=(
+            byteplus_session_token
+            if provider_id == "byteplus"
+            else volcengine_session_token
+        ),
+        provider=provider_id,
     )
+    if provider_id == "byteplus":
+        os.environ["BYTEPLUS_ACCESS_KEY"] = ak
+        os.environ["BYTEPLUS_SECRET_KEY"] = sk
+        if session_token:
+            os.environ["BYTEPLUS_SESSION_TOKEN"] = session_token
 
     identity_region = _resolve_studio_identity_region(
         access_key=ak,
@@ -6806,27 +7196,34 @@ def frontend_deploy(
         client_id=allowed_client_id,
         deployment_region=region,
         session_token=session_token,
+        provider=provider_id,
     )
     if identity_region != region:
         click.secho(
-            f"Warning: Studio deploys to {region}, but the VeIdentity user "
+            f"Warning: Studio deploys to {region}, but the Identity user "
             f"pool/client was found in {identity_region}. Continuing with "
             f"Identity region {identity_region}.",
             fg="yellow",
         )
 
     # 1) Ensure VeFaaS has its service role before provisioning cloud resources.
-    from veadk.cli.studio_deploy_serverless_iam import (
-        ensure_serverless_application_role,
-    )
+    if provider_id == "volcengine":
+        from veadk.cli.studio_deploy_serverless_iam import (
+            ensure_serverless_application_role,
+        )
 
-    ensure_serverless_application_role(ak, sk, session_token=session_token)
+        ensure_serverless_application_role(ak, sk, session_token=session_token)
 
     # 2) Ensure the IAM role the function runs as (auto-create unless provided).
     if iam_role:
         role_trn = iam_role
         click.echo(f"Using provided IAM role: {role_trn}")
     else:
+        if provider_id == "byteplus":
+            raise click.ClickException(
+                "BytePlus Studio deployment requires --iam-role. Automatic "
+                "BytePlus IAM role creation is not available yet."
+            )
         from veadk.cli.frontend_deploy_iam import ensure_frontend_role
 
         click.echo("Ensuring IAM role + policy…")
@@ -6855,6 +7252,12 @@ def frontend_deploy(
         "openclaw": "openclaw",
         "hermes": "hermes",
     }
+    sandbox_tool_flags = {
+        "codex": "--sandbox-chat-codex-tool-id",
+        "skill_creator": "--sandbox-skill-creator-tool-id",
+        "openclaw": "--sandbox-chat-openclaw-tool-id",
+        "hermes": "--sandbox-chat-hermes-tool-id",
+    }
     from veadk.cli.studio_sandbox_tools import (
         STUDIO_SANDBOX_AGENT_MODEL_NAME,
         ensure_studio_agent_model_credential,
@@ -6868,6 +7271,12 @@ def frontend_deploy(
         label = sandbox_tool_labels[kind]
         if tool_id:
             click.echo(f"Using configured AgentKit {label} Tool '{tool_id}'.")
+            continue
+        if provider_id == "byteplus":
+            click.echo(
+                f"Skipping AgentKit {label} Tool auto-provisioning for BytePlus. "
+                f"Pass {sandbox_tool_flags[kind]} to enable it."
+            )
             continue
         tool_name = studio_sandbox_tool_name(
             vefaas_app_name,
@@ -6924,13 +7333,19 @@ def frontend_deploy(
     resolved_sandbox_tool_ids: dict[str, str] = {}
     for kind, tool_id in sandbox_tool_ids.items():
         if not tool_id:
+            if provider_id == "byteplus":
+                continue
             raise click.ClickException(
                 f"AgentKit {sandbox_tool_labels[kind]} Tool did not return a Tool ID."
             )
         resolved_sandbox_tool_ids[kind] = tool_id
         click.echo(f"Creating AgentKit {sandbox_tool_labels[kind]} model credential…")
 
-    with ThreadPoolExecutor(max_workers=len(resolved_sandbox_tool_ids)) as executor:
+    if resolved_sandbox_tool_ids:
+        max_workers = len(resolved_sandbox_tool_ids)
+    else:
+        max_workers = 1
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         credential_futures = {}
         for kind, tool_id in resolved_sandbox_tool_ids.items():
             if kind in {"codex", "skill_creator"}:
@@ -6970,10 +7385,10 @@ def frontend_deploy(
                 ) from error
             click.echo(f"AgentKit {label} model credential is ready.")
 
-    chat_codex_tool_id = resolved_sandbox_tool_ids["codex"]
-    skill_creator_tool_id = resolved_sandbox_tool_ids["skill_creator"]
-    openclaw_tool_id = resolved_sandbox_tool_ids["openclaw"]
-    hermes_tool_id = resolved_sandbox_tool_ids["hermes"]
+    chat_codex_tool_id = resolved_sandbox_tool_ids.get("codex", "")
+    skill_creator_tool_id = resolved_sandbox_tool_ids.get("skill_creator", "")
+    openclaw_tool_id = resolved_sandbox_tool_ids.get("openclaw", "")
+    hermes_tool_id = resolved_sandbox_tool_ids.get("hermes", "")
 
     # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
     # (i.e. the deployer's whole .env) as function env vars. The frontend must
@@ -6988,6 +7403,10 @@ def frontend_deploy(
     # `veadk frontend` resolves the client secret + registers the callback from
     # the pool/client UID via from_veidentity, so we only ship the UIDs here.
     veadk_environments.clear()
+    veadk_environments["CLOUD_PROVIDER"] = provider_id
+    veadk_environments["AGENTKIT_CLOUD_PROVIDER"] = provider_id
+    if provider_id == "byteplus":
+        veadk_environments["BYTEPLUS_REGION"] = region
     veadk_environments["OAUTH2_USER_POOL_ID"] = user_pool_id
     veadk_environments["OAUTH2_USER_POOL_CLIENT_ID"] = allowed_client_id
     veadk_environments["OAUTH2_PROVIDER"] = "veidentity"
@@ -7026,7 +7445,13 @@ def frontend_deploy(
     from veadk.integrations.ve_apig.ve_apig import APIGateway
 
     if not gateway_name:
-        apig = APIGateway(ak, sk, region, session_token=session_token)
+        apig = APIGateway(
+            ak,
+            sk,
+            region,
+            session_token=session_token,
+            provider=provider_id,
+        )
         gw = apig.find_serverless_gateway()
         if gw is not None:
             gateway_name = getattr(gw, "name")
@@ -7060,6 +7485,7 @@ def frontend_deploy(
             Path(tmp),
             requirements=requirements,
             site_logo=branding_logo,
+            provider=provider_id,
         )
 
         # 3) Deploy the function + a plain public APIG trigger on the serverless
@@ -7072,6 +7498,7 @@ def frontend_deploy(
             volcengine_session_token=session_token,
             region=region,
             project=project,
+            provider=provider_id,
         )
         click.echo(
             f"Deploying frontend to VeFaaS as '{vefaas_app_name}' "
@@ -7104,6 +7531,7 @@ def frontend_deploy(
                     secret_key=sk,
                     session_token=session_token,
                     region=identity_region,
+                    provider=provider_id,
                 ).register_callback_for_user_pool_client(
                     user_pool_uid=user_pool_id,
                     client_uid=allowed_client_id,

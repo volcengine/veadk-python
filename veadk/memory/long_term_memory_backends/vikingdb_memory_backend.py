@@ -32,21 +32,48 @@ from veadk.integrations.ve_viking_db_memory.ve_viking_db_memory import (
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
 )
+from veadk.utils.cloud_provider import DEFAULT_BYTEPLUS_REGION
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
+def _viking_cloud_provider() -> str:
+    return (
+        os.getenv("AGENTKIT_CLOUD_PROVIDER")
+        or os.getenv("CLOUD_PROVIDER")
+        or "volcengine"
+    ).lower()
+
+
+def _viking_access_key_from_env() -> str | None:
+    if _viking_cloud_provider() == "byteplus":
+        return os.getenv("BYTEPLUS_ACCESS_KEY")
+    return os.getenv("VOLCENGINE_ACCESS_KEY")
+
+
+def _viking_secret_key_from_env() -> str | None:
+    if _viking_cloud_provider() == "byteplus":
+        return os.getenv("BYTEPLUS_SECRET_KEY")
+    return os.getenv("VOLCENGINE_SECRET_KEY")
+
+
+def _viking_session_token_from_env() -> str:
+    if _viking_cloud_provider() == "byteplus":
+        return os.getenv("BYTEPLUS_SESSION_TOKEN", "")
+    return os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+
+
 class VikingDBLTMBackend(BaseLongTermMemoryBackend):
     volcengine_access_key: str | None = Field(
-        default_factory=lambda: os.getenv("VOLCENGINE_ACCESS_KEY")
+        default_factory=_viking_access_key_from_env
     )
 
     volcengine_secret_key: str | None = Field(
-        default_factory=lambda: os.getenv("VOLCENGINE_SECRET_KEY")
+        default_factory=_viking_secret_key_from_env
     )
 
-    session_token: str = ""
+    session_token: str = Field(default_factory=_viking_session_token_from_env)
 
     cloud_provider: str = Field(
         default_factory=lambda: os.getenv("CLOUD_PROVIDER", "volces")
@@ -65,7 +92,10 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
     def model_post_init(self, __context: Any) -> None:
         if not self.region:
             if self.cloud_provider.lower() == "byteplus":
-                self.region = os.getenv("DATABASE_VIKING_REGION", "cn-hongkong")
+                self.region = os.getenv(
+                    "DATABASE_VIKING_REGION",
+                    DEFAULT_BYTEPLUS_REGION,
+                )
             else:
                 self.region = os.getenv("DATABASE_VIKING_REGION", "cn-beijing")
 

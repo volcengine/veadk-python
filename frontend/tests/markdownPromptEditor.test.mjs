@@ -286,7 +286,7 @@ test("baseline debug config defaults to the first configured Agent model", () =>
   );
   assert.match(
     createSource,
-    /id: "baseline",[\s\S]*?modelName: defaultDebugModelName\(initialDraft \?\? emptyDraft\(\)\)/,
+    /id: "baseline",[\s\S]*?modelName: defaultDebugModelName\(initialDraft \?\? emptyDraft\(cloudProvider\)\)/,
   );
   assert.match(
     createSource,
@@ -658,7 +658,7 @@ test("root Agent exposes a confirmed custom clear action", () => {
   assert.match(createSource, /function ClearAgentIcon/);
   assert.match(createSource, /aria-label="清空根 Agent"/);
   assert.match(createSource, /window\.confirm\("清空根 Agent/);
-  assert.match(createSource, /setDraft\(emptyDraft\(\)\)/);
+  assert.match(createSource, /setDraft\(emptyDraft\(cloudProvider\)\)/);
 });
 
 test("skill sources open in a fixed-height dialog above a six-row selected list", () => {

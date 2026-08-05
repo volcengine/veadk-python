@@ -28,6 +28,7 @@ import { SearchButton } from "./Search";
 import { AgentFaceIcon } from "./AgentFaceIcon";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
 import defaultSiteLogo from "../assets/logo.svg";
+import byteplusLogo from "../assets/byteplus.svg";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 
@@ -59,6 +60,7 @@ function ApplicationsIcon(props: SVGProps<SVGSVGElement>) {
 
 export interface SidebarProps {
   branding: SiteBranding;
+  cloudProvider: "volcengine" | "byteplus";
   sessions: AdkSession[];
   currentSessionId: string;
   activePage: SidebarPage;
@@ -279,6 +281,7 @@ function SidebarUser({
 
 export function Sidebar({
   branding,
+  cloudProvider,
   sessions,
   currentSessionId,
   activePage,
@@ -338,6 +341,7 @@ export function Sidebar({
     query.addEventListener("change", handleViewportChange);
     return () => query.removeEventListener("change", handleViewportChange);
   }, []);
+  const fallbackLogo = cloudProvider === "byteplus" ? byteplusLogo : defaultSiteLogo;
   return (
     <aside className={`sidebar ${collapsed ? "is-collapsed" : ""}`}>
       <div className="sidebar-top">
@@ -351,7 +355,7 @@ export function Sidebar({
           >
             <img
               className="brand-logo"
-              src={branding.logoUrl || defaultSiteLogo}
+              src={branding.logoUrl || fallbackLogo}
               width={20}
               height={20}
               alt=""

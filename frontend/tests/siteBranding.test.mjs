@@ -47,10 +47,11 @@ test("applies configured branding to the UI, document title, and favicon", () =>
   assert.match(clientSource, /title: "AgentKit Studio"/);
   assert.match(appSource, /import defaultSiteLogo from "\.\/assets\/logo\.svg"/);
   assert.match(appSource, /document\.title = siteBranding\.title/);
-  assert.match(appSource, /favicon\.href = siteBranding\.logoUrl \|\| defaultSiteLogo/);
+  assert.match(appSource, /cloudProvider === "byteplus" \? byteplusLogo : defaultSiteLogo/);
   assert.match(sidebarSource, /\{branding\.title\}/);
   assert.match(sidebarSource, /import defaultSiteLogo from "\.\.\/assets\/logo\.svg"/);
-  assert.match(sidebarSource, /branding\.logoUrl \|\| defaultSiteLogo/);
+  assert.match(sidebarSource, /cloudProvider === "byteplus" \? byteplusLogo : defaultSiteLogo/);
+  assert.match(sidebarSource, /branding\.logoUrl \|\| fallbackLogo/);
   assert.match(sidebarSource, /width=\{20\}\s*height=\{20\}/);
   assert.match(
     sidebarSource,
@@ -58,14 +59,19 @@ test("applies configured branding to the UI, document title, and favicon", () =>
   );
   assert.match(loginSource, /width=\{20\}\s*height=\{20\}/);
   assert.match(loginSource, /import defaultSiteLogo from "\.\.\/assets\/logo\.svg"/);
+  assert.match(loginSource, /cloudProvider === "byteplus" \? byteplusLogo : defaultSiteLogo/);
+  assert.match(loginSource, /branding\.logoUrl \|\| fallbackLogo/);
   assert.match(
     loginSource,
     /<TextShimmer as="h1" className="login-title"[\s\S]*?\{branding\.title\}[\s\S]*?<\/TextShimmer>/,
   );
   assert.match(loginSource, /<p className="login-sub">登录以继续使用<\/p>/);
   assert.match(loginSource, /火山引擎 AgentKit 提供企业级 Agent 解决方案/);
+  assert.match(loginSource, /BytePlus AgentKit 提供企业级 Agent 解决方案/);
   assert.match(loginSource, /继续即表示你已阅读并同意 AgentKit/);
   assert.match(loginSource, /https:\/\/docs\.volcengine\.com\/docs\/86681\/1925174\?lang=zh/);
+  assert.match(loginSource, /https:\/\/docs\.byteplus\.com\/en\/docs\/legal/);
+  assert.match(loginSource, /cloudProvider: "volcengine" \| "byteplus"/);
   assert.match(loginSource, /target="_blank"/);
   assert.match(stylesSource, /flex: 0 0 20px/);
   assert.match(stylesSource, /object-fit: contain/);

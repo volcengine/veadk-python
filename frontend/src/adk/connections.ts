@@ -47,6 +47,9 @@ const RUNTIME_REGION_FALLBACKS = ["cn-beijing", "cn-shanghai"] as const;
 
 function runtimeRegionCandidates(region: string): string[] {
   const primary = region || "cn-beijing";
+  if (!RUNTIME_REGION_FALLBACKS.includes(primary as (typeof RUNTIME_REGION_FALLBACKS)[number])) {
+    return [primary];
+  }
   return [
     primary,
     ...RUNTIME_REGION_FALLBACKS.filter((candidate) => candidate !== primary),

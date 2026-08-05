@@ -10,6 +10,11 @@ import {
   type RuntimeScope,
 } from "../adk/client";
 import {
+  defaultCloudRegion,
+  formatCloudRegion,
+  type CloudProvider,
+} from "../adk/cloudProvider";
+import {
   sandboxClient,
   sandboxStatusLabel,
   type SandboxAgentKind,
@@ -43,8 +48,6 @@ export interface MyAgentCardData {
 }
 
 export type AgentType = "general" | "codex" | "openclaw" | "hermes";
-type RuntimeRegion = "cn-beijing" | "cn-shanghai";
-const DEFAULT_CREATE_REGION: RuntimeRegion = "cn-beijing";
 
 const AGENT_TYPES: Array<{ id: AgentType; label: string }> = [
   { id: "general", label: "通用智能体" },
@@ -115,12 +118,6 @@ function formatCreatedAt(value: string): string {
     second: "2-digit",
     hour12: false,
   }).format(date).replace(/\//g, "-");
-}
-
-function formatRuntimeRegion(region: string): string {
-  if (region === "cn-shanghai") return "上海";
-  if (region === "cn-beijing") return "北京";
-  return region || "—";
 }
 
 function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
@@ -202,6 +199,7 @@ async function loadRuntimeAgents(
 
 function AgentCard({
   agent,
+  cloudProvider,
   onUse,
   onViewDetails,
   connecting,
@@ -213,6 +211,7 @@ function AgentCard({
   onDeleteDraft,
 }: {
   agent: MyAgentCardData;
+  cloudProvider: CloudProvider;
   onUse?: (agent: MyAgentCardData) => Promise<void>;
   onViewDetails?: (agent: MyAgentCardData) => void;
   connecting?: boolean;
@@ -253,7 +252,7 @@ function AgentCard({
                 <span className="my-agent-deploying-badge">部署中</span>
               ) : null}
               <span className="my-agent-region-badge">
-                {formatRuntimeRegion(agent.runtime.region)}
+                {formatCloudRegion(agent.runtime.region, cloudProvider)}
               </span>
               {showOwnership && agent.isMine ? (
                 <span className="runtime-owner-badge">我创建的</span>
@@ -337,9 +336,10 @@ function AgentCard({
 }
 
 export interface MyAgentsProps {
+  cloudProvider: CloudProvider;
   canCreate: boolean;
   runtimeScope: RuntimeScope;
-  onCreateAgent: (region: RuntimeRegion) => void;
+  onCreateAgent: (region: string) => void;
   onUseAgent: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails: (agent: MyAgentCardData) => void;
   onCreateSandboxAgent: (kind: "codex" | SandboxAgentKind) => void;
@@ -357,6 +357,7 @@ export interface MyAgentsProps {
 }
 
 export function MyAgents({
+  cloudProvider,
   canCreate,
   runtimeScope,
   onCreateAgent,
@@ -586,7 +587,7 @@ export function MyAgents({
   const showEmpty = !showInitialLoading && visibleAgents.length === 0;
   const createAgent = canCreate
     ? activeType === "general"
-      ? () => onCreateAgent(DEFAULT_CREATE_REGION)
+      ? () => onCreateAgent(defaultCloudRegion(cloudProvider))
       : () => onCreateSandboxAgent(activeType)
     : undefined;
   const createDisabledReason = !canCreate
@@ -717,7 +718,7 @@ export function MyAgents({
                     <Button
                       color="primary"
                       size="lg"
-                      onClick={() => onCreateAgent(DEFAULT_CREATE_REGION)}
+                      onClick={() => onCreateAgent(defaultCloudRegion(cloudProvider))}
                     >
                       <AddIcon />
                       创建智能体
@@ -742,6 +743,7 @@ export function MyAgents({
                 <AgentCard
                   key={agent.id}
                   agent={agent}
+                  cloudProvider={cloudProvider}
                   deploymentTask={deploymentTaskForAgent(agent)}
                   onViewDeploymentTask={onViewDeploymentTask}
                   onUse={useAgent}

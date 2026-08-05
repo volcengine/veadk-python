@@ -28,13 +28,21 @@ from veadk.cli.studio_telemetry import (
     studio_apmplus_release_environment_from_env,
 )
 from veadk.cli.frontend_branding import SiteLogo
+from veadk.utils.cloud_provider import DEFAULT_CLOUD_PROVIDER, CloudProvider
 
 STUDIO_RELEASE_ENVIRONMENT_FILENAME = ".studio-release-environment.json"
 
 
-def studio_run_script(site_logo_filename: str | None = None) -> str:
+def studio_run_script(
+    site_logo_filename: str | None = None,
+    *,
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+) -> str:
     """Return the authenticated VeFaaS entrypoint used by Studio."""
-    command = "exec python3 -m veadk.cli.cli studio --auth-mode frontend"
+    command = (
+        "exec python3 -m veadk.cli.cli studio "
+        f"--provider {provider} --auth-mode frontend"
+    )
     if site_logo_filename:
         command += f' --site-logo "$ROOT_DIR/{site_logo_filename}"'
     command += ' --host "$HOST" --port "$PORT"\n'
@@ -79,6 +87,7 @@ def write_studio_package(
     requirements: str,
     site_logo: SiteLogo | None,
     release_environment: dict[str, str] | None = None,
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
 ) -> None:
     """Write the Studio entrypoint, requirements, and optional logo."""
     package_dir.mkdir(parents=True, exist_ok=True)
@@ -86,7 +95,7 @@ def write_studio_package(
         f"site-logo.{site_logo.extension}" if site_logo is not None else None
     )
     (package_dir / "run.sh").write_text(
-        studio_run_script(logo_filename), encoding="utf-8"
+        studio_run_script(logo_filename, provider=provider), encoding="utf-8"
     )
     if site_logo is not None and logo_filename is not None:
         (package_dir / logo_filename).write_bytes(site_logo.content)

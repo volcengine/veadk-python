@@ -58,11 +58,11 @@ class VannaTrainer:
         volcengine_access_key: Optional[str] = None,
         volcengine_secret_key: Optional[str] = None,
         session_token: str = "",
-        region: str = "cn-beijing",
+        region: str = "",
         host: Optional[str] = None,
         collection_prefix: str = "vanna_train",
         embedding_model: str = "doubao-embedding",
-        cloud_provider: str = "volces",
+        cloud_provider: Optional[str] = None,
     ):
         """
         Initialize VannaTrainer with VikingDB backend.

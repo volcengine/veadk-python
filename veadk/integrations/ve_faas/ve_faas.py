@@ -37,6 +37,11 @@ from veadk.integrations.ve_faas.ve_faas_utils import (
     signed_request,
     zip_and_encode_folder,
 )
+from veadk.utils.cloud_provider import (
+    DEFAULT_CLOUD_PROVIDER,
+    CloudProvider,
+    vefaas_openapi_host,
+)
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp, getenv
 from veadk.utils.volcengine_sign import ve_request
@@ -57,18 +62,23 @@ class VeFaaS:
         session_token: str = "",
         region: str = "cn-beijing",
         project_name: str = "default",
+        provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
     ):
         self.ak = access_key
         self.sk = secret_key
         self.session_token = session_token
         self.region = region
         self.project_name = project_name
+        self.provider = provider
+        self.openapi_host = vefaas_openapi_host(region, provider)
 
         configuration = volcenginesdkcore.Configuration()
         configuration.ak = self.ak
         configuration.sk = self.sk
         configuration.session_token = self.session_token
         configuration.region = region
+        if provider == "byteplus":
+            configuration.host = f"https://{self.openapi_host}"
 
         configuration.client_side_validation = True
         volcenginesdkcore.Configuration.set_default(configuration)
@@ -82,10 +92,25 @@ class VeFaaS:
             self.sk,
             self.region,
             session_token=self.session_token,
+            provider=self.provider,
         )
 
-        self.template_id = _APPLICATION_TEMPLATE_IDS.get(
-            region, _APPLICATION_TEMPLATE_IDS["cn-beijing"]
+        self.template_id = (
+            ""
+            if provider == "byteplus"
+            else _APPLICATION_TEMPLATE_IDS.get(
+                region, _APPLICATION_TEMPLATE_IDS["cn-beijing"]
+            )
+        )
+
+    def _openapi_host(self) -> str:
+        return getattr(
+            self,
+            "openapi_host",
+            vefaas_openapi_host(
+                getattr(self, "region", "cn-beijing"),
+                getattr(self, "provider", DEFAULT_CLOUD_PROVIDER),
+            ),
         )
 
     def _upload_and_mount_code(self, function_id: str, path: str):
@@ -133,6 +158,7 @@ class VeFaaS:
             body={"FunctionId": function_id},
             region=self.region,
             session_token=self.session_token,
+            host=self._openapi_host(),
         )
 
         return res
@@ -183,29 +209,32 @@ class VeFaaS:
         service_name: str,
         enable_key_auth: bool = False,
     ):
-        response = ve_request(
-            request_body={
-                "Name": application_name,
-                "Services": [],
-                "IAM": [],
-                "Config": {
-                    "Region": self.region,
-                    "FunctionName": function_name,
-                    "GatewayName": gateway_name,
-                    "ServiceName": service_name,
-                    "UpstreamName": upstream_name,
-                    "EnableKeyAuth": enable_key_auth,
-                    "EnableMcpSession": True,
-                },
-                "TemplateId": self.template_id,
+        request_body = {
+            "Name": application_name,
+            "Services": [],
+            "IAM": [],
+            "Config": {
+                "Region": self.region,
+                "FunctionName": function_name,
+                "GatewayName": gateway_name,
+                "ServiceName": service_name,
+                "UpstreamName": upstream_name,
+                "EnableKeyAuth": enable_key_auth,
+                "EnableMcpSession": True,
             },
+        }
+        template_id = getattr(self, "template_id", "")
+        if template_id:
+            request_body["TemplateId"] = template_id
+        response = ve_request(
+            request_body=request_body,
             action="CreateApplication",
             ak=self.ak,
             sk=self.sk,
             service="vefaas",
             version="2021-03-03",
             region=self.region,
-            host="open.volcengineapi.com",
+            host=self._openapi_host(),
             session_token=self.session_token,
         )
 
@@ -227,7 +256,7 @@ class VeFaaS:
             service="vefaas",
             version="2021-03-03",
             region=self.region,
-            host="open.volcengineapi.com",
+            host=self._openapi_host(),
             session_token=self.session_token,
         )
 
@@ -272,7 +301,7 @@ class VeFaaS:
             service="vefaas",
             version="2021-03-03",
             region=self.region,
-            host="open.volcengineapi.com",
+            host=self._openapi_host(),
             session_token=self.session_token,
         )
         return response["Result"]["Status"], response
@@ -295,6 +324,7 @@ class VeFaaS:
         page_number = 1
         all_items = []
         total_page = None
+        response: dict[str, Any] | None = None
         while True:
             try:
                 request_body.update({"PageNumber": page_number, "PageSize": page_size})
@@ -306,7 +336,7 @@ class VeFaaS:
                     service="vefaas",
                     version="2021-03-03",
                     region=self.region,
-                    host="open.volcengineapi.com",
+                    host=self._openapi_host(),
                     session_token=self.session_token,
                 )
                 result = response.get("Result", {})
@@ -556,7 +586,7 @@ class VeFaaS:
                 service="vefaas",
                 version="2021-03-03",
                 region=self.region,
-                host="open.volcengineapi.com",
+                host=self._openapi_host(),
                 session_token=self.session_token,
             )
         except Exception as e:
@@ -731,7 +761,7 @@ class VeFaaS:
                     service="vefaas",
                     version="2021-03-03",
                     region="cn-beijing",
-                    host="open.volcengineapi.com",
+                    host=self._openapi_host(),
                     session_token=self.session_token,
                 )
 
@@ -748,7 +778,7 @@ class VeFaaS:
                     service="vefaas",
                     version="2021-03-03",
                     region="cn-beijing",
-                    host="open.volcengineapi.com",
+                    host=self._openapi_host(),
                     session_token=self.session_token,
                 )
 
@@ -774,7 +804,7 @@ class VeFaaS:
                     service="vefaas",
                     version="2021-03-03",
                     region="cn-beijing",
-                    host="open.volcengineapi.com",
+                    host=self._openapi_host(),
                     session_token=self.session_token,
                 )
 
@@ -962,7 +992,7 @@ class VeFaaS:
             service="vefaas",
             version="2021-03-03",
             region=self.region,
-            host="open.volcengineapi.com",
+            host=self._openapi_host(),
             session_token=self.session_token,
         )
 

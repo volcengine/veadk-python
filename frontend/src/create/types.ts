@@ -35,6 +35,11 @@ export interface McpTool {
 // makes them available to external importers of "./types" unchanged.
 import type { SelectedSkill, SkillHit, SkillSource } from "./skills/types";
 import { DEFAULT_KB_BACKEND } from "./veadkCatalog";
+import {
+  defaultModelName,
+  VOLCENGINE_DEFAULT_MODEL_NAME,
+  type CloudProvider,
+} from "../adk/cloudProvider";
 export type { SelectedSkill, SkillHit, SkillSource };
 
 
@@ -137,7 +142,7 @@ export interface AgentDraft {
 // Pre-filled defaults so description / system prompt / model are never empty
 // when the custom wizard opens. `DEFAULT_MODEL_NAME` mirrors veadk's
 // DEFAULT_MODEL_AGENT_NAME (veadk/consts.py).
-export const DEFAULT_MODEL_NAME = "doubao-seed-2-1-pro-260628";
+export const DEFAULT_MODEL_NAME = VOLCENGINE_DEFAULT_MODEL_NAME;
 const DEFAULT_DESCRIPTION =
   "一个基于 VeADK 构建的智能助手，理解用户意图并调用合适的工具完成任务。";
 const DEFAULT_INSTRUCTION =
@@ -148,7 +153,7 @@ const DEFAULT_INSTRUCTION =
   "- 需要时合理调用可用的工具，并说明关键结论。\n" +
   "- 保持礼貌、专业的语气。";
 
-export function emptyDraft(): AgentDraft {
+export function emptyDraft(cloudProvider: CloudProvider = "volcengine"): AgentDraft {
   return {
     name: "",
     description: DEFAULT_DESCRIPTION,
@@ -172,7 +177,7 @@ export function emptyDraft(): AgentDraft {
       registryRegion: "",
       registryEndpoint: "",
     },
-    modelName: DEFAULT_MODEL_NAME,
+    modelName: defaultModelName(cloudProvider),
     modelProvider: "",
     modelApiBase: "",
     shortTermBackend: "local",
@@ -187,6 +192,8 @@ export function emptyDraft(): AgentDraft {
 }
 
 export interface CreateModeProps {
+  /** Cloud provider selected by the Studio shell. */
+  cloudProvider?: CloudProvider;
   /** Return to the quick-create card menu. */
   onBack: () => void;
   /** Called when the user finishes assembling an agent. */

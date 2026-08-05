@@ -83,6 +83,13 @@ const OPENVIKING_DEFAULT_URL =
 const OPENVIKING_MEMORY_POLICY_PLACEHOLDER =
   '{\n  "self": {"enabled": true},\n  "peer": {"enabled": true},\n  "working_memory": {"enabled": true},\n  "memory_types": null\n}';
 
+const VIKING_KB_ENV: EnvVar[] = [
+  { key: "DATABASE_VIKING_PROJECT", required: false, placeholder: "default" },
+  { key: "DATABASE_VIKING_REGION", required: false },
+  { key: "DATABASE_VIKING_COLLECTION_KIND", required: false },
+  { key: "DATABASE_VIKING_RESOURCE_ID", required: false },
+];
+
 /** Feishu Channel runtime credentials. */
 export const FEISHU_ENV: EnvVar[] = [
   {
@@ -319,7 +326,7 @@ export const LTM_BACKENDS: BackendOption[] = [
   {
     id: "viking",
     label: "VikingDB Memory",
-    desc: "火山 VikingDB 记忆库（支持用户画像）。",
+    desc: "VikingDB 记忆库（支持用户画像）。",
     env: VOLC_ENV,
   },
   {
@@ -380,8 +387,8 @@ export const KB_BACKENDS: BackendOption[] = [
   {
     id: "viking",
     label: "VikingDB Knowledge",
-    desc: "火山 VikingDB 知识库。",
-    env: VOLC_ENV,
+    desc: "VikingDB 知识库。",
+    env: VIKING_KB_ENV,
   },
   {
     id: "opensearch",

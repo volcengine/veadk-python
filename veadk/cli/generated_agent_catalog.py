@@ -78,6 +78,12 @@ EMBEDDING_ENV = (
 # Studio owns the Volcengine credential chain and forwards it to debug runs and
 # AgentKit runtimes. Components must not ask users to duplicate AK/SK settings.
 VOLC_ENV: tuple[EnvVar, ...] = ()
+VIKING_KB_ENV = (
+    EnvVar("DATABASE_VIKING_PROJECT", False, "default"),
+    EnvVar("DATABASE_VIKING_REGION", False),
+    EnvVar("DATABASE_VIKING_COLLECTION_KIND", False),
+    EnvVar("DATABASE_VIKING_RESOURCE_ID", False),
+)
 
 A2A_REGISTRY_ENV = (
     EnvVar(
@@ -222,7 +228,7 @@ LTM_BACKENDS = (
         ),
         pip_extra="extensions",
     ),
-    BackendOption("viking", env=VOLC_ENV),
+    BackendOption("viking", env=VIKING_KB_ENV),
     BackendOption(
         "openviking",
         env=(

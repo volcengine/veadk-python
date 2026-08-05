@@ -1,4 +1,4 @@
-// Volcengine AgentKit SkillSpace picker. Lists account-scoped SkillSpaces via
+// AgentKit SkillSpace picker. Lists account-scoped SkillSpaces via
 // the server-side /web/skill-spaces* routes (which sign with the SERVER's AK/SK
 // so the browser never sees credentials), lists skills within a chosen space,
 // and lets the user toggle them into the draft. SKILL.md content is fetched at
@@ -17,19 +17,19 @@ import {
 } from "./skills/skillspace";
 import type { SelectedSkill, SkillHit } from "./skills/types";
 import { displayDescription } from "./displayText";
-
-function regionLabel(region: string): string {
-  if (region === "cn-beijing") return "北京";
-  if (region === "cn-shanghai") return "上海";
-  return region;
-}
+import {
+  formatCloudRegion,
+  type CloudProvider,
+} from "../adk/cloudProvider";
 
 export function SkillSpacePicker({
   selected,
   onChange,
+  cloudProvider = "volcengine",
 }: {
   selected: SelectedSkill[];
   onChange: (next: SelectedSkill[]) => void;
+  cloudProvider?: CloudProvider;
 }) {
   const [spaces, setSpaces] = useState<SkillSpaceRef[]>([]);
   const [skills, setSkills] = useState<SkillSpaceSkill[]>([]);
@@ -85,6 +85,9 @@ export function SkillSpacePicker({
   }, [spaceId, spaces]);
 
   const selectedSpace = spaces.find((s) => s.id === spaceId);
+  const consoleUrl = selectedSpace
+    ? getSkillSpaceConsoleUrl(selectedSpace.id, selectedSpace.region, cloudProvider)
+    : "";
 
   const isSelected = (skillId: string, ver: string) =>
     selected.some(
@@ -161,19 +164,21 @@ export function SkillSpacePicker({
                     className="cw-skillspace-region-label"
                     title={selectedSpace.region}
                   >
-                    {regionLabel(selectedSpace.region)}
+                    {formatCloudRegion(selectedSpace.region, cloudProvider)}
                   </span>
                 )}
-                <a
-                  href={getSkillSpaceConsoleUrl(selectedSpace.id, selectedSpace.region)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="cw-button cw-button-secondary cw-skillspace-console-link"
-                  title="在火山引擎控制台打开"
-                  aria-label="在火山引擎控制台打开"
-                >
-                  <ExternalLink className="cw-i cw-i-sm" />
-                </a>
+                {consoleUrl && (
+                  <a
+                    href={consoleUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="cw-button cw-button-secondary cw-skillspace-console-link"
+                    title="在火山引擎控制台打开"
+                    aria-label="在火山引擎控制台打开"
+                  >
+                    <ExternalLink className="cw-i cw-i-sm" />
+                  </a>
+                )}
               </>
             )}
           </div>

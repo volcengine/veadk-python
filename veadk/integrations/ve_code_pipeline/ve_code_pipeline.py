@@ -19,6 +19,12 @@ import requests
 
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
+from veadk.utils.cloud_provider import (
+    CloudProvider,
+    cp_openapi_host,
+    default_region,
+    normalize_cloud_provider,
+)
 from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
@@ -89,7 +95,7 @@ stages:
                 type: full
             functionId: ${function_id}
             functionVersion: 0
-            region: cn-beijing
+            region: ${function_region}
           outputs:
             - releaseId
             - releaseStatus
@@ -111,15 +117,17 @@ class VeCodePipeline:
         self,
         volcengine_access_key: str,
         volcengine_secret_key: str,
-        region: str = "cn-beijing",
+        region: str = "",
+        provider: CloudProvider = "volcengine",
     ) -> None:
+        self.provider = normalize_cloud_provider(provider)
         self.volcengine_access_key = volcengine_access_key
         self.volcengine_secret_key = volcengine_secret_key
-        self.region = region
+        self.region = region or default_region(self.provider)
 
         self.service = "CP"
         self.version = "2023-05-01"
-        self.host = "open.volcengineapi.com"
+        self.host = cp_openapi_host(self.region, self.provider)
         self.content_type = "application/json"
 
     def _create_code_connection(
@@ -209,6 +217,7 @@ class VeCodePipeline:
             cr_repo_name=cr_repo_name,
             docker_file=docker_file,
             function_id=function_id,
+            function_region=self.region,
         )
 
         print(spec)
@@ -224,8 +233,8 @@ class VeCodePipeline:
             sk=self.volcengine_secret_key,
             service="CP",
             version="2023-05-01",
-            region="cn-beijing",
-            host="open.volcengineapi.com",
+            region=self.region,
+            host=self.host,
             content_type="application/json",
         )
 

@@ -20,6 +20,7 @@ import {
 import type { AgentProject } from "../create/project";
 import type { AgentDraft, NetworkConfig } from "../create/types";
 import type { IssueFeedbackReport } from "./issueFeedback";
+import { VOLCENGINE_DEFAULT_REGION } from "./cloudProvider";
 
 /** An ADK event as serialised over `/run_sse` (camelCase, by_alias=True). */
 export interface AdkUsage {
@@ -516,7 +517,10 @@ function runtimeAppsCacheKey(runtimeId: string, region: string): string {
 }
 
 function runtimeRegionCandidates(region?: string): string[] {
-  const primary = region || "cn-beijing";
+  const primary = region || VOLCENGINE_DEFAULT_REGION;
+  if (!RUNTIME_REGION_FALLBACKS.includes(primary as (typeof RUNTIME_REGION_FALLBACKS)[number])) {
+    return [primary];
+  }
   return [
     primary,
     ...RUNTIME_REGION_FALLBACKS.filter((candidate) => candidate !== primary),
@@ -2053,7 +2057,7 @@ export interface ManagedRuntime {
 
 /** List AgentKit runtimes the server authorizes this user to manage. */
 export async function getMyRuntimes(
-  region = "cn-beijing",
+  region = VOLCENGINE_DEFAULT_REGION,
 ): Promise<ManagedRuntime[]> {
   const res = await apiFetch(`/web/my-runtimes?region=${encodeURIComponent(region)}`);
   if (!res.ok) throw new Error(`加载失败 (${res.status})`);
@@ -2107,6 +2111,7 @@ export interface StudioTelemetryConfig {
 export interface UiConfig {
   studio: boolean;
   version: string;
+  provider: "volcengine" | "byteplus";
   branding: SiteBranding;
   features: UiFeatures;
   defaultView: "chat" | "addAgent";
@@ -2128,6 +2133,7 @@ const DISABLED_STUDIO_TELEMETRY: StudioTelemetryConfig = {
 const DEFAULT_UI_CONFIG: UiConfig = {
   studio: false,
   version: "",
+  provider: "volcengine",
   branding: DEFAULT_SITE_BRANDING,
   features: {
     newChat: true,
@@ -2204,6 +2210,7 @@ export async function getUiConfig(): Promise<UiConfig> {
     return {
       studio: d.studio ?? false,
       version: typeof d.version === "string" ? d.version : "",
+      provider: d.provider === "byteplus" ? "byteplus" : "volcengine",
       branding: {
         title: typeof d.branding?.title === "string"
           ? d.branding.title

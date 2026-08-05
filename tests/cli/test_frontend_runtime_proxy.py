@@ -438,6 +438,95 @@ def test_runtime_list_surfaces_all_regional_failures(
     assert "cn-shanghai DNS lookup failed" in detail
 
 
+def test_viking_knowledgebases_include_agentkit_imported_bases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    requests: list[tuple[str, int]] = []
+
+    class _FakeKnowledgeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def list_knowledge_bases(self, request: Any) -> SimpleNamespace:
+            requests.append((request.next_token or "", request.max_results))
+            if not request.next_token:
+                return SimpleNamespace(
+                    knowledge_bases=[
+                        SimpleNamespace(
+                            name="vikingkl_we4191n",
+                            knowledge_id="kb-agentkit-we",
+                            provider_knowledge_id="kb-yef-example-we",
+                            provider_type="VIKINGDB_KNOWLEDGE",
+                            description="Imported from VikingDB",
+                            project_name="default",
+                            region=self.region,
+                            status="Ready",
+                            last_update_time="2026-02-10T12:45:32Z",
+                        )
+                    ],
+                    next_token="next-page",
+                )
+            return SimpleNamespace(
+                knowledge_bases=[
+                    SimpleNamespace(
+                        name="vikingkl_35idqf7",
+                        knowledge_id="kb-agentkit-35",
+                        provider_knowledge_id="kb-yef-example-35",
+                        provider_type="VIKINGDB_KNOWLEDGE",
+                        description="Second page",
+                        project_name="default",
+                        region=self.region,
+                        status="Ready",
+                        last_update_time="2026-02-10T14:33:09Z",
+                    )
+                ],
+                next_token="",
+            )
+
+    class _FakeKnowledgeService:
+        def __init__(self, **_: Any) -> None:
+            pass
+
+        def list_collections(self, **_: Any) -> list[Any]:
+            return []
+
+    class _FakeVikingDbApi:
+        def __init__(self, *_: Any, **__: Any) -> None:
+            pass
+
+        def list_vikingdb_collection(self, _request: Any) -> SimpleNamespace:
+            return SimpleNamespace(collections=[], total_count=0)
+
+    monkeypatch.setattr(
+        "agentkit.sdk.knowledge.client.AgentkitKnowledgeClient",
+        _FakeKnowledgeClient,
+    )
+    monkeypatch.setattr(
+        "volcengine.viking_knowledgebase.VikingKnowledgeBaseService",
+        _FakeKnowledgeService,
+    )
+    monkeypatch.setattr("volcenginesdkvikingdb.VIKINGDBApi", _FakeVikingDbApi)
+
+    with TestClient(app) as client:
+        response = client.get("/web/viking-knowledgebases")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert requests == [("", 100), ("next-page", 100)]
+    assert data["totalCount"] == 2
+    items = data["items"]
+    assert [item["name"] for item in items] == [
+        "vikingkl_35idqf7",
+        "vikingkl_we4191n",
+    ]
+    assert items[1]["id"] == "vikingkl_we4191n"
+    assert items[1]["resourceId"] == "kb-yef-example-we"
+    assert items[1]["agentkitKnowledgeId"] == "kb-agentkit-we"
+    assert items[1]["sourceKind"] == "agentkit"
+    assert items[1]["sourceLabel"] == "AgentKit Knowledge Base"
+
+
 @pytest.mark.parametrize(
     ("authorizer", "expected_authorization"),
     [

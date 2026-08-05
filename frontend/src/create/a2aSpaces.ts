@@ -1,5 +1,5 @@
 // AgentKit A2A Space client. The browser calls the local /web/a2a-spaces
-// route; the server signs ListA2aSpaces with its Volcengine credential chain.
+// route; the server signs ListA2aSpaces with its cloud credential chain.
 
 import { DEFAULT_REQUEST_TIMEOUT_MS, requestSignal } from "../adk/timeout";
 
@@ -37,7 +37,7 @@ async function jfetch<T>(url: string): Promise<T> {
     signal: requestSignal(undefined, DEFAULT_REQUEST_TIMEOUT_MS),
   });
   if (res.status === 409) {
-    throw new Error("服务端未配置 Volcengine AK/SK，无法访问 AgentKit 智能体中心");
+    throw new Error("服务端未配置云厂商 AK/SK，无法访问 AgentKit 智能体中心");
   }
   if (res.status === 401) {
     throw new Error("请先登录以访问 AgentKit 智能体中心");
@@ -59,10 +59,10 @@ export async function listA2aSpaces(
   options: ListA2aSpacesOptions = {},
 ): Promise<A2aSpaceRef[]> {
   const params = new URLSearchParams({
-    region: options.region || "cn-beijing",
     page_size: String(options.pageSize ?? 100),
     project: options.project || "default",
   });
+  if (options.region) params.set("region", options.region);
   const data = await jfetch<A2aSpacePage>(`/web/a2a-spaces?${params.toString()}`);
   return data.items || [];
 }
