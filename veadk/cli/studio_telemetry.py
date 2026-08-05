@@ -21,24 +21,22 @@ shape here so CLI deploy, release publishing, and runtime config cannot drift.
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 from typing import Any
 
-from veadk.consts import (
-    STUDIO_APMPLUS_AID,
-    STUDIO_APMPLUS_DOMAIN,
-    STUDIO_APMPLUS_ENV,
-    STUDIO_APMPLUS_TOKEN,
-)
-from veadk.utils.logger import get_logger
-
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 STUDIO_APMPLUS_AID_ENV = "VEADK_STUDIO_APMPLUS_AID"
 STUDIO_APMPLUS_TOKEN_ENV = "VEADK_STUDIO_APMPLUS_TOKEN"
 STUDIO_APMPLUS_DOMAIN_ENV = "VEADK_STUDIO_APMPLUS_DOMAIN"
 STUDIO_APMPLUS_ENV_ENV = "VEADK_STUDIO_APMPLUS_ENV"
+
+STUDIO_APMPLUS_AID = ""
+STUDIO_APMPLUS_TOKEN = ""
+STUDIO_APMPLUS_DOMAIN = "apmplus.volces.com"
+STUDIO_APMPLUS_ENV = "production"
 
 STUDIO_DEPLOY_ID_ENV = "VEADK_STUDIO_DEPLOY_ID"
 STUDIO_USER_POOL_ID_ENV = "VEADK_STUDIO_USER_POOL_ID"

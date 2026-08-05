@@ -15,13 +15,29 @@
 import pytest
 
 from veadk.cli.studio_telemetry import (
+    STUDIO_APMPLUS_DOMAIN,
+    STUDIO_APMPLUS_ENV,
     StudioTelemetryConfigurationError,
     normalize_studio_apmplus_release_environment,
     studio_apmplus_environment_from_options,
     studio_apmplus_release_environment_from_env,
     studio_telemetry_config,
 )
-from veadk.consts import STUDIO_APMPLUS_DOMAIN, STUDIO_APMPLUS_ENV
+
+
+def test_studio_telemetry_module_has_no_heavy_imports() -> None:
+    import subprocess
+    import sys
+
+    code = """
+import sys
+import veadk.cli.studio_telemetry
+assert "veadk.consts" not in sys.modules
+assert "veadk.utils.logger" not in sys.modules
+assert "veadk.utils.misc" not in sys.modules
+"""
+
+    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 def test_studio_telemetry_config_builds_ui_payload_from_environment() -> None:
