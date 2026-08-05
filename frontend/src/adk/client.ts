@@ -18,7 +18,7 @@ import {
   TRANSFER_REQUEST_TIMEOUT_MS,
 } from "./timeout";
 import type { AgentProject } from "../create/project";
-import type { AgentDraft } from "../create/types";
+import type { AgentDraft, NetworkConfig } from "../create/types";
 import type { IssueFeedbackReport } from "./issueFeedback";
 
 /** An ADK event as serialised over `/run_sse` (camelCase, by_alias=True). */
@@ -2469,6 +2469,7 @@ export interface RuntimeUpdateCapability {
     region: string;
     currentVersion?: number | null;
     envs: { key: string; value: string }[];
+    network: NetworkConfig;
   };
   agent?: {
     appName: string;
