@@ -101,7 +101,6 @@ import { CustomCreate } from "./create/CustomCreate";
 import { TemplateCreate } from "./create/TemplateCreate";
 import { WorkflowCreate } from "./create/WorkflowCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
-import { FileArchive } from "lucide-react";
 import type { AgentDraft } from "./create/types";
 import {
   loadWorkspaceDrafts,
@@ -275,12 +274,62 @@ import {
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
 import { buildSurfaces } from "./a2ui/Surface";
 
-/** Hand-drawn "from zero" mark: a "0" ring with a creativity spark inside. */
+/** Hand-drawn "from zero" mark: a blank Agent canvas ready to create. */
 function ScratchIcon({ className }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <ellipse cx="12" cy="12" rx="6.6" ry="8.2" />
-      <path d="M12 8.2l1.05 2.75 2.75 1.05-2.75 1.05L12 15.8l-1.05-2.75L8.2 12l2.75-1.05z" fill="currentColor" stroke="none" />
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.45"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3.75" y="3.75" width="16.5" height="16.5" rx="3.25" />
+      <path d="M12 8.5v7M8.5 12h7" />
+      <path d="M6.75 6.75h1M16.25 17.25h1" opacity="0.6" />
+    </svg>
+  );
+}
+
+/** Hand-drawn code package mark: an archive with source inside. */
+function PackageIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.45"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3.5" y="5" width="17" height="14.75" rx="2.25" />
+      <path d="M3.5 9h17M9.25 12.25 7.1 14.4l2.15 2.15M14.75 12.25l2.15 2.15-2.15 2.15M12.8 11.85l-1.6 5.1" />
+    </svg>
+  );
+}
+
+/** Hand-drawn migration mark: an existing project moving into a new runtime. */
+function MigrationIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.45"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="2.75" y="5" width="6.5" height="14" rx="1.6" />
+      <path d="M5.25 8.5h1.5M5.25 11.5h1.5" />
+      <rect x="14.75" y="5" width="6.5" height="14" rx="1.6" />
+      <path d="M17.25 15.5h1.5M17.25 12.5h1.5M8.75 12h6.5m-2.5-2.5 2.5 2.5-2.5 2.5" />
     </svg>
   );
 }
@@ -4170,7 +4219,7 @@ export default function App() {
                   },
                   {
                     key: "package",
-                    icon: FileArchive,
+                    icon: PackageIcon,
                     title: "从代码包添加和部署",
                     desc: "上传 Agent 项目压缩包，查看代码并直接部署到 AgentKit Runtime。",
                     onClick: () => {
@@ -4178,6 +4227,15 @@ export default function App() {
                       setImportedDraft(null);
                       setCreateView("package");
                     },
+                  },
+                  {
+                    key: "migration",
+                    icon: MigrationIcon,
+                    title: "从存量迁移",
+                    desc: "从您的 LangChain / Dify 等存量项目迁移至 AgentKit Runtime",
+                    status: "敬请期待",
+                    disabled: true,
+                    onClick: () => undefined,
                   },
                 ]}
               />
