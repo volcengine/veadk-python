@@ -34,6 +34,7 @@ logger = get_logger(__name__)
 
 AGENT_CARD_WELL_KNOWN_PATH = "/.well-known/agent-card.json"
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_A2A_RPC_PATHS = frozenset({"/a2a", "/a2a/"})
 
 
 def _convert_agent_card_dict_to_obj(agent_card_dict: dict) -> AgentCard:
@@ -54,6 +55,8 @@ def _endpoint_parts(url: str):
 def _agent_card_discovery_url(endpoint: str) -> str:
     parts = _endpoint_parts(endpoint)
     base_path = parts.path.rstrip("/")
+    if parts.path in _A2A_RPC_PATHS:
+        base_path = ""
     return urlunsplit(
         (
             parts.scheme,
@@ -107,6 +110,36 @@ def _resolve_agent_card_rpc_url(card_url: str | None, endpoint: str) -> str:
 
 def _is_same_origin(first_url: str, second_url: str) -> bool:
     return _origin(_endpoint_parts(first_url)) == _origin(_endpoint_parts(second_url))
+
+
+def _fetch_agent_card_dict(
+    *,
+    discovery_url: str,
+    headers: dict[str, str],
+    params: dict[str, str],
+) -> dict:
+    try:
+        response = requests.get(discovery_url, headers=headers, params=params)
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        status_code = (
+            exc.response.status_code if exc.response is not None else "unknown"
+        )
+        reason = exc.response.reason if exc.response is not None else ""
+        detail = f" {reason}" if reason else ""
+        raise RuntimeError(
+            f"Failed to fetch A2A Agent Card: HTTP {status_code}{detail}"
+        ) from exc
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Failed to fetch A2A Agent Card: {exc}") from exc
+
+    try:
+        agent_card_dict = response.json()
+    except ValueError as exc:
+        raise RuntimeError("Failed to parse A2A Agent Card response as JSON") from exc
+    if not isinstance(agent_card_dict, dict):
+        raise RuntimeError("A2A Agent Card response must be a JSON object")
+    return agent_card_dict
 
 
 class RemoteVeAgent(RemoteA2aAgent):
@@ -238,11 +271,11 @@ class RemoteVeAgent(RemoteA2aAgent):
 
         endpoint_query_params = _endpoint_query_params(effective_url)
         discovery_params = {**endpoint_query_params, **req_params}
-        agent_card_dict = requests.get(
-            _agent_card_discovery_url(effective_url),
+        agent_card_dict = _fetch_agent_card_dict(
+            discovery_url=_agent_card_discovery_url(effective_url),
             headers=req_headers,
             params=discovery_params,
-        ).json()
+        )
         agent_card_dict["url"] = _resolve_agent_card_rpc_url(
             agent_card_dict.get("url"), effective_url
         )
