@@ -63,6 +63,7 @@ class VeFaaS:
         region: str = "cn-beijing",
         project_name: str = "default",
         provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+        application_template_id: str | None = None,
     ):
         self.ak = access_key
         self.sk = secret_key
@@ -95,13 +96,23 @@ class VeFaaS:
             provider=self.provider,
         )
 
-        self.template_id = (
-            ""
-            if provider == "byteplus"
-            else _APPLICATION_TEMPLATE_IDS.get(
+        configured_template_id = (
+            application_template_id
+            or getenv(
+                "VEFAAS_APPLICATION_TEMPLATE_ID",
+                "",
+                allow_false_values=True,
+            )
+            or ""
+        ).strip()
+        if configured_template_id:
+            self.template_id = configured_template_id
+        elif provider == "byteplus":
+            self.template_id = ""
+        else:
+            self.template_id = _APPLICATION_TEMPLATE_IDS.get(
                 region, _APPLICATION_TEMPLATE_IDS["cn-beijing"]
             )
-        )
 
     def _openapi_host(self) -> str:
         return getattr(
@@ -224,8 +235,17 @@ class VeFaaS:
             },
         }
         template_id = getattr(self, "template_id", "")
-        if template_id:
-            request_body["TemplateId"] = template_id
+        if (
+            not template_id
+            and getattr(self, "provider", DEFAULT_CLOUD_PROVIDER) == "byteplus"
+        ):
+            raise ValueError(
+                "BytePlus VeFaaS Application creation requires "
+                "VEFAAS_APPLICATION_TEMPLATE_ID or --vefaas-application-template-id. "
+                "Volcengine Application TemplateIds are region-scoped and do not "
+                "exist in BytePlus ap-southeast-1."
+            )
+        request_body["TemplateId"] = template_id
         response = ve_request(
             request_body=request_body,
             action="CreateApplication",

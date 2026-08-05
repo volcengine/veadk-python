@@ -133,3 +133,25 @@ def test_local_serve_commands_accept_explicit_byteplus_provider(
 
     assert result.exit_code == 0, result.output
     assert captured["provider"] == "byteplus"
+
+
+def test_studio_deploy_byteplus_requires_application_template() -> None:
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--provider",
+            "byteplus",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+            "--iam-role",
+            "trn:iam::3001037806:role/dev",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--vefaas-application-template-id" in result.output

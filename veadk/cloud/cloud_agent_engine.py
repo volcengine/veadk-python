@@ -77,6 +77,9 @@ class CloudAgentEngine(BaseModel):
     region: str = "cn-beijing"
     project: str = "default"
     provider: CloudProvider = DEFAULT_CLOUD_PROVIDER
+    vefaas_application_template_id: str = getenv(
+        "VEFAAS_APPLICATION_TEMPLATE_ID", "", allow_false_values=True
+    )
 
     def model_post_init(self, context: Any, /) -> None:
         """Initializes the internal VeFaaS service after Pydantic model validation.
@@ -100,6 +103,7 @@ class CloudAgentEngine(BaseModel):
             region=self.region,
             project_name=self.project,
             provider=self.provider,
+            application_template_id=self.vefaas_application_template_id,
         )
         self._veapig_service = APIGateway(
             access_key=self.volcengine_access_key,

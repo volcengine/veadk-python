@@ -148,12 +148,13 @@ def test_vefaas_code_upload_callback_uses_byteplus_host() -> None:
     )
 
 
-def test_vefaas_byteplus_application_omits_volcengine_template() -> None:
+def test_vefaas_byteplus_application_uses_configured_template() -> None:
     service = VeFaaS(
         access_key="test_access_key",
         secret_key="test_secret_key",
         region="ap-southeast-1",
         provider="byteplus",
+        application_template_id="byteplus-template-id",
     )
 
     with patch("veadk.integrations.ve_faas.ve_faas.ve_request") as request:
@@ -169,8 +170,51 @@ def test_vefaas_byteplus_application_omits_volcengine_template() -> None:
 
     assert app_id == "app-id"
     request_body = request.call_args.kwargs["request_body"]
-    assert "TemplateId" not in request_body
+    assert request_body["TemplateId"] == "byteplus-template-id"
     assert request_body["Config"]["Region"] == "ap-southeast-1"
+
+
+def test_vefaas_byteplus_application_requires_template() -> None:
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        region="ap-southeast-1",
+        provider="byteplus",
+    )
+
+    with (
+        patch("veadk.integrations.ve_faas.ve_faas.ve_request") as request,
+        pytest.raises(ValueError, match="VEFAAS_APPLICATION_TEMPLATE_ID"),
+    ):
+        service._create_application(
+            "studio-app",
+            "studio-function",
+            "gateway",
+            "upstream",
+            "service",
+        )
+
+    request.assert_not_called()
+
+
+def test_cloud_agent_engine_passes_application_template() -> None:
+    with (
+        patch("veadk.cloud.cloud_agent_engine.VeFaaS") as vefaas_class,
+        patch("veadk.cloud.cloud_agent_engine.APIGateway"),
+        patch("veadk.cloud.cloud_agent_engine.IdentityClient"),
+    ):
+        CloudAgentEngine(
+            volcengine_access_key="test_access_key",
+            volcengine_secret_key="test_secret_key",
+            region="ap-southeast-1",
+            provider="byteplus",
+            vefaas_application_template_id="byteplus-template-id",
+        )
+
+    assert (
+        vefaas_class.call_args.kwargs["application_template_id"]
+        == "byteplus-template-id"
+    )
 
 
 def test_code_pipeline_uses_byteplus_region_host() -> None:
@@ -242,6 +286,7 @@ async def test_cloud():
                     region="cn-beijing",
                     project_name="studio-project",
                     provider="volcengine",
+                    application_template_id="",
                 )
 
                 # Test deploy operation

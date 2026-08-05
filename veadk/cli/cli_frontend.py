@@ -6981,6 +6981,14 @@ def _resolve_studio_cloud_credentials(
     "is auto-created with the frontend deploy policy.",
 )
 @click.option(
+    "--vefaas-application-template-id",
+    "--application-template-id",
+    default=None,
+    envvar="VEFAAS_APPLICATION_TEMPLATE_ID",
+    help="VeFaaS Application Center TemplateId for application creation. Required "
+    "for BytePlus until its ap-southeast-1 template id is built in.",
+)
+@click.option(
     "--gateway-name",
     default="",
     help="Serverless APIG gateway name to use. Default: auto-discover an "
@@ -7114,6 +7122,7 @@ def frontend_deploy(
     region: str | None,
     project: str,
     iam_role: str | None,
+    vefaas_application_template_id: str | None,
     gateway_name: str,
     gateway_service_name: str,
     gateway_upstream_name: str,
@@ -7157,6 +7166,13 @@ def frontend_deploy(
     os.environ["AGENTKIT_CLOUD_PROVIDER"] = provider_id
     if provider_id == "byteplus":
         os.environ.setdefault("BYTEPLUS_REGION", region)
+        if not vefaas_application_template_id:
+            raise click.ClickException(
+                "BytePlus Studio deployment requires "
+                "--vefaas-application-template-id (or env "
+                "VEFAAS_APPLICATION_TEMPLATE_ID). The existing Volcengine "
+                "TemplateIds do not exist in ap-southeast-1."
+            )
 
     try:
         branding_title = normalize_site_title(site_title)
@@ -7499,6 +7515,7 @@ def frontend_deploy(
             region=region,
             project=project,
             provider=provider_id,
+            vefaas_application_template_id=vefaas_application_template_id or "",
         )
         click.echo(
             f"Deploying frontend to VeFaaS as '{vefaas_app_name}' "
