@@ -12,94 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import functools
 import json
+import functools
 from typing import AsyncGenerator, Literal, Optional
-from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
 
+from a2a.client.base_client import BaseClient
 import httpx
 import requests
-from a2a.client.base_client import BaseClient
 from a2a.types import AgentCard
-from google.adk.agents.invocation_context import InvocationContext
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
-from google.adk.events.event import Event
-from google.adk.utils.context_utils import Aclosing
 
 from veadk.integrations.ve_identity.utils import generate_headers
 from veadk.utils.auth import VE_TIP_TOKEN_CREDENTIAL_KEY, VE_TIP_TOKEN_HEADER
 from veadk.utils.logger import get_logger
+from google.adk.utils.context_utils import Aclosing
+from google.adk.events.event import Event
+from google.adk.agents.invocation_context import InvocationContext
+
 
 logger = get_logger(__name__)
 
 AGENT_CARD_WELL_KNOWN_PATH = "/.well-known/agent-card.json"
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def _convert_agent_card_dict_to_obj(agent_card_dict: dict) -> AgentCard:
     agent_card_json_str = json.dumps(agent_card_dict, ensure_ascii=False, indent=2)
     agent_card_object = AgentCard.model_validate_json(str(agent_card_json_str))
     return agent_card_object
-
-
-def _agent_card_discovery_url(endpoint: str) -> str:
-    parts = urlsplit(endpoint)
-    base_path = parts.path.rstrip("/")
-    # AgentKit Skill 沙箱的 RPC 地址通常是 /a2a，但 Agent Card 暴露在根路径。
-    if base_path == "/a2a":
-        base_path = ""
-    return urlunsplit(
-        (
-            parts.scheme,
-            parts.netloc,
-            f"{base_path}{AGENT_CARD_WELL_KNOWN_PATH}",
-            "",
-            "",
-        )
-    )
-
-
-def _endpoint_query_params(endpoint: str) -> dict[str, str]:
-    return dict(parse_qsl(urlsplit(endpoint).query, keep_blank_values=True))
-
-
-def _resolve_agent_card_rpc_url(card_url: str | None, endpoint: str) -> str:
-    endpoint_parts = urlsplit(endpoint)
-    clean_endpoint = urlunsplit(endpoint_parts._replace(query="", fragment=""))
-    if not card_url:
-        return clean_endpoint
-
-    # 保留 Agent Card 声明的 RPC path，避免把 /a2a 覆盖成沙箱根地址。
-    resolved_url = urljoin(clean_endpoint, card_url)
-    card_parts = urlsplit(resolved_url)
-    if (
-        card_parts.hostname in _LOOPBACK_HOSTS
-        and endpoint_parts.hostname not in _LOOPBACK_HOSTS
-    ):
-        resolved_url = urlunsplit(
-            (
-                endpoint_parts.scheme,
-                endpoint_parts.netloc,
-                card_parts.path,
-                card_parts.query,
-                "",
-            )
-        )
-    return resolved_url
-
-
-def _is_same_origin(first_url: str, second_url: str) -> bool:
-    first = urlsplit(first_url)
-    second = urlsplit(second_url)
-    return (
-        first.scheme.lower(),
-        (first.hostname or "").lower(),
-        first.port,
-    ) == (
-        second.scheme.lower(),
-        (second.hostname or "").lower(),
-        second.port,
-    )
 
 
 class RemoteVeAgent(RemoteA2aAgent):
@@ -229,28 +168,13 @@ class RemoteVeAgent(RemoteA2aAgent):
                     f"Unsupported auth method {auth_method}, use `header` or `querystring` instead."
                 )
 
-        endpoint_query_params = _endpoint_query_params(effective_url)
-        discovery_params = {**endpoint_query_params, **req_params}
-        response = requests.get(
-            _agent_card_discovery_url(effective_url),
+        agent_card_dict = requests.get(
+            effective_url + AGENT_CARD_WELL_KNOWN_PATH,
             headers=req_headers,
-            params=discovery_params,
-        )
-        try:
-            response.raise_for_status()
-        except requests.HTTPError as exc:
-            status_code = (
-                exc.response.status_code if exc.response is not None else "unknown"
-            )
-            reason = exc.response.reason if exc.response is not None else ""
-            detail = f" {reason}" if reason else ""
-            raise RuntimeError(
-                f"Failed to fetch A2A Agent Card: HTTP {status_code}{detail}"
-            ) from exc
-        agent_card_dict = response.json()
-        agent_card_dict["url"] = _resolve_agent_card_rpc_url(
-            agent_card_dict.get("url"), effective_url
-        )
+            params=req_params,
+        ).json()
+        # replace agent_card_url with actual host
+        agent_card_dict["url"] = effective_url
 
         agent_card_object = _convert_agent_card_dict_to_obj(agent_card_dict)
 
@@ -281,12 +205,6 @@ class RemoteVeAgent(RemoteA2aAgent):
                     )
             else:  # No auth, no client provided
                 client_to_use = httpx.AsyncClient(base_url=effective_url, timeout=600)
-
-        if _is_same_origin(agent_card_dict["url"], effective_url):
-            # 同源 RPC 继续携带 session query 鉴权；跨域 Card URL 不透传用户查询参数。
-            new_params = dict(client_to_use.params)
-            new_params.update(discovery_params)
-            client_to_use.params = new_params
 
         super().__init__(
             name=name, agent_card=agent_card_object, httpx_client=client_to_use
@@ -409,9 +327,8 @@ class RemoteVeAgent(RemoteA2aAgent):
             return
 
         try:
-            from google.adk.agents.callback_context import CallbackContext
-
             from veadk.utils.auth import build_auth_config
+            from google.adk.agents.callback_context import CallbackContext
 
             # Inject TIP token via header
             workload_auth_config = build_auth_config(
