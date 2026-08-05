@@ -212,4 +212,12 @@ def _stage_wheel_source(
         wheel_source / "veadk",
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "webui"),
     )
+    frontend_package = wheel_source / "frontend"
+    frontend_package.mkdir()
+    shutil.copy2(source_root / "frontend" / "__init__.py", frontend_package)
+    shutil.copytree(
+        source_root / "frontend" / "server",
+        frontend_package / "server",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
     shutil.copytree(frontend_assets, wheel_source / "veadk" / "webui")

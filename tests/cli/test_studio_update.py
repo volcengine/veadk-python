@@ -30,7 +30,7 @@ from veadk.cli.studio_update import (
     find_studio_deployments,
     load_deployed_site_logo,
 )
-from veadk.cli.studio_package import build_frontend_assets
+from veadk.cli.studio_package import _stage_wheel_source, build_frontend_assets
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
 _PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
@@ -88,6 +88,33 @@ def test_build_frontend_assets_runs_clean_install_and_production_build(
         ["/bin/npm", "ci"],
         ["/bin/npm", "run", "build", "--", "--outDir", str(output_dir)],
     ]
+
+
+def test_stage_wheel_source_includes_studio_python_backend(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    (source_root / "veadk").mkdir(parents=True)
+    (source_root / "veadk" / "__init__.py").write_text("", encoding="utf-8")
+    (source_root / "frontend" / "server").mkdir(parents=True)
+    (source_root / "frontend" / "__init__.py").write_text("", encoding="utf-8")
+    (source_root / "frontend" / "server" / "__init__.py").write_text(
+        "", encoding="utf-8"
+    )
+    (source_root / "frontend" / "server" / "routes.py").write_text(
+        "ROUTES = []\n", encoding="utf-8"
+    )
+    for filename in ("pyproject.toml", "README.md", "LICENSE"):
+        (source_root / filename).write_text("", encoding="utf-8")
+    frontend_assets = tmp_path / "assets"
+    frontend_assets.mkdir()
+    (frontend_assets / "index.html").write_text("built", encoding="utf-8")
+
+    wheel_source = tmp_path / "wheel-source"
+    _stage_wheel_source(source_root, frontend_assets, wheel_source)
+
+    assert (wheel_source / "frontend" / "__init__.py").is_file()
+    assert (wheel_source / "frontend" / "server" / "routes.py").read_text() == (
+        "ROUTES = []\n"
+    )
 
 
 def test_find_studio_deployments_searches_regions_and_filters_project(

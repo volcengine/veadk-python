@@ -55,7 +55,7 @@ test("offers code execution with its sandbox configuration", () => {
   );
   assert.match(
     customCreateSource,
-    /createGeneratedAgentTestRun\([\s\S]*?debugRuntimeDraft\(variantDraft\)/,
+    /createGeneratedAgentTestRun\([\s\S]*?debugRuntimeDraft\(variantDraft\)[\s\S]*?runtimeId: deploymentTarget\.runtimeId[\s\S]*?region: deploymentTarget\.region/,
   );
   assert.match(
     customCreateSource,
@@ -238,6 +238,14 @@ test("uses a flipping Feishu channel card instead of a switch", () => {
   assert.match(projectPreviewSource, /deploymentRegionPicker\(false\)/);
   assert.match(
     projectPreviewStyles,
+    /\.pp-region-trigger:disabled\s*\{[\s\S]*?cursor:\s*not-allowed;[\s\S]*?opacity:\s*0\.58;/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-region-help\s*\{[\s\S]*?font-size:\s*12px;[\s\S]*?line-height:\s*1\.5;/,
+  );
+  assert.match(
+    projectPreviewStyles,
     /\.pp-channel-remove\s*\{[\s\S]*?background:\s*hsl\(var\(--destructive\) \/ 0\.07\);[\s\S]*?color:\s*hsl\(0 46% 36%\);/,
   );
 });
@@ -313,6 +321,18 @@ test("shows the total environment variable count beside the section title", () =
   assert.match(
     projectPreviewStyles,
     /\.pp-env-head \.pp-config-label\s*\{[\s\S]*?align-items:\s*center;[\s\S]*?gap:\s*7px;/,
+  );
+});
+
+test("keeps deployment environment variable values visible", () => {
+  assert.doesNotMatch(projectPreviewSource, /showEnvValues|EyeOff|隐藏值|显示值/);
+  assert.match(
+    projectPreviewSource,
+    /className="pp-env-value"\s*type="text"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /placeholder="名称"[\s\S]*?type="text"[\s\S]*?placeholder="值"/,
   );
 });
 

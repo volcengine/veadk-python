@@ -45,6 +45,15 @@ function asStringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
+function asStringRecord(v: unknown): Record<string, string> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  return Object.fromEntries(
+    Object.entries(v).filter((entry): entry is [string, string] =>
+      typeof entry[1] === "string",
+    ),
+  );
+}
+
 function asCustomTools(v: unknown): CustomTool[] {
   if (!Array.isArray(v)) return [];
   return v
@@ -201,6 +210,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
   const deployment = (
     o.deployment && typeof o.deployment === "object" ? o.deployment : {}
   ) as Record<string, unknown>;
+  const deploymentEnvValues = asStringRecord(deployment.envValues);
   const a2aRegistry = asA2aRegistry(o.a2aRegistry);
   const parsedType = asAgentType(o.agentType);
   const agentType =
@@ -216,6 +226,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
             transport: transport as "http" | "stdio",
             url: asString(mo.url),
             authToken: asString(mo.authToken),
+            authTokenEnv: asString(mo.authTokenEnv),
             command: asString(mo.command),
             args: asStringArray(mo.args),
           };
@@ -250,7 +261,12 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     tracingExporters: asStringArray(o.tracingExporters).filter((e) =>
       EXPORTER_IDS.has(e),
     ),
-    deployment: { feishuEnabled: asBool(deployment.feishuEnabled) },
+    deployment: {
+      feishuEnabled: asBool(deployment.feishuEnabled),
+      ...(Object.keys(deploymentEnvValues).length > 0
+        ? { envValues: deploymentEnvValues }
+        : {}),
+    },
     subAgents: parseSubAgents(o.subAgents),
     selectedSkills: parseSelectedSkills(o),
   };

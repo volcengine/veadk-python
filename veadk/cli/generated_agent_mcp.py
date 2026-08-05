@@ -17,32 +17,28 @@
 from __future__ import annotations
 
 from contextlib import suppress
-from urllib.parse import urlsplit, urlunsplit
 
 from google.adk.tools.mcp_tool.mcp_session_manager import (
     StreamableHTTPConnectionParams,
 )
 from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
 
-from veadk.cli.generated_agent_codegen import AgentDraft, McpTool
+from veadk.cli.generated_agent_codegen import AgentDraft, McpTool, prepare_mcp_auth
 
 
 class McpDebugConnectionError(ValueError):
     """Raised when a configured MCP server cannot expose tools for debugging."""
 
 
-def _normalize_mcp_endpoint(url: str) -> str:
-    parsed = urlsplit(url)
-    if parsed.path.rstrip("/").endswith("/mcp"):
-        return url
-    path = f"{parsed.path.rstrip('/')}/mcp"
-    return urlunsplit(parsed._replace(path=path))
-
-
-async def _list_mcp_tools(tool: McpTool, url: str) -> None:
+async def _list_mcp_tools(
+    tool: McpTool,
+    url: str,
+    env_values: dict[str, str],
+) -> None:
     headers = None
-    if tool.authToken.strip():
-        headers = {"Authorization": f"Bearer {tool.authToken.strip()}"}
+    auth_token = tool.authToken.strip() or env_values.get(tool.authTokenEnv, "").strip()
+    if auth_token:
+        headers = {"Authorization": f"Bearer {auth_token}"}
     toolset = MCPToolset(
         connection_params=StreamableHTTPConnectionParams(
             url=url,
@@ -59,10 +55,13 @@ async def _list_mcp_tools(tool: McpTool, url: str) -> None:
             await toolset.close()
 
 
-async def _resolve_http_mcp_tool(tool: McpTool) -> McpTool:
-    url = _normalize_mcp_endpoint(tool.url.strip())
+async def _resolve_http_mcp_tool(
+    tool: McpTool,
+    env_values: dict[str, str],
+) -> McpTool:
+    url = tool.url.strip()
     try:
-        await _list_mcp_tools(tool, url)
+        await _list_mcp_tools(tool, url, env_values)
     except Exception:
         pass
     else:
@@ -71,21 +70,29 @@ async def _resolve_http_mcp_tool(tool: McpTool) -> McpTool:
     name = tool.name.strip() or "未命名 MCP"
     raise McpDebugConnectionError(
         f"MCP 工具 `{name}` 连接失败：无法通过 Streamable HTTP 完成工具发现。"
-        "请确认 URL 指向实际 MCP endpoint（通常以 /mcp 结尾），并检查 Token。"
+        "请确认 URL 指向实际 MCP Endpoint，并检查 Token。"
     ) from None
 
 
-async def resolve_debug_mcp_endpoints(draft: AgentDraft) -> AgentDraft:
+async def resolve_debug_mcp_endpoints(
+    draft: AgentDraft,
+    _env_values: dict[str, str] | None = None,
+) -> AgentDraft:
     """Resolve HTTP MCP endpoints recursively without mutating the input draft."""
+    env_values = _env_values
+    if env_values is None:
+        draft = prepare_mcp_auth(draft)
+        env_values = draft.deployment.envValues
     tools: list[McpTool] = []
     for tool in draft.mcpTools:
         if tool.transport == "http" and tool.url.strip():
-            tools.append(await _resolve_http_mcp_tool(tool))
+            tools.append(await _resolve_http_mcp_tool(tool, env_values))
         else:
             tools.append(tool)
 
     sub_agents = [
-        await resolve_debug_mcp_endpoints(sub_agent) for sub_agent in draft.subAgents
+        await resolve_debug_mcp_endpoints(sub_agent, env_values)
+        for sub_agent in draft.subAgents
     ]
     return draft.model_copy(
         deep=True,

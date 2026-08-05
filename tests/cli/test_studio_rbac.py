@@ -696,6 +696,12 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
             managed=False,
         ),
     }
+    runtimes["runtime-developer"].envs = [
+        SimpleNamespace(key="MCP_VISIBLE_AUTH_TOKEN", value="visible-secret")
+    ]
+    runtimes["runtime-viewer"].envs = [
+        SimpleNamespace(key="VIEWER_VISIBLE_TOKEN", value="viewer-secret")
+    ]
     deleted: list[str] = []
 
     def get_runtime(_self: Any, request: Any) -> SimpleNamespace:
@@ -725,6 +731,17 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
         assert runtime_detail.status_code == 200
         assert runtime_detail.json()["endpoint"] == "https://runtime.example.com"
         assert runtime_detail.json()["authType"] == "key_auth"
+        assert runtime_detail.json()["envs"] == [
+            {"key": "MCP_VISIBLE_AUTH_TOKEN", "value": "visible-secret"}
+        ]
+        viewer_runtime_detail = client.get(
+            "/web/runtime-detail?runtimeId=runtime-viewer&region=cn-beijing",
+            headers=viewer_headers,
+        )
+        assert viewer_runtime_detail.status_code == 200
+        assert viewer_runtime_detail.json()["envs"] == [
+            {"key": "VIEWER_VISIBLE_TOKEN", "value": "viewer-secret"}
+        ]
         assert "runtime-key" not in runtime_detail.text
         revealed_key = client.post(
             "/web/runtime-api-key/reveal?runtimeId=runtime-developer&region=cn-beijing",
@@ -908,6 +925,7 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
             "region": "cn-beijing",
             "currentVersion": 7,
             "managed": False,
+            "envs": [],
         },
         "agent": {
             "appName": "selected-agent",
@@ -1072,6 +1090,13 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     )
     runtime.role_name = "runtime-role"
     runtime.current_version_number = 3
+    runtime.envs = [
+        SimpleNamespace(
+            key="MCP_UPDATED_AGENT_ORDERS_AUTH_TOKEN",
+            value="preserved-secret",
+        ),
+        SimpleNamespace(key="REPLACED_ENV", value="old-value"),
+    ]
     captured_config: dict[str, Any] = {}
     get_calls = 0
     evaluation_set_calls: list[dict[str, Any]] = []
@@ -1160,6 +1185,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
                 "files": [{"path": "app.py", "content": "app = object()\n"}],
                 "config": {"region": "cn-beijing", "projectName": "default"},
                 "authentication": {"type": "api_key"},
+                "envs": [{"key": "REPLACED_ENV", "value": "new-value"}],
             },
         ) as response:
             frames = [
@@ -1208,6 +1234,10 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         "https://studio.example.com/.well-known/openid-configuration"
     )
     assert cloud["runtime_jwt_allowed_clients"] == ["studio-client"]
+    assert cloud["runtime_envs"]["MCP_UPDATED_AGENT_ORDERS_AUTH_TOKEN"] == (
+        "preserved-secret"
+    )
+    assert cloud["runtime_envs"]["REPLACED_ENV"] == "new-value"
     assert "runtime_network" not in cloud
     assert captured_config["common"]["description"] == "Updated description"
 
