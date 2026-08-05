@@ -24,7 +24,7 @@ import httpx
 import pytest
 import yaml
 from click.testing import CliRunner
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from veadk.cli.cli_frontend import (
@@ -50,6 +50,8 @@ def _create_studio_app(
     auth_mode: str = "frontend",
     admins: str | None = None,
     developers: str | None = None,
+    oauth2_user_pool_uid: str | None = None,
+    oauth2_user_pool_client_uid: str | None = None,
 ) -> FastAPI:
     captured: dict[str, Any] = {}
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
@@ -70,8 +72,8 @@ def _create_studio_app(
         vite=True,
         oauth2_user_pool=None,
         oauth2_user_pool_client=None,
-        oauth2_user_pool_uid=None,
-        oauth2_user_pool_client_uid=None,
+        oauth2_user_pool_uid=oauth2_user_pool_uid,
+        oauth2_user_pool_client_uid=oauth2_user_pool_client_uid,
         oauth2_redirect_uri=None,
         oauth2_provider=None,
         oauth2_provider_label=None,
@@ -83,6 +85,244 @@ def _create_studio_app(
         studio=True,
     )
     return captured["app"]
+
+
+def test_identity_user_pools_marks_the_current_studio_pool(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    regions: list[str] = []
+
+    class _FakeIdentityClient:
+        def __init__(self, **kwargs: Any) -> None:
+            regions.append(kwargs["region"])
+
+        def list_user_pools(self) -> list[dict[str, str]]:
+            return [
+                {
+                    "uid": "pool-current",
+                    "name": "Studio",
+                    "domain": "studio.example.com",
+                },
+                {
+                    "uid": "pool-other",
+                    "name": "Customers",
+                    "domain": "users.example.com",
+                },
+            ]
+
+    monkeypatch.setenv("VEIDENTITY_REGION", "cn-shanghai")
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        _FakeIdentityClient,
+    )
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+        developers="developer",
+        oauth2_user_pool_uid="pool-current",
+        oauth2_user_pool_client_uid="studio-client",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/identity/user-pools",
+            headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'developer'})}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [
+            {
+                "uid": "pool-current",
+                "name": "Studio",
+                "domain": "studio.example.com",
+                "region": "cn-shanghai",
+                "isCurrent": True,
+            },
+            {
+                "uid": "pool-other",
+                "name": "Customers",
+                "domain": "users.example.com",
+                "region": "cn-shanghai",
+                "isCurrent": False,
+            },
+        ]
+    }
+    assert regions == ["cn-shanghai"]
+
+
+def test_current_user_pool_deployment_forwards_studio_jwt_to_run_sse(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    captured_config: dict[str, Any] = {}
+    runtime_id = "runtime-custom-jwt"
+    runtime = _runtime_with_public_endpoint(_runtime(runtime_id, "developer"))
+    runtime.current_version_number = 1
+    runtime.authorizer_configuration = SimpleNamespace(
+        key_auth=None,
+        custom_jwt_authorizer=SimpleNamespace(
+            discovery_url=(
+                "https://studio.example.com/.well-known/openid-configuration"
+            ),
+            allowed_clients=["studio-client"],
+        ),
+    )
+
+    class _FakeIdentityClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def get_user_pool(
+            self,
+            *,
+            uid: str,
+            name: str | None = None,
+        ) -> tuple[str, str] | None:
+            assert uid == "pool-current"
+            assert name is None
+            return uid, "studio.example.com"
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        captured_config.update(yaml.safe_load(Path(config_file).read_text()))
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": runtime_id,
+                    "runtime_name": "demo-agent",
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "",
+                },
+            ),
+        )
+
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        _FakeIdentityClient,
+    )
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: runtime,
+    )
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+        developers="developer",
+        oauth2_user_pool_uid="pool-current",
+        oauth2_user_pool_client_uid="studio-client",
+    )
+
+    upstream_headers: dict[str, str] = {}
+
+    class _FakeUpstreamResponse:
+        status_code = 200
+        headers = {"content-type": "text/event-stream"}
+
+        async def aiter_raw(self):
+            yield b'data: {"author":"runtime"}\n\n'
+
+        async def aclose(self) -> None:
+            pass
+
+    class _FakeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def build_request(
+            self,
+            _method: str,
+            _url: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+            content: bytes,
+        ) -> object:
+            assert params == {}
+            assert json.loads(content) == {
+                "app_name": "demo-agent",
+                "user_id": "developer",
+                "session_id": "session-1",
+                "new_message": {"role": "user", "parts": [{"text": "hello"}]},
+                "streaming": True,
+            }
+            upstream_headers.update(headers)
+            return object()
+
+        async def send(
+            self,
+            _request: object,
+            *,
+            stream: bool,
+        ) -> _FakeUpstreamResponse:
+            assert stream is True
+            return _FakeUpstreamResponse()
+
+        async def aclose(self) -> None:
+            pass
+
+    token = _unsigned_jwt({"sub": "developer"})
+    authorization = f"Bearer {token}"
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"Authorization": authorization},
+            json={
+                "name": "demo-agent",
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+                "authentication": {
+                    "type": "user_pool",
+                    "userPoolUid": "pool-current",
+                    "discoveryUrl": "https://untrusted.example.com/openid",
+                },
+            },
+        ) as response:
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+
+        monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+        run_response = client.post(
+            f"/web/runtime-proxy/{runtime_id}/run_sse?region=cn-beijing",
+            headers={"Authorization": authorization},
+            json={
+                "app_name": "demo-agent",
+                "user_id": "developer",
+                "session_id": "session-1",
+                "new_message": {"role": "user", "parts": [{"text": "hello"}]},
+                "streaming": True,
+            },
+        )
+        unauthenticated_response = client.post(
+            f"/web/runtime-proxy/{runtime_id}/run_sse?region=cn-beijing",
+            json={},
+        )
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    cloud = captured_config["launch_types"]["cloud"]
+    assert cloud["runtime_auth_type"] == "custom_jwt"
+    assert cloud["runtime_jwt_discovery_url"] == (
+        "https://studio.example.com/.well-known/openid-configuration"
+    )
+    assert cloud["runtime_jwt_allowed_clients"] == ["studio-client"]
+    assert run_response.status_code == 200
+    assert run_response.text == 'data: {"author":"runtime"}\n\n'
+    assert upstream_headers["Authorization"] == authorization
+    assert unauthenticated_response.status_code == 401
 
 
 def _unsigned_jwt(claims: dict[str, str]) -> str:
@@ -814,6 +1054,15 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     runtime = _runtime_with_public_endpoint(
         _runtime("runtime-developer", "developer", managed=False)
     )
+    runtime.authorizer_configuration = SimpleNamespace(
+        key_auth=None,
+        custom_jwt_authorizer=SimpleNamespace(
+            discovery_url=(
+                "https://studio.example.com/.well-known/openid-configuration"
+            ),
+            allowed_clients=["studio-client"],
+        ),
+    )
     runtime.role_name = "runtime-role"
     runtime.current_version_number = 3
     captured_config: dict[str, Any] = {}
@@ -873,6 +1122,12 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         developers="developer",
     )
 
+    @app.middleware("http")
+    async def _mark_validated_oauth_token(request: Request, call_next):
+        request.state.oauth2_access_token_validated = True
+        request.state.oauth2_access_token = "validated.jwt.token"
+        return await call_next(request)
+
     with TestClient(app) as client:
         with client.stream(
             "POST",
@@ -885,6 +1140,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
                 "appName": "updated-agent",
                 "files": [{"path": "app.py", "content": "app = object()\n"}],
                 "config": {"region": "cn-beijing", "projectName": "default"},
+                "authentication": {"type": "api_key"},
             },
         ) as response:
             frames = [
@@ -902,6 +1158,11 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert cloud["runtime_name"] == runtime.name
     assert cloud["runtime_role_name"] == "runtime-role"
     assert cloud["image_tag"] == "veadk-v4"
+    assert cloud["runtime_auth_type"] == "custom_jwt"
+    assert cloud["runtime_jwt_discovery_url"] == (
+        "https://studio.example.com/.well-known/openid-configuration"
+    )
+    assert cloud["runtime_jwt_allowed_clients"] == ["studio-client"]
     assert "runtime_network" not in cloud
     assert captured_config["common"]["description"] == "Updated description"
 
@@ -926,6 +1187,7 @@ def test_new_deployment_only_updates_non_default_instance_range(
 
     runtime_id = "r-new-runtime"
     update_requests: list[Any] = []
+    captured_config: dict[str, Any] = {}
 
     def create_runtime(_self: Any, _request: Any) -> SimpleNamespace:
         return SimpleNamespace(runtime_id=runtime_id)
@@ -937,7 +1199,8 @@ def test_new_deployment_only_updates_non_default_instance_range(
     def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
         return SimpleNamespace(current_version_number=2)
 
-    def launch(**_kwargs: Any) -> SimpleNamespace:
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        captured_config.update(yaml.safe_load(Path(config_file).read_text()))
         request = SimpleNamespace(tags=[], apmplus_enable=True, description="demo")
         created = AgentkitRuntimeClient.create_runtime(object(), request)
         return SimpleNamespace(
@@ -982,6 +1245,7 @@ def test_new_deployment_only_updates_non_default_instance_range(
 
     assert response.status_code == 200
     assert frames[-1]["success"] is True
+    assert captured_config["launch_types"]["cloud"]["runtime_auth_type"] == ("key_auth")
     assert bool(update_requests) is expects_update
     assert any(frame.get("phase") == "update" for frame in frames) is expects_update
     if expects_update:

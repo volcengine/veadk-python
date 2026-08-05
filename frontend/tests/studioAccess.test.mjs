@@ -79,11 +79,10 @@ test("runtime authorization failures are not reported as unsupported", () => {
   assert.match(clientSource, /runtime_proxy_timeout/);
   assert.match(clientSource, /Runtime 已部署成功，但 Studio 暂时无法连接服务/);
   assert.match(cliFrontendSource, /endpoint_network_type == "private"[\s\S]*?runtime_private_endpoint_unreachable/);
-  assert.match(cliFrontendSource, /def _runtime_proxy_should_retry_probe[\s\S]*?normalized == "list-apps"[\s\S]*?normalized\.startswith\("web\/agent-info\/"\)/);
-  assert.match(cliFrontendSource, /parts\[0\] == "apps"[\s\S]*?parts\[2\] == "users"[\s\S]*?parts\[4\] == "sessions"/);
-  assert.match(cliFrontendSource, /endpoint_network_type == "private"[\s\S]*?return 1/);
-  assert.match(cliFrontendSource, /retry_mode == "connect"[\s\S]*?else 1/);
-  assert.match(cliFrontendSource, /runtime-proxy probe retry/);
+  assert.match(cliFrontendSource, /def _runtime_proxy_is_retryable_read[\s\S]*?\{"GET", "HEAD"\}/);
+  assert.match(cliFrontendSource, /def _runtime_proxy_attempts[\s\S]*?endpoint_network_type == "private"[\s\S]*?return 1[\s\S]*?return 3 if _runtime_proxy_is_retryable_read\(method\) else 1/);
+  assert.match(cliFrontendSource, /max_attempts = _runtime_proxy_attempts[\s\S]*?for attempt in range\(1, max_attempts \+ 1\)/);
+  assert.match(cliFrontendSource, /except \(httpx\.ConnectError, httpx\.TimeoutException\)[\s\S]*?attempt < max_attempts[\s\S]*?runtime-proxy request retry/);
   assert.match(clientSource, /res\.status === 404[\s\S]*?RuntimeProbeError/);
   assert.match(clientSource, /res\.status === 401 \|\| res\.status === 403/);
   assert.match(clientSource, /error instanceof RuntimeAccessDeniedError \|\|[\s\S]*?error instanceof RuntimeProbeError/);

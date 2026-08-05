@@ -547,21 +547,57 @@ def test_runtime_proxy_accepts_post_delete_override(
 
 
 @pytest.mark.parametrize(
-    ("network_type", "query", "expected_attempts"),
+    (
+        "network_type",
+        "request_method",
+        "proxy_path",
+        "query",
+        "expected_attempts",
+        "succeeds_on_attempt",
+        "expected_status",
+    ),
     [
-        ("private", "?region=cn-beijing&probe_retry=connect", 1),
-        ("public", "?region=cn-beijing&probe_retry=connect", 3),
-        ("public", "?region=cn-beijing", 1),
+        ("private", "GET", "list-apps", "?region=cn-beijing", 1, None, 502),
+        ("public", "GET", "list-apps", "?region=cn-beijing", 3, None, 502),
+        (
+            "public",
+            "GET",
+            "apps/demo/users/user/sessions",
+            "?region=cn-beijing",
+            3,
+            3,
+            200,
+        ),
+        (
+            "public",
+            "HEAD",
+            "apps/demo/users/user/sessions",
+            "?region=cn-beijing",
+            3,
+            None,
+            502,
+        ),
+        (
+            "public",
+            "POST",
+            "apps/demo/users/user/sessions",
+            "?region=cn-beijing",
+            1,
+            None,
+            502,
+        ),
     ],
 )
-@pytest.mark.parametrize("probe_path", ["list-apps", ".well-known/agent-card.json"])
-def test_runtime_proxy_probe_retry_policy(
+def test_runtime_proxy_retry_policy(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     network_type: str,
+    request_method: str,
+    proxy_path: str,
     query: str,
     expected_attempts: int,
-    probe_path: str,
+    succeeds_on_attempt: int | None,
+    expected_status: int,
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
 
@@ -596,6 +632,17 @@ def test_runtime_proxy_probe_retry_policy(
     attempts = 0
     forwarded_params: list[dict[str, str]] = []
 
+    class _FakeUpstreamResponse:
+        def __init__(self) -> None:
+            self.status_code = 200
+            self.headers = {"content-type": "application/json"}
+
+        async def aiter_raw(self):
+            yield b"[]"
+
+        async def aclose(self) -> None:
+            pass
+
     class _FakeAsyncClient:
         def __init__(self, **kwargs: Any) -> None:
             pass
@@ -612,9 +659,11 @@ def test_runtime_proxy_probe_retry_policy(
             forwarded_params.append(params)
             return object()
 
-        async def send(self, request: object, *, stream: bool) -> None:
+        async def send(self, request: object, *, stream: bool) -> _FakeUpstreamResponse:
             nonlocal attempts
             attempts += 1
+            if succeeds_on_attempt == attempts:
+                return _FakeUpstreamResponse()
             raise httpx.ConnectError("connect failed")
 
         async def aclose(self) -> None:
@@ -623,16 +672,22 @@ def test_runtime_proxy_probe_retry_policy(
     monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
 
     with TestClient(app) as client:
-        response = client.get(f"/web/runtime-proxy/runtime-1/{probe_path}{query}")
+        response = client.request(
+            request_method,
+            f"/web/runtime-proxy/runtime-1/{proxy_path}{query}",
+        )
 
-    assert response.status_code == 502
+    assert response.status_code == expected_status
     assert attempts == expected_attempts
     assert forwarded_params == [{}] * expected_attempts
-    assert response.json()["detail"] == (
-        "runtime_private_endpoint_unreachable"
-        if network_type == "private"
-        else "runtime_proxy_connect_error"
-    )
+    if expected_status == 200:
+        assert response.json() == []
+    elif request_method != "HEAD":
+        assert response.json()["detail"] == (
+            "runtime_private_endpoint_unreachable"
+            if network_type == "private"
+            else "runtime_proxy_connect_error"
+        )
 
 
 @pytest.mark.parametrize("upstream_path", ["run_sse", "harness/run_sse"])

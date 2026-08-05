@@ -605,6 +605,51 @@ def test_identity_client_preserves_external_sts_token() -> None:
     )
 
 
+def test_identity_client_lists_all_user_pool_pages() -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    identity_client._api_client = Mock()
+    identity_client._api_client.list_user_pools.side_effect = [
+        SimpleNamespace(
+            data=[
+                SimpleNamespace(
+                    uid="pool-1", name="Studio", domain="studio.example.com"
+                ),
+                SimpleNamespace(
+                    uid="pool-2", name="Customers", domain="users.example.com"
+                ),
+            ],
+            total_count=3,
+        ),
+        SimpleNamespace(
+            data=[
+                SimpleNamespace(
+                    uid="pool-3", name="Partners", domain="partners.example.com"
+                ),
+            ],
+            total_count=3,
+        ),
+    ]
+
+    pools = identity_client.list_user_pools(page_size=2)
+
+    assert pools == [
+        {"uid": "pool-1", "name": "Studio", "domain": "studio.example.com"},
+        {"uid": "pool-2", "name": "Customers", "domain": "users.example.com"},
+        {"uid": "pool-3", "name": "Partners", "domain": "partners.example.com"},
+    ]
+    requests = [
+        call.args[0]
+        for call in identity_client._api_client.list_user_pools.call_args_list
+    ]
+    assert [(request.page_number, request.page_size) for request in requests] == [
+        (1, 2),
+        (2, 2),
+    ]
+
+
 def test_identity_client_refreshes_known_sts_expiration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

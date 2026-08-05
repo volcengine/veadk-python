@@ -92,8 +92,13 @@ server that `veadk frontend` launches — no separate backend.
   panels stack vertically instead of squeezing the form. The deployment page
   pairs an inspectable Agent topology with a vertically aligned action rail for
   YAML export, source download, and the code browser/editor dialog, while keeping
-  region, message channel,
-  network, and environment settings primary. Local skills accept a dropped
+  region, access authentication, message channel, network, and environment
+  settings primary. New Runtime deployments default to API Key authentication
+  and can instead select an Identity user pool loaded by the Studio server. The
+  current Studio pool is marked in the picker; selecting it lets Studio forward
+  the validated login JWT to the Runtime, while other pools require a JWT issued
+  by that pool. Runtime updates keep their existing authentication mode. Local
+  skills accept a dropped
   folder or ZIP and detect the format automatically. Component forms omit
   credentials that VeADK can resolve automatically, while the Studio server
   forwards its Volcengine credentials to debug runs and deployed runtimes. A

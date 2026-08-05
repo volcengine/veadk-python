@@ -1672,6 +1672,45 @@ export interface DeployAgentkitResult {
   };
 }
 
+export type DeployAuthentication =
+  | { type: "api_key" }
+  | { type: "user_pool"; userPoolUid: string };
+
+export interface IdentityUserPool {
+  uid: string;
+  name: string;
+  domain: string;
+  region: string;
+  isCurrent: boolean;
+}
+
+export async function listIdentityUserPools(
+  signal?: AbortSignal,
+): Promise<IdentityUserPool[]> {
+  const response = await apiFetch("/web/identity/user-pools", { signal });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "加载用户池失败"));
+  }
+  const payload = (await response.json()) as { items?: unknown };
+  if (!Array.isArray(payload.items)) {
+    throw new Error("用户池列表响应格式无效");
+  }
+  return payload.items.map((item) => {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      typeof (item as IdentityUserPool).uid !== "string" ||
+      typeof (item as IdentityUserPool).name !== "string" ||
+      typeof (item as IdentityUserPool).domain !== "string" ||
+      typeof (item as IdentityUserPool).region !== "string" ||
+      typeof (item as IdentityUserPool).isCurrent !== "boolean"
+    ) {
+      throw new Error("用户池列表响应格式无效");
+    }
+    return item as IdentityUserPool;
+  });
+}
+
 export interface DeployBuildLogSnapshot {
   source: "code-pipeline";
   status: "running" | "complete" | "error";
@@ -1733,6 +1772,7 @@ export async function deployAgentkitProject(
     minInstance?: number;
     maxInstance?: number;
     description?: string;
+    authentication?: DeployAuthentication;
     onStage?: (s: DeployStage) => void;
     im?: {
       feishu?: {
@@ -1776,6 +1816,7 @@ export async function deployAgentkitProject(
           minInstance: opts?.minInstance,
           maxInstance: opts?.maxInstance,
           description: normalizeRuntimeDescription(opts?.description ?? ""),
+          authentication: opts?.authentication,
           im: opts?.im,
           envs: opts?.envs,
         }),
