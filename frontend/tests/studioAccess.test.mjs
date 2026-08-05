@@ -44,7 +44,7 @@ test("sidebar shows the OAuth email and translated role badge", () => {
   assert.match(sidebarSource, /developer: "开发者"/);
   assert.match(sidebarSource, /user: "普通用户"/);
   assert.match(sidebarSource, /typeof userInfo\.email === "string"/);
-  assert.match(sidebarSource, /<SidebarUser access=\{access\}/);
+  assert.match(sidebarSource, /<SidebarUser\s+access=\{access\}/);
   assert.match(stylesSource, /studio-role-badge--admin[\s\S]*?hsl\(271/);
   assert.match(stylesSource, /studio-role-badge--developer[\s\S]*?hsl\(47/);
   assert.match(stylesSource, /studio-role-badge--user[\s\S]*?hsl\(145/);

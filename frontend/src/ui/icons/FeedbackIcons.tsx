@@ -53,3 +53,24 @@ export function FeedbackDownIcon({ filled = false, ...props }: FeedbackIconProps
     </svg>
   );
 }
+
+export function IssueFeedbackIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M5.25 4.25h9.5a2.5 2.5 0 0 1 2.5 2.5v3.5" />
+      <path d="M13.25 17.75h-8a2.5 2.5 0 0 1-2.5-2.5v-8a3 3 0 0 1 3-3" />
+      <path d="M7 8.25h5.5M7 11.75h3.25" />
+      <path d="m13.35 16.65.42-2.16 4.76-4.76a1.35 1.35 0 0 1 1.91 1.91l-4.76 4.76-2.33.25Z" />
+      <path d="m17.65 10.6 1.9 1.9" />
+    </svg>
+  );
+}
