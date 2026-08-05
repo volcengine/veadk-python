@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 const applicationsSource = readFileSync(
@@ -24,6 +24,10 @@ const githubStyles = readFileSync(
 );
 const apiSource = readFileSync(
   new URL("../src/adk/githubIntegration.ts", import.meta.url),
+  "utf8",
+);
+const cliFrontendSource = readFileSync(
+  new URL("../../veadk/cli/cli_frontend.py", import.meta.url),
   "utf8",
 );
 const registrySource = readFileSync(
@@ -125,7 +129,7 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
   assert.match(githubSource, /required \? "必填" : "可选"/);
   assert.match(githubSource, /definition\.fields\.map\(field\)/);
   assert.doesNotMatch(githubSource, /automation === "review"|automation === "template"/);
-  assert.match(templateSource, /projectPath: values\.projectPath\.trim\(\) \|\| "agentkit-basic-agent"/);
+  assert.match(templateSource, /normalizeRepositoryPath\(values\.projectPath, "agentkit-basic-agent"\)/);
   assert.match(reviewSource, /Sandbox Tool ID/);
   assert.match(reviewSource, /模型 API 地址/);
   assert.match(githubSource, /className="pp-region-trigger"/);
@@ -158,10 +162,22 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
   assert.match(githubSource, /role="alert"/);
   assert.match(githubSource, /event\.nativeEvent\.isComposing/);
   assert.doesNotMatch(githubSource, /localStorage|sessionStorage/);
-  assert.match(deliverySource, /\/web\/integrations\/github\/pull-requests/);
-  assert.match(templateSource, /\/web\/integrations\/github\/template-pull-requests/);
-  assert.match(reviewSource, /\/web\/integrations\/github\/review-pull-requests/);
-  assert.match(apiSource, /export async function postGitHubPullRequest/);
+  assert.match(apiSource, /https:\/\/api\.github\.com/);
+  assert.match(apiSource, /Authorization: `Bearer \$\{options\.token\}`/);
+  assert.match(apiSource, /export async function createGitHubPullRequest/);
+  assert.match(deliverySource, /createGitHubPullRequest/);
+  assert.match(templateSource, /createGitHubPullRequest/);
+  assert.match(reviewSource, /createGitHubPullRequest/);
+  assert.doesNotMatch(apiSource, /\/web\/integrations\/github/);
+  assert.doesNotMatch(cliFrontendSource, /frontend_github_integration/);
+  assert.equal(
+    existsSync(new URL("../../veadk/cli/frontend_github_integration.py", import.meta.url)),
+    false,
+  );
+  assert.equal(
+    existsSync(new URL("../../veadk/cli/github_automations", import.meta.url)),
+    false,
+  );
   assert.match(appSource, /useState<"catalog" \| ApplicationId \| null>/);
   assert.doesNotMatch(apiSource, /console\.(?:log|warn|error)/);
 });
