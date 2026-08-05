@@ -1,12 +1,4 @@
-export interface GitHubPullRequestInput {
-  repository: string;
-  baseBranch: string;
-  projectPath: string;
-  runtimeName: string;
-  runtimeId: string;
-  region: "cn-beijing" | "cn-shanghai";
-  token: string;
-}
+export type GitHubAutomationRegion = "cn-beijing" | "cn-shanghai";
 
 export interface GitHubPullRequestResult {
   number: number;
@@ -14,14 +6,17 @@ export interface GitHubPullRequestResult {
   branch: string;
 }
 
-export async function createGitHubPullRequest(
-  input: GitHubPullRequestInput,
+export async function postGitHubPullRequest(
+  endpoint: string,
+  input: object,
+  signal?: AbortSignal,
 ): Promise<GitHubPullRequestResult> {
-  const response = await fetch("/web/integrations/github/pull-requests", {
+  const timeoutSignal = AbortSignal.timeout(30_000);
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
-    signal: AbortSignal.timeout(30_000),
+    signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => null) as { detail?: string } | null;
@@ -29,4 +24,3 @@ export async function createGitHubPullRequest(
   }
   return response.json() as Promise<GitHubPullRequestResult>;
 }
-

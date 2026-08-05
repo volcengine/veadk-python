@@ -76,8 +76,9 @@ import {
   invalidateRuntimeAgentCache,
   type MyAgentCardData,
 } from "./ui/MyAgents";
-import { Applications } from "./ui/Applications";
+import { Applications, type ApplicationId } from "./ui/Applications";
 import { GitHubIntegration } from "./ui/GitHubIntegration";
+import { FeishuBotIntegration } from "./automations/feishu/FeishuBotIntegration";
 import { SearchView } from "./ui/Search";
 import {
   buildAgentEntries,
@@ -999,7 +1000,7 @@ export default function App() {
     useState<AgentFeedbackCase | null>(null);
   const [myAgents, setMyAgents] = useState(false);
   const [applicationsView, setApplicationsView] =
-    useState<"catalog" | "github" | null>(null);
+    useState<"catalog" | ApplicationId | null>(null);
   // A search result may belong to a different agent; remember it so the
   // agent-switch effect opens it instead of resetting to a fresh chat.
   const pendingOpenRef = useRef<{ app: string; sid: string } | null>(null);
@@ -4001,10 +4002,17 @@ export default function App() {
                 </div>
               )}
 
-            {applicationsView === "github" ? (
-              <GitHubIntegration onBack={() => setApplicationsView("catalog")} />
+            {applicationsView === "feishu" ? (
+              <FeishuBotIntegration
+                onBack={() => setApplicationsView("catalog")}
+              />
+            ) : applicationsView && applicationsView !== "catalog" ? (
+              <GitHubIntegration
+                automation={applicationsView}
+                onBack={() => setApplicationsView("catalog")}
+              />
             ) : applicationsView === "catalog" ? (
-              <Applications onOpenGitHub={() => setApplicationsView("github")} />
+              <Applications onOpen={setApplicationsView} />
             ) : sandboxAgentWorkspace ? (
               <SandboxAgentWorkspace
                 workspace={sandboxAgentWorkspace}

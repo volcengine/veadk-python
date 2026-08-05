@@ -64,7 +64,7 @@ class _FakeSession:
 def _app(session: _FakeSession) -> TestClient:
     app = FastAPI()
     service = GitHubIntegrationService(
-        session=session, branch_factory=lambda: "feat/agentkit-release"
+        session=session, branch_factory=lambda _operation: "feat/agentkit-release"
     )
     mount_github_integration_routes(app, lambda _request: None, service=service)
     return TestClient(app)
@@ -120,6 +120,111 @@ def test_creates_agentkit_workflow_pull_request_without_persisting_token() -> No
         call[2]["headers"]["Authorization"] == "Bearer github-secret-token"
         for call in session.calls
     )
+
+
+def test_imports_studio_compatible_basic_template_with_delivery_workflow() -> None:
+    session = _FakeSession()
+    response = _app(session).post(
+        "/web/integrations/github/template-pull-requests",
+        json={
+            "repository": "acme/agent",
+            "baseBranch": "main",
+            "projectPath": "examples/basic-agent",
+            "runtimeName": "basic-agent",
+            "runtimeId": "rt-basic-agent",
+            "region": "cn-beijing",
+            "token": "github-secret-token",
+        },
+    )
+
+    assert response.status_code == 200
+    contents = {
+        call[1].split("/contents/", 1)[1]: base64.b64decode(
+            call[2]["json"]["content"]
+        ).decode()
+        for call in session.calls
+        if call[0] == "PUT" and "/contents/" in call[1]
+    }
+    assert {
+        "examples/basic-agent/.dockerignore",
+        "examples/basic-agent/.env.example",
+        "examples/basic-agent/.gitignore",
+        "examples/basic-agent/Dockerfile",
+        "examples/basic-agent/README.md",
+        "examples/basic-agent/assistant/__init__.py",
+        "examples/basic-agent/assistant/agent.py",
+        "examples/basic-agent/app.py",
+        "examples/basic-agent/requirements.txt",
+        ".github/workflows/publish-agentkit-examples-basic-agent.yml",
+    } == set(contents)
+    app_source = contents["examples/basic-agent/app.py"]
+    compile(app_source, "app.py", "exec")
+    compile(contents["examples/basic-agent/assistant/agent.py"], "agent.py", "exec")
+    assert "create_agentkit_app(" in app_source
+    assert "enable_feishu=True" in app_source
+    assert "run_agentkit_app(app)" in app_source
+    assert "AgentkitAgentServerApp" not in app_source
+    assert "root_agent = Agent(" in contents["examples/basic-agent/assistant/agent.py"]
+    assert "python app.py" in contents["examples/basic-agent/README.md"]
+    assert "lark-channel-sdk" in contents["examples/basic-agent/requirements.txt"]
+    workflow = contents[".github/workflows/publish-agentkit-examples-basic-agent.yml"]
+    assert '"entry_point": "app.py"' in workflow
+    assert "examples/basic-agent" in workflow
+    assert "github-secret-token" not in "".join(contents.values())
+
+
+def test_creates_isolated_codex_sandbox_review_workflow() -> None:
+    session = _FakeSession()
+    response = _app(session).post(
+        "/web/integrations/github/review-pull-requests",
+        json={
+            "repository": "acme/agent",
+            "baseBranch": "main",
+            "sandboxToolId": "tool-code-review",
+            "modelName": "doubao-seed-code-preview",
+            "modelBaseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3",
+            "region": "cn-beijing",
+            "token": "github-secret-token",
+        },
+    )
+
+    assert response.status_code == 200
+    put_call = next(
+        call
+        for call in session.calls
+        if call[0] == "PUT" and "codex-pr-review.yml" in call[1]
+    )
+    workflow = base64.b64decode(put_call[2]["json"]["content"]).decode()
+    parsed_workflow = yaml.safe_load(workflow)
+    assert "pull_request_target" not in workflow
+    assert (
+        "github.event.pull_request.head.repo.full_name == github.repository" in workflow
+    )
+    assert "agentkit sandbox exec" in workflow
+    assert "--copy . /workspace" in workflow
+    assert "codex review --base" in workflow
+    assert "agentkit sandbox delete" in workflow
+    assert "secrets.CODEX_MODEL_API_KEY" in workflow
+    assert parsed_workflow["permissions"]["pull-requests"] == "write"
+    assert "github-secret-token" not in workflow
+
+
+def test_rejects_insecure_review_model_url_before_github_request() -> None:
+    session = _FakeSession()
+    response = _app(session).post(
+        "/web/integrations/github/review-pull-requests",
+        json={
+            "repository": "acme/agent",
+            "sandboxToolId": "tool-code-review",
+            "modelName": "review-model",
+            "modelBaseUrl": "http://model.example.com/v1",
+            "region": "cn-beijing",
+            "token": "token",
+        },
+    )
+
+    assert response.status_code == 400
+    assert session.calls == []
 
 
 def test_rejects_unsafe_repository_and_project_path_before_github_request() -> None:
