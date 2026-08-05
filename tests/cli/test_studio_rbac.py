@@ -901,6 +901,17 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
         _runtime("runtime-unmanaged", "developer", managed=False)
     )
     runtime.current_version_number = 7
+    runtime.network_configurations.append(
+        SimpleNamespace(
+            endpoint="https://runtime.internal.example.com",
+            network_type="private",
+            vpc_configuration=SimpleNamespace(
+                vpc_id="vpc-existing",
+                subnet_ids=["subnet-a", "subnet-b"],
+                enable_shared_internet_access=True,
+            ),
+        )
+    )
     requested_paths: list[str] = []
 
     def get_runtime(_self: Any, request: Any) -> SimpleNamespace:
@@ -1003,6 +1014,12 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
             "currentVersion": 7,
             "managed": False,
             "envs": [],
+            "network": {
+                "mode": "both",
+                "vpcId": "vpc-existing",
+                "subnetIds": "subnet-a,subnet-b",
+                "enableSharedInternetAccess": True,
+            },
         },
         "agent": {
             "appName": "selected-agent",

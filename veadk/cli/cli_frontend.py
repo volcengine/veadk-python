@@ -5268,6 +5268,50 @@ def _run_frontend_server(
             raise RuntimeError("Runtime returned an invalid JSON response")
         return data
 
+    def _runtime_network_payload(runtime: Any) -> dict[str, Any]:
+        network_configurations = list(
+            getattr(runtime, "network_configurations", None) or []
+        )
+        network_types = {
+            str(getattr(item, "network_type", "") or "").strip().lower()
+            for item in network_configurations
+        }
+        private_network = next(
+            (
+                item
+                for item in network_configurations
+                if str(getattr(item, "network_type", "") or "").strip().lower()
+                == "private"
+            ),
+            None,
+        )
+        mode = (
+            "both"
+            if "public" in network_types and private_network is not None
+            else "private"
+            if private_network is not None
+            else "public"
+        )
+        payload: dict[str, Any] = {"mode": mode}
+        vpc_configuration = getattr(private_network, "vpc_configuration", None)
+        if vpc_configuration is None:
+            return payload
+
+        vpc_id = str(getattr(vpc_configuration, "vpc_id", "") or "").strip()
+        if vpc_id:
+            payload["vpcId"] = vpc_id
+        subnet_ids = getattr(vpc_configuration, "subnet_ids", None) or []
+        if subnet_ids:
+            payload["subnetIds"] = ",".join(str(item) for item in subnet_ids)
+        shared_internet = getattr(
+            vpc_configuration,
+            "enable_shared_internet_access",
+            None,
+        )
+        if shared_internet is not None:
+            payload["enableSharedInternetAccess"] = bool(shared_internet)
+        return payload
+
     def _runtime_update_payload(runtime: Any, region: str) -> dict[str, Any]:
         tags = _runtime_tags(runtime)
         return {
@@ -5285,6 +5329,7 @@ def _run_frontend_server(
                 for item in (getattr(runtime, "envs", None) or [])
                 if getattr(item, "key", None)
             ],
+            "network": _runtime_network_payload(runtime),
         }
 
     def _runtime_update_result(

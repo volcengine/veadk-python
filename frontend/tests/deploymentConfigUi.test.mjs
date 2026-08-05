@@ -401,6 +401,11 @@ test("requires explicit confirmation before starting deployment", () => {
     /disabled=\{deploying \|\| isRuntimeUpdate \|\| !onNetworkChange\}/,
   );
   assert.match(projectPreviewSource, /现有 Runtime 的区域与网络模式保持不变。/);
+  assert.match(projectPreviewSource, /const networkMode = network\?\.mode \?\? "public"/);
+  assert.match(
+    projectPreviewSource,
+    /checked=\{networkMode === mode\}[\s\S]*?disabled=\{deploying \|\| isRuntimeUpdate \|\| !onNetworkChange\}/,
+  );
 });
 
 test("creates feedback evaluation sets by default and sends the deployment choice", () => {

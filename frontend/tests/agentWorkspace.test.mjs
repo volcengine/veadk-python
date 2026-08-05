@@ -425,6 +425,7 @@ test("runtime refresh preserves agent order and detail loading uses an overlay",
 test("runtime updates use the Agent selected in management instead of the active chat connection", () => {
   assert.match(clientSource, /export interface RuntimeUpdateCapability/);
   assert.match(clientSource, /envs: \{ key: string; value: string \}\[\]/);
+  assert.match(clientSource, /network: NetworkConfig/);
   assert.match(clientSource, /agent\?:\s*\{[\s\S]*?\}\s*\| null/);
   assert.match(clientSource, /export async function getRuntimeUpdateCapability/);
   assert.match(clientSource, /\/web\/runtime-update-capability\?\$\{params\.toString\(\)\}/);
@@ -453,6 +454,7 @@ test("runtime updates use the Agent selected in management instead of the active
     handler,
     /envValues:\s*\{[\s\S]*?\.\.\.runtimeEnvValues,[\s\S]*?\.\.\.\(nextDraft\.deployment\?\.envValues \?\? \{\}\)/,
   );
+  assert.match(handler, /network:\s*capability\.runtime\.network/);
 });
 
 test("runtime update capability checks ignore aborted and stale selections", () => {

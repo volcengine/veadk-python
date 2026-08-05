@@ -4337,6 +4337,7 @@ export default function App() {
                     ...nextDraft,
                     deployment: {
                       ...(nextDraft.deployment ?? { feishuEnabled: false }),
+                      network: capability.runtime.network,
                       envValues: {
                         ...runtimeEnvValues,
                         ...(nextDraft.deployment?.envValues ?? {}),
