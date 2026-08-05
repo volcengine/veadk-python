@@ -20,6 +20,8 @@ import type {
 
 const LIST_POLL_INTERVAL_MS = 2_500;
 const DETAIL_POLL_INTERVAL_MS = 1_200;
+const ARTIFACT_RETRY_INTERVAL_MS = 900;
+const ARTIFACT_RETRY_LIMIT = 4;
 const PROVISIONING_TTL_SECONDS = 10 * 60;
 const TERMINAL_STATES = new Set(["ready", "failed", "cancelled", "expired", "published"]);
 const JOB_ID_PATTERN = /^sw-[0-9a-f]{12}-[0-9a-f]{24}$/;
@@ -113,6 +115,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   const [tasksLoading, setTasksLoading] = useState(false);
   const [tasksError, setTasksError] = useState("");
   const [activeJobId, setActiveJobId] = useState("");
+  const [activeSelectionRevision, setActiveSelectionRevision] = useState(0);
   const [activeTask, setActiveTask] = useState<SkillWorkbenchTask | null>(null);
   const [activeTaskLoading, setActiveTaskLoading] = useState(false);
   const [activeTaskError, setActiveTaskError] = useState("");
@@ -252,7 +255,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     const controller = new AbortController();
     void refreshActiveTask(controller.signal);
     return () => controller.abort();
-  }, [activeJobId, refreshActiveTask]);
+  }, [activeJobId, activeSelectionRevision, refreshActiveTask]);
 
   const activeIsProvisioning = tasks.some((task) => task.jobId === activeJobId && task.state === "provisioning");
   useEffect(() => {
@@ -270,6 +273,27 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     };
   }, [activeIsProvisioning, activeJobId, activeTask?.state, refreshActiveTask]);
 
+  const refreshActiveArtifact = useCallback(async (signal?: AbortSignal) => {
+    if (
+      !activeJobId ||
+      !activeTask ||
+      (activeTask.state !== "ready" && activeTask.state !== "published")
+    ) return;
+    const request = ++artifactRequestRef.current;
+    setActiveArtifactLoading(true);
+    setActiveArtifactError("");
+    try {
+      const artifact = await getSkillWorkbenchArtifact(activeJobId, signal);
+      if (request === artifactRequestRef.current) setActiveArtifact(artifact);
+    } catch (cause) {
+      if (signal?.aborted || request !== artifactRequestRef.current) return;
+      setActiveArtifactError(cause instanceof Error ? cause.message : String(cause));
+      throw cause;
+    } finally {
+      if (request === artifactRequestRef.current) setActiveArtifactLoading(false);
+    }
+  }, [activeJobId, activeTask]);
+
   useEffect(() => {
     if (
       !activeJobId ||
@@ -282,23 +306,34 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       setActiveArtifactError("");
       return;
     }
-    const request = ++artifactRequestRef.current;
     const controller = new AbortController();
-    setActiveArtifactLoading(true);
-    setActiveArtifactError("");
-    void getSkillWorkbenchArtifact(activeJobId, controller.signal)
-      .then((artifact) => {
-        if (request === artifactRequestRef.current) setActiveArtifact(artifact);
-      })
-      .catch((cause) => {
-        if (controller.signal.aborted || request !== artifactRequestRef.current) return;
-        setActiveArtifactError(cause instanceof Error ? cause.message : String(cause));
-      })
-      .finally(() => {
-        if (request === artifactRequestRef.current) setActiveArtifactLoading(false);
+    let timer: number | undefined;
+    let attempts = 0;
+    const load = () => {
+      void refreshActiveArtifact(controller.signal).catch((cause) => {
+        if (controller.signal.aborted) return;
+        const retryable = cause instanceof SkillWorkbenchApiError
+          ? cause.retryable || [404, 409, 502, 503].includes(cause.status)
+          : true;
+        if (retryable && attempts < ARTIFACT_RETRY_LIMIT) {
+          attempts += 1;
+          setActiveArtifactError("");
+          setActiveArtifactLoading(true);
+          timer = window.setTimeout(load, ARTIFACT_RETRY_INTERVAL_MS);
+        }
       });
-    return () => controller.abort();
-  }, [activeJobId, activeTask]);
+    };
+    load();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [
+    activeJobId,
+    activeTask?.revision,
+    activeTask?.state,
+    refreshActiveArtifact,
+  ]);
 
   useEffect(() => {
     if (!enabled || !identityKey) return;
@@ -315,6 +350,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
 
   const selectTask = useCallback((jobId: string) => {
     setActiveJobId(jobId);
+    setActiveSelectionRevision((revision) => revision + 1);
     setActiveTask((current) => current?.jobId === jobId ? current : null);
     setActiveTaskError("");
   }, []);
@@ -447,5 +483,6 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     deleteTask,
     refreshTasks,
     refreshActiveTask,
+    refreshActiveArtifact,
   };
 }

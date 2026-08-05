@@ -102,6 +102,11 @@
   gap: 12px;
 }
 
+.skill-workbench__run-grid.is-process-only {
+  grid-template-columns: minmax(0, 860px);
+  justify-content: center;
+}
+
 .skill-workbench__timeline,
 .skill-workbench__result {
   min-width: 0;
@@ -145,6 +150,83 @@
 }
 
 .skill-workbench__activity .conversation-column { max-width: none; }
+
+.skill-workbench__stage-note {
+  margin: 4px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.skill-workbench__execution-stages {
+  display: grid;
+  gap: 0;
+  margin: 4px 0 14px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid hsl(var(--border));
+  list-style: none;
+}
+
+.skill-workbench__execution-stages li {
+  position: relative;
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 2px 6px 24px;
+  color: hsl(var(--muted-foreground));
+}
+
+.skill-workbench__execution-stages li::before {
+  position: absolute;
+  left: 3px;
+  top: 15px;
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  border: 1px solid hsl(var(--border));
+  border-radius: 50%;
+  background: hsl(var(--panel));
+  content: "";
+}
+
+.skill-workbench__execution-stages li:not(:last-child)::after {
+  position: absolute;
+  left: 6.5px;
+  top: 23px;
+  bottom: -15px;
+  width: 1px;
+  background: hsl(var(--border));
+  content: "";
+}
+
+.skill-workbench__execution-stages li.is-done,
+.skill-workbench__execution-stages li.is-active {
+  color: hsl(var(--foreground));
+}
+
+.skill-workbench__execution-stages li.is-done::before {
+  border-color: hsl(var(--foreground));
+  background: hsl(var(--foreground));
+}
+
+.skill-workbench__execution-stages li.is-active::before {
+  border-color: hsl(var(--foreground));
+  box-shadow: 0 0 0 3px hsl(var(--foreground) / .1);
+}
+
+.skill-workbench__execution-stages span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.skill-workbench__execution-stages small {
+  color: hsl(var(--muted-foreground));
+  font-size: 10.5px;
+}
 
 .skill-workbench__composer.composer {
   flex: 0 0 auto;
@@ -479,6 +561,9 @@
     grid-template-rows: minmax(420px, auto) minmax(560px, 1fr);
     overflow-y: visible;
     flex: 0 0 auto;
+  }
+  .skill-workbench__run-grid.is-process-only {
+    grid-template-rows: minmax(520px, auto);
   }
   .skill-workbench__timeline,
   .skill-workbench__result { min-height: 0; }

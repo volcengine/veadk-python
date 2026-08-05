@@ -4882,6 +4882,9 @@ export default function App() {
                 onDeleteTask={skillWorkbenchTasks.deleteTask}
                 onCancelProvisioning={skillWorkbenchTasks.cancelProvisioning}
                 onRetryTask={() => void skillWorkbenchTasks.refreshActiveTask()}
+                onRetryArtifact={() => {
+                  void skillWorkbenchTasks.refreshActiveArtifact().catch(() => undefined);
+                }}
                 onBack={() => {
                   setSkillWorkbenchOpen(false);
                   setSkillCenter(true);

@@ -31,8 +31,10 @@ import re
 import stat
 import tempfile
 import textwrap
+import threading
 import time
 import uuid
+import weakref
 import zipfile
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path, PurePosixPath
@@ -427,6 +429,10 @@ class SkillWorkbenchService:
         self._skills_client_factory = skills_client_factory or (
             lambda region: AgentkitSkillsClient(region=region)
         )
+        self._publish_locks: weakref.WeakValueDictionary[str, threading.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+        self._publish_locks_guard = threading.Lock()
 
     def capabilities(self) -> dict[str, object]:
         tool_id = self._tool_id(required=False)
@@ -722,6 +728,13 @@ class SkillWorkbenchService:
             **status,
             "state": self._normalize_task_state(status.get("status")),
         }
+        revision = _json_int(result.get("revision"), 1)
+        publication = _json_object(result.get("publication"))
+        if (
+            result["state"] == "ready"
+            and _json_int(publication.get("revision"), 0) == revision
+        ):
+            result["state"] = "published"
         result.pop("startedAtMs", None)
         return result
 
@@ -761,7 +774,7 @@ class SkillWorkbenchService:
     ) -> dict[str, object]:
         """Delegate a follow-up outcome against the current DevEnv artifact."""
         task = self.get_task(job_id, owner_id)
-        if task.get("state") != "ready":
+        if task.get("state") not in {"ready", "published"}:
             raise SkillWorkbenchError(
                 "SKILL_TASK_NOT_READY",
                 "只有已完成的 Skill 可以继续调整",
@@ -785,6 +798,7 @@ class SkillWorkbenchService:
             "files",
             "skillMd",
             "validation",
+            "publication",
             "error",
             "elapsedMs",
         ):
@@ -834,13 +848,14 @@ class SkillWorkbenchService:
             "activities": [],
         }
 
-    def download(self, job_id: str, owner_id: str) -> tuple[bytes, str]:
-        task = self.get_task(job_id, owner_id)
+    def _download_archive(self, job_id: str, owner_id: str) -> SkillArchive:
+        self._validate_job_owner(job_id, owner_id)
+        session = self._find_session(self._validated_tool_id(), job_id)
+        task = self._task_from_session(session["endpoint"], job_id)
         if task.get("state") not in {"ready", "published"}:
             raise SkillWorkbenchError(
                 "SKILL_TASK_NOT_READY", "Skill 尚未生成完成", status_code=409
             )
-        session = self._find_session(self._validated_tool_id(), job_id)
         response = requests.get(
             build_file_url(session["endpoint"], SANDBOX_FILE_DOWNLOAD_ROUTE),
             params={
@@ -853,13 +868,15 @@ class SkillWorkbenchService:
             raise SkillWorkbenchError(
                 "SKILL_ARTIFACT_DOWNLOAD_FAILED", "下载 Skill ZIP 失败", status_code=502
             )
-        archive = validate_skill_archive(response.content)
+        return validate_skill_archive(response.content)
+
+    def download(self, job_id: str, owner_id: str) -> tuple[bytes, str]:
+        archive = self._download_archive(job_id, owner_id)
         return archive.content, f"{archive.name}.zip"
 
     def artifact(self, job_id: str, owner_id: str) -> dict[str, object]:
         """Return every validated text file for the read-only artifact browser."""
-        content, _ = self.download(job_id, owner_id)
-        archive = validate_skill_archive(content)
+        archive = self._download_archive(job_id, owner_id)
         files: list[dict[str, object]] = []
         with zipfile.ZipFile(io.BytesIO(archive.content)) as source:
             root = archive.name
@@ -897,6 +914,24 @@ class SkillWorkbenchService:
         body: PublishSkillTaskBody,
         report_progress: Callable[[dict[str, str]], None] | None = None,
     ) -> dict[str, object]:
+        """Serialize one revision's publish decision within this Studio process."""
+        with self._publish_locks_guard:
+            lock = self._publish_locks.setdefault(job_id, threading.Lock())
+        with lock:
+            return self._publish_once(
+                job_id,
+                owner_id,
+                body,
+                report_progress,
+            )
+
+    def _publish_once(
+        self,
+        job_id: str,
+        owner_id: str,
+        body: PublishSkillTaskBody,
+        report_progress: Callable[[dict[str, str]], None] | None = None,
+    ) -> dict[str, object]:
         """Publish a validated output explicitly as new or to its trusted source."""
 
         def report(phase: str, message: str) -> None:
@@ -905,16 +940,27 @@ class SkillWorkbenchService:
 
         report("preparing", "正在校验 Skill 产物")
         task = self.get_task(job_id, owner_id)
-        if task.get("state") != "ready":
-            raise SkillWorkbenchError(
-                "SKILL_TASK_NOT_READY", "Skill 尚未生成完成", status_code=409
-            )
         revision = _json_int(task.get("revision"), 1)
         if body.expected_revision != revision:
             raise SkillWorkbenchError(
                 "SKILL_TASK_REVISION_CONFLICT",
                 "Skill 已被其他操作更新，请刷新后重试",
                 status_code=409,
+            )
+        publication = _json_object(task.get("publication"))
+        if _json_int(publication.get("revision"), 0) == revision:
+            previous = self._validated_publication_result(publication)
+            if previous["disposition"] != body.disposition:
+                raise SkillWorkbenchError(
+                    "SKILL_ALREADY_PUBLISHED",
+                    "该版本已通过另一种方式发布；继续调整后可发布新版本",
+                    status_code=409,
+                )
+            report("preparing", "该版本已发布，正在读取发布结果")
+            return previous
+        if task.get("state") != "ready":
+            raise SkillWorkbenchError(
+                "SKILL_TASK_NOT_READY", "Skill 尚未生成完成", status_code=409
             )
         source = _json_object(task.get("source"))
         source_skill_id = str(source.get("skillId") or "")
@@ -1035,7 +1081,7 @@ class SkillWorkbenchService:
             effective_skill_id,
             version,
         )
-        return {
+        result: dict[str, object] = {
             "skillId": effective_skill_id,
             "version": version,
             "skillSpaceIds": body.skill_space_ids,
@@ -1043,6 +1089,65 @@ class SkillWorkbenchService:
             "region": effective_region,
             "projectName": effective_project or "default",
         }
+        self._persist_publication(job_id, owner_id, revision, result)
+        return result
+
+    @staticmethod
+    def _validated_publication_result(
+        publication: dict[str, object],
+    ) -> dict[str, object]:
+        skill_id = publication.get("skillId")
+        version = publication.get("version")
+        skill_space_ids = publication.get("skillSpaceIds")
+        disposition = publication.get("disposition")
+        region = publication.get("region")
+        project_name = publication.get("projectName")
+        if (
+            not isinstance(skill_id, str)
+            or not isinstance(version, str)
+            or not isinstance(skill_space_ids, list)
+            or not all(isinstance(item, str) for item in skill_space_ids)
+            or disposition not in {"create-new", "update-source"}
+            or region not in {"cn-beijing", "cn-shanghai"}
+            or not isinstance(project_name, str)
+        ):
+            raise SkillWorkbenchError(
+                "SKILL_TASK_STATE_INVALID",
+                "Skill 发布结果格式错误",
+                status_code=502,
+            )
+        return {
+            "skillId": skill_id,
+            "version": version,
+            "skillSpaceIds": skill_space_ids,
+            "disposition": disposition,
+            "region": region,
+            "projectName": project_name,
+        }
+
+    def _persist_publication(
+        self,
+        job_id: str,
+        owner_id: str,
+        revision: int,
+        result: dict[str, object],
+    ) -> None:
+        self._validate_job_owner(job_id, owner_id)
+        session = self._find_session(self._validated_tool_id(), job_id)
+        request_data = self._remote_json(session["endpoint"], job_id, "request.json")
+        if _json_int(request_data.get("revision"), 1) != revision:
+            raise SkillWorkbenchError(
+                "SKILL_TASK_REVISION_CONFLICT",
+                "Skill 已被其他操作更新，请刷新后重试",
+                status_code=409,
+            )
+        request_data["publication"] = {"revision": revision, **result}
+        self._upload_file(
+            session["endpoint"],
+            f"{self._remote_dir(job_id)}/request.json",
+            json.dumps(request_data, ensure_ascii=False).encode("utf-8"),
+            media_type="application/json",
+        )
 
     def delete_task(self, job_id: str, owner_id: str) -> None:
         self._validate_job_owner(job_id, owner_id)
@@ -1232,16 +1337,25 @@ class SkillWorkbenchService:
         return value
 
     @staticmethod
-    def _upload_file(endpoint: str, path: str, content: bytes) -> None:
+    def _upload_file(
+        endpoint: str,
+        path: str,
+        content: bytes,
+        *,
+        media_type: str = "application/zip",
+    ) -> None:
         response = requests.post(
             build_file_url(endpoint, "/v1/file/upload"),
             data={"path": path},
-            files={"file": (PurePosixPath(path).name, content, "application/zip")},
+            files={"file": (PurePosixPath(path).name, content, media_type)},
             timeout=120,
         )
         if response.status_code >= 400:
             raise SkillWorkbenchError(
-                "SKILL_SOURCE_UPLOAD_FAILED", "上传 Skill 来源失败", status_code=502
+                "SKILL_REMOTE_WRITE_FAILED",
+                "写入 Skill 会话数据失败",
+                status_code=502,
+                retryable=True,
             )
 
     @staticmethod

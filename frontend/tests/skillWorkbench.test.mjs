@@ -38,31 +38,37 @@ test("preserves the existing A/B Skill creator beside the DevEnv conversation fl
   assert.match(app, /skillWorkbenchOpen/);
 });
 
-test("starts Create and Optimize conversations directly from the Skill Center composer", () => {
-  assert.match(center, /function SkillCenterComposer/);
-  assert.match(center, /className="composer composer--new-chat skillcenter-composer"/);
-  assert.match(center, /role="radiogroup"/);
-  assert.match(center, /创建 Skill/);
-  assert.match(center, /优化 Skill/);
+test("opens Create and Optimize setup from a card-based Skill Space home", () => {
+  assert.match(center, /function SkillWorkbenchSetup/);
+  assert.match(center, /className="skillcenter-space-grid"/);
+  assert.match(center, /className="skillcenter-create-action"/);
+  assert.match(center, /className="skillcenter-optimize-action"/);
+  assert.match(center, /openSetup\("create"\)/);
+  assert.match(center, /openSetup\("optimize"\)/);
+  assert.match(center, /className="composer composer--new-chat skillcenter-setup-composer"/);
   assert.match(center, /上传 ZIP/);
   assert.match(center, /isImeCompositionEvent/);
   assert.match(center, /event\.nativeEvent/);
   assert.match(center, /event\.target\.value = ""/);
   assert.match(center, /onStartTask/);
-  assert.doesNotMatch(center, /进入工作台创建和优化/);
+  assert.doesNotMatch(center, /function SkillCenterComposer/);
+  assert.doesNotMatch(center, /role="radiogroup"/);
 });
 
-test("keeps Skill Center source selection in the same conversation composer", () => {
-  assert.match(center, /setOperation\("optimize"\)/);
+test("opens optimization sources in the dedicated conversation setup", () => {
+  assert.match(center, /setSetupOperation\("optimize"\)/);
   assert.match(center, /setSource\(nextSource\)/);
-  assert.match(center, /composerRef\.current\?\.focus\(\)/);
-  assert.match(center, /选择下方 Skill/);
+  assert.match(center, /setSetupOpen\(true\)/);
+  assert.match(center, /选择技能中心中的 Skill，或上传 ZIP/);
   assert.match(center, /onOptimize=\{chooseOptimizationSource\}/);
   assert.doesNotMatch(workbench, /从技能中心选择/);
 });
 
-test("renders a conversation process beside a complete read-only artifact browser", () => {
+test("renders a single-column process until a complete artifact is available", () => {
   assert.match(workbench, /SkillConversationStream/);
+  assert.match(workbench, /ExecutionStages/);
+  assert.match(workbench, /skill-workbench__run-grid is-process-only/);
+  assert.match(workbench, /ready \? \(/);
   assert.match(workbench, /<CodeBrowserWorkspace/);
   assert.match(workbench, /artifact\.files/);
   assert.match(workbench, /readOnly/);
@@ -72,6 +78,7 @@ test("renders a conversation process beside a complete read-only artifact browse
   assert.match(editor, /editable: !readOnly/);
   assert.doesNotMatch(workbench, /<pre><code>\{task\.skillMd\}/);
   assert.doesNotMatch(workbench, /skill-workbench__tabs/);
+  assert.doesNotMatch(workbench, /产物将在生成后显示/);
 });
 
 test("uses contextual deletion and never offers cancellation after success", () => {
@@ -112,6 +119,8 @@ test("streams publish stages and returns a concrete destination", () => {
   assert.match(workbench, /在技能中心查看/);
   assert.match(workbench, /onViewPublished/);
   assert.match(workbench, /skillSpaceIds/);
+  assert.match(workbench, /task\.publication/);
+  assert.match(workbench, /该版本已发布/);
 });
 
 test("keeps task polling above the workbench and supports safe reopening", () => {
@@ -120,6 +129,8 @@ test("keeps task polling above the workbench and supports safe reopening", () =>
   assert.match(controller, /visibilitychange/);
   assert.match(controller, /setTimeout\(poll, LIST_POLL_INTERVAL_MS\)/);
   assert.match(controller, /setTimeout\(poll, DETAIL_POLL_INTERVAL_MS\)/);
+  assert.match(controller, /activeSelectionRevision/);
+  assert.match(controller, /setActiveSelectionRevision\(\(revision\) => revision \+ 1\)/);
   assert.doesNotMatch(workbench, /setTimeout\(poll/);
   assert.match(controller, /reserveSkillWorkbenchTask/);
   assert.match(controller, /state: "provisioning"/);
@@ -127,15 +138,25 @@ test("keeps task polling above the workbench and supports safe reopening", () =>
   assert.match(controller, /cancelRequested/);
   assert.match(controller, /saveProvisioningReferences/);
   assert.doesNotMatch(controller, /localStorage\.setItem\([^\n]*(intent|source|file|activities)/);
+  assert.match(controller, /ARTIFACT_RETRY_INTERVAL_MS/);
+  assert.match(controller, /refreshActiveArtifact/);
 });
 
-test("uses wider Skill Center space, a narrower reasoning rail, and reduced motion", () => {
+test("uses a wider artifact view, a spacious process-only view, and reduced motion", () => {
   assert.match(styles, /grid-template-columns:\s*minmax\(260px,\s*\.58fr\)\s+minmax\(480px,\s*1\.42fr\)/);
+  assert.match(styles, /\.skill-workbench__run-grid\.is-process-only\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*860px\)/);
   assert.match(styles, /min-height:\s*0/);
   assert.match(styles, /overflow-y:\s*auto/);
   assert.match(styles, /@media \(max-width: 980px\)/);
   assert.match(styles, /prefers-reduced-motion: reduce/);
   assert.match(shellStyles, /\.skillcenter-regions button\s*\{[^}]*min-width:\s*52px;[^}]*height:\s*32px;/);
-  assert.match(shellStyles, /\.skillcenter-browser\s*\{[^}]*grid-template-columns:\s*minmax\(300px,\s*\.72fr\)\s+minmax\(0,\s*1\.78fr\)/);
+  assert.match(shellStyles, /\.skillcenter-space-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(min\(280px,\s*100%\),\s*1fr\)\)/);
   assert.doesNotMatch(shellStyles, /sidebar-skill-task__live/);
+});
+
+test("uses the user intent for Skill conversation titles and no Skill Center badge", () => {
+  assert.match(sidebar, /function skillConversationTitle[\s\S]*task\.intent/);
+  assert.doesNotMatch(sidebar, /\("name" in task \? task\.name/);
+  assert.doesNotMatch(sidebar, /sidebar-skill-count/);
+  assert.doesNotMatch(sidebar, /runningSkillConversations/);
 });

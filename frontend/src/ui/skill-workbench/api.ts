@@ -112,6 +112,32 @@ function normalizeActivities(value: unknown): SkillWorkbenchActivity[] {
   });
 }
 
+function normalizePublication(
+  value: unknown,
+): (SkillWorkbenchPublishResult & { revision: number }) | undefined {
+  if (value === undefined || value === null) return undefined;
+  const publication = record(value, "Skill 发布结果");
+  if (
+    typeof publication.revision !== "number" ||
+    typeof publication.skillId !== "string" ||
+    typeof publication.version !== "string" ||
+    !Array.isArray(publication.skillSpaceIds) ||
+    !publication.skillSpaceIds.every((item) => typeof item === "string") ||
+    (publication.disposition !== "create-new" && publication.disposition !== "update-source") ||
+    (publication.region !== "cn-beijing" && publication.region !== "cn-shanghai") ||
+    typeof publication.projectName !== "string"
+  ) throw new Error("Skill 发布结果格式错误。");
+  return {
+    revision: publication.revision,
+    skillId: publication.skillId,
+    version: publication.version,
+    skillSpaceIds: publication.skillSpaceIds,
+    disposition: publication.disposition,
+    region: publication.region,
+    projectName: publication.projectName,
+  };
+}
+
 function normalizeTask(value: unknown): SkillWorkbenchTask {
   const task = record(value, "Skill 任务");
   if (
@@ -149,6 +175,9 @@ function normalizeTask(value: unknown): SkillWorkbenchTask {
     ...(typeof task.error === "string" ? { error: task.error } : {}),
     ...(task.validation && typeof task.validation === "object"
       ? { validation: task.validation as SkillWorkbenchTask["validation"] }
+      : {}),
+    ...(task.publication
+      ? { publication: normalizePublication(task.publication) }
       : {}),
   };
 }

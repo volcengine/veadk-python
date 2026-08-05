@@ -144,8 +144,7 @@ function skillConversationStatus(task: SkillWorkbenchTaskListItem): string {
 }
 
 function skillConversationTitle(task: SkillWorkbenchTaskListItem): string {
-  return ("name" in task ? task.name : "") ||
-    task.intent ||
+  return task.intent ||
     (task.operation === "create" ? "创建 Skill" : "优化 Skill");
 }
 
@@ -388,12 +387,6 @@ export function Sidebar({
   );
   const [collapsed, setCollapsed] = useState(autoCollapsedRef.current);
   const conversations = mergeSidebarConversations(sessions, skillConversations);
-  const runningSkillConversations = skillConversations.filter(
-    (task) => task.state === "running" || task.state === "provisioning",
-  ).length;
-  const skillCenterLabel = runningSkillConversations > 0
-    ? `技能中心，${runningSkillConversations} 个 Skill 会话进行中`
-    : "技能中心";
   const toggleCollapsed = () => {
     autoCollapsedRef.current = false;
     setCollapsed((value) => !value);
@@ -483,16 +476,11 @@ export function Sidebar({
           <button
             className="new-chat new-chat--skills"
             onClick={onSkillCenter}
-            aria-label={skillCenterLabel}
-            title={skillCenterLabel}
+            aria-label="技能中心"
+            title="技能中心"
           >
             <span className="sidebar-skill-icon">
               <SkillSpaceIcon />
-              {runningSkillConversations > 0 ? (
-                <span className="sidebar-skill-count" aria-hidden="true">
-                  {runningSkillConversations > 9 ? "9+" : runningSkillConversations}
-                </span>
-              ) : null}
             </span>
             <span className="sidebar-nav-label">技能中心</span>
           </button>

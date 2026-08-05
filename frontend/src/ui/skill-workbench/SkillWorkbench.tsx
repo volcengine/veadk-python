@@ -39,6 +39,7 @@ export interface SkillWorkbenchProps {
   onDeleteTask: (jobId: string) => Promise<void>;
   onCancelProvisioning: (jobId: string) => Promise<void>;
   onRetryTask: () => void;
+  onRetryArtifact: () => void;
   onBack: () => void;
   onViewPublished: (result: SkillWorkbenchPublishResult) => void;
 }
@@ -84,6 +85,52 @@ function regionLabel(region: SkillRegion): string {
   return region === "cn-shanghai" ? "上海" : "北京";
 }
 
+function ExecutionStages({ task }: { task: SkillWorkbenchTask }) {
+  const statusStages = task.activities.flatMap((activity) =>
+    activity.kind === "status"
+      ? [{
+          id: activity.id,
+          text: activity.text,
+          done: activity.status === "done",
+        }]
+      : [],
+  );
+  const stages = [
+    { id: "session", text: "DevEnv 已就绪", done: true },
+    {
+      id: "codex",
+      text: task.operation === "create" ? "Codex 正在创建 Skill" : "Codex 正在分析并优化 Skill",
+      done: task.stage === "validating" || task.stage === "packaging" || TERMINAL.has(task.state),
+    },
+    ...statusStages,
+    ...(task.stage === "validating" || task.stage === "packaging" || TERMINAL.has(task.state)
+      ? [{ id: "validating", text: "校验 Skill 结构与内容", done: task.stage === "packaging" || TERMINAL.has(task.state) }]
+      : []),
+    ...(task.stage === "packaging" || TERMINAL.has(task.state)
+      ? [{ id: "packaging", text: "生成可下载产物", done: TERMINAL.has(task.state) }]
+      : []),
+  ].filter((stage, index, values) =>
+    values.findIndex((candidate) => candidate.text === stage.text) === index
+  );
+
+  return (
+    <ol className="skill-workbench__execution-stages" aria-label="执行阶段">
+      {stages.map((stage, index) => {
+        const active = !stage.done && stages.slice(0, index).every((item) => item.done);
+        return (
+          <li
+            key={stage.id}
+            className={stage.done ? "is-done" : active ? "is-active" : ""}
+          >
+            <span>{stage.text}</span>
+            <small>{stage.done ? "已完成" : active ? "进行中" : "等待中"}</small>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 function LoadingConversation({
   operation,
   intent,
@@ -92,23 +139,23 @@ function LoadingConversation({
   intent: string;
 }) {
   return (
-    <div className="skill-workbench__run-grid">
+    <div className="skill-workbench__run-grid is-process-only">
       <section className="skill-workbench__timeline" aria-live="polite">
         <div className="skill-workbench__state is-running">
           <TextShimmer duration={2.2} spread={16}>正在创建 DevEnv</TextShimmer>
           <span className="skill-workbench__user-intent">{intent}</span>
         </div>
+        <div className="skill-workbench__activity">
+          <p className="skill-workbench__stage-note">
+            正在分配隔离环境并准备 Codex。完成后会自动开始
+            {operation === "create" ? "创建" : "优化"}，离开页面不会中断任务。
+          </p>
         <ol className="skill-workbench__provisioning-steps">
           <li className="is-done">会话已建立</li>
           <li className="is-active">正在创建 DevEnv</li>
           <li>准备 Skill 工作区</li>
           <li>{operation === "create" ? "开始创建 Skill" : "开始优化 Skill"}</li>
         </ol>
-      </section>
-      <section className="skill-workbench__result" aria-label="Skill 产物">
-        <div className="skill-workbench__result-empty">
-          <strong>产物将在生成后显示</strong>
-          <span>可以离开当前页面，稍后从会话列表继续查看。</span>
         </div>
       </section>
     </div>
@@ -127,6 +174,7 @@ export function SkillWorkbench({
   onDeleteTask,
   onCancelProvisioning,
   onRetryTask,
+  onRetryArtifact,
   onBack,
   onViewPublished,
 }: SkillWorkbenchProps) {
@@ -149,6 +197,10 @@ export function SkillWorkbench({
   const publishControllerRef = useRef<AbortController | null>(null);
 
   const ready = task?.state === "ready" || task?.state === "published";
+  const persistedPublication = task && task.publication?.revision === task.revision
+    ? task.publication
+    : null;
+  const effectivePublishResult = publishResult ?? persistedPublication;
   const canDeleteFromHeader = task
     ? task.state !== "ready" && task.state !== "published"
     : Boolean(provisioningTask);
@@ -353,7 +405,7 @@ export function SkillWorkbench({
           )}
         </div>
       ) : (
-        <div className="skill-workbench__run-grid">
+        <div className={`skill-workbench__run-grid${ready ? "" : " is-process-only"}`}>
           <section className="skill-workbench__timeline" aria-live="polite">
             <div className={`skill-workbench__state is-${task.state}`}>
               {TERMINAL.has(task.state) ? (
@@ -364,6 +416,7 @@ export function SkillWorkbench({
               <span className="skill-workbench__user-intent">{task.intent}</span>
             </div>
             <div className="skill-workbench__activity">
+              <ExecutionStages task={task} />
               <SkillConversationStream activities={task.activities} />
               {task.error ? (
                 <div className="skill-workbench__error" role="alert">{task.error}</div>
@@ -410,8 +463,8 @@ export function SkillWorkbench({
             ) : null}
           </section>
 
-          <section className="skill-workbench__result" aria-label="Skill 产物">
-            {ready ? (
+          {ready ? (
+            <section className="skill-workbench__result" aria-label="Skill 产物">
               <>
                 <header className="skill-workbench__artifact-head">
                   <div>
@@ -436,13 +489,14 @@ export function SkillWorkbench({
                 <div className="skill-workbench__artifact">
                   {artifactLoading ? (
                     <div className="skill-workbench__result-empty">
-                      <TextShimmer duration={2.2} spread={16}>正在读取完整产物</TextShimmer>
+                      <TextShimmer duration={2.2} spread={16}>生成已完成，正在同步文件预览</TextShimmer>
+                      <span>下载与发布能力将在产物校验完成后可用。</span>
                     </div>
                   ) : artifactError ? (
                     <div className="skill-workbench__result-empty" role="alert">
                       <strong>无法读取文件预览</strong>
                       <span>{artifactError}</span>
-                      <button type="button" onClick={onRetryTask}>重试</button>
+                      <button type="button" onClick={onRetryArtifact}>重试</button>
                     </div>
                   ) : artifact ? (
                     <CodeBrowserWorkspace
@@ -463,18 +517,18 @@ export function SkillWorkbench({
                 </div>
 
                 <footer className="skill-workbench__publish">
-                  {publishResult ? (
+                  {effectivePublishResult ? (
                     <div className="skill-workbench__publish-success" role="status">
                       <div>
-                        <strong>Skill 已发布</strong>
+                        <strong>{task.state === "published" ? "该版本已发布" : "Skill 已发布"}</strong>
                         <span>
-                          {regionLabel(publishResult.region)} · {publishResult.projectName}
-                          {" · "}{publishResult.skillSpaceIds[0] || "未关联空间"}
-                          {" · "}v{publishResult.version}
+                          {regionLabel(effectivePublishResult.region)} · {effectivePublishResult.projectName}
+                          {" · "}{effectivePublishResult.skillSpaceIds[0] || "未关联空间"}
+                          {" · "}v{effectivePublishResult.version}
                         </span>
-                        <small title={publishResult.skillId}>{publishResult.skillId}</small>
+                        <small title={effectivePublishResult.skillId}>{effectivePublishResult.skillId}</small>
                       </div>
-                      <button type="button" onClick={() => onViewPublished(publishResult)}>
+                      <button type="button" onClick={() => onViewPublished(effectivePublishResult)}>
                         在技能中心查看
                       </button>
                     </div>
@@ -546,13 +600,8 @@ export function SkillWorkbench({
                   )}
                 </footer>
               </>
-            ) : (
-              <div className="skill-workbench__result-empty">
-                <strong>产物将在生成后显示</strong>
-                <span>可以离开当前页面，稍后从会话列表继续查看。</span>
-              </div>
-            )}
-          </section>
+            </section>
+          ) : null}
         </div>
       )}
 

@@ -175,9 +175,8 @@ function ComposerUploadIcon() {
   );
 }
 
-function SkillCenterComposer({
+function SkillWorkbenchSetup({
   operation,
-  setOperation,
   source,
   setSource,
   file,
@@ -189,10 +188,11 @@ function SkillCenterComposer({
   error,
   onError,
   composerRef,
+  onBack,
+  onBrowseSources,
   onStartTask,
 }: {
   operation: SkillWorkbenchOperation;
-  setOperation: (operation: SkillWorkbenchOperation) => void;
   source: SkillCenterOptimizationSource | null;
   setSource: (source: SkillCenterOptimizationSource | null) => void;
   file: File | null;
@@ -204,6 +204,8 @@ function SkillCenterComposer({
   error: string;
   onError: (message: string) => void;
   composerRef: React.RefObject<HTMLTextAreaElement | null>;
+  onBack: () => void;
+  onBrowseSources: () => void;
   onStartTask?: (args: StartSkillWorkbenchTaskArgs) => Promise<SkillWorkbenchTask>;
 }) {
   const hasSource = Boolean(source || file);
@@ -228,33 +230,20 @@ function SkillCenterComposer({
   };
 
   return (
-    <section className="skillcenter-composer-wrap" aria-label="创建或优化 Skill">
-      <div className="skillcenter-composer-head">
-        <h1>技能中心</h1>
-        <div className="skillcenter-composer-modes" role="radiogroup" aria-label="Skill 操作">
-          {(["create", "optimize"] as const).map((value) => (
-            <button
-              key={value}
-              type="button"
-              role="radio"
-              aria-checked={operation === value}
-              className={operation === value ? "is-active" : ""}
-              onClick={() => {
-                setOperation(value);
-                if (value === "create") {
-                  setSource(null);
-                  setFile(null);
-                }
-                requestAnimationFrame(() => composerRef.current?.focus());
-              }}
-            >
-              {value === "create" ? "创建 Skill" : "优化 Skill"}
-            </button>
-          ))}
+    <section className="skillcenter-setup" aria-label={operation === "create" ? "创建 Skill" : "优化 Skill"}>
+      <header className="skillcenter-setup-head">
+        <button type="button" onClick={onBack}>返回技能中心</button>
+        <div>
+          <h1>{operation === "create" ? "创建 Skill" : "优化 Skill"}</h1>
+          <p>
+            {operation === "create"
+              ? "描述目标与使用场景，Codex 将在独立 DevEnv 中创建并验证 Skill。"
+              : "选择现有 Skill 或上传 ZIP，再说明希望保留和改进的内容。"}
+          </p>
         </div>
-      </div>
+      </header>
 
-      <div className="composer composer--new-chat skillcenter-composer">
+      <div className="composer composer--new-chat skillcenter-setup-composer">
         <div className="composer-box">
           {operation === "optimize" ? (
             <div className="skillcenter-composer-source">
@@ -282,7 +271,16 @@ function SkillCenterComposer({
                   <CloseIcon />
                 </button>
               ) : (
-                <span>选择下方 Skill，或上传 ZIP</span>
+                <>
+                  <span>选择技能中心中的 Skill，或上传 ZIP</span>
+                  <button
+                    type="button"
+                    className="skillcenter-source-picker"
+                    onClick={onBrowseSources}
+                  >
+                    选择 Skill
+                  </button>
+                </>
               )}
             </div>
           ) : null}
@@ -291,6 +289,7 @@ function SkillCenterComposer({
               ref={composerRef}
               className="comp-input scroll"
               rows={4}
+              autoFocus
               maxLength={20_000}
               value={intent}
               disabled={busy || capability?.enabled === false}
@@ -353,6 +352,11 @@ function SkillCenterComposer({
         <div className="skillcenter-composer-error" role="alert">{capability.reason || "DevEnv 暂不可用"}</div>
       ) : error ? (
         <div className="skillcenter-composer-error" role="alert">{error}</div>
+      ) : null}
+      {operation === "optimize" && capability?.maxUploadBytes ? (
+        <p className="skillcenter-upload-limit">
+          ZIP 最大 {capability.maxUploadBytes / (1024 * 1024)} MiB，仅支持 UTF-8 文本 Skill 包。
+        </p>
       ) : null}
     </section>
   );
@@ -484,7 +488,10 @@ export function SkillCenterView({
   focus?: SkillWorkbenchPublishResult | null;
   onFocusHandled?: () => void;
 }) {
-  const [operation, setOperation] = useState<SkillWorkbenchOperation>("create");
+  const [setupOperation, setSetupOperation] =
+    useState<SkillWorkbenchOperation>("create");
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [selectingSource, setSelectingSource] = useState(false);
   const [source, setSource] = useState<SkillCenterOptimizationSource | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [intent, setIntent] = useState("");
@@ -513,6 +520,12 @@ export function SkillCenterView({
   const detailRequest = useRef(0);
   const handledFocus = useRef("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!setupOpen) return;
+    const frame = requestAnimationFrame(() => composerRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [setupOpen, setupOperation]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -562,7 +575,6 @@ export function SkillCenterView({
           const focusedSpaceId = focus?.region === region ? focus.skillSpaceIds[0] : "";
           return items.find((space) => space.id === focusedSpaceId)
             || items.find((space) => space.id === current?.id)
-            || items[0]
             || null;
         });
       })
@@ -673,11 +685,22 @@ export function SkillCenterView({
   }, [focus, onFocusHandled, selectedSpace, skills]);
 
   const chooseOptimizationSource = (nextSource: SkillCenterOptimizationSource) => {
-    setOperation("optimize");
+    setSetupOperation("optimize");
     setSource(nextSource);
     setFile(null);
+    setSelectingSource(false);
+    setSetupOpen(true);
     closeDetail();
-    requestAnimationFrame(() => composerRef.current?.focus());
+  };
+
+  const openSetup = (operation: SkillWorkbenchOperation) => {
+    setSetupOperation(operation);
+    setSource(null);
+    setFile(null);
+    setIntent("");
+    setComposerError("");
+    setSelectingSource(false);
+    setSetupOpen(true);
   };
 
   const startTask = async (args: StartSkillWorkbenchTaskArgs) => {
@@ -694,11 +717,10 @@ export function SkillCenterView({
     }
   };
 
-  return (
-    <section className="skillcenter">
-      <SkillCenterComposer
-        operation={operation}
-        setOperation={setOperation}
+  if (setupOpen) {
+    return (
+      <SkillWorkbenchSetup
+        operation={setupOperation}
         source={source}
         setSource={setSource}
         file={file}
@@ -710,97 +732,156 @@ export function SkillCenterView({
         error={composerError}
         onError={setComposerError}
         composerRef={composerRef}
+        onBack={() => setSetupOpen(false)}
+        onBrowseSources={() => {
+          setSetupOpen(false);
+          setSelectingSource(true);
+        }}
         onStartTask={startTask}
       />
-      <div className="skillcenter-browser">
-          <section className="skillcenter-panel" aria-label="技能空间列表">
-            <header className="skillcenter-panel-head">
-              <div>
-                <h2>技能空间</h2>
-                <span className="skillcenter-count-badge">{spaceTotal}</span>
-              </div>
-              <div className="skillcenter-regions" aria-label="地域">
-                {regionOptions.map((option) => (
+    );
+  }
+
+  return (
+    <section className="skillcenter">
+      <header className="skillcenter-page-head">
+        <div>
+          {selectedSpace ? (
+            <button
+              type="button"
+              className="skillcenter-back"
+              onClick={() => {
+                closeDetail();
+                setSelectedSpace(null);
+                setSkills([]);
+              }}
+            >
+              返回技能空间
+            </button>
+          ) : null}
+          <h1>{selectedSpace?.name || "技能中心"}</h1>
+          <p>
+            {selectedSpace
+              ? `${selectedSpace.description || "浏览并管理空间中的 Skill"} · ${skillTotal} 个技能`
+              : selectingSource
+                ? "选择要优化的 Skill，查看详情后开始优化。"
+                : "浏览 Skill Space，或通过 Codex 创建和优化可复用技能。"}
+          </p>
+        </div>
+        <div className="skillcenter-page-actions">
+          <button
+            type="button"
+            className="skillcenter-optimize-action"
+            disabled={capability?.enabled === false}
+            onClick={() => openSetup("optimize")}
+          >
+            优化 Skill
+          </button>
+          <button
+            type="button"
+            className="skillcenter-create-action"
+            disabled={capability?.enabled === false}
+            onClick={() => openSetup("create")}
+          >
+            创建 Skill
+          </button>
+        </div>
+      </header>
+
+      <div className="skillcenter-toolbar">
+        <div className="skillcenter-regions" aria-label="地域">
+          {regionOptions.map((option) => (
+            <button
+              type="button"
+              key={option.value}
+              className={region === option.value ? "active" : ""}
+              onClick={() => changeRegion(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <span>{selectedSpace ? `${skillTotal} 个 Skill` : `${spaceTotal} 个 Skill Space`}</span>
+      </div>
+
+      <div className="skillcenter-results">
+        {selectedSpace ? (
+          <>
+            {skillsLoading ? (
+              <div className="skillcenter-loading"><LoadingMark />正在读取技能…</div>
+            ) : skillsError ? (
+              <div className="skillcenter-error">{skillsError}</div>
+            ) : skills.length === 0 ? (
+              <EmptyState>这个空间中暂无技能</EmptyState>
+            ) : (
+              <div className="skillcenter-skill-grid">
+                {skills.map((skill) => (
                   <button
                     type="button"
-                    key={option.value}
-                    className={region === option.value ? "active" : ""}
-                    onClick={() => changeRegion(option.value)}
+                    key={`${skill.skillId}:${skill.version}`}
+                    className="skillcenter-skill-card"
+                    onClick={() => void openDetail(skill)}
                   >
-                    {option.label}
+                    <span className="skillcenter-card-title-row">
+                      <span className="skillcenter-symbol skillcenter-symbol--skill"><SkillIcon /></span>
+                      <span className={`skillcenter-status ${statusTone(skill.skillStatus)}`}>{statusLabel(skill.skillStatus)}</span>
+                    </span>
+                    <span className="skillcenter-item-title" title={skill.skillName}>{skill.skillName}</span>
+                    <span className="skillcenter-item-description">{skill.skillDescription || "暂无描述"}</span>
+                    <span className="skillcenter-item-meta">
+                      <span className="skillcenter-meta-text">版本 · {skill.version || "—"}</span>
+                      <span className="skillcenter-card-link">{selectingSource ? "选择并优化" : "查看详情"}</span>
+                    </span>
                   </button>
                 ))}
               </div>
-            </header>
-            <div className="skillcenter-listwrap">
-              {spacesLoading && <div className="skillcenter-loading skillcenter-loading--overlay"><LoadingMark />正在读取技能空间…</div>}
-              {spacesError ? (
-                <div className="skillcenter-error">{spacesError}</div>
-              ) : spaces.length === 0 && !spacesLoading ? (
-                <EmptyState>当前地域暂无可访问的技能空间</EmptyState>
-              ) : (
-                <div className="skillcenter-list">
-                  {spaces.map((space) => (
-                    <button
-                      type="button"
-                      key={`${space.projectName || "default"}:${space.id}`}
-                      className={`skillcenter-space-item ${selectedSpace?.id === space.id ? "active" : ""}`}
-                      onClick={() => selectSpace(space)}
-                    >
-                      <span className="skillcenter-item-body">
-                        <span className="skillcenter-item-title" title={space.name}>{space.name}</span>
-                        <span className="skillcenter-item-description">{space.description || "暂无描述"}</span>
-                        <span className="skillcenter-item-meta">
-                          <span className={`skillcenter-status ${statusTone(space.status)}`}>{statusLabel(space.status)}</span>
-                          <span className="skillcenter-meta-text" title={space.projectName || "default"}>Project · {space.projectName || "default"}</span>
-                          <span className="skillcenter-meta-text">{space.skillCount ?? 0} 个技能</span>
-                          {space.updatedAt && <span className="skillcenter-meta-text">更新于 {updatedAtLabel(space.updatedAt)}</span>}
-                        </span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <Pager page={spacePage} total={spaceTotal} pageSize={SPACE_PAGE_SIZE} onPage={setSpacePage} />
-          </section>
-
-          <section className="skillcenter-panel" aria-label="技能列表">
-            {!selectedSpace ? (
-              <EmptyState>点击 Skill 空间以查看详情</EmptyState>
-            ) : (
-              <>
-                <header className="skillcenter-panel-head">
-                  <div><h2 title={selectedSpace.name}>{selectedSpace.name} · 技能</h2></div>
-                  <span>{skillTotal}</span>
-                </header>
-                <div className="skillcenter-listwrap">
-                  {skillsLoading && <div className="skillcenter-loading skillcenter-loading--overlay"><LoadingMark />正在读取技能…</div>}
-                  {skillsError ? (
-                    <div className="skillcenter-error">{skillsError}</div>
-                  ) : skills.length === 0 && !skillsLoading ? (
-                    <EmptyState>这个空间中暂无技能</EmptyState>
-                  ) : (
-                    <div className="skillcenter-list skillcenter-list--skills">
-                      {skills.map((skill) => (
-                        <button type="button" key={`${skill.skillId}:${skill.version}`} className="skillcenter-skill-item" onClick={() => void openDetail(skill)}>
-                          <span className="skillcenter-item-body">
-                            <span className="skillcenter-item-title" title={skill.skillName}>{skill.skillName}</span>
-                            <span className="skillcenter-item-description">{skill.skillDescription || "暂无描述"}</span>
-                            <span className="skillcenter-item-meta">
-                              <span className={`skillcenter-status ${statusTone(skill.skillStatus)}`}>{statusLabel(skill.skillStatus)}</span>
-                              <span className="skillcenter-meta-text">版本 · {skill.version || "—"}</span>
-                            </span>
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <Pager page={skillPage} total={skillTotal} pageSize={SKILL_PAGE_SIZE} onPage={setSkillPage} />
-              </>
             )}
-          </section>
+            <Pager page={skillPage} total={skillTotal} pageSize={SKILL_PAGE_SIZE} onPage={setSkillPage} />
+          </>
+        ) : (
+          <>
+            {spacesLoading ? (
+              <div className="skillcenter-loading"><LoadingMark />正在读取技能空间…</div>
+            ) : spacesError ? (
+              <div className="skillcenter-error">{spacesError}</div>
+            ) : spaces.length === 0 ? (
+              <EmptyState>当前地域暂无可访问的技能空间</EmptyState>
+            ) : (
+              <div className="skillcenter-space-grid">
+                {spaces.map((space) => (
+                  <article
+                    key={`${space.projectName || "default"}:${space.id}`}
+                    className="skillcenter-space-card"
+                  >
+                    <div className="skillcenter-card-title-row">
+                      <span className="skillcenter-symbol"><SkillSpaceIcon /></span>
+                      <span className={`skillcenter-status ${statusTone(space.status)}`}>{statusLabel(space.status)}</span>
+                    </div>
+                    <div className="skillcenter-item-body">
+                      <h2 className="skillcenter-item-title" title={space.name}>{space.name}</h2>
+                      <p className="skillcenter-item-description">{space.description || "暂无描述"}</p>
+                      <div className="skillcenter-item-meta">
+                        <span className="skillcenter-meta-text" title={space.projectName || "default"}>Project · {space.projectName || "default"}</span>
+                        <span className="skillcenter-meta-text">{space.skillCount ?? 0} 个技能</span>
+                        {space.updatedAt ? <span className="skillcenter-meta-text">更新于 {updatedAtLabel(space.updatedAt)}</span> : null}
+                      </div>
+                    </div>
+                    <footer>
+                      <button
+                        type="button"
+                        className="skillcenter-space-open"
+                        onClick={() => selectSpace(space)}
+                      >
+                        查看技能
+                      </button>
+                    </footer>
+                  </article>
+                ))}
+              </div>
+            )}
+            <Pager page={spacePage} total={spaceTotal} pageSize={SPACE_PAGE_SIZE} onPage={setSpacePage} />
+          </>
+        )}
       </div>
 
       {detailSkill && selectedSpace && (

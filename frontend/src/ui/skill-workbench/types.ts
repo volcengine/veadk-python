@@ -77,6 +77,7 @@ export interface SkillWorkbenchTask {
   skillMd?: string;
   files: SkillWorkbenchFile[];
   validation?: { valid: boolean; errors: string[]; warnings?: string[] };
+  publication?: SkillWorkbenchPublishResult & { revision: number };
   error?: string;
 }
 

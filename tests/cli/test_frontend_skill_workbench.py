@@ -15,7 +15,9 @@
 import io
 import json
 import stat
+import threading
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -145,6 +147,29 @@ def test_validate_skill_archive_rejects_unsafe_boundaries(builder, code: str) ->
         validate_skill_archive(output.getvalue())
 
     assert caught.value.code == code
+
+
+def test_validate_skill_archive_rejects_invalid_zip() -> None:
+    with pytest.raises(SkillWorkbenchError) as caught:
+        validate_skill_archive(b"not-a-zip")
+
+    assert caught.value.code == "SKILL_ARCHIVE_INVALID"
+
+
+def test_validate_skill_archive_rejects_suspicious_compression_ratio() -> None:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "compressed/SKILL.md",
+            "---\nname: compressed\ndescription: Compressed input.\n---\n"
+            + ("x" * (512 * 1024)),
+        )
+
+    with pytest.raises(SkillWorkbenchError) as caught:
+        validate_skill_archive(output.getvalue())
+
+    assert caught.value.code == "SKILL_ARCHIVE_SUSPICIOUS_COMPRESSION"
+    assert caught.value.status_code == 413
 
 
 def _write_symlink(archive: zipfile.ZipFile, name: str) -> None:
@@ -386,6 +411,42 @@ def test_task_state_normalization_is_shared_by_detail_and_list(
     assert service._task_summary(detail)["state"] == "ready"
 
 
+def test_task_with_current_revision_publication_reopens_as_published(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    service = SkillWorkbenchService(tool_id="tool")
+    payloads = {
+        "request.json": {
+            "jobId": job_id,
+            "operation": "create",
+            "intent": "Create actionable incident summaries",
+            "revision": 2,
+            "createdAt": 1,
+            "publication": {
+                "revision": 2,
+                "skillId": "skill-1",
+                "version": "3",
+                "skillSpaceIds": ["space-1"],
+                "disposition": "create-new",
+                "region": "cn-beijing",
+                "projectName": "default",
+            },
+        },
+        "status.json": {"status": "succeeded", "stage": "packaging"},
+    }
+    monkeypatch.setattr(
+        service,
+        "_remote_json",
+        lambda endpoint, requested_job_id, filename: payloads[filename],
+    )
+
+    detail = service._task_from_session("endpoint", job_id)
+
+    assert detail["state"] == "published"
+    assert service._task_summary(detail)["state"] == "published"
+
+
 def _session(job_id: str, owner: str, endpoint: str) -> SimpleNamespace:
     return SimpleNamespace(
         user_session_id=job_id,
@@ -451,6 +512,198 @@ def test_publish_rejects_stale_revision(monkeypatch: pytest.MonkeyPatch) -> None
         service.publish(service._new_job_id("alice"), "alice", body)
 
     assert caught.value.code == "SKILL_TASK_REVISION_CONFLICT"
+
+
+def test_publish_reuses_the_persisted_result_for_the_same_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    result = {
+        "skillId": "skill-1",
+        "version": "2",
+        "skillSpaceIds": ["space-1"],
+        "disposition": "create-new",
+        "region": "cn-beijing",
+        "projectName": "default",
+    }
+    monkeypatch.setattr(
+        service,
+        "get_task",
+        lambda job_id, owner_id: {
+            "jobId": job_id,
+            "state": "published",
+            "revision": 3,
+            "source": None,
+            "publication": {"revision": 3, **result},
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "download",
+        lambda *args, **kwargs: pytest.fail(
+            "an idempotent retry must have no side effects"
+        ),
+    )
+
+    actual = service.publish(
+        service._new_job_id("alice"),
+        "alice",
+        PublishSkillTaskBody(
+            disposition="create-new",
+            expectedRevision=3,
+            skillSpaceIds=["a-different-current-selection"],
+        ),
+    )
+
+    assert actual == result
+
+
+def test_publish_serializes_concurrent_requests_for_the_same_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    job_id = service._new_job_id("alice")
+    body = PublishSkillTaskBody(
+        disposition="create-new",
+        expectedRevision=3,
+        skillSpaceIds=["space-1"],
+    )
+    result = {
+        "skillId": "skill-1",
+        "version": "2",
+        "skillSpaceIds": ["space-1"],
+        "disposition": "create-new",
+        "region": "cn-beijing",
+        "projectName": "default",
+    }
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+    publication: dict[str, object] | None = None
+    calls = 0
+    side_effects = 0
+
+    def publish_once(requested_job_id, owner_id, requested_body, report_progress):
+        nonlocal calls, publication, side_effects
+        assert requested_job_id == job_id
+        assert owner_id == "alice"
+        assert requested_body == body
+        calls += 1
+        if publication is None:
+            first_entered.set()
+            assert release_first.wait(timeout=2)
+            side_effects += 1
+            publication = result
+        else:
+            second_entered.set()
+        return publication
+
+    monkeypatch.setattr(service, "_publish_once", publish_once)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(service.publish, job_id, "alice", body)
+        assert first_entered.wait(timeout=2)
+        second = pool.submit(service.publish, job_id, "alice", body)
+        assert not second_entered.wait(timeout=0.1)
+        release_first.set()
+
+        assert first.result(timeout=2) == result
+        assert second.result(timeout=2) == result
+
+    assert calls == 2
+    assert side_effects == 1
+    assert second_entered.is_set()
+
+
+def test_publish_rejects_a_different_disposition_after_revision_is_published(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    monkeypatch.setattr(
+        service,
+        "get_task",
+        lambda job_id, owner_id: {
+            "jobId": job_id,
+            "state": "published",
+            "revision": 3,
+            "source": {"kind": "skill-center", "skillId": "source-1"},
+            "publication": {
+                "revision": 3,
+                "skillId": "source-1",
+                "version": "4",
+                "skillSpaceIds": ["space-1"],
+                "disposition": "update-source",
+                "region": "cn-beijing",
+                "projectName": "default",
+            },
+        },
+    )
+
+    with pytest.raises(SkillWorkbenchError) as caught:
+        service.publish(
+            service._new_job_id("alice"),
+            "alice",
+            PublishSkillTaskBody(
+                disposition="create-new",
+                expectedRevision=3,
+                skillSpaceIds=["space-1"],
+            ),
+        )
+
+    assert caught.value.code == "SKILL_ALREADY_PUBLISHED"
+    assert caught.value.status_code == 409
+
+
+def test_persist_publication_writes_the_owner_bound_task_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    job_id = service._new_job_id("alice")
+    uploaded: dict[str, object] = {}
+    monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool")
+    monkeypatch.setattr(
+        service,
+        "_find_session",
+        lambda tool_id, requested_job_id: {
+            "endpoint": "https://devenv.example",
+            "instanceId": "session-1",
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_remote_json",
+        lambda endpoint, requested_job_id, filename: {
+            "jobId": job_id,
+            "operation": "create",
+            "intent": "Create it",
+            "revision": 2,
+        },
+    )
+
+    def upload(endpoint, path, content, *, media_type="application/zip"):
+        uploaded.update(
+            endpoint=endpoint,
+            path=path,
+            body=json.loads(content),
+            media_type=media_type,
+        )
+
+    monkeypatch.setattr(service, "_upload_file", upload)
+    result = {
+        "skillId": "skill-1",
+        "version": "3",
+        "skillSpaceIds": ["space-1"],
+        "disposition": "create-new",
+        "region": "cn-beijing",
+        "projectName": "default",
+    }
+
+    service._persist_publication(job_id, "alice", 2, result)
+
+    assert uploaded["endpoint"] == "https://devenv.example"
+    assert uploaded["path"] == f"{service._remote_dir(job_id)}/request.json"
+    assert uploaded["media_type"] == "application/json"
+    assert uploaded["body"]["publication"] == {"revision": 2, **result}
 
 
 def test_upload_route_accepts_a_valid_skill_zip(
@@ -630,8 +883,8 @@ def test_artifact_returns_every_validated_nested_text_file(
     )
     monkeypatch.setattr(
         service,
-        "download",
-        lambda job_id, owner_id: (content, "release-notes.zip"),
+        "_download_archive",
+        lambda job_id, owner_id: validate_skill_archive(content),
     )
 
     artifact = service.artifact(
