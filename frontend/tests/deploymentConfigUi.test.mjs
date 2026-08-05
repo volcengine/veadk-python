@@ -316,6 +316,18 @@ test("shows the total environment variable count beside the section title", () =
   );
 });
 
+test("keeps deployment environment variable values visible", () => {
+  assert.doesNotMatch(projectPreviewSource, /showEnvValues|EyeOff|隐藏值|显示值/);
+  assert.match(
+    projectPreviewSource,
+    /className="pp-env-value"\s*type="text"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /placeholder="名称"[\s\S]*?type="text"[\s\S]*?placeholder="值"/,
+  );
+});
+
 test("lays out network settings in two columns", () => {
   assert.match(
     projectPreviewSource,

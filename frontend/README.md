@@ -91,11 +91,12 @@ server that `veadk frontend` launches — no separate backend.
   expandable, copyable runner error details, per-result Trace inspection, and
   review. In-progress drafts are stored only in the current browser and scoped
   to the signed-in user. MCP tokens are converted to Runtime environment
-  variables: generated source, YAML, and browser drafts retain only the
-  `${ENV_NAME}` reference. Runtime updates preserve the existing secret value;
-  entering a replacement Token overrides it for the next deployment. Other
-  deployment environment values are never persisted. Long descriptions and
-  prompts scroll within bounded editors, while the sidebar stays pinned to the
+  variables: generated source retains only the `${ENV_NAME}` reference, while
+  YAML and browser drafts preserve the corresponding environment value.
+  Runtime updates reload existing values, and the deployment form keeps all
+  environment values visible to users who can view the Agent. Entering a
+  replacement Token overrides the previous value. Long descriptions and prompts
+  scroll within bounded editors, while the sidebar stays pinned to the
   viewport. On narrow desktop windows, the structure, configuration, and debug
   panels stack vertically instead of squeezing the form. The deployment page
   pairs an inspectable Agent topology with a vertically aligned action rail for

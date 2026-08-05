@@ -76,8 +76,17 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
     o.tracing = true;
     o.tracingExporters = [...draft.tracingExporters];
   }
-  if (draft.deployment?.feishuEnabled) {
-    o.deployment = { feishuEnabled: true };
+  if (
+    draft.deployment?.feishuEnabled ||
+    Object.keys(draft.deployment?.envValues ?? {}).length > 0
+  ) {
+    const deployment: Record<string, unknown> = {
+      feishuEnabled: !!draft.deployment?.feishuEnabled,
+    };
+    if (Object.keys(draft.deployment?.envValues ?? {}).length > 0) {
+      deployment.envValues = { ...draft.deployment?.envValues };
+    }
+    o.deployment = deployment;
   }
   if (draft.selectedSkills?.length)
     o.selectedSkills = draft.selectedSkills.map((s) => {
@@ -105,11 +114,22 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
 }
 
 export function draftToYaml(draft: AgentDraft): string {
-  const prepared = prepareMcpAuth(draft).draft;
+  const prepared = prepareMcpAuth(draft);
+  const envValues = {
+    ...(prepared.draft.deployment?.envValues ?? {}),
+    ...prepared.envValues,
+  };
+  const exportDraft: AgentDraft = {
+    ...prepared.draft,
+    deployment: {
+      ...(prepared.draft.deployment ?? { feishuEnabled: false }),
+      envValues,
+    },
+  };
   return (
     "# VeADK Agent 结构配置\n" +
     "# 可在「创建 Agent」页通过「导入 YAML」重新载入。\n" +
-    stringify(toConfig(prepared))
+    stringify(toConfig(exportDraft))
   );
 }
 

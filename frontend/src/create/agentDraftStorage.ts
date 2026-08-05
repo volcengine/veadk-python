@@ -44,27 +44,20 @@ export function workspaceDraftsKey(userId: string): string {
 }
 
 export function sanitizeAgentDraftForStorage(draft: AgentDraft): AgentDraft {
-  const prepared = prepareMcpAuth(draft).draft;
-  const deployment = prepared.deployment
-    ? { ...prepared.deployment }
-    : undefined;
-  if (deployment) delete deployment.envValues;
-
+  const prepared = prepareMcpAuth(draft);
+  const envValues = {
+    ...(prepared.draft.deployment?.envValues ?? {}),
+    ...prepared.envValues,
+  };
+  if (!prepared.draft.deployment && Object.keys(envValues).length === 0) {
+    return prepared.draft;
+  }
   return {
-    ...prepared,
-    subAgents: prepared.subAgents.map(sanitizeAgentDraftForStorage),
-    ...(deployment ? { deployment } : {}),
-    ...(prepared.workflow
-      ? {
-          workflow: {
-            ...prepared.workflow,
-            nodes: prepared.workflow.nodes.map((node) => ({
-              ...node,
-              agent: sanitizeAgentDraftForStorage(node.agent),
-            })),
-          },
-        }
-      : {}),
+    ...prepared.draft,
+    deployment: {
+      ...(prepared.draft.deployment ?? { feishuEnabled: false }),
+      envValues,
+    },
   };
 }
 

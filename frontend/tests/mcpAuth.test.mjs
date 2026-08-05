@@ -40,6 +40,9 @@ const {
   prepareMcpAuth,
   updateMcpAuthTokenInput,
 } = await loadTypeScriptModule("../src/create/mcpAuth.ts");
+const { normalizeDraft } = await loadTypeScriptModule(
+  "../src/create/normalizeDraft.ts",
+);
 const configYamlSource = readFileSync(
   new URL("../src/create/configYaml.ts", import.meta.url),
   "utf8",
@@ -95,8 +98,23 @@ test("warns about non-standard MCP paths without rewriting them", () => {
   assert.equal(mcpUrlNeedsPathWarning("https://example.com/custom-path"), true);
 });
 
-test("YAML export prepares MCP auth and emits only the environment field", () => {
-  assert.match(configYamlSource, /prepareMcpAuth\(draft\)\.draft/);
-  assert.match(configYamlSource, /e\.authTokenEnv = m\.authTokenEnv\.trim\(\)/);
+test("YAML export preserves MCP tokens as runtime environment values", () => {
+  assert.match(configYamlSource, /const prepared = prepareMcpAuth\(draft\)/);
+  assert.match(
+    configYamlSource,
+    /envValues = \{[\s\S]*?\.\.\.prepared\.envValues/,
+  );
+  assert.match(configYamlSource, /deployment\.envValues = \{/);
   assert.doesNotMatch(configYamlSource, /e\.authToken =/);
+
+  const imported = normalizeDraft({
+    name: "sales-agent",
+    deployment: {
+      envValues: { MCP_SALES_AGENT_ORDERS_AUTH_TOKEN: "yaml-secret" },
+    },
+  });
+  assert.equal(
+    imported.deployment.envValues.MCP_SALES_AGENT_ORDERS_AUTH_TOKEN,
+    "yaml-secret",
+  );
 });

@@ -696,6 +696,12 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
             managed=False,
         ),
     }
+    runtimes["runtime-developer"].envs = [
+        SimpleNamespace(key="MCP_VISIBLE_AUTH_TOKEN", value="visible-secret")
+    ]
+    runtimes["runtime-viewer"].envs = [
+        SimpleNamespace(key="VIEWER_VISIBLE_TOKEN", value="viewer-secret")
+    ]
     deleted: list[str] = []
 
     def get_runtime(_self: Any, request: Any) -> SimpleNamespace:
@@ -725,6 +731,17 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
         assert runtime_detail.status_code == 200
         assert runtime_detail.json()["endpoint"] == "https://runtime.example.com"
         assert runtime_detail.json()["authType"] == "key_auth"
+        assert runtime_detail.json()["envs"] == [
+            {"key": "MCP_VISIBLE_AUTH_TOKEN", "value": "visible-secret"}
+        ]
+        viewer_runtime_detail = client.get(
+            "/web/runtime-detail?runtimeId=runtime-viewer&region=cn-beijing",
+            headers=viewer_headers,
+        )
+        assert viewer_runtime_detail.status_code == 200
+        assert viewer_runtime_detail.json()["envs"] == [
+            {"key": "VIEWER_VISIBLE_TOKEN", "value": "viewer-secret"}
+        ]
         assert "runtime-key" not in runtime_detail.text
         revealed_key = client.post(
             "/web/runtime-api-key/reveal?runtimeId=runtime-developer&region=cn-beijing",
@@ -908,6 +925,7 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
             "region": "cn-beijing",
             "currentVersion": 7,
             "managed": False,
+            "envs": [],
         },
         "agent": {
             "appName": "selected-agent",

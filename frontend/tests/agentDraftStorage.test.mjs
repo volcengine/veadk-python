@@ -55,7 +55,7 @@ function memoryStorage(initial = {}) {
   };
 }
 
-test("removes secrets from every persisted Agent draft branch", () => {
+test("persists runtime credentials while converting MCP tokens to environment values", () => {
   const sourceDraft = draft({
     mcpTools: [{ name: "root", transport: "http", authToken: "root-secret" }],
     deployment: { feishuEnabled: true, envValues: { FEISHU_APP_SECRET: "secret" } },
@@ -87,18 +87,25 @@ test("removes secrets from every persisted Agent draft branch", () => {
 
   assert.equal(sanitized.mcpTools[0].authToken, undefined);
   assert.equal(sanitized.mcpTools[0].authTokenEnv, "MCP_DRAFT_AGENT_ROOT_AUTH_TOKEN");
-  assert.equal(sanitized.deployment.envValues, undefined);
+  assert.deepEqual(sanitized.deployment.envValues, {
+    FEISHU_APP_SECRET: "secret",
+    MCP_DRAFT_AGENT_ROOT_AUTH_TOKEN: "root-secret",
+    MCP_CHILD_CHILD_AUTH_TOKEN: "child-secret",
+    MCP_WORKFLOW_AGENT_WORKFLOW_AUTH_TOKEN: "workflow-secret",
+  });
   assert.equal(sanitized.subAgents[0].mcpTools[0].authToken, undefined);
   assert.equal(
     sanitized.subAgents[0].mcpTools[0].authTokenEnv,
     "MCP_CHILD_CHILD_AUTH_TOKEN",
   );
-  assert.equal(sanitized.subAgents[0].deployment.envValues, undefined);
+  assert.deepEqual(sanitized.subAgents[0].deployment.envValues, {
+    API_KEY: "child-key",
+  });
   assert.equal(sanitized.workflow.nodes[0].agent.mcpTools[0].authToken, undefined);
   assert.equal(sourceDraft.mcpTools[0].authToken, "root-secret");
 });
 
-test("writes a versioned user-scoped payload without secrets", () => {
+test("writes a versioned user-scoped payload with runtime environment values", () => {
   const storage = memoryStorage();
   writeWorkspaceDrafts(storage, "alice@example.com", [
     {
@@ -118,6 +125,9 @@ test("writes a versioned user-scoped payload without secrets", () => {
     payload.drafts[0].draft.mcpTools[0].authTokenEnv,
     "MCP_DRAFT_AGENT_SERVER_AUTH_TOKEN",
   );
+  assert.deepEqual(payload.drafts[0].draft.deployment.envValues, {
+    MCP_DRAFT_AGENT_SERVER_AUTH_TOKEN: "secret",
+  });
 });
 
 test("loads both legacy arrays and the current versioned payload", () => {

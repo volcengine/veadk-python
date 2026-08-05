@@ -2423,6 +2423,7 @@ export interface RuntimeUpdateCapability {
     name: string;
     region: string;
     currentVersion?: number | null;
+    envs: { key: string; value: string }[];
   };
   agent?: {
     appName: string;

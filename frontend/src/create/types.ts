@@ -65,7 +65,7 @@ export interface DeploymentConfig {
   feishuEnabled: boolean;
   network?: NetworkConfig;
   /** Values entered for feature-specific runtime configuration.
-   *  These are deployment-only and must not be exported to source/YAML. */
+   *  Draft and YAML persistence intentionally preserve these values. */
   envValues?: Record<string, string>;
 }
 
