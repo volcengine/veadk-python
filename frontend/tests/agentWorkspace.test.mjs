@@ -129,10 +129,13 @@ test("agent details show capability badges and deployment state before the flow"
 });
 
 test("agent details expose detected integration methods without inventing unavailable endpoints", () => {
-  assert.match(workspaceSource, /type AgentSection = "basic" \| "integrations" \| "evaluations"/);
   assert.match(
     workspaceSource,
-    /\{ id: "basic", label: "基本信息" \},\s*\{ id: "evaluations", label: "评测集" \},\s*\{ id: "integrations", label: "接入方法" \}/,
+    /type AgentSection = "basic" \| "evaluations" \| "optimizations" \| "integrations"/,
+  );
+  assert.match(
+    workspaceSource,
+    /\{ id: "basic", label: "基本信息" \},\s*\{ id: "evaluations", label: "评测集" \},\s*\{ id: "optimizations", label: "优化项" \},\s*\{ id: "integrations", label: "接入方法" \}/,
   );
   assert.match(workspaceSource, /role="tablist"/);
   assert.match(workspaceSource, /role="tab"/);
@@ -572,6 +575,10 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
 
 test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(clientSource, /export interface AgentFeedbackCase/);
+  assert.match(clientSource, /export type AgentFeedbackSource = "user" \| "auto"/);
+  assert.match(clientSource, /source\?: AgentFeedbackSource/);
+  assert.match(clientSource, /score\?: number \| null/);
+  assert.match(clientSource, /reason\?: string/);
   assert.match(clientSource, /export async function getAgentFeedbackCases/);
   assert.match(clientSource, /export async function deleteAgentFeedbackCases/);
   assert.match(clientSource, /appName\?: string/);
@@ -633,17 +640,73 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(workspaceSource, /Good cases/);
   assert.match(workspaceSource, /Bad cases/);
   assert.match(workspaceSource, /AgentKit 评测集/);
+  assert.match(
+    workspaceSource,
+    /<span>用户输入<\/span>[\s\S]*?<span>Agent 输出<\/span>[\s\S]*?<span>评分<\/span>[\s\S]*?<span>评分理由<\/span>[\s\S]*?<span className="aw-case-action-head">操作<\/span>/,
+  );
+  assert.match(
+    workspaceSource,
+    /className="aw-case-actions aw-case-cell"[\s\S]*?data-label="操作"[\s\S]*?className="aw-case-delete"/,
+  );
+  assert.match(workspaceSource, /function DeleteCaseIcon\(\)/);
+  assert.doesNotMatch(workspaceSource, /<span>来源<\/span>/);
+  assert.match(workspaceSource, /自动回流/);
+  assert.match(workspaceSource, /手动回流/);
+  assert.match(workspaceSource, /useState<AgentFeedbackSource>\("auto"\)/);
+  assert.match(workspaceSource, /source !== caseSourceFilter/);
+  assert.match(workspaceSource, /caseSourceFilter === source/);
+  assert.match(workspaceSource, /setCaseSourceFilter\(source\)/);
+  assert.match(workspaceSource, /formatCaseTime\(item\.createdAt\)/);
+  assert.match(workspaceSource, /item\.source !== "auto"/);
+  assert.match(workspaceSource, /Math\.round\(item\.score \* 100\)/);
+  assert.match(workspaceSource, /isAutomatic \? item\.reason \|\| "暂无评分理由" : "—"/);
   assert.match(workspaceStyles, /\.aw-case-summary/);
+  assert.match(workspaceStyles, /\.aw-case-filter-bar/);
+  assert.match(workspaceStyles, /\.aw-case-source-filters/);
+  assert.match(workspaceStyles, /\.aw-case-reason p/);
+  assert.match(workspaceStyles, /\.aw-case-cell::before/);
   assert.match(appSource, /case-return-bar/);
   assert.match(appSource, /app: agentDetailTarget\.appName \?\? agentDetailTarget\.name/);
   assert.match(workspaceStyles, /\.aw-case-toolbar/);
+  assert.match(workspaceStyles, /\.aw-case-actions/);
   assert.match(workspaceStyles, /\.aw-case-delete/);
   assert.match(workspaceStyles, /\.aw-case-output-preview/);
   assert.match(workspaceStyles, /-webkit-line-clamp: 3/);
   assert.match(workspaceStyles, /\.aw-case-expand/);
   assert.match(workspaceStyles, /\.aw-case-row\.is-focused/);
-  assert.match(workspaceStyles, /\.aw-case-tag\.is-good/);
+  assert.match(workspaceStyles, /\.aw-agent-tabs button[\s\S]*?font-size: 14px/);
   assert.match(workspaceStyles, /\.aw-case-error/);
+});
+
+test("agent detail exposes optimization recommendations between evaluations and integrations", () => {
+  assert.match(clientSource, /export type AgentOptimizationModule =/);
+  assert.match(clientSource, /export interface AgentOptimizationSuggestion/);
+  assert.match(clientSource, /export interface AgentOptimizationGroup/);
+  assert.match(clientSource, /customModule: string \| null/);
+  assert.match(clientSource, /items: AgentOptimizationSuggestion\[\]/);
+  assert.match(clientSource, /export async function getAgentOptimizations/);
+  assert.match(clientSource, /\/web\/evaluation\/optimizations\?\$\{query\.toString\(\)\}/);
+  assert.doesNotMatch(workspaceSource, /DEFAULT_OPTIMIZATION_GROUPS/);
+  assert.match(workspaceSource, /section === "optimizations"/);
+  assert.match(workspaceSource, /getAgentOptimizations\(\{/);
+  assert.match(workspaceSource, /setOptimizationGroups\(response\.groups\)/);
+  assert.match(workspaceSource, /<OptimizationTable groups=\{optimizationGroups\} \/>/);
+  assert.match(workspaceSource, /暂无优化项，自动评测完成后会在这里生成建议/);
+  assert.match(workspaceSource, /setOptimizationsReloadToken/);
+  assert.match(workspaceSource, /<th scope="col">修复优先级<\/th>/);
+  assert.match(workspaceSource, /<th scope="col">建议优化模块<\/th>/);
+  assert.match(workspaceSource, /<th scope="col">优化建议和理由<\/th>/);
+  assert.match(workspaceSource, /optimizationPriorityLabel\(group\.priority\)/);
+  assert.match(workspaceSource, /optimizationModuleLabel\(group\)/);
+  assert.match(workspaceSource, /group\.items\.map/);
+  assert.doesNotMatch(workspaceSource, /aw-option-glass/);
+  assert.match(workspaceStyles, /\.aw-optimization-table/);
+  assert.match(workspaceStyles, /\.aw-optimization-state/);
+  assert.match(workspaceStyles, /\.aw-optimization-module/);
+  assert.match(workspaceStyles, /\.aw-optimization-list li \+ li/);
+  assert.match(workspaceStyles, /\.aw-priority\.is-high/);
+  assert.match(workspaceStyles, /\.aw-priority\.is-medium/);
+  assert.match(workspaceStyles, /\.aw-priority\.is-low/);
 });
 
 test("evaluation tab remains the PR 748 placeholder until the real feature lands", () => {

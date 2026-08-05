@@ -111,7 +111,7 @@ dev = [
 
 
 [tool.setuptools.packages.find]
-include = ["veadk*"]
+include = ["veadk*", "frontend", "frontend.server*"]
 exclude = ["assets*", "ide*", "tests*"]
 
 [tool.setuptools]

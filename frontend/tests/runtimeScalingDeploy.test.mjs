@@ -84,10 +84,10 @@ test("draws complete native radio and checkbox states after the global reset", (
   );
   assert.match(
     projectPreviewStyles,
-    /\.pp-network-check input\s*\{[\s\S]*?appearance:\s*none;[\s\S]*?border-radius:\s*4px/,
+    /\.pp-network-check input,\s*\.pp-evaluation-set-option input\s*\{[\s\S]*?appearance:\s*none;[\s\S]*?border-radius:\s*4px/,
   );
   assert.match(
     projectPreviewStyles,
-    /\.pp-network-check input:checked::before\s*\{[\s\S]*?rotate\(45deg\)/,
+    /\.pp-network-check input:checked::before,\s*\.pp-evaluation-set-option input:checked::before\s*\{[\s\S]*?rotate\(45deg\)/,
   );
 });

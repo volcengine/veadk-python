@@ -532,6 +532,7 @@ export interface DeployResult {
   consoleUrl?: string;
   region?: string;
   version?: number | null;
+  warnings?: string[];
   feishuChannel?: {
     enabled: boolean;
     transport: string;
@@ -598,6 +599,7 @@ export interface DeployOptions {
   minInstance?: number;
   maxInstance?: number;
   authentication?: DeployAuthentication;
+  createEvaluationSets?: boolean;
   im?: {
     feishu?: {
       enabled: boolean;
@@ -852,6 +854,7 @@ export function ProjectPreview({
   const [maxInstance, setMaxInstance] = useState(
     inMemorySession ? "1" : "5",
   );
+  const [createEvaluationSets, setCreateEvaluationSets] = useState(true);
   const [deploymentActionTarget, setDeploymentActionTarget] =
     useState<HTMLElement | null>(null);
   const mountedRef = useRef(true);
@@ -1256,6 +1259,7 @@ export function ProjectPreview({
                     : { type: "api_key" as const },
               }
             : {}),
+          createEvaluationSets,
           ...(feishuEnabled
             ? {
                 im: {
@@ -1281,6 +1285,7 @@ export function ProjectPreview({
         status: "success",
         phase: "complete",
         label: "部署完成",
+        message: result.warnings?.join("；"),
         ...terminalBuildLogUpdate("complete"),
       });
       try {
@@ -1974,6 +1979,24 @@ export function ProjectPreview({
                 </div>
               </section>
 
+              <section className="pp-config-section">
+                <div className="pp-config-label">评测集</div>
+                <label className="pp-evaluation-set-option">
+                  <input
+                    type="checkbox"
+                    checked={createEvaluationSets}
+                    disabled={deploying}
+                    onChange={(event) =>
+                      setCreateEvaluationSets(event.currentTarget.checked)
+                    }
+                  />
+                  <span>
+                    <strong>创建评测集</strong>
+                    <small>部署成功后自动创建 good case 和 bad case。</small>
+                  </span>
+                </label>
+              </section>
+
               <section className="pp-config-section pp-env-section">
                 <div className="pp-env-head">
                   <div>
@@ -2160,6 +2183,13 @@ export function ProjectPreview({
                     {isRuntimeUpdate ? "更新成功" : "部署成功"}
                   </div>
                   <div className="pp-deploy-result-body">
+                    {deployResult.warnings && deployResult.warnings.length > 0 && (
+                      <div className="pp-deploy-result-warning" role="status">
+                        {deployResult.warnings.map((warning) => (
+                          <span key={warning}>{warning}</span>
+                        ))}
+                      </div>
+                    )}
                     {deployResult.region && (
                       <div className="pp-deploy-result-field">
                         <label>区域</label>

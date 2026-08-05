@@ -10,6 +10,10 @@ const projectPreviewStyles = readFileSync(
   new URL("../src/ui/ProjectPreview.css", import.meta.url),
   "utf8",
 );
+const adkClientSource = readFileSync(
+  new URL("../src/adk/client.ts", import.meta.url),
+  "utf8",
+);
 const appStyles = readFileSync(
   new URL("../src/styles.css", import.meta.url),
   "utf8",
@@ -370,4 +374,27 @@ test("requires explicit confirmation before starting deployment", () => {
     /disabled=\{deploying \|\| isRuntimeUpdate \|\| !onNetworkChange\}/,
   );
   assert.match(projectPreviewSource, /现有 Runtime 的区域与网络模式保持不变。/);
+});
+
+test("creates feedback evaluation sets by default and sends the deployment choice", () => {
+  assert.match(
+    projectPreviewSource,
+    /useState\(true\)[\s\S]*?创建评测集[\s\S]*?good case 和 bad case/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /type="checkbox"[\s\S]*?checked=\{createEvaluationSets\}[\s\S]*?setCreateEvaluationSets/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /createEvaluationSets,\s*[\s\S]*?envs,/,
+  );
+  assert.match(
+    adkClientSource,
+    /createEvaluationSets:\s*opts\?\.createEvaluationSets/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /deployResult\.warnings[\s\S]*?role="status"/,
+  );
 });

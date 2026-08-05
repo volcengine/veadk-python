@@ -1067,6 +1067,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     runtime.current_version_number = 3
     captured_config: dict[str, Any] = {}
     get_calls = 0
+    evaluation_set_calls: list[dict[str, Any]] = []
 
     def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
         nonlocal get_calls
@@ -1115,6 +1116,15 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
 
     monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
     monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+
+    async def fail_evaluation_set_initialization(**kwargs: Any) -> list[str]:
+        evaluation_set_calls.append(kwargs)
+        raise RuntimeError("evaluation workspace unavailable")
+
+    monkeypatch.setattr(
+        "frontend.server.evaluation_automation.datasets.ensure_feedback_sets",
+        fail_evaluation_set_initialization,
+    )
     app = _create_studio_app(
         monkeypatch,
         tmp_path,
@@ -1153,6 +1163,17 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert frames[-1]["success"] is True
     assert frames[-1]["runtimeId"] == runtime.runtime_id
     assert frames[-1]["version"] == 4
+    assert frames[-1]["warnings"] == [
+        "Runtime 已部署，但评测集创建失败：evaluation workspace unavailable"
+    ]
+    assert len(evaluation_set_calls) == 1
+    assert callable(evaluation_set_calls[0]["openapi_post"])
+    assert evaluation_set_calls[0] | {"openapi_post": None} == {
+        "openapi_post": None,
+        "region": "cn-beijing",
+        "project_name": "default",
+        "agent_name": "updated-agent",
+    }
     cloud = captured_config["launch_types"]["cloud"]
     assert cloud["runtime_id"] == runtime.runtime_id
     assert cloud["runtime_name"] == runtime.name

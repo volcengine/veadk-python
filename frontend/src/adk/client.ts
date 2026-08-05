@@ -82,6 +82,7 @@ export interface AdkSession {
 }
 
 export type MessageFeedbackRating = "good" | "bad";
+export type AgentFeedbackSource = "user" | "auto";
 
 export interface MessageFeedbackState {
   rating: MessageFeedbackRating | null;
@@ -120,6 +121,9 @@ export interface AgentFeedbackCase {
   evaluationSetId: string;
   evaluationSetName: string;
   workspaceId: string;
+  source?: AgentFeedbackSource;
+  score?: number | null;
+  reason?: string;
 }
 
 export interface AgentFeedbackCasesResponse {
@@ -129,6 +133,37 @@ export interface AgentFeedbackCasesResponse {
   projectName: string;
   sets: AgentFeedbackSetSummary[];
   items: AgentFeedbackCase[];
+}
+
+export type AgentOptimizationPriority = "high" | "medium" | "low";
+export type AgentOptimizationModule =
+  | "agent_structure"
+  | "prompt"
+  | "tool"
+  | "knowledge"
+  | "memory"
+  | "workflow"
+  | "other";
+
+export interface AgentOptimizationSuggestion {
+  suggestion: string;
+  reason: string;
+}
+
+export interface AgentOptimizationGroup {
+  priority: AgentOptimizationPriority;
+  module: AgentOptimizationModule;
+  customModule: string | null;
+  items: AgentOptimizationSuggestion[];
+}
+
+export interface AgentOptimizationsResponse {
+  runtimeId: string;
+  appName: string;
+  generatedAt: string | null;
+  optimizerVersion: string | null;
+  sourceItemKeys: string[];
+  groups: AgentOptimizationGroup[];
 }
 
 const MESSAGE_FEEDBACK_CACHE_KEY = "veadk.messageFeedback.v1";
@@ -705,6 +740,25 @@ export async function getAgentFeedbackCases(args: {
       });
     }
   }
+}
+
+export async function getAgentOptimizations(args: {
+  runtimeId: string;
+  region?: string;
+  appName: string;
+}): Promise<AgentOptimizationsResponse> {
+  let lastError: Error | null = null;
+  for (const region of runtimeRegionCandidates(args.region)) {
+    const query = new URLSearchParams({
+      runtimeId: args.runtimeId,
+      region,
+      appName: args.appName,
+    });
+    const res = await apiFetch(`/web/evaluation/optimizations?${query.toString()}`);
+    if (res.ok) return res.json() as Promise<AgentOptimizationsResponse>;
+    lastError = new Error(await httpErrorMessage(res, "读取优化项失败"));
+  }
+  throw lastError ?? new Error("读取优化项失败");
 }
 
 export function getCachedAgentFeedbackCases(args: {
@@ -1665,6 +1719,7 @@ export interface DeployAgentkitResult {
   consoleUrl?: string;
   region?: string;
   version?: number | null;
+  warnings?: string[];
   feishuChannel?: {
     enabled: boolean;
     transport: string;
@@ -1771,6 +1826,7 @@ export async function deployAgentkitProject(
     sessionStorage?: "in-memory" | "persistent";
     minInstance?: number;
     maxInstance?: number;
+    createEvaluationSets?: boolean;
     description?: string;
     authentication?: DeployAuthentication;
     onStage?: (s: DeployStage) => void;
@@ -1815,6 +1871,7 @@ export async function deployAgentkitProject(
           sessionStorage: opts?.sessionStorage,
           minInstance: opts?.minInstance,
           maxInstance: opts?.maxInstance,
+          createEvaluationSets: opts?.createEvaluationSets,
           description: normalizeRuntimeDescription(opts?.description ?? ""),
           authentication: opts?.authentication,
           im: opts?.im,
@@ -1875,6 +1932,7 @@ export async function deployAgentkitProject(
     consoleUrl: final.consoleUrl,
     region: final.region,
     version: final.version,
+    warnings: final.warnings,
     feishuChannel: final.feishuChannel,
   };
 }
