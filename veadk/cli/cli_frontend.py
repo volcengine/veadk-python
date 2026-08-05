@@ -4195,38 +4195,19 @@ def _run_frontend_server(
         parsed = urlparse(endpoint or "")
         return parsed.hostname or parsed.netloc or ""
 
-    def _runtime_proxy_should_retry_probe(method: str, path: str) -> bool:
-        if method.upper() != "GET":
-            return False
-        normalized = path.strip("/")
-        if (
-            normalized == "list-apps"
-            or normalized == ".well-known/agent-card.json"
-            or normalized.startswith("web/agent-info/")
-        ):
-            return True
-        parts = normalized.split("/")
-        return (
-            len(parts) == 5
-            and parts[0] == "apps"
-            and parts[2] == "users"
-            and parts[4] == "sessions"
-        )
+    def _runtime_proxy_is_retryable_read(method: str) -> bool:
+        return method.upper() in {"GET", "HEAD"}
 
     def _runtime_proxy_retry_delay(attempt: int) -> float:
         return min(5.0, float(2 ** max(0, attempt - 1)))
 
-    def _runtime_proxy_probe_attempts(
-        request: Request,
-        path: str,
+    def _runtime_proxy_attempts(
+        method: str,
         endpoint_network_type: str,
     ) -> int:
-        if not _runtime_proxy_should_retry_probe(request.method, path):
-            return 1
         if endpoint_network_type == "private":
             return 1
-        retry_mode = request.query_params.get("probe_retry", "")
-        return 3 if retry_mode == "connect" else 1
+        return 3 if _runtime_proxy_is_retryable_read(method) else 1
 
     def _runtime_network_error_detail(
         endpoint_network_type: str,
@@ -4370,7 +4351,7 @@ def _run_frontend_server(
 
     @app.api_route(
         "/web/runtime-proxy/{runtime_id}/{path:path}",
-        methods=["GET", "POST", "PATCH", "DELETE"],
+        methods=["GET", "HEAD", "POST", "PATCH", "DELETE"],
     )
     async def _runtime_proxy(runtime_id: str, path: str, request: Request):
         """Proxy a data-plane call with its runtime credential injected server-side.
@@ -4454,13 +4435,12 @@ def _run_frontend_server(
 
         from fastapi.responses import StreamingResponse
 
-        is_probe_request = _runtime_proxy_should_retry_probe(upstream_method, path)
-        max_attempts = _runtime_proxy_probe_attempts(
-            request,
-            path,
+        is_retryable_read = _runtime_proxy_is_retryable_read(upstream_method)
+        max_attempts = _runtime_proxy_attempts(
+            upstream_method,
             endpoint_network_type,
         )
-        timeout = httpx.Timeout(10.0, connect=5.0) if is_probe_request else None
+        timeout = httpx.Timeout(10.0, connect=5.0) if is_retryable_read else None
 
         # Open the upstream stream so we can forward status + body incrementally.
         client = httpx.AsyncClient(timeout=timeout)
@@ -4473,7 +4453,7 @@ def _run_frontend_server(
                 upstream = await client.send(req, stream=True)
                 if attempt > 1:
                     logger.info(
-                        "runtime-proxy probe succeeded after retry "
+                        "runtime-proxy request succeeded after retry "
                         "runtime_id=%s region=%s path=%s target_host=%s "
                         "attempt=%s max_attempts=%s",
                         runtime_id,
@@ -4489,7 +4469,7 @@ def _run_frontend_server(
                 if attempt < max_attempts:
                     delay = _runtime_proxy_retry_delay(attempt)
                     logger.warning(
-                        "runtime-proxy probe retry runtime_id=%s region=%s "
+                        "runtime-proxy request retry runtime_id=%s region=%s "
                         "method=%s path=%s target_host=%s network_type=%s "
                         "attempt=%s max_attempts=%s delay=%.1fs error=%s",
                         runtime_id,

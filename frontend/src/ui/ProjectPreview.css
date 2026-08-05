@@ -1056,10 +1056,10 @@
 .pp-deployment-select-badge {
   flex-shrink: 0;
   padding: 1px 5px;
-  border: 1px solid hsl(var(--primary) / 0.22);
+  border: 1px solid hsl(211 90% 48% / 0.24);
   border-radius: 999px;
-  background: hsl(var(--primary) / 0.07);
-  color: hsl(var(--primary));
+  background: hsl(211 100% 45% / 0.1);
+  color: hsl(211 76% 40%);
   font-size: 10px;
   font-weight: 600;
 }

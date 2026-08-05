@@ -239,7 +239,12 @@ test("configures API Key or Identity user-pool authentication for deployment", (
   assert.match(projectPreviewSource, />访问鉴权</);
   assert.match(projectPreviewSource, /label: "API Key"/);
   assert.match(projectPreviewSource, /label: "用户池"/);
+  assert.match(projectPreviewSource, /badge: pool\.isCurrent \? "当前用户池"/);
   assert.match(projectPreviewSource, /当前 Studio/);
+  assert.match(
+    projectPreviewSource,
+    /className="pp-user-pool-error" role="alert"[\s\S]*?部署后无法从 Studio[\s\S]*?调用此 Runtime/,
+  );
   assert.match(projectPreviewSource, /role="listbox"/);
   assert.match(projectPreviewSource, /aria-selected=\{selected\}/);
   assert.match(
@@ -251,6 +256,10 @@ test("configures API Key or Identity user-pool authentication for deployment", (
   assert.match(
     projectPreviewStyles,
     /\.pp-deployment-select-trigger\s*\{[\s\S]*?height:\s*36px;[\s\S]*?border-radius:\s*6px;/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-deployment-select-badge\s*\{[\s\S]*?background:\s*hsl\(211 100% 45% \/ 0\.1\);[\s\S]*?color:\s*hsl\(211 76% 40%\);/,
   );
 });
 

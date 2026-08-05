@@ -381,7 +381,7 @@ function IdentityUserPoolSelect({
           value: pool.uid,
           label: pool.name.trim() || "未命名用户池",
           description: pool.domain || pool.uid,
-          badge: pool.isCurrent ? "当前 Studio" : undefined,
+          badge: pool.isCurrent ? "当前用户池" : undefined,
         })),
     [pools],
   );
@@ -416,9 +416,12 @@ function IdentityUserPoolSelect({
           当前 Studio 的登录 JWT 将透传访问此 Runtime。
         </span>
       ) : selectedPool ? (
-        <span className="pp-user-pool-status">
-          访问时需要使用此用户池签发的 JWT。
-        </span>
+        <div className="pp-user-pool-error" role="alert">
+          <span>
+            所选用户池不是当前 Studio 使用的用户池，部署后无法从 Studio
+            调用此 Runtime。
+          </span>
+        </div>
       ) : (
         <span className="pp-user-pool-status">
           当前 Studio 使用的用户池已在列表中标注。
