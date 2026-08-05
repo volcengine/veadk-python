@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Self
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -158,7 +158,7 @@ def test_agent_feedback_posts_redacted_data_to_public_form(
             assert kwargs["follow_redirects"] is True
             self.cookies = {"_csrf_token": "csrf-test"}
 
-        async def __aenter__(self) -> Self:
+        async def __aenter__(self) -> Any:
             return self
 
         async def __aexit__(self, *args: object) -> None:
@@ -231,7 +231,7 @@ def test_agent_feedback_loads_apmplus_trace_when_request_has_none(
             del kwargs
             self.cookies = {"_csrf_token": "csrf-test"}
 
-        async def __aenter__(self) -> Self:
+        async def __aenter__(self) -> Any:
             return self
 
         async def __aexit__(self, *args: object) -> None:
@@ -281,7 +281,7 @@ def test_platform_feedback_posts_module_and_issues_to_platform_form(
             del kwargs
             self.cookies = {"_csrf_token": "csrf-test"}
 
-        async def __aenter__(self) -> Self:
+        async def __aenter__(self) -> Any:
             return self
 
         async def __aexit__(self, *args: object) -> None:
@@ -352,7 +352,7 @@ def test_issue_feedback_surfaces_public_form_failures(
             del kwargs
             self.cookies = {"_csrf_token": "csrf-test"}
 
-        async def __aenter__(self) -> Self:
+        async def __aenter__(self) -> Any:
             return self
 
         async def __aexit__(self, *args: object) -> None:
@@ -387,7 +387,7 @@ def test_issue_feedback_surfaces_public_form_network_failures(
         def __init__(self, **kwargs: Any) -> None:
             del kwargs
 
-        async def __aenter__(self) -> Self:
+        async def __aenter__(self) -> Any:
             return self
 
         async def __aexit__(self, *args: object) -> None:
