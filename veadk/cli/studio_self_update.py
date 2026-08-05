@@ -42,6 +42,7 @@ from veadk.cli.studio_package import (
 )
 from veadk.cli.studio_release import (
     DEFAULT_RELEASE_PREFIX,
+    STUDIO_RELEASE_REGION,
     StudioReleaseError,
     StudioReleaseManifest,
     StudioReleaseStore,
@@ -85,7 +86,7 @@ class StudioUpdateSettings:
     """Immutable identifiers required to update the current Studio."""
 
     bucket: str
-    region: str
+    deployment_region: str
     prefix: str
     application_id: str
     function_id: str
@@ -96,7 +97,11 @@ class StudioUpdateSettings:
         """Load self-update settings injected during Studio deployment."""
         return cls(
             bucket=os.getenv("VEADK_STUDIO_UPDATE_BUCKET", "").strip(),
-            region=os.getenv("VEADK_STUDIO_UPDATE_REGION", "cn-beijing").strip(),
+            deployment_region=(
+                os.getenv("VEADK_STUDIO_DEPLOY_REGION")
+                or os.getenv("AGENTKIT_SANDBOX_REGION")
+                or "cn-beijing"
+            ).strip(),
             prefix=os.getenv(
                 "VEADK_STUDIO_UPDATE_PREFIX", DEFAULT_RELEASE_PREFIX
             ).strip(),
@@ -110,7 +115,7 @@ class StudioUpdateSettings:
         """Whether this deployment has all required immutable identifiers."""
         return bool(
             self.bucket
-            and self.region
+            and self.deployment_region
             and self.prefix
             and self.application_id
             and self.function_id
@@ -362,7 +367,7 @@ class StudioSelfUpdater:
                     access_key=access_key,
                     secret_key=secret_key,
                     session_token=session_token or "",
-                    region=self._settings.region,
+                    region=self._settings.deployment_region,
                     project_name=self._settings.project,
                 )
                 self._set_progress("submitting", "正在提交 VeFaaS Function 更新")
@@ -443,7 +448,7 @@ class StudioSelfUpdater:
             (
                 f"errorId={self._error_id}",
                 f"stage={failure_stage}",
-                f"region={self._settings.region}",
+                f"region={self._settings.deployment_region}",
                 f"project={self._settings.project}",
                 f"applicationId={self._settings.application_id}",
                 f"functionId={self._settings.function_id}",
@@ -485,7 +490,7 @@ class StudioSelfUpdater:
             *self._diagnostic_lines,
             f"errorId={error_id}",
             f"stage={stage}",
-            f"region={self._settings.region}",
+            f"region={self._settings.deployment_region}",
             f"project={self._settings.project}",
             f"applicationId={self._settings.application_id}",
             f"functionId={self._settings.function_id}",
@@ -537,7 +542,7 @@ class StudioSelfUpdater:
                 access_key=access_key,
                 secret_key=secret_key,
                 session_token=session_token or "",
-                region=self._settings.region,
+                region=self._settings.deployment_region,
                 project_name=self._settings.project,
             )
             raw_lines = service._get_application_logs(
@@ -561,11 +566,11 @@ class StudioSelfUpdater:
 
     def _console_url(self) -> str:
         """Return the fixed VeFaaS Function console URL for this Studio."""
-        if not self._settings.region or not self._settings.function_id:
+        if not self._settings.deployment_region or not self._settings.function_id:
             return ""
         return (
             "https://console.volcengine.com/vefaas/"
-            f"region:vefaas+{self._settings.region}/function/detail/"
+            f"region:vefaas+{self._settings.deployment_region}/function/detail/"
             f"{self._settings.function_id}"
         )
 
@@ -578,7 +583,7 @@ class StudioSelfUpdater:
             access_key=access_key,
             secret_key=secret_key,
             session_token=session_token or "",
-            region=self._settings.region,
+            region=self._settings.deployment_region,
             project_name=self._settings.project,
         )
         status, response = service._get_application_status(
@@ -662,7 +667,7 @@ class StudioSelfUpdater:
     ) -> StudioReleaseStore:
         return StudioReleaseStore(
             bucket=self._settings.bucket,
-            region=self._settings.region,
+            region=STUDIO_RELEASE_REGION,
             prefix=self._settings.prefix,
             access_key=access_key,
             secret_key=secret_key,

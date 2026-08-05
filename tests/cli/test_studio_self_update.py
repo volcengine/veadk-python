@@ -27,7 +27,11 @@ from fastapi.testclient import TestClient
 
 from veadk.cli.frontend_branding import SiteLogo
 from veadk.cli.studio_package import STUDIO_RELEASE_ENVIRONMENT_FILENAME
-from veadk.cli.studio_release import StudioReleaseError, StudioReleaseManifest
+from veadk.cli.studio_release import (
+    STUDIO_RELEASE_REGION,
+    StudioReleaseError,
+    StudioReleaseManifest,
+)
 from veadk.cli.studio_self_update import (
     StudioSelfUpdater,
     StudioUpdateSettings,
@@ -81,15 +85,39 @@ def _manifest() -> StudioReleaseManifest:
     )
 
 
-def _settings() -> StudioUpdateSettings:
+def _settings(*, deployment_region: str = "cn-beijing") -> StudioUpdateSettings:
     return StudioUpdateSettings(
         bucket="studio-releases",
-        region="cn-beijing",
+        deployment_region=deployment_region,
         prefix="veadk/studio/main",
         application_id="application-id",
         function_id="function-id",
         project="default",
     )
+
+
+def test_shanghai_studio_uses_beijing_release_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _Store:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setenv("VEADK_STUDIO_DEPLOY_REGION", "cn-shanghai")
+    monkeypatch.setenv("VEADK_STUDIO_UPDATE_REGION", "cn-shanghai")
+    monkeypatch.setattr("veadk.cli.studio_self_update.StudioReleaseStore", _Store)
+    updater = StudioSelfUpdater(
+        settings=StudioUpdateSettings.from_env(),
+        credential_resolver=lambda: ("ak", "sk", "token"),
+        branding_logo=None,
+    )
+
+    updater._store("ak", "sk", "token")
+
+    assert updater._settings.deployment_region == "cn-shanghai"
+    assert captured["region"] == STUDIO_RELEASE_REGION
 
 
 def _bundle(
@@ -186,7 +214,7 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
             captured["update"] = kwargs
 
     updater = StudioSelfUpdater(
-        settings=_settings(),
+        settings=_settings(deployment_region="cn-shanghai"),
         credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
         branding_logo=None,
     )
@@ -200,7 +228,7 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
         "access_key": "sts-ak",
         "secret_key": "sts-sk",
         "session_token": "sts-token",
-        "region": "cn-beijing",
+        "region": "cn-shanghai",
         "project_name": "default",
     }
     update = captured["update"]

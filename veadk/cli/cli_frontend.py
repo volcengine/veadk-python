@@ -6564,12 +6564,6 @@ def _resolve_studio_cloud_credentials(
     help="TOS bucket containing immutable Studio release bundles.",
 )
 @click.option(
-    "--studio-update-region",
-    default=None,
-    envvar="VEADK_STUDIO_UPDATE_REGION",
-    help="TOS region for Studio release bundles. Defaults to --region.",
-)
-@click.option(
     "--studio-update-prefix",
     default="veadk/studio/main",
     show_default=True,
@@ -6625,7 +6619,6 @@ def frontend_deploy(
     sandbox_chat_hermes_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
     studio_update_bucket: str,
-    studio_update_region: str | None,
     studio_update_prefix: str,
     apmplus_aid: str,
     apmplus_token: str,
@@ -6869,7 +6862,6 @@ def frontend_deploy(
     veadk_environments["SANDBOX_CHAT_HERMES"] = hermes_tool_id
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
     veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
-    veadk_environments["VEADK_STUDIO_UPDATE_REGION"] = studio_update_region or region
     veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] = studio_update_prefix
     veadk_environments["VEADK_STUDIO_PROJECT"] = project
     studio_deploy_id = _new_studio_deploy_id()

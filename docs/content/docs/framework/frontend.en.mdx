@@ -329,16 +329,15 @@ keeps that Tool ID from the deployed Function instead of clearing it.
 
 ### One-click Studio updates
 
-Configure a release channel during deployment:
+Studio reads new releases from the centrally maintained `veadk-studio` TOS
+source in `cn-beijing`; no release-region configuration is required for customer
+deployments. Administrators can update Studio directly from the navbar:
 
 ```bash
 veadk studio deploy \
   --user-pool-id <pool-id> \
   --allowed-client-id <client-id> \
-  --vefaas-app-name <app-name> \
-  --studio-update-bucket <tos-bucket> \
-  --studio-update-region cn-beijing \
-  --studio-update-prefix veadk/studio/main
+  --vefaas-app-name <app-name>
 ```
 
 Studio reads `latest.json` every three minutes. Administrators can inspect each

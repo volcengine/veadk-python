@@ -268,16 +268,14 @@ Application。未指定 `--region` 和 `--project` 时，会在北京、上海�
 
 ### Studio 一键更新
 
-部署时配置 TOS 发布通道后，管理员可以在导航栏更新 Studio：
+Studio 固定从维护在北京地域的 `veadk-studio` TOS 发布源读取新版本，客户部署
+地域无需额外配置。管理员可以直接在导航栏更新 Studio：
 
 ```bash
 veadk studio deploy \
   --user-pool-id <pool-id> \
   --allowed-client-id <client-id> \
-  --vefaas-app-name <app-name> \
-  --studio-update-bucket <tos-bucket> \
-  --studio-update-region cn-beijing \
-  --studio-update-prefix veadk/studio/main
+  --vefaas-app-name <app-name>
 ```
 
 Studio 每 3 分钟读取一次 `latest.json`，展示新版本的 changelog 和 Git SHA。
