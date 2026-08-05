@@ -78,6 +78,11 @@ test("adds the Automation destination with a repository-owned four-circle icon",
   assert.equal((sidebarSource.match(/<circle /g) ?? []).length >= 4, true);
   assert.match(sidebarSource, /aria-label="自动化"/);
   assert.match(sidebarSource, /<span className="sidebar-nav-label">自动化<\/span>/);
+  assert.match(sidebarSource, /<span className="sidebar-beta-badge">Beta<\/span>/);
+  const searchIndex = sidebarSource.indexOf("<SearchButton");
+  const applicationsIndex = sidebarSource.indexOf('aria-label="自动化"');
+  assert.equal(searchIndex >= 0, true);
+  assert.equal(searchIndex < applicationsIndex, true);
   assert.match(appSource, /onApplications=\{openApplicationsPage\}/);
 });
 
