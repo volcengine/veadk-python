@@ -534,8 +534,7 @@ class StudioReleaseBuilder:
         credentials = resolve_credentials()
         command = [
             sys.executable,
-            "-m",
-            "veadk.cli.studio_release",
+            str(Path(__file__).with_name("publisher.py")),
             "--source-root",
             str(source_root),
             "--output-dir",
@@ -555,8 +554,9 @@ class StudioReleaseBuilder:
             command.extend(("--changelog", item))
         if frontend_assets is not None:
             command.extend(("--frontend-assets", str(frontend_assets)))
-        if dependency_wheels is not None:
-            command.extend(("--dependency-wheels", str(dependency_wheels)))
+        if dependency_wheels is None:
+            raise RuntimeError("Prepared Studio dependency wheels are missing.")
+        command.extend(("--dependency-wheels", str(dependency_wheels)))
         env = os.environ.copy()
         path_entries = [str(uv.parent)]
         if node_bin is not None:
@@ -565,9 +565,6 @@ class StudioReleaseBuilder:
         env.update(
             {
                 "PATH": os.pathsep.join(path_entries),
-                "PYTHONPATH": os.pathsep.join(
-                    (str(source_root), env.get("PYTHONPATH", ""))
-                ),
                 "VOLCENGINE_ACCESS_KEY": credentials.access_key,
                 "VOLCENGINE_SECRET_KEY": credentials.secret_key,
                 "VOLCENGINE_SESSION_TOKEN": credentials.session_token,
