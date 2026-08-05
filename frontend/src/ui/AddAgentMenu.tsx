@@ -9,6 +9,7 @@ export interface StackCardDef {
   icon: ComponentType<{ className?: string }>;
   title: string;
   desc: string;
+  status?: string;
   onClick: () => void;
   disabled?: boolean;
 }
@@ -46,6 +47,7 @@ export function StackCards({ title, sub, cards, footer }: {
               <span className="stk-card-title">{c.title}</span>
               <span className="stk-card-desc">{c.desc}</span>
             </span>
+            {c.status && <span className="stk-card-status">{c.status}</span>}
             <ChevronRight className="stk-card-arrow" />
           </motion.button>
         ))}

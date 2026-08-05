@@ -10,6 +10,14 @@ const appSource = readFileSync(
   new URL("../src/App.tsx", import.meta.url),
   "utf8",
 );
+const addAgentMenuSource = readFileSync(
+  new URL("../src/ui/AddAgentMenu.tsx", import.meta.url),
+  "utf8",
+);
+const addAgentMenuStyles = readFileSync(
+  new URL("../src/ui/AddAgentMenu.css", import.meta.url),
+  "utf8",
+);
 const packageCreateSource = readFileSync(
   new URL("../src/create/CodePackageCreate.tsx", import.meta.url),
   "utf8",
@@ -45,9 +53,36 @@ test("offers code package deployment beside scratch creation", () => {
     appSource,
     /key: "package"[\s\S]*?title: "从代码包添加和部署"/,
   );
-  assert.match(appSource, /icon: FileArchive/);
+  assert.match(appSource, /icon: PackageIcon/);
+  assert.doesNotMatch(appSource, /import \{ FileArchive \} from "lucide-react"/);
   assert.match(appSource, /import \{ CodePackageCreate \}/);
   assert.match(appSource, /visibleCreateView === "package"/);
+});
+
+test("uses thin hand-drawn icons for all add-agent options", () => {
+  for (const iconName of ["ScratchIcon", "PackageIcon", "MigrationIcon"]) {
+    assert.match(
+      appSource,
+      new RegExp(`function ${iconName}\\([\\s\\S]*?strokeWidth="1\\.45"`),
+    );
+  }
+  assert.match(
+    appSource,
+    /function ScratchIcon[\s\S]*?<rect[\s\S]*?<path d="M12 8\.5v7M8\.5 12h7"/,
+  );
+});
+
+test("shows existing-project migration as a disabled coming-soon option", () => {
+  assert.match(
+    appSource,
+    /key: "migration"[\s\S]*?title: "从存量迁移"[\s\S]*?desc: "从您的 LangChain \/ Dify 等存量项目迁移至 AgentKit Runtime"[\s\S]*?status: "敬请期待"[\s\S]*?disabled: true/,
+  );
+  assert.match(addAgentMenuSource, /disabled=\{c\.disabled\}/);
+  assert.match(
+    addAgentMenuSource,
+    /c\.status && <span className="stk-card-status">\{c\.status\}<\/span>/,
+  );
+  assert.match(addAgentMenuStyles, /\.stk-card-status\s*\{/);
 });
 
 test("validates and previews uploaded zip projects before deployment", () => {
