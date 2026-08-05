@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from typing import Optional
 from urllib import error, request
 from urllib.parse import urlsplit, urlunsplit
@@ -36,6 +37,10 @@ _SKILL_API_TIMEOUT = 900
 _SKILL_API_HEALTH_TIMEOUT = 30.0
 _SKILL_API_HEALTH_POLL_INTERVAL = 1.0
 _SKILL_API_HEALTH_REQUEST_TIMEOUT = 5.0
+_SKILL_INVOCATION_MODE_ENV = "AGENTKIT_SKILL_INVOCATION_MODE"
+_SKILL_INVOCATION_MODES = frozenset(
+    {"execute", "skill_api", "run_sse", "a2a", "python_agent"}
+)
 
 
 def _skill_api_upgrade_hint() -> str:
@@ -76,6 +81,20 @@ def _skill_api_url(endpoint: str, path: str) -> str:
     )
 
 
+def _resolve_skill_invocation_mode(mode: str | None = None) -> str:
+    resolved = (mode or os.getenv(_SKILL_INVOCATION_MODE_ENV) or "execute").strip()
+    if not resolved:
+        return "execute"
+    normalized = resolved.lower().replace("-", "_")
+    if normalized not in _SKILL_INVOCATION_MODES:
+        raise ValueError(
+            "Unsupported AgentKit Skill invocation mode "
+            f"{resolved!r}. Expected one of: "
+            "execute, run_sse, a2a, python_agent."
+        )
+    return "execute" if normalized == "skill_api" else normalized
+
+
 def _post_skill_api_json(
     *,
     endpoint: str,
@@ -112,6 +131,34 @@ def _post_skill_api_json(
     except error.URLError as exc:
         raise RuntimeError(
             f"Skill HTTP API endpoint is not reachable: {exc.reason}"
+        ) from exc
+
+
+def _post_json(
+    *,
+    endpoint: str,
+    path: str,
+    payload: dict[str, object],
+    timeout: int,
+    accept: str = "application/json",
+) -> bytes:
+    req = request.Request(
+        _skill_api_url(endpoint, path),
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": accept},
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=timeout) as response:
+            return response.read()
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"AgentKit Skill {path} request failed with HTTP {exc.code}: {detail}"
+        ) from exc
+    except error.URLError as exc:
+        raise RuntimeError(
+            f"AgentKit Skill {path} endpoint is not reachable: {exc.reason}"
         ) from exc
 
 
@@ -173,12 +220,175 @@ def _parse_skill_execute_response(raw: bytes) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _run_request_payload(workflow_prompt: str, tool_context: ToolContext) -> dict:
+    invocation_context = tool_context._invocation_context
+    return {
+        "app_name": invocation_context.agent.name,
+        "user_id": invocation_context.user_id,
+        "session_id": invocation_context.session.id,
+        "new_message": {
+            "role": "user",
+            "parts": [{"text": workflow_prompt}],
+        },
+        "streaming": True,
+    }
+
+
+def _extract_text_from_parts(parts: object) -> str:
+    if not isinstance(parts, list):
+        return ""
+    chunks: list[str] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        text = part.get("text")
+        if isinstance(text, str):
+            chunks.append(text)
+            continue
+        text_part = part.get("textPart")
+        if isinstance(text_part, dict) and isinstance(text_part.get("text"), str):
+            chunks.append(text_part["text"])
+    return "".join(chunks)
+
+
+def _extract_text_from_a2a_result(result: object) -> str:
+    if not isinstance(result, dict):
+        return ""
+    if result.get("kind") == "message":
+        return _extract_text_from_parts(result.get("parts"))
+    artifacts = result.get("artifacts")
+    if isinstance(artifacts, list):
+        chunks = [
+            _extract_text_from_parts(artifact.get("parts"))
+            for artifact in artifacts
+            if isinstance(artifact, dict)
+        ]
+        text = "".join(chunks)
+        if text:
+            return text
+    history = result.get("history")
+    if isinstance(history, list):
+        for message in reversed(history):
+            if isinstance(message, dict) and message.get("role") in {
+                "agent",
+                "assistant",
+            }:
+                text = _extract_text_from_parts(message.get("parts"))
+                if text:
+                    return text
+    return ""
+
+
+def _parse_run_sse_response(raw: bytes) -> str:
+    chunks: list[str] = []
+    for raw_line in raw.splitlines():
+        line = raw_line.decode("utf-8", errors="replace")
+        if not line.startswith("data:"):
+            continue
+        data = line[len("data:") :].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            event = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and isinstance(event.get("error"), str):
+            raise RuntimeError(event["error"])
+        if not isinstance(event, dict):
+            continue
+        content = event.get("content")
+        if isinstance(content, dict):
+            text = _extract_text_from_parts(content.get("parts"))
+            if text:
+                chunks.append(text)
+    return "".join(chunks)
+
+
+def _execute_skills_via_run_sse(
+    *,
+    workflow_prompt: str,
+    endpoint: str,
+    tool_context: ToolContext,
+    timeout: int,
+) -> str:
+    raw = _post_json(
+        endpoint=endpoint,
+        path="/run_sse",
+        payload=_run_request_payload(workflow_prompt, tool_context),
+        timeout=timeout,
+        accept="text/event-stream",
+    )
+    return _parse_run_sse_response(raw)
+
+
+def _execute_skills_via_a2a(
+    *,
+    workflow_prompt: str,
+    endpoint: str,
+    tool_context: ToolContext,
+    timeout: int,
+) -> str:
+    invocation_context = tool_context._invocation_context
+    payload = {
+        "jsonrpc": "2.0",
+        "id": uuid.uuid4().hex,
+        "method": "message/send",
+        "params": {
+            "message": {
+                "kind": "message",
+                "messageId": uuid.uuid4().hex,
+                "role": "user",
+                "parts": [{"kind": "text", "text": workflow_prompt}],
+            },
+            "metadata": {
+                "user_id": invocation_context.user_id,
+                "session_id": invocation_context.session.id,
+            },
+            "configuration": {"blocking": True},
+        },
+    }
+    raw = _post_json(endpoint=endpoint, path="/a2a", payload=payload, timeout=timeout)
+    response = json.loads(raw.decode("utf-8"))
+    if isinstance(response, dict) and response.get("error"):
+        raise RuntimeError(json.dumps(response["error"], ensure_ascii=False))
+    result = response.get("result") if isinstance(response, dict) else None
+    text = _extract_text_from_a2a_result(result)
+    if text:
+        return text
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _execute_skills_via_python_agent(
+    *,
+    workflow_prompt: str,
+    tool_id: str,
+    tool_context: ToolContext,
+    timeout: int,
+    env_vars: Optional[dict[str, str]] = None,
+) -> str:
+    account_id = get_agentkit_account_id(tool_context.state)
+    extra_env_vars = dict(env_vars or {})
+    if account_id:
+        extra_env_vars.setdefault(
+            "TOS_SKILLS_DIR",
+            f"tos://agentkit-platform-{account_id}/skills/",
+        )
+    return run_sandbox_agent(
+        workflow_prompt=workflow_prompt,
+        tool_id=tool_id,
+        tool_context=tool_context,
+        timeout=timeout,
+        extra_env_vars=extra_env_vars,
+    )
+
+
 def _execute_skills_via_skill_api(
     *,
     workflow_prompt: str,
     tool_id: str,
     tool_context: ToolContext,
     timeout: int,
+    invocation_mode: str,
 ) -> str:
     try:
         endpoint = ensure_agentkit_session_endpoint(
@@ -192,6 +402,22 @@ def _execute_skills_via_skill_api(
         raise RuntimeError(
             f"AgentKit session endpoint is not available: {exc}"
         ) from exc
+
+    if invocation_mode == "run_sse":
+        return _execute_skills_via_run_sse(
+            workflow_prompt=workflow_prompt,
+            endpoint=endpoint,
+            tool_context=tool_context,
+            timeout=timeout,
+        )
+    if invocation_mode == "a2a":
+        return _execute_skills_via_a2a(
+            workflow_prompt=workflow_prompt,
+            endpoint=endpoint,
+            tool_context=tool_context,
+            timeout=timeout,
+        )
+
     _wait_for_skill_api_health(endpoint=endpoint)
     return _post_skill_api_json(
         endpoint=endpoint,
@@ -206,6 +432,7 @@ def execute_skills(
     workflow_prompt: str,
     tool_context: ToolContext = None,
     env_vars: Optional[dict[str, str]] = None,
+    invocation_mode: Optional[str] = None,
 ) -> str:
     """Execute skills in a sandbox and return the output.
 
@@ -216,6 +443,9 @@ def execute_skills(
         env_vars (Optional[dict[str, str]]): Environment variables passed to the
             skill agent process for this execution only. Requests with custom
             environment variables use the legacy RunCode execution path.
+        invocation_mode (Optional[str]): AgentKit Skill sandbox invocation backend.
+            Supported values are "execute" (default), "run_sse", "a2a", and
+            "python_agent". It can also be set with AGENTKIT_SKILL_INVOCATION_MODE.
 
     Returns:
         str: The output of the code execution.
@@ -225,19 +455,21 @@ def execute_skills(
 
     tool_id = resolve_agentkit_tool_id("AGENTKIT_TOOL_ID_SKILLS")
     if env_vars:
-        account_id = get_agentkit_account_id(tool_context.state)
-        extra_env_vars = dict(env_vars)
-        if account_id:
-            extra_env_vars.setdefault(
-                "TOS_SKILLS_DIR",
-                f"tos://agentkit-platform-{account_id}/skills/",
-            )
-        return run_sandbox_agent(
+        return _execute_skills_via_python_agent(
             workflow_prompt=workflow_prompt,
             tool_id=tool_id,
             tool_context=tool_context,
             timeout=_SKILL_API_TIMEOUT,
-            extra_env_vars=extra_env_vars,
+            env_vars=env_vars,
+        )
+
+    mode = _resolve_skill_invocation_mode(invocation_mode)
+    if mode == "python_agent":
+        return _execute_skills_via_python_agent(
+            workflow_prompt=workflow_prompt,
+            tool_id=tool_id,
+            tool_context=tool_context,
+            timeout=_SKILL_API_TIMEOUT,
         )
 
     return _execute_skills_via_skill_api(
@@ -245,4 +477,5 @@ def execute_skills(
         tool_id=tool_id,
         tool_context=tool_context,
         timeout=_SKILL_API_TIMEOUT,
+        invocation_mode=mode,
     )
