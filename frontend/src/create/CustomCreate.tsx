@@ -4060,6 +4060,7 @@ export function CustomCreate({
               }
               deployRegion={deployRegion}
               onDeployRegionChange={setDeployRegion}
+              deploymentTelemetrySource="custom_create"
               onExportYaml={() =>
                 downloadText(
                   `${draft.name || "agent"}.yaml`,

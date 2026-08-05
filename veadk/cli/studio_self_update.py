@@ -36,7 +36,10 @@ from typing import Any, Callable
 from fastapi import HTTPException, Request
 
 from veadk.cli.frontend_branding import SiteLogo
-from veadk.cli.studio_package import studio_run_script
+from veadk.cli.studio_package import (
+    read_studio_release_environment,
+    studio_run_script,
+)
 from veadk.cli.studio_release import (
     DEFAULT_RELEASE_PREFIX,
     StudioReleaseError,
@@ -349,6 +352,10 @@ class StudioSelfUpdater:
                 self._set_progress("preparing", "正在准备 VeFaaS Function 代码")
                 extract_studio_bundle(archive, package_dir)
                 self._preserve_branding(package_dir)
+                release_environment = read_studio_release_environment(
+                    package_dir,
+                    remove=True,
+                )
                 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
                 service = VeFaaS(
@@ -365,6 +372,7 @@ class StudioSelfUpdater:
                     path=str(package_dir),
                     environment_overrides={
                         "VEADK_STUDIO_RELEASE_VERSION": manifest.version,
+                        **release_environment,
                     },
                 )
             self._submitted_version = manifest.version
