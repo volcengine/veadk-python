@@ -2088,6 +2088,12 @@
   border-bottom: 1px solid hsl(var(--border) / 0.68);
   background: hsl(var(--muted) / 0.34);
 }
+.cw-section:has(.cw-a2a-space-picker) {
+  overflow: visible;
+}
+.cw-section:has(.cw-a2a-space-picker) > .cw-sec-head {
+  border-radius: 17px 17px 0 0;
+}
 .cw-sec-body {
   padding: 2px 18px 6px;
 }
