@@ -178,8 +178,8 @@ class TestInvokeAgentkitExecBash(unittest.TestCase):
                 command="echo hello",
                 exec_dir="/tmp",
                 env={"DEMO_ENV": "from-invoke-tool"},
-                timeout=30,
-                hard_timeout=60,
+                timeout=120,
+                hard_timeout=300,
                 max_output_length=30000,
                 ttl=1800,
             )
@@ -196,11 +196,35 @@ class TestInvokeAgentkitExecBash(unittest.TestCase):
                 "command": "echo hello",
                 "exec_dir": "/tmp",
                 "env": {"DEMO_ENV": "from-invoke-tool"},
-                "timeout": 30,
-                "hard_timeout": 60,
+                "timeout": 120,
+                "hard_timeout": 300,
                 "max_output_length": 30000,
             },
         )
+        self.assertEqual(ve_request.call_args.kwargs["timeout"], (10.0, 330.0))
+
+
+class TestInvokeAgentkitRunCode(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.agentkit_module = _load_agentkit_module()
+
+    def test_request_timeout_covers_code_execution_timeout(self):
+        with patch.object(
+            self.agentkit_module,
+            "ve_request",
+            return_value={"Result": {"Result": "code output"}},
+        ) as ve_request:
+            result = self.agentkit_module.invoke_agentkit_run_code(
+                tool_id="code-tool",
+                tool_user_session_id="kk",
+                code="print('hello')",
+                timeout=120,
+                kernel_name="python3",
+            )
+
+        self.assertEqual(result, {"Result": {"Result": "code output"}})
+        self.assertEqual(ve_request.call_args.kwargs["timeout"], (10.0, 150.0))
 
 
 class TestEnsureAgentkitSessionEndpoint(unittest.TestCase):

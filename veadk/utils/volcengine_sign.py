@@ -353,6 +353,7 @@ def ve_request(
     method: Literal["GET", "POST", "PUT", "DELETE"] = "POST",
     scheme: Literal["http", "https"] = "https",
     session_token: str = "",
+    timeout: float | tuple[float, float] | None = DEFAULT_REQUEST_TIMEOUT,
 ):
     global Service
     Service = service
@@ -387,6 +388,7 @@ def ve_request(
             action,
             json.dumps(request_body),
             Scheme,
+            timeout=timeout,
         )
         return response_body
     except Exception as e:
