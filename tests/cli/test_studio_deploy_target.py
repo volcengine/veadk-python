@@ -360,9 +360,10 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "skill-code-env-id"
     assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == expected_region
     assert veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] == expected_update_bucket
-    assert veadk_environments["VEADK_STUDIO_UPDATE_REGION"] == expected_region
     assert veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] == "veadk/studio/main"
+    assert veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] == expected_region
     assert veadk_environments["VEADK_STUDIO_PROJECT"] == expected_project
+    assert "VEADK_STUDIO_UPDATE_REGION" not in veadk_environments
     assert sorted(credential_tool_ids) == [
         "chat-code-env-id",
         "skill-code-env-id",

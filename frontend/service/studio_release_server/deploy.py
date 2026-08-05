@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 import veadk.config
+from veadk.cli.studio_release import STUDIO_RELEASE_REGION
 from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 
 _APPLICATION_NAME = "veadk-studio-release-server"
@@ -42,7 +43,7 @@ _GATEWAY_UPSTREAM_NAME = "veadk-studio-release-server"
 _GATEWAY_ROUTE_NAME = "veadk-studio-release-server"
 _GATEWAY_TIMEOUT_MILLISECONDS = 30 * 60 * 1000
 _BUCKET = "veadk-studio"
-_REGION = "cn-beijing"
+_REGION = STUDIO_RELEASE_REGION
 _RELEASE_PREFIX = "veadk/studio/main"
 _JOB_PREFIX = "veadk/studio/release-server/jobs"
 _REPOSITORY = "volcengine/veadk-python"
