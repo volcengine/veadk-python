@@ -91,7 +91,7 @@ test("keeps alternate chat modes hidden from the new-chat composer", () => {
   );
   assert.match(
     modeStylesSource,
-    /\.new-chat-mode__menu\s*\{[\s\S]*?top:\s*calc\(100% \+ 7px\);[\s\S]*?left:\s*0;/,
+    /\.new-chat-mode__menus\s*\{[\s\S]*?top:\s*calc\(100% \+ 7px\);[\s\S]*?left:\s*0;/,
   );
   assert.match(selectorSource, /<AgentIdentityIcon className="new-chat-mode__agent-icon"/);
   assert.match(selectorSource, /className="new-chat-mode__temporary-icon"[\s\S]*?m10 2\.8 6\.1 3\.45/);
@@ -121,6 +121,17 @@ test("keeps alternate chat modes hidden from the new-chat composer", () => {
   assert.match(
     stylesSource,
     /\.welcome\s*\{[\s\S]*?padding:\s*0 16px clamp\(88px, 16vh, 136px\);/,
+  );
+});
+
+test("keeps the mode submenu inside narrow viewports", () => {
+  assert.match(
+    selectorSource,
+    /className="new-chat-mode__menus"[\s\S]*?className="new-chat-mode__menu"[\s\S]*?className="new-chat-mode__submenu"/,
+  );
+  assert.match(
+    modeStylesSource,
+    /@media \(max-width:\s*640px\)[\s\S]*?\.new-chat-mode__menus\s*\{[\s\S]*?width:\s*min\(320px, calc\(100vw - 48px\)\);[\s\S]*?flex-direction:\s*column;/,
   );
 });
 

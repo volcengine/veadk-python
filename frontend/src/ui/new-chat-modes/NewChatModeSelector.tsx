@@ -188,89 +188,91 @@ export function NewChatModeSelector({
       </button>
 
       {open ? (
-        <div
-          className="new-chat-mode__menu"
-          role="listbox"
-          aria-label="新会话模式"
-          tabIndex={-1}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-              event.preventDefault();
-              moveActive(event.key === "ArrowDown" ? 1 : -1);
-            } else if (event.key === "Enter") {
-              event.preventDefault();
-              choose(MODES[activeIndex]);
-            } else if (event.key === "Escape") {
-              event.preventDefault();
-              setOpen(false);
-              setBuiltinOpen(false);
-              triggerRef.current?.focus();
-            }
-          }}
-        >
-          {MODES.map((mode, index) => {
-            const nested = mode.value === "temporary";
-            return (
-              <button
-                key={mode.value}
-                type="button"
-                role="option"
-                aria-selected={value === mode.value}
-                aria-haspopup={nested ? "menu" : undefined}
-                aria-expanded={nested ? builtinOpen : undefined}
-                aria-disabled={modeDisabled(mode)}
-                disabled={modeDisabled(mode)}
-                className={`new-chat-mode__option${index === activeIndex ? " is-active" : ""}`}
-                onMouseEnter={() => {
-                  setActiveIndex(index);
-                  setBuiltinOpen(mode.value === "temporary");
-                }}
-                onClick={() => choose(mode)}
-              >
-                <span className="new-chat-mode__option-icon"><ModeIcon mode={mode.value} /></span>
-                <span className="new-chat-mode__copy">
-                  <span className="new-chat-mode__label">
-                    {mode.label}
-                    {mode.value === "skill-create" ? (
-                      <span className="new-chat-mode__beta">Beta</span>
-                    ) : null}
-                  </span>
-                  <span>{modeDescription(mode)}</span>
-                </span>
-                {nested ? <NestedChevron /> : value === mode.value ? (
-                  <svg className="new-chat-mode__check" viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="m3.5 8.2 2.8 2.8 6.2-6" />
-                  </svg>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-
-      {open && builtinOpen ? (
-        <div className="new-chat-mode__submenu" role="menu" aria-label="内置智能体">
-          <button
-            type="button"
-            role="menuitem"
-            className="new-chat-mode__submenu-option"
-            onClick={chooseBuiltinAgent}
+        <div className="new-chat-mode__menus">
+          <div
+            className="new-chat-mode__menu"
+            role="listbox"
+            aria-label="新会话模式"
+            tabIndex={-1}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                moveActive(event.key === "ArrowDown" ? 1 : -1);
+              } else if (event.key === "Enter") {
+                event.preventDefault();
+                choose(MODES[activeIndex]);
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                setOpen(false);
+                setBuiltinOpen(false);
+                triggerRef.current?.focus();
+              }
+            }}
           >
-            <SandboxAgentIcon kind="codex" className="new-chat-mode__builtin-icon" />
-            <span className="new-chat-mode__copy">
-              <span className="new-chat-mode__label">Codex 智能体</span>
-              <span>在沙箱中执行任务</span>
-            </span>
-          </button>
-          {UNAVAILABLE_BUILTIN_AGENTS.map(({ label, kind }) => (
-            <button key={label} type="button" role="menuitem" className="new-chat-mode__submenu-option" disabled>
-              <SandboxAgentIcon kind={kind} className="new-chat-mode__builtin-icon" />
-              <span className="new-chat-mode__copy">
-                <span className="new-chat-mode__label">{label}</span>
-                <span>暂不可用</span>
-              </span>
-            </button>
-          ))}
+            {MODES.map((mode, index) => {
+              const nested = mode.value === "temporary";
+              return (
+                <button
+                  key={mode.value}
+                  type="button"
+                  role="option"
+                  aria-selected={value === mode.value}
+                  aria-haspopup={nested ? "menu" : undefined}
+                  aria-expanded={nested ? builtinOpen : undefined}
+                  aria-disabled={modeDisabled(mode)}
+                  disabled={modeDisabled(mode)}
+                  className={`new-chat-mode__option${index === activeIndex ? " is-active" : ""}`}
+                  onMouseEnter={() => {
+                    setActiveIndex(index);
+                    setBuiltinOpen(mode.value === "temporary");
+                  }}
+                  onClick={() => choose(mode)}
+                >
+                  <span className="new-chat-mode__option-icon"><ModeIcon mode={mode.value} /></span>
+                  <span className="new-chat-mode__copy">
+                    <span className="new-chat-mode__label">
+                      {mode.label}
+                      {mode.value === "skill-create" ? (
+                        <span className="new-chat-mode__beta">Beta</span>
+                      ) : null}
+                    </span>
+                    <span>{modeDescription(mode)}</span>
+                  </span>
+                  {nested ? <NestedChevron /> : value === mode.value ? (
+                    <svg className="new-chat-mode__check" viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="m3.5 8.2 2.8 2.8 6.2-6" />
+                    </svg>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+
+          {builtinOpen ? (
+            <div className="new-chat-mode__submenu" role="menu" aria-label="内置智能体">
+              <button
+                type="button"
+                role="menuitem"
+                className="new-chat-mode__submenu-option"
+                onClick={chooseBuiltinAgent}
+              >
+                <SandboxAgentIcon kind="codex" className="new-chat-mode__builtin-icon" />
+                <span className="new-chat-mode__copy">
+                  <span className="new-chat-mode__label">Codex 智能体</span>
+                  <span>在沙箱中执行任务</span>
+                </span>
+              </button>
+              {UNAVAILABLE_BUILTIN_AGENTS.map(({ label, kind }) => (
+                <button key={label} type="button" role="menuitem" className="new-chat-mode__submenu-option" disabled>
+                  <SandboxAgentIcon kind={kind} className="new-chat-mode__builtin-icon" />
+                  <span className="new-chat-mode__copy">
+                    <span className="new-chat-mode__label">{label}</span>
+                    <span>暂不可用</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

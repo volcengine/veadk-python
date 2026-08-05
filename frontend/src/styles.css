@@ -979,6 +979,8 @@ body {
   overflow: hidden; /* clip inner scroll regions to the rounded corners */
 }
 .error {
+  position: relative;
+  z-index: 3;
   margin: 10px auto 0;
   max-width: 768px;
   width: calc(100% - 32px);
@@ -987,6 +989,7 @@ body {
   background: hsl(var(--destructive) / 0.1);
   color: hsl(var(--destructive));
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .case-return-bar {
