@@ -396,6 +396,9 @@ export function Sidebar({
           <AgentFaceIcon />
           <span className="sidebar-nav-label">智能体</span>
         </button>
+        {show("search") && (
+          <SearchButton active={activePage === "search"} onClick={onSearch} />
+        )}
         <button
           className={`new-chat new-chat--applications${
             activePage === "applications" ? " is-active" : ""
@@ -409,9 +412,6 @@ export function Sidebar({
           <span className="sidebar-nav-label">自动化</span>
           <span className="sidebar-beta-badge">Beta</span>
         </button>
-        {show("search") && (
-          <SearchButton active={activePage === "search"} onClick={onSearch} />
-        )}
       </div>
 
       {show("history") && (
