@@ -8,7 +8,6 @@ import {
   deleteSkillWorkbenchTask,
   downloadSkillWorkbenchTask,
   getSkillWorkbenchCapability,
-  getSkillWorkbenchTask,
   publishSkillWorkbenchTask,
   refineSkillWorkbenchTask,
 } from "./api";
@@ -20,11 +19,17 @@ import type {
 } from "./types";
 import "./skill-workbench.css";
 
-const POLL_INTERVAL_MS = 1_200;
 const TERMINAL = new Set(["ready", "failed", "cancelled", "expired", "published"]);
 
 export interface SkillWorkbenchProps {
   initialSource?: SkillCenterOptimizationSource | null;
+  task: SkillWorkbenchTask | null;
+  taskLoading: boolean;
+  taskError: string;
+  onTaskChanged: (task: SkillWorkbenchTask) => void;
+  onTaskDeleted: (jobId: string) => void;
+  onRetryTask: () => void;
+  onStartOver: () => void;
   onBack: () => void;
   onChooseCenterSource: () => void;
   onPublished?: () => void;
@@ -41,6 +46,13 @@ function stageLabel(task: SkillWorkbenchTask): string {
 
 export function SkillWorkbench({
   initialSource = null,
+  task,
+  taskLoading,
+  taskError,
+  onTaskChanged,
+  onTaskDeleted,
+  onRetryTask,
+  onStartOver,
   onBack,
   onChooseCenterSource,
 }: SkillWorkbenchProps) {
@@ -51,7 +63,6 @@ export function SkillWorkbench({
   const [file, setFile] = useState<File | null>(null);
   const [intent, setIntent] = useState("");
   const [capability, setCapability] = useState<SkillWorkbenchCapability | null>(null);
-  const [task, setTask] = useState<SkillWorkbenchTask | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -72,30 +83,6 @@ export function SkillWorkbench({
     return () => controller.abort();
   }, []);
 
-  useEffect(() => {
-    if (!task || TERMINAL.has(task.state)) return;
-    let stopped = false;
-    let timer: number | undefined;
-    const poll = async () => {
-      try {
-        const next = await getSkillWorkbenchTask(task.jobId);
-        if (stopped) return;
-        setTask(next);
-        setError("");
-        if (!TERMINAL.has(next.state)) timer = window.setTimeout(poll, POLL_INTERVAL_MS);
-      } catch (cause) {
-        if (stopped) return;
-        setError(cause instanceof Error ? cause.message : String(cause));
-        timer = window.setTimeout(poll, POLL_INTERVAL_MS);
-      }
-    };
-    timer = window.setTimeout(poll, POLL_INTERVAL_MS);
-    return () => {
-      stopped = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [task?.jobId, task?.state]);
-
   const hasSource = Boolean(source || file);
   const canSubmit =
     capability?.enabled === true &&
@@ -115,7 +102,7 @@ export function SkillWorkbench({
         ...(source ? { source } : {}),
         ...(file ? { file } : {}),
       });
-      if (requestRef.current === run) setTask(next);
+      if (requestRef.current === run) onTaskChanged(next);
     } catch (cause) {
       if (requestRef.current === run) {
         setError(cause instanceof Error ? cause.message : String(cause));
@@ -131,9 +118,10 @@ export function SkillWorkbench({
     setError("");
     try {
       await deleteSkillWorkbenchTask(task.jobId);
-      setTask(null);
+      onTaskDeleted(task.jobId);
       setIntent("");
       setConfirmCancel(false);
+      onBack();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -151,7 +139,7 @@ export function SkillWorkbench({
         intent: refinement.trim(),
         expectedRevision: task.revision,
       });
-      setTask(next);
+      onTaskChanged(next);
       setRefinement("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -190,6 +178,34 @@ export function SkillWorkbench({
     }
   }
 
+  if (!task && (taskLoading || taskError)) {
+    return (
+      <section className="skill-workbench" aria-label="Skill 工作台">
+        <header className="skill-workbench__head">
+          <div>
+            <button type="button" className="skill-workbench__back" onClick={onBack}>
+              返回技能中心
+            </button>
+            <h1>Skill 任务</h1>
+          </div>
+        </header>
+        <div className="skill-workbench__start" aria-live="polite">
+          {taskLoading && !taskError ? <TextShimmer duration={2.2} spread={16}>正在读取任务进度</TextShimmer> : null}
+          {taskError ? (
+            <div className="skill-workbench__notice" role="alert">
+              <strong>无法读取 Skill 任务</strong>
+              <span>{taskError}</span>
+              <div className="skill-workbench__actions">
+                <button type="button" onClick={onRetryTask}>重试</button>
+                <button type="button" onClick={onBack}>返回技能中心</button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </section>
+    );
+  }
+
   if (task) {
     return (
       <section className="skill-workbench" aria-label="Skill 工作台">
@@ -210,6 +226,11 @@ export function SkillWorkbench({
         </header>
 
         {error ? <div className="skill-workbench__error" role="alert">{error}</div> : null}
+        {taskError ? (
+          <div className="skill-workbench__error" role="alert">
+            {taskError} <button type="button" onClick={onRetryTask}>重试更新</button>
+          </div>
+        ) : null}
 
         <div className="skill-workbench__run-grid">
           <section className="skill-workbench__timeline" aria-live="polite">
@@ -225,9 +246,9 @@ export function SkillWorkbench({
             {task.error ? <div className="skill-workbench__error" role="alert">{task.error}</div> : null}
             {task.state === "failed" || task.state === "expired" ? (
               <div className="skill-workbench__recovery">
-                <button type="button" onClick={() => setTask(null)}>修改意图后重试</button>
+                <button type="button" onClick={onStartOver}>修改意图后重试</button>
                 {operation === "optimize" ? (
-                  <button type="button" onClick={() => { setTask(null); onChooseCenterSource(); }}>
+                  <button type="button" onClick={() => { onStartOver(); onChooseCenterSource(); }}>
                     更换来源
                   </button>
                 ) : null}
@@ -286,7 +307,7 @@ export function SkillWorkbench({
             ) : (
               <div className="skill-workbench__result-empty">
                 <strong>结果将在完成后显示</strong>
-                <span>可以离开当前页面，稍后从任务入口继续查看。</span>
+                <span>可以离开当前页面，稍后从左侧“Skill 任务”继续查看进度。</span>
                 <button type="button" onClick={onBack}>安全离开</button>
               </div>
             )}

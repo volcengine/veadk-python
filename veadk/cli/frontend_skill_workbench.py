@@ -57,7 +57,12 @@ from veadk.cli.agentkit_sandbox_region import (
     is_agentkit_resource_not_found,
     sandbox_region_candidates,
 )
-from veadk.cli.agentkit_session_metadata import build_create_session_request
+from veadk.cli.agentkit_session_metadata import (
+    build_create_session_request,
+    build_list_sessions_request,
+    call_session_client,
+    session_username,
+)
 from veadk.cli.frontend_skill_creator import (
     _runner_source,
     _safe_json_response,
@@ -586,22 +591,128 @@ class SkillWorkbenchService:
             "activities": [],
         }
 
+    def list_tasks(self, owner_id: str) -> dict[str, list[dict[str, object]]]:
+        """List recoverable Skill tasks owned by the current Studio principal."""
+        tool_id = self._validated_tool_id()
+        for index, region in enumerate(sandbox_region_candidates(self._region)):
+            tasks: list[dict[str, object]] = []
+            next_token: str | None = None
+            seen_tokens: set[str] = set()
+            try:
+                client = self._tools_client_factory(region)
+                for _page in range(100):
+                    response = call_session_client(
+                        client,
+                        "list_sessions",
+                        build_list_sessions_request(
+                            tool_id=tool_id,
+                            max_results=100,
+                            next_token=next_token,
+                            username=owner_id,
+                        ),
+                    )
+                    for session in response.session_infos or []:
+                        job_id = str(session.user_session_id or "").strip()
+                        endpoint = str(session.endpoint or "").strip()
+                        if (
+                            not endpoint
+                            or session_username(session) != owner_id
+                            or not _JOB_ID_RE.fullmatch(job_id)
+                        ):
+                            continue
+                        try:
+                            self._validate_job_owner(job_id, owner_id)
+                        except SkillWorkbenchError:
+                            continue
+                        tasks.append(
+                            self._task_summary(
+                                self._task_from_session(endpoint, job_id)
+                            )
+                        )
+                    next_token = str(response.next_token or "").strip() or None
+                    if next_token is None:
+                        self._region = region
+                        tasks.sort(
+                            key=lambda item: int(item.get("createdAt") or 0),
+                            reverse=True,
+                        )
+                        return {"tasks": tasks}
+                    if next_token in seen_tokens:
+                        raise SkillWorkbenchError(
+                            "SKILL_TASK_LIST_INVALID",
+                            "AgentKit 返回了重复的任务分页标记",
+                            status_code=502,
+                            retryable=True,
+                        )
+                    seen_tokens.add(next_token)
+                raise SkillWorkbenchError(
+                    "SKILL_TASK_LIST_INVALID",
+                    "Skill 任务列表超过安全分页上限",
+                    status_code=502,
+                    retryable=True,
+                )
+            except SkillWorkbenchError:
+                raise
+            except Exception as error:
+                if is_agentkit_resource_not_found(error) and index == 0:
+                    continue
+                raise SkillWorkbenchError(
+                    "SKILL_TASK_LIST_FAILED",
+                    "读取 Skill 任务列表失败，请稍后重试",
+                    status_code=502,
+                    retryable=True,
+                ) from error
+        raise SkillWorkbenchError(
+            "SKILL_TASK_LIST_FAILED",
+            "读取 Skill 任务列表失败，请稍后重试",
+            status_code=502,
+            retryable=True,
+        )
+
     def get_task(self, job_id: str, owner_id: str) -> dict[str, object]:
         self._validate_job_owner(job_id, owner_id)
         session = self._find_session(self._validated_tool_id(), job_id)
-        request_data = self._remote_json(session["endpoint"], job_id, "request.json")
-        status = self._remote_json(session["endpoint"], job_id, "status.json")
+        return self._task_from_session(session["endpoint"], job_id)
+
+    def _task_from_session(self, endpoint: str, job_id: str) -> dict[str, object]:
+        request_data = self._remote_json(endpoint, job_id, "request.json")
+        status = self._remote_json(endpoint, job_id, "status.json")
         status["activities"] = _validated_activities(status.get("activities"))
-        raw_status = str(status.get("status") or "running")
-        state = {
+        result = {
+            **request_data,
+            **status,
+            "state": self._normalize_task_state(status.get("status")),
+        }
+        result.pop("startedAtMs", None)
+        return result
+
+    @staticmethod
+    def _normalize_task_state(value: object) -> str:
+        raw_status = str(value or "running")
+        return {
             "succeeded": "ready",
             "running": "running",
             "queued": "running",
             "failed": "failed",
         }.get(raw_status, raw_status)
-        result = {**request_data, **status, "state": state}
-        result.pop("startedAtMs", None)
-        return result
+
+    @staticmethod
+    def _task_summary(task: dict[str, object]) -> dict[str, object]:
+        source = task.get("source") if isinstance(task.get("source"), dict) else {}
+        summary: dict[str, object] = {
+            "jobId": task.get("jobId"),
+            "operation": task.get("operation"),
+            "intent": task.get("intent"),
+            "revision": task.get("revision"),
+            "state": task.get("state"),
+            "stage": task.get("stage") or "generating",
+            "createdAt": task.get("createdAt"),
+        }
+        if isinstance(task.get("name"), str):
+            summary["name"] = task["name"]
+        if isinstance(source.get("name"), str):
+            summary["sourceName"] = source["name"]
+        return summary
 
     def refine(
         self,
@@ -1077,6 +1188,15 @@ def mount_skill_workbench_routes(
     async def capabilities(request: Request) -> dict[str, object]:
         owner_resolver(request)
         return await run_in_threadpool(service.capabilities)
+
+    @app.get("/web/skill-workbench/tasks")
+    async def list_tasks(request: Request) -> dict[str, list[dict[str, object]]]:
+        try:
+            return await run_in_threadpool(
+                service.list_tasks, owner_resolver(request)
+            )
+        except SkillWorkbenchError as error:
+            raise http_error(error) from error
 
     @app.post("/web/skill-workbench/tasks")
     async def create_task(

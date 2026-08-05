@@ -56,6 +56,18 @@ export interface SkillWorkbenchTask {
   error?: string;
 }
 
+export interface SkillWorkbenchTaskSummary {
+  jobId: string;
+  operation: SkillWorkbenchOperation;
+  intent: string;
+  revision: number;
+  state: SkillWorkbenchState;
+  stage: string;
+  createdAt: number;
+  name?: string;
+  sourceName?: string;
+}
+
 export interface SkillWorkbenchCapability {
   enabled: boolean;
   reason: string;

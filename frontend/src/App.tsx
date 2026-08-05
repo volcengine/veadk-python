@@ -80,6 +80,7 @@ import { Sidebar, type SidebarPage } from "./ui/Sidebar";
 import { AgentInfoPanel } from "./ui/AgentTopology";
 import { SkillCenterView } from "./ui/SkillCenter";
 import { SkillWorkbench } from "./ui/skill-workbench/SkillWorkbench";
+import { useSkillWorkbenchTasks } from "./ui/skill-workbench/useSkillWorkbenchTasks";
 import type { SkillCenterOptimizationSource } from "./ui/skill-workbench/types";
 import { AddAgentKitView } from "./ui/AddAgentKit";
 import { AgentWorkspace } from "./ui/AgentWorkspace";
@@ -1150,6 +1151,10 @@ export default function App() {
   const [skillWorkbenchOpen, setSkillWorkbenchOpen] = useState(false);
   const [skillWorkbenchSource, setSkillWorkbenchSource] =
     useState<SkillCenterOptimizationSource | null>(null);
+  const skillWorkbenchTasks = useSkillWorkbenchTasks(
+    features.skillCenter !== false,
+    userId,
+  );
   const [addAgent, setAddAgent] = useState(false);
   // The "添加 Agent" chooser (two cards: AgentKit / 从 0 快速创建).
   const [addMenu, setAddMenu] = useState(false);
@@ -4215,6 +4220,31 @@ export default function App() {
         activePage={sidebarActivePage}
         streamingSids={streamingSids}
         evaluatingSids={evaluatingSids}
+        skillTasks={skillWorkbenchTasks.tasks}
+        skillTasksLoading={skillWorkbenchTasks.tasksLoading}
+        skillTasksError={skillWorkbenchTasks.tasksError}
+        activeSkillTaskId={skillWorkbenchOpen ? skillWorkbenchTasks.activeJobId : ""}
+        onRetrySkillTasks={() => void skillWorkbenchTasks.refreshTasks()}
+        onOpenSkillTask={(jobId) => {
+          if (sandboxSession) exitSandboxSession();
+          viewSidRef.current = "";
+          setSessionId("");
+          setCreateView(null);
+          setAddAgent(false);
+          setAddMenu(false);
+          setSearchView(false);
+          setManageAgents(false);
+          setAgentDetailTarget(null);
+          setSandboxAgentDetailTarget(null);
+          setSandboxAgentWorkspace(null);
+          setMyAgents(false);
+          setApplicationsView(null);
+          setSkillCenter(false);
+          setSkillWorkbenchSource(null);
+          skillWorkbenchTasks.selectTask(jobId);
+          setSkillWorkbenchOpen(true);
+          setError("");
+        }}
         onNewChat={openNewChat}
         onSearch={() => {
           setPlatformFeedbackOrigin(null);
@@ -4838,6 +4868,13 @@ export default function App() {
             ) : skillWorkbenchOpen ? (
               <SkillWorkbench
                 initialSource={skillWorkbenchSource}
+                task={skillWorkbenchTasks.activeTask}
+                taskLoading={skillWorkbenchTasks.activeTaskLoading}
+                taskError={skillWorkbenchTasks.activeTaskError}
+                onTaskChanged={skillWorkbenchTasks.upsertTask}
+                onTaskDeleted={skillWorkbenchTasks.removeTask}
+                onRetryTask={() => void skillWorkbenchTasks.refreshActiveTask()}
+                onStartOver={() => skillWorkbenchTasks.clearActiveTask()}
                 onBack={() => {
                   setSkillWorkbenchOpen(false);
                   setSkillWorkbenchSource(null);
@@ -4852,11 +4889,13 @@ export default function App() {
               <SkillCenterView
                 cloudProvider={cloudProvider}
                 onCreate={() => {
+                  skillWorkbenchTasks.clearActiveTask();
                   setSkillWorkbenchSource(null);
                   setSkillCenter(false);
                   setSkillWorkbenchOpen(true);
                 }}
                 onOptimize={(source) => {
+                  skillWorkbenchTasks.clearActiveTask();
                   setSkillWorkbenchSource(source);
                   setSkillCenter(false);
                   setSkillWorkbenchOpen(true);

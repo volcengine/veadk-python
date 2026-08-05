@@ -17,6 +17,11 @@ const styles = readFileSync(
   new URL("../src/ui/skill-workbench/skill-workbench.css", import.meta.url),
   "utf8",
 );
+const shellStyles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+const controller = readFileSync(
+  new URL("../src/ui/skill-workbench/useSkillWorkbenchTasks.ts", import.meta.url),
+  "utf8",
+);
 
 
 test("adds the workbench without replacing the existing Skill creation flow", () => {
@@ -70,10 +75,33 @@ test("uses server-owned APIs with timeouts and cancellation", () => {
 });
 
 
-test("keeps the Skill Center discoverable in the existing sidebar", () => {
+test("keeps the Skill Center discoverable and shows recoverable task progress", () => {
   assert.match(sidebar, /show\("skillCenter"\)/);
   assert.match(sidebar, /onClick=\{onSkillCenter\}/);
   assert.match(sidebar, /<SkillSpaceIcon/);
+  assert.match(sidebar, /Skill 任务/);
+  assert.match(sidebar, /正在读取任务/);
+  assert.match(sidebar, /任务列表加载失败/);
+  assert.match(sidebar, /生成中/);
+  assert.match(sidebar, /校验中/);
+  assert.match(sidebar, /打包中/);
+  assert.match(sidebar, /已完成/);
+  assert.match(sidebar, /失败/);
+  assert.match(sidebar, /sidebar-skill-count/);
+  assert.match(app, /skillTasks=\{skillWorkbenchTasks\.tasks\}/);
+  assert.match(app, /onOpenSkillTask=/);
+});
+
+
+test("keeps Skill task polling above the workbench and supports safe reopening", () => {
+  assert.match(app, /useSkillWorkbenchTasks/);
+  assert.match(controller, /listSkillWorkbenchTasks/);
+  assert.match(controller, /visibilitychange/);
+  assert.match(controller, /setTimeout\(poll, LIST_POLL_INTERVAL_MS\)/);
+  assert.match(controller, /setTimeout\(poll, DETAIL_POLL_INTERVAL_MS\)/);
+  assert.doesNotMatch(workbench, /setTimeout\(poll/);
+  assert.match(workbench, /左侧“Skill 任务”继续查看进度/);
+  assert.doesNotMatch(controller, /localStorage|sessionStorage/);
 });
 
 
@@ -83,4 +111,7 @@ test("uses bounded desktop layout and reduced motion support", () => {
   assert.match(styles, /@media \(max-width: 980px\)/);
   assert.match(styles, /prefers-reduced-motion: reduce/);
   assert.match(styles, /hsl\(var\(--border\)\)/);
+  assert.match(shellStyles, /sidebar-skill-tasks/);
+  assert.match(shellStyles, /sidebar-skill-task__live/);
+  assert.match(shellStyles, /prefers-reduced-motion: reduce/);
 });

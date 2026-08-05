@@ -11,6 +11,7 @@ import type {
   SkillWorkbenchCapability,
   SkillWorkbenchOperation,
   SkillWorkbenchTask,
+  SkillWorkbenchTaskSummary,
 } from "./types";
 
 const API_ROOT = "/web/skill-workbench";
@@ -211,6 +212,42 @@ export async function createSkillWorkbenchTask(args: {
     signal: args.signal,
   }, TRANSFER_REQUEST_TIMEOUT_MS);
   return normalizeTask(await json(response, "创建 Skill 任务失败"));
+}
+
+function normalizeTaskSummary(value: unknown): SkillWorkbenchTaskSummary {
+  const task = record(value, "Skill 任务摘要");
+  const allowedStates = ["running", "ready", "failed", "cancelled", "expired", "published"];
+  if (
+    typeof task.jobId !== "string" ||
+    (task.operation !== "create" && task.operation !== "optimize") ||
+    typeof task.intent !== "string" ||
+    typeof task.revision !== "number" ||
+    typeof task.state !== "string" ||
+    !allowedStates.includes(task.state) ||
+    typeof task.createdAt !== "number"
+  ) throw new Error("Skill 任务摘要格式错误。");
+  return {
+    jobId: task.jobId,
+    operation: task.operation,
+    intent: task.intent,
+    revision: task.revision,
+    state: task.state as SkillWorkbenchTaskSummary["state"],
+    stage: typeof task.stage === "string" ? task.stage : "generating",
+    createdAt: task.createdAt,
+    ...(typeof task.name === "string" ? { name: task.name } : {}),
+    ...(typeof task.sourceName === "string" ? { sourceName: task.sourceName } : {}),
+  };
+}
+
+export async function listSkillWorkbenchTasks(
+  signal?: AbortSignal,
+): Promise<SkillWorkbenchTaskSummary[]> {
+  const body = record(await json(
+    await request("/tasks", { signal }),
+    "读取 Skill 任务列表失败",
+  ), "Skill 任务列表");
+  if (!Array.isArray(body.tasks)) throw new Error("Skill 任务列表格式错误。");
+  return body.tasks.map(normalizeTaskSummary);
 }
 
 export async function getSkillWorkbenchTask(

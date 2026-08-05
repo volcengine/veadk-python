@@ -28,6 +28,7 @@ import { SearchButton } from "./Search";
 import { AgentFaceIcon } from "./AgentFaceIcon";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
 import { SkillSpaceIcon } from "./SkillCenter";
+import type { SkillWorkbenchTaskSummary } from "./skill-workbench/types";
 import defaultSiteLogo from "../assets/logo.svg";
 import byteplusLogo from "../assets/byteplus.svg";
 
@@ -73,6 +74,12 @@ export interface SidebarProps {
   streamingSids?: Set<string>;
   /** Session ids whose latest reply is currently being evaluated. */
   evaluatingSids?: Set<string>;
+  skillTasks?: SkillWorkbenchTaskSummary[];
+  skillTasksLoading?: boolean;
+  skillTasksError?: string;
+  activeSkillTaskId?: string;
+  onOpenSkillTask: (jobId: string) => void;
+  onRetrySkillTasks: () => void;
   onNewChat: () => void;
   onSearch: () => void;
   onQuickCreate: () => void;
@@ -290,6 +297,12 @@ export function Sidebar({
   access,
   streamingSids,
   evaluatingSids,
+  skillTasks = [],
+  skillTasksLoading = false,
+  skillTasksError = "",
+  activeSkillTaskId = "",
+  onOpenSkillTask,
+  onRetrySkillTasks,
   onNewChat,
   onSearch,
   onQuickCreate,
@@ -318,6 +331,10 @@ export function Sidebar({
   const sorted = [...sessions].sort(
     (a, b) => (b.lastUpdateTime ?? 0) - (a.lastUpdateTime ?? 0),
   );
+  const runningSkillTasks = skillTasks.filter((task) => task.state === "running").length;
+  const skillCenterLabel = runningSkillTasks > 0
+    ? `技能中心，${runningSkillTasks} 个 Skill 任务进行中`
+    : "技能中心";
   const toggleCollapsed = () => {
     autoCollapsedRef.current = false;
     setCollapsed((value) => !value);
@@ -407,10 +424,17 @@ export function Sidebar({
           <button
             className="new-chat new-chat--skills"
             onClick={onSkillCenter}
-            aria-label="技能中心"
-            title="技能中心"
+            aria-label={skillCenterLabel}
+            title={skillCenterLabel}
           >
-            <SkillSpaceIcon />
+            <span className="sidebar-skill-icon">
+              <SkillSpaceIcon />
+              {runningSkillTasks > 0 ? (
+                <span className="sidebar-skill-count" aria-hidden="true">
+                  {runningSkillTasks > 9 ? "9+" : runningSkillTasks}
+                </span>
+              ) : null}
+            </span>
             <span className="sidebar-nav-label">技能中心</span>
           </button>
         )}
@@ -431,6 +455,64 @@ export function Sidebar({
           <span className="sidebar-beta-badge">Beta</span>
         </button>
       </div>
+
+      {show("skillCenter") && (
+        <section className="sidebar-skill-tasks" aria-label="Skill 任务">
+          <div className="sidebar-skill-tasks__head">
+            <span>Skill 任务</span>
+            {runningSkillTasks > 0 ? <span>{runningSkillTasks} 个进行中</span> : null}
+          </div>
+          <div className="sidebar-skill-tasks__list">
+            {skillTasksLoading && skillTasks.length === 0 ? (
+              <div className="sidebar-skill-tasks__empty" role="status">正在读取任务…</div>
+            ) : skillTasksError && skillTasks.length === 0 ? (
+              <div className="sidebar-skill-tasks__error" role="alert">
+                <span>任务列表加载失败</span>
+                <button type="button" onClick={onRetrySkillTasks}>重试</button>
+              </div>
+            ) : skillTasks.length === 0 ? (
+              <div className="sidebar-skill-tasks__empty">暂无 Skill 任务</div>
+            ) : (
+              skillTasks.map((task) => {
+                const title = task.name || task.intent || (task.operation === "create" ? "创建 Skill" : "优化 Skill");
+                const status = task.state === "running"
+                  ? task.stage === "validating"
+                    ? "校验中"
+                    : task.stage === "packaging"
+                      ? "打包中"
+                      : "生成中"
+                  : task.state === "ready" || task.state === "published"
+                    ? "已完成"
+                    : task.state === "failed"
+                      ? "失败"
+                      : "已结束";
+                return (
+                  <button
+                    type="button"
+                    key={task.jobId}
+                    className={`sidebar-skill-task${task.jobId === activeSkillTaskId ? " is-active" : ""}`}
+                    onClick={() => onOpenSkillTask(task.jobId)}
+                    aria-current={task.jobId === activeSkillTaskId ? "page" : undefined}
+                    title={`${title} · ${status}`}
+                  >
+                    <span className="sidebar-skill-task__title">{title}</span>
+                    <span className="sidebar-skill-task__meta">
+                      {task.state === "running" ? <span className="sidebar-skill-task__live" aria-hidden="true" /> : null}
+                      {task.operation === "create" ? "创建" : "优化"} · {status}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+            {skillTasksError && skillTasks.length > 0 ? (
+              <div className="sidebar-skill-tasks__stale" role="alert">
+                <span>进度更新失败</span>
+                <button type="button" onClick={onRetrySkillTasks}>重试</button>
+              </div>
+            ) : null}
+          </div>
+        </section>
+      )}
 
       {show("history") && (
       <div className="sidebar-history">
