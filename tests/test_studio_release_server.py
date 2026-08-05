@@ -20,9 +20,12 @@ import hashlib
 import importlib.machinery
 import io
 import json
+import os
 import shutil
 import subprocess
+import sys
 import tarfile
+import zipfile
 from collections.abc import Callable
 from concurrent.futures import Executor, Future
 from contextlib import nullcontext
@@ -43,9 +46,10 @@ from frontend.service.studio_release_server import (
     StudioReleaseBuilder,
     create_app,
 )
+from frontend.service.studio_release_server import app as release_app
 from frontend.service.studio_release_server import builder as release_builder
 from frontend.service.studio_release_server import deploy as release_deploy
-from frontend.service.studio_release_server import app as release_app
+from frontend.service.studio_release_server import publisher as release_publisher
 from frontend.service.studio_release_server.tos_store import TosDependencyStore
 
 
@@ -458,7 +462,7 @@ def test_builder_passes_studio_apmplus_to_publisher_environment(
         changelog=("发布 Studio 更新",),
         studioApmplus={"aid": "12345", "token": "client-token"},
     )
-    captured: dict[str, dict[str, str]] = {}
+    captured: dict[str, Any] = {}
 
     monkeypatch.setattr(
         release_builder,
@@ -471,6 +475,7 @@ def test_builder_passes_studio_apmplus_to_publisher_environment(
     )
 
     def _run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+        captured["command"] = command
         captured["env"] = kwargs["env"]
         return subprocess.CompletedProcess(command, 0)
 
@@ -485,12 +490,72 @@ def test_builder_passes_studio_apmplus_to_publisher_environment(
         node_bin=None,
         uv=Path("/bin/uv"),
         frontend_assets=None,
-        dependency_wheels=None,
+        dependency_wheels=tmp_path,
     )
 
     assert captured["env"]["VEADK_STUDIO_APMPLUS_AID"] == "12345"
     assert captured["env"]["VEADK_STUDIO_APMPLUS_TOKEN"] == "client-token"
     assert captured["env"]["VOLCENGINE_ACCESS_KEY"] == "release-ak"
+    assert captured["command"][1].endswith("studio_release_server/publisher.py")
+    assert "veadk.cli.studio_release" not in captured["command"]
+    assert str(tmp_path) not in captured["env"].get("PYTHONPATH", "").split(os.pathsep)
+
+
+def test_standalone_publisher_starts_without_importing_veadk() -> None:
+    publisher = Path(release_builder.__file__).with_name("publisher.py")
+
+    completed = subprocess.run(
+        [sys.executable, "-I", str(publisher), "--help"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_standalone_publisher_builds_bundle_from_source_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frontend_assets = tmp_path / "frontend-assets"
+    frontend_assets.mkdir()
+    (frontend_assets / "index.html").write_text("studio", encoding="utf-8")
+    dependency_wheels = tmp_path / "dependencies"
+    dependency_wheels.mkdir()
+    (dependency_wheels / "dependency-1.0-py3-none-any.whl").write_bytes(b"wheel")
+
+    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[Any]:
+        output_dir = Path(command[command.index("-o") + 1])
+        (output_dir / "veadk_python-1.0.0-py3-none-any.whl").write_bytes(b"veadk")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(release_publisher.subprocess, "run", _run)
+    output_dir = tmp_path / "output"
+    bundle, manifest = release_publisher.build_studio_release(
+        source_root=Path(__file__).parents[1],
+        output_dir=output_dir,
+        version="20260805190000",
+        git_sha="a" * 40,
+        changelog=("发布 Studio 更新",),
+        frontend_assets=frontend_assets,
+        dependency_wheels=dependency_wheels,
+        env={
+            "PATH": os.environ["PATH"],
+            "VEADK_STUDIO_APMPLUS_AID": "12345",
+            "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
+        },
+    )
+
+    with zipfile.ZipFile(bundle) as archive:
+        assert archive.read("requirements.txt").decode() == (
+            "./dependency-1.0-py3-none-any.whl\n./veadk_python-1.0.0-py3-none-any.whl\n"
+        )
+        assert json.loads(archive.read(".studio-release-environment.json")) == {
+            "VEADK_STUDIO_APMPLUS_AID": "12345",
+            "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
+        }
+    assert manifest.git_sha == "a" * 40
+    assert manifest.sha256 == hashlib.sha256(bundle.read_bytes()).hexdigest()
 
 
 def test_builder_shallow_clones_only_main_build_files(
@@ -762,6 +827,7 @@ def test_stage_deployment_uses_frontend_service_package(
     assert (destination / "frontend" / "__init__.py").is_file()
     assert (destination / "frontend" / "service" / "__init__.py").is_file()
     assert (package_root / "app.py").is_file()
+    assert (package_root / "publisher.py").is_file()
     assert not (package_root / "deploy.py").exists()
     assert not (package_root / "deploy.sh").exists()
     assert not (destination / "veadk").exists()
