@@ -532,6 +532,7 @@ export interface DeployResult {
   consoleUrl?: string;
   region?: string;
   version?: number | null;
+  warnings?: string[];
   feishuChannel?: {
     enabled: boolean;
     transport: string;
@@ -556,6 +557,11 @@ const CODE_PACKAGE_DEPLOY_STEPS: { phase: string; label: string }[] = [
 const INSTANCE_UPDATE_STEP = {
   phase: "update",
   label: "更新实例配置",
+} as const;
+
+const EVALUATION_SET_STEP = {
+  phase: "evaluation",
+  label: "创建评测集",
 } as const;
 
 function usesInMemorySession(agentDraft?: AgentDraft): boolean {
@@ -598,6 +604,7 @@ export interface DeployOptions {
   minInstance?: number;
   maxInstance?: number;
   authentication?: DeployAuthentication;
+  createEvaluationSets?: boolean;
   im?: {
     feishu?: {
       enabled: boolean;
@@ -625,6 +632,8 @@ export interface DeploymentTaskUpdate {
   buildLog?: DeployBuildLogSnapshot;
   /** Instance range applied through UpdateRuntime after creation. */
   instanceRange?: { min: number; max: number };
+  /** Whether this deployment initializes the Studio feedback evaluation sets. */
+  createEvaluationSets?: boolean;
   /** Draft used to render the Agent detail while its Runtime is still publishing. */
   agentDraft?: AgentDraft;
   /** Re-runs the same project/config as a new deployment task. */
@@ -852,6 +861,7 @@ export function ProjectPreview({
   const [maxInstance, setMaxInstance] = useState(
     inMemorySession ? "1" : "5",
   );
+  const [createEvaluationSets, setCreateEvaluationSets] = useState(true);
   const [deploymentActionTarget, setDeploymentActionTarget] =
     useState<HTMLElement | null>(null);
   const mountedRef = useRef(true);
@@ -863,9 +873,12 @@ export function ProjectPreview({
   const baseDeploymentSteps = deploymentPrimaryPane
     ? CODE_PACKAGE_DEPLOY_STEPS
     : DEPLOY_STEPS;
-  const deploymentSteps = needsInstanceUpdate
+  const deploymentStepsWithInstanceUpdate = needsInstanceUpdate
     ? [...baseDeploymentSteps, INSTANCE_UPDATE_STEP]
     : baseDeploymentSteps;
+  const deploymentSteps = createEvaluationSets
+    ? [...deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP]
+    : deploymentStepsWithInstanceUpdate;
 
   useEffect(() => {
     if (!deploymentActionTargetId) {
@@ -1165,6 +1178,7 @@ export function ProjectPreview({
       instanceRange: needsInstanceUpdate
         ? { min: instanceRange.min, max: instanceRange.max }
         : undefined,
+      createEvaluationSets,
     };
     onDeploymentTaskChange?.(initialTask);
     onDeploymentStarted?.(initialTask);
@@ -1256,6 +1270,7 @@ export function ProjectPreview({
                     : { type: "api_key" as const },
               }
             : {}),
+          createEvaluationSets,
           ...(feishuEnabled
             ? {
                 im: {
@@ -1281,6 +1296,7 @@ export function ProjectPreview({
         status: "success",
         phase: "complete",
         label: "部署完成",
+        message: result.warnings?.join("；"),
         ...terminalBuildLogUpdate("complete"),
       });
       try {
@@ -1974,6 +1990,26 @@ export function ProjectPreview({
                 </div>
               </section>
 
+              <section className="pp-config-section">
+                <div className="pp-config-label">评测集</div>
+                <label className="pp-evaluation-set-option">
+                  <input
+                    type="checkbox"
+                    checked={createEvaluationSets}
+                    disabled={deploying}
+                    onChange={(event) =>
+                      setCreateEvaluationSets(event.currentTarget.checked)
+                    }
+                  />
+                  <span>
+                    <strong>自动创建评测集</strong>
+                    <small>
+                      部署成功后，自动创建 Good Case 和 Bad Case 评测集。
+                    </small>
+                  </span>
+                </label>
+              </section>
+
               <section className="pp-config-section pp-env-section">
                 <div className="pp-env-head">
                   <div>
@@ -2160,6 +2196,13 @@ export function ProjectPreview({
                     {isRuntimeUpdate ? "更新成功" : "部署成功"}
                   </div>
                   <div className="pp-deploy-result-body">
+                    {deployResult.warnings && deployResult.warnings.length > 0 && (
+                      <div className="pp-deploy-result-warning" role="status">
+                        {deployResult.warnings.map((warning) => (
+                          <span key={warning}>{warning}</span>
+                        ))}
+                      </div>
+                    )}
                     {deployResult.region && (
                       <div className="pp-deploy-result-field">
                         <label>区域</label>

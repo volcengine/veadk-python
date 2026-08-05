@@ -26,7 +26,12 @@ from fastapi.testclient import TestClient
 from veadk.cli.cli_frontend import _run_frontend_server
 
 
-def _create_frontend_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FastAPI:
+def _create_frontend_app(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    studio: bool = False,
+) -> FastAPI:
     captured: dict[str, Any] = {}
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setattr(
@@ -54,6 +59,7 @@ def _create_frontend_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Fas
         auth_mode="frontend",
         generated_agent_test_run_ttl=60,
         open_browser=False,
+        studio=studio,
     )
     return captured["app"]
 
@@ -380,7 +386,18 @@ def test_message_feedback_uncheck_deletes_case_by_stable_item_key(
 def test_feedback_cases_list_agentkit_dataset_items(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    app = _create_frontend_app(monkeypatch, tmp_path)
+    class _Automation:
+        def get_optimizations(self, runtime_id: str, app_name: str) -> None:
+            del runtime_id, app_name
+
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "frontend.server.evaluation_automation.create_service",
+        lambda **kwargs: _Automation(),
+    )
+    app = _create_frontend_app(monkeypatch, tmp_path, studio=True)
     openapi_calls: list[dict[str, Any]] = []
 
     class _FakeRuntimeClient:
@@ -417,7 +434,7 @@ def test_feedback_cases_list_agentkit_dataset_items(
         async def request(self, method: str, url: str, **kwargs: Any) -> _FakeResponse:
             del kwargs
             if method == "GET" and "/web/agent-info/agent" in url:
-                return _FakeResponse({"name": "客服助手"})
+                return _FakeResponse({}, status_code=404)
             raise AssertionError((method, url))
 
         async def post(self, url: str, **kwargs: Any) -> _FakeResponse:
@@ -432,28 +449,44 @@ def test_feedback_cases_list_agentkit_dataset_items(
                 }
             )
             if action == "ListEvaluationSets":
-                if "客服助手_good_case" in body:
+                if "agent_auto_good_case" in body:
                     return _FakeResponse(
                         {
                             "Result": {
                                 "EvaluationSets": [
                                     {
-                                        "Id": "good-set",
-                                        "Name": "客服助手_good_case",
+                                        "Id": "auto-good-set",
+                                        "Name": "agent_auto_good_case",
                                         "WorkspaceId": "workspace-1",
                                     }
                                 ]
                             }
                         }
                     )
-                if "客服助手_bad_case" in body:
+                if "agent_auto_bad_case" in body:
+                    return _FakeResponse({"Result": {"EvaluationSets": []}})
+                if "agent_good_case" in body:
+                    return _FakeResponse(
+                        {
+                            "Result": {
+                                "EvaluationSets": [
+                                    {
+                                        "Id": "good-set",
+                                        "Name": "agent_good_case",
+                                        "WorkspaceId": "workspace-1",
+                                    }
+                                ]
+                            }
+                        }
+                    )
+                if "agent_bad_case" in body:
                     return _FakeResponse(
                         {
                             "Result": {
                                 "EvaluationSets": [
                                     {
                                         "Id": "bad-set",
-                                        "Name": "客服助手_bad_case",
+                                        "Name": "agent_bad_case",
                                         "WorkspaceId": "workspace-1",
                                     }
                                 ]
@@ -475,6 +508,53 @@ def test_feedback_cases_list_agentkit_dataset_items(
                 )
             if action == "ListEvaluationSetItems":
                 set_id = kwargs["params"]["EvaluationSetId"]
+                if set_id == "auto-good-set":
+                    return _FakeResponse(
+                        {
+                            "Result": {
+                                "Items": [
+                                    {
+                                        "ItemId": "auto-good-item",
+                                        "ItemKey": "auto-good-key",
+                                        "Turns": [
+                                            {
+                                                "FieldDataList": [
+                                                    {
+                                                        "Key": "input",
+                                                        "Content": {"Text": "自动问题"},
+                                                    },
+                                                    {
+                                                        "Key": "output",
+                                                        "Content": {"Text": "自动回答"},
+                                                    },
+                                                    {
+                                                        "Key": "runtime_id",
+                                                        "Content": {
+                                                            "Text": "runtime-1"
+                                                        },
+                                                    },
+                                                    {
+                                                        "Key": "score",
+                                                        "Content": {"Text": "0.82"},
+                                                    },
+                                                    {
+                                                        "Key": "reason",
+                                                        "Content": {
+                                                            "Text": "回答完整。"
+                                                        },
+                                                    },
+                                                    {
+                                                        "Key": "evaluator_version",
+                                                        "Content": {"Text": "v1"},
+                                                    },
+                                                ]
+                                            }
+                                        ],
+                                    }
+                                ]
+                            }
+                        }
+                    )
                 rating = "good" if set_id == "good-set" else "bad"
                 return _FakeResponse(
                     {
@@ -527,18 +607,23 @@ def test_feedback_cases_list_agentkit_dataset_items(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["agentName"] == "客服助手"
+    assert payload["agentName"] == "agent"
     assert {item["kind"] for item in payload["items"]} == {"good", "bad"}
     assert payload["items"][0]["input"] == "问题"
-    assert [call["action"] for call in openapi_calls] == [
-        "ListEvaluationSets",
-        "ListEvaluationSets",
-        "ListEvaluationSetItems",
-        "ListEvaluationSets",
-        "ListEvaluationSetItems",
-    ]
-    assert openapi_calls[2]["params"]["EvaluationSetId"] == "good-set"
-    assert openapi_calls[4]["params"]["EvaluationSetId"] == "bad-set"
+    manual_items = [item for item in payload["items"] if item["source"] == "user"]
+    automatic_items = [item for item in payload["items"] if item["source"] == "auto"]
+    assert len(manual_items) == 2
+    assert all(item["score"] is None and item["reason"] == "" for item in manual_items)
+    assert len(automatic_items) == 1
+    assert automatic_items[0]["score"] == 0.82
+    assert automatic_items[0]["reason"] == "回答完整。"
+    assert {item["itemCount"] for item in payload["sets"]} == {1, 2}
+    listed_set_ids = {
+        call["params"].get("EvaluationSetId")
+        for call in openapi_calls
+        if call["action"] == "ListEvaluationSetItems"
+    }
+    assert listed_set_ids == {"good-set", "bad-set", "auto-good-set"}
 
 
 def test_feedback_cases_delete_removes_dataset_items_and_clears_rating(

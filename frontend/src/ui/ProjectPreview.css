@@ -1532,7 +1532,8 @@
 }
 
 .pp-network-option input:focus-visible,
-.pp-network-check input:focus-visible {
+.pp-network-check input:focus-visible,
+.pp-evaluation-set-option input:focus-visible {
   outline: 2px solid hsl(var(--ring) / 0.55);
   outline-offset: 2px;
 }
@@ -1566,7 +1567,35 @@
   cursor: pointer;
 }
 
-.pp-network-check input {
+.pp-evaluation-set-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: hsl(var(--foreground));
+  cursor: pointer;
+}
+
+.pp-evaluation-set-option > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pp-evaluation-set-option strong {
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.45;
+}
+
+.pp-evaluation-set-option small {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pp-network-check input,
+.pp-evaluation-set-option input {
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
@@ -1585,7 +1614,8 @@
     box-shadow 120ms ease;
 }
 
-.pp-network-check input::before {
+.pp-network-check input::before,
+.pp-evaluation-set-option input::before {
   width: 4px;
   height: 8px;
   border: solid hsl(var(--primary-foreground));
@@ -1595,12 +1625,14 @@
   transition: transform 120ms ease-out;
 }
 
-.pp-network-check input:checked {
+.pp-network-check input:checked,
+.pp-evaluation-set-option input:checked {
   border-color: hsl(var(--primary));
   background: hsl(var(--primary));
 }
 
-.pp-network-check input:checked::before {
+.pp-network-check input:checked::before,
+.pp-evaluation-set-option input:checked::before {
   transform: translateY(-1px) rotate(45deg) scale(1);
 }
 
@@ -1834,6 +1866,19 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.pp-deploy-result-warning {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid hsl(42 90% 45% / 0.25);
+  border-radius: 6px;
+  background: hsl(42 90% 50% / 0.07);
+  color: hsl(35 82% 34%);
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 .pp-deploy-result-field {

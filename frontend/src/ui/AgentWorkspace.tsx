@@ -26,6 +26,7 @@ import {
   getCachedRuntimeAgentInfo,
   getCachedRuntimeDetail,
   getAgentFeedbackCases,
+  getAgentOptimizations,
   getRuntimeAgentInfo,
   getRuntimeDetail,
   getRuntimeUpdateCapability,
@@ -37,9 +38,13 @@ import {
   revealRuntimeApiKey,
   type AgentFeedbackCasesResponse,
   type AgentFeedbackCase,
+  type AgentFeedbackSource,
   type AgentFeedbackSetSummary,
   type AgentInfo,
   type AgentNode,
+  type AgentOptimizationGroup,
+  type AgentOptimizationModule,
+  type AgentOptimizationPriority,
   type RuntimeA2aIntegration,
   RuntimeProbeError,
   type RuntimeDetail,
@@ -56,12 +61,15 @@ import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import "./AgentWorkspace.css";
 
 type WorkspaceView = "library" | "evaluation";
-type AgentSection = "basic" | "integrations" | "evaluations";
+type AgentSection = "basic" | "evaluations" | "optimizations" | "integrations";
 type IntegrationProtocol = "api-server" | "a2a";
 type EvaluationSection = "config" | "history";
 type CaseKind = "good" | "bad";
+type OptimizationPriority = AgentOptimizationPriority;
+type OptimizationModule = AgentOptimizationModule;
 
 type AgentCase = AgentFeedbackCase & { tag?: string };
+type OptimizationGroup = AgentOptimizationGroup;
 type DeleteConfirmTarget =
   | {
       kind: "selection";
@@ -119,11 +127,14 @@ const DEFAULT_CASES: AgentCase[] = [
     runtimeId: "",
     invocationId: "",
     userId: "",
-    createdAt: "",
+    createdAt: "2026-08-05T09:12:00+08:00",
     evaluationSetId: "",
     evaluationSetName: "示例 good case",
     workspaceId: "",
     tag: "总结",
+    source: "auto",
+    score: 0.92,
+    reason: "任务完整覆盖了用户目标，输出结构清晰，并给出了可执行的下一步动作。",
   },
   {
     id: "case-2",
@@ -139,11 +150,12 @@ const DEFAULT_CASES: AgentCase[] = [
     runtimeId: "",
     invocationId: "",
     userId: "",
-    createdAt: "",
+    createdAt: "2026-08-05T08:47:00+08:00",
     evaluationSetId: "",
     evaluationSetName: "示例 good case",
     workspaceId: "",
     tag: "工具调用",
+    source: "user",
   },
   {
     id: "case-3",
@@ -159,11 +171,14 @@ const DEFAULT_CASES: AgentCase[] = [
     runtimeId: "",
     invocationId: "",
     userId: "",
-    createdAt: "",
+    createdAt: "2026-08-05T07:35:00+08:00",
     evaluationSetId: "",
     evaluationSetName: "示例 bad case",
     workspaceId: "",
     tag: "幻觉",
+    source: "auto",
+    score: 0.28,
+    reason: "信息不足时仍给出了确定结论，缺少必要的澄清步骤与不确定性说明。",
   },
   {
     id: "case-4",
@@ -179,11 +194,12 @@ const DEFAULT_CASES: AgentCase[] = [
     runtimeId: "",
     invocationId: "",
     userId: "",
-    createdAt: "",
+    createdAt: "2026-08-05T06:58:00+08:00",
     evaluationSetId: "",
     evaluationSetName: "示例 bad case",
     workspaceId: "",
     tag: "效率",
+    source: "user",
   },
 ];
 
@@ -218,6 +234,7 @@ const DEFAULT_EVALUATION_GROUPS: EvaluationGroup[] = [
 const AGENT_SECTIONS: Array<{ id: AgentSection; label: string }> = [
   { id: "basic", label: "基本信息" },
   { id: "evaluations", label: "评测集" },
+  { id: "optimizations", label: "优化项" },
   { id: "integrations", label: "接入方法" },
 ];
 
@@ -541,6 +558,33 @@ function formatCaseTime(value: string): string {
   }).format(new Date(time));
 }
 
+function formatCaseScore(item: AgentCase): string {
+  if (item.source !== "auto" || typeof item.score !== "number") return "—";
+  if (!Number.isFinite(item.score)) return "—";
+  return `${Math.round(item.score * 100)} 分`;
+}
+
+function optimizationPriorityLabel(priority: OptimizationPriority): string {
+  if (priority === "high") return "高";
+  if (priority === "medium") return "中";
+  return "低";
+}
+
+const OPTIMIZATION_MODULE_LABELS: Record<OptimizationModule, string> = {
+  agent_structure: "Agent 结构",
+  prompt: "提示词",
+  tool: "工具",
+  knowledge: "知识库",
+  memory: "记忆",
+  workflow: "工作流",
+  other: "其他",
+};
+
+function optimizationModuleLabel(group: OptimizationGroup): string {
+  if (group.module === "other") return group.customModule?.trim() || "其他";
+  return OPTIMIZATION_MODULE_LABELS[group.module];
+}
+
 function feedbackSetFor(
   sets: AgentFeedbackSetSummary[],
   kind: CaseKind,
@@ -585,6 +629,11 @@ const DEPLOYMENT_STEPS = [
   { phase: "publish", label: "发布服务", description: "等待服务就绪并生成访问地址" },
   { phase: "complete", label: "部署完成", description: "智能体已可以正常使用" },
 ] as const;
+const EVALUATION_SET_STEP = {
+  phase: "evaluation",
+  label: "创建评测集",
+  description: "自动创建 Good Case 和 Bad Case 评测集",
+} as const;
 function instanceUpdateStep(range: { min: number; max: number }) {
   return {
     phase: "update",
@@ -595,13 +644,20 @@ function instanceUpdateStep(range: { min: number; max: number }) {
 const BUILD_STEP_INDEX = DEPLOYMENT_STEPS.findIndex((step) => step.phase === "build");
 
 function deploymentSteps(task: DeploymentTaskUpdate) {
-  return task.instanceRange
+  const steps = task.instanceRange
     ? [
         ...DEPLOYMENT_STEPS.slice(0, -1),
         instanceUpdateStep(task.instanceRange),
         DEPLOYMENT_STEPS[DEPLOYMENT_STEPS.length - 1],
       ]
     : DEPLOYMENT_STEPS;
+  return task.createEvaluationSets
+    ? [
+        ...steps.slice(0, -1),
+        EVALUATION_SET_STEP,
+        steps[steps.length - 1],
+      ]
+    : steps;
 }
 
 function deploymentStepIndex(task: DeploymentTaskUpdate): number {
@@ -612,6 +668,7 @@ function deploymentStepIndex(task: DeploymentTaskUpdate): number {
     构建镜像: "build",
     部署: "deploy",
     发布: "publish",
+    创建评测集: "evaluation",
     部署完成: "complete",
   } as Record<string, string>)[task.label];
   const index = steps.findIndex((step) => step.phase === phase);
@@ -912,6 +969,8 @@ export function AgentWorkspace({
   const [query, setQuery] = useState("");
   const [caseFilter, setCaseFilter] = useState<CaseKind>("good");
   const [caseQuery, setCaseQuery] = useState("");
+  const [caseSourceFilter, setCaseSourceFilter] =
+    useState<AgentFeedbackSource>("auto");
   const [draggingAgentId, setDraggingAgentId] = useState("");
   const [dropAgentId, setDropAgentId] = useState("");
   const [dropPlacement, setDropPlacement] = useState<"before" | "after">("before");
@@ -927,6 +986,10 @@ export function AgentWorkspace({
   const [feedbackCasesLoading, setFeedbackCasesLoading] = useState(false);
   const [feedbackCasesError, setFeedbackCasesError] = useState("");
   const [feedbackReloadToken, setFeedbackReloadToken] = useState(0);
+  const [optimizationGroups, setOptimizationGroups] = useState<OptimizationGroup[]>([]);
+  const [optimizationsLoading, setOptimizationsLoading] = useState(false);
+  const [optimizationsError, setOptimizationsError] = useState("");
+  const [optimizationsReloadToken, setOptimizationsReloadToken] = useState(0);
   const [caseSelectionMode, setCaseSelectionMode] = useState(false);
   const [selectedCaseIds, setSelectedCaseIds] = useState<Set<string>>(() => new Set());
   const [deletingCases, setDeletingCases] = useState(false);
@@ -1372,6 +1435,52 @@ export function AgentWorkspace({
   ]);
 
   useEffect(() => {
+    let cancelled = false;
+    const runtimeId = selectedAgent?.runtimeId ?? "";
+    const region = selectedAgent?.region ?? "cn-beijing";
+    setOptimizationGroups([]);
+    setOptimizationsError("");
+    if (section !== "optimizations" || !runtimeId) {
+      setOptimizationsLoading(false);
+      return;
+    }
+    if (detailOnly && !selectedAgentAppName) {
+      setOptimizationsLoading(!detailAgentInfoResolved);
+      return;
+    }
+    setOptimizationsLoading(true);
+    void getAgentOptimizations({
+      runtimeId,
+      region,
+      appName: selectedAgentAppName,
+    })
+      .then((response) => {
+        if (!cancelled) setOptimizationGroups(response.groups);
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) {
+          setOptimizationsError(
+            cause instanceof Error ? cause.message : String(cause),
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setOptimizationsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    detailAgentInfoResolved,
+    detailOnly,
+    optimizationsReloadToken,
+    section,
+    selectedAgentAppName,
+    selectedAgent?.region,
+    selectedAgent?.runtimeId,
+  ]);
+
+  useEffect(() => {
     apiKeyRequestRef.current += 1;
     setRevealedApiKey(null);
     setApiKeyVisible(false);
@@ -1623,6 +1732,8 @@ export function AgentWorkspace({
   }, [feedbackCases, previewCase, selectedAgent?.runtimeId]);
   const visibleCases = cases.filter((item) => {
     if (item.kind !== caseFilter) return false;
+    const source: AgentFeedbackSource = item.source === "auto" ? "auto" : "user";
+    if (source !== caseSourceFilter) return false;
     const keyword = caseQuery.trim().toLowerCase();
     if (!keyword) return true;
     return [
@@ -2522,28 +2633,6 @@ export function AgentWorkspace({
                       </div>
                     </dl>
                   </section>
-                  <section className="aw-option-panel aw-settings-card">
-                    <div className="aw-section-head">
-                      <div><h3>优化项</h3><p>针对运行质量开启专项优化策略。</p></div>
-                    </div>
-                    <div className="aw-option-content">
-                      <div className="aw-option-list" aria-disabled="true">
-                        {[
-                          ["上下文优化", "压缩冗余信息，保留对当前任务最有价值的上下文。"],
-                          ["幻觉抑制", "在证据不足时降低确定性表达并主动请求补充信息。"],
-                          ["工具调用优化", "减少重复调用，并优先复用已经获得的结果。"],
-                        ].map(([title, description]) => (
-                          <label key={title}>
-                            <input type="checkbox" disabled />
-                            <span><strong>{title}</strong><small>{description}</small></span>
-                          </label>
-                        ))}
-                      </div>
-                      <div className="aw-option-glass" role="status">
-                        <span>暂未开放</span>
-                      </div>
-                    </div>
-                  </section>
                 </div>
               )}
               {section === "integrations" && (
@@ -2727,7 +2816,7 @@ export function AgentWorkspace({
 
               {section === "evaluations" && (
                 <section className="aw-cases">
-                  {selectedAgent?.runtimeId ? (
+                  {selectedAgent?.runtimeId && (
                     <div className="aw-case-summary">
                       {(["good", "bad"] as const).map((kind) => {
                         const set = feedbackSetFor(feedbackSets, kind);
@@ -2745,34 +2834,47 @@ export function AgentWorkspace({
                         );
                       })}
                     </div>
-                  ) : (
-                    <div className="aw-case-note">
-                      只有已部署到 AgentKit Runtime 的 Agent 会同步展示用户反馈评测集。
-                    </div>
                   )}
-                  <div className="aw-case-filters">
-                    {(["good", "bad"] as const).map((filter) => (
-                      <button
-                        type="button"
-                        key={filter}
-                        className={caseFilter === filter ? "is-active" : ""}
-                        aria-pressed={caseFilter === filter}
-                        onClick={() => setCaseFilter(filter)}
-                      >
-                        {filter === "good" ? "Good case" : "Bad case"}
-                      </button>
-                    ))}
+                  <div className="aw-case-filter-bar">
+                    <div className="aw-case-filter-stack">
+                      <div className="aw-case-filters" aria-label="案例结果筛选">
+                        {(["good", "bad"] as const).map((filter) => (
+                          <button
+                            type="button"
+                            key={filter}
+                            className={caseFilter === filter ? "is-active" : ""}
+                            aria-pressed={caseFilter === filter}
+                            onClick={() => setCaseFilter(filter)}
+                          >
+                            {filter === "good" ? "Good case" : "Bad case"}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="aw-case-source-filters" aria-label="回流方式筛选">
+                        {(["auto", "user"] as const).map((source) => (
+                          <button
+                            type="button"
+                            key={source}
+                            className={caseSourceFilter === source ? "is-active" : ""}
+                            aria-pressed={caseSourceFilter === source}
+                            onClick={() => setCaseSourceFilter(source)}
+                          >
+                            {source === "auto" ? "自动回流" : "手动回流"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <label className="aw-case-search">
+                      <Search aria-hidden />
+                      <input
+                        type="search"
+                        value={caseQuery}
+                        onChange={(event) => setCaseQuery(event.currentTarget.value)}
+                        placeholder="搜索用户输入、期望行为或标签"
+                        aria-label="搜索评测案例"
+                      />
+                    </label>
                   </div>
-                  <label className="aw-case-search">
-                    <Search aria-hidden />
-                    <input
-                      type="search"
-                      value={caseQuery}
-                      onChange={(event) => setCaseQuery(event.currentTarget.value)}
-                      placeholder="搜索用户输入、期望行为或标签"
-                      aria-label="搜索评测案例"
-                    />
-                  </label>
                   {canManageCases && (
                     <div className={`aw-case-toolbar${caseSelectionMode ? " is-active" : ""}`}>
                       {caseSelectionMode ? (
@@ -2839,6 +2941,36 @@ export function AgentWorkspace({
                       onRetry={() => setFeedbackReloadToken((value) => value + 1)}
                     />
                   </div>
+                </section>
+              )}
+              {section === "optimizations" && (
+                <section className="aw-optimizations">
+                  <div className="aw-optimization-intro">
+                    <h3>优化项</h3>
+                    <p>根据评测结果汇总需要优先处理的改进建议。</p>
+                  </div>
+                  {optimizationsLoading ? (
+                    <div className="aw-optimization-state" role="status">
+                      <span className="loading-gap-spinner" aria-hidden="true" />
+                      <span>正在读取优化项</span>
+                    </div>
+                  ) : optimizationsError ? (
+                    <div className="aw-optimization-state is-error" role="alert">
+                      <span>{optimizationsError}</span>
+                      <button
+                        type="button"
+                        onClick={() => setOptimizationsReloadToken((value) => value + 1)}
+                      >
+                        重试
+                      </button>
+                    </div>
+                  ) : optimizationGroups.length > 0 ? (
+                    <OptimizationTable groups={optimizationGroups} />
+                  ) : (
+                    <div className="aw-optimization-state">
+                      暂无优化项，自动评测完成后会在这里生成建议。
+                    </div>
+                  )}
                 </section>
               )}
             </div>
@@ -2933,6 +3065,69 @@ export function AgentWorkspace({
   );
 }
 
+function OptimizationTable({ groups }: { groups: OptimizationGroup[] }) {
+  return (
+    <div className="aw-optimization-table-wrap">
+      <table className="aw-optimization-table">
+        <thead>
+          <tr>
+            <th scope="col">修复优先级</th>
+            <th scope="col">建议优化模块</th>
+            <th scope="col">优化建议和理由</th>
+          </tr>
+        </thead>
+        <tbody>
+          {groups.map((group) => (
+            <tr
+              key={`${group.priority}:${group.module}:${group.customModule ?? ""}`}
+            >
+              <td>
+                <span className={`aw-priority is-${group.priority}`}>
+                  {optimizationPriorityLabel(group.priority)}
+                </span>
+              </td>
+              <td>
+                <span className="aw-optimization-module">
+                  {optimizationModuleLabel(group)}
+                </span>
+              </td>
+              <td>
+                <ul className="aw-optimization-list">
+                  {group.items.map((item) => (
+                    <li key={`${item.suggestion}:${item.reason}`}>
+                      <strong>{item.suggestion}</strong>
+                      <p>{item.reason}</p>
+                    </li>
+                  ))}
+                </ul>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DeleteCaseIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4.5 7h15" />
+      <path d="M9 7V4.8h6V7" />
+      <path d="m6.5 7 .8 12h9.4l.8-12" />
+      <path d="M10 10.5v5M14 10.5v5" />
+    </svg>
+  );
+}
+
 function CaseTable({
   cases,
   loading = false,
@@ -2969,7 +3164,11 @@ function CaseTable({
   return (
     <div className="aw-case-table">
       <div className="aw-case-row aw-case-row-head">
-        <span>用户输入</span><span>Agent 输出</span><span>来源</span>
+        <span>用户输入</span>
+        <span>Agent 输出</span>
+        <span>评分</span>
+        <span>评分理由</span>
+        <span className="aw-case-action-head">操作</span>
       </div>
       {loading ? (
         <div className="aw-case-empty">正在读取 AgentKit 评测集…</div>
@@ -2989,8 +3188,9 @@ function CaseTable({
           const isExpanded = expandedCaseIds?.has(item.id) ?? false;
           const outputLength =
             item.output.length + item.referenceOutput.length;
-          const canExpand = outputLength > 220;
+          const canExpand = outputLength > 220 || (item.reason?.length ?? 0) > 120;
           const canDeleteCase = canDelete && !isLocalPreview;
+          const isAutomatic = item.source === "auto";
           return (
             <div
               className={[
@@ -3021,7 +3221,7 @@ function CaseTable({
                 }
               }}
             >
-              <div className="aw-case-text">
+              <div className="aw-case-text aw-case-cell" data-label="用户输入">
                 <span className="aw-case-title-line">
                   {selectionMode && canDeleteCase && (
                     <span
@@ -3032,8 +3232,17 @@ function CaseTable({
                   <strong title={item.input}>{item.input || "无用户输入"}</strong>
                 </span>
                 {item.comment && <small title={item.comment}>备注：{item.comment}</small>}
+                <small className="aw-case-time">{formatCaseTime(item.createdAt)}</small>
+                {(item.userId || item.sessionId) && (
+                  <small title={[item.userId, item.sessionId].filter(Boolean).join(" · ")}>
+                    {[item.userId, item.sessionId].filter(Boolean).join(" · ")}
+                  </small>
+                )}
               </div>
-              <div className={`aw-case-output${isExpanded ? " is-expanded" : ""}`}>
+              <div
+                className={`aw-case-output aw-case-cell${isExpanded ? " is-expanded" : ""}`}
+                data-label="Agent 输出"
+              >
                 <p className="aw-case-output-preview" title={item.output}>
                   {item.output || "无可见回复"}
                 </p>
@@ -3058,11 +3267,18 @@ function CaseTable({
                   </button>
                 )}
               </div>
-              <div className="aw-case-meta">
-                <span className="aw-case-meta-top">
-                  <span className={`aw-case-tag is-${item.kind}`}>
-                    {item.kind === "good" ? "Good case" : "Bad case"}
-                  </span>
+              <div className="aw-case-score aw-case-cell" data-label="评分">
+                {formatCaseScore(item)}
+              </div>
+              <div
+                className={`aw-case-reason aw-case-cell${isExpanded ? " is-expanded" : ""}`}
+                data-label="评分理由"
+              >
+                <p title={isAutomatic ? item.reason : undefined}>
+                  {isAutomatic ? item.reason || "暂无评分理由" : "—"}
+                  </p>
+                </div>
+                <div className="aw-case-actions aw-case-cell" data-label="操作">
                   {canDeleteCase && (
                     <button
                       type="button"
@@ -3075,18 +3291,11 @@ function CaseTable({
                       title="删除反馈案例"
                       aria-label="删除反馈案例"
                     >
-                      <Trash2 aria-hidden />
+                      <DeleteCaseIcon />
                     </button>
                   )}
-                </span>
-                <small>{formatCaseTime(item.createdAt)}</small>
-                {(item.userId || item.sessionId) && (
-                  <small title={[item.userId, item.sessionId].filter(Boolean).join(" · ")}>
-                    {[item.userId, item.sessionId].filter(Boolean).join(" · ")}
-                  </small>
-                )}
+                </div>
               </div>
-            </div>
           );
         })
       )}
