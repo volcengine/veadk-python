@@ -85,55 +85,31 @@ function ttlLabel(seconds: number): string {
   return `${Math.ceil(seconds / 60)} 分钟`;
 }
 
-function ExecutionStages({ task }: { task: SkillWorkbenchTask }) {
-  const statusStages = task.activities.flatMap((activity) =>
-    activity.kind === "status"
-      ? [{
-          id: activity.id,
-          text: activity.text,
-          done: activity.status === "done",
-        }]
-      : [],
-  );
-  const stages = [
-    { id: "session", text: "DevEnv 已就绪", done: true },
-    {
-      id: "codex",
-      text: task.operation === "create" ? "Codex 正在创建 Skill" : "Codex 正在分析并优化 Skill",
-      done: task.stage === "validating" || task.stage === "packaging" || TERMINAL.has(task.state),
-    },
-    ...statusStages,
-    ...(task.stage === "validating" || task.stage === "packaging" || TERMINAL.has(task.state)
-      ? [{ id: "validating", text: "校验 Skill 结构与内容", done: task.stage === "packaging" || TERMINAL.has(task.state) }]
-      : []),
-    ...(task.stage === "packaging" || TERMINAL.has(task.state)
-      ? [{ id: "packaging", text: "生成可下载产物", done: TERMINAL.has(task.state) }]
-      : []),
-  ].filter((stage, index, values) =>
-    values.findIndex((candidate) => candidate.text === stage.text) === index
-  );
-
+function SkillUserTurn({
+  intent,
+  sourceName,
+}: {
+  intent: string;
+  sourceName?: string;
+}) {
   return (
-    <ol className="skill-workbench__execution-stages" aria-label="执行阶段">
-      {stages.map((stage, index) => {
-        const active = !stage.done && stages.slice(0, index).every((item) => item.done);
-        return (
-          <li
-            key={stage.id}
-            className={stage.done ? "is-done" : active ? "is-active" : ""}
-          >
-            <span>{stage.text}</span>
-            <small>{stage.done ? "已完成" : active ? "进行中" : "等待中"}</small>
-          </li>
-        );
-      })}
-    </ol>
+    <div className="skill-workbench__user-turn">
+      <div className="skill-workbench__user-bubble">
+        {sourceName ? (
+          <span className="skill-workbench__turn-context" title={sourceName}>
+            Skill · {sourceName}
+          </span>
+        ) : null}
+        <p>{intent}</p>
+      </div>
+    </div>
   );
 }
 
 function LoadingConversation({
   operation,
   intent,
+  sourceName,
   refinement,
   stopping,
   onRefinementChange,
@@ -141,6 +117,7 @@ function LoadingConversation({
 }: {
   operation: "create" | "optimize" | null;
   intent: string;
+  sourceName?: string;
   refinement: string;
   stopping: boolean;
   onRefinementChange: (value: string) => void;
@@ -149,32 +126,20 @@ function LoadingConversation({
   return (
     <div className="skill-workbench__run-grid is-process-only">
       <section className="skill-workbench__timeline" aria-live="polite">
-        <div className="skill-workbench__state is-running">
-          <TextShimmer duration={2.2} spread={16}>正在创建 DevEnv</TextShimmer>
-          <span className="skill-workbench__user-intent">{intent}</span>
-        </div>
         <div className="skill-workbench__activity">
-          <p className="skill-workbench__stage-note">
-            正在分配隔离环境并准备 Codex。完成后会自动开始
+          <SkillUserTurn intent={intent} sourceName={sourceName} />
+          <div className="skill-workbench__assistant-turn">
+            <TextShimmer duration={2.2} spread={16}>正在创建 DevEnv</TextShimmer>
+            <p className="skill-workbench__stage-note">
+              正在准备隔离环境，随后会自动开始
             {operation === "create"
-              ? "创建"
+              ? "创建 Skill"
               : operation === "optimize"
-                ? "优化"
+                ? "优化 Skill"
                 : "处理 Skill"}
-            ，离开页面不会中断任务。
-          </p>
-        <ol className="skill-workbench__provisioning-steps">
-          <li className="is-done">会话已建立</li>
-          <li className="is-active">正在创建 DevEnv</li>
-          <li>准备 Skill 工作区</li>
-          <li>
-            {operation === "create"
-              ? "开始创建 Skill"
-              : operation === "optimize"
-                ? "开始优化 Skill"
-                : "开始处理 Skill"}
-          </li>
-        </ol>
+              。
+            </p>
+          </div>
         </div>
         <div className="composer composer--new-chat skill-workbench__composer">
           <div className="composer-box">
@@ -192,7 +157,7 @@ function LoadingConversation({
             </div>
             <button
               type="button"
-              className="comp-send"
+              className="comp-send is-stop"
               disabled={stopping}
               onClick={onStop}
               aria-label="停止创建 DevEnv"
@@ -454,7 +419,9 @@ export function SkillWorkbench({
           role={taskRecovering ? "status" : "alert"}
         >
           <span>{taskError}</span>
-          <button type="button" onClick={onRetryTask}>立即重试</button>
+          {taskRecovering ? (
+            <button type="button" onClick={onRetryTask}>立即重试</button>
+          ) : null}
         </div>
       ) : null}
 
@@ -462,6 +429,7 @@ export function SkillWorkbench({
         <LoadingConversation
           operation={provisioningTask.operation}
           intent={provisioningTask.intent}
+          sourceName={provisioningTask.sourceName}
           refinement={refinement}
           stopping={action === "stop"}
           onRefinementChange={setRefinement}
@@ -483,58 +451,64 @@ export function SkillWorkbench({
       ) : (
         <div className={`skill-workbench__run-grid${ready ? "" : " is-process-only"}`}>
           <section className="skill-workbench__timeline" aria-live="polite">
-            <div className={`skill-workbench__state is-${task.state}`}>
-              {TERMINAL.has(task.state) ? (
-                <strong>{stageLabel(task)}</strong>
-              ) : (
-                <TextShimmer duration={2.2} spread={16}>{stageLabel(task)}</TextShimmer>
-              )}
-              <span className="skill-workbench__user-intent">{task.intent}</span>
-              {task.toolId || task.sessionId ? (
-                <dl className="skill-workbench__runtime-meta">
-                  {task.toolId ? (
-                    <div>
-                      <dt>Tool ID</dt>
-                      <dd title={task.toolId}>{task.toolId}</dd>
-                    </div>
-                  ) : null}
-                  {task.sessionId ? (
-                    <div>
-                      <dt>Session ID</dt>
-                      <dd title={task.sessionId}>{task.sessionId}</dd>
-                    </div>
-                  ) : null}
-                </dl>
-              ) : null}
-            </div>
             <div
               ref={activityRef}
               className="skill-workbench__activity"
               onScroll={handleActivityScroll}
             >
-              <ExecutionStages task={task} />
-              <SkillConversationStream activities={task.activities} />
-              {task.error ? (
-                <div className="skill-workbench__error" role="alert">{task.error}</div>
-              ) : null}
-              {["failed", "cancelled", "expired"].includes(task.state) ? (
-                <div className="skill-workbench__recovery">
-                  <p>
-                    {task.state === "expired"
-                      ? task.recoveryAvailable === true
-                        ? "当前 DevEnv 已释放，当前产物无法下载或发布。提交后将创建新的 DevEnv，并从最近的恢复点继续。"
-                        : task.recoveryAvailable === false
-                          ? "当前 DevEnv 已释放，当前产物无法下载或发布，并且没有可用恢复点。请返回技能中心重新创建。"
-                          : "当前 DevEnv 已释放，当前产物无法下载或发布。提交后会尝试从最近可用的恢复点创建新 DevEnv；如果恢复点不可用，系统会提示重新创建。"
-                      : task.state === "cancelled"
-                        ? "当前任务已停止，DevEnv 和已完成内容仍保留。可以在下方继续输入。"
-                        : "本轮执行失败，但 DevEnv 和已完成内容仍保留。调整要求后可以继续。"}
-                  </p>
-                  {recoveryUnavailable ? (
-                    <button type="button" onClick={onBack}>返回技能中心</button>
-                  ) : null}
+              <SkillUserTurn
+                intent={task.intent}
+                sourceName={task.source?.name}
+              />
+              <div className="skill-workbench__assistant-turn">
+                <div className="skill-workbench__assistant-head">
+                  {TERMINAL.has(task.state) ? (
+                    <strong>{stageLabel(task)}</strong>
+                  ) : (
+                    <TextShimmer duration={2.2} spread={16}>
+                      {stageLabel(task)}
+                    </TextShimmer>
+                  )}
                 </div>
-              ) : null}
+                {task.toolId || task.sessionId ? (
+                  <dl className="skill-workbench__runtime-meta">
+                    {task.toolId ? (
+                      <div>
+                        <dt>Tool ID</dt>
+                        <dd title={task.toolId}>{task.toolId}</dd>
+                      </div>
+                    ) : null}
+                    {task.sessionId ? (
+                      <div>
+                        <dt>Session ID</dt>
+                        <dd title={task.sessionId}>{task.sessionId}</dd>
+                      </div>
+                    ) : null}
+                  </dl>
+                ) : null}
+                <SkillConversationStream activities={task.activities} />
+                {task.error ? (
+                  <div className="skill-workbench__error" role="alert">{task.error}</div>
+                ) : null}
+                {["failed", "cancelled", "expired"].includes(task.state) ? (
+                  <div className="skill-workbench__recovery">
+                    <p>
+                      {task.state === "expired"
+                        ? task.recoveryAvailable === true
+                          ? "当前 DevEnv 已释放，当前产物无法下载或发布。提交后将创建新的 DevEnv，并从最近的恢复点继续。"
+                          : task.recoveryAvailable === false
+                            ? "当前 DevEnv 已释放，当前产物无法下载或发布，并且没有可用恢复点。请返回技能中心重新创建。"
+                            : "当前 DevEnv 已释放，当前产物无法下载或发布。提交后会尝试从最近可用的恢复点创建新 DevEnv；如果恢复点不可用，系统会提示重新创建。"
+                        : task.state === "cancelled"
+                          ? "当前任务已停止，DevEnv 和已完成内容仍保留。可以在下方继续输入。"
+                          : "本轮执行失败，但 DevEnv 和已完成内容仍保留。调整要求后可以继续。"}
+                    </p>
+                    {recoveryUnavailable ? (
+                      <button type="button" onClick={onBack}>返回技能中心</button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
             </div>
             <div className="composer composer--new-chat skill-workbench__composer">
               <div className="composer-box">
@@ -570,7 +544,7 @@ export function SkillWorkbench({
                 {task.state === "running" ? (
                   <button
                     type="button"
-                    className="comp-send"
+                    className="comp-send is-stop"
                     disabled={Boolean(action)}
                     onClick={() => void stop()}
                     aria-label="停止当前任务"

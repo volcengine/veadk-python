@@ -490,7 +490,11 @@ export async function publishSkillWorkbenchTask(args: {
     if (done) break;
   }
   consumeLine(buffered);
-  if (!result) throw new Error("发布进度流提前结束，请重试。");
+  if (!result) {
+    throw new Error(
+      "发布进度流提前结束，无法确认发布结果。请刷新技能中心确认状态。",
+    );
+  }
   return result;
 }
 

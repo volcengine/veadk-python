@@ -42,7 +42,7 @@ test("preserves the existing A/B Skill creator beside the DevEnv conversation fl
   assert.match(app, /skillWorkbenchOpen/);
 });
 
-test("opens Create and Optimize setup from a card-based Skill Space home", () => {
+test("opens Create and Optimize as chat-first conversations from Skill Center", () => {
   assert.match(center, /function SkillWorkbenchSetup/);
   assert.match(center, /className="skillcenter-space-grid"/);
   assert.match(center, /className="skillcenter-create-action"/);
@@ -50,7 +50,9 @@ test("opens Create and Optimize setup from a card-based Skill Space home", () =>
   assert.match(center, /openSetup\("create"\)/);
   assert.match(center, /beginOptimization/);
   assert.match(center, /onClick=\{beginOptimization\}/);
+  assert.match(center, /className="skillcenter-chat-intro"/);
   assert.match(center, /className="composer composer--new-chat skillcenter-setup-composer"/);
+  assert.match(center, /className="skillcenter-context-attachment"/);
   assert.match(center, /上传 ZIP/);
   assert.match(center, /isImeCompositionEvent/);
   assert.match(center, /event\.nativeEvent/);
@@ -58,6 +60,7 @@ test("opens Create and Optimize setup from a card-based Skill Space home", () =>
   assert.match(center, /onStartTask/);
   assert.doesNotMatch(center, /function SkillCenterComposer/);
   assert.doesNotMatch(center, /role="radiogroup"/);
+  assert.doesNotMatch(center, /<form/);
 });
 
 test("opens optimization sources in the dedicated conversation setup", () => {
@@ -82,7 +85,8 @@ test("sends complete Skill Center identity when starting an optimization", () =>
 
 test("renders a single-column process until a complete artifact is available", () => {
   assert.match(workbench, /SkillConversationStream/);
-  assert.match(workbench, /ExecutionStages/);
+  assert.match(workbench, /SkillUserTurn/);
+  assert.match(workbench, /skill-workbench__assistant-turn/);
   assert.match(workbench, /skill-workbench__run-grid is-process-only/);
   assert.match(workbench, /ready \? \(/);
   assert.match(workbench, /<CodeBrowserWorkspace/);
@@ -95,6 +99,8 @@ test("renders a single-column process until a complete artifact is available", (
   assert.doesNotMatch(workbench, /<pre><code>\{task\.skillMd\}/);
   assert.doesNotMatch(workbench, /skill-workbench__tabs/);
   assert.doesNotMatch(workbench, /产物将在生成后显示/);
+  assert.doesNotMatch(workbench, /ExecutionStages/);
+  assert.doesNotMatch(workbench, /skill-workbench__provisioning-steps/);
 });
 
 test("uses contextual deletion and never offers cancellation after success", () => {
@@ -189,6 +195,8 @@ test("keeps task polling above the workbench and supports safe reopening", () =>
 
 test("preserves optimization intent while provisioning and uses neutral reload labels", () => {
   assert.match(controller, /operation:\s*null/);
+  assert.match(controller, /sourceName:\s*args\.source\?\.name \|\| args\.file\?\.name/);
+  assert.match(workbench, /sourceName=\{provisioningTask\.sourceName\}/);
   assert.match(
     controller,
     /current\.find\(\(task\) =>\s*task\.jobId === reference\.jobId &&\s*task\.state === "provisioning"/,
@@ -206,9 +214,18 @@ test("recovers transient task polling failures without discarding the last good 
   assert.match(controller, /function isRetryableSyncFailure/);
   assert.match(controller, /listFailureCountRef/);
   assert.match(controller, /detailFailureCountRef/);
-  assert.match(controller, /setActiveTaskRecovering\(true\)/);
+  assert.match(controller, /SKILL_TASK_INITIALIZING/);
+  assert.match(controller, /setActiveTaskRecovering\(reveal\)/);
+  assert.match(
+    controller,
+    /detailFailureCountRef\.current >= SYNC_ERROR_REVEAL_THRESHOLD/,
+  );
   assert.match(controller, /正在自动重试/);
   assert.match(controller, /activeTaskRef\.current/);
+  assert.doesNotMatch(
+    controller,
+    /!activeTaskRef\.current\s*\|\|/,
+  );
   assert.doesNotMatch(
     controller,
     /catch \(cause\)[\s\S]{0,500}setActiveTask\(null\)/,
@@ -218,6 +235,32 @@ test("recovers transient task polling failures without discarding the last good 
   assert.match(
     controller,
     /cause\.code === "SKILL_WORKBENCH_ERROR"[\s\S]*includes\(cause\.status\)/,
+  );
+  assert.doesNotMatch(
+    controller,
+    /\[408,\s*429,\s*500,\s*502,\s*503,\s*504\]/,
+  );
+});
+
+test("retries artifact reads only when transport or server semantics allow it", () => {
+  assert.match(
+    controller,
+    /const retryable = isRetryableSyncFailure\(cause\)/,
+  );
+  assert.doesNotMatch(
+    controller,
+    /\[404,\s*409,\s*502,\s*503\]\.includes\(cause\.status\)/,
+  );
+  assert.doesNotMatch(
+    api,
+    /发布进度流提前结束，请重试/,
+  );
+});
+
+test("does not offer a manual retry for non-retryable task failures", () => {
+  assert.match(
+    workbench,
+    /\{taskRecovering \? \(\s*<button type="button" onClick=\{onRetryTask\}>立即重试<\/button>\s*\) : null\}/,
   );
 });
 
@@ -304,6 +347,15 @@ test("keeps one composer across running, stopped, failed, ready, and expired sta
   assert.match(workbench, /stop\(\)/);
   assert.match(workbench, /submitRefinement/);
   assert.match(api, /export async function stopSkillWorkbenchTask/);
+  assert.match(workbench, /className="comp-send is-stop"/);
+  assert.match(
+    styles,
+    /\.skill-workbench__composer \.comp-send\.is-stop\s*\{[^}]*background:\s*hsl\(var\(--secondary\)\)/,
+  );
+  assert.doesNotMatch(
+    styles,
+    /\.skill-workbench__composer \.comp-send\.is-stop\s*\{[^}]*--destructive/,
+  );
 });
 
 test("renders Markdown and highlights shell files in the artifact browser", () => {

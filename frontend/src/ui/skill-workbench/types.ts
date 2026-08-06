@@ -91,6 +91,7 @@ export interface SkillWorkbenchProvisioningTask {
   jobId: string;
   operation: SkillWorkbenchOperation | null;
   intent: string;
+  sourceName?: string;
   revision: 1;
   state: "provisioning";
   stage: "provisioning";

@@ -1011,6 +1011,7 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     credential_tool_ids: list[str] = []
     agent_tool_kinds: list[str] = []
     agent_credential_kinds: list[str] = []
+    shared_model_api_key = uuid4().hex
     creation_barrier = threading.Barrier(6)
     created_kinds_lock = threading.Lock()
 
@@ -1053,9 +1054,15 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
             created_kinds.append("dev")
         return "dev-tool"
 
-    def _ensure_code_credential(**kwargs: object) -> None:
+    def _ensure_code_credential(**kwargs: object) -> str:
         assert len(created_kinds) == 6
-        credential_tool_ids.append(str(kwargs["tool_id"]))
+        tool_id = str(kwargs["tool_id"])
+        credential_tool_ids.append(tool_id)
+        if tool_id == "chat-tool":
+            assert "model_api_key" not in kwargs
+        else:
+            assert kwargs["model_api_key"] == shared_model_api_key
+        return shared_model_api_key
 
     def _ensure_agent_credential(**kwargs: object) -> None:
         assert len(created_kinds) == 6

@@ -7598,17 +7598,45 @@ def frontend_deploy(
         resolved_sandbox_tool_ids[kind] = tool_id
         click.echo(f"Creating AgentKit {sandbox_tool_labels[kind]} model credential…")
 
-    if resolved_sandbox_tool_ids:
-        max_workers = len(resolved_sandbox_tool_ids)
-    else:
-        max_workers = 1
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    primary_codex_kind = "codex"
+    shared_codex_model_api_key: str | None = None
+    primary_codex_tool_id = resolved_sandbox_tool_ids.get(primary_codex_kind)
+    if primary_codex_tool_id:
+        try:
+            shared_codex_model_api_key = ensure_skill_creator_model_credential(
+                tool_id=primary_codex_tool_id,
+                region=region,
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token,
+                provider=provider_id,
+                model_name=sandbox_agent_model_name,
+            )
+        except Exception as error:
+            detail = _safe_exception_detail(
+                error,
+                secrets=(ak, sk, session_token),
+            )
+            raise click.ClickException(
+                "Failed to provision the AgentKit Codex model credential. "
+                f"Underlying error:\n{detail}"
+            ) from error
+        click.echo("AgentKit Codex model credential is ready.")
+
+    remaining_credential_ids = {
+        kind: tool_id
+        for kind, tool_id in resolved_sandbox_tool_ids.items()
+        if kind != primary_codex_kind
+    }
+    with ThreadPoolExecutor(
+        max_workers=max(1, len(remaining_credential_ids))
+    ) as executor:
         credential_futures = {}
-        for kind, tool_id in resolved_sandbox_tool_ids.items():
-            if kind in {"codex", "skill_creator", "skill_workbench", "dev"}:
+        for kind, tool_id in remaining_credential_ids.items():
+            if kind in {"skill_creator", "skill_workbench", "dev"}:
                 code_model_name = (
                     sandbox_agent_model_name
-                    if kind in {"codex", "skill_workbench"}
+                    if kind in {"skill_workbench", "dev"}
                     else None
                 )
                 future = executor.submit(
@@ -7620,6 +7648,7 @@ def frontend_deploy(
                     session_token=session_token,
                     provider=provider_id,
                     model_name=code_model_name,
+                    model_api_key=shared_codex_model_api_key,
                 )
             else:
                 future = executor.submit(

@@ -109,6 +109,20 @@ test("ZIP selection rejects files above the server-advertised upload limit", () 
   assert.match(skillCenterSource, /setComposerError/);
 });
 
+test("create and optimize setup uses a chat welcome with source attachments", () => {
+  assert.match(skillCenterSource, /className="skillcenter-chat-intro"/);
+  assert.match(skillCenterSource, /className="skillcenter-context-attachment"/);
+  assert.match(
+    stylesSource,
+    /\.skillcenter-chat-intro\s*\{[^}]*max-width:\s*768px;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.skillcenter-setup-composer\.composer\s*\{[^}]*max-width:\s*768px;/,
+  );
+  assert.doesNotMatch(skillCenterSource, /<form/);
+});
+
 test("capability failures remain visible in the Skill browser and can be retried", () => {
   assert.match(skillCenterSource, /capabilityLoading/);
   assert.match(skillCenterSource, /capabilityError/);

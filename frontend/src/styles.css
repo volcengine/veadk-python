@@ -4288,14 +4288,14 @@ body {
   flex-direction: column;
   align-items: center;
   overflow-y: auto;
-  padding: 32px;
+  padding: 24px 32px 32px;
   background: hsl(var(--background));
 }
-.skillcenter-setup-head {
-  width: min(880px, 100%);
-  margin: 0 auto 24px;
+.skillcenter-setup-nav {
+  width: min(768px, 100%);
+  margin: 0 auto;
 }
-.skillcenter-setup-head > button,
+.skillcenter-setup-nav > button,
 .skillcenter-back {
   min-height: 28px;
   padding: 0;
@@ -4306,20 +4306,25 @@ body {
   font-size: 12px;
   cursor: pointer;
 }
-.skillcenter-setup-head > button:hover,
+.skillcenter-setup-nav > button:hover,
 .skillcenter-back:hover { color: hsl(var(--foreground)); }
-.skillcenter-setup-head > div { margin-top: 14px; }
-.skillcenter-setup-head h1 {
-  margin: 0;
-  font-size: 21px;
-  font-weight: 650;
-  line-height: 1.3;
+.skillcenter-chat-intro {
+  width: 100%;
+  max-width: 768px;
+  margin: clamp(64px, 12vh, 124px) auto 24px;
+  text-align: center;
 }
-.skillcenter-setup-head p {
-  margin: 6px 0 0;
+.skillcenter-chat-intro h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.skillcenter-chat-intro p {
+  margin: 10px 0 0;
   color: hsl(var(--muted-foreground));
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: 13.5px;
+  line-height: 1.6;
 }
 .skillcenter-composer-upload:focus-within,
 .skillcenter-source-chip:focus-visible,
@@ -4328,25 +4333,25 @@ body {
   outline-offset: 1px;
 }
 .skillcenter-setup-composer.composer {
-  width: min(880px, 100%);
-  max-width: none;
+  width: 100%;
+  max-width: 768px;
   padding: 0;
 }
 .skillcenter-setup-composer.composer--new-chat .composer-box {
-  min-height: 164px;
-  border-radius: 12px;
+  min-height: 152px;
+  border-radius: 16px;
 }
 .skillcenter-setup-composer.composer--new-chat .composer-input-stack {
-  min-height: 120px;
+  min-height: 108px;
 }
 .skillcenter-setup-composer.composer--new-chat .comp-input {
-  min-height: 92px;
+  min-height: 82px;
   padding-top: 4px;
 }
 .skillcenter-setup-composer.composer--new-chat .comp-input::placeholder {
   color: hsl(var(--muted-foreground));
 }
-.skillcenter-composer-source {
+.skillcenter-context-attachment {
   min-height: 30px;
   display: flex;
   align-items: center;
@@ -4355,7 +4360,7 @@ body {
   color: hsl(var(--muted-foreground));
   font-size: 12px;
 }
-.skillcenter-composer-source > span {
+.skillcenter-context-attachment > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4433,14 +4438,14 @@ body {
   opacity: 0;
 }
 .skillcenter-composer-error {
-  width: min(880px, 100%);
+  width: min(768px, 100%);
   margin: 8px auto 0;
   color: hsl(var(--destructive));
   font-size: 12px;
   line-height: 1.5;
 }
 .skillcenter-upload-limit {
-  width: min(880px, 100%);
+  width: min(768px, 100%);
   margin: 8px auto 0;
   color: hsl(var(--muted-foreground));
   font-size: 11.5px;

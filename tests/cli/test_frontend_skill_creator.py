@@ -22,9 +22,8 @@ import subprocess
 import sys
 import time
 import zipfile
-
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -360,7 +359,7 @@ def test_model_credential_is_bound_directly_to_tool(
         "veadk.auth.veauth.ark_veauth.get_ark_token",
         return_value=model_api_key,
     ) as get_ark_token:
-        ensure_skill_creator_model_credential(
+        resolved_key = ensure_skill_creator_model_credential(
             tool_id="tool-id",
             access_key=access_key,
             secret_key=secret_key,
@@ -382,6 +381,7 @@ def test_model_credential_is_bound_directly_to_tool(
     assert envs["CODEX_API_KEY"] == model_api_key
     assert envs["CODEX_BASE_URL"] == expected_base_url
     assert envs["AGENTKIT_SANDBOX_MODEL_PROVIDER"] == expected_model_provider
+    assert resolved_key == model_api_key
 
 
 def test_code_env_credential_accepts_a_provider_specific_default_model() -> None:
@@ -410,6 +410,34 @@ def test_code_env_credential_accepts_a_provider_specific_default_model() -> None
     assert envs["CODEX_MODEL"] == "seed-2-0-lite-260228"
     assert envs["OPENCODE_MODEL"] == "seed-2-0-lite-260228"
     assert envs["ANTHROPIC_MODEL"] == "seed-2-0-lite-260228"
+
+
+def test_model_credential_reuses_the_key_selected_for_the_primary_code_env() -> None:
+    selected_key = os.urandom(24).hex()
+    updates: list[object] = []
+    client = SimpleNamespace(
+        get_tool=lambda _: SimpleNamespace(envs=[]),
+        update_tool=updates.append,
+    )
+
+    with patch(
+        "veadk.auth.veauth.ark_veauth.get_ark_token",
+        side_effect=AssertionError("a shared key must not be resolved again"),
+    ):
+        resolved_key = ensure_skill_creator_model_credential(
+            tool_id="devenv-tool",
+            access_key=os.urandom(16).hex(),
+            secret_key=os.urandom(24).hex(),
+            model_api_key=selected_key,
+            client=client,
+        )
+
+    envs = {
+        item.key: item.value for item in cast(list[Any], getattr(updates[0], "envs"))
+    }
+    assert resolved_key == selected_key
+    assert envs["CODEX_API_KEY"] == selected_key
+    assert envs["CODEX_MODEL"] == "doubao-seed-2-0-pro-260215"
 
 
 def test_candidate_session_never_overrides_tool_model_credential(monkeypatch) -> None:

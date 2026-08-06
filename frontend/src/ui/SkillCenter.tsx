@@ -247,24 +247,29 @@ function SkillWorkbenchSetup({
 
   return (
     <section className="skillcenter-setup" aria-label={operation === "create" ? "创建 Skill" : "优化 Skill"}>
-      <header className="skillcenter-setup-head">
+      <header className="skillcenter-setup-nav">
         <button type="button" onClick={onBack}>
           {operation === "optimize" ? "返回选择来源" : "返回技能中心"}
         </button>
-        <div>
-          <h1>{operation === "create" ? "创建 Skill" : "优化 Skill"}</h1>
-          <p>
-            {operation === "create"
-              ? "描述目标与使用场景，Codex 将在独立 DevEnv 中创建并验证 Skill。"
-              : "选择现有 Skill 或上传 ZIP，再说明希望保留和改进的内容。"}
-          </p>
-        </div>
       </header>
+
+      <div className="skillcenter-chat-intro">
+        <h1>
+          {operation === "create"
+            ? "你希望创建什么 Skill？"
+            : "你希望如何优化这个 Skill？"}
+        </h1>
+        <p>
+          {operation === "create"
+            ? "描述目标、使用场景和期望输出。"
+            : "说明需要保留的能力和希望改进的结果。"}
+        </p>
+      </div>
 
       <div className="composer composer--new-chat skillcenter-setup-composer">
         <div className="composer-box">
           {operation === "optimize" ? (
-            <div className="skillcenter-composer-source">
+            <div className="skillcenter-context-attachment">
               {source ? (
                 <>
                   <span className="skillcenter-source-chip" title={source.name}>

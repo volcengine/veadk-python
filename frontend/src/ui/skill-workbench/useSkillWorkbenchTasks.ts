@@ -39,7 +39,7 @@ function isRetryableSyncFailure(cause: unknown): boolean {
   if (cause instanceof SkillWorkbenchApiError) {
     if (cause.retryable) return true;
     return cause.code === "SKILL_WORKBENCH_ERROR" &&
-      [408, 429, 500, 502, 503, 504].includes(cause.status);
+      [408, 429, 502, 503, 504].includes(cause.status);
   }
   if (cause instanceof TypeError) return true;
   return typeof DOMException !== "undefined" &&
@@ -354,7 +354,14 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       });
     } catch (cause) {
       if (signal?.aborted || generation !== generationRef.current || request !== detailRequestRef.current || requestedJobId !== activeJobId) return;
-      if (provisioning && cause instanceof SkillWorkbenchApiError && cause.status === 404) {
+      if (
+        provisioning &&
+        cause instanceof SkillWorkbenchApiError &&
+        (
+          cause.status === 404 ||
+          cause.code === "SKILL_TASK_INITIALIZING"
+        )
+      ) {
         detailFailureCountRef.current = 0;
         setActiveTaskError("");
         setActiveTaskRecovering(false);
@@ -390,11 +397,10 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
         const retryable = isRetryableSyncFailure(cause);
         if (retryable) {
           detailFailureCountRef.current += 1;
-          setActiveTaskRecovering(true);
-          if (
-            !activeTaskRef.current ||
-            detailFailureCountRef.current >= SYNC_ERROR_REVEAL_THRESHOLD
-          ) {
+          const reveal =
+            detailFailureCountRef.current >= SYNC_ERROR_REVEAL_THRESHOLD;
+          setActiveTaskRecovering(reveal);
+          if (reveal) {
             setActiveTaskError(
               "暂时无法读取 DevEnv 状态，正在自动重试。当前会话和已完成内容已保留。",
             );
@@ -533,9 +539,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     const load = () => {
       void refreshActiveArtifact(controller.signal).catch((cause) => {
         if (controller.signal.aborted) return;
-        const retryable = cause instanceof SkillWorkbenchApiError
-          ? cause.retryable || [404, 409, 502, 503].includes(cause.status)
-          : true;
+        const retryable = isRetryableSyncFailure(cause);
         if (retryable && attempts < ARTIFACT_RETRY_LIMIT) {
           attempts += 1;
           setActiveArtifactError("");
@@ -626,6 +630,9 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       jobId: reference.jobId,
       operation: args.operation,
       intent: args.intent,
+      ...(args.source?.name || args.file?.name
+        ? { sourceName: args.source?.name || args.file?.name }
+        : {}),
       revision: 1,
       state: "provisioning",
       stage: "provisioning",
