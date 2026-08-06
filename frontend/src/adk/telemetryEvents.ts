@@ -1,4 +1,5 @@
 import {
+  agentDebugErrorKind,
   agentDeployErrorKind,
   sandboxCreateErrorKind,
   telemetryErrorSummary,
@@ -64,6 +65,19 @@ export interface SandboxCreateFailedTelemetry extends SandboxCreateTelemetryBase
   error: unknown;
 }
 
+export type AgentDebugVariantType = "baseline" | "comparison";
+export type AgentDebugFailedPhase = "create_test_run" | "create_test_session";
+
+export interface AgentDebugTelemetryBase {
+  durationMs: number;
+  variantType?: AgentDebugVariantType;
+}
+
+export interface AgentDebugFailedTelemetry extends AgentDebugTelemetryBase {
+  phase?: AgentDebugFailedPhase;
+  error: unknown;
+}
+
 function agentDeployCategories(args: AgentDeployTelemetryBase) {
   return {
     deploy_source: args.telemetry.source,
@@ -126,4 +140,33 @@ export function trackSandboxCreateFailed(args: SandboxCreateFailedTelemetry): vo
     error_kind: sandboxCreateErrorKind(args.error),
     error_summary: telemetryErrorSummary(args.error),
   });
+}
+
+export function trackAgentDebugSucceeded(args: AgentDebugTelemetryBase): void {
+  trackStudioEvent(
+    "studio_agent_debug",
+    {
+      debug_status: "succeeded",
+      variant_type: args.variantType,
+    },
+    {
+      duration_ms: args.durationMs,
+    },
+  );
+}
+
+export function trackAgentDebugFailed(args: AgentDebugFailedTelemetry): void {
+  trackStudioEvent(
+    "studio_agent_debug",
+    {
+      debug_status: "failed",
+      variant_type: args.variantType,
+      failed_phase: args.phase,
+      error_kind: agentDebugErrorKind(args.error),
+      error_summary: telemetryErrorSummary(args.error),
+    },
+    {
+      duration_ms: args.durationMs,
+    },
+  );
 }

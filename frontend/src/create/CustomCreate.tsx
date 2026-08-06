@@ -114,6 +114,11 @@ import {
   generateAgentProject,
   runGeneratedAgentTestSSE,
 } from "../adk/client";
+import {
+  trackAgentDebugFailed,
+  trackAgentDebugSucceeded,
+  type AgentDebugFailedPhase,
+} from "../adk/telemetryEvents";
 import type {
   DeployStage,
   GeneratedAgentTestRun,
@@ -3045,6 +3050,9 @@ export function CustomCreate({
     setDebugInput("");
 
     let createdRun: GeneratedAgentTestRun | null = null;
+    let failedPhase: AgentDebugFailedPhase | undefined;
+    const debugStartedAt = Date.now();
+    const variantType = id === "baseline" ? "baseline" : "comparison";
     try {
       await cleanupDebugVariantRun(id);
       await cleanupStoredDebugRuns();
@@ -3054,6 +3062,7 @@ export function CustomCreate({
         description: variant.description,
         instruction: variant.instruction,
       };
+      failedPhase = "create_test_run";
       createdRun = await createGeneratedAgentTestRun(
         debugRuntimeDraft(variantDraft),
         deploymentTarget
@@ -3064,6 +3073,7 @@ export function CustomCreate({
           : undefined,
       );
       rememberDebugTestRun(createdRun.runId);
+      failedPhase = "create_test_session";
       const sessionId = await createGeneratedAgentTestSession(
         createdRun.runId,
         "test_user",
@@ -3077,6 +3087,10 @@ export function CustomCreate({
             : item,
         ),
       );
+      trackAgentDebugSucceeded({
+        durationMs: Date.now() - debugStartedAt,
+        variantType,
+      });
     } catch (err) {
       if (createdRun) {
         try {
@@ -3098,6 +3112,12 @@ export function CustomCreate({
             : item,
         ),
       );
+      trackAgentDebugFailed({
+        durationMs: Date.now() - debugStartedAt,
+        variantType,
+        phase: failedPhase,
+        error: err,
+      });
     }
   };
 

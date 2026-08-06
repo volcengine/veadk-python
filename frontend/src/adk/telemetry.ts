@@ -8,7 +8,8 @@ export type StudioTelemetryEventName =
   | "studio_instance_loaded"
   | "studio_user_authenticated"
   | "studio_agent_deploy"
-  | "studio_sandbox_create";
+  | "studio_sandbox_create"
+  | "studio_agent_debug";
 
 export interface StudioTelemetryEventOptions {
   dedupeKey?: string;
