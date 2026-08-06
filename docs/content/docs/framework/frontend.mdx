@@ -26,6 +26,10 @@ VeADK 自带一个 React 前端，用于渲染智能体经由 Google ADK API Ser
   Codex 进行多轮对话，实时展示公开思考摘要、命令、文件修改、MCP 调用和最终回复。
   退出后云端 Session 会被删除，内容不会写入普通历史会话；
   页面刷新后可直接新建，遗留 Session 由 AgentKit 在 TTL 到期后自动回收。
+- **沙箱智能体快照**：Codex、OpenClaw 和 Hermes Tool 开启快照后，AgentKit 已保存
+  快照但没有运行中 Session 的智能体会显示为“可唤醒”。点击后 Studio 使用最新快照
+  恢复 Session，再进入 Codex 对话或 OpenClaw/Hermes 主界面；同一智能体已有运行中
+  Session 时不会重复展示快照。
 - **智能搜索**：「会话」源在当前 agent 的历史消息中做全文检索；「网页」源调用该 agent 挂载的联网搜索工具实时检索（使用服务端环境变量里的凭据）。
 - **消息反馈回流**：连接云端 AgentKit Runtime 时，回答下方的赞/踩按钮会将
   当前问题、回答和反馈状态写入 AgentKit 评测集。每个 Agent 自动维护
@@ -200,11 +204,11 @@ ZIP 上传到 TOS，再调用 Skills API 创建或更新 Skill；只有用户填
 候选 Session 的 TTL 为 30 分钟，用户重新创建或离开任务时会立即清理。任务状态保存
 在 Sandbox 而非 Frontend 进程内存，因此 FaaS 请求命中不同实例时仍可继续轮询和下载。
 
-云上首次部署时，若没有指定 Tool ID，部署命令会使用部署 AK/SK 并行创建两个独立
-CodeEnv Tool。也可以分别使用 `--sandbox-chat-codex-tool-id` 和
-`--sandbox-skill-creator-tool-id` 指定已有 Tool。部署命令会通过 AgentKit 凭据托管
-将 Ark 凭据保存到 KMS，并把代理地址和可撤销票据绑定到两个 Tool；VeFaaS Function
-只接收 Tool ID，不接收模型凭据：
+云上首次部署时，若没有指定 Tool ID，部署命令会使用部署 AK/SK 并行创建 Codex、
+OpenClaw、Hermes 和 Skill Creator 四个独立 Tool，并为前三个 Tool 开启自动快照。
+也可以使用对应的 `--sandbox-*-tool-id` 参数指定已有 Tool；部署命令同样会检查并开启
+其快照能力。部署命令会通过 AgentKit 凭据托管将 Ark 凭据保存到 KMS，并把代理地址
+和可撤销票据绑定到 Tool；VeFaaS Function 只接收 Tool ID，不接收模型凭据：
 
 ```bash
 veadk studio deploy \

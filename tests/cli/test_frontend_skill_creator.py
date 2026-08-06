@@ -334,6 +334,7 @@ def test_model_credential_is_bound_directly_to_tool() -> None:
     model_api_key = os.urandom(24).hex()
     secret_key = os.urandom(24).hex()
     calls: list[tuple[str, dict[str, object]]] = []
+    update_slots: list[None] = []
 
     class FakeApi:
         def call(
@@ -361,6 +362,7 @@ def test_model_credential_is_bound_directly_to_tool() -> None:
             tool_id="tool-id",
             access_key=access_key,
             secret_key=secret_key,
+            before_update=lambda: update_slots.append(None),
         )
 
     get_ark_token.assert_called_once_with(
@@ -370,6 +372,7 @@ def test_model_credential_is_bound_directly_to_tool() -> None:
         session_token=None,
     )
     assert [action for action, _ in calls] == ["GetTool", "UpdateTool"]
+    assert update_slots == [None]
     update_body = calls[1][1]
     envs = {
         item["Key"]: item["Value"]

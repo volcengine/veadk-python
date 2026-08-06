@@ -17,7 +17,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -25,8 +27,8 @@ import secrets
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass, field
-from typing import Annotated, Any, Protocol
+from dataclasses import dataclass, field, replace
+from typing import Annotated, Any, Literal, Protocol
 
 from fastapi import File, Request, UploadFile
 
@@ -73,13 +75,29 @@ STUDIO_SANDBOX_TOOL_NAME = "veadk-studio-codex"
 STUDIO_SANDBOX_TTL_SECONDS = 28_800
 STUDIO_SANDBOX_MAX_ACTIVE = 20
 STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH = SESSION_DISPLAY_NAME_MAX_LENGTH
+STUDIO_SANDBOX_USER_SESSION_ID_MAX_LENGTH = 200
 _SANDBOX_CHAT_TOOL_ENV = "SANDBOX_CHAT_CODEX"
+_SANDBOX_CHAT_SNAPSHOT_TOOL_ENV = "SANDBOX_CHAT_CODEX_SNAPSHOT"
 _SANDBOX_AGENT_TOOL_ENVS = {
     "openclaw": ("SANDBOX_CHAT_OPENCLAW", "SANDBOX_OPENCLAW_TOOL"),
     "hermes": ("SANDBOX_CHAT_HERMES", "SANDBOX_HERMES_TOOL"),
 }
+_SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS = {
+    "openclaw": ("SANDBOX_CHAT_OPENCLAW_SNAPSHOT",),
+    "hermes": ("SANDBOX_CHAT_HERMES_SNAPSHOT",),
+}
 _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 _SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
+_RESUME_SESSION_ATTEMPTS = 60
+_RESUME_SESSION_INTERVAL_SECONDS = 5
+_STUDIO_USER_SESSION_PREFIX = "studio"
+_LEGACY_STUDIO_USER_SESSION_PREFIX = "studio2"
+_STUDIO_USER_SESSION_UUID_LENGTH = 32
+_ACTIVE_SESSION_STATUSES = frozenset(
+    {"creating", "starting", "initializing", "pending", "ready", "running"}
+)
+SandboxRetentionMode = Literal["temporary", "recoverable"]
+_SANDBOX_RETENTION_MODES = frozenset({"temporary", "recoverable"})
 _SENSITIVE_PATTERN = re.compile(
     r"(?i)((?:api[_-]?key|access[_-]?key|secret|token|authorization|password)"
     r"\s*[:=]\s*)(?:[\"'][^\"']*[\"']|[^\s,;]+)"
@@ -147,6 +165,79 @@ def _require_session_access(
 ) -> None:
     if not is_admin and session.created_by != owner_id:
         raise SandboxSessionNotFoundError("智能体 Session 不存在或不属于当前用户。")
+
+
+def _owner_fingerprint(owner_id: str) -> str:
+    return hashlib.sha256(owner_id.encode("utf-8")).hexdigest()[:16]
+
+
+def _safe_user_session_owner(owner_id: str) -> str:
+    """Encode one owner using AgentKit's UserSessionId-safe characters."""
+    if re.fullmatch(r"[A-Za-z0-9_]+", owner_id) and not owner_id.startswith("u_"):
+        value = owner_id
+    else:
+        encoded = base64.b32encode(owner_id.encode("utf-8"))
+        value = f"u_{encoded.decode('ascii').rstrip('=')}"
+
+    maximum = (
+        STUDIO_SANDBOX_USER_SESSION_ID_MAX_LENGTH
+        - len(_STUDIO_USER_SESSION_PREFIX)
+        - _STUDIO_USER_SESSION_UUID_LENGTH
+        - 2
+    )
+    if len(value) > maximum:
+        fingerprint = hashlib.sha256(owner_id.encode("utf-8")).hexdigest()[:32]
+        value = f"{value[: maximum - len(fingerprint) - 1]}_{fingerprint}"
+    return value
+
+
+def _studio_user_session_prefix(owner_id: str) -> str:
+    return f"{_STUDIO_USER_SESSION_PREFIX}-{_safe_user_session_owner(owner_id)}-"
+
+
+def _build_studio_user_session_id(owner_id: str) -> str:
+    return f"{_studio_user_session_prefix(owner_id)}{uuid.uuid4().hex}"
+
+
+def _legacy_snapshot_display_name_for_owner(
+    user_session_id: str,
+    owner_id: str | None,
+) -> str | None:
+    parts = user_session_id.split("-", 3)
+    if len(parts) != 4 or parts[0] != _LEGACY_STUDIO_USER_SESSION_PREFIX:
+        return None
+    if owner_id is not None and not secrets.compare_digest(
+        parts[1], _owner_fingerprint(owner_id)
+    ):
+        return None
+    encoded_name = parts[3]
+    if not encoded_name:
+        return ""
+    try:
+        padding = "=" * (-len(encoded_name) % 4)
+        return base64.urlsafe_b64decode(encoded_name + padding).decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        return None
+
+
+def _snapshot_display_name_for_owner(
+    user_session_id: str,
+    owner_id: str | None,
+) -> str | None:
+    legacy_name = _legacy_snapshot_display_name_for_owner(
+        user_session_id,
+        owner_id,
+    )
+    if legacy_name is not None:
+        return legacy_name
+    if owner_id is None:
+        return user_session_id
+    owner_prefix = _studio_user_session_prefix(owner_id)
+    if not user_session_id.startswith(owner_prefix) or not user_session_id.removeprefix(
+        owner_prefix
+    ):
+        return None
+    return user_session_id
 
 
 def _safe_error_message(error: object) -> str:
@@ -227,6 +318,54 @@ class SandboxCloudSession:
     display_name: str = ""
     created_by: str = ""
     creator_name: str = ""
+
+
+@dataclass(frozen=True)
+class SandboxCloudSnapshot:
+    """Restorable AgentKit Session snapshot without a running data plane."""
+
+    tool_id: str
+    snapshot_id: str
+    session_id: str
+    user_session_id: str
+    region: str = ""
+    status: str = "Unknown"
+    reason: str = ""
+    created_at: str = ""
+    display_name: str = ""
+    created_by: str = ""
+
+
+def _restorable_snapshots(
+    sessions: list[SandboxCloudSession],
+    snapshots: list[SandboxCloudSnapshot],
+) -> list[SandboxCloudSnapshot]:
+    active_user_session_ids = {
+        session.user_session_id
+        for session in sessions
+        if session.user_session_id
+        and session.status.lower() in _ACTIVE_SESSION_STATUSES
+    }
+    active_session_ids = {
+        session.instance_id
+        for session in sessions
+        if session.status.lower() in _ACTIVE_SESSION_STATUSES
+    }
+    restorable: list[SandboxCloudSnapshot] = []
+    for snapshot in sorted(
+        snapshots,
+        key=lambda item: item.created_at,
+        reverse=True,
+    ):
+        if (
+            snapshot.user_session_id
+            and snapshot.user_session_id in active_user_session_ids
+        ):
+            continue
+        if not snapshot.user_session_id and snapshot.session_id in active_session_ids:
+            continue
+        restorable.append(snapshot)
+    return restorable
 
 
 @dataclass
@@ -393,6 +532,22 @@ class SandboxCloudGateway(Protocol):
         """Create a fresh remote Sandbox session."""
         raise NotImplementedError
 
+    async def list_snapshots(
+        self, tool_id: str, username: str | None = None
+    ) -> list[SandboxCloudSnapshot]:
+        """List restorable snapshots, optionally scoped to one Studio owner."""
+        raise NotImplementedError
+
+    async def resume_snapshot(
+        self, snapshot: SandboxCloudSnapshot
+    ) -> SandboxCloudSession:
+        """Restore one snapshot and wait for its Session to become ready."""
+        raise NotImplementedError
+
+    async def delete_snapshot(self, snapshot: SandboxCloudSnapshot) -> None:
+        """Delete one restorable snapshot."""
+        raise NotImplementedError
+
     async def delete_session(self, session: SandboxCloudSession) -> None:
         """Delete a remote Sandbox session."""
         raise NotImplementedError
@@ -505,6 +660,34 @@ class AgentkitSandboxGateway:
             creator_name=session_creator_name(value),
         )
 
+    @staticmethod
+    def _cloud_snapshot(
+        tool_id: str,
+        value: Any,
+        *,
+        region: str,
+        owner_id: str | None,
+    ) -> SandboxCloudSnapshot | None:
+        snapshot_id = str(getattr(value, "snapshot_id", "") or "").strip()
+        user_session_id = str(getattr(value, "user_session_id", "") or "").strip()
+        display_name = _snapshot_display_name_for_owner(user_session_id, owner_id)
+        if not snapshot_id or display_name is None:
+            return None
+        if not display_name:
+            display_name = user_session_id or snapshot_id
+        return SandboxCloudSnapshot(
+            tool_id=tool_id,
+            snapshot_id=snapshot_id,
+            session_id=str(getattr(value, "session_id", "") or "").strip(),
+            user_session_id=user_session_id,
+            region=region,
+            status=str(getattr(value, "status", "") or "Unknown").strip(),
+            reason=str(getattr(value, "reason", "") or "").strip(),
+            created_at=str(getattr(value, "created_at", "") or "").strip(),
+            display_name=display_name,
+            created_by=owner_id or "",
+        )
+
     async def list_sessions(
         self, tool_id: str, username: str | None = None
     ) -> list[SandboxCloudSession]:
@@ -557,6 +740,176 @@ class AgentkitSandboxGateway:
                 ) from error
         raise SandboxProvisioningError("无法在支持的地域读取 AgentKit Session。")
 
+    async def list_snapshots(
+        self, tool_id: str, username: str | None = None
+    ) -> list[SandboxCloudSnapshot]:
+        from agentkit.sdk.tools import types as tools_types
+
+        regions = self._region_candidates or ("",)
+        for index, region in enumerate(regions):
+            snapshots: dict[str, SandboxCloudSnapshot] = {}
+            next_token: str | None = None
+            seen_tokens: set[str] = set()
+            try:
+                for _page in range(100):
+                    response = await self._call(
+                        "list_session_snapshots",
+                        tools_types.ListSessionSnapshotsRequest(
+                            ToolId=tool_id,
+                            MaxResults=100,
+                            NextToken=next_token,
+                        ),
+                        region=region,
+                    )
+                    for value in response.snapshots or []:
+                        snapshot = self._cloud_snapshot(
+                            tool_id,
+                            value,
+                            region=region,
+                            owner_id=username,
+                        )
+                        if snapshot is not None:
+                            snapshots[snapshot.snapshot_id] = snapshot
+                    next_token = str(response.next_token or "").strip() or None
+                    if next_token is None:
+                        return sorted(
+                            snapshots.values(),
+                            key=lambda item: item.created_at,
+                            reverse=True,
+                        )
+                    if next_token in seen_tokens:
+                        raise SandboxProvisioningError(
+                            "AgentKit ListSessionSnapshots 返回了重复的 NextToken。"
+                        )
+                    seen_tokens.add(next_token)
+                raise SandboxProvisioningError(
+                    "AgentKit ListSessionSnapshots 分页超过安全上限。"
+                )
+            except SandboxError:
+                raise
+            except Exception as error:
+                if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
+                    continue
+                raise SandboxProvisioningError(
+                    f"读取 AgentKit Session 快照失败：{_safe_error_message(error)}"
+                ) from error
+        raise SandboxProvisioningError("无法在支持的地域读取 AgentKit Session 快照。")
+
+    async def _active_session_for_snapshot(
+        self, snapshot: SandboxCloudSnapshot
+    ) -> SandboxCloudSession | None:
+        from agentkit.sdk.tools import types as tools_types
+
+        response = await self._call(
+            "list_sessions",
+            tools_types.ListSessionsRequest(
+                ToolId=snapshot.tool_id,
+                MaxResults=10,
+                Filters=[
+                    tools_types.FiltersItemForListSessions(
+                        Name="UserSessionId",
+                        Values=[snapshot.user_session_id],
+                    )
+                ],
+            ),
+            region=snapshot.region,
+        )
+        for value in response.session_infos or []:
+            if str(getattr(value, "user_session_id", "") or "").strip() != (
+                snapshot.user_session_id
+            ):
+                continue
+            session = self._cloud_session(
+                snapshot.tool_id,
+                value,
+                region=snapshot.region,
+                fallback_user_session_id=snapshot.user_session_id,
+            )
+            if session.status.lower() in _ACTIVE_SESSION_STATUSES:
+                return session
+        return None
+
+    async def resume_snapshot(
+        self, snapshot: SandboxCloudSnapshot
+    ) -> SandboxCloudSession:
+        from agentkit.sdk.tools import types as tools_types
+
+        try:
+            current = await self._active_session_for_snapshot(snapshot)
+            if current is not None:
+                return current
+            response = await self._call(
+                "resume_session_from_snapshot",
+                tools_types.ResumeSessionFromSnapshotRequest(
+                    ToolId=snapshot.tool_id,
+                    SnapshotId=snapshot.snapshot_id,
+                    Ttl=STUDIO_SANDBOX_TTL_SECONDS,
+                    CreateNewInstance=False,
+                ),
+                region=snapshot.region,
+            )
+            session_id = str(response.session_id or "").strip()
+            if not session_id:
+                raise SandboxProvisioningError("AgentKit 唤醒快照响应缺少 SessionId。")
+            latest: SandboxCloudSession | None = None
+            for attempt in range(_RESUME_SESSION_ATTEMPTS):
+                try:
+                    value = await self._call(
+                        "get_session",
+                        tools_types.GetSessionRequest(
+                            ToolId=snapshot.tool_id,
+                            SessionId=session_id,
+                        ),
+                        region=snapshot.region,
+                    )
+                    latest = self._cloud_session(
+                        snapshot.tool_id,
+                        value,
+                        region=snapshot.region,
+                        fallback_user_session_id=snapshot.user_session_id,
+                    )
+                    status = latest.status.lower()
+                    if status == "ready" and latest.endpoint:
+                        return latest
+                    if status in {"failed", "error", "deleted", "expired"}:
+                        raise SandboxProvisioningError(
+                            f"AgentKit 快照唤醒失败，当前状态：{latest.status}。"
+                        )
+                except Exception as error:
+                    if not is_agentkit_resource_not_found(error):
+                        raise
+                if attempt + 1 < _RESUME_SESSION_ATTEMPTS:
+                    await asyncio.sleep(_RESUME_SESSION_INTERVAL_SECONDS)
+            last_status = latest.status if latest is not None else "Unknown"
+            raise SandboxProvisioningError(
+                f"AgentKit 快照唤醒超时，最后状态：{last_status}。"
+            )
+        except SandboxError:
+            raise
+        except Exception as error:
+            raise SandboxProvisioningError(
+                f"唤醒 AgentKit Session 快照失败：{_safe_error_message(error)}"
+            ) from error
+
+    async def delete_snapshot(self, snapshot: SandboxCloudSnapshot) -> None:
+        from agentkit.sdk.tools import types as tools_types
+
+        try:
+            await self._call(
+                "delete_session_snapshot",
+                tools_types.DeleteSessionSnapshotRequest(
+                    ToolId=snapshot.tool_id,
+                    SnapshotId=snapshot.snapshot_id,
+                ),
+                region=snapshot.region,
+            )
+        except Exception as error:
+            if is_agentkit_resource_not_found(error):
+                return
+            raise SandboxProvisioningError(
+                f"删除 AgentKit Session 快照失败：{_safe_error_message(error)}"
+            ) from error
+
     async def get_session(self, tool_id: str, session_id: str) -> SandboxCloudSession:
         from agentkit.sdk.tools import types as tools_types
 
@@ -591,7 +944,7 @@ class AgentkitSandboxGateway:
         username: str = "",
         creator_name: str = "",
     ) -> SandboxCloudSession:
-        user_session_id = f"studio-{uuid.uuid4()}"
+        user_session_id = _build_studio_user_session_id(username)
         regions = self._region_candidates or ("",)
         for index, region in enumerate(regions):
             request = build_create_session_request(
@@ -726,46 +1079,209 @@ class AgentkitSandboxGateway:
         return connection
 
 
+def _sandbox_tool_ids(
+    temporary_tool_id: str,
+    snapshot_tool_id: str,
+) -> tuple[str, str]:
+    """Resolve dual-Tool mode while preserving legacy one-Tool deployments."""
+    temporary_tool_id = temporary_tool_id.strip()
+    snapshot_tool_id = snapshot_tool_id.strip()
+    if snapshot_tool_id and snapshot_tool_id != temporary_tool_id:
+        return temporary_tool_id, snapshot_tool_id
+    return "", snapshot_tool_id or temporary_tool_id
+
+
+def _sandbox_capabilities(
+    temporary_tool_id: str,
+    recoverable_tool_id: str,
+) -> dict[str, object]:
+    enabled = bool(temporary_tool_id or recoverable_tool_id)
+    reason = "" if enabled else "管理员未配置"
+    return {
+        "enabled": enabled,
+        "reason": reason,
+        "defaultRetentionMode": ("recoverable" if recoverable_tool_id else "temporary"),
+        "retentionModes": {
+            "temporary": {
+                "enabled": bool(temporary_tool_id),
+                "reason": "" if temporary_tool_id else "管理员未配置临时会话 Tool",
+            },
+            "recoverable": {
+                "enabled": bool(recoverable_tool_id),
+                "reason": (
+                    "" if recoverable_tool_id else "管理员未配置可恢复会话 Tool"
+                ),
+            },
+        },
+    }
+
+
+def _sandbox_create_tool_id(
+    retention_mode: object,
+    *,
+    temporary_tool_id: str,
+    recoverable_tool_id: str,
+) -> str:
+    if not isinstance(retention_mode, str) or retention_mode not in (
+        _SANDBOX_RETENTION_MODES
+    ):
+        raise SandboxValidationError("会话类型必须是 temporary 或 recoverable。")
+    tool_id = (
+        temporary_tool_id if retention_mode == "temporary" else recoverable_tool_id
+    )
+    if not tool_id:
+        label = "临时会话" if retention_mode == "temporary" else "可恢复会话"
+        raise SandboxConfigurationError(f"管理员未配置{label} Tool。")
+    return tool_id
+
+
+def _unique_tool_ids(*tool_ids: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(tool_id for tool_id in tool_ids if tool_id))
+
+
+async def _list_tool_sessions(
+    gateway: SandboxCloudGateway,
+    tool_ids: tuple[str, ...],
+    username: str | None,
+) -> list[SandboxCloudSession]:
+    if not tool_ids:
+        raise SandboxConfigurationError("管理员未配置")
+    pages = await asyncio.gather(
+        *(gateway.list_sessions(tool_id, username) for tool_id in tool_ids)
+    )
+    sessions = {
+        (session.tool_id, session.instance_id): session
+        for page in pages
+        for session in page
+    }
+    return sorted(
+        sessions.values(),
+        key=lambda item: item.created_at,
+        reverse=True,
+    )
+
+
+async def _get_tool_session(
+    gateway: SandboxCloudGateway,
+    tool_ids: tuple[str, ...],
+    session_id: str,
+) -> SandboxCloudSession:
+    if not tool_ids:
+        raise SandboxConfigurationError("管理员未配置")
+    for tool_id in tool_ids:
+        try:
+            return await gateway.get_session(tool_id, session_id)
+        except SandboxSessionNotFoundError:
+            continue
+    raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
+
+
 class SandboxConversationService:
     """Manage reusable cloud Sessions and per-user conversation connections."""
 
     def __init__(
-        self, gateway: SandboxCloudGateway, tool_id: str | None = None
+        self,
+        gateway: SandboxCloudGateway,
+        tool_id: str | None = None,
+        snapshot_tool_id: str | None = None,
     ) -> None:
         self._gateway = gateway
         self._configured_tool_id = (tool_id or "").strip()
+        self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
         self._sessions: dict[tuple[str, str], SandboxConversation] = {}
         self._registry_lock = asyncio.Lock()
         self._sessions_starting = 0
 
     def capabilities(self) -> dict[str, object]:
-        """Report whether the dedicated Codex Tool is configured."""
-        enabled = bool(self._tool_id(required=False))
-        return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
+        """Report the configured Codex retention modes."""
+        return _sandbox_capabilities(*self._tool_ids())
 
-    def _tool_id(self, *, required: bool = True) -> str:
-        tool_id = (
+    def _tool_ids(self) -> tuple[str, str]:
+        temporary_tool_id = (
             self._configured_tool_id
             or (os.getenv(_SANDBOX_CHAT_TOOL_ENV) or "").strip()
         )
-        if required and not tool_id:
-            raise SandboxConfigurationError("管理员未配置")
-        return tool_id
+        snapshot_tool_id = (
+            self._configured_snapshot_tool_id
+            or (os.getenv(_SANDBOX_CHAT_SNAPSHOT_TOOL_ENV) or "").strip()
+        )
+        return _sandbox_tool_ids(temporary_tool_id, snapshot_tool_id)
+
+    def _all_tool_ids(self) -> tuple[str, ...]:
+        return _unique_tool_ids(*self._tool_ids())
 
     async def list_sessions(
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSession]:
         """List the configured account's Sessions without exposing Endpoints."""
-        return await self._gateway.list_sessions(
-            self._tool_id(),
+        return await _list_tool_sessions(
+            self._gateway,
+            self._all_tool_ids(),
             None if is_admin else owner_id,
         )
+
+    async def list_snapshots(
+        self, owner_id: str, *, is_admin: bool = False
+    ) -> list[SandboxCloudSnapshot]:
+        _temporary_tool_id, recoverable_tool_id = self._tool_ids()
+        if not recoverable_tool_id:
+            return []
+        return await self._gateway.list_snapshots(
+            recoverable_tool_id, None if is_admin else owner_id
+        )
+
+    async def list_resources(
+        self, owner_id: str, *, is_admin: bool = False
+    ) -> tuple[list[SandboxCloudSession], list[SandboxCloudSnapshot]]:
+        sessions, snapshots = await asyncio.gather(
+            self.list_sessions(owner_id, is_admin=is_admin),
+            self.list_snapshots(owner_id, is_admin=is_admin),
+        )
+        return sessions, _restorable_snapshots(sessions, snapshots)
+
+    async def resume_snapshot(
+        self,
+        snapshot_id: str,
+        owner_id: str,
+        *,
+        is_admin: bool = False,
+    ) -> SandboxCloudSession:
+        snapshots = await self.list_snapshots(owner_id, is_admin=is_admin)
+        snapshot = next(
+            (item for item in snapshots if item.snapshot_id == snapshot_id),
+            None,
+        )
+        if snapshot is None:
+            raise SandboxSessionNotFoundError("智能体快照不存在或不属于当前用户。")
+        session = await self._gateway.resume_snapshot(snapshot)
+        return replace(
+            session,
+            display_name=session.display_name or snapshot.display_name,
+            created_by=session.created_by or snapshot.created_by,
+        )
+
+    async def delete_snapshot(
+        self,
+        snapshot_id: str,
+        owner_id: str,
+        *,
+        is_admin: bool = False,
+    ) -> None:
+        snapshots = await self.list_snapshots(owner_id, is_admin=is_admin)
+        snapshot = next(
+            (item for item in snapshots if item.snapshot_id == snapshot_id),
+            None,
+        )
+        if snapshot is None:
+            raise SandboxSessionNotFoundError("智能体快照不存在或不属于当前用户。")
+        await self._gateway.delete_snapshot(snapshot)
 
     async def create(
         self,
         owner_id: str,
         display_name: object = "",
         creator_name: str = "",
+        retention_mode: object = "recoverable",
     ) -> SandboxCloudSession:
         """Create a cloud Session without opening a conversation connection."""
         if not isinstance(display_name, str):
@@ -775,7 +1291,12 @@ class SandboxConversationService:
             raise SandboxValidationError(
                 f"智能体名称不能超过 {STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH} 个字符。"
             )
-        tool_id = self._tool_id()
+        temporary_tool_id, recoverable_tool_id = self._tool_ids()
+        tool_id = _sandbox_create_tool_id(
+            retention_mode,
+            temporary_tool_id=temporary_tool_id,
+            recoverable_tool_id=recoverable_tool_id,
+        )
         await self.cleanup_expired()
         async with self._registry_lock:
             if len(self._sessions) + self._sessions_starting >= (
@@ -814,7 +1335,11 @@ class SandboxConversationService:
                 raise SandboxCapacityError("智能体连接数已达上限，请稍后重试。")
             self._sessions_starting += 1
         try:
-            cloud = await self._gateway.get_session(self._tool_id(), session_id)
+            cloud = await _get_tool_session(
+                self._gateway,
+                self._all_tool_ids(),
+                session_id,
+            )
             _require_session_access(cloud, owner_id, is_admin=is_admin)
             if cloud.status.lower() != "ready" or not cloud.endpoint:
                 status = cloud.status or "Unknown"
@@ -1208,7 +1733,11 @@ class SandboxConversationService:
             raise SandboxSessionNotFoundError("智能体 Session 不存在或不属于当前用户。")
         session = self._sessions.pop(key, None)
         if session is None:
-            cloud = await self._gateway.get_session(self._tool_id(), session_id)
+            cloud = await _get_tool_session(
+                self._gateway,
+                self._all_tool_ids(),
+                session_id,
+            )
             _require_session_access(cloud, owner_id, is_admin=is_admin)
         else:
             cloud = session.cloud
@@ -1265,20 +1794,22 @@ class SandboxAgentSessionService:
         *,
         kind: str,
         tool_id: str | None = None,
+        snapshot_tool_id: str | None = None,
     ) -> None:
         if kind not in _SANDBOX_AGENT_TOOL_ENVS:
             raise ValueError(f"Unsupported Studio sandbox agent kind: {kind}")
         self._gateway = gateway
         self.kind = kind
         self._configured_tool_id = (tool_id or "").strip()
+        self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
         self._workspaces: dict[
             tuple[str, str], tuple[SandboxCloudSession, str, float]
         ] = {}
 
-    def _tool_id(self, *, required: bool = True) -> str:
-        tool_id = self._configured_tool_id
-        if not tool_id:
-            tool_id = next(
+    def _tool_ids(self) -> tuple[str, str]:
+        temporary_tool_id = self._configured_tool_id
+        if not temporary_tool_id:
+            temporary_tool_id = next(
                 (
                     value
                     for env_name in _SANDBOX_AGENT_TOOL_ENVS[self.kind]
@@ -1286,27 +1817,95 @@ class SandboxAgentSessionService:
                 ),
                 "",
             )
-        if required and not tool_id:
-            raise SandboxConfigurationError("管理员未配置")
-        return tool_id
+        snapshot_tool_id = self._configured_snapshot_tool_id
+        if not snapshot_tool_id:
+            snapshot_tool_id = next(
+                (
+                    value
+                    for env_name in _SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS[self.kind]
+                    if (value := (os.getenv(env_name) or "").strip())
+                ),
+                "",
+            )
+        return _sandbox_tool_ids(temporary_tool_id, snapshot_tool_id)
+
+    def _all_tool_ids(self) -> tuple[str, ...]:
+        return _unique_tool_ids(*self._tool_ids())
 
     def capabilities(self) -> dict[str, object]:
-        enabled = bool(self._tool_id(required=False))
-        return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
+        return _sandbox_capabilities(*self._tool_ids())
 
     async def list_sessions(
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSession]:
-        return await self._gateway.list_sessions(
-            self._tool_id(),
+        return await _list_tool_sessions(
+            self._gateway,
+            self._all_tool_ids(),
             None if is_admin else owner_id,
         )
+
+    async def list_snapshots(
+        self, owner_id: str, *, is_admin: bool = False
+    ) -> list[SandboxCloudSnapshot]:
+        _temporary_tool_id, recoverable_tool_id = self._tool_ids()
+        if not recoverable_tool_id:
+            return []
+        return await self._gateway.list_snapshots(
+            recoverable_tool_id, None if is_admin else owner_id
+        )
+
+    async def list_resources(
+        self, owner_id: str, *, is_admin: bool = False
+    ) -> tuple[list[SandboxCloudSession], list[SandboxCloudSnapshot]]:
+        sessions, snapshots = await asyncio.gather(
+            self.list_sessions(owner_id, is_admin=is_admin),
+            self.list_snapshots(owner_id, is_admin=is_admin),
+        )
+        return sessions, _restorable_snapshots(sessions, snapshots)
+
+    async def resume_snapshot(
+        self,
+        snapshot_id: str,
+        owner_id: str,
+        *,
+        is_admin: bool = False,
+    ) -> SandboxCloudSession:
+        snapshots = await self.list_snapshots(owner_id, is_admin=is_admin)
+        snapshot = next(
+            (item for item in snapshots if item.snapshot_id == snapshot_id),
+            None,
+        )
+        if snapshot is None:
+            raise SandboxSessionNotFoundError("智能体快照不存在或不属于当前用户。")
+        session = await self._gateway.resume_snapshot(snapshot)
+        return replace(
+            session,
+            display_name=session.display_name or snapshot.display_name,
+            created_by=session.created_by or snapshot.created_by,
+        )
+
+    async def delete_snapshot(
+        self,
+        snapshot_id: str,
+        owner_id: str,
+        *,
+        is_admin: bool = False,
+    ) -> None:
+        snapshots = await self.list_snapshots(owner_id, is_admin=is_admin)
+        snapshot = next(
+            (item for item in snapshots if item.snapshot_id == snapshot_id),
+            None,
+        )
+        if snapshot is None:
+            raise SandboxSessionNotFoundError("智能体快照不存在或不属于当前用户。")
+        await self._gateway.delete_snapshot(snapshot)
 
     async def create(
         self,
         owner_id: str,
         display_name: object = "",
         creator_name: str = "",
+        retention_mode: object = "recoverable",
     ) -> SandboxCloudSession:
         if not isinstance(display_name, str):
             raise SandboxValidationError("智能体名称必须是文本。")
@@ -1315,8 +1914,14 @@ class SandboxAgentSessionService:
             raise SandboxValidationError(
                 f"智能体名称不能超过 {STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH} 个字符。"
             )
+        temporary_tool_id, recoverable_tool_id = self._tool_ids()
+        tool_id = _sandbox_create_tool_id(
+            retention_mode,
+            temporary_tool_id=temporary_tool_id,
+            recoverable_tool_id=recoverable_tool_id,
+        )
         return await self._gateway.create_session(
-            self._tool_id(), display_name, owner_id, creator_name
+            tool_id, display_name, owner_id, creator_name
         )
 
     async def open(
@@ -1328,7 +1933,11 @@ class SandboxAgentSessionService:
     ) -> tuple[SandboxCloudSession, str]:
         """Resolve one ready Session and issue an opaque WebUI capability."""
         self._cleanup_expired()
-        cloud = await self._gateway.get_session(self._tool_id(), session_id)
+        cloud = await _get_tool_session(
+            self._gateway,
+            self._all_tool_ids(),
+            session_id,
+        )
         _require_session_access(cloud, owner_id, is_admin=is_admin)
         if cloud.status.lower() != "ready" or not cloud.endpoint:
             status = cloud.status or "Unknown"
@@ -1356,7 +1965,11 @@ class SandboxAgentSessionService:
             for candidate_owner, candidate_id in self._workspaces
         ):
             raise SandboxSessionNotFoundError("智能体 Session 不存在或不属于当前用户。")
-        cloud = await self._gateway.get_session(self._tool_id(), session_id)
+        cloud = await _get_tool_session(
+            self._gateway,
+            self._all_tool_ids(),
+            session_id,
+        )
         _require_session_access(cloud, owner_id, is_admin=is_admin)
         self._workspaces = {
             key: workspace
@@ -1420,6 +2033,27 @@ class SandboxAgentSessionService:
             for key, workspace in self._workspaces.items()
             if workspace[2] > now
         }
+
+
+def _public_snapshot(
+    snapshot: SandboxCloudSnapshot,
+    tool_name: str,
+) -> dict[str, str]:
+    status = (
+        "Wakeable" if snapshot.status.strip().lower() == "ready" else snapshot.status
+    )
+    return {
+        "snapshotId": snapshot.snapshot_id,
+        "sessionId": snapshot.session_id,
+        "userSessionId": snapshot.user_session_id,
+        "status": status,
+        "snapshotStatus": snapshot.status,
+        "reason": snapshot.reason,
+        "createdAt": snapshot.created_at,
+        "createdBy": snapshot.created_by,
+        "displayName": snapshot.display_name,
+        "toolName": tool_name,
+    }
 
 
 def mount_sandbox_agent_routes(
@@ -1495,13 +2129,20 @@ def mount_sandbox_agent_routes(
         request: Request,
     ) -> dict[str, object]:
         try:
-            sessions = await _service(kind).list_sessions(
+            sessions, snapshots = await _service(kind).list_resources(
                 owner_resolver(request),
                 is_admin=_is_admin(request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
-        return {"sessions": [_public_session(session, kind) for session in sessions]}
+        result: dict[str, object] = {
+            "sessions": [_public_session(session, kind) for session in sessions]
+        }
+        if snapshots:
+            result["snapshots"] = [
+                _public_snapshot(snapshot, kind) for snapshot in snapshots
+            ]
+        return result
 
     @app.post("/web/{kind}/sessions")
     async def _create_sandbox_agent_session(
@@ -1526,10 +2167,43 @@ def mount_sandbox_agent_routes(
                 owner_id,
                 data.get("displayName", ""),
                 creator_resolver(request) if creator_resolver else owner_id,
+                data.get("retentionMode", "recoverable"),
             )
         except SandboxError as error:
             raise _http_error(error) from error
         return _public_session(session, kind)
+
+    @app.post("/web/{kind}/snapshots/{snapshot_id}/resume")
+    async def _resume_sandbox_agent_snapshot(
+        kind: str,
+        snapshot_id: str,
+        request: Request,
+    ) -> dict[str, str]:
+        try:
+            session = await _service(kind).resume_snapshot(
+                snapshot_id,
+                owner_resolver(request),
+                is_admin=_is_admin(request),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return _public_session(session, kind)
+
+    @app.delete("/web/{kind}/snapshots/{snapshot_id}")
+    async def _delete_sandbox_agent_snapshot(
+        kind: str,
+        snapshot_id: str,
+        request: Request,
+    ) -> dict[str, bool]:
+        try:
+            await _service(kind).delete_snapshot(
+                snapshot_id,
+                owner_resolver(request),
+                is_admin=_is_admin(request),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"deleted": True}
 
     @app.post("/web/{kind}/sessions/{session_id}/open")
     async def _open_sandbox_agent_session(
@@ -1702,13 +2376,21 @@ def mount_sandbox_routes(
     @app.get("/web/sandbox/sessions")
     async def _list_sandbox_sessions(request: Request) -> dict[str, object]:
         try:
-            sessions = await service.list_sessions(
+            sessions, snapshots = await service.list_resources(
                 owner_resolver(request),
                 is_admin=_is_admin(request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
-        return {"sessions": [_public_session(session) for session in sessions]}
+        result: dict[str, object] = {
+            "sessions": [_public_session(session) for session in sessions]
+        }
+        if snapshots:
+            result["snapshots"] = [
+                _public_snapshot(snapshot, STUDIO_SANDBOX_TOOL_NAME)
+                for snapshot in snapshots
+            ]
+        return result
 
     @app.post("/web/sandbox/sessions")
     async def _start_sandbox_session(request: Request) -> dict[str, str]:
@@ -1730,6 +2412,7 @@ def mount_sandbox_routes(
                 owner_id,
                 data.get("displayName", ""),
                 creator_resolver(request) if creator_resolver else owner_id,
+                data.get("retentionMode", "recoverable"),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -1737,6 +2420,39 @@ def mount_sandbox_routes(
             **_public_session(session),
             "toolName": STUDIO_SANDBOX_TOOL_NAME,
         }
+
+    @app.post("/web/sandbox/snapshots/{snapshot_id}/resume")
+    async def _resume_sandbox_snapshot(
+        snapshot_id: str,
+        request: Request,
+    ) -> dict[str, str]:
+        try:
+            session = await service.resume_snapshot(
+                snapshot_id,
+                owner_resolver(request),
+                is_admin=_is_admin(request),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {
+            **_public_session(session),
+            "toolName": STUDIO_SANDBOX_TOOL_NAME,
+        }
+
+    @app.delete("/web/sandbox/snapshots/{snapshot_id}")
+    async def _delete_sandbox_snapshot(
+        snapshot_id: str,
+        request: Request,
+    ) -> dict[str, bool]:
+        try:
+            await service.delete_snapshot(
+                snapshot_id,
+                owner_resolver(request),
+                is_admin=_is_admin(request),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"deleted": True}
 
     @app.post("/web/sandbox/sessions/{session_id}/connect")
     async def _connect_sandbox_session(

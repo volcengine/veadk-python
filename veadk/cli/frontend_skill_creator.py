@@ -704,6 +704,7 @@ def ensure_skill_creator_model_credential(
     secret_key: str,
     session_token: str | None = None,
     region: str = _REGION,
+    before_update: Callable[[], None] | None = None,
 ) -> None:
     """Resolve an Ark API key and bind it directly to the CodeEnv Tool."""
     from agentkit.auth._openapi import OpenApiClient
@@ -746,6 +747,8 @@ def ensure_skill_creator_model_credential(
     if all(envs.get(key) == value for key, value in updates.items()):
         return
     envs.update(updates)
+    if before_update is not None:
+        before_update()
     api.call(
         "agentkit",
         "UpdateTool",

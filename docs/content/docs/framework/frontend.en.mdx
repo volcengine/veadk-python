@@ -220,6 +220,12 @@ export SANDBOX_SKILL_CREATOR=<skill-code-env-tool-id>
 veadk frontend --agents-dir examples
 ```
 
+Enable snapshots on the Codex, OpenClaw, and Hermes Tools. When AgentKit retains
+a snapshot but no Session is running, Studio marks the Agent as **Wakeable** and
+restores the latest snapshot before opening it. A cloud Studio deployment enables
+this capability on both newly created and explicitly configured Agent Tools;
+the Skill-creation Tool remains snapshot-free.
+
 For local Studio, configure the Ark model variables on both dedicated CodeEnv
 Tools. Adding a candidate to AgentKit uploads its ZIP to TOS, then creates or
 updates the Skill through the Skills API. It is published to a SkillSpace only

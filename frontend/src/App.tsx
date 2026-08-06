@@ -133,9 +133,12 @@ import {
   sandboxClient,
   type SandboxApproval,
   type SandboxApprovalDecision,
+  type SandboxAgentResource,
   type SandboxAgentKind,
   type SandboxAgentWorkspace as SandboxAgentWorkspaceData,
+  type SandboxLaunchCapabilities,
   type SandboxPermissions,
+  type SandboxRetentionMode,
   type SandboxSession as SandboxSessionInfo,
   type SandboxSkill,
   type SandboxToolLaunch,
@@ -727,15 +730,23 @@ export default function App() {
   const [sandboxLaunchState, setSandboxLaunchState] =
     useState<SandboxLaunchState>("confirm");
   const [sandboxLaunchError, setSandboxLaunchError] = useState("");
+  const [sandboxLaunchCapabilities, setSandboxLaunchCapabilities] =
+    useState<SandboxLaunchCapabilities | null>(null);
+  const [sandboxLaunchCapabilitiesLoading, setSandboxLaunchCapabilitiesLoading] =
+    useState(false);
+  const [sandboxLaunchCapabilitiesError, setSandboxLaunchCapabilitiesError] =
+    useState("");
   const [sandboxLaunchKind, setSandboxLaunchKind] =
     useState<"codex" | SandboxAgentKind>("codex");
   const [sandboxLaunchFromAgents, setSandboxLaunchFromAgents] = useState(false);
   const [sandboxAgentRefreshKey, setSandboxAgentRefreshKey] = useState(0);
   const [sandboxAgentDetailTarget, setSandboxAgentDetailTarget] =
-    useState<SandboxSessionInfo | null>(null);
+    useState<SandboxAgentResource | null>(null);
   const [sandboxAgentWorkspace, setSandboxAgentWorkspace] =
     useState<SandboxAgentWorkspaceData | null>(null);
   const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
+  const sandboxLaunchCapabilitiesAbortRef =
+    useRef<AbortController | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
   const sandboxSessionIdRef = useRef(sandboxSession?.id ?? "");
   const sandboxActiveAssistantTurnIdRef = useRef("");
@@ -2161,6 +2172,7 @@ export default function App() {
   useEffect(
     () => () => {
       sandboxLaunchAbortRef.current?.abort();
+      sandboxLaunchCapabilitiesAbortRef.current?.abort();
       sandboxMessageAbortRef.current?.abort();
     },
     [],
@@ -2252,14 +2264,51 @@ export default function App() {
     setSandboxLaunchKind(kind);
     setSandboxLaunchFromAgents(fromAgents);
     setSandboxLaunchOpen(true);
+    loadSandboxLaunchCapabilities(kind);
+  }
+
+  function loadSandboxLaunchCapabilities(
+    kind: "codex" | SandboxAgentKind = sandboxLaunchKind,
+  ) {
+    sandboxLaunchCapabilitiesAbortRef.current?.abort();
+    const controller = new AbortController();
+    sandboxLaunchCapabilitiesAbortRef.current = controller;
+    setSandboxLaunchCapabilities(null);
+    setSandboxLaunchCapabilitiesLoading(true);
+    setSandboxLaunchCapabilitiesError("");
+    void sandboxClient
+      .getLaunchCapabilities(kind, { signal: controller.signal })
+      .then((capabilities) => {
+        if (sandboxLaunchCapabilitiesAbortRef.current !== controller) return;
+        setSandboxLaunchCapabilities(capabilities);
+      })
+      .catch((capabilityError) => {
+        if ((capabilityError as Error)?.name === "AbortError") return;
+        if (sandboxLaunchCapabilitiesAbortRef.current !== controller) return;
+        setSandboxLaunchCapabilitiesError(
+          capabilityError instanceof Error
+            ? capabilityError.message
+            : String(capabilityError),
+        );
+      })
+      .finally(() => {
+        if (sandboxLaunchCapabilitiesAbortRef.current !== controller) return;
+        sandboxLaunchCapabilitiesAbortRef.current = null;
+        setSandboxLaunchCapabilitiesLoading(false);
+      });
   }
 
   function cancelSandboxLaunch() {
     sandboxLaunchAbortRef.current?.abort();
     sandboxLaunchAbortRef.current = null;
+    sandboxLaunchCapabilitiesAbortRef.current?.abort();
+    sandboxLaunchCapabilitiesAbortRef.current = null;
     setSandboxLaunchOpen(false);
     setSandboxLaunchState("confirm");
     setSandboxLaunchError("");
+    setSandboxLaunchCapabilities(null);
+    setSandboxLaunchCapabilitiesLoading(false);
+    setSandboxLaunchCapabilitiesError("");
     if (
       !sandboxSession &&
       newChatMode === "temporary" &&
@@ -2269,7 +2318,10 @@ export default function App() {
     }
   }
 
-  async function launchSandboxSession(displayName: string) {
+  async function launchSandboxSession(
+    displayName: string,
+    retentionMode: SandboxRetentionMode,
+  ) {
     sandboxLaunchAbortRef.current?.abort();
     const controller = new AbortController();
     sandboxLaunchAbortRef.current = controller;
@@ -2277,12 +2329,14 @@ export default function App() {
     setSandboxLaunchError("");
     try {
       const createdSession = sandboxLaunchKind === "codex"
-        ? await sandboxClient.startSession({
+          ? await sandboxClient.startSession({
             displayName,
+            retentionMode,
             signal: controller.signal,
           })
         : await sandboxClient.startAgentSession(sandboxLaunchKind, {
             displayName,
+            retentionMode,
             signal: controller.signal,
           });
       if (sandboxLaunchAbortRef.current !== controller) return;
@@ -2349,8 +2403,14 @@ export default function App() {
     }
   }
 
-  async function openSandboxAgent(session: SandboxSessionInfo) {
+  async function openSandboxAgent(resource: SandboxAgentResource) {
     setError("");
+    const session = resource.resourceType === "snapshot"
+      ? await sandboxClient.resumeSnapshot(resource.toolName, resource.snapshotId)
+      : resource;
+    if (resource.resourceType === "snapshot") {
+      setSandboxAgentRefreshKey((current) => current + 1);
+    }
     if (session.toolName === "codex") {
       const connected = await sandboxClient.connectSession(session.id);
       viewSidRef.current = "";
@@ -2377,7 +2437,7 @@ export default function App() {
     setManageAgents(false);
   }
 
-  function openSandboxAgentDetails(session: SandboxSessionInfo) {
+  function openSandboxAgentDetails(session: SandboxAgentResource) {
     setSandboxAgentDetailTarget(session);
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
@@ -2385,12 +2445,16 @@ export default function App() {
     setError("");
   }
 
-  async function deleteSandboxAgent(session: SandboxSessionInfo) {
-    if (sandboxSession?.id === session.id) exitSandboxSession();
-    if (session.toolName === "codex") {
-      await sandboxClient.deleteSession(session.id);
+  async function deleteSandboxAgent(session: SandboxAgentResource) {
+    if (session.resourceType === "snapshot") {
+      await sandboxClient.deleteSnapshot(session.toolName, session.snapshotId);
     } else {
-      await sandboxClient.deleteAgentSession(session.toolName, session.id);
+      if (sandboxSession?.id === session.id) exitSandboxSession();
+      if (session.toolName === "codex") {
+        await sandboxClient.deleteSession(session.id);
+      } else {
+        await sandboxClient.deleteAgentSession(session.toolName, session.id);
+      }
     }
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
@@ -5037,8 +5101,16 @@ export default function App() {
         state={sandboxLaunchState}
         agentKind={sandboxLaunchKind}
         error={sandboxLaunchError}
+        capabilities={sandboxLaunchCapabilities}
+        capabilitiesLoading={sandboxLaunchCapabilitiesLoading}
+        capabilitiesError={sandboxLaunchCapabilitiesError}
+        onRetryCapabilities={() => {
+          loadSandboxLaunchCapabilities();
+        }}
         onCancel={cancelSandboxLaunch}
-        onConfirm={(displayName) => void launchSandboxSession(displayName)}
+        onConfirm={(displayName, retentionMode) => {
+          void launchSandboxSession(displayName, retentionMode);
+        }}
       />
 
       {sandboxSession ? (

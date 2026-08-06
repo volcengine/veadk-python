@@ -12,8 +12,8 @@ import {
 import {
   sandboxClient,
   sandboxStatusLabel,
+  type SandboxAgentResource,
   type SandboxAgentKind,
-  type SandboxSession,
 } from "../adk/sandbox";
 import { formatRequestError } from "../adk/requestError";
 import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
@@ -38,7 +38,7 @@ export interface MyAgentCardData {
     currentVersion?: number | null;
     canDelete: boolean;
   };
-  sandbox?: SandboxSession;
+  sandbox?: SandboxAgentResource;
   draft?: WorkspaceAgentDraft;
 }
 
@@ -141,7 +141,7 @@ function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
   };
 }
 
-function sandboxToAgent(session: SandboxSession): MyAgentCardData {
+function sandboxToAgent(session: SandboxAgentResource): MyAgentCardData {
   return {
     id: session.id,
     name: session.displayName || `${session.toolName} 智能体`,
@@ -223,7 +223,14 @@ function AgentCard({
   onEditDraft?: (draft: WorkspaceAgentDraft) => void;
   onDeleteDraft?: (draft: WorkspaceAgentDraft) => void;
 }) {
-  const actionable = Boolean(agent.runtime || agent.sandbox);
+  const sandboxStatus = agent.sandbox?.status.toLowerCase();
+  const wakeable = agent.sandbox?.resourceType === "snapshot";
+  const actionable = Boolean(
+    agent.runtime || sandboxStatus === "ready" || sandboxStatus === "wakeable",
+  );
+  const sandboxResourceId = agent.sandbox?.resourceType === "snapshot"
+    ? agent.sandbox.sourceSessionId || agent.sandbox.snapshotId
+    : agent.sandbox?.id;
   return (
     <article className="my-agent-card">
       <div className="my-agent-card-content">
@@ -231,8 +238,8 @@ function AgentCard({
           <div className="my-agent-card-title-copy">
             <h3>{agent.name}</h3>
             {agent.sandbox ? (
-              <span className="my-agent-session-id" title={agent.sandbox.id}>
-                {agent.sandbox.id}
+              <span className="my-agent-session-id" title={sandboxResourceId}>
+                {sandboxResourceId}
               </span>
             ) : null}
           </div>
@@ -244,6 +251,7 @@ function AgentCard({
             <span
               className="my-agent-status-label"
               data-ready={agent.sandbox.status.toLowerCase() === "ready" || undefined}
+              data-wakeable={wakeable || undefined}
             >
               {agent.description}
             </span>
@@ -319,15 +327,19 @@ function AgentCard({
               className={`my-agent-use${connected ? " is-connected" : ""}`}
               disabled={!actionable || connecting || connected}
               aria-busy={connecting || undefined}
-              aria-label={connected ? `${agent.name} 已连接` : `使用 ${agent.name}`}
+              aria-label={connected
+                ? `${agent.name} 已连接`
+                : wakeable
+                  ? `唤醒 ${agent.name}`
+                  : `使用 ${agent.name}`}
               onClick={() => void onUse?.(agent)}
             >
               {connecting ? (
                 <>
                   <span className="my-agent-use-spinner" aria-hidden="true" />
-                  <span>连接中</span>
+                  <span>{wakeable ? "唤醒中" : "连接中"}</span>
                 </>
-              ) : connected ? "已连接" : "使用"}
+              ) : connected ? "已连接" : wakeable ? "唤醒" : "使用"}
             </button>
           </>
         )}
@@ -343,8 +355,8 @@ export interface MyAgentsProps {
   onUseAgent: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails: (agent: MyAgentCardData) => void;
   onCreateSandboxAgent: (kind: "codex" | SandboxAgentKind) => void;
-  onUseSandboxAgent: (session: SandboxSession) => Promise<void>;
-  onViewSandboxAgentDetails: (session: SandboxSession) => void;
+  onUseSandboxAgent: (session: SandboxAgentResource) => Promise<void>;
+  onViewSandboxAgentDetails: (session: SandboxAgentResource) => void;
   sandboxRefreshKey?: number;
   connectedRuntimeId?: string;
   hiddenRuntimeIds?: ReadonlySet<string>;

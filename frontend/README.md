@@ -41,7 +41,9 @@ server that `veadk frontend` launches — no separate backend.
   explicit deletion. Codex streams reasoning, tool activity, and replies into
   the normal conversation renderer; leaving the conversation only disconnects
   it, so the Agent remains available until the user deletes it. OpenClaw and
-  Hermes expose their main interface and Terminal through Studio.
+  Hermes expose their main interface and Terminal through Studio. If a running
+  Session has been reclaimed after AgentKit saved it, Studio presents its latest
+  snapshot as **Wakeable** and restores it before opening the Agent.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
 - **Automation directory**: browse development and message-channel integrations
@@ -397,17 +399,36 @@ assistant messages returned by the generator. Private chain-of-thought and
 credentials never enter the UI. Completed candidates still support preview,
 ZIP download, and AgentKit publish.
 
-Configure separate ready AgentKit Tools for Codex, OpenClaw, Hermes, and Skill
-creation before starting the server. The Tool IDs are intentionally server-only
-and cannot be supplied by the browser:
+Configure a temporary and a snapshot-enabled AgentKit Tool for each of Codex,
+OpenClaw, and Hermes, plus a separate Skill Creator Tool, before starting the
+server. The Tool IDs are intentionally server-only and cannot be supplied by
+the browser. Studio defaults new agents to a recoverable session; users can
+instead select a temporary session that is destroyed at expiry without keeping
+a workspace snapshot. Skill Creator does not use snapshots:
 
 ```bash
-export SANDBOX_CHAT_CODEX=<chat-code-env-tool-id>
-export SANDBOX_CHAT_OPENCLAW=<openclaw-env-tool-id>
-export SANDBOX_CHAT_HERMES=<hermes-env-tool-id>
+export SANDBOX_CHAT_CODEX=<temporary-code-env-tool-id>
+export SANDBOX_CHAT_CODEX_SNAPSHOT=<recoverable-code-env-tool-id>
+export SANDBOX_CHAT_OPENCLAW=<temporary-openclaw-env-tool-id>
+export SANDBOX_CHAT_OPENCLAW_SNAPSHOT=<recoverable-openclaw-env-tool-id>
+export SANDBOX_CHAT_HERMES=<temporary-hermes-env-tool-id>
+export SANDBOX_CHAT_HERMES_SNAPSHOT=<recoverable-hermes-env-tool-id>
 export SANDBOX_SKILL_CREATOR=<skill-code-env-tool-id>
 veadk frontend --agents-dir examples
 ```
+
+For backward compatibility, when only a legacy `SANDBOX_CHAT_*` Tool is
+configured, Studio treats it as the recoverable Tool and disables the temporary
+choice. A new cloud deployment automatically provisions the missing temporary
+Tool.
+
+Studio creates new Agent Sandbox sessions with a
+`studio-<safe-user-name>-<uuid>` UserSessionId. When listing snapshots, the
+server follows every `NextToken` page and filters this prefix for the signed-in
+user before returning results to the browser. Local administrators can see all
+snapshots from the configured Tool, including legacy `studio2-*` snapshots.
+Multiple restorable historical snapshots are kept in the result instead of
+being collapsed to only the latest one.
 
 Publishing a generated Skill uses TOS and the AgentKit Skills API. Set
 `VEADK_SKILL_CREATOR_TOS_BUCKET`, `VEADK_SKILL_CREATOR_TOS_PREFIX`, and
@@ -418,13 +439,13 @@ memory, so polling and downloads continue to work when FaaS requests reach a
 different instance.
 
 For local Studio, run the AgentKit `credential-hosting` command and bind its
-result to both CodeEnv Tools. A cloud deployment creates both Tools in parallel
-when their IDs are omitted. Alternatively, select existing Tools with
-`--sandbox-chat-codex-tool-id`, `--sandbox-chat-openclaw-tool-id`,
-`--sandbox-chat-hermes-tool-id`, and `--sandbox-skill-creator-tool-id`. The
-deploy command obtains the Ark key with the deployer's Volcengine credentials,
-stores it through AgentKit credential hosting, and binds only the returned
-ticket and relay URL to the Tools:
+result to the Tools. A cloud deployment creates all missing Tools in parallel,
+with snapshots enabled only on the three recoverable Tools. Alternatively,
+select existing Tools with the `--sandbox-chat-*-tool-id` and
+`--sandbox-chat-*-snapshot-tool-id` option pairs, plus
+`--sandbox-skill-creator-tool-id`. The deploy command obtains the Ark key with
+the deployer's Volcengine credentials, stores it through AgentKit credential
+hosting, and binds only the returned ticket and relay URL to the Tools:
 
 ```bash
 veadk studio deploy \
