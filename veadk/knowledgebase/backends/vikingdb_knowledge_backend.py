@@ -70,6 +70,14 @@ def _viking_session_token_from_env() -> str:
     return os.getenv("VOLCENGINE_SESSION_TOKEN", "")
 
 
+def _byteplus_viking_region(region: str | None) -> str:
+    """Return the supported BytePlus VikingDB Knowledge Base region."""
+    region = (region or "").strip()
+    if not region or region.startswith("cn-"):
+        return DEFAULT_BYTEPLUS_REGION
+    return region
+
+
 def build_vikingdb_knowledgebase_request(
     path: str,
     volcengine_access_key: str,
@@ -213,22 +221,21 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     _viking_sdk_client = None
 
     def model_post_init(self, __context: Any) -> None:
-        if not self.region:
-            if self.cloud_provider.lower() == "byteplus":
-                self.region = os.getenv(
-                    "DATABASE_VIKING_REGION",
-                    DEFAULT_BYTEPLUS_REGION,
-                )
-                self.base_url = (
-                    f"https://api-knowledgebase.mlp.{self.region}.bytepluses.com"
-                )
-                self.host = f"api-knowledgebase.mlp.{self.region}.bytepluses.com"
-            else:
-                self.region = os.getenv("DATABASE_VIKING_REGION", "cn-beijing")
-                self.base_url = (
-                    f"https://api-knowledgebase.mlp.{self.region}.volces.com"
-                )
-                self.host = f"api-knowledgebase.mlp.{self.region}.volces.com"
+        if self.cloud_provider.lower() == "byteplus":
+            self.region = _byteplus_viking_region(
+                self.region or os.getenv("DATABASE_VIKING_REGION")
+            )
+            self.base_url = (
+                self.base_url
+                or f"https://api-knowledgebase.mlp.{self.region}.bytepluses.com"
+            )
+            self.host = (
+                self.host or f"api-knowledgebase.mlp.{self.region}.bytepluses.com"
+            )
+        elif not self.region:
+            self.region = os.getenv("DATABASE_VIKING_REGION", "cn-beijing")
+            self.base_url = f"https://api-knowledgebase.mlp.{self.region}.volces.com"
+            self.host = f"api-knowledgebase.mlp.{self.region}.volces.com"
 
         logger.info(f"Cloud provider: {self.cloud_provider.lower()}")
         logger.info(f"VikingDBKnowledgeBackend: region={self.region}, host={self.host}")

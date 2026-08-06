@@ -245,6 +245,7 @@ class CloudAgentEngine(BaseModel):
         reuse_gateway: bool = False,
         local_test: bool = False,
         enable_mcp_session: bool = True,
+        keep_failed_deploy: bool = False,
     ) -> CloudApp:
         """Deploys a local agent project to Volcengine FaaS, creating necessary resources.
 
@@ -322,6 +323,7 @@ class CloudAgentEngine(BaseModel):
                 gateway_upstream_name=gateway_upstream_name,
                 enable_key_auth=enable_key_auth,
                 enable_mcp_session=enable_mcp_session,
+                keep_failed_deploy=keep_failed_deploy,
             )
             _ = function_id  # for future use
 

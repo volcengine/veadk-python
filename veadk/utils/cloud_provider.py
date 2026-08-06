@@ -25,6 +25,15 @@ SUPPORTED_CLOUD_PROVIDERS: tuple[CloudProvider, ...] = ("volcengine", "byteplus"
 DEFAULT_CLOUD_PROVIDER: CloudProvider = "volcengine"
 DEFAULT_BYTEPLUS_REGION = "ap-southeast-1"
 DEFAULT_VOLCENGINE_REGION = "cn-beijing"
+_VEFAAS_APPLICATION_TEMPLATE_IDS: dict[CloudProvider, dict[str, str]] = {
+    "volcengine": {
+        "cn-beijing": "6874f3360bdbc40008ecf8c7",
+        "cn-shanghai": "6a685988162bcd00083c9001",
+    },
+    "byteplus": {
+        DEFAULT_BYTEPLUS_REGION: "697a03b8adb54b0008fdebd0",
+    },
+}
 
 
 def normalize_cloud_provider(value: str | None) -> CloudProvider:
@@ -49,6 +58,20 @@ def default_region(provider: CloudProvider) -> str:
     if provider == "byteplus":
         return os.getenv("BYTEPLUS_REGION") or DEFAULT_BYTEPLUS_REGION
     return DEFAULT_VOLCENGINE_REGION
+
+
+def default_vefaas_application_template_id(
+    provider: CloudProvider,
+    region: str,
+) -> str:
+    """Return the built-in VeFaaS Application Center template id, if known."""
+    provider_templates = _VEFAAS_APPLICATION_TEMPLATE_IDS.get(provider, {})
+    if provider == "volcengine":
+        return (
+            provider_templates.get(region)
+            or provider_templates[DEFAULT_VOLCENGINE_REGION]
+        )
+    return provider_templates.get(region, "")
 
 
 def vefaas_openapi_host(region: str, provider: CloudProvider) -> str:

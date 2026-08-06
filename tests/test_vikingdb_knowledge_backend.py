@@ -85,3 +85,31 @@ def test_viking_knowledgebase_reads_byteplus_credentials(
     assert backend.volcengine_access_key == "bp-ak"
     assert backend.volcengine_secret_key == "bp-sk"
     assert backend.session_token == "bp-token"
+
+
+def test_byteplus_viking_knowledgebase_uses_byteplus_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from veadk.knowledgebase.backends.vikingdb_knowledge_backend import (
+        VikingDBKnowledgeBackend,
+    )
+
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("DATABASE_VIKING_REGION", "cn-beijing")
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "bp-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "bp-sk")
+    monkeypatch.setattr(
+        VikingDBKnowledgeBackend,
+        "collection_status",
+        lambda self: {"existed": True},
+    )
+
+    backend = VikingDBKnowledgeBackend(index="vikingkl_we4191n")
+
+    assert backend.region == "ap-southeast-1"
+    assert backend.host == "api-knowledgebase.mlp.ap-southeast-1.bytepluses.com"
+    assert (
+        backend.base_url
+        == "https://api-knowledgebase.mlp.ap-southeast-1.bytepluses.com"
+    )

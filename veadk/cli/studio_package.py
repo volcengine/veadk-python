@@ -33,6 +33,17 @@ from veadk.utils.cloud_provider import DEFAULT_CLOUD_PROVIDER, CloudProvider
 STUDIO_RELEASE_ENVIRONMENT_FILENAME = ".studio-release-environment.json"
 
 
+def stage_studio_provider_requirements(
+    package_dir: Path,
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+) -> str:
+    """Stage provider-specific wheels and return their requirements lines."""
+    if provider != "byteplus":
+        return ""
+    dependencies = stage_studio_dependency_wheels(package_dir, provider=provider)
+    return "".join(f"./{path.name}\n" for path in dependencies)
+
+
 def studio_run_script(
     site_logo_filename: str | None = None,
     *,
@@ -140,6 +151,7 @@ def build_local_studio_requirements(
     *,
     frontend_assets: Path | None = None,
     dependency_wheels: Path | None = None,
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
 ) -> str:
     """Build a local VeADK wheel and return its offline requirements."""
     _validate_source_checkout(source_root)
@@ -175,13 +187,15 @@ def build_local_studio_requirements(
     dependencies = stage_studio_dependency_wheels(
         package_dir,
         source_dir=dependency_wheels,
+        provider=provider,
     )
 
     shutil.rmtree(package_dir / "wheel-source", ignore_errors=True)
-    return "".join(
+    requirements = "".join(
         f"./{name}\n"
         for name in (*(path.name for path in dependencies), wheels[0].name)
     )
+    return requirements
 
 
 def _validate_source_checkout(source_root: Path) -> None:

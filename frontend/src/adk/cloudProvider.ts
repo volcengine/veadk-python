@@ -11,6 +11,8 @@ export const BYTEPLUS_MODELARK_BASE_URL = "https://ark.ap-southeast.bytepluses.c
 export const VOLCENGINE_MODELARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3/";
 export const BYTEPLUS_DEFAULT_MODEL_NAME = "seed-2-0-lite-260228";
 export const VOLCENGINE_DEFAULT_MODEL_NAME = "doubao-seed-2-1-pro-260628";
+export const BYTEPLUS_DEFAULT_EMBEDDING_NAME = "skylark-embedding-vision-250615";
+export const VOLCENGINE_DEFAULT_EMBEDDING_NAME = "doubao-embedding-vision-250615";
 export const BYTEPLUS_PLANNER_MODEL_NAME = "seed-2-0-lite-260228";
 export const VOLCENGINE_PLANNER_MODEL_NAME = "doubao-seed-2-0-lite-260428";
 
@@ -48,6 +50,12 @@ export function defaultModelApiBase(provider: CloudProvider): string {
   return provider === "byteplus"
     ? BYTEPLUS_MODELARK_BASE_URL
     : VOLCENGINE_MODELARK_BASE_URL;
+}
+
+export function defaultEmbeddingModelName(provider: CloudProvider): string {
+  return provider === "byteplus"
+    ? BYTEPLUS_DEFAULT_EMBEDDING_NAME
+    : VOLCENGINE_DEFAULT_EMBEDDING_NAME;
 }
 
 export function plannerModelName(provider: CloudProvider): string {

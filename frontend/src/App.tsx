@@ -4884,6 +4884,7 @@ export default function App() {
             ) : visibleCreateView === "intelligent" ? (
               <IntelligentCreate
                 userId={userId}
+                cloudProvider={cloudProvider}
                 onBack={() => setCreateView("menu")}
                 onCreate={onCreate}
                 onAgentAdded={onAgentAdded}

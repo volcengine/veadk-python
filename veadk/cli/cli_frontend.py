@@ -56,6 +56,7 @@ from veadk.utils.cloud_provider import (
     CloudProvider,
     agentkit_openapi_base,
     default_region,
+    default_vefaas_application_template_id,
     normalize_cloud_provider,
 )
 from veadk.utils.logger import get_logger
@@ -63,6 +64,9 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_BYTEPLUS_VEFAAS_APPLICATION_NAME_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
+)
 _BUILD_ERROR_MARKERS = (
     "no solution found",
     "unsatisfiable",
@@ -106,6 +110,28 @@ _CP_PIPELINE_RUN_RE = re.compile(
     r"Pipeline triggered successfully,\s*run ID:\s*(?P<id>\S+)"
 )
 _RUNTIME_DESCRIPTION_MAX_BYTES = 255
+
+
+def _byteplus_vefaas_application_name_suggestion(name: str) -> str:
+    suggestion = re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-")
+    suggestion = re.sub(r"-{2,}", "-", suggestion)
+    if not suggestion:
+        return "studio"
+    if len(suggestion) > 64:
+        suggestion = suggestion[:64].strip("-")
+    return suggestion or "studio"
+
+
+def _validate_byteplus_vefaas_application_name(name: str) -> None:
+    if _BYTEPLUS_VEFAAS_APPLICATION_NAME_RE.fullmatch(name):
+        return
+    suggestion = _byteplus_vefaas_application_name_suggestion(name)
+    raise click.ClickException(
+        "BytePlus VeFaaS application name must start and end with a lowercase "
+        "letter or digit, contain only lowercase letters, digits, and hyphens, "
+        "and be 1-64 characters long. "
+        f"Got {name!r}. Suggested value: {suggestion!r}."
+    )
 
 
 def _runtime_regions(provider: str, requested_region: str) -> list[str]:
@@ -1269,20 +1295,39 @@ def _run_frontend_server(
     def _resolve_ve_credentials() -> tuple[str, str, str | None]:
         """Resolve cloud credentials as (access_key, secret_key, session_token).
 
-        BytePlus uses its explicit environment credentials. Volcengine uses
-        environment credentials first, then the VeFaaS-injected STS credential
-        file so the same endpoints work locally and inside a VeFaaS function.
+        Environment credentials support local development. When Studio runs in
+        VeFaaS, the frontend function should use the IAM role's injected STS
+        credential file so long-lived deployer AK/SK do not need to be shipped
+        as function env vars.
         """
+
+        def _read_vefaas_iam_credentials() -> tuple[str, str, str | None] | None:
+            try:
+                with open("/var/run/secrets/iam/credential", encoding="utf-8") as f:
+                    data = json.load(f)
+                ak = data.get("access_key_id") or data.get("AccessKeyId")
+                sk = data.get("secret_access_key") or data.get("SecretAccessKey")
+                token = data.get("session_token") or data.get("SessionToken")
+                if ak and sk:
+                    return ak, sk, token or None
+            except (OSError, ValueError):
+                pass
+            return None
+
         if provider == "byteplus":
             ak = os.getenv("BYTEPLUS_ACCESS_KEY")
             sk = os.getenv("BYTEPLUS_SECRET_KEY")
             token = os.getenv("BYTEPLUS_SESSION_TOKEN")
             if ak and sk:
                 return ak, sk, token or None
+            credentials = _read_vefaas_iam_credentials()
+            if credentials is not None:
+                return credentials
             raise HTTPException(
                 status_code=400,
                 detail="BytePlus credentials not found (set BYTEPLUS_ACCESS_KEY/"
-                "BYTEPLUS_SECRET_KEY)",
+                "BYTEPLUS_SECRET_KEY, or run inside a VeFaaS function with an "
+                "IAM role)",
             )
 
         ak = os.getenv("VOLCENGINE_ACCESS_KEY")
@@ -1293,16 +1338,9 @@ def _run_frontend_server(
                 "VOLC_SESSIONTOKEN"
             )
             return ak, sk, token or None
-        try:
-            with open("/var/run/secrets/iam/credential", encoding="utf-8") as f:
-                data = json.load(f)
-            ak = data.get("access_key_id") or data.get("AccessKeyId")
-            sk = data.get("secret_access_key") or data.get("SecretAccessKey")
-            token = data.get("session_token") or data.get("SessionToken")
-            if ak and sk:
-                return ak, sk, token
-        except (OSError, ValueError):
-            pass
+        credentials = _read_vefaas_iam_credentials()
+        if credentials is not None:
+            return credentials
         raise HTTPException(
             status_code=400,
             detail="Volcengine credentials not found (set VOLCENGINE_ACCESS_KEY/"
@@ -1514,6 +1552,10 @@ def _run_frontend_server(
                     e,
                 )
         out["VEADK_DISABLE_EXPIRE_AT"] = "true"
+        if provider == "byteplus":
+            out["CLOUD_PROVIDER"] = "byteplus"
+            out["AGENTKIT_CLOUD_PROVIDER"] = "byteplus"
+            out["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_REGION
         return out
 
     def _model_name(model: object) -> str:
@@ -1696,11 +1738,49 @@ def _run_frontend_server(
         if not q.strip():
             return {"mounted": True, "results": []}
         if provider == "byteplus":
-            return {
-                "mounted": False,
-                "results": [],
-                "error": "BytePlus web search is not connected in this Studio yet.",
-            }
+            if not os.getenv("BYTEPLUS_WEB_SEARCH_API_KEY"):
+                return {
+                    "mounted": True,
+                    "results": [],
+                    "error": "服务端未配置 BYTEPLUS_WEB_SEARCH_API_KEY",
+                }
+            try:
+                from veadk.tools.builtin_tools.web_search import (
+                    _byteplus_web_search,
+                    _extract_web_results,
+                    _result_summary,
+                )
+
+                resp = _byteplus_web_search(q[:100], count=8)
+                results = []
+                for item in _extract_web_results(resp):
+                    results.append(
+                        {
+                            "title": str(item.get("Title") or item.get("title") or ""),
+                            "url": str(
+                                item.get("Url")
+                                or item.get("url")
+                                or item.get("Link")
+                                or item.get("link")
+                                or ""
+                            ),
+                            "siteName": str(
+                                item.get("SiteName")
+                                or item.get("siteName")
+                                or item.get("site_name")
+                                or ""
+                            ),
+                            "summary": _result_summary(item),
+                        }
+                    )
+                return {"mounted": True, "results": results}
+            except Exception as e:
+                logger.error(f"BytePlus web search error: {e}", exc_info=True)
+                return {
+                    "mounted": True,
+                    "results": [],
+                    "error": str(e),
+                }
 
         # Gate on the agent's tools only when we can introspect it locally.
         if agent is not None:
@@ -3168,6 +3248,54 @@ def _run_frontend_server(
                 ),
             )
 
+        @contextmanager
+        def _agentkit_sdk_credential_env():
+            """Expose provider credentials only while AgentKit SDK deploys.
+
+            The deployed Studio reads temporary IAM credentials from VeFaaS at
+            runtime. AgentKit SDK's template renderer reads provider credentials
+            from process env, so bridge the IAM creds into env for the launch
+            call without copying them into the agent runtime environment.
+            """
+            if provider != "byteplus":
+                yield
+                return
+
+            keys = (
+                "BYTEPLUS_ACCESS_KEY",
+                "BYTEPLUS_SECRET_KEY",
+                "BYTEPLUS_SESSION_TOKEN",
+                "VOLCENGINE_ACCESS_KEY",
+                "VOLCENGINE_SECRET_KEY",
+                "VOLCENGINE_SESSION_TOKEN",
+                "VOLC_SESSIONTOKEN",
+            )
+            original = {key: os.environ.get(key) for key in keys}
+            ak, sk, token = _resolve_ve_credentials()
+            try:
+                os.environ["BYTEPLUS_ACCESS_KEY"] = ak
+                os.environ["BYTEPLUS_SECRET_KEY"] = sk
+                os.environ["VOLCENGINE_ACCESS_KEY"] = ak
+                os.environ["VOLCENGINE_SECRET_KEY"] = sk
+                if token:
+                    os.environ["BYTEPLUS_SESSION_TOKEN"] = token
+                    os.environ["VOLCENGINE_SESSION_TOKEN"] = token
+                    os.environ["VOLC_SESSIONTOKEN"] = token
+                else:
+                    for key in (
+                        "BYTEPLUS_SESSION_TOKEN",
+                        "VOLCENGINE_SESSION_TOKEN",
+                        "VOLC_SESSIONTOKEN",
+                    ):
+                        os.environ.pop(key, None)
+                yield
+            finally:
+                for key, value in original.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
         # Write the generated project (+ agentkit.yaml) into a temp dir. Passing
         # config_file makes the SDK resolve THIS dir as the project dir, so the
         # live server process is never chdir'd.
@@ -3207,6 +3335,10 @@ def _run_frontend_server(
                     "FEISHU_APP_SECRET": feishu_app_secret,
                 }
             )
+        if provider == "byteplus":
+            runtime_envs["CLOUD_PROVIDER"] = "byteplus"
+            runtime_envs["AGENTKIT_CLOUD_PROVIDER"] = "byteplus"
+            runtime_envs["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_REGION
 
         # TOS build-artifact buckets are region-scoped. The SDK default template
         # ("agentkit-platform-<account_id>") produces a single global name, which
@@ -3238,11 +3370,14 @@ def _run_frontend_server(
         elif runtime_network:
             cloud_config["runtime_network"] = runtime_network
         if region and region != "cn-beijing":
-            region_suffix = region.split("-")[-1]  # "shanghai" from "cn-shanghai"
+            region_suffix = (
+                region.split("-", 1)[1] if region.startswith("cn-") else region
+            )
             try:
                 from agentkit.utils.template_utils import render_template
 
-                bucket_base = render_template("agentkit-platform-{{account_id}}")
+                with _agentkit_sdk_credential_env():
+                    bucket_base = render_template("agentkit-platform-{{account_id}}")
             except Exception as e:
                 logger.warning(
                     "Could not resolve account_id for TOS bucket naming: %s; "
@@ -3252,6 +3387,8 @@ def _run_frontend_server(
                 )
                 bucket_base = "agentkit-platform"
             cloud_config["tos_bucket"] = f"{bucket_base}-{region_suffix}"
+            if provider == "byteplus":
+                cloud_config["cr_instance_name"] = bucket_base
 
         agentkit_config = {
             "common": {
@@ -3741,11 +3878,12 @@ def _run_frontend_server(
                                     f"({attempt}/2)..."
                                 ),
                             )
-                        result = sdk.launch(
-                            config_file=str(base / "agentkit.yaml"),
-                            preflight_mode=PreflightMode.WARN,
-                            reporter=_QReporter(),
-                        )
+                        with _agentkit_sdk_credential_env():
+                            result = sdk.launch(
+                                config_file=str(base / "agentkit.yaml"),
+                                preflight_mode=PreflightMode.WARN,
+                                reporter=_QReporter(),
+                            )
                         if getattr(result, "success", False):
                             break
                         error_text = _result_error_text(result)
@@ -6985,8 +7123,7 @@ def _resolve_studio_cloud_credentials(
     "--application-template-id",
     default=None,
     envvar="VEFAAS_APPLICATION_TEMPLATE_ID",
-    help="VeFaaS Application Center TemplateId for application creation. Required "
-    "for BytePlus until its ap-southeast-1 template id is built in.",
+    help="Override the built-in VeFaaS Application Center TemplateId.",
 )
 @click.option(
     "--gateway-name",
@@ -7015,6 +7152,13 @@ def _resolve_studio_cloud_credentials(
     help="Build a wheel from THIS checkout (incl. uncommitted changes + the "
     "current veadk/webui) and ship it, instead of installing veadk-python from "
     "PyPI. Use to deploy unreleased frontend/backend changes.",
+)
+@click.option(
+    "--keep-failed-deploy",
+    is_flag=True,
+    default=False,
+    help="Keep created VeFaaS application/function resources when deploy fails, "
+    "so release logs can be inspected in the console.",
 )
 @click.option(
     "--site-logo",
@@ -7134,6 +7278,7 @@ def frontend_deploy(
     byteplus_session_token: str | None,
     veadk_version: str,
     from_source: bool,
+    keep_failed_deploy: bool,
     site_logo: str | None,
     site_title: str | None,
     studio_admins: str | None,
@@ -7161,18 +7306,23 @@ def frontend_deploy(
     from veadk.config import veadk_environments
 
     provider_id = normalize_cloud_provider(provider)
-    region = region or default_region(provider_id)
+    if provider_id == "byteplus":
+        region = region or DEFAULT_BYTEPLUS_REGION
+    else:
+        region = region or default_region(provider_id)
     os.environ["CLOUD_PROVIDER"] = provider_id
     os.environ["AGENTKIT_CLOUD_PROVIDER"] = provider_id
     if provider_id == "byteplus":
-        os.environ.setdefault("BYTEPLUS_REGION", region)
-        if not vefaas_application_template_id:
+        _validate_byteplus_vefaas_application_name(vefaas_app_name)
+        if region != DEFAULT_BYTEPLUS_REGION:
             raise click.ClickException(
-                "BytePlus Studio deployment requires "
-                "--vefaas-application-template-id (or env "
-                "VEFAAS_APPLICATION_TEMPLATE_ID). The existing Volcengine "
-                "TemplateIds do not exist in ap-southeast-1."
+                "BytePlus Studio deployment currently supports only "
+                f"{DEFAULT_BYTEPLUS_REGION}; got {region}."
             )
+        os.environ["BYTEPLUS_REGION"] = region
+    resolved_application_template_id = (
+        vefaas_application_template_id or ""
+    ).strip() or default_vefaas_application_template_id(provider_id, region)
 
     try:
         branding_title = normalize_site_title(site_title)
@@ -7223,12 +7373,17 @@ def frontend_deploy(
         )
 
     # 1) Ensure VeFaaS has its service role before provisioning cloud resources.
-    if provider_id == "volcengine":
+    if provider_id in {"volcengine", "byteplus"}:
         from veadk.cli.studio_deploy_serverless_iam import (
             ensure_serverless_application_role,
         )
 
-        ensure_serverless_application_role(ak, sk, session_token=session_token)
+        ensure_serverless_application_role(
+            ak,
+            sk,
+            session_token=session_token,
+            provider=provider_id,
+        )
 
     # 2) Ensure the IAM role the function runs as (auto-create unless provided).
     if iam_role:
@@ -7423,6 +7578,18 @@ def frontend_deploy(
     veadk_environments["AGENTKIT_CLOUD_PROVIDER"] = provider_id
     if provider_id == "byteplus":
         veadk_environments["BYTEPLUS_REGION"] = region
+        veadk_environments["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_REGION
+        byteplus_web_search_api_key = os.getenv(
+            "BYTEPLUS_WEB_SEARCH_API_KEY",
+            "",
+        ).strip()
+        if byteplus_web_search_api_key:
+            veadk_environments["BYTEPLUS_WEB_SEARCH_API_KEY"] = (
+                byteplus_web_search_api_key
+            )
+        byteplus_web_search_url = os.getenv("BYTEPLUS_WEB_SEARCH_URL", "").strip()
+        if byteplus_web_search_url:
+            veadk_environments["BYTEPLUS_WEB_SEARCH_URL"] = byteplus_web_search_url
     veadk_environments["OAUTH2_USER_POOL_ID"] = user_pool_id
     veadk_environments["OAUTH2_USER_POOL_CLIENT_ID"] = allowed_client_id
     veadk_environments["OAUTH2_PROVIDER"] = "veidentity"
@@ -7491,9 +7658,23 @@ def frontend_deploy(
             repo_root = Path(veadk.__file__).resolve().parent.parent
             click.echo(f"Building wheel from source at {repo_root}…")
             try:
-                requirements = build_local_studio_requirements(repo_root, Path(tmp))
+                requirements = build_local_studio_requirements(
+                    repo_root,
+                    Path(tmp),
+                    provider=provider_id,
+                )
             except ValueError as error:
                 raise click.ClickException(f"--from-source: {error}") from error
+        else:
+            from veadk.cli.studio_package import stage_studio_provider_requirements
+
+            try:
+                requirements = (
+                    stage_studio_provider_requirements(Path(tmp), provider_id)
+                    + requirements
+                )
+            except ValueError as error:
+                raise click.ClickException(str(error)) from error
 
         from veadk.cli.studio_package import write_studio_package
 
@@ -7515,7 +7696,7 @@ def frontend_deploy(
             region=region,
             project=project,
             provider=provider_id,
-            vefaas_application_template_id=vefaas_application_template_id or "",
+            vefaas_application_template_id=resolved_application_template_id,
         )
         click.echo(
             f"Deploying frontend to VeFaaS as '{vefaas_app_name}' "
@@ -7530,6 +7711,7 @@ def frontend_deploy(
             use_adk_web=False,
             auth_method="none",
             enable_mcp_session=False,
+            keep_failed_deploy=keep_failed_deploy,
         )
         url = (app.vefaas_endpoint or "").rstrip("/")
         redirect_uri = f"{url}/oauth2/callback"
@@ -7602,6 +7784,13 @@ def frontend_deploy(
 
 @studio.command("update")
 @click.option(
+    "--provider",
+    default=DEFAULT_CLOUD_PROVIDER,
+    type=click.Choice(["volcengine", "byteplus"]),
+    show_default=True,
+    help="Cloud provider for the existing Studio deployment.",
+)
+@click.option(
     "--vefaas-app-name",
     required=True,
     help="Existing VeFaaS Application name to update.",
@@ -7609,8 +7798,8 @@ def frontend_deploy(
 @click.option(
     "--region",
     default=None,
-    type=click.Choice(["cn-beijing", "cn-shanghai"]),
-    help="Limit Application lookup to one region (default: search both).",
+    type=click.Choice(["cn-beijing", "cn-shanghai", DEFAULT_BYTEPLUS_REGION]),
+    help="Limit Application lookup to one region.",
 )
 @click.option(
     "--project",
@@ -7661,7 +7850,12 @@ def frontend_deploy(
 )
 @click.option("--volcengine-access-key", default=None)
 @click.option("--volcengine-secret-key", default=None)
+@click.option("--volcengine-session-token", default=None)
+@click.option("--byteplus-access-key", default=None, envvar="BYTEPLUS_ACCESS_KEY")
+@click.option("--byteplus-secret-key", default=None, envvar="BYTEPLUS_SECRET_KEY")
+@click.option("--byteplus-session-token", default=None, envvar="BYTEPLUS_SESSION_TOKEN")
 def frontend_update(
+    provider: str,
     vefaas_app_name: str,
     region: str | None,
     project: str | None,
@@ -7674,6 +7868,10 @@ def frontend_update(
     sandbox_skill_creator_tool_id: str | None,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
+    volcengine_session_token: str | None,
+    byteplus_access_key: str | None,
+    byteplus_secret_key: str | None,
+    byteplus_session_token: str | None,
 ) -> None:
     """Build local Studio sources and update an existing VeFaaS Application."""
     import shutil
@@ -7687,28 +7885,49 @@ def frontend_update(
         find_studio_deployments,
         load_deployed_site_logo,
     )
-    from veadk.config import getenv
     from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
-    ak = volcengine_access_key or getenv("VOLCENGINE_ACCESS_KEY")
-    sk = volcengine_secret_key or getenv("VOLCENGINE_SECRET_KEY")
-    if not ak or not sk:
+    provider_id = normalize_cloud_provider(provider)
+    if provider_id == "byteplus":
+        if region is not None and region != DEFAULT_BYTEPLUS_REGION:
+            raise click.ClickException(
+                "BytePlus Studio update currently supports only "
+                f"{DEFAULT_BYTEPLUS_REGION}; got {region}."
+            )
+        region = region or DEFAULT_BYTEPLUS_REGION
+    elif region == DEFAULT_BYTEPLUS_REGION:
         raise click.ClickException(
-            "Volcengine credentials required: set VOLCENGINE_ACCESS_KEY/SECRET_KEY "
-            "or pass --volcengine-access-key/--volcengine-secret-key."
+            f"{DEFAULT_BYTEPLUS_REGION} is a BytePlus region. Use "
+            "--provider byteplus for BytePlus Studio updates."
         )
+
+    ak, sk, session_token = _resolve_studio_cloud_credentials(
+        byteplus_access_key if provider_id == "byteplus" else volcengine_access_key,
+        byteplus_secret_key if provider_id == "byteplus" else volcengine_secret_key,
+        session_token=(
+            byteplus_session_token
+            if provider_id == "byteplus"
+            else volcengine_session_token
+        ),
+        provider=provider_id,
+    )
 
     targets = find_studio_deployments(
         access_key=ak,
         secret_key=sk,
+        session_token=session_token,
         application_name=vefaas_app_name,
         region=region,
         project=project,
+        provider=provider_id,
     )
     if not targets:
-        scope = "/".join(value for value in (region, project) if value) or (
-            "cn-beijing and cn-shanghai across all visible projects"
+        default_scope = (
+            DEFAULT_BYTEPLUS_REGION
+            if provider_id == "byteplus"
+            else "cn-beijing and cn-shanghai across all visible projects"
         )
+        scope = "/".join(value for value in (region, project) if value) or default_scope
         raise click.ClickException(
             f"VeFaaS Application '{vefaas_app_name}' was not found in {scope}."
         )
@@ -7749,6 +7968,7 @@ def frontend_update(
                 source_root,
                 package_dir,
                 frontend_assets=frontend_assets,
+                provider=provider_id,
             )
         except ValueError as error:
             raise click.ClickException(str(error)) from error
@@ -7756,16 +7976,24 @@ def frontend_update(
             package_dir,
             requirements=requirements,
             site_logo=branding_logo,
+            provider=provider_id,
         )
 
         click.echo(f"Updating '{vefaas_app_name}' in {target.region}/{target.project}…")
         service = VeFaaS(
             access_key=ak,
             secret_key=sk,
+            session_token=session_token,
             region=target.region,
             project_name=target.project,
+            provider=provider_id,
         )
         environment_overrides = {"AGENTKIT_SANDBOX_REGION": target.region}
+        if provider_id == "byteplus":
+            environment_overrides["CLOUD_PROVIDER"] = provider_id
+            environment_overrides["AGENTKIT_CLOUD_PROVIDER"] = provider_id
+            environment_overrides["BYTEPLUS_REGION"] = target.region
+            environment_overrides["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_REGION
         if branding_title is not None:
             environment_overrides["VEADK_SITE_TITLE"] = branding_title
         if sandbox_chat_codex_tool_id is not None:

@@ -88,6 +88,8 @@ export interface AgentDraft {
    * A2A center. Defaults to "llm" when absent.
    */
   agentType?: "llm" | "sequential" | "parallel" | "loop" | "a2a";
+  /** Cloud provider selected by the Studio shell. */
+  cloudProvider?: CloudProvider;
   /** Max iterations for a "loop" orchestrator (LoopAgent.max_iterations). */
   maxIterations?: number;
   /** Remote agent URL for an "a2a" agent (RemoteVeAgent.url). */
@@ -159,6 +161,7 @@ export function emptyDraft(cloudProvider: CloudProvider = "volcengine"): AgentDr
     description: DEFAULT_DESCRIPTION,
     instruction: DEFAULT_INSTRUCTION,
     agentType: "llm",
+    cloudProvider,
     maxIterations: 3,
     a2aUrl: "",
     tools: [],

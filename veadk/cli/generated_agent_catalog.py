@@ -56,24 +56,62 @@ class ExporterOption:
     env: tuple[EnvVar, ...] = ()
 
 
-ARK = "https://ark.cn-beijing.volces.com/api/v3/"
+VOLCENGINE_MODELARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3/"
+BYTEPLUS_MODELARK_BASE_URL = "https://ark.ap-southeast.bytepluses.com/api/v3"
+VOLCENGINE_DEFAULT_MODEL_NAME = "doubao-seed-1-6-250615"
+BYTEPLUS_DEFAULT_MODEL_NAME = "seed-2-0-lite-260228"
+VOLCENGINE_DEFAULT_EMBEDDING_NAME = "doubao-embedding-vision-250615"
+BYTEPLUS_DEFAULT_EMBEDDING_NAME = "skylark-embedding-vision-250615"
 
 MODEL_ENV = (
-    EnvVar("MODEL_AGENT_NAME", False, "doubao-seed-1-6-250615", "模型名称"),
+    EnvVar("MODEL_AGENT_NAME", False, VOLCENGINE_DEFAULT_MODEL_NAME, "模型名称"),
     EnvVar("MODEL_AGENT_PROVIDER", False, "openai"),
-    EnvVar("MODEL_AGENT_API_BASE", False, ARK),
+    EnvVar("MODEL_AGENT_API_BASE", False, VOLCENGINE_MODELARK_BASE_URL),
 )
 
 EMBEDDING_ENV = (
     EnvVar(
         "MODEL_EMBEDDING_NAME",
         False,
-        "doubao-embedding-vision-250615",
+        VOLCENGINE_DEFAULT_EMBEDDING_NAME,
         "向量化模型（记忆/知识库需要）",
     ),
     EnvVar("MODEL_EMBEDDING_DIM", False, "2048"),
-    EnvVar("MODEL_EMBEDDING_API_BASE", False, ARK),
+    EnvVar("MODEL_EMBEDDING_API_BASE", False, VOLCENGINE_MODELARK_BASE_URL),
 )
+
+
+def model_env_for_provider(provider: str) -> tuple[EnvVar, ...]:
+    """Return base model env placeholders for generated projects."""
+    if provider == "byteplus":
+        return (
+            EnvVar(
+                "MODEL_AGENT_NAME",
+                False,
+                BYTEPLUS_DEFAULT_MODEL_NAME,
+                "模型名称",
+            ),
+            EnvVar("MODEL_AGENT_PROVIDER", False, "openai"),
+            EnvVar("MODEL_AGENT_API_BASE", False, BYTEPLUS_MODELARK_BASE_URL),
+        )
+    return MODEL_ENV
+
+
+def embedding_env_for_provider(provider: str) -> tuple[EnvVar, ...]:
+    """Return embedding env placeholders for generated projects."""
+    if provider == "byteplus":
+        return (
+            EnvVar(
+                "MODEL_EMBEDDING_NAME",
+                False,
+                BYTEPLUS_DEFAULT_EMBEDDING_NAME,
+                "向量化模型（记忆/知识库需要）",
+            ),
+            EnvVar("MODEL_EMBEDDING_DIM", False, "2048"),
+            EnvVar("MODEL_EMBEDDING_API_BASE", False, BYTEPLUS_MODELARK_BASE_URL),
+        )
+    return EMBEDDING_ENV
+
 
 # Studio owns the Volcengine credential chain and forwards it to debug runs and
 # AgentKit runtimes. Components must not ask users to duplicate AK/SK settings.

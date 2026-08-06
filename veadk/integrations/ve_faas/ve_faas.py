@@ -41,6 +41,7 @@ from veadk.integrations.ve_faas.ve_faas_utils import (
 from veadk.utils.cloud_provider import (
     DEFAULT_CLOUD_PROVIDER,
     CloudProvider,
+    default_vefaas_application_template_id,
     vefaas_openapi_host,
 )
 from veadk.utils.logger import get_logger
@@ -48,11 +49,6 @@ from veadk.utils.misc import formatted_timestamp, getenv
 from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
-
-_APPLICATION_TEMPLATE_IDS = {
-    "cn-beijing": "6874f3360bdbc40008ecf8c7",
-    "cn-shanghai": "6a685988162bcd00083c9001",
-}
 
 
 def _redact_release_text(text: str) -> str:
@@ -137,11 +133,10 @@ class VeFaaS:
         ).strip()
         if configured_template_id:
             self.template_id = configured_template_id
-        elif provider == "byteplus":
-            self.template_id = ""
         else:
-            self.template_id = _APPLICATION_TEMPLATE_IDS.get(
-                region, _APPLICATION_TEMPLATE_IDS["cn-beijing"]
+            self.template_id = default_vefaas_application_template_id(
+                provider,
+                region,
             )
 
     def _openapi_host(self) -> str:
@@ -273,8 +268,7 @@ class VeFaaS:
             raise ValueError(
                 "BytePlus VeFaaS Application creation requires "
                 "VEFAAS_APPLICATION_TEMPLATE_ID or --vefaas-application-template-id. "
-                "Volcengine Application TemplateIds are region-scoped and do not "
-                "exist in BytePlus ap-southeast-1."
+                f"No built-in TemplateId is known for region {self.region}."
             )
         request_body["TemplateId"] = template_id
         response = ve_request(
@@ -705,6 +699,7 @@ class VeFaaS:
         gateway_upstream_name: str = "",
         enable_key_auth: bool = False,
         enable_mcp_session: bool = True,
+        keep_failed_deploy: bool = False,
     ) -> tuple[str, str, str]:
         """Deploy an agent project to VeFaaS service.
 
@@ -773,6 +768,13 @@ class VeFaaS:
             url = self._release_application(app_id)
             logger.info(f"VeFaaS application {name} with ID {app_id} released.")
         except Exception:
+            if keep_failed_deploy:
+                logger.warning(
+                    "Keeping failed VeFaaS deployment resources for inspection. "
+                    f"Application ID: {app_id or 'not created'}, "
+                    f"Function ID: {function_id or 'not created'}."
+                )
+                raise
             if app_id:
                 logger.info(
                     f"Cleaning up VeFaaS application {app_id} after failed deploy."

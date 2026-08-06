@@ -128,6 +128,7 @@ import {
   BYTEPLUS_DEFAULT_MODEL_NAME,
   BYTEPLUS_MODELARK_BASE_URL,
   defaultCloudRegion,
+  defaultEmbeddingModelName,
   defaultModelApiBase,
   defaultModelName,
   plannerModelName,
@@ -390,6 +391,23 @@ function a2aRegistryEnvValues(
   }
   return values;
 }
+
+function providerRuntimeEnv(
+  env: EnvVar[],
+  cloudProvider: CloudProvider,
+): EnvVar[] {
+  if (cloudProvider !== "byteplus") return env;
+  return env.map((item) => {
+    if (item.key === "MODEL_EMBEDDING_NAME") {
+      return { ...item, placeholder: defaultEmbeddingModelName(cloudProvider) };
+    }
+    if (item.key === "MODEL_EMBEDDING_API_BASE") {
+      return { ...item, placeholder: defaultModelApiBase(cloudProvider) };
+    }
+    return item;
+  });
+}
+
 /* ---------------------------------------------------------------- *
  * Multi-select checklist. Each row = label + desc, toggling the id in
  * `selected`. Used for built-in tools and tracing exporters.
@@ -1625,10 +1643,11 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
   const prepared = prepareMcpAuth(root);
   const selections: RuntimeEnvSelection[] = [];
   const fixedValues: Record<string, string> = { ...prepared.envValues };
+  const cloudProvider = prepared.draft.cloudProvider ?? "volcengine";
   const visit = (node: AgentDraft) => {
     for (const toolId of node.builtinTools ?? []) {
       const tool = BUILTIN_TOOLS.find((item) => item.id === toolId);
-      if (tool) selections.push({ env: tool.env });
+      if (tool) selections.push({ env: providerRuntimeEnv(tool.env, cloudProvider) });
     }
     for (const mcpTool of node.mcpTools ?? []) {
       if (mcpTool.authTokenEnv) {
@@ -1653,26 +1672,35 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
     if (node.memory.shortTerm) {
       selections.push({
         env:
-          STM_BACKENDS.find(
-            (item) => item.id === (node.shortTermBackend ?? "local"),
-          )?.env ?? [],
+          providerRuntimeEnv(
+            STM_BACKENDS.find(
+              (item) => item.id === (node.shortTermBackend ?? "local"),
+            )?.env ?? [],
+            cloudProvider,
+          ),
       });
     }
     if (node.memory.longTerm) {
       selections.push({
         env:
-          LTM_BACKENDS.find(
-            (item) => item.id === (node.longTermBackend ?? "local"),
-          )?.env ?? [],
+          providerRuntimeEnv(
+            LTM_BACKENDS.find(
+              (item) => item.id === (node.longTermBackend ?? "local"),
+            )?.env ?? [],
+            cloudProvider,
+          ),
       });
     }
     if (node.knowledgebase) {
       selections.push({
         env:
-          KB_BACKENDS.find(
-            (item) =>
-              item.id === (node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND),
-          )?.env ?? [],
+          providerRuntimeEnv(
+            KB_BACKENDS.find(
+              (item) =>
+                item.id === (node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND),
+            )?.env ?? [],
+            cloudProvider,
+          ),
       });
     }
     if (node.tracing) {

@@ -67,6 +67,28 @@ def test_vefaas_deploy_cleans_created_resources_on_release_failure() -> None:
     service.delete_function.assert_called_once_with("function-id")
 
 
+def test_vefaas_deploy_can_keep_failed_resources_for_inspection() -> None:
+    service = object.__new__(VeFaaS)
+    service._create_function = Mock(return_value=("studio-app-fn", "function-id"))
+    service._create_application = Mock(return_value="application-id")
+    service._release_application = Mock(side_effect=RuntimeError("release failed"))
+    service.delete = Mock()
+    service.delete_function = Mock()
+
+    with pytest.raises(RuntimeError, match="release failed"):
+        service.deploy(
+            "studio-app",
+            ".",
+            gateway_name="gateway",
+            gateway_service_name="service",
+            gateway_upstream_name="upstream",
+            keep_failed_deploy=True,
+        )
+
+    service.delete.assert_not_called()
+    service.delete_function.assert_not_called()
+
+
 def test_apig_uses_session_token() -> None:
     gateway = APIGateway(
         access_key="test_access_key",
@@ -221,7 +243,10 @@ def test_vefaas_application_can_disable_mcp_session() -> None:
     assert request_body["Config"]["EnableMcpSession"] is False
 
 
-def test_vefaas_byteplus_application_requires_template() -> None:
+def test_vefaas_byteplus_application_uses_builtin_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VEFAAS_APPLICATION_TEMPLATE_ID", raising=False)
     service = VeFaaS(
         access_key="test_access_key",
         secret_key="test_secret_key",
@@ -229,9 +254,36 @@ def test_vefaas_byteplus_application_requires_template() -> None:
         provider="byteplus",
     )
 
+    with patch("veadk.integrations.ve_faas.ve_faas.ve_request") as request:
+        request.return_value = {"Result": {"Status": "create_success", "Id": "app-id"}}
+
+        app_id = service._create_application(
+            "studio-app",
+            "studio-function",
+            "gateway",
+            "upstream",
+            "service",
+        )
+
+    assert app_id == "app-id"
+    request_body = request.call_args.kwargs["request_body"]
+    assert request_body["TemplateId"] == "697a03b8adb54b0008fdebd0"
+
+
+def test_vefaas_byteplus_application_requires_template_for_unknown_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VEFAAS_APPLICATION_TEMPLATE_ID", raising=False)
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        region="ap-southeast-2",
+        provider="byteplus",
+    )
+
     with (
         patch("veadk.integrations.ve_faas.ve_faas.ve_request") as request,
-        pytest.raises(ValueError, match="VEFAAS_APPLICATION_TEMPLATE_ID"),
+        pytest.raises(ValueError, match="No built-in TemplateId"),
     ):
         service._create_application(
             "studio-app",

@@ -42,6 +42,7 @@ def _create_frontend_app(
     site_logo: str | None = None,
     site_title: str | None = None,
     studio: bool = False,
+    provider: str = "volcengine",
 ) -> FastAPI:
     captured: dict[str, Any] = {}
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
@@ -71,6 +72,7 @@ def _create_frontend_app(
         auth_mode="frontend",
         generated_agent_test_run_ttl=60,
         open_browser=False,
+        provider=provider,  # type: ignore[arg-type]
         studio=studio,
     )
     return captured["app"]
@@ -113,6 +115,83 @@ def test_runtime_regions_use_byteplus_default_region(
     assert _runtime_regions("byteplus", "all") == ["ap-southeast-1"]
     monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-2")
     assert _runtime_regions("byteplus", "all") == ["ap-southeast-2"]
+
+
+def test_byteplus_runtime_list_uses_vefaas_iam_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path, provider="byteplus")
+    monkeypatch.delenv("BYTEPLUS_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SESSION_TOKEN", raising=False)
+    monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-1")
+    calls: list[tuple[str, str, str, str]] = []
+
+    import builtins
+
+    real_open = builtins.open
+
+    def _fake_open(path: object, *args: object, **kwargs: object):
+        if path == "/var/run/secrets/iam/credential":
+            return real_open(
+                tmp_path / "iam-credential.json",
+                *args,
+                **kwargs,
+            )
+        return real_open(path, *args, **kwargs)
+
+    (tmp_path / "iam-credential.json").write_text(
+        json.dumps(
+            {
+                "access_key_id": "iam-ak",
+                "secret_access_key": "iam-sk",
+                "session_token": "iam-token",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(builtins, "open", _fake_open)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            calls.append(
+                (
+                    kwargs["access_key"],
+                    kwargs["secret_key"],
+                    kwargs["session_token"],
+                    kwargs["region"],
+                )
+            )
+
+        def list_runtimes(self, _request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                agent_kit_runtimes=[
+                    SimpleNamespace(
+                        name="runtime-bp",
+                        runtime_id="runtime-bp-id",
+                        status="Ready",
+                        created_at="2026-08-06T10:00:00Z",
+                        tags=[],
+                    )
+                ],
+                next_token="",
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtimes",
+            params={"region": "all", "page_size": 1},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["runtimes"][0]["name"] == "runtime-bp"
+    assert calls == [("iam-ak", "iam-sk", "iam-token", "ap-southeast-1")]
 
 
 def test_ui_config_serves_custom_branding(
