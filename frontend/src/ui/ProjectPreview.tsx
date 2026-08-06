@@ -78,6 +78,8 @@ import {
 import {
   trackAgentDeployFailed,
   trackAgentDeploySucceeded,
+  trackAgentSourceDownloadFailed,
+  trackAgentSourceDownloadSucceeded,
   type DeploymentTelemetryOrigin,
 } from "../adk/telemetryEvents";
 import feishuLogo from "../assets/feishu-logo.svg";
@@ -1485,15 +1487,35 @@ export function ProjectPreview({
   }
 
   function handleDownloadZip() {
-    const blob = buildZip(project.files);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${project.name || "project"}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const startedAt = Date.now();
+    const action = deploymentRuntimeId ? "update" as const : "create" as const;
+    try {
+      const blob = buildZip(project.files);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${project.name || "project"}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      trackAgentSourceDownloadSucceeded({
+        telemetry: deploymentTelemetry,
+        action,
+        fileCount: project.files.length,
+        zipSizeBytes: blob.size,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      trackAgentSourceDownloadFailed({
+        telemetry: deploymentTelemetry,
+        action,
+        fileCount: project.files.length,
+        durationMs: Date.now() - startedAt,
+        error,
+      });
+      throw error;
+    }
   }
 
   const artifactActions = (

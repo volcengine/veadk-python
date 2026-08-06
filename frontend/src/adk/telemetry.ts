@@ -11,7 +11,8 @@ export type StudioTelemetryEventName =
   | "studio_sandbox_create"
   | "studio_agent_debug"
   | "studio_agent_connect"
-  | "studio_agent_message";
+  | "studio_agent_message"
+  | "studio_agent_source_download";
 
 export interface StudioTelemetryEventOptions {
   dedupeKey?: string;

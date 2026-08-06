@@ -3,6 +3,7 @@ import {
   agentDebugErrorKind,
   agentDeployErrorKind,
   agentMessageErrorKind,
+  agentSourceDownloadErrorKind,
   sandboxCreateErrorKind,
   telemetryErrorSummary,
 } from "./telemetryClassifiers";
@@ -132,6 +133,23 @@ export interface AgentMessageFailedTelemetry extends AgentMessageTelemetryBase {
   error: unknown;
 }
 
+export interface AgentSourceDownloadTelemetryBase {
+  telemetry: DeploymentTelemetryOrigin;
+  action: "create" | "update";
+  fileCount: number;
+  durationMs: number;
+}
+
+export interface AgentSourceDownloadSucceededTelemetry
+  extends AgentSourceDownloadTelemetryBase {
+  zipSizeBytes: number;
+}
+
+export interface AgentSourceDownloadFailedTelemetry
+  extends AgentSourceDownloadTelemetryBase {
+  error: unknown;
+}
+
 function agentDeployCategories(args: AgentDeployTelemetryBase) {
   return {
     deploy_source: args.telemetry.source,
@@ -141,6 +159,18 @@ function agentDeployCategories(args: AgentDeployTelemetryBase) {
     deploy_region: args.region,
     runtime_network_type: args.networkType,
     feishu_enabled: args.feishuEnabled,
+  };
+}
+
+function deploymentOriginCategories(args: {
+  telemetry: DeploymentTelemetryOrigin;
+  action: "create" | "update";
+}) {
+  return {
+    deploy_source: args.telemetry.source,
+    create_mode: args.telemetry.createMode,
+    ai_assisted: args.telemetry.aiAssisted,
+    deploy_action: args.action,
   };
 }
 
@@ -291,6 +321,41 @@ export function trackAgentMessageFailed(args: AgentMessageFailedTelemetry): void
     },
     {
       duration_ms: args.durationMs,
+    },
+  );
+}
+
+export function trackAgentSourceDownloadSucceeded(
+  args: AgentSourceDownloadSucceededTelemetry,
+): void {
+  trackStudioEvent(
+    "studio_agent_source_download",
+    {
+      ...deploymentOriginCategories(args),
+      download_status: "succeeded",
+    },
+    {
+      duration_ms: args.durationMs,
+      file_count: args.fileCount,
+      zip_size_bytes: args.zipSizeBytes,
+    },
+  );
+}
+
+export function trackAgentSourceDownloadFailed(
+  args: AgentSourceDownloadFailedTelemetry,
+): void {
+  trackStudioEvent(
+    "studio_agent_source_download",
+    {
+      ...deploymentOriginCategories(args),
+      download_status: "failed",
+      error_kind: agentSourceDownloadErrorKind(args.error),
+      error_summary: telemetryErrorSummary(args.error),
+    },
+    {
+      duration_ms: args.durationMs,
+      file_count: args.fileCount,
     },
   );
 }
