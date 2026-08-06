@@ -97,7 +97,7 @@ CMD ["python", "app.py"]
 A minimal VeADK Agent with the full Studio App Server and one example weather
 tool.
 
-## Run in VeADK Studio
+## Run in AgentKit Studio
 
 \`\`\`bash
 pip install -r requirements.txt
@@ -215,7 +215,7 @@ export const templateProjectAutomation: GitHubAutomationDefinition = {
         files,
         branchPrefix: "feat/agentkit-basic-template",
         title: "feat: 导入 AgentKit basic 模板",
-        description: "导入带有 VeADK Studio App Server 的 basic Agent 项目，并添加持续发布到 AgentKit Runtime 的工作流。合并前请配置 Volcengine Secrets。",
+        description: "导入带有 AgentKit Studio App Server 的 basic Agent 项目，并添加持续发布到 AgentKit Runtime 的工作流。合并前请配置 Volcengine Secrets。",
       },
       signal,
     );

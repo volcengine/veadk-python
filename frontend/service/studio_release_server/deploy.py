@@ -124,7 +124,7 @@ def _ensure_runtime_role(access_key: str, secret_key: str) -> str:
                     {
                         "PolicyName": _POLICY_NAME,
                         "PolicyDocument": policy_document,
-                        "Description": "Publish VeADK Studio releases to TOS",
+                        "Description": "Publish AgentKit Studio releases to TOS",
                     }
                 )
             )
@@ -141,7 +141,7 @@ def _ensure_runtime_role(access_key: str, secret_key: str) -> str:
                 {
                     "RoleName": _ROLE_NAME,
                     "TrustPolicyDocument": json.dumps(_TRUST_POLICY),
-                    "Description": "VeADK Studio release server runtime role",
+                    "Description": "AgentKit Studio release server runtime role",
                 }
             )
         )
