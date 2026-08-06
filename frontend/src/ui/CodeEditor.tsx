@@ -1,10 +1,12 @@
 import { useMemo } from "react";
+import { StreamLanguage } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { python } from "@codemirror/lang-python";
 import { yaml } from "@codemirror/lang-yaml";
+import { shell } from "@codemirror/legacy-modes/mode/shell";
 import CodeMirror from "@uiw/react-codemirror";
 
 interface CodeEditorProps {
@@ -29,6 +31,9 @@ function languageFor(path: string): Extension[] {
   if (extension === "json" || extension === "jsonc") return [json()];
   if (extension === "yaml" || extension === "yml") return [yaml()];
   if (["md", "markdown"].includes(extension ?? "")) return [markdown()];
+  if (["sh", "bash", "zsh"].includes(extension ?? "")) {
+    return [StreamLanguage.define(shell)];
+  }
   return [];
 }
 

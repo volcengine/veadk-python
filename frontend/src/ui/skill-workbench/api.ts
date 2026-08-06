@@ -38,6 +38,14 @@ function record(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function optionalIdentifier(value: unknown, label: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || !value.trim() || value.trim().length > 256) {
+    throw new Error(`${label}格式错误。`);
+  }
+  return value.trim();
+}
+
 async function request(
   path: string,
   init: RequestInit = {},
@@ -157,15 +165,25 @@ function normalizeTask(value: unknown): SkillWorkbenchTask {
     : [];
   const allowedStates = ["running", "ready", "failed", "cancelled", "expired", "published"];
   if (!allowedStates.includes(task.state)) throw new Error("Skill 会话状态无法识别。");
+  const toolId = optionalIdentifier(task.toolId, "Tool ID");
+  const sessionId = optionalIdentifier(task.sessionId, "Session ID");
   return {
     jobId: task.jobId,
     operation: task.operation,
     intent: task.intent,
     revision: task.revision,
+    ...(toolId ? { toolId } : {}),
+    ...(sessionId ? { sessionId } : {}),
     ...(typeof task.sessionTtlSeconds === "number"
       ? { sessionTtlSeconds: task.sessionTtlSeconds }
       : {}),
     ...(typeof task.expiresAt === "string" ? { expiresAt: task.expiresAt } : {}),
+    ...(typeof task.recoveryAvailable === "boolean"
+      ? { recoveryAvailable: task.recoveryAvailable }
+      : {}),
+    ...(typeof task.recoveredFromSnapshot === "boolean"
+      ? { recoveredFromSnapshot: task.recoveredFromSnapshot }
+      : {}),
     state: task.state as SkillWorkbenchTask["state"],
     stage: typeof task.stage === "string" ? task.stage : "generating",
     activities: normalizeActivities(task.activities),
@@ -254,10 +272,12 @@ export async function createSkillWorkbenchTask(args: {
         source: {
           kind: "skill-center",
           skillId: args.source.skillId,
+          skillName: args.source.name,
           version: args.source.version,
           region: args.source.region,
           projectName: args.source.projectName,
           skillSpaceId: args.source.skillSpaceId,
+          skillSpaceName: args.source.skillSpaceName,
         },
       } : {}),
     }),
@@ -288,6 +308,9 @@ function normalizeTaskSummary(value: unknown): SkillWorkbenchTaskSummary {
     createdAt: task.createdAt,
     ...(typeof task.name === "string" ? { name: task.name } : {}),
     ...(typeof task.sourceName === "string" ? { sourceName: task.sourceName } : {}),
+    ...(typeof task.recoveryAvailable === "boolean"
+      ? { recoveryAvailable: task.recoveryAvailable }
+      : {}),
   };
 }
 
@@ -355,6 +378,18 @@ export async function refineSkillWorkbenchTask(args: {
     }),
   }, TRANSFER_REQUEST_TIMEOUT_MS);
   return normalizeTask(await json(response, "继续调整 Skill 失败"));
+}
+
+export async function stopSkillWorkbenchTask(args: {
+  jobId: string;
+  expectedRevision: number;
+}): Promise<SkillWorkbenchTask> {
+  const response = await request(`/tasks/${encodeURIComponent(args.jobId)}/stop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expectedRevision: args.expectedRevision }),
+  });
+  return normalizeTask(await json(response, "停止当前 Skill 任务失败"));
 }
 
 export async function publishSkillWorkbenchTask(args: {

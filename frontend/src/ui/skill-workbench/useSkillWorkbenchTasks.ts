@@ -7,6 +7,7 @@ import {
   listSkillWorkbenchTasks,
   reserveSkillWorkbenchTask,
   SkillWorkbenchApiError,
+  stopSkillWorkbenchTask,
 } from "./api";
 import type {
   SkillCenterOptimizationSource,
@@ -18,8 +19,10 @@ import type {
   SkillWorkbenchTaskSummary,
 } from "./types";
 
-const LIST_POLL_INTERVAL_MS = 2_500;
-const DETAIL_POLL_INTERVAL_MS = 1_200;
+const LIST_POLL_INTERVAL_MS = 10_000;
+const DETAIL_POLL_INTERVAL_MS = 2_000;
+const MAX_POLL_INTERVAL_MS = 16_000;
+const SYNC_ERROR_REVEAL_THRESHOLD = 3;
 const ARTIFACT_RETRY_INTERVAL_MS = 900;
 const ARTIFACT_RETRY_LIMIT = 4;
 const PROVISIONING_TTL_SECONDS = 10 * 60;
@@ -30,6 +33,25 @@ interface ProvisioningReference {
   jobId: string;
   reservedAt: number;
   cancelRequested?: true;
+}
+
+function isRetryableSyncFailure(cause: unknown): boolean {
+  if (cause instanceof SkillWorkbenchApiError) {
+    if (cause.retryable) return true;
+    return cause.code === "SKILL_WORKBENCH_ERROR" &&
+      [408, 429, 500, 502, 503, 504].includes(cause.status);
+  }
+  if (cause instanceof TypeError) return true;
+  return typeof DOMException !== "undefined" &&
+    cause instanceof DOMException &&
+    ["NetworkError", "TimeoutError"].includes(cause.name);
+}
+
+function pollDelay(baseDelay: number, failures: number): number {
+  return Math.min(
+    baseDelay * 2 ** Math.min(failures, 3),
+    MAX_POLL_INTERVAL_MS,
+  );
 }
 
 export interface StartSkillWorkbenchTaskArgs {
@@ -96,13 +118,16 @@ function taskSummary(task: SkillWorkbenchTask): SkillWorkbenchTaskSummary {
     createdAt: Math.floor(Date.now() / 1_000),
     ...(task.name ? { name: task.name } : {}),
     ...(task.source?.name ? { sourceName: task.source.name } : {}),
+    ...(typeof task.recoveryAvailable === "boolean"
+      ? { recoveryAvailable: task.recoveryAvailable }
+      : {}),
   };
 }
 
 function restoredProvisioning(reference: ProvisioningReference): SkillWorkbenchProvisioningTask {
   return {
     jobId: reference.jobId,
-    operation: "create",
+    operation: null,
     intent: "Skill 会话",
     revision: 1,
     state: "provisioning",
@@ -112,7 +137,7 @@ function restoredProvisioning(reference: ProvisioningReference): SkillWorkbenchP
 }
 
 const RELEASED_DEVENV_MESSAGE =
-  "DevEnv 已到期或被释放，临时文件已无法访问。请返回技能中心重新开始。";
+  "DevEnv 已到期或被释放，当前产物已无法下载或发布。";
 const CLEANUP_FAILED_MESSAGE =
   "删除 Skill 会话失败，临时 DevEnv 可能仍在运行，请稍后重试。";
 
@@ -131,6 +156,12 @@ function expiredTask(
     ? previous.activities
     : [];
   const name = previous && "name" in previous ? previous.name : undefined;
+  const recoveryAvailable =
+    previous && "recoveryAvailable" in previous
+      ? previous.recoveryAvailable
+      : undefined;
+  const toolId = previous && "toolId" in previous ? previous.toolId : undefined;
+  const sessionId = previous && "sessionId" in previous ? previous.sessionId : undefined;
   return {
     jobId,
     operation: previous?.operation ?? "create",
@@ -140,7 +171,10 @@ function expiredTask(
     stage: "expired",
     activities,
     files: [],
+    ...(toolId ? { toolId } : {}),
+    ...(sessionId ? { sessionId } : {}),
     ...(name ? { name } : {}),
+    ...(typeof recoveryAvailable === "boolean" ? { recoveryAvailable } : {}),
     error: RELEASED_DEVENV_MESSAGE,
   };
 }
@@ -154,6 +188,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   const [activeTask, setActiveTask] = useState<SkillWorkbenchTask | null>(null);
   const [activeTaskLoading, setActiveTaskLoading] = useState(false);
   const [activeTaskError, setActiveTaskError] = useState("");
+  const [activeTaskRecovering, setActiveTaskRecovering] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<SkillWorkbenchArtifact | null>(null);
   const [activeArtifactLoading, setActiveArtifactLoading] = useState(false);
   const [activeArtifactError, setActiveArtifactError] = useState("");
@@ -164,9 +199,21 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   const listRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const artifactRequestRef = useRef(0);
+  const listFailureCountRef = useRef(0);
+  const detailFailureCountRef = useRef(0);
   const referencesRef = useRef<ProvisioningReference[]>([]);
   const cleanupRequestsRef = useRef<Map<string, Promise<void>>>(new Map());
   const selectedTaskRef = useRef<SkillWorkbenchTaskListItem | null>(null);
+  const tasksRef = useRef<SkillWorkbenchTaskListItem[]>([]);
+  const activeTaskRef = useRef<SkillWorkbenchTask | null>(null);
+
+  useEffect(() => {
+    tasksRef.current = tasks;
+  }, [tasks]);
+
+  useEffect(() => {
+    activeTaskRef.current = activeTask;
+  }, [activeTask]);
 
   const persistReferences = useCallback((next: ProvisioningReference[]) => {
     referencesRef.current = next;
@@ -225,7 +272,14 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       );
       return [
         ...cancelledPlaceholders,
-        ...remaining.filter((reference) => !reference.cancelRequested).map(restoredProvisioning),
+        ...remaining
+          .filter((reference) => !reference.cancelRequested)
+          .map((reference) =>
+            current.find((task) =>
+              task.jobId === reference.jobId &&
+              task.state === "provisioning"
+            ) ?? restoredProvisioning(reference)
+          ),
         ...durable.filter((task) => !cancelledIds.has(task.jobId)),
         ...missing,
       ].sort((a, b) => b.createdAt - a.createdAt);
@@ -250,15 +304,28 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     if (!enabled || !identityKey) return;
     const generation = generationRef.current;
     const request = ++listRequestRef.current;
-    setTasksLoading(true);
+    if (tasksRef.current.length === 0) setTasksLoading(true);
     try {
       const next = await listSkillWorkbenchTasks(signal);
       if (generation !== generationRef.current || request !== listRequestRef.current) return;
+      listFailureCountRef.current = 0;
       reconcileTasks(next);
       setTasksError("");
     } catch (cause) {
       if (signal?.aborted || generation !== generationRef.current || request !== listRequestRef.current) return;
-      setTasksError(cause instanceof Error ? cause.message : String(cause));
+      const retryable = isRetryableSyncFailure(cause);
+      listFailureCountRef.current = retryable
+        ? listFailureCountRef.current + 1
+        : 0;
+      if (
+        !retryable ||
+        tasksRef.current.length === 0 ||
+        listFailureCountRef.current >= SYNC_ERROR_REVEAL_THRESHOLD
+      ) {
+        setTasksError(retryable
+          ? "Skill 会话列表连接不稳定，正在自动重试。"
+          : cause instanceof Error ? cause.message : String(cause));
+      }
     } finally {
       if (generation === generationRef.current && request === listRequestRef.current) setTasksLoading(false);
     }
@@ -274,9 +341,11 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     try {
       const next = await getSkillWorkbenchTask(requestedJobId, signal);
       if (generation !== generationRef.current || request !== detailRequestRef.current || requestedJobId !== activeJobId) return;
+      detailFailureCountRef.current = 0;
       persistReferences(referencesRef.current.filter((item) => item.jobId !== requestedJobId));
       setActiveTask(next);
       setActiveTaskError("");
+      setActiveTaskRecovering(false);
       setTasks((current) => {
         const existing = current.find((item) => item.jobId === next.jobId);
         const summary = { ...taskSummary(next), ...(existing ? { createdAt: existing.createdAt } : {}) };
@@ -286,7 +355,9 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     } catch (cause) {
       if (signal?.aborted || generation !== generationRef.current || request !== detailRequestRef.current || requestedJobId !== activeJobId) return;
       if (provisioning && cause instanceof SkillWorkbenchApiError && cause.status === 404) {
+        detailFailureCountRef.current = 0;
         setActiveTaskError("");
+        setActiveTaskRecovering(false);
       } else if (
         cause instanceof SkillWorkbenchApiError &&
         (
@@ -304,6 +375,8 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
         );
         setActiveTask(released);
         setActiveTaskError("");
+        setActiveTaskRecovering(false);
+        detailFailureCountRef.current = 0;
         setTasks((current) => {
           const existing = current.find((item) => item.jobId === requestedJobId);
           const summary = {
@@ -314,7 +387,25 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
           return [summary, ...current.filter((item) => item.jobId !== requestedJobId)];
         });
       } else {
-        setActiveTaskError(cause instanceof Error ? cause.message : String(cause));
+        const retryable = isRetryableSyncFailure(cause);
+        if (retryable) {
+          detailFailureCountRef.current += 1;
+          setActiveTaskRecovering(true);
+          if (
+            !activeTaskRef.current ||
+            detailFailureCountRef.current >= SYNC_ERROR_REVEAL_THRESHOLD
+          ) {
+            setActiveTaskError(
+              "暂时无法读取 DevEnv 状态，正在自动重试。当前会话和已完成内容已保留。",
+            );
+          } else {
+            setActiveTaskError("");
+          }
+        } else {
+          detailFailureCountRef.current = 0;
+          setActiveTaskRecovering(false);
+          setActiveTaskError(cause instanceof Error ? cause.message : String(cause));
+        }
       }
     } finally {
       if (generation === generationRef.current && request === detailRequestRef.current && requestedJobId === activeJobId) {
@@ -335,10 +426,13 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     setActiveJobId("");
     setActiveTask(null);
     setActiveTaskError("");
+    setActiveTaskRecovering(false);
     setActiveArtifact(null);
     setActiveArtifactError("");
     setStartError("");
     setCleanupError("");
+    listFailureCountRef.current = 0;
+    detailFailureCountRef.current = 0;
     setStartingTask(false);
     if (!enabled || !identityKey) return;
     const controller = new AbortController();
@@ -354,7 +448,12 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     let stopped = false;
     const poll = async () => {
       await refreshTasks();
-      if (!stopped) timer = window.setTimeout(poll, LIST_POLL_INTERVAL_MS);
+      if (!stopped) {
+        timer = window.setTimeout(
+          poll,
+          pollDelay(LIST_POLL_INTERVAL_MS, listFailureCountRef.current),
+        );
+      }
     };
     timer = window.setTimeout(poll, LIST_POLL_INTERVAL_MS);
     return () => {
@@ -381,7 +480,12 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     let stopped = false;
     const poll = async () => {
       await refreshActiveTask();
-      if (!stopped) timer = window.setTimeout(poll, DETAIL_POLL_INTERVAL_MS);
+      if (!stopped) {
+        timer = window.setTimeout(
+          poll,
+          pollDelay(DETAIL_POLL_INTERVAL_MS, detailFailureCountRef.current),
+        );
+      }
     };
     timer = window.setTimeout(poll, DETAIL_POLL_INTERVAL_MS);
     return () => {
@@ -471,6 +575,8 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     setActiveSelectionRevision((revision) => revision + 1);
     setActiveTask((current) => current?.jobId === jobId ? current : null);
     setActiveTaskError("");
+    setActiveTaskRecovering(false);
+    detailFailureCountRef.current = 0;
   }, [tasks]);
 
   const upsertTask = useCallback((task: SkillWorkbenchTask) => {
@@ -479,6 +585,8 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     selectedTaskRef.current = taskSummary(task);
     setActiveTask(task);
     setActiveTaskError("");
+    setActiveTaskRecovering(false);
+    detailFailureCountRef.current = 0;
     setTasks((current) => {
       const existing = current.find((item) => item.jobId === task.jobId);
       const summary = { ...taskSummary(task), ...(existing ? { createdAt: existing.createdAt } : {}) };
@@ -578,6 +686,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     setTasks((current) => current.filter((item) => item.jobId !== jobId));
     setActiveJobId((current) => current === jobId ? "" : current);
     setActiveTask((current) => current?.jobId === jobId ? null : current);
+    if (activeTaskRef.current?.jobId === jobId) activeTaskRef.current = null;
     if (selectedTaskRef.current?.jobId === jobId) selectedTaskRef.current = null;
   }, [persistReferences]);
 
@@ -589,6 +698,16 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     await deleteSkillWorkbenchTask(jobId);
     removeTask(jobId);
   }, [cancelProvisioning, removeTask]);
+
+  const stopTask = useCallback(async (
+    jobId: string,
+    expectedRevision: number,
+  ): Promise<SkillWorkbenchTask> => {
+    detailRequestRef.current += 1;
+    const task = await stopSkillWorkbenchTask({ jobId, expectedRevision });
+    upsertTask(task);
+    return task;
+  }, [upsertTask]);
 
   return {
     tasks,
@@ -602,6 +721,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     ) ?? null,
     activeTaskLoading,
     activeTaskError,
+    activeTaskRecovering,
     activeArtifact,
     activeArtifactLoading,
     activeArtifactError,
@@ -614,6 +734,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     upsertTask,
     removeTask,
     deleteTask,
+    stopTask,
     refreshTasks,
     refreshActiveTask,
     refreshActiveArtifact,

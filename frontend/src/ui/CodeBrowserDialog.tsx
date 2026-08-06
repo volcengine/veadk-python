@@ -53,6 +53,16 @@ function sortedChildren(node: TreeNode): TreeNode[] {
   });
 }
 
+function markdownPreviewText(content: string): string {
+  const frontmatter = content.match(
+    /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/,
+  );
+  if (!frontmatter || !/^[A-Za-z_][\w.-]*\s*:/m.test(frontmatter[1])) {
+    return content;
+  }
+  return content.slice(frontmatter[0].length);
+}
+
 export interface CodeBrowserDialogProps {
   project: AgentProject;
   open: boolean;
@@ -174,7 +184,7 @@ export function CodeBrowserWorkspace({
           {selectedFile ? (
             renderMarkdown && /\.md(?:own)?$/i.test(selectedFile.path) ? (
               <Markdown
-                text={selectedFile.content}
+                text={markdownPreviewText(selectedFile.content)}
                 className="code-browser-markdown"
                 allowRawHtml={false}
               />

@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
+import { PanelRightOpen, Square, X } from "lucide-react";
 import {
+  formatSkillVersion,
   listSkillSpacesPage,
   type SkillSpaceRef,
 } from "../../create/skills/skillspace";
 import { CodeBrowserWorkspace } from "../CodeBrowserDialog";
 import { isImeCompositionEvent } from "../composerKeyboard";
 import { SkillConversationStream } from "../skill-create/SkillConversationStream";
-import { StudioConfirmDialog } from "../StudioConfirmDialog";
 import { TextShimmer } from "../text-shimmer/TextShimmer";
 import {
   downloadSkillWorkbenchTask,
@@ -23,7 +24,7 @@ import type {
 import "./skill-workbench.css";
 
 type SkillRegion = "cn-beijing" | "cn-shanghai";
-type Action = "delete" | "publish" | "refine" | null;
+type Action = "publish" | "refine" | "stop" | null;
 
 const TERMINAL = new Set(["ready", "failed", "cancelled", "expired", "published"]);
 
@@ -32,26 +33,20 @@ export interface SkillWorkbenchProps {
   provisioningTask: SkillWorkbenchProvisioningTask | null;
   taskLoading: boolean;
   taskError: string;
+  taskRecovering: boolean;
   artifact: SkillWorkbenchArtifact | null;
   artifactLoading: boolean;
   artifactError: string;
   onTaskChanged: (task: SkillWorkbenchTask) => void;
-  onDeleteTask: (jobId: string) => Promise<void>;
   onCancelProvisioning: (jobId: string) => Promise<void>;
+  onStopTask: (
+    jobId: string,
+    expectedRevision: number,
+  ) => Promise<SkillWorkbenchTask>;
   onRetryTask: () => void;
   onRetryArtifact: () => void;
   onBack: () => void;
   onViewPublished: (result: SkillWorkbenchPublishResult) => void;
-}
-
-function MoreIcon() {
-  return (
-    <svg className="icon" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <circle cx="5.5" cy="12" r="1.25" fill="currentColor" />
-      <circle cx="12" cy="12" r="1.25" fill="currentColor" />
-      <circle cx="18.5" cy="12" r="1.25" fill="currentColor" />
-    </svg>
-  );
 }
 
 function DownloadIcon() {
@@ -139,9 +134,17 @@ function ExecutionStages({ task }: { task: SkillWorkbenchTask }) {
 function LoadingConversation({
   operation,
   intent,
+  refinement,
+  stopping,
+  onRefinementChange,
+  onStop,
 }: {
-  operation: "create" | "optimize";
+  operation: "create" | "optimize" | null;
   intent: string;
+  refinement: string;
+  stopping: boolean;
+  onRefinementChange: (value: string) => void;
+  onStop: () => void;
 }) {
   return (
     <div className="skill-workbench__run-grid is-process-only">
@@ -153,14 +156,51 @@ function LoadingConversation({
         <div className="skill-workbench__activity">
           <p className="skill-workbench__stage-note">
             正在分配隔离环境并准备 Codex。完成后会自动开始
-            {operation === "create" ? "创建" : "优化"}，离开页面不会中断任务。
+            {operation === "create"
+              ? "创建"
+              : operation === "optimize"
+                ? "优化"
+                : "处理 Skill"}
+            ，离开页面不会中断任务。
           </p>
         <ol className="skill-workbench__provisioning-steps">
           <li className="is-done">会话已建立</li>
           <li className="is-active">正在创建 DevEnv</li>
           <li>准备 Skill 工作区</li>
-          <li>{operation === "create" ? "开始创建 Skill" : "开始优化 Skill"}</li>
+          <li>
+            {operation === "create"
+              ? "开始创建 Skill"
+              : operation === "optimize"
+                ? "开始优化 Skill"
+                : "开始处理 Skill"}
+          </li>
         </ol>
+        </div>
+        <div className="composer composer--new-chat skill-workbench__composer">
+          <div className="composer-box">
+            <div className="composer-input-stack">
+              <textarea
+                className="comp-input scroll"
+                rows={4}
+                maxLength={20_000}
+                value={refinement}
+                disabled={stopping}
+                aria-label="下一步 Skill 调整要求"
+                placeholder="可以先输入下一步要求，DevEnv 就绪后会保留在这里…"
+                onChange={(event) => onRefinementChange(event.target.value)}
+              />
+            </div>
+            <button
+              type="button"
+              className="comp-send"
+              disabled={stopping}
+              onClick={onStop}
+              aria-label="停止创建 DevEnv"
+              title="停止创建 DevEnv"
+            >
+              <Square className="icon" size={16} fill="currentColor" strokeWidth={0} aria-hidden />
+            </button>
+          </div>
         </div>
       </section>
     </div>
@@ -172,19 +212,18 @@ export function SkillWorkbench({
   provisioningTask,
   taskLoading,
   taskError,
+  taskRecovering,
   artifact,
   artifactLoading,
   artifactError,
   onTaskChanged,
-  onDeleteTask,
   onCancelProvisioning,
+  onStopTask,
   onRetryTask,
   onRetryArtifact,
   onBack,
   onViewPublished,
 }: SkillWorkbenchProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const [action, setAction] = useState<Action>(null);
   const [error, setError] = useState("");
   const [refinement, setRefinement] = useState("");
@@ -199,18 +238,21 @@ export function SkillWorkbench({
     useState<SkillWorkbenchPublishProgress | null>(null);
   const [publishResult, setPublishResult] =
     useState<SkillWorkbenchPublishResult | null>(null);
+  const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
   const publishControllerRef = useRef<AbortController | null>(null);
   const activityRef = useRef<HTMLDivElement>(null);
   const followActivityRef = useRef(true);
+  const artifactToggleRef = useRef<HTMLButtonElement>(null);
+  const artifactCloseRef = useRef<HTMLButtonElement>(null);
 
   const ready = task?.state === "ready" || task?.state === "published";
   const persistedPublication = task && task.publication?.revision === task.revision
     ? task.publication
     : null;
   const effectivePublishResult = publishResult ?? persistedPublication;
-  const canDeleteFromHeader = task
-    ? task.state !== "ready" && task.state !== "published"
-    : Boolean(provisioningTask);
+  const recoveryUnavailable =
+    task?.state === "expired" && task.recoveryAvailable === false;
+  const canRefine = task && task.state !== "running" && !recoveryUnavailable;
 
   useEffect(() => {
     if (!ready) return;
@@ -247,7 +289,23 @@ export function SkillWorkbench({
 
   useEffect(() => {
     followActivityRef.current = true;
+    setArtifactPanelOpen(false);
   }, [task?.jobId]);
+
+  useEffect(() => {
+    if (!artifactPanelOpen) return;
+    const frame = requestAnimationFrame(() => artifactCloseRef.current?.focus());
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setArtifactPanelOpen(false);
+      artifactToggleRef.current?.focus();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [artifactPanelOpen]);
 
   useEffect(() => {
     if (!task || !followActivityRef.current) return;
@@ -264,25 +322,8 @@ export function SkillWorkbench({
     followActivityRef.current = scrollHeight - scrollTop - clientHeight <= 48;
   };
 
-  async function deleteConversation() {
-    const jobId = task?.jobId ?? provisioningTask?.jobId;
-    if (!jobId || action) return;
-    setAction("delete");
-    setError("");
-    try {
-      if (provisioningTask) await onCancelProvisioning(jobId);
-      else await onDeleteTask(jobId);
-      setConfirmDelete(false);
-      onBack();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setAction(null);
-    }
-  }
-
   async function refine() {
-    if (!task || !refinement.trim() || action) return;
+    if (!canRefine || !refinement.trim() || action) return;
     setAction("refine");
     setError("");
     try {
@@ -295,6 +336,25 @@ export function SkillWorkbench({
       setRefinement("");
       setPublishResult(null);
       setPublishProgress(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAction(null);
+    }
+  }
+
+  async function stop() {
+    const jobId = task?.jobId ?? provisioningTask?.jobId;
+    if (!jobId || action) return;
+    setAction("stop");
+    setError("");
+    try {
+      if (task?.state === "running") {
+        await onStopTask(task.jobId, task.revision);
+      } else if (provisioningTask) {
+        await onCancelProvisioning(provisioningTask.jobId);
+        onBack();
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -351,15 +411,15 @@ export function SkillWorkbench({
   }
 
   const submitRefinement = () => {
-    if (refinement.trim() && !action) void refine();
+    if (canRefine && refinement.trim() && !action) void refine();
   };
 
-  const deleteLabel = provisioningTask || task?.state === "running"
-    ? "取消并删除会话"
-    : "删除会话";
-  const title = provisioningTask?.operation === "optimize" || task?.operation === "optimize"
+  const operation = provisioningTask?.operation ?? task?.operation ?? null;
+  const title = operation === "optimize"
     ? "优化 Skill"
-    : "创建 Skill";
+    : operation === "create"
+      ? "创建 Skill"
+      : "Skill 会话";
 
   return (
     <section className="skill-workbench" aria-label="Skill 会话">
@@ -370,48 +430,31 @@ export function SkillWorkbench({
           </button>
           <h1>{title}</h1>
         </div>
-        {canDeleteFromHeader ? (
-          <div className="skill-workbench__more">
-            <button
-              type="button"
-              className="skill-workbench__icon-button"
-              aria-label="会话操作"
-              aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((value) => !value)}
-            >
-              <MoreIcon />
-            </button>
-            {menuOpen ? (
-              <>
-                <button
-                  type="button"
-                  className="skill-workbench__menu-scrim"
-                  aria-label="关闭会话操作"
-                  onClick={() => setMenuOpen(false)}
-                />
-                <div className="skill-workbench__menu">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMenuOpen(false);
-                        setError("");
-                        setConfirmDelete(true);
-                      }}
-                    >
-                    {deleteLabel}
-                  </button>
-                </div>
-              </>
-            ) : null}
-          </div>
+        {ready ? (
+          <button
+            ref={artifactToggleRef}
+            type="button"
+            className="skill-workbench__artifact-toggle"
+            aria-controls="skill-workbench-artifact-panel"
+            aria-expanded={artifactPanelOpen}
+            onClick={() => setArtifactPanelOpen(true)}
+          >
+            <PanelRightOpen size={16} aria-hidden />
+            <span>查看产物</span>
+          </button>
         ) : null}
       </header>
 
       {error ? <div className="skill-workbench__error" role="alert">{error}</div> : null}
       {taskError ? (
-        <div className="skill-workbench__error" role="alert">
+        <div
+          className={taskRecovering
+            ? "skill-workbench__connection"
+            : "skill-workbench__error"}
+          role={taskRecovering ? "status" : "alert"}
+        >
           <span>{taskError}</span>
-          <button type="button" onClick={onRetryTask}>重试</button>
+          <button type="button" onClick={onRetryTask}>立即重试</button>
         </div>
       ) : null}
 
@@ -419,11 +462,17 @@ export function SkillWorkbench({
         <LoadingConversation
           operation={provisioningTask.operation}
           intent={provisioningTask.intent}
+          refinement={refinement}
+          stopping={action === "stop"}
+          onRefinementChange={setRefinement}
+          onStop={() => void stop()}
         />
       ) : !task ? (
         <div className="skill-workbench__loading" aria-live="polite">
-          {taskLoading ? (
-            <TextShimmer duration={2.2} spread={16}>正在读取会话</TextShimmer>
+          {taskLoading || taskRecovering ? (
+            <TextShimmer duration={2.2} spread={16}>
+              {taskRecovering ? "正在重新连接 DevEnv" : "正在读取会话"}
+            </TextShimmer>
           ) : (
             <>
               <strong>会话不存在或已删除</strong>
@@ -441,6 +490,22 @@ export function SkillWorkbench({
                 <TextShimmer duration={2.2} spread={16}>{stageLabel(task)}</TextShimmer>
               )}
               <span className="skill-workbench__user-intent">{task.intent}</span>
+              {task.toolId || task.sessionId ? (
+                <dl className="skill-workbench__runtime-meta">
+                  {task.toolId ? (
+                    <div>
+                      <dt>Tool ID</dt>
+                      <dd title={task.toolId}>{task.toolId}</dd>
+                    </div>
+                  ) : null}
+                  {task.sessionId ? (
+                    <div>
+                      <dt>Session ID</dt>
+                      <dd title={task.sessionId}>{task.sessionId}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+              ) : null}
             </div>
             <div
               ref={activityRef}
@@ -452,87 +517,151 @@ export function SkillWorkbench({
               {task.error ? (
                 <div className="skill-workbench__error" role="alert">{task.error}</div>
               ) : null}
-              {task.state === "failed" || task.state === "expired" ? (
+              {["failed", "cancelled", "expired"].includes(task.state) ? (
                 <div className="skill-workbench__recovery">
                   <p>
                     {task.state === "expired"
-                      ? "临时文件已无法访问。返回技能中心后可重新开始。"
-                      : "返回技能中心后可以调整意图或重新选择来源，再开始一段新会话。"}
+                      ? task.recoveryAvailable === true
+                        ? "当前 DevEnv 已释放，当前产物无法下载或发布。提交后将创建新的 DevEnv，并从最近的恢复点继续。"
+                        : task.recoveryAvailable === false
+                          ? "当前 DevEnv 已释放，当前产物无法下载或发布，并且没有可用恢复点。请返回技能中心重新创建。"
+                          : "当前 DevEnv 已释放，当前产物无法下载或发布。提交后会尝试从最近可用的恢复点创建新 DevEnv；如果恢复点不可用，系统会提示重新创建。"
+                      : task.state === "cancelled"
+                        ? "当前任务已停止，DevEnv 和已完成内容仍保留。可以在下方继续输入。"
+                        : "本轮执行失败，但 DevEnv 和已完成内容仍保留。调整要求后可以继续。"}
                   </p>
-                  <button type="button" onClick={onBack}>返回技能中心</button>
+                  {recoveryUnavailable ? (
+                    <button type="button" onClick={onBack}>返回技能中心</button>
+                  ) : null}
                 </div>
               ) : null}
             </div>
-            {ready ? (
-              <div className="composer composer--new-chat skill-workbench__composer">
-                <div className="composer-box">
-                  <div className="composer-input-stack">
-                    <textarea
-                      className="comp-input scroll"
-                      rows={4}
-                      maxLength={20_000}
-                      value={refinement}
-                      disabled={Boolean(action)}
-                      placeholder="继续告诉 Codex 需要调整什么…"
-                      onChange={(event) => setRefinement(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (isImeCompositionEvent(event.nativeEvent)) return;
-                        if (event.key === "Enter" && !event.shiftKey) {
-                          event.preventDefault();
-                          submitRefinement();
-                        }
-                      }}
-                    />
-                  </div>
+            <div className="composer composer--new-chat skill-workbench__composer">
+              <div className="composer-box">
+                <div className="composer-input-stack">
+                  <textarea
+                    className="comp-input scroll"
+                    rows={4}
+                    maxLength={20_000}
+                    value={refinement}
+                    disabled={Boolean(action) || recoveryUnavailable}
+                    aria-label="Skill 调整要求"
+                    placeholder={task.state === "running"
+                      ? "可以先输入下一步要求；停止当前任务后即可提交…"
+                      : task.state === "expired"
+                        ? recoveryUnavailable
+                          ? "当前会话没有可用恢复点"
+                          : "描述下一步 Skill 调整，提交后将恢复到新的 DevEnv…"
+                        : "继续告诉 Codex 需要调整什么…"}
+                    onChange={(event) => setRefinement(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (isImeCompositionEvent(event.nativeEvent)) return;
+                      if (
+                        event.key === "Enter" &&
+                        !event.shiftKey &&
+                        canRefine
+                      ) {
+                        event.preventDefault();
+                        submitRefinement();
+                      }
+                    }}
+                  />
+                </div>
+                {task.state === "running" ? (
                   <button
                     type="button"
                     className="comp-send"
-                    disabled={!refinement.trim() || Boolean(action)}
+                    disabled={Boolean(action)}
+                    onClick={() => void stop()}
+                    aria-label="停止当前任务"
+                    title="停止当前任务"
+                  >
+                    <Square className="icon" size={16} fill="currentColor" strokeWidth={0} aria-hidden />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="comp-send"
+                    disabled={
+                      !refinement.trim() || Boolean(action) || recoveryUnavailable
+                    }
                     onClick={submitRefinement}
                     aria-label="提交调整"
                   >
                     <SendIcon />
                   </button>
-                </div>
+                )}
               </div>
-            ) : null}
+            </div>
           </section>
 
           {ready ? (
-            <section className="skill-workbench__result" aria-label="Skill 产物">
-              <>
-                <header className="skill-workbench__artifact-head">
-                  <div>
-                    <strong>{artifact?.name || task.name || "Skill 产物"}</strong>
+            <>
+              {artifactPanelOpen ? (
+                <button
+                  type="button"
+                  className="skill-workbench__artifact-scrim"
+                  aria-label="关闭产物预览"
+                  onClick={() => setArtifactPanelOpen(false)}
+                />
+              ) : null}
+              <section
+                id="skill-workbench-artifact-panel"
+                className={`skill-workbench__result${artifactPanelOpen ? " is-open" : ""}`}
+                role={artifactPanelOpen ? "dialog" : undefined}
+                aria-modal={artifactPanelOpen ? "true" : undefined}
+                aria-labelledby="skill-workbench-artifact-title"
+              >
+                <>
+                  <header className="skill-workbench__artifact-head">
+                    <div className="skill-workbench__artifact-copy">
+                    <strong id="skill-workbench-artifact-title">
+                      {artifact?.name || task.name || "Skill 产物"}
+                    </strong>
                     <span>
                       {artifact?.description || task.description || "已完成生成与校验"}
                     </span>
-                  </div>
-                  <button
-                    type="button"
-                    className="skill-workbench__download"
-                    onClick={() => void downloadSkillWorkbenchTask(task.jobId).catch((cause) =>
-                      setError(cause instanceof Error ? cause.message : String(cause))
-                    )}
-                    title="下载 ZIP"
-                  >
-                    <DownloadIcon />
-                    <span>下载 ZIP</span>
-                  </button>
-                </header>
+                    </div>
+                    <div className="skill-workbench__artifact-actions">
+                    <button
+                      type="button"
+                      className="skill-workbench__download"
+                      onClick={() => void downloadSkillWorkbenchTask(task.jobId).catch((cause) =>
+                        setError(cause instanceof Error ? cause.message : String(cause))
+                      )}
+                      title="下载 ZIP"
+                    >
+                      <DownloadIcon />
+                      <span>下载 ZIP</span>
+                    </button>
+                    <button
+                      ref={artifactCloseRef}
+                      type="button"
+                      className="skill-workbench__artifact-close"
+                      aria-label="关闭产物预览"
+                      title="关闭产物预览"
+                      onClick={() => {
+                        setArtifactPanelOpen(false);
+                        artifactToggleRef.current?.focus();
+                      }}
+                    >
+                      <X size={17} aria-hidden />
+                    </button>
+                    </div>
+                  </header>
 
-                {task.sessionTtlSeconds ? (
-                  <div className="skill-workbench__ttl-note" role="note">
-                    DevEnv 最长保留 {ttlLabel(task.sessionTtlSeconds)}，从创建时开始计算。
-                    请及时下载或发布。超过保留时间后将无法下载或发布，产物也无法恢复。
-                  </div>
-                ) : null}
+                  {task.sessionTtlSeconds ? (
+                    <div className="skill-workbench__ttl-note" role="note">
+                      DevEnv 最长保留 {ttlLabel(task.sessionTtlSeconds)}，从创建时开始计算。
+                      请及时下载或发布。超过保留时间后将无法下载或发布。
+                    </div>
+                  ) : null}
 
-                <div className="skill-workbench__artifact">
+                  <div className="skill-workbench__artifact">
                   {artifactLoading ? (
                     <div className="skill-workbench__result-empty">
                       <TextShimmer duration={2.2} spread={16}>生成已完成，正在同步文件预览</TextShimmer>
-                      <span>下载与发布能力将在产物校验完成后可用。</span>
+                      <span>文件预览正在同步，下载与发布仍可使用。</span>
                     </div>
                   ) : artifactError ? (
                     <div className="skill-workbench__result-empty" role="alert">
@@ -550,15 +679,16 @@ export function SkillWorkbench({
                         })),
                       }}
                       readOnly
+                      renderMarkdown
                     />
                   ) : (
                     <div className="skill-workbench__result-empty">
                       <strong>暂无可预览文件</strong>
                     </div>
                   )}
-                </div>
+                  </div>
 
-                <footer className="skill-workbench__publish">
+                  <footer className="skill-workbench__publish">
                   {effectivePublishResult ? (
                     <div className="skill-workbench__publish-success" role="status">
                       <div>
@@ -566,7 +696,7 @@ export function SkillWorkbench({
                         <span>
                           {regionLabel(effectivePublishResult.region)} · {effectivePublishResult.projectName}
                           {" · "}{effectivePublishResult.skillSpaceIds[0] || "未关联空间"}
-                          {" · "}v{effectivePublishResult.version}
+                          {" · "}{formatSkillVersion(effectivePublishResult.version)}
                         </span>
                         <small title={effectivePublishResult.skillId}>{effectivePublishResult.skillId}</small>
                       </div>
@@ -640,31 +770,14 @@ export function SkillWorkbench({
                       ) : null}
                     </div>
                   )}
-                </footer>
-              </>
-            </section>
+                  </footer>
+                </>
+              </section>
+            </>
           ) : null}
         </div>
       )}
 
-      {confirmDelete ? (
-        <StudioConfirmDialog
-          title={`${deleteLabel}？`}
-          description={error
-            ? `删除失败：${error}`
-            : task?.state === "running" || provisioningTask
-              ? "这会停止当前处理、删除临时 DevEnv，并从会话列表移除。"
-              : "这会删除临时 DevEnv，并从会话列表移除。"}
-          confirmLabel={action === "delete" ? "正在删除…" : deleteLabel}
-          variant="danger"
-          busy={action === "delete"}
-          onCancel={() => {
-            setConfirmDelete(false);
-            setError("");
-          }}
-          onConfirm={() => void deleteConversation()}
-        />
-      ) : null}
     </section>
   );
 }

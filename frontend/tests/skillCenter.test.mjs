@@ -57,21 +57,39 @@ test("space and skill requests are paged server-side without exposing credential
 });
 
 test("pagination appears only for multiple pages and clamps deleted last pages", () => {
+  assert.match(skillCenterSource, /const SKILL_CENTER_PAGE_SIZE = 24/);
+  assert.doesNotMatch(skillCenterSource, /SPACE_PAGE_SIZE = 6|SKILL_PAGE_SIZE = 7/);
+  assert.match(
+    skillCenterSource,
+    /pageSize:\s*SKILL_CENTER_PAGE_SIZE/,
+  );
   assert.match(skillCenterSource, /if \(pageCount <= 1\) return null/);
   assert.match(
     skillCenterSource,
-    /const lastPage = Math\.max\(1, Math\.ceil\([^)]*totalCount[^)]*\/ SPACE_PAGE_SIZE\)\)/,
+    /const lastPage = Math\.max\(1, Math\.ceil\([^)]*totalCount[^)]*\/ SKILL_CENTER_PAGE_SIZE\)\)/,
   );
   assert.match(skillCenterSource, /if \(spacePage > lastPage\)/);
   assert.match(
     skillCenterSource,
-    /const lastPage = Math\.max\(1, Math\.ceil\([^)]*totalCount[^)]*\/ SKILL_PAGE_SIZE\)\)/,
+    /const lastPage = Math\.max\(1, Math\.ceil\([^)]*totalCount[^)]*\/ SKILL_CENTER_PAGE_SIZE\)\)/,
   );
   assert.match(skillCenterSource, /if \(skillPage > lastPage\)/);
   assert.doesNotMatch(
     stylesSource,
     /\.skillcenter-results\s*>\s*\.skillcenter-pager\s*\{[^}]*margin-top:\s*auto/,
   );
+});
+
+test("Skill versions render with exactly one v prefix", () => {
+  assert.match(skillspaceSource, /export function formatSkillVersion/);
+  assert.match(skillspaceSource, /replace\(\/\^v\+\/i,\s*""\)/);
+  assert.match(skillCenterSource, /formatSkillVersion\(source\.version\)/);
+  assert.match(skillCenterSource, /formatSkillVersion\(skill\.version\)/);
+  assert.doesNotMatch(skillCenterSource, /<small>v\{source\.version\}<\/small>/);
+});
+
+test("optimization sources retain their Skill Space display name", () => {
+  assert.match(skillCenterSource, /skillSpaceName:\s*selectedSpace\.name/);
 });
 
 test("SkillSpace downloads prefer full package files over SKILL.md only", () => {

@@ -4875,12 +4875,13 @@ export default function App() {
                 provisioningTask={skillWorkbenchTasks.activeProvisioningTask}
                 taskLoading={skillWorkbenchTasks.activeTaskLoading || skillWorkbenchTasks.startingTask}
                 taskError={skillWorkbenchTasks.activeTaskError || skillWorkbenchTasks.startError}
+                taskRecovering={skillWorkbenchTasks.activeTaskRecovering}
                 artifact={skillWorkbenchTasks.activeArtifact}
                 artifactLoading={skillWorkbenchTasks.activeArtifactLoading}
                 artifactError={skillWorkbenchTasks.activeArtifactError}
                 onTaskChanged={skillWorkbenchTasks.upsertTask}
-                onDeleteTask={skillWorkbenchTasks.deleteTask}
                 onCancelProvisioning={skillWorkbenchTasks.cancelProvisioning}
+                onStopTask={skillWorkbenchTasks.stopTask}
                 onRetryTask={() => void skillWorkbenchTasks.refreshActiveTask()}
                 onRetryArtifact={() => {
                   void skillWorkbenchTasks.refreshActiveArtifact().catch(() => undefined);

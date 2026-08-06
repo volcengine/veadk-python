@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  formatSkillVersion,
   getSkillDetail,
   listSkillSpacesPage,
   listSkillsInSpacePage,
@@ -25,8 +26,7 @@ import type {
 } from "./skill-workbench/types";
 import type { StartSkillWorkbenchTaskArgs } from "./skill-workbench/useSkillWorkbenchTasks";
 
-const SPACE_PAGE_SIZE = 6;
-const SKILL_PAGE_SIZE = 7;
+const SKILL_CENTER_PAGE_SIZE = 24;
 
 type SkillRegion = string;
 
@@ -270,7 +270,7 @@ function SkillWorkbenchSetup({
                   <span className="skillcenter-source-chip" title={source.name}>
                     <SkillIcon />
                     <span>{source.name}</span>
-                    <small>v{source.version}</small>
+                    <small>{formatSkillVersion(source.version)}</small>
                   </span>
                   <button
                     type="button"
@@ -452,7 +452,7 @@ function SkillDetailDialog({
 
         <dl className="skill-detail-meta">
           <div><dt>Skill ID</dt><dd title={skill.skillId}>{skill.skillId}</dd></div>
-          <div><dt>版本</dt><dd>{detail?.version || skill.version || "—"}</dd></div>
+          <div><dt>版本</dt><dd>{formatSkillVersion(detail?.version || skill.version)}</dd></div>
           <div><dt>状态</dt><dd>{statusLabel(skill.skillStatus)}</dd></div>
           <div><dt>Skill 空间</dt><dd title={space.name}>{space.name}</dd></div>
           <div><dt>Project</dt><dd title={space.projectName || "default"}>{space.projectName || "default"}</dd></div>
@@ -597,11 +597,15 @@ export function SkillCenterView({
     let active = true;
     setSpacesLoading(true);
     setSpacesError("");
-    void listSkillSpacesPage({ region, page: spacePage, pageSize: SPACE_PAGE_SIZE })
+    void listSkillSpacesPage({
+      region,
+      page: spacePage,
+      pageSize: SKILL_CENTER_PAGE_SIZE,
+    })
       .then((result) => {
         if (!active) return;
         const totalCount = result.totalCount || 0;
-        const lastPage = Math.max(1, Math.ceil(totalCount / SPACE_PAGE_SIZE));
+        const lastPage = Math.max(1, Math.ceil(totalCount / SKILL_CENTER_PAGE_SIZE));
         setSpaceTotal(totalCount);
         if (spacePage > lastPage) {
           setSpacePage(lastPage);
@@ -641,13 +645,13 @@ export function SkillCenterView({
     void listSkillsInSpacePage(selectedSpace.id, {
       region,
       page: skillPage,
-      pageSize: SKILL_PAGE_SIZE,
+      pageSize: SKILL_CENTER_PAGE_SIZE,
       project: selectedSpace.projectName,
     })
       .then((result) => {
         if (!active) return;
         const totalCount = result.totalCount || 0;
-        const lastPage = Math.max(1, Math.ceil(totalCount / SKILL_PAGE_SIZE));
+        const lastPage = Math.max(1, Math.ceil(totalCount / SKILL_CENTER_PAGE_SIZE));
         setSkillTotal(totalCount);
         if (skillPage > lastPage) {
           setSkillPage(lastPage);
@@ -748,6 +752,7 @@ export function SkillCenterView({
       region,
       projectName: selectedSpace.projectName,
       skillSpaceId: selectedSpace.id,
+      skillSpaceName: selectedSpace.name,
       name: skill.skillName,
       description: skill.skillDescription,
     };
@@ -994,14 +999,20 @@ export function SkillCenterView({
                     <span className="skillcenter-item-title" title={skill.skillName}>{skill.skillName}</span>
                     <span className="skillcenter-item-description">{skill.skillDescription || "暂无描述"}</span>
                     <span className="skillcenter-item-meta">
-                      <span className="skillcenter-meta-text">版本 · {skill.version || "—"}</span>
+                      <span className="skillcenter-meta-text">
+                        版本 · {formatSkillVersion(skill.version)}
+                      </span>
                       <span className="skillcenter-card-link">{selectingSource ? "选择并优化" : "查看详情"}</span>
                     </span>
                   </button>
                 ))}
               </div>
             )}
-            <Pager page={skillPage} total={skillTotal} pageSize={SKILL_PAGE_SIZE} onPage={setSkillPage} />
+            <Pager page={skillPage}
+              total={skillTotal}
+              pageSize={SKILL_CENTER_PAGE_SIZE}
+              onPage={setSkillPage}
+            />
           </>
         ) : (
           <>
@@ -1047,7 +1058,11 @@ export function SkillCenterView({
                 ))}
               </div>
             )}
-            <Pager page={spacePage} total={spaceTotal} pageSize={SPACE_PAGE_SIZE} onPage={setSpacePage} />
+            <Pager page={spacePage}
+              total={spaceTotal}
+              pageSize={SKILL_CENTER_PAGE_SIZE}
+              onPage={setSpacePage}
+            />
           </>
         )}
       </div>

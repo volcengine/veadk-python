@@ -68,8 +68,12 @@ export interface SkillWorkbenchTask {
   operation: SkillWorkbenchOperation;
   intent: string;
   revision: number;
+  toolId?: string;
+  sessionId?: string;
   sessionTtlSeconds?: number;
   expiresAt?: string;
+  recoveryAvailable?: boolean;
+  recoveredFromSnapshot?: boolean;
   source?: SkillWorkbenchSource | null;
   state: SkillWorkbenchState;
   stage: string;
@@ -85,7 +89,7 @@ export interface SkillWorkbenchTask {
 
 export interface SkillWorkbenchProvisioningTask {
   jobId: string;
-  operation: SkillWorkbenchOperation;
+  operation: SkillWorkbenchOperation | null;
   intent: string;
   revision: 1;
   state: "provisioning";
@@ -103,6 +107,7 @@ export interface SkillWorkbenchTaskSummary {
   createdAt: number;
   name?: string;
   sourceName?: string;
+  recoveryAvailable?: boolean;
 }
 
 export type SkillWorkbenchTaskListItem =
@@ -123,6 +128,7 @@ export interface SkillCenterOptimizationSource {
   region: string;
   projectName?: string;
   skillSpaceId?: string;
+  skillSpaceName?: string;
   name: string;
   description?: string;
 }

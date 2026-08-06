@@ -21,9 +21,9 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
 from cookiecutter.main import cookiecutter
+import httpx
 import veadk.integrations.ve_faas as vefaas
 from veadk.version import VERSION
-import requests
 import volcenginesdkcore
 import volcenginesdkvefaas
 from volcenginesdkvefaas.models.env_for_create_function_input import (
@@ -176,7 +176,8 @@ class VeFaaS:
         upload_host = urlsplit(upload_url).hostname or "unknown-host"
         logger.info(
             "Uploading Function code bundle function_id=%s size_bytes=%s host=%s "
-            "connect_timeout_seconds=30 read_timeout_seconds=300",
+            "connect_timeout_seconds=30 write_timeout_seconds=300 "
+            "read_timeout_seconds=300",
             function_id,
             code_zip_size,
             upload_host,
@@ -186,13 +187,18 @@ class VeFaaS:
             "Content-Type": "application/zip",
         }
         try:
-            response = requests.put(
+            response = httpx.put(
                 url=upload_url,
-                data=code_zip_data,
+                content=code_zip_data,
                 headers=headers,
-                timeout=(30, 300),
+                timeout=httpx.Timeout(
+                    connect=30,
+                    write=300,
+                    read=300,
+                    pool=30,
+                ),
             )
-        except requests.RequestException as error:
+        except httpx.RequestError as error:
             error_type = type(error).__name__
             logger.error(
                 "Function code upload request failed function_id=%s size_bytes=%s "

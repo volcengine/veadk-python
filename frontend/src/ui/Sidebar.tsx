@@ -146,7 +146,17 @@ function skillConversationStatus(task: SkillWorkbenchTaskListItem): string {
 
 function skillConversationTitle(task: SkillWorkbenchTaskListItem): string {
   return task.intent ||
-    (task.operation === "create" ? "创建 Skill" : "优化 Skill");
+    (task.operation === "create"
+      ? "创建 Skill"
+      : task.operation === "optimize"
+        ? "优化 Skill"
+        : "Skill 会话");
+}
+
+function skillConversationOperation(task: SkillWorkbenchTaskListItem): string {
+  if (task.operation === "create") return "创建";
+  if (task.operation === "optimize") return "优化";
+  return "Skill";
 }
 
 /** Stable per-user blue/cyan smoke palette so avatars feel individual without flicker. */
@@ -542,6 +552,7 @@ export function Sidebar({
               && !live
               && evaluatingSids?.has(conversation.session.id) === true;
             const status = task ? skillConversationStatus(task) : "";
+            const skillOperation = task ? skillConversationOperation(task) : "";
             return (
               <div
                 key={conversation.id}
@@ -557,14 +568,14 @@ export function Sidebar({
                     }
                   }}
                   aria-current={active ? "page" : undefined}
-                  title={task ? `${title} · ${task.operation === "create" ? "创建" : "优化"} · ${status}` : title}
+                  title={task ? `${title} · ${skillOperation} · ${status}` : title}
                 >
                   {live && (
                     <span className="history-streaming" title="正在生成…" aria-label="正在生成" />
                   )}
                   <span className="history-title">
                     {title}
-                    {task ? <small>{task.operation === "create" ? "创建" : "优化"} · {status}</small> : null}
+                    {task ? <small>{skillOperation} · {status}</small> : null}
                   </span>
                   {evaluating && (
                     <span className="history-evaluating-status" title="正在自动评测">
