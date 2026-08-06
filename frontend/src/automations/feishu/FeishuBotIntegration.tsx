@@ -12,6 +12,10 @@ import {
   type DeployAgentkitResult,
   type DeployStage,
 } from "../../adk/client";
+import {
+  trackAgentDeployFailed,
+  trackAgentDeploySucceeded,
+} from "../../adk/telemetryEvents";
 import feishuLogo from "../../assets/feishu-logo.svg";
 import { agentNameProblem } from "../../create/agentNameValidation";
 import { TextShimmer } from "../../ui/text-shimmer/TextShimmer";
@@ -101,6 +105,7 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
   const regionOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const regionFocusIndexRef = useRef(0);
   const taskIdRef = useRef<string | null>(null);
+  const latestPhaseRef = useRef("prepare");
   const cancelledRef = useRef(false);
   const mountedRef = useRef(true);
 
@@ -166,6 +171,7 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
 
     const taskId = crypto.randomUUID();
     taskIdRef.current = taskId;
+    latestPhaseRef.current = "prepare";
     cancelledRef.current = false;
     setDeploymentStatus("preparing");
     setActiveStage(null);
@@ -179,18 +185,44 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
         region,
         taskId,
         onStage: (stage) => {
+          latestPhaseRef.current = stage.phase || "deploy";
           if (!mountedRef.current || cancelledRef.current) return;
           setDeploymentStatus("running");
           setActiveStage(stage);
         },
       });
       if (!mountedRef.current || cancelledRef.current) return;
+      trackAgentDeploySucceeded({
+        telemetry: {
+          source: "feishu_automation",
+          createMode: "feishu_template",
+          aiAssisted: false,
+        },
+        action: "create",
+        region,
+        networkType: "public",
+        feishuEnabled: true,
+        runtimeId: deployed.runtimeId || "",
+      });
       setResult(deployed);
       setAppSecret("");
       setShowSecret(false);
       setDeploymentStatus("succeeded");
     } catch (error) {
       if (!mountedRef.current || cancelledRef.current) return;
+      trackAgentDeployFailed({
+        telemetry: {
+          source: "feishu_automation",
+          createMode: "feishu_template",
+          aiAssisted: false,
+        },
+        action: "create",
+        region,
+        networkType: "public",
+        feishuEnabled: true,
+        phase: latestPhaseRef.current,
+        error,
+      });
       setDeploymentStatus("failed");
       setDeployError(error instanceof Error ? error.message : String(error));
     } finally {

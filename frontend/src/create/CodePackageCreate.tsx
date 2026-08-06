@@ -190,7 +190,11 @@ export function CodePackageCreate({
         onNetworkChange={setNetwork}
         deployRegion={deployRegion}
         onDeployRegionChange={setDeployRegion}
-        deploymentTelemetrySource="code_package"
+        deploymentTelemetry={{
+          source: "code_package",
+          createMode: "code_package",
+          aiAssisted: false,
+        }}
         onBack={onBack}
         backLabel="返回创建方式"
         deployDisabled={!project || reading}
