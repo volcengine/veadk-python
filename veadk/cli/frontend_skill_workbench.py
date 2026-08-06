@@ -1800,41 +1800,28 @@ class SkillWorkbenchService:
                 status_code=409,
             )
         next_revision = revision + 1
-        request_data = dict(task)
-        for key in (
-            "state",
-            "status",
-            "stage",
-            "activities",
-            "files",
-            "skillMd",
-            "validation",
-            "publication",
-            "error",
-            "elapsedMs",
-            "expiresAt",
-            "recoveryAvailable",
-            "recoveryStatus",
-            "recoverySnapshotId",
-            "recoverySnapshotRevision",
-            "recoverySnapshotStatus",
-            "recoverySnapshotRequestedAt",
-            "recoverySnapshotRequestToken",
-        ):
-            request_data.pop(key, None)
-        request_data["intent"] = body.intent.strip()
-        request_data["revision"] = next_revision
         previous_intents = self._conversation_intents(
             task.get("conversation"),
             fallback=str(task.get("intent") or ""),
         )
-        request_data["conversation"] = [
-            *[
-                {"revision": index + 1, "intent": value}
-                for index, value in enumerate(previous_intents)
-            ],
-            {"revision": next_revision, "intent": body.intent.strip()},
-        ][-9:]
+        request_data: dict[str, object] = {
+            "jobId": task["jobId"],
+            "operation": task["operation"],
+            "intent": body.intent.strip(),
+            "revision": next_revision,
+            "createdAt": task["createdAt"],
+            "sessionTtlSeconds": task.get("sessionTtlSeconds", _SESSION_TTL_SECONDS),
+            "source": copy.deepcopy(task.get("source")),
+            "conversation": [
+                *[
+                    {"revision": index + 1, "intent": value}
+                    for index, value in enumerate(previous_intents)
+                ],
+                {"revision": next_revision, "intent": body.intent.strip()},
+            ][-9:],
+            "toolId": tool_id,
+            "sessionId": session["instanceId"],
+        }
         if recovered:
             request_data["recoveredFromSnapshot"] = True
         raw_operation = task.get("operation")

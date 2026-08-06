@@ -2966,6 +2966,144 @@ def test_refine_only_marks_transient_idempotent_launch_failures_retryable(
     assert caught.value.retryable is retryable
 
 
+@pytest.mark.parametrize(
+    ("operation", "source"),
+    [
+        ("create", None),
+        (
+            "optimize",
+            {
+                "kind": "center",
+                "name": "release-notes",
+                "sha256": "b" * 64,
+            },
+        ),
+    ],
+)
+def test_refine_from_completed_task_does_not_carry_prior_revision_output_state(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    source: dict[str, object] | None,
+) -> None:
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    service = SkillWorkbenchService(tool_id="tool")
+    monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool")
+    session = {
+        "instanceId": "session-1",
+        "endpoint": "https://devenv.example",
+        "expireAt": "2026-08-05T13:00:00Z",
+    }
+    completed_task = {
+        "jobId": job_id,
+        "operation": operation,
+        "intent": "Create release notes",
+        "revision": 1,
+        "createdAt": 1,
+        "sessionTtlSeconds": 3600,
+        "source": source,
+        "conversation": [{"revision": 1, "intent": "Create release notes"}],
+        "toolId": "tool",
+        "sessionId": "session-1",
+        "state": "published",
+        "status": "succeeded",
+        "stage": "completed",
+        "activities": [{"id": "done", "kind": "status", "text": "Done"}],
+        "name": "release-notes",
+        "description": "Create release notes.",
+        "files": [{"path": "SKILL.md", "size": 100}],
+        "skillMd": "---\nname: release-notes\ndescription: Create release notes.\n---\n",
+        "validation": {"valid": True, "errors": [], "warnings": []},
+        "artifact": {
+            "revision": 1,
+            "path": "artifacts/revision-1.zip",
+            "sha256": "a" * 64,
+            "size": 100,
+        },
+        "publication": {
+            "revision": 1,
+            "skillId": "skill-1",
+            "version": "1",
+            "skillSpaceIds": [],
+            "disposition": "new",
+            "region": "cn-beijing",
+            "projectName": "default",
+        },
+        "elapsedMs": 100,
+        "expiresAt": session["expireAt"],
+        "recoveryAvailable": True,
+        "recoveryStatus": "ready",
+    }
+    monkeypatch.setattr(
+        service,
+        "_get_task_with_session",
+        lambda requested_job_id, owner_id, **kwargs: (dict(completed_task), session),
+    )
+    launched_request: dict[str, object] = {}
+
+    def post(url: str, **kwargs):
+        del url
+        encoded = kwargs["json"]["env"]["VEADK_SKILL_REQUEST_B64"]
+        launched_request.update(
+            json.loads(__import__("base64").b64decode(encoded).decode("utf-8"))
+        )
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"data": {"status": "completed", "exit_code": 0}},
+        )
+
+    monkeypatch.setattr(
+        "veadk.cli.frontend_skill_workbench.requests.post",
+        post,
+    )
+
+    result = service.refine(
+        job_id,
+        "alice",
+        RefineSkillTaskBody(
+            intent="Add an error recovery section",
+            expectedRevision=1,
+        ),
+    )
+
+    assert result["state"] == "running"
+    assert result["revision"] == 2
+    assert launched_request == {
+        "jobId": job_id,
+        "operation": operation,
+        "intent": "Add an error recovery section",
+        "revision": 2,
+        "createdAt": 1,
+        "sessionTtlSeconds": 3600,
+        "source": source,
+        "conversation": [
+            {"revision": 1, "intent": "Create release notes"},
+            {"revision": 2, "intent": "Add an error recovery section"},
+        ],
+        "toolId": "tool",
+        "sessionId": "session-1",
+    }
+
+    monkeypatch.setattr(
+        service,
+        "_remote_task_payload",
+        lambda endpoint, requested_job_id: (
+            dict(launched_request),
+            {
+                "status": "running",
+                "stage": "generating",
+                "activities": [],
+            },
+        ),
+    )
+
+    running = service._task_from_session(session["endpoint"], job_id)
+
+    assert running["state"] == "running"
+    assert running["revision"] == 2
+    assert "artifact" not in running
+    assert "publication" not in running
+
+
 def test_refine_waits_until_the_current_recovery_snapshot_is_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3059,6 +3197,7 @@ def test_refine_resumes_an_expired_task_from_the_latest_snapshot(
         "operation": "create",
         "intent": "Create release notes",
         "revision": 3,
+        "createdAt": 1,
         "state": "cancelled",
         "activities": [],
     }
@@ -3213,6 +3352,7 @@ def test_refine_serializes_concurrent_expired_recovery(
             "operation": "create",
             "intent": "Create release notes",
             "revision": 3,
+            "createdAt": 1,
             "state": "cancelled",
             "activities": [],
         },
