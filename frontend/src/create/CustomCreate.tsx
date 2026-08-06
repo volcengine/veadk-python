@@ -2473,6 +2473,8 @@ interface CustomCreateProps extends CreateModeProps {
   features?: UiFeatures;
   /** Publish deploy progress into the persistent app header. */
   onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;
+  /** Specific creation path inside the scratch flow. */
+  createMode?: "custom" | "yaml_import";
   /** Existing Runtime target when editing an Agent from the library. */
   deploymentTarget?: {
     runtimeId: string;
@@ -2500,6 +2502,7 @@ export function CustomCreate({
   initialDraft,
   features,
   onDeploymentTaskChange,
+  createMode = "custom",
   deploymentTarget,
   initialDeployRegion = "cn-beijing",
   onDeploymentComplete,
@@ -2516,6 +2519,7 @@ export function CustomCreate({
   const [aiRequirement, setAiRequirement] = useState("");
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiGenerated, setAiGenerated] = useState(false);
+  const [usedAiGeneration, setUsedAiGeneration] = useState(false);
   const [aiErrorDialog, setAiErrorDialog] = useState<string | null>(null);
   const trimmedAiRequirement = aiRequirement.trim();
   const aiRequirementError =
@@ -2757,6 +2761,7 @@ export function CustomCreate({
       setShowErrors(false);
       setBuildErr("");
       setAiGenerated(true);
+      setUsedAiGeneration(true);
     } catch (error) {
       setAiErrorDialog(
         error instanceof Error ? error.message : String(error),
@@ -4104,7 +4109,11 @@ export function CustomCreate({
               }
               deployRegion={deployRegion}
               onDeployRegionChange={setDeployRegion}
-              deploymentTelemetrySource="custom_create"
+              deploymentTelemetry={{
+                source: "scratch",
+                createMode,
+                aiAssisted: usedAiGeneration,
+              }}
               onExportYaml={() =>
                 downloadText(
                   `${draft.name || "agent"}.yaml`,

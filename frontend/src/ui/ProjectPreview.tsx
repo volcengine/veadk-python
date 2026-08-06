@@ -78,7 +78,7 @@ import {
 import {
   trackAgentDeployFailed,
   trackAgentDeploySucceeded,
-  type DeploymentTelemetrySource,
+  type DeploymentTelemetryOrigin,
 } from "../adk/telemetryEvents";
 import feishuLogo from "../assets/feishu-logo.svg";
 import { buildZip } from "./zip";
@@ -703,8 +703,8 @@ export interface ProjectPreviewProps {
   deployRegion?: string;
   /** Called when the user changes the deploy region. */
   onDeployRegionChange?: (region: string) => void;
-  /** Creation entry used to group Studio deployment telemetry. */
-  deploymentTelemetrySource?: DeploymentTelemetrySource;
+  /** Creation entry and method used to group Studio deployment telemetry. */
+  deploymentTelemetry?: DeploymentTelemetryOrigin;
   /** Deploy-page toolbar actions. */
   onBack?: () => void;
   backLabel?: string;
@@ -830,7 +830,11 @@ export function ProjectPreview({
   onNetworkChange,
   deployRegion = "cn-beijing",
   onDeployRegionChange,
-  deploymentTelemetrySource = "unknown",
+  deploymentTelemetry = {
+    source: "unknown",
+    createMode: "unknown",
+    aiAssisted: false,
+  },
   onBack,
   backLabel = "返回配置",
   onExportYaml,
@@ -1000,7 +1004,7 @@ export function ProjectPreview({
     project.files.find((f) => f.path === selected) ?? null;
   const networkMode = network?.mode ?? "public";
   const deploymentTelemetryBase = () => ({
-    source: deploymentTelemetrySource,
+    telemetry: deploymentTelemetry,
     action: deploymentRuntimeId ? "update" as const : "create" as const,
     region: deployRegion,
     networkType: networkMode,

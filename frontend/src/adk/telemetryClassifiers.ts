@@ -19,3 +19,13 @@ export function agentDeployErrorKind(error: unknown, phase: string): string {
   }
   return "unknown";
 }
+
+export function telemetryErrorSummary(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw
+    .replace(
+      /\b((?:app[_-]?)?secret|token|api[_-]?key|password)\b\s*[:=]\s*["']?[^"',\s}]+/gi,
+      "$1=<redacted>",
+    )
+    .slice(0, 300);
+}

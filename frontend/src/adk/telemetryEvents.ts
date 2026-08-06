@@ -1,15 +1,32 @@
 import {
   agentDeployErrorKind,
   sandboxCreateErrorKind,
+  telemetryErrorSummary,
 } from "./telemetryClassifiers";
 import { trackStudioEvent } from "./telemetry";
 import type { SandboxAgentKind } from "./sandbox";
 
 export type DeploymentTelemetrySource =
-  | "custom_create"
-  | "intelligent_create"
+  | "scratch"
   | "code_package"
+  | "feishu_automation"
   | "unknown";
+
+export type DeploymentCreateMode =
+  | "custom"
+  | "intelligent"
+  | "template"
+  | "workflow"
+  | "yaml_import"
+  | "code_package"
+  | "feishu_template"
+  | "unknown";
+
+export interface DeploymentTelemetryOrigin {
+  source: DeploymentTelemetrySource;
+  createMode: DeploymentCreateMode;
+  aiAssisted: boolean;
+}
 
 export interface StudioLoadedTelemetry {
   agentsSource: "local" | "cloud";
@@ -18,7 +35,7 @@ export interface StudioLoadedTelemetry {
 export type SandboxTelemetryKind = "codex" | SandboxAgentKind;
 
 export interface AgentDeployTelemetryBase {
-  source: DeploymentTelemetrySource;
+  telemetry: DeploymentTelemetryOrigin;
   action: "create" | "update";
   region: string;
   networkType: string;
@@ -49,7 +66,9 @@ export interface SandboxCreateFailedTelemetry extends SandboxCreateTelemetryBase
 
 function agentDeployCategories(args: AgentDeployTelemetryBase) {
   return {
-    deploy_source: args.source,
+    deploy_source: args.telemetry.source,
+    create_mode: args.telemetry.createMode,
+    ai_assisted: args.telemetry.aiAssisted,
     deploy_action: args.action,
     deploy_region: args.region,
     runtime_network_type: args.networkType,
@@ -71,24 +90,28 @@ export function trackStudioLoaded(args: StudioLoadedTelemetry): void {
 export function trackAgentDeploySucceeded(
   args: AgentDeploySucceededTelemetry,
 ): void {
-  trackStudioEvent("studio_agent_deploy_succeeded", {
+  trackStudioEvent("studio_agent_deploy", {
     ...agentDeployCategories(args),
+    deploy_status: "succeeded",
     runtime_id: args.runtimeId,
   });
 }
 
 export function trackAgentDeployFailed(args: AgentDeployFailedTelemetry): void {
-  trackStudioEvent("studio_agent_deploy_failed", {
+  trackStudioEvent("studio_agent_deploy", {
     ...agentDeployCategories(args),
+    deploy_status: "failed",
     failed_phase: args.phase,
     error_kind: agentDeployErrorKind(args.error, args.phase),
+    error_summary: telemetryErrorSummary(args.error),
   });
 }
 
 export function trackSandboxCreateSucceeded(
   args: SandboxCreateSucceededTelemetry,
 ): void {
-  trackStudioEvent("studio_sandbox_create_succeeded", {
+  trackStudioEvent("studio_sandbox_create", {
+    sandbox_status: "succeeded",
     sandbox_kind: args.kind,
     sandbox_source: args.source,
     sandbox_session_id: args.sessionId,
@@ -96,9 +119,11 @@ export function trackSandboxCreateSucceeded(
 }
 
 export function trackSandboxCreateFailed(args: SandboxCreateFailedTelemetry): void {
-  trackStudioEvent("studio_sandbox_create_failed", {
+  trackStudioEvent("studio_sandbox_create", {
+    sandbox_status: "failed",
     sandbox_kind: args.kind,
     sandbox_source: args.source,
     error_kind: sandboxCreateErrorKind(args.error),
+    error_summary: telemetryErrorSummary(args.error),
   });
 }

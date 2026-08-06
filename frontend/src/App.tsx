@@ -219,6 +219,7 @@ async function probeNewChatCapabilities(
 type CreateMode = QuickCreateKind | "package";
 
 type CreateView = "menu" | CreateMode | null;
+type CustomCreateMode = "custom" | "yaml_import";
 
 // Persist the last view so a page refresh restores where the user was.
 const LS = { app: "veadk.appName", view: "veadk.view", session: "veadk.sessionId" } as const;
@@ -1138,6 +1139,8 @@ export default function App() {
   const [addMenu, setAddMenu] = useState(false);
   // A draft imported from YAML, used to pre-fill the custom wizard once.
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
+  const [customCreateMode, setCustomCreateMode] =
+    useState<CustomCreateMode>("custom");
   const [savedAgentDrafts, setSavedAgentDrafts] = useState<WorkspaceAgentDraft[]>([]);
   const savedAgentDraftsRef = useRef<WorkspaceAgentDraft[]>([]);
   const pendingWorkspaceDraftRef = useRef<WorkspaceAgentDraft | null>(null);
@@ -4438,6 +4441,7 @@ export default function App() {
                 onEditDraft={(item) => {
                   setMyAgents(false);
                   setImportedDraft(item.draft);
+                  setCustomCreateMode("custom");
                   setEditingDraftId(item.id);
                   editingDraftBaselineRef.current = item;
                   setRuntimeUpdateTarget(item.deploymentTarget ?? null);
@@ -4531,6 +4535,7 @@ export default function App() {
                   };
                   setManageAgents(false);
                   setImportedDraft(hydratedDraft);
+                  setCustomCreateMode("custom");
                   const nextDraftId = `runtime-${capability.runtime.runtimeId}`;
                   setEditingDraftId(nextDraftId);
                   editingDraftBaselineRef.current =
@@ -4550,6 +4555,7 @@ export default function App() {
                 onEditDraft={(item) => {
                   setManageAgents(false);
                   setImportedDraft(item.draft);
+                  setCustomCreateMode("custom");
                   setEditingDraftId(item.id);
                   editingDraftBaselineRef.current = item;
                   setRuntimeUpdateTarget(item.deploymentTarget ?? null);
@@ -4648,6 +4654,7 @@ export default function App() {
                   setRuntimeUpdateTarget(null);
                   setFocusedDeploymentTaskId("");
                   setFocusedWorkspaceAgentId("");
+                  if (k === "custom") setCustomCreateMode("custom");
                   setEditingDraftId(
                     k === "custom" ? `draft-${Date.now().toString(36)}` : "",
                   );
@@ -4656,6 +4663,7 @@ export default function App() {
                 }}
                 onImport={(d) => {
                   setImportedDraft(d);
+                  setCustomCreateMode("yaml_import");
                   setRuntimeUpdateTarget(null);
                   setFocusedDeploymentTaskId("");
                   setFocusedWorkspaceAgentId("");
@@ -4681,6 +4689,7 @@ export default function App() {
                 onAgentAdded={onAgentAdded}
                 features={features}
                 onDeploymentTaskChange={updateDeploymentTask}
+                createMode={customCreateMode}
                 deploymentTarget={runtimeUpdateTarget ?? undefined}
                 initialDeployRegion={newRuntimeRegion}
                 onDraftChange={(draft, dirty) => {

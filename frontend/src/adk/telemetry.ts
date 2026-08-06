@@ -7,10 +7,8 @@ import type {
 export type StudioTelemetryEventName =
   | "studio_instance_loaded"
   | "studio_user_authenticated"
-  | "studio_agent_deploy_succeeded"
-  | "studio_agent_deploy_failed"
-  | "studio_sandbox_create_succeeded"
-  | "studio_sandbox_create_failed";
+  | "studio_agent_deploy"
+  | "studio_sandbox_create";
 
 export interface StudioTelemetryEventOptions {
   dedupeKey?: string;
