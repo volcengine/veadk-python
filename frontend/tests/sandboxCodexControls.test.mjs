@@ -57,6 +57,17 @@ test("Codex token usage and approvals are presented per assistant turn", () => {
   assert.match(controlsSource, /保存权限/);
 });
 
+test("Codex image attachments keep their preview until the transcript is cleared", () => {
+  assert.match(blocksSource, /previewUrl\?: string/);
+  assert.match(
+    appSource,
+    /files: readyAttachments\.map[\s\S]*?previewUrl: attachment\.previewUrl/,
+  );
+  assert.match(appSource, /sandboxPreviewUrlsRef/);
+  assert.match(appSource, /releaseAllSandboxPreviews\(\)/);
+  assert.doesNotMatch(appSource, /releaseAttachmentPreviews\(messageAttachments\)/);
+});
+
 test("sandbox dialogs provide explicit loading error and keyboard states", () => {
   assert.match(controlsSource, /role="dialog"/);
   assert.match(controlsSource, /if \(event\.key === "Escape"\)/);

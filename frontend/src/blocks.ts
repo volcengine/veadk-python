@@ -45,6 +45,7 @@ export interface AttachmentView {
   uri?: string;
   name?: string;
   sizeBytes?: number;
+  previewUrl?: string;
 }
 
 export type Block =

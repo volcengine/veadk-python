@@ -740,7 +740,33 @@ export default function App() {
   const sandboxSessionIdRef = useRef(sandboxSession?.id ?? "");
   const sandboxActiveAssistantTurnIdRef = useRef("");
   const sandboxUploadRunRef = useRef(0);
+  const sandboxPreviewUrlsRef = useRef<Set<string>>(new Set());
   sandboxSessionIdRef.current = sandboxSession?.id ?? "";
+  useEffect(() => () => {
+    for (const previewUrl of sandboxPreviewUrlsRef.current) {
+      URL.revokeObjectURL(previewUrl);
+    }
+    sandboxPreviewUrlsRef.current.clear();
+  }, []);
+
+  function createSandboxPreviewUrl(file: File) {
+    const previewUrl = URL.createObjectURL(file);
+    sandboxPreviewUrlsRef.current.add(previewUrl);
+    return previewUrl;
+  }
+
+  function releaseSandboxPreviewUrl(previewUrl?: string) {
+    if (!previewUrl || !sandboxPreviewUrlsRef.current.delete(previewUrl)) return;
+    URL.revokeObjectURL(previewUrl);
+  }
+
+  function releaseAllSandboxPreviews() {
+    for (const previewUrl of sandboxPreviewUrlsRef.current) {
+      URL.revokeObjectURL(previewUrl);
+    }
+    sandboxPreviewUrlsRef.current.clear();
+  }
+
   // Turns are stored PER SESSION, so a background stream can keep updating its
   // own session's transcript while you view another one — no cross-session
   // leak, no data loss, and no re-fetch when you switch back (its entry is
@@ -953,6 +979,7 @@ export default function App() {
     },
     onSnapshot: (snapshot) => {
       const activeSessionId = sandboxSessionIdRef.current;
+      releaseAllSandboxPreviews();
       setSandboxTurns(sandboxSnapshotTurns(snapshot));
       setSandboxSession((current) =>
         current?.id === activeSessionId
@@ -2286,6 +2313,7 @@ export default function App() {
       setSkillCreating(false);
       discardDraftAttachments(attachments);
       setAttachments([]);
+      releaseAllSandboxPreviews();
       setSandboxTurns([]);
       setSandboxSession(nextSession);
       setCreateView(null);
@@ -2330,6 +2358,7 @@ export default function App() {
       setPendingTurns([]);
       setInput("");
       setInvocation(emptyInvocation());
+      releaseAllSandboxPreviews();
       setSandboxTurns([]);
       setSandboxSession(connected);
       setSandboxAgentDetailTarget(null);
@@ -2375,8 +2404,8 @@ export default function App() {
     sandboxSessionIdRef.current = "";
     sandboxActiveAssistantTurnIdRef.current = "";
     setSandboxBusy(false);
+    releaseAllSandboxPreviews();
     setSandboxTurns([]);
-    releaseAttachmentPreviews(attachments);
     setAttachments([]);
     setInput("");
     setError("");
@@ -2564,7 +2593,7 @@ export default function App() {
         name: file.name,
         sizeBytes: file.size,
         status: "uploading",
-        previewUrl: URL.createObjectURL(file),
+        previewUrl: createSandboxPreviewUrl(file),
       };
       return { file, attachment };
     });
@@ -2636,9 +2665,9 @@ export default function App() {
       if (sandboxUploadRunRef.current === uploadRun) {
         setSandboxUploadBusy(false);
       } else {
-        releaseAttachmentPreviews(
-          drafts.map(({ attachment }) => attachment),
-        );
+        for (const { attachment } of drafts) {
+          releaseSandboxPreviewUrl(attachment.previewUrl);
+        }
       }
     }
   }
@@ -2646,7 +2675,7 @@ export default function App() {
   function removeSandboxAttachment(id: string) {
     const removed = attachments.find((item) => item.id === id);
     if (!removed) return;
-    releaseAttachmentPreviews([removed]);
+    releaseSandboxPreviewUrl(removed.previewUrl);
     setAttachments((current) => current.filter((item) => item.id !== id));
   }
 
@@ -2690,6 +2719,7 @@ export default function App() {
           mimeType: attachment.mimeType,
           name: attachment.name,
           sizeBytes: attachment.sizeBytes,
+          previewUrl: attachment.previewUrl,
         })),
       });
     }
@@ -2808,14 +2838,11 @@ export default function App() {
         }
         return next;
       });
-      releaseAttachmentPreviews(messageAttachments);
     } catch (messageError) {
       if ((messageError as Error)?.name === "AbortError") {
-        releaseAttachmentPreviews(messageAttachments);
         return;
       }
       if (sandboxMessageAbortRef.current !== controller) {
-        releaseAttachmentPreviews(messageAttachments);
         return;
       }
       setSandboxTurns((current) =>
