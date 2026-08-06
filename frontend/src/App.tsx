@@ -27,6 +27,7 @@ import {
   downloadArtifact,
   previewArtifact,
   getAgentInfo,
+  getAutomaticEvaluationStatuses,
   getSessionTrace,
   getSessionCapabilities,
   getSession,
@@ -222,6 +223,9 @@ type CreateView = "menu" | CreateMode | null;
 // Persist the last view so a page refresh restores where the user was.
 const LS = { app: "veadk.appName", view: "veadk.view", session: "veadk.sessionId" } as const;
 const DRAFT_AUTOSAVE_DELAY_MS = 600;
+const AUTO_EVALUATION_RUNNING_POLL_MS = 1_000;
+const AUTO_EVALUATION_RETRY_POLL_MS = 5_000;
+const AUTO_EVALUATION_MIN_PENDING_POLL_MS = 500;
 const EMPTY_STRING_SET: Set<string> = new Set<string>();
 const EMPTY_STRING_ARR: string[] = [];
 
@@ -667,6 +671,31 @@ function runtimeIdForSelection(
   )?.runtimeId ?? "";
 }
 
+interface AutomaticEvaluationTarget {
+  runtimeId: string;
+  region: string;
+  appName: string;
+}
+
+function automaticEvaluationTargetForSelection(
+  connections: RemoteConnection[],
+  selectedAppName: string,
+): AutomaticEvaluationTarget | null {
+  for (const connection of connections) {
+    const runtimeApp = connection.apps.find(
+      (app) => remoteAppId(connection.id, app) === selectedAppName,
+    );
+    if (runtimeApp && connection.runtimeId) {
+      return {
+        runtimeId: connection.runtimeId,
+        region: connection.region ?? "cn-beijing",
+        appName: runtimeApp,
+      };
+    }
+  }
+  return null;
+}
+
 export default function App() {
   const [apps, setApps] = useState<string[]>([]);
   const [appName, setAppName] = useState("");
@@ -801,8 +830,13 @@ export default function App() {
   const [streamPresentationSids, setStreamPresentationSids] = useState<Set<string>>(
     () => new Set(),
   );
+  const [evaluatingSids, setEvaluatingSids] = useState<Set<string>>(
+    () => new Set(),
+  );
   const streamAbortsRef = useRef<Map<string, AbortController>>(new Map());
   const streamPresentationTimersRef = useRef<Map<string, number>>(new Map());
+  const automaticEvaluationStatusTimerRef = useRef<number | undefined>(undefined);
+  const automaticEvaluationStatusRefreshRef = useRef<() => void>(() => {});
   const setStreaming = (sid: string, on: boolean) =>
     setStreamingSids((s) => {
       const n = new Set(s);
@@ -828,6 +862,15 @@ export default function App() {
       });
     }, 2400);
     streamPresentationTimersRef.current.set(sid, timer);
+  };
+  const setEvaluating = (sid: string, on: boolean) => {
+    setEvaluatingSids((current) => {
+      if (current.has(sid) === on) return current;
+      const next = new Set(current);
+      if (on) next.add(sid);
+      else next.delete(sid);
+      return next;
+    });
   };
   // The session currently on screen — used to gate the single global error
   // banner (per-session transcripts/topology don't need it).
@@ -1979,6 +2022,104 @@ export default function App() {
     // any navigation path that doesn't set it synchronously).
     viewSidRef.current = sessionId;
   }, [sessionId]);
+  useEffect(
+    () => {
+      const target = automaticEvaluationTargetForSelection(connections, appName);
+      if (!target || !userId) {
+        automaticEvaluationStatusRefreshRef.current = () => {};
+        setEvaluatingSids((current) =>
+          current.size === 0 ? current : new Set(),
+        );
+        return;
+      }
+      const {
+        runtimeId: evaluationRuntimeId,
+        region: evaluationRegion,
+        appName: evaluationAppName,
+      } = target;
+
+      let disposed = false;
+      let requestGeneration = 0;
+
+      function clearTimer() {
+        if (automaticEvaluationStatusTimerRef.current === undefined) return;
+        window.clearTimeout(automaticEvaluationStatusTimerRef.current);
+        automaticEvaluationStatusTimerRef.current = undefined;
+      }
+
+      function schedulePoll(delayMs: number) {
+        clearTimer();
+        automaticEvaluationStatusTimerRef.current = window.setTimeout(
+          () => void poll(),
+          delayMs,
+        );
+      }
+
+      async function poll() {
+        const generation = ++requestGeneration;
+        try {
+          const response = await getAutomaticEvaluationStatuses({
+            runtimeId: evaluationRuntimeId,
+            region: evaluationRegion,
+            appName: evaluationAppName,
+            userId,
+          });
+          if (disposed || generation !== requestGeneration) return;
+
+          const nextEvaluating = new Set(
+            response.items
+              .filter((status) => status.state === "running")
+              .map((status) => status.sessionId),
+          );
+          setEvaluatingSids((current) => {
+            if (
+              current.size === nextEvaluating.size &&
+              [...nextEvaluating].every((sid) => current.has(sid))
+            ) {
+              return current;
+            }
+            return nextEvaluating;
+          });
+
+          if (nextEvaluating.size > 0) {
+            schedulePoll(AUTO_EVALUATION_RUNNING_POLL_MS);
+            return;
+          }
+          const pendingDueTimes = response.items
+            .filter((status) => status.state === "pending")
+            .map((status) => Date.parse(status.dueAt))
+            .filter(Number.isFinite);
+          if (pendingDueTimes.length > 0) {
+            schedulePoll(Math.max(
+              AUTO_EVALUATION_MIN_PENDING_POLL_MS,
+              Math.min(...pendingDueTimes) - Date.now(),
+            ));
+          }
+        } catch {
+          if (!disposed && generation === requestGeneration) {
+            schedulePoll(AUTO_EVALUATION_RETRY_POLL_MS);
+          }
+        }
+      }
+
+      const refresh = () => {
+        clearTimer();
+        void poll();
+      };
+      automaticEvaluationStatusRefreshRef.current = refresh;
+      refresh();
+
+      return () => {
+        disposed = true;
+        requestGeneration += 1;
+        clearTimer();
+        if (automaticEvaluationStatusRefreshRef.current === refresh) {
+          automaticEvaluationStatusRefreshRef.current = () => {};
+        }
+      };
+    },
+    [appName, connections, userId],
+  );
   // Abort the in-flight stream when the whole view unmounts.
   useEffect(
     () => () => streamAbortsRef.current.forEach((c) => c.abort()),
@@ -2789,6 +2930,7 @@ export default function App() {
     try {
       // Deleting a session with a running stream — abort just that one.
       streamAbortsRef.current.get(id)?.abort();
+      setEvaluating(id, false);
       await deleteSessionMedia(appName, userId, id);
       await deleteSession(appName, userId, id);
       const presentationTimer = streamPresentationTimersRef.current.get(id);
@@ -3181,6 +3323,7 @@ export default function App() {
       let ts = Date.now() / 1000;
       let eventId = "";
       let invocationId = "";
+      let streamFailed = false;
       for await (const event of runSSE({
         appName,
         userId,
@@ -3194,6 +3337,7 @@ export default function App() {
         if (ctrl.signal.aborted) break;
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
         if (typeof errMsg === "string" && errMsg) {
+          streamFailed = true;
           if (viewSidRef.current === sid) setError(errMsg);
           break;
         }
@@ -3236,6 +3380,9 @@ export default function App() {
         });
       }
       void refreshSessions(appName);
+      if (!ctrl.signal.aborted && !streamFailed && eventId) {
+        automaticEvaluationStatusRefreshRef.current();
+      }
     } catch (e) {
       // An abort (unmount / session delete) is expected — surface only real
       // errors, and only while this session is on screen.
@@ -3305,6 +3452,7 @@ export default function App() {
       let ts = Date.now() / 1000;
       let eventId = lastTurn?.meta?.eventId ?? "";
       let invocationId = lastTurn?.meta?.invocationId ?? "";
+      let streamFailed = false;
       for await (const event of runSSE({
         appName,
         userId,
@@ -3317,6 +3465,12 @@ export default function App() {
         sessionCapabilities: requiresSessionCapabilityRunner(sessionCapabilities),
       })) {
         if (ctrl.signal.aborted) break;
+        const errMsg = event.error ?? event.errorMessage ?? event.error_message;
+        if (typeof errMsg === "string" && errMsg) {
+          streamFailed = true;
+          if (viewSidRef.current === sid) setError(errMsg);
+          break;
+        }
         applyStreamSignals(sid, event);
         const eventAuthor = event.author && event.author !== "user"
           ? event.author
@@ -3360,6 +3514,9 @@ export default function App() {
         });
       }
       void refreshSessions(appName);
+      if (!ctrl.signal.aborted && !streamFailed && eventId) {
+        automaticEvaluationStatusRefreshRef.current();
+      }
     } catch (e) {
       if (
         (e as Error)?.name !== "AbortError" &&
@@ -3835,6 +3992,7 @@ export default function App() {
         currentSessionId={sessionId}
         activePage={sidebarActivePage}
         streamingSids={streamingSids}
+        evaluatingSids={evaluatingSids}
         onNewChat={openNewChat}
         onSearch={() => {
           setPlatformFeedbackOrigin(null);

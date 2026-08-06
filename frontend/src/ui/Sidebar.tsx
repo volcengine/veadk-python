@@ -68,6 +68,8 @@ export interface SidebarProps {
   access: StudioAccess;
   /** Session ids that are currently streaming a reply (shows a live dot). */
   streamingSids?: Set<string>;
+  /** Session ids whose latest reply is currently being evaluated. */
+  evaluatingSids?: Set<string>;
   onNewChat: () => void;
   onSearch: () => void;
   onQuickCreate: () => void;
@@ -283,6 +285,7 @@ export function Sidebar({
   features,
   access,
   streamingSids,
+  evaluatingSids,
   onNewChat,
   onSearch,
   onQuickCreate,
@@ -436,6 +439,8 @@ export function Sidebar({
           )}
           {sorted.map((s) => {
             const title = sessionTitle(s.events);
+            const streaming = streamingSids?.has(s.id) === true;
+            const evaluating = !streaming && evaluatingSids?.has(s.id) === true;
             return (
               <div
                 key={s.id}
@@ -447,10 +452,16 @@ export function Sidebar({
                   aria-current={s.id === currentSessionId ? "page" : undefined}
                   title={title}
                 >
-                  {streamingSids?.has(s.id) && (
+                  {streaming && (
                     <span className="history-streaming" title="正在生成…" aria-label="正在生成" />
                   )}
                   <span className="history-title">{title}</span>
+                  {evaluating && (
+                    <span className="history-evaluating-status" title="正在自动评测">
+                      <span className="history-evaluating" aria-hidden="true" />
+                      评测中
+                    </span>
+                  )}
                 </button>
               <button
                 className="history-more"
