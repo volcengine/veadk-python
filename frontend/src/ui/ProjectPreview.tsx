@@ -82,6 +82,12 @@ import {
   trackAgentSourceDownloadSucceeded,
   type DeploymentTelemetryOrigin,
 } from "../adk/telemetryEvents";
+import {
+  cloudRegionOptions,
+  defaultCloudRegion,
+  formatCloudRegion,
+  type CloudProvider,
+} from "../adk/cloudProvider";
 import feishuLogo from "../assets/feishu-logo.svg";
 import { buildZip } from "./zip";
 import { ProjectCodeBrowser } from "./CodeBrowserDialog";
@@ -701,8 +707,10 @@ export interface ProjectPreviewProps {
   /** Runtime network settings edited on the deploy page. */
   network?: NetworkConfig;
   onNetworkChange?: (network: NetworkConfig | undefined) => void;
-  /** Selected deploy region (cn-beijing / cn-shanghai). */
+  /** Selected deploy region for the active cloud provider. */
   deployRegion?: string;
+  /** Active cloud provider; controls deploy-region choices. */
+  cloudProvider?: CloudProvider;
   /** Called when the user changes the deploy region. */
   onDeployRegionChange?: (region: string) => void;
   /** Creation entry and method used to group Studio deployment telemetry. */
@@ -830,7 +838,8 @@ export function ProjectPreview({
   onDeploymentEnvChange,
   network,
   onNetworkChange,
-  deployRegion = "cn-beijing",
+  cloudProvider = "volcengine",
+  deployRegion = defaultCloudRegion(cloudProvider),
   onDeployRegionChange,
   deploymentTelemetry = {
     source: "unknown",
@@ -871,6 +880,8 @@ export function ProjectPreview({
   const [authenticationType, setAuthenticationType] =
     useState<DeployAuthentication["type"]>("api_key");
   const [userPoolUid, setUserPoolUid] = useState("");
+  const deployRegionOptions = cloudRegionOptions(cloudProvider);
+  const deployRegionLabel = formatCloudRegion(deployRegion, cloudProvider);
   const [minInstance, setMinInstance] = useState("1");
   const [maxInstance, setMaxInstance] = useState(
     inMemorySession ? "1" : "5",
@@ -895,6 +906,18 @@ export function ProjectPreview({
     : deploymentStepsWithInstanceUpdate;
 
   useEffect(() => {
+    if (!onDeployRegionChange || isRuntimeUpdate) return;
+    if (deployRegionOptions.some((region) => region.value === deployRegion)) return;
+    onDeployRegionChange(defaultCloudRegion(cloudProvider));
+  }, [
+    cloudProvider,
+    deployRegion,
+    deployRegionOptions,
+    isRuntimeUpdate,
+    onDeployRegionChange,
+  ]);
+
+  useEffect(() => {
     if (!deploymentActionTargetId) {
       setDeploymentActionTarget(null);
       return;
@@ -904,7 +927,7 @@ export function ProjectPreview({
 
   const deploymentRegionPicker = (showLabel: boolean) => (
     <div
-      className="pp-network-region"
+      className={`pp-network-region${regionMenuOpen ? " is-open" : ""}`}
       onKeyDown={(event) => {
         if (event.key === "Escape") setRegionMenuOpen(false);
       }}
@@ -920,9 +943,7 @@ export function ProjectPreview({
         disabled={deploying || isRuntimeUpdate || !onDeployRegionChange}
         onClick={() => setRegionMenuOpen((open) => !open)}
       >
-        <span>
-          {deployRegion === "cn-shanghai" ? "华东 2（上海）" : "华北 2（北京）"}
-        </span>
+        <span>{deployRegionLabel}</span>
         <ChevronDown
           className={`pp-region-chevron${regionMenuOpen ? " is-open" : ""}`}
         />
@@ -931,10 +952,7 @@ export function ProjectPreview({
         <>
           <div className="menu-scrim" onClick={() => setRegionMenuOpen(false)} />
           <div className="pp-region-menu" role="listbox" aria-label="部署区域">
-            {[
-              { value: "cn-beijing", label: "华北 2（北京）" },
-              { value: "cn-shanghai", label: "华东 2（上海）" },
-            ].map((region) => {
+            {deployRegionOptions.map((region) => {
               const selected = region.value === deployRegion;
               return (
                 <button
@@ -2328,9 +2346,7 @@ export function ProjectPreview({
                       <div className="pp-deploy-result-field">
                         <label>区域</label>
                         <code>
-                          {deployResult.region === "cn-shanghai"
-                            ? "上海 (cn-shanghai)"
-                            : "北京 (cn-beijing)"}
+                          {formatCloudRegion(deployResult.region, cloudProvider)}
                         </code>
                       </div>
                     )}

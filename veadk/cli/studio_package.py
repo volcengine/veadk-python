@@ -28,13 +28,32 @@ from veadk.cli.studio_telemetry import (
     studio_apmplus_release_environment_from_env,
 )
 from veadk.cli.frontend_branding import SiteLogo
+from veadk.utils.cloud_provider import DEFAULT_CLOUD_PROVIDER, CloudProvider
 
 STUDIO_RELEASE_ENVIRONMENT_FILENAME = ".studio-release-environment.json"
 
 
-def studio_run_script(site_logo_filename: str | None = None) -> str:
+def stage_studio_provider_requirements(
+    package_dir: Path,
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+) -> str:
+    """Stage provider-specific wheels and return their requirements lines."""
+    if provider != "byteplus":
+        return ""
+    dependencies = stage_studio_dependency_wheels(package_dir, provider=provider)
+    return "".join(f"./{path.name}\n" for path in dependencies)
+
+
+def studio_run_script(
+    site_logo_filename: str | None = None,
+    *,
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+) -> str:
     """Return the authenticated VeFaaS entrypoint used by Studio."""
-    command = "exec python3 -m veadk.cli.cli studio --auth-mode frontend"
+    command = (
+        "exec python3 -m veadk.cli.cli studio "
+        f"--provider {provider} --auth-mode frontend"
+    )
     if site_logo_filename:
         command += f' --site-logo "$ROOT_DIR/{site_logo_filename}"'
     command += ' --host "$HOST" --port "$PORT"\n'
@@ -79,6 +98,7 @@ def write_studio_package(
     requirements: str,
     site_logo: SiteLogo | None,
     release_environment: dict[str, str] | None = None,
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
 ) -> None:
     """Write the Studio entrypoint, requirements, and optional logo."""
     package_dir.mkdir(parents=True, exist_ok=True)
@@ -86,7 +106,7 @@ def write_studio_package(
         f"site-logo.{site_logo.extension}" if site_logo is not None else None
     )
     (package_dir / "run.sh").write_text(
-        studio_run_script(logo_filename), encoding="utf-8"
+        studio_run_script(logo_filename, provider=provider), encoding="utf-8"
     )
     if site_logo is not None and logo_filename is not None:
         (package_dir / logo_filename).write_bytes(site_logo.content)
@@ -131,6 +151,7 @@ def build_local_studio_requirements(
     *,
     frontend_assets: Path | None = None,
     dependency_wheels: Path | None = None,
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
 ) -> str:
     """Build a local VeADK wheel and return its offline requirements."""
     _validate_source_checkout(source_root)
@@ -166,13 +187,15 @@ def build_local_studio_requirements(
     dependencies = stage_studio_dependency_wheels(
         package_dir,
         source_dir=dependency_wheels,
+        provider=provider,
     )
 
     shutil.rmtree(package_dir / "wheel-source", ignore_errors=True)
-    return "".join(
+    requirements = "".join(
         f"./{name}\n"
         for name in (*(path.name for path in dependencies), wheels[0].name)
     )
+    return requirements
 
 
 def _validate_source_checkout(source_root: Path) -> None:

@@ -18,7 +18,7 @@ import os
 from typing import Any
 
 import pytest
-from click import Command
+from click import ClickException, Command
 from click.testing import CliRunner
 
 from veadk.cli.cli_frontend import frontend, studio
@@ -133,3 +133,60 @@ def test_local_serve_commands_accept_explicit_byteplus_provider(
 
     assert result.exit_code == 0, result.output
     assert captured["provider"] == "byteplus"
+
+
+def test_studio_deploy_byteplus_uses_builtin_application_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BYTEPLUS_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SESSION_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_studio_cloud_credentials",
+        lambda *_, **__: (_ for _ in ()).throw(
+            ClickException("BytePlus credentials required.")
+        ),
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--provider",
+            "byteplus",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+            "--iam-role",
+            "trn:iam::3001037806:role/dev",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "BytePlus credentials required" in result.output
+    assert "--vefaas-application-template-id" not in result.output
+
+
+def test_studio_deploy_byteplus_rejects_non_singapore_region() -> None:
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--provider",
+            "byteplus",
+            "--region",
+            "cn-beijing",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "currently supports only ap-southeast-1" in result.output

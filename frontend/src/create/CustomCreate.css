@@ -2083,6 +2083,9 @@
     inset 0 1px 0 hsl(var(--background)),
     0 8px 28px hsl(var(--foreground) / 0.045);
 }
+.cw-section:has(.cw-a2a-space-picker) {
+  overflow: visible;
+}
 .cw-sec-head {
   padding: 13px 18px;
   border-bottom: 1px solid hsl(var(--border) / 0.68);
@@ -2252,9 +2255,13 @@
   line-height: 1.6;
 }
 .cw-a2a-space-picker {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+.cw-a2a-space-picker.is-open {
+  z-index: 80;
 }
 .cw-a2a-space-row {
   display: flex;
@@ -2332,7 +2339,7 @@
 }
 .cw-a2a-space-menu {
   position: absolute;
-  z-index: 30;
+  z-index: 81;
   top: calc(100% + 6px);
   left: 0;
   width: 100%;

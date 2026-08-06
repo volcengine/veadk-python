@@ -267,6 +267,30 @@ def test_managed_components_keep_only_component_specific_env() -> None:
     assert "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY" not in env_keys
 
 
+def test_byteplus_generated_project_uses_byteplus_modelark_defaults() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="byteplus-agent",
+            cloudProvider="byteplus",
+            knowledgebase=True,
+            knowledgebaseBackend="opensearch",
+        )
+    )
+    env_example = _files(project)[".env.example"]
+
+    assert "MODEL_AGENT_NAME=seed-2-0-lite-260228" in env_example
+    assert (
+        "MODEL_AGENT_API_BASE=https://ark.ap-southeast.bytepluses.com/api/v3"
+        in env_example
+    )
+    assert "MODEL_EMBEDDING_NAME=skylark-embedding-vision-250615" in env_example
+    assert (
+        "MODEL_EMBEDDING_API_BASE=https://ark.ap-southeast.bytepluses.com/api/v3"
+        in env_example
+    )
+    assert "ark.cn-beijing.volces.com" not in env_example
+
+
 def test_run_code_generates_tool_import_and_sandbox_env() -> None:
     project = generate_project_from_draft(
         AgentDraft(

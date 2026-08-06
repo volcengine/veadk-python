@@ -26,10 +26,11 @@ from veadk.cli.generated_agent_catalog import (
     EXPORTER_BY_ID,
     KB_BY_ID,
     LTM_BY_ID,
-    MODEL_ENV,
     STM_BY_ID,
     TOOL_BY_ID,
     EnvVar,
+    embedding_env_for_provider,
+    model_env_for_provider,
 )
 
 _PYTHON_LICENSE_HEADER = """# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
@@ -173,6 +174,7 @@ class AgentDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = ""
+    cloudProvider: Literal["volcengine", "byteplus"] = "volcengine"
     description: str = ""
     instruction: str = ""
     agentType: Literal["llm", "sequential", "parallel", "loop", "a2a"] = "llm"
@@ -236,10 +238,11 @@ class GeneratedAgentTestRunRequest(BaseModel):
 
 
 class _Acc:
-    def __init__(self) -> None:
+    def __init__(self, cloud_provider: str = "volcengine") -> None:
+        self.cloud_provider = cloud_provider
         self.imports: list[str] = []
         self.pre_lines: list[str] = []
-        self.env: list[EnvVar] = list(MODEL_ENV)
+        self.env: list[EnvVar] = list(model_env_for_provider(cloud_provider))
         self.extras: set[str] = set()
         self.used_names: set[str] = set()
         self.agent_display_names: dict[str, str] = {}
@@ -324,6 +327,8 @@ def _safe_draft_payload(draft: AgentDraft) -> dict[str, Any]:
     used: set[str] = set()
 
     def sanitize(node: dict[str, Any]) -> None:
+        if node.get("cloudProvider") == "volcengine":
+            node.pop("cloudProvider", None)
         agent_segment = _env_segment(str(node.get("name") or ""), "AGENT")
         tools = node.get("mcpTools")
         if isinstance(tools, list):
@@ -416,7 +421,13 @@ def _add_import(acc: _Acc, line: str) -> None:
 
 
 def _add_env(acc: _Acc, env: tuple[EnvVar, ...]) -> None:
-    acc.env.extend(env)
+    if acc.cloud_provider != "byteplus":
+        acc.env.extend(env)
+        return
+    embedding_env_by_key = {
+        item.key: item for item in embedding_env_for_provider(acc.cloud_provider)
+    }
+    acc.env.extend(embedding_env_by_key.get(item.key, item) for item in env)
 
 
 def _emit_tool_stub(acc: _Acc, name: str, description: str) -> str:
@@ -1352,7 +1363,7 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
 
     draft = prepare_mcp_auth(draft)
     pkg = ident(draft.name, "my_agent")
-    acc = _Acc()
+    acc = _Acc(draft.cloudProvider)
     feishu_channel_enabled = bool(draft.deployment.feishuEnabled)
     if feishu_channel_enabled:
         acc.env.extend(

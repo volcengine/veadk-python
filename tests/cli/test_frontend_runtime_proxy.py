@@ -42,6 +42,7 @@ def _create_frontend_app(
     site_logo: str | None = None,
     site_title: str | None = None,
     studio: bool = False,
+    provider: str = "volcengine",
 ) -> FastAPI:
     captured: dict[str, Any] = {}
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
@@ -71,6 +72,7 @@ def _create_frontend_app(
         auth_mode="frontend",
         generated_agent_test_run_ttl=60,
         open_browser=False,
+        provider=provider,  # type: ignore[arg-type]
         studio=studio,
     )
     return captured["app"]
@@ -113,6 +115,83 @@ def test_runtime_regions_use_byteplus_default_region(
     assert _runtime_regions("byteplus", "all") == ["ap-southeast-1"]
     monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-2")
     assert _runtime_regions("byteplus", "all") == ["ap-southeast-2"]
+
+
+def test_byteplus_runtime_list_uses_vefaas_iam_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path, provider="byteplus")
+    monkeypatch.delenv("BYTEPLUS_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SESSION_TOKEN", raising=False)
+    monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-1")
+    calls: list[tuple[str, str, str, str]] = []
+
+    import builtins
+
+    real_open = builtins.open
+
+    def _fake_open(path: object, *args: object, **kwargs: object):
+        if path == "/var/run/secrets/iam/credential":
+            return real_open(
+                tmp_path / "iam-credential.json",
+                *args,
+                **kwargs,
+            )
+        return real_open(path, *args, **kwargs)
+
+    (tmp_path / "iam-credential.json").write_text(
+        json.dumps(
+            {
+                "access_key_id": "iam-ak",
+                "secret_access_key": "iam-sk",
+                "session_token": "iam-token",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(builtins, "open", _fake_open)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            calls.append(
+                (
+                    kwargs["access_key"],
+                    kwargs["secret_key"],
+                    kwargs["session_token"],
+                    kwargs["region"],
+                )
+            )
+
+        def list_runtimes(self, _request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                agent_kit_runtimes=[
+                    SimpleNamespace(
+                        name="runtime-bp",
+                        runtime_id="runtime-bp-id",
+                        status="Ready",
+                        created_at="2026-08-06T10:00:00Z",
+                        tags=[],
+                    )
+                ],
+                next_token="",
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtimes",
+            params={"region": "all", "page_size": 1},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["runtimes"][0]["name"] == "runtime-bp"
+    assert calls == [("iam-ak", "iam-sk", "iam-token", "ap-southeast-1")]
 
 
 def test_ui_config_serves_custom_branding(
@@ -436,6 +515,95 @@ def test_runtime_list_surfaces_all_regional_failures(
     assert "cn-shanghai control plane unavailable" in detail
     assert "cn-beijing DNS lookup failed" in detail
     assert "cn-shanghai DNS lookup failed" in detail
+
+
+def test_viking_knowledgebases_include_agentkit_imported_bases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    requests: list[tuple[str, int]] = []
+
+    class _FakeKnowledgeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def list_knowledge_bases(self, request: Any) -> SimpleNamespace:
+            requests.append((request.next_token or "", request.max_results))
+            if not request.next_token:
+                return SimpleNamespace(
+                    knowledge_bases=[
+                        SimpleNamespace(
+                            name="vikingkl_we4191n",
+                            knowledge_id="kb-agentkit-we",
+                            provider_knowledge_id="kb-yef-example-we",
+                            provider_type="VIKINGDB_KNOWLEDGE",
+                            description="Imported from VikingDB",
+                            project_name="default",
+                            region=self.region,
+                            status="Ready",
+                            last_update_time="2026-02-10T12:45:32Z",
+                        )
+                    ],
+                    next_token="next-page",
+                )
+            return SimpleNamespace(
+                knowledge_bases=[
+                    SimpleNamespace(
+                        name="vikingkl_35idqf7",
+                        knowledge_id="kb-agentkit-35",
+                        provider_knowledge_id="kb-yef-example-35",
+                        provider_type="VIKINGDB_KNOWLEDGE",
+                        description="Second page",
+                        project_name="default",
+                        region=self.region,
+                        status="Ready",
+                        last_update_time="2026-02-10T14:33:09Z",
+                    )
+                ],
+                next_token="",
+            )
+
+    class _FakeKnowledgeService:
+        def __init__(self, **_: Any) -> None:
+            pass
+
+        def list_collections(self, **_: Any) -> list[Any]:
+            return []
+
+    class _FakeVikingDbApi:
+        def __init__(self, *_: Any, **__: Any) -> None:
+            pass
+
+        def list_vikingdb_collection(self, _request: Any) -> SimpleNamespace:
+            return SimpleNamespace(collections=[], total_count=0)
+
+    monkeypatch.setattr(
+        "agentkit.sdk.knowledge.client.AgentkitKnowledgeClient",
+        _FakeKnowledgeClient,
+    )
+    monkeypatch.setattr(
+        "volcengine.viking_knowledgebase.VikingKnowledgeBaseService",
+        _FakeKnowledgeService,
+    )
+    monkeypatch.setattr("volcenginesdkvikingdb.VIKINGDBApi", _FakeVikingDbApi)
+
+    with TestClient(app) as client:
+        response = client.get("/web/viking-knowledgebases")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert requests == [("", 100), ("next-page", 100)]
+    assert data["totalCount"] == 2
+    items = data["items"]
+    assert [item["name"] for item in items] == [
+        "vikingkl_35idqf7",
+        "vikingkl_we4191n",
+    ]
+    assert items[1]["id"] == "vikingkl_we4191n"
+    assert items[1]["resourceId"] == "kb-yef-example-we"
+    assert items[1]["agentkitKnowledgeId"] == "kb-agentkit-we"
+    assert items[1]["sourceKind"] == "agentkit"
+    assert items[1]["sourceLabel"] == "AgentKit Knowledge Base"
 
 
 @pytest.mark.parametrize(

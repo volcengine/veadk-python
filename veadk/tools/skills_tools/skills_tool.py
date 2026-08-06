@@ -111,13 +111,16 @@ class SkillsTool(BaseTool):
 
         working_dir = get_session_path(session_id=tool_context.session.id)
         skill_dir = working_dir / "skills"
-        region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
+        cloud_provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+        default_region = (
+            "ap-southeast-1" if cloud_provider == "byteplus" else "cn-beijing"
+        )
+        region = os.getenv("AGENTKIT_TOOL_REGION", default_region)
 
         if skill_name not in self.skills:
             # 1. Download skill from TOS if not found locally
             user_skill_dir = skill_dir / skill_name
             if not user_skill_dir.exists() or not user_skill_dir.is_dir():
-                cloud_provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
                 if cloud_provider == "vestack":
                     error_msg = f"Error: Skill '{skill_name}' not found locally or in skill space. Downloading from TOS_SKILLS_DIR is not supported in vestack environment."
                     logger.error(error_msg)
@@ -430,7 +433,10 @@ class SkillsTool(BaseTool):
         }
 
         agentkit_tool_service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
-        region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
+        default_region = (
+            "ap-southeast-1" if cloud_provider == "byteplus" else "cn-beijing"
+        )
+        region = os.getenv("AGENTKIT_TOOL_REGION", default_region)
         default_sld = "byteplusapi" if cloud_provider == "byteplus" else "volcengineapi"
         agentkit_skill_host = os.getenv(
             "AGENTKIT_SKILL_HOST",

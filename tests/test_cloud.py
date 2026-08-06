@@ -23,7 +23,9 @@ os.environ["VOLCENGINE_SECRET_KEY"] = "test_secret_key"
 
 from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 from veadk.integrations.ve_apig.ve_apig import APIGateway
+from veadk.integrations.ve_code_pipeline.ve_code_pipeline import VeCodePipeline
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
+from veadk.utils.cloud_provider import cp_openapi_host
 
 
 def test_vefaas_create_function_uses_configured_project() -> None:
@@ -42,6 +44,49 @@ def test_vefaas_create_function_uses_configured_project() -> None:
 
     request = service.client.create_function.call_args.args[0]
     assert request.project_name == "studio-project"
+
+
+def test_vefaas_deploy_cleans_created_resources_on_release_failure() -> None:
+    service = object.__new__(VeFaaS)
+    service._create_function = Mock(return_value=("studio-app-fn", "function-id"))
+    service._create_application = Mock(return_value="application-id")
+    service._release_application = Mock(side_effect=RuntimeError("release failed"))
+    service.delete = Mock()
+    service.delete_function = Mock()
+
+    with pytest.raises(RuntimeError, match="release failed"):
+        service.deploy(
+            "studio-app",
+            ".",
+            gateway_name="gateway",
+            gateway_service_name="service",
+            gateway_upstream_name="upstream",
+        )
+
+    service.delete.assert_called_once_with("application-id")
+    service.delete_function.assert_called_once_with("function-id")
+
+
+def test_vefaas_deploy_can_keep_failed_resources_for_inspection() -> None:
+    service = object.__new__(VeFaaS)
+    service._create_function = Mock(return_value=("studio-app-fn", "function-id"))
+    service._create_application = Mock(return_value="application-id")
+    service._release_application = Mock(side_effect=RuntimeError("release failed"))
+    service.delete = Mock()
+    service.delete_function = Mock()
+
+    with pytest.raises(RuntimeError, match="release failed"):
+        service.deploy(
+            "studio-app",
+            ".",
+            gateway_name="gateway",
+            gateway_service_name="service",
+            gateway_upstream_name="upstream",
+            keep_failed_deploy=True,
+        )
+
+    service.delete.assert_not_called()
+    service.delete_function.assert_not_called()
 
 
 def test_apig_uses_session_token() -> None:
@@ -69,6 +114,7 @@ def test_vefaas_passes_session_token_to_apig() -> None:
         "test_secret_key",
         "cn-shanghai",
         session_token="test_session_token",
+        provider="volcengine",
     )
 
 
@@ -107,7 +153,179 @@ def test_vefaas_code_upload_callback_uses_configured_region() -> None:
         body={"FunctionId": "function-id"},
         region="cn-shanghai",
         session_token="",
+        host="open.volcengineapi.com",
     )
+
+
+def test_vefaas_code_upload_callback_uses_byteplus_host() -> None:
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        region="ap-southeast-1",
+        provider="byteplus",
+    )
+    service.client = Mock()
+    service.client.get_code_upload_address.return_value = Mock(
+        upload_address="https://example.com/upload"
+    )
+
+    with (
+        patch(
+            "veadk.integrations.ve_faas.ve_faas.zip_and_encode_folder",
+            return_value=(b"archive", 7, None),
+        ),
+        patch("veadk.integrations.ve_faas.ve_faas.requests.put") as upload,
+        patch("veadk.integrations.ve_faas.ve_faas.signed_request") as callback,
+    ):
+        upload.return_value = Mock(status_code=200)
+        service._upload_and_mount_code("function-id", ".")
+
+    callback.assert_called_once_with(
+        ak="test_access_key",
+        sk="test_secret_key",
+        target="CodeUploadCallback",
+        body={"FunctionId": "function-id"},
+        region="ap-southeast-1",
+        session_token="",
+        host="vefaas.ap-southeast-1.byteplusapi.com",
+    )
+
+
+def test_vefaas_byteplus_application_uses_configured_template() -> None:
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        region="ap-southeast-1",
+        provider="byteplus",
+        application_template_id="byteplus-template-id",
+    )
+
+    with patch("veadk.integrations.ve_faas.ve_faas.ve_request") as request:
+        request.return_value = {"Result": {"Status": "create_success", "Id": "app-id"}}
+
+        app_id = service._create_application(
+            "studio-app",
+            "studio-function",
+            "gateway",
+            "upstream",
+            "service",
+        )
+
+    assert app_id == "app-id"
+    request_body = request.call_args.kwargs["request_body"]
+    assert request_body["TemplateId"] == "byteplus-template-id"
+    assert request_body["Config"]["Region"] == "ap-southeast-1"
+    assert request_body["Config"]["EnableMcpSession"] is True
+
+
+def test_vefaas_application_can_disable_mcp_session() -> None:
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        region="ap-southeast-1",
+        provider="byteplus",
+        application_template_id="byteplus-template-id",
+    )
+
+    with patch("veadk.integrations.ve_faas.ve_faas.ve_request") as request:
+        request.return_value = {"Result": {"Status": "create_success", "Id": "app-id"}}
+
+        service._create_application(
+            "studio-app",
+            "studio-function",
+            "gateway",
+            "upstream",
+            "service",
+            enable_mcp_session=False,
+        )
+
+    request_body = request.call_args.kwargs["request_body"]
+    assert request_body["Config"]["EnableMcpSession"] is False
+
+
+def test_vefaas_byteplus_application_uses_builtin_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VEFAAS_APPLICATION_TEMPLATE_ID", raising=False)
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        region="ap-southeast-1",
+        provider="byteplus",
+    )
+
+    with patch("veadk.integrations.ve_faas.ve_faas.ve_request") as request:
+        request.return_value = {"Result": {"Status": "create_success", "Id": "app-id"}}
+
+        app_id = service._create_application(
+            "studio-app",
+            "studio-function",
+            "gateway",
+            "upstream",
+            "service",
+        )
+
+    assert app_id == "app-id"
+    request_body = request.call_args.kwargs["request_body"]
+    assert request_body["TemplateId"] == "697a03b8adb54b0008fdebd0"
+
+
+def test_vefaas_byteplus_application_requires_template_for_unknown_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VEFAAS_APPLICATION_TEMPLATE_ID", raising=False)
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        region="ap-southeast-2",
+        provider="byteplus",
+    )
+
+    with (
+        patch("veadk.integrations.ve_faas.ve_faas.ve_request") as request,
+        pytest.raises(ValueError, match="No built-in TemplateId"),
+    ):
+        service._create_application(
+            "studio-app",
+            "studio-function",
+            "gateway",
+            "upstream",
+            "service",
+        )
+
+    request.assert_not_called()
+
+
+def test_cloud_agent_engine_passes_application_template() -> None:
+    with (
+        patch("veadk.cloud.cloud_agent_engine.VeFaaS") as vefaas_class,
+        patch("veadk.cloud.cloud_agent_engine.APIGateway"),
+        patch("veadk.cloud.cloud_agent_engine.IdentityClient"),
+    ):
+        CloudAgentEngine(
+            volcengine_access_key="test_access_key",
+            volcengine_secret_key="test_secret_key",
+            region="ap-southeast-1",
+            provider="byteplus",
+            vefaas_application_template_id="byteplus-template-id",
+        )
+
+    assert (
+        vefaas_class.call_args.kwargs["application_template_id"]
+        == "byteplus-template-id"
+    )
+
+
+def test_code_pipeline_uses_byteplus_region_host() -> None:
+    service = VeCodePipeline(
+        volcengine_access_key="test_access_key",
+        volcengine_secret_key="test_secret_key",
+        provider="byteplus",
+    )
+
+    assert service.region == "ap-southeast-1"
+    assert service.host == "cp.ap-southeast-1.byteplusapi.com"
+    assert cp_openapi_host("ap-southeast-1", "byteplus") == service.host
 
 
 @pytest.mark.asyncio
@@ -166,6 +384,8 @@ async def test_cloud():
                     session_token="test_session_token",
                     region="cn-beijing",
                     project_name="studio-project",
+                    provider="volcengine",
+                    application_template_id="",
                 )
 
                 # Test deploy operation

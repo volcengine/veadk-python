@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { type CreateModeProps, type AgentDraft, emptyDraft } from "./types";
 import { agentNameProblem, duplicateAgentNames } from "./agentNameValidation";
+import { type CloudProvider } from "../adk/cloudProvider";
 import "./WorkflowCreate.css";
 
 /* ------------------------------------------------------------------ *
@@ -69,9 +70,10 @@ function nextNodeId() {
 function makeAgentNode(
   id: string,
   position: { x: number; y: number },
+  cloudProvider: CloudProvider = "volcengine",
   agent?: Partial<AgentDraft>,
 ): WfNode {
-  const base = emptyDraft();
+  const base = emptyDraft(cloudProvider);
   return {
     id,
     type: "agentNode",
@@ -116,7 +118,11 @@ const defaultEdgeOptions = {
   markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
 };
 
-function WorkflowCreateInner({ onBack, onCreate }: CreateModeProps) {
+function WorkflowCreateInner({
+  cloudProvider = "volcengine",
+  onBack,
+  onCreate,
+}: CreateModeProps) {
   const rfInstance = useRef<ReactFlowInstance<WfNode, Edge> | null>(null);
 
   const [wfName, setWfName] = useState("");
@@ -127,8 +133,10 @@ function WorkflowCreateInner({ onBack, onCreate }: CreateModeProps) {
   const starter = useMemo(() => {
     nodeSeq = 0;
     const id = nextNodeId();
-    return makeAgentNode(id, { x: 80, y: 120 }, { name: "agent_1" });
-  }, []);
+    return makeAgentNode(id, { x: 80, y: 120 }, cloudProvider, {
+      name: "agent_1",
+    });
+  }, [cloudProvider]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<WfNode>([starter]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -175,10 +183,14 @@ function WorkflowCreateInner({ onBack, onCreate }: CreateModeProps) {
     const id = nextNodeId();
     // Stagger placement so fresh nodes don't stack exactly.
     const offset = nodes.length * 28;
-    const node = makeAgentNode(id, { x: 80 + offset, y: 120 + offset });
+    const node = makeAgentNode(
+      id,
+      { x: 80 + offset, y: 120 + offset },
+      cloudProvider,
+    );
     setNodes((nds) => nds.concat(node));
     setSelectedId(id);
-  }, [nodes.length, setNodes]);
+  }, [cloudProvider, nodes.length, setNodes]);
 
   /* ---- drag from palette onto the canvas ---- */
   const onDragStart = (e: DragEvent) => {
@@ -201,11 +213,11 @@ function WorkflowCreateInner({ onBack, onCreate }: CreateModeProps) {
         y: e.clientY,
       });
       const id = nextNodeId();
-      const node = makeAgentNode(id, position);
+      const node = makeAgentNode(id, position, cloudProvider);
       setNodes((nds) => nds.concat(node));
       setSelectedId(id);
     },
-    [setNodes],
+    [cloudProvider, setNodes],
   );
 
   /* ---- edit the selected node's agent fields ---- */
@@ -240,7 +252,7 @@ function WorkflowCreateInner({ onBack, onCreate }: CreateModeProps) {
     if (!canCreate) return;
     const nodeAgents = nodes.map((n) => n.data.agent);
     const draft: AgentDraft = {
-      ...emptyDraft(),
+      ...emptyDraft(cloudProvider),
       name: effectiveWorkflowName,
       description: wfDesc.trim(),
       instruction: wfDesc.trim(),
@@ -252,7 +264,16 @@ function WorkflowCreateInner({ onBack, onCreate }: CreateModeProps) {
       },
     };
     onCreate(draft);
-  }, [canCreate, nodes, edges, effectiveWorkflowName, wfDesc, wfType, onCreate]);
+  }, [
+    canCreate,
+    cloudProvider,
+    nodes,
+    edges,
+    effectiveWorkflowName,
+    wfDesc,
+    wfType,
+    onCreate,
+  ]);
 
   // The app breadcrumb handles leaving this view, so onBack is no longer
   // rendered here.
