@@ -269,6 +269,17 @@
   overflow: hidden;
 }
 
+.code-browser-editor > .code-browser-markdown {
+  height: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding: 20px 24px 32px;
+}
+
+.code-browser-markdown > :first-child { margin-top: 0; }
+.code-browser-markdown > :last-child { margin-bottom: 0; }
+
 .code-browser-editor > div,
 .code-browser-editor .cm-theme,
 .code-browser-editor .cm-editor {

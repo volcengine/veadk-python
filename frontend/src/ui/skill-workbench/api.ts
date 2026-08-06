@@ -83,16 +83,16 @@ async function json(response: Response, fallback: string): Promise<unknown> {
 function normalizeActivities(value: unknown): SkillWorkbenchActivity[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => {
-    const activity = record(item, "任务活动");
+    const activity = record(item, "Skill 会话活动");
     const kind = activity.kind;
     const status = activity.status;
     if (
       typeof activity.id !== "string" ||
       !["status", "thinking", "message", "tool"].includes(String(kind)) ||
       !["running", "done"].includes(String(status))
-    ) throw new Error("任务活动格式错误。");
+    ) throw new Error("Skill 会话活动格式错误。");
     if (kind === "tool") {
-      if (typeof activity.name !== "string") throw new Error("任务工具活动格式错误。");
+      if (typeof activity.name !== "string") throw new Error("Skill 工具活动格式错误。");
       return {
         id: activity.id,
         kind,
@@ -102,7 +102,7 @@ function normalizeActivities(value: unknown): SkillWorkbenchActivity[] {
         ...(activity.output !== undefined ? { response: activity.output } : {}),
       };
     }
-    if (typeof activity.text !== "string") throw new Error("任务文本活动格式错误。");
+    if (typeof activity.text !== "string") throw new Error("Skill 文本活动格式错误。");
     return {
       id: activity.id,
       kind: kind as "status" | "thinking" | "message",
@@ -139,14 +139,14 @@ function normalizePublication(
 }
 
 function normalizeTask(value: unknown): SkillWorkbenchTask {
-  const task = record(value, "Skill 任务");
+  const task = record(value, "Skill 会话");
   if (
     typeof task.jobId !== "string" ||
     (task.operation !== "create" && task.operation !== "optimize") ||
     typeof task.intent !== "string" ||
     typeof task.revision !== "number" ||
     typeof task.state !== "string"
-  ) throw new Error("Skill 任务格式错误。");
+  ) throw new Error("Skill 会话格式错误。");
   const files = Array.isArray(task.files)
     ? task.files.flatMap((item) => {
         const file = record(item, "Skill 文件");
@@ -156,12 +156,16 @@ function normalizeTask(value: unknown): SkillWorkbenchTask {
       })
     : [];
   const allowedStates = ["running", "ready", "failed", "cancelled", "expired", "published"];
-  if (!allowedStates.includes(task.state)) throw new Error("未知的 Skill 任务状态。");
+  if (!allowedStates.includes(task.state)) throw new Error("Skill 会话状态无法识别。");
   return {
     jobId: task.jobId,
     operation: task.operation,
     intent: task.intent,
     revision: task.revision,
+    ...(typeof task.sessionTtlSeconds === "number"
+      ? { sessionTtlSeconds: task.sessionTtlSeconds }
+      : {}),
+    ...(typeof task.expiresAt === "string" ? { expiresAt: task.expiresAt } : {}),
     state: task.state as SkillWorkbenchTask["state"],
     stage: typeof task.stage === "string" ? task.stage : "generating",
     activities: normalizeActivities(task.activities),
@@ -208,10 +212,10 @@ export async function reserveSkillWorkbenchTask(
 ): Promise<{ jobId: string; reservedAt: number }> {
   const value = record(await json(
     await request("/tasks/reservations", { method: "POST", signal }),
-    "创建 Skill 任务引用失败",
-  ), "Skill 任务引用");
+    "准备 Skill 会话失败",
+  ), "Skill 会话引用");
   if (typeof value.jobId !== "string" || typeof value.reservedAt !== "number") {
-    throw new Error("Skill 任务引用格式错误。");
+    throw new Error("Skill 会话引用格式错误。");
   }
   return { jobId: value.jobId, reservedAt: value.reservedAt };
 }
@@ -237,7 +241,7 @@ export async function createSkillWorkbenchTask(args: {
       },
       TRANSFER_REQUEST_TIMEOUT_MS,
     );
-    return normalizeTask(await json(response, "创建 Skill 优化任务失败"));
+    return normalizeTask(await json(response, "开始优化 Skill 失败"));
   }
   const response = await request("/tasks", {
     method: "POST",
@@ -259,11 +263,11 @@ export async function createSkillWorkbenchTask(args: {
     }),
     signal: args.signal,
   }, TRANSFER_REQUEST_TIMEOUT_MS);
-  return normalizeTask(await json(response, "创建 Skill 任务失败"));
+  return normalizeTask(await json(response, "开始 Skill 会话失败"));
 }
 
 function normalizeTaskSummary(value: unknown): SkillWorkbenchTaskSummary {
-  const task = record(value, "Skill 任务摘要");
+  const task = record(value, "Skill 会话摘要");
   const allowedStates = ["running", "ready", "failed", "cancelled", "expired", "published"];
   if (
     typeof task.jobId !== "string" ||
@@ -273,7 +277,7 @@ function normalizeTaskSummary(value: unknown): SkillWorkbenchTaskSummary {
     typeof task.state !== "string" ||
     !allowedStates.includes(task.state) ||
     typeof task.createdAt !== "number"
-  ) throw new Error("Skill 任务摘要格式错误。");
+  ) throw new Error("Skill 会话摘要格式错误。");
   return {
     jobId: task.jobId,
     operation: task.operation,
@@ -292,9 +296,9 @@ export async function listSkillWorkbenchTasks(
 ): Promise<SkillWorkbenchTaskSummary[]> {
   const body = record(await json(
     await request("/tasks", { signal }),
-    "读取 Skill 任务列表失败",
-  ), "Skill 任务列表");
-  if (!Array.isArray(body.tasks)) throw new Error("Skill 任务列表格式错误。");
+    "读取 Skill 会话列表失败",
+  ), "Skill 会话列表");
+  if (!Array.isArray(body.tasks)) throw new Error("Skill 会话列表格式错误。");
   return body.tasks.map(normalizeTaskSummary);
 }
 
@@ -304,7 +308,7 @@ export async function getSkillWorkbenchTask(
 ): Promise<SkillWorkbenchTask> {
   return normalizeTask(await json(
     await request(`/tasks/${encodeURIComponent(jobId)}`, { signal }),
-    "读取 Skill 任务失败",
+    "读取 Skill 会话失败",
   ));
 }
 
@@ -458,7 +462,7 @@ export async function publishSkillWorkbenchTask(args: {
 export async function deleteSkillWorkbenchTask(jobId: string): Promise<void> {
   await json(
     await request(`/tasks/${encodeURIComponent(jobId)}`, { method: "DELETE" }),
-    "清理 Skill 任务失败",
+    "删除 Skill 会话失败",
   );
 }
 

@@ -317,6 +317,16 @@
   overflow: hidden;
 }
 
+.skill-workbench__ttl-note {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--muted) / .42);
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
 .skill-workbench__artifact > .code-browser-workspace { height: 100%; }
 .skill-workbench__artifact .code-browser-sidebar { flex-basis: 200px; }
 
@@ -552,6 +562,15 @@
 .skill-workbench textarea:focus-visible {
   outline: 2px solid hsl(var(--ring) / .34);
   outline-offset: 1px;
+}
+
+.skill-workbench .skill-conversation .think-head:focus-visible,
+.skill-workbench .skill-conversation .tool-head:focus-visible,
+.skill-workbench .skill-conversation .builtin-tool-head:focus-visible {
+  outline: none;
+  border-radius: 5px;
+  background: hsl(var(--muted) / .55);
+  box-shadow: inset 0 0 0 1px hsl(var(--ring) / .32);
 }
 
 @media (max-width: 980px) {

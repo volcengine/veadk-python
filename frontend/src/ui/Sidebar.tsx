@@ -140,6 +140,7 @@ function skillConversationStatus(task: SkillWorkbenchTaskListItem): string {
   }
   if (task.state === "ready" || task.state === "published") return "已完成";
   if (task.state === "failed") return "失败";
+  if (task.state === "expired") return "DevEnv 已释放";
   return "已结束";
 }
 

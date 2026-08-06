@@ -44,7 +44,8 @@ test("opens Create and Optimize setup from a card-based Skill Space home", () =>
   assert.match(center, /className="skillcenter-create-action"/);
   assert.match(center, /className="skillcenter-optimize-action"/);
   assert.match(center, /openSetup\("create"\)/);
-  assert.match(center, /openSetup\("optimize"\)/);
+  assert.match(center, /beginOptimization/);
+  assert.match(center, /onClick=\{beginOptimization\}/);
   assert.match(center, /className="composer composer--new-chat skillcenter-setup-composer"/);
   assert.match(center, /上传 ZIP/);
   assert.match(center, /isImeCompositionEvent/);
@@ -59,7 +60,9 @@ test("opens optimization sources in the dedicated conversation setup", () => {
   assert.match(center, /setSetupOperation\("optimize"\)/);
   assert.match(center, /setSource\(nextSource\)/);
   assert.match(center, /setSetupOpen\(true\)/);
-  assert.match(center, /选择技能中心中的 Skill，或上传 ZIP/);
+  assert.match(center, /选择要优化的 Skill/);
+  assert.match(center, /if \(selectingSource && nextSource\)[\s\S]*chooseOptimizationSource\(nextSource\)/);
+  assert.match(center, /更换 Skill/);
   assert.match(center, /onOptimize=\{chooseOptimizationSource\}/);
   assert.doesNotMatch(workbench, /从技能中心选择/);
 });
@@ -152,6 +155,39 @@ test("uses a wider artifact view, a spacious process-only view, and reduced moti
   assert.match(shellStyles, /\.skillcenter-regions button\s*\{[^}]*min-width:\s*52px;[^}]*height:\s*32px;/);
   assert.match(shellStyles, /\.skillcenter-space-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(min\(280px,\s*100%\),\s*1fr\)\)/);
   assert.doesNotMatch(shellStyles, /sidebar-skill-task__live/);
+});
+
+test("keeps a running Skill conversation at the bottom without stealing manual scroll", () => {
+  assert.match(workbench, /activityRef/);
+  assert.match(workbench, /followActivityRef/);
+  assert.match(workbench, /scrollHeight - scrollTop - clientHeight/);
+  assert.match(workbench, /activityRef\.current\.scrollTop = activityRef\.current\.scrollHeight/);
+  assert.match(workbench, /onScroll=\{handleActivityScroll\}/);
+  assert.match(
+    styles,
+    /\.skill-workbench \.skill-conversation \.(?:think-head|tool-head):focus-visible/,
+  );
+  assert.match(styles, /\.skill-workbench \.skill-conversation \.builtin-tool-head:focus-visible/);
+});
+
+test("turns a released remote DevEnv into an actionable expired conversation", () => {
+  assert.match(controller, /SKILL_TASK_EXPIRED/);
+  assert.match(controller, /DevEnv 已到期或被释放/);
+  assert.match(controller, /state: "expired"/);
+  assert.match(
+    controller,
+    /current\.filter\(\(task\) =>\s*task\.state !== "provisioning"/,
+  );
+  assert.match(workbench, /DevEnv 已到期/);
+  assert.doesNotMatch(workbench, /DevEnv Session 已过期/);
+});
+
+test("warns ready users that DevEnv TTL limits download and publishing", () => {
+  assert.match(api, /sessionTtlSeconds/);
+  assert.match(workbench, /DevEnv 最长保留/);
+  assert.match(workbench, /请及时下载或发布/);
+  assert.match(workbench, /超过保留时间后将无法下载或发布/);
+  assert.match(workbench, /产物也无法恢复/);
 });
 
 test("uses the user intent for Skill conversation titles and no Skill Center badge", () => {

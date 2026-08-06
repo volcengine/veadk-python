@@ -37,6 +37,7 @@ import uuid
 import weakref
 import zipfile
 from collections.abc import AsyncIterator, Callable
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
@@ -64,6 +65,7 @@ from veadk.cli.agentkit_session_metadata import (
     build_create_session_request,
     build_list_sessions_request,
     call_session_client,
+    session_display_name,
     session_username,
 )
 from veadk.cli.frontend_skill_creator import (
@@ -90,6 +92,14 @@ _MAX_PATH_LENGTH = 512
 _JOB_ID_RE = re.compile(r"^sw-[0-9a-f]{12}-[0-9a-f]{24}$")
 _SKILL_NAME_RE = re.compile(r"^[a-z0-9-]+$")
 _TERMINAL_STATES = {"ready", "failed", "cancelled", "expired", "published"}
+_RELEASED_SESSION_STATUSES = {
+    "createfailed",
+    "deleted",
+    "deleting",
+    "error",
+    "expired",
+    "failed",
+}
 
 
 def _json_int(value: object, default: int) -> int:
@@ -103,6 +113,28 @@ def _json_object(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         return {}
     return {str(key): item for key, item in value.items()}
+
+
+def _session_time(value: object) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
+
+
+def _session_is_released(session: Any, *, now: int | None = None) -> bool:
+    status = str(getattr(session, "status", "") or "").strip().lower()
+    if status in _RELEASED_SESSION_STATUSES:
+        return True
+    expire_at = _session_time(getattr(session, "expire_at", None))
+    current_time = int(time.time()) if now is None else now
+    return expire_at is not None and expire_at <= current_time
 
 
 class SkillWorkbenchError(RuntimeError):
@@ -519,6 +551,7 @@ class SkillWorkbenchService:
             "revision": 1,
             "source": source_meta,
             "createdAt": int(time.time()),
+            "sessionTtlSeconds": _SESSION_TTL_SECONDS,
         }
         client = self._tools_client_factory(self._region)
         create_request = build_create_session_request(
@@ -549,7 +582,7 @@ class SkillWorkbenchService:
             )
             raise SkillWorkbenchError(
                 "SKILL_DEVENV_PROVISIONING_FAILED",
-                "创建 DevEnv Session 失败，请稍后重试",
+                "DevEnv 创建失败，请稍后重试",
                 status_code=502,
                 retryable=True,
             ) from error
@@ -558,7 +591,7 @@ class SkillWorkbenchService:
                 self._delete_session(client, tool_id, response.session_id)
             raise SkillWorkbenchError(
                 "SKILL_DEVENV_PROVISIONING_FAILED",
-                "DevEnv Session 未返回完整连接信息",
+                "DevEnv 创建失败：连接信息不完整，请重试",
                 status_code=502,
                 retryable=True,
             )
@@ -634,6 +667,7 @@ class SkillWorkbenchService:
             "state": "running",
             "stage": "generating",
             "activities": [],
+            "expiresAt": str(getattr(response, "expire_at", "") or "").strip(),
         }
 
     def list_tasks(self, owner_id: str) -> dict[str, list[dict[str, object]]]:
@@ -658,22 +692,24 @@ class SkillWorkbenchService:
                     )
                     for session in response.session_infos or []:
                         job_id = str(session.user_session_id or "").strip()
-                        endpoint = str(session.endpoint or "").strip()
-                        if (
-                            not endpoint
-                            or session_username(session) != owner_id
-                            or not _JOB_ID_RE.fullmatch(job_id)
-                        ):
+                        username = session_username(session)
+                        if username != owner_id or not _JOB_ID_RE.fullmatch(job_id):
                             continue
                         try:
                             self._validate_job_owner(job_id, owner_id)
                         except SkillWorkbenchError:
                             continue
-                        tasks.append(
-                            self._task_summary(
-                                self._task_from_session(endpoint, job_id)
-                            )
-                        )
+                        if _session_is_released(session):
+                            tasks.append(self._expired_task_summary(session, job_id))
+                            continue
+                        endpoint = str(session.endpoint or "").strip()
+                        if not endpoint:
+                            continue
+                        task = self._task_from_session(endpoint, job_id)
+                        task["expiresAt"] = str(
+                            getattr(session, "expire_at", "") or ""
+                        ).strip()
+                        tasks.append(self._task_summary(task))
                     next_token = str(response.next_token or "").strip() or None
                     if next_token is None:
                         self._region = region
@@ -685,14 +721,14 @@ class SkillWorkbenchService:
                     if next_token in seen_tokens:
                         raise SkillWorkbenchError(
                             "SKILL_TASK_LIST_INVALID",
-                            "AgentKit 返回了重复的任务分页标记",
+                            "读取 Skill 会话列表失败，请重试",
                             status_code=502,
                             retryable=True,
                         )
                     seen_tokens.add(next_token)
                 raise SkillWorkbenchError(
                     "SKILL_TASK_LIST_INVALID",
-                    "Skill 任务列表超过安全分页上限",
+                    "Skill 会话数量过多，暂时无法完整加载",
                     status_code=502,
                     retryable=True,
                 )
@@ -703,13 +739,13 @@ class SkillWorkbenchService:
                     continue
                 raise SkillWorkbenchError(
                     "SKILL_TASK_LIST_FAILED",
-                    "读取 Skill 任务列表失败，请稍后重试",
+                    "读取 Skill 会话列表失败，请稍后重试",
                     status_code=502,
                     retryable=True,
                 ) from error
         raise SkillWorkbenchError(
             "SKILL_TASK_LIST_FAILED",
-            "读取 Skill 任务列表失败，请稍后重试",
+            "读取 Skill 会话列表失败，请稍后重试",
             status_code=502,
             retryable=True,
         )
@@ -717,7 +753,9 @@ class SkillWorkbenchService:
     def get_task(self, job_id: str, owner_id: str) -> dict[str, object]:
         self._validate_job_owner(job_id, owner_id)
         session = self._find_session(self._validated_tool_id(), job_id)
-        return self._task_from_session(session["endpoint"], job_id)
+        task = self._task_from_session(session["endpoint"], job_id)
+        task["expiresAt"] = session.get("expireAt", "")
+        return task
 
     def _task_from_session(self, endpoint: str, job_id: str) -> dict[str, object]:
         request_data = self._remote_json(endpoint, job_id, "request.json")
@@ -728,6 +766,7 @@ class SkillWorkbenchService:
             **status,
             "state": self._normalize_task_state(status.get("status")),
         }
+        result.setdefault("sessionTtlSeconds", _SESSION_TTL_SECONDS)
         revision = _json_int(result.get("revision"), 1)
         publication = _json_object(result.get("publication"))
         if (
@@ -765,6 +804,21 @@ class SkillWorkbenchService:
         if isinstance(source.get("name"), str):
             summary["sourceName"] = source["name"]
         return summary
+
+    @staticmethod
+    def _expired_task_summary(session: Any, job_id: str) -> dict[str, object]:
+        display_name = session_display_name(session)
+        return {
+            "jobId": job_id,
+            "operation": (
+                "optimize" if display_name.startswith("Skill 优化") else "create"
+            ),
+            "intent": "Skill 会话",
+            "revision": 1,
+            "state": "expired",
+            "stage": "expired",
+            "createdAt": _session_time(getattr(session, "created_at", None)) or 0,
+        }
 
     def refine(
         self,
@@ -1155,7 +1209,7 @@ class SkillWorkbenchService:
         try:
             session = self._find_session(tool_id, job_id)
         except SkillWorkbenchError as error:
-            if error.code == "SKILL_TASK_NOT_FOUND":
+            if error.code in {"SKILL_TASK_NOT_FOUND", "SKILL_TASK_EXPIRED"}:
                 return
             raise
         client = self._tools_client_factory(self._region)
@@ -1293,22 +1347,31 @@ class SkillWorkbenchService:
                 if is_agentkit_resource_not_found(error) and index == 0:
                     continue
                 raise SkillWorkbenchError(
-                    "SKILL_TASK_NOT_FOUND", "Skill 任务不存在或已过期", status_code=404
+                    "SKILL_TASK_NOT_FOUND",
+                    "Skill 会话不存在或已删除",
+                    status_code=404,
                 ) from error
             self._region = region
             for session in response.session_infos or []:
-                if (
-                    session.user_session_id == job_id
-                    and session.session_id
-                    and session.endpoint
-                ):
+                if session.user_session_id != job_id:
+                    continue
+                if _session_is_released(session):
+                    raise SkillWorkbenchError(
+                        "SKILL_TASK_EXPIRED",
+                        "DevEnv 已到期并自动释放",
+                        status_code=410,
+                    )
+                if session.session_id and session.endpoint:
                     return {
                         "instanceId": session.session_id,
                         "endpoint": session.endpoint,
+                        "expireAt": str(
+                            getattr(session, "expire_at", "") or ""
+                        ).strip(),
                     }
             break
         raise SkillWorkbenchError(
-            "SKILL_TASK_NOT_FOUND", "Skill 任务不存在或已过期", status_code=404
+            "SKILL_TASK_NOT_FOUND", "Skill 会话不存在或已删除", status_code=404
         )
 
     def _remote_json(self, endpoint: str, job_id: str, filename: str) -> dict[str, Any]:
@@ -1387,7 +1450,7 @@ class SkillWorkbenchService:
         expected = hashlib.sha256(owner_id.encode()).hexdigest()[:12]
         if not _JOB_ID_RE.fullmatch(job_id) or job_id.split("-")[1] != expected:
             raise SkillWorkbenchError(
-                "SKILL_TASK_NOT_FOUND", "Skill 任务不存在或已过期", status_code=404
+                "SKILL_TASK_NOT_FOUND", "Skill 会话不存在或已删除", status_code=404
             )
 
 

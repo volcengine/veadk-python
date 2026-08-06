@@ -102,11 +102,36 @@ function restoredProvisioning(reference: ProvisioningReference): SkillWorkbenchP
   return {
     jobId: reference.jobId,
     operation: "create",
-    intent: "Skill 任务",
+    intent: "Skill 会话",
     revision: 1,
     state: "provisioning",
     stage: "provisioning",
     createdAt: reference.reservedAt,
+  };
+}
+
+const RELEASED_DEVENV_MESSAGE =
+  "DevEnv 已到期或被释放，临时文件已无法访问。请返回技能中心重新开始。";
+
+function expiredTask(
+  jobId: string,
+  previous: SkillWorkbenchTask | SkillWorkbenchTaskListItem | null,
+): SkillWorkbenchTask {
+  const activities = previous && "activities" in previous
+    ? previous.activities
+    : [];
+  const name = previous && "name" in previous ? previous.name : undefined;
+  return {
+    jobId,
+    operation: previous?.operation ?? "create",
+    intent: previous?.intent || "Skill 会话",
+    revision: previous?.revision ?? 1,
+    state: "expired",
+    stage: "expired",
+    activities,
+    files: [],
+    ...(name ? { name } : {}),
+    error: RELEASED_DEVENV_MESSAGE,
   };
 }
 
@@ -129,6 +154,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   const detailRequestRef = useRef(0);
   const artifactRequestRef = useRef(0);
   const referencesRef = useRef<ProvisioningReference[]>([]);
+  const selectedTaskRef = useRef<SkillWorkbenchTaskListItem | null>(null);
 
   const persistReferences = useCallback((next: ProvisioningReference[]) => {
     referencesRef.current = next;
@@ -144,10 +170,16 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       !durableIds.has(reference.jobId) && now - reference.reservedAt <= PROVISIONING_TTL_SECONDS
     );
     if (remaining.length !== referencesRef.current.length) persistReferences(remaining);
-    setTasks([
-      ...remaining.filter((reference) => !reference.cancelRequested).map(restoredProvisioning),
-      ...durable,
-    ].sort((a, b) => b.createdAt - a.createdAt));
+    setTasks((current) => {
+      const missing = current.filter((task) =>
+        task.state !== "provisioning" && !durableIds.has(task.jobId)
+      );
+      return [
+        ...remaining.filter((reference) => !reference.cancelRequested).map(restoredProvisioning),
+        ...durable,
+        ...missing,
+      ].sort((a, b) => b.createdAt - a.createdAt);
+    });
 
     for (const reference of referencesRef.current) {
       if (reference.cancelRequested && durableIds.has(reference.jobId)) {
@@ -193,12 +225,39 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       setTasks((current) => {
         const existing = current.find((item) => item.jobId === next.jobId);
         const summary = { ...taskSummary(next), ...(existing ? { createdAt: existing.createdAt } : {}) };
+        selectedTaskRef.current = summary;
         return [summary, ...current.filter((item) => item.jobId !== next.jobId)];
       });
     } catch (cause) {
       if (signal?.aborted || generation !== generationRef.current || request !== detailRequestRef.current || requestedJobId !== activeJobId) return;
       if (provisioning && cause instanceof SkillWorkbenchApiError && cause.status === 404) {
         setActiveTaskError("");
+      } else if (
+        cause instanceof SkillWorkbenchApiError &&
+        (
+          cause.code === "SKILL_TASK_EXPIRED" ||
+          cause.code === "SKILL_TASK_NOT_FOUND" ||
+          cause.status === 410
+        )
+      ) {
+        const released = expiredTask(
+          requestedJobId,
+          selectedTaskRef.current,
+        );
+        persistReferences(
+          referencesRef.current.filter((item) => item.jobId !== requestedJobId),
+        );
+        setActiveTask(released);
+        setActiveTaskError("");
+        setTasks((current) => {
+          const existing = current.find((item) => item.jobId === requestedJobId);
+          const summary = {
+            ...taskSummary(released),
+            ...(existing ? { createdAt: existing.createdAt } : {}),
+          };
+          selectedTaskRef.current = summary;
+          return [summary, ...current.filter((item) => item.jobId !== requestedJobId)];
+        });
       } else {
         setActiveTaskError(cause instanceof Error ? cause.message : String(cause));
       }
@@ -216,6 +275,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       : [];
     referencesRef.current = references;
     setTasks(references.filter((item) => !item.cancelRequested).map(restoredProvisioning));
+    selectedTaskRef.current = null;
     setTasksError("");
     setActiveJobId("");
     setActiveTask(null);
@@ -349,15 +409,17 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   }, [enabled, identityKey, refreshTasks]);
 
   const selectTask = useCallback((jobId: string) => {
+    selectedTaskRef.current = tasks.find((task) => task.jobId === jobId) ?? null;
     setActiveJobId(jobId);
     setActiveSelectionRevision((revision) => revision + 1);
     setActiveTask((current) => current?.jobId === jobId ? current : null);
     setActiveTaskError("");
-  }, []);
+  }, [tasks]);
 
   const upsertTask = useCallback((task: SkillWorkbenchTask) => {
     persistReferences(referencesRef.current.filter((item) => item.jobId !== task.jobId));
     setActiveJobId(task.jobId);
+    selectedTaskRef.current = taskSummary(task);
     setActiveTask(task);
     setActiveTaskError("");
     setTasks((current) => {
@@ -446,6 +508,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     setTasks((current) => current.filter((item) => item.jobId !== jobId));
     setActiveJobId((current) => current === jobId ? "" : current);
     setActiveTask((current) => current?.jobId === jobId ? null : current);
+    if (selectedTaskRef.current?.jobId === jobId) selectedTaskRef.current = null;
   }, [persistReferences]);
 
   const deleteTask = useCallback(async (jobId: string) => {

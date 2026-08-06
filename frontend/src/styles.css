@@ -4387,7 +4387,6 @@ body {
   color: hsl(var(--foreground));
   font: inherit;
   font-size: 12px;
-  cursor: pointer;
 }
 .skillcenter-source-chip > svg {
   width: 14px;
@@ -4499,6 +4498,31 @@ body {
   background: hsl(var(--foreground));
   color: hsl(var(--background));
 }
+.skillcenter-primary-action {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.skillcenter-selection-upload {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.skillcenter-selection-upload .icon {
+  width: 15px;
+  height: 15px;
+}
+.skillcenter-selection-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.skillcenter-selection-upload:focus-within {
+  outline: 2px solid hsl(var(--ring) / 0.34);
+  outline-offset: 1px;
+}
 .skillcenter-create-action:hover:not(:disabled),
 .skillcenter-primary-action:hover:not(:disabled) {
   border-color: hsl(var(--foreground) / .84);
@@ -4523,7 +4547,12 @@ body {
   color: hsl(var(--muted-foreground));
   font-size: 11.5px;
 }
-.skill-detail-actions { display: flex; align-items: center; gap: 8px; }
+.skill-detail-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
 .skillcenter-regions {
   display: grid;
   padding: 2px;
@@ -4670,10 +4699,19 @@ body {
 .skillcenter-results > .skillcenter-pager {
   width: 100%;
   box-sizing: border-box;
-  margin-top: auto;
+  margin-top: 0;
   border: 1px solid hsl(var(--border));
   border-radius: 8px;
   background: hsl(var(--panel));
+}
+.skillcenter-selection-error {
+  margin: 0 0 12px;
+  padding: 9px 11px;
+  border-radius: 7px;
+  background: hsl(var(--destructive) / .07);
+  color: hsl(var(--destructive));
+  font-size: 12px;
+  line-height: 1.5;
 }
 .skillcenter-browser {
   flex: 1;
@@ -4901,6 +4939,21 @@ body {
   overflow-wrap: anywhere;
 }
 .skillcenter-error { color: hsl(var(--destructive)); }
+.skillcenter-error {
+  flex-direction: column;
+}
+.skillcenter-error button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 7px;
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.skillcenter-error button:hover { background: hsl(var(--muted)); }
 .skillcenter-loading--overlay {
   position: absolute;
   inset: 0;
@@ -5024,7 +5077,8 @@ body {
   .skillcenter-setup { padding: 22px 18px; }
   .skillcenter-page-head { align-items: stretch; flex-direction: column; gap: 16px; }
   .skillcenter-page-actions { width: 100%; }
-  .skillcenter-page-actions button { flex: 1; }
+  .skillcenter-page-actions button,
+  .skillcenter-page-actions label { flex: 1; }
   .skillcenter-toolbar { margin-top: 14px; }
   .skill-detail-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

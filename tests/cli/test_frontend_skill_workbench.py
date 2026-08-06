@@ -384,6 +384,103 @@ def test_list_tasks_rejects_repeated_pagination_token(
     assert caught.value.retryable is True
 
 
+def test_list_tasks_returns_expired_session_without_reading_released_devenv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    response = SimpleNamespace(
+        session_infos=[
+            _session(
+                job_id,
+                "alice",
+                "released-endpoint",
+                status="Ready",
+                expire_at="2000-01-01T00:00:00Z",
+                created_at="1999-12-31T23:00:00Z",
+            )
+        ],
+        next_token=None,
+    )
+    tools = SimpleNamespace(list_sessions=lambda request: response)
+    service = SkillWorkbenchService(
+        tool_id="tool", tools_client_factory=lambda region: tools
+    )
+    monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool")
+    monkeypatch.setattr(
+        service,
+        "_task_from_session",
+        lambda endpoint, requested_job_id: pytest.fail(
+            "an expired DevEnv must not be contacted"
+        ),
+    )
+
+    result = service.list_tasks("alice")
+
+    assert result == {
+        "tasks": [
+            {
+                "jobId": job_id,
+                "operation": "create",
+                "intent": "Skill 会话",
+                "revision": 1,
+                "state": "expired",
+                "stage": "expired",
+                "createdAt": 946681200,
+            }
+        ]
+    }
+
+
+def test_find_session_distinguishes_expired_from_missing() -> None:
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    response = SimpleNamespace(
+        session_infos=[
+            _session(
+                job_id,
+                "alice",
+                "released-endpoint",
+                status="Expired",
+                expire_at="2000-01-01T00:00:00Z",
+            )
+        ]
+    )
+    tools = SimpleNamespace(list_sessions=lambda request: response)
+    service = SkillWorkbenchService(
+        tool_id="tool", tools_client_factory=lambda region: tools
+    )
+
+    with pytest.raises(SkillWorkbenchError) as caught:
+        service._find_session("tool", job_id)
+
+    assert caught.value.code == "SKILL_TASK_EXPIRED"
+    assert caught.value.status_code == 410
+    assert str(caught.value) == "DevEnv 已到期并自动释放"
+
+
+def test_delete_task_is_idempotent_after_devenv_expiration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    service = SkillWorkbenchService(
+        tool_id="tool",
+        tools_client_factory=lambda region: pytest.fail(
+            "an expired Session has no remote resource to delete"
+        ),
+    )
+    monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool")
+
+    def expired_session(tool_id: str, requested_job_id: str) -> dict[str, str]:
+        raise SkillWorkbenchError(
+            "SKILL_TASK_EXPIRED",
+            "DevEnv 已到期并自动释放",
+            status_code=410,
+        )
+
+    monkeypatch.setattr(service, "_find_session", expired_session)
+
+    service.delete_task(job_id, "alice")
+
+
 def test_task_state_normalization_is_shared_by_detail_and_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -408,7 +505,40 @@ def test_task_state_normalization_is_shared_by_detail_and_list(
     detail = service._task_from_session("endpoint", job_id)
 
     assert detail["state"] == "ready"
+    assert detail["sessionTtlSeconds"] == 3600
     assert service._task_summary(detail)["state"] == "ready"
+
+
+def test_get_task_returns_the_live_session_expiration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    service = SkillWorkbenchService(tool_id="tool")
+    monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool")
+    monkeypatch.setattr(
+        service,
+        "_find_session",
+        lambda tool_id, requested_job_id: {
+            "instanceId": "session-1",
+            "endpoint": "https://devenv.example",
+            "expireAt": "2026-08-05T12:00:00Z",
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_task_from_session",
+        lambda endpoint, requested_job_id: {
+            "jobId": requested_job_id,
+            "operation": "create",
+            "intent": "Create it",
+            "revision": 1,
+            "state": "ready",
+        },
+    )
+
+    detail = service.get_task(job_id, "alice")
+
+    assert detail["expiresAt"] == "2026-08-05T12:00:00Z"
 
 
 def test_task_with_current_revision_publication_reopens_as_published(
@@ -447,10 +577,22 @@ def test_task_with_current_revision_publication_reopens_as_published(
     assert service._task_summary(detail)["state"] == "published"
 
 
-def _session(job_id: str, owner: str, endpoint: str) -> SimpleNamespace:
+def _session(
+    job_id: str,
+    owner: str,
+    endpoint: str,
+    *,
+    status: str = "Ready",
+    expire_at: str = "2099-01-01T00:00:00Z",
+    created_at: str = "2026-01-01T00:00:00Z",
+) -> SimpleNamespace:
     return SimpleNamespace(
+        session_id=f"session-{job_id}",
         user_session_id=job_id,
         endpoint=endpoint,
+        status=status,
+        expire_at=expire_at,
+        created_at=created_at,
         metadata=[{"Key": "Username", "Value": owner}],
     )
 
@@ -703,7 +845,9 @@ def test_persist_publication_writes_the_owner_bound_task_request(
     assert uploaded["endpoint"] == "https://devenv.example"
     assert uploaded["path"] == f"{service._remote_dir(job_id)}/request.json"
     assert uploaded["media_type"] == "application/json"
-    assert uploaded["body"]["publication"] == {"revision": 2, **result}
+    uploaded_body = uploaded["body"]
+    assert isinstance(uploaded_body, dict)
+    assert uploaded_body["publication"] == {"revision": 2, **result}
 
 
 def test_upload_route_accepts_a_valid_skill_zip(

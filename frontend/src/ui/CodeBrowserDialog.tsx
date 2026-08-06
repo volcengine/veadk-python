@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { AgentProject, ProjectFile } from "../create/project";
 import "./CodeBrowserDialog.css";
+import { Markdown } from "./Markdown";
 
 const CodeEditor = lazy(() => import("./CodeEditor"));
 
@@ -63,6 +64,7 @@ export interface CodeBrowserWorkspaceProps {
   project: AgentProject;
   onChange?: (project: AgentProject) => void;
   readOnly?: boolean;
+  renderMarkdown?: boolean;
   className?: string;
 }
 
@@ -71,6 +73,7 @@ export function CodeBrowserWorkspace({
   project,
   onChange,
   readOnly = false,
+  renderMarkdown = false,
   className = "",
 }: CodeBrowserWorkspaceProps) {
   const [selected, setSelected] = useState<string | null>(
@@ -169,18 +172,26 @@ export function CodeBrowserWorkspace({
         </div>
         <div className="code-browser-editor">
           {selectedFile ? (
-            <Suspense
-              fallback={<div className="code-browser-empty">正在加载编辑器…</div>}
-            >
-              <CodeEditor
-                value={selectedFile.content}
-                path={selectedFile.path}
-                onChange={handleEdit}
-                readOnly={readOnly}
+            renderMarkdown && /\.md(?:own)?$/i.test(selectedFile.path) ? (
+              <Markdown
+                text={selectedFile.content}
+                className="code-browser-markdown"
+                allowRawHtml={false}
               />
-            </Suspense>
+            ) : (
+              <Suspense
+                fallback={<div className="code-browser-empty">正在加载编辑器…</div>}
+              >
+                <CodeEditor
+                  value={selectedFile.content}
+                  path={selectedFile.path}
+                  onChange={handleEdit}
+                  readOnly={readOnly}
+                />
+              </Suspense>
+            )
           ) : (
-            <div className="code-browser-empty">从左侧选择文件以查看代码</div>
+            <div className="code-browser-empty">从左侧选择文件以查看内容</div>
           )}
         </div>
       </main>

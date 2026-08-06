@@ -139,6 +139,7 @@ function Pager({
   onPage: (page: number) => void;
 }) {
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  if (pageCount <= 1) return null;
   return (
     <footer className="skillcenter-pager">
       <span>共 {total} 项</span>
@@ -157,6 +158,21 @@ function Pager({
 
 function EmptyState({ children }: { children: string }) {
   return <div className="skillcenter-empty">{children}</div>;
+}
+
+function ErrorState({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="skillcenter-error" role="alert">
+      <span>{message}</span>
+      <button type="button" onClick={onRetry}>重试</button>
+    </div>
+  );
 }
 
 function ComposerSendIcon() {
@@ -232,7 +248,9 @@ function SkillWorkbenchSetup({
   return (
     <section className="skillcenter-setup" aria-label={operation === "create" ? "创建 Skill" : "优化 Skill"}>
       <header className="skillcenter-setup-head">
-        <button type="button" onClick={onBack}>返回技能中心</button>
+        <button type="button" onClick={onBack}>
+          {operation === "optimize" ? "返回选择来源" : "返回技能中心"}
+        </button>
         <div>
           <h1>{operation === "create" ? "创建 Skill" : "优化 Skill"}</h1>
           <p>
@@ -248,37 +266,34 @@ function SkillWorkbenchSetup({
           {operation === "optimize" ? (
             <div className="skillcenter-composer-source">
               {source ? (
-                <button
-                  type="button"
-                  className="skillcenter-source-chip"
-                  onClick={() => setSource(null)}
-                  title="移除所选 Skill"
-                >
-                  <SkillIcon />
-                  <span>{source.name}</span>
-                  <small>v{source.version}</small>
-                  <CloseIcon />
-                </button>
-              ) : file ? (
-                <button
-                  type="button"
-                  className="skillcenter-source-chip"
-                  onClick={() => setFile(null)}
-                  title="移除 ZIP"
-                >
-                  <ComposerUploadIcon />
-                  <span>{file.name}</span>
-                  <CloseIcon />
-                </button>
-              ) : (
                 <>
-                  <span>选择技能中心中的 Skill，或上传 ZIP</span>
+                  <span className="skillcenter-source-chip" title={source.name}>
+                    <SkillIcon />
+                    <span>{source.name}</span>
+                    <small>v{source.version}</small>
+                  </span>
                   <button
                     type="button"
                     className="skillcenter-source-picker"
                     onClick={onBrowseSources}
                   >
-                    选择 Skill
+                    更换 Skill
+                  </button>
+                </>
+              ) : file ? (
+                <span className="skillcenter-source-chip" title={file.name}>
+                  <ComposerUploadIcon />
+                  <span>{file.name}</span>
+                </span>
+              ) : (
+                <>
+                  <span>选择要优化的 Skill，或上传 ZIP</span>
+                  <button
+                    type="button"
+                    className="skillcenter-source-picker"
+                    onClick={onBrowseSources}
+                  >
+                    选择已有 Skill
                   </button>
                 </>
               )}
@@ -322,7 +337,7 @@ function SkillWorkbenchSetup({
                     nextFile.size > capability.maxUploadBytes
                   ) {
                     const limitMiB = capability.maxUploadBytes / (1024 * 1024);
-                    onError(`Skill ZIP 不能超过 ${limitMiB} MiB`);
+                    onError(`Skill ZIP 不能超过 ${limitMiB} MiB。`);
                     event.target.value = "";
                     return;
                   }
@@ -371,6 +386,7 @@ function SkillDetailDialog({
   loading,
   error,
   onClose,
+  onRetry,
   onOptimize,
 }: {
   skill: SkillSpaceSkill;
@@ -381,6 +397,7 @@ function SkillDetailDialog({
   loading: boolean;
   error: string;
   onClose: () => void;
+  onRetry: () => void;
   onOptimize?: (source: SkillCenterOptimizationSource) => void;
 }) {
   useEffect(() => {
@@ -434,19 +451,19 @@ function SkillDetailDialog({
         </header>
 
         <dl className="skill-detail-meta">
-          <div><dt>技能 ID</dt><dd title={skill.skillId}>{skill.skillId}</dd></div>
+          <div><dt>Skill ID</dt><dd title={skill.skillId}>{skill.skillId}</dd></div>
           <div><dt>版本</dt><dd>{detail?.version || skill.version || "—"}</dd></div>
           <div><dt>状态</dt><dd>{statusLabel(skill.skillStatus)}</dd></div>
-          <div><dt>技能空间</dt><dd title={space.name}>{space.name}</dd></div>
+          <div><dt>Skill 空间</dt><dd title={space.name}>{space.name}</dd></div>
           <div><dt>Project</dt><dd title={space.projectName || "default"}>{space.projectName || "default"}</dd></div>
           <div><dt>地域</dt><dd>{formatCloudRegion(region, cloudProvider)}</dd></div>
         </dl>
 
         <div className="skill-detail-content">
           {loading ? (
-            <div className="skillcenter-loading"><LoadingMark />正在读取技能内容…</div>
+            <div className="skillcenter-loading"><LoadingMark />正在读取 Skill 内容…</div>
           ) : error ? (
-            <div className="skillcenter-error">{error}</div>
+            <ErrorState message={error} onRetry={onRetry} />
           ) : detail?.skillMd ? (
             <CodeBrowserWorkspace
               project={{
@@ -456,6 +473,7 @@ function SkillDetailDialog({
                   : [{ path: "SKILL.md", content: detail.skillMd }],
               }}
               readOnly
+              renderMarkdown
             />
           ) : (
             <EmptyState>该技能暂无 SKILL.md 内容</EmptyState>
@@ -507,12 +525,14 @@ export function SkillCenterView({
   const [spaceTotal, setSpaceTotal] = useState(0);
   const [spacesLoading, setSpacesLoading] = useState(false);
   const [spacesError, setSpacesError] = useState("");
+  const [spacesRevision, setSpacesRevision] = useState(0);
   const [selectedSpace, setSelectedSpace] = useState<SkillSpaceRef | null>(null);
   const [skills, setSkills] = useState<SkillSpaceSkill[]>([]);
   const [skillPage, setSkillPage] = useState(1);
   const [skillTotal, setSkillTotal] = useState(0);
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [skillsError, setSkillsError] = useState("");
+  const [skillsRevision, setSkillsRevision] = useState(0);
   const [detailSkill, setDetailSkill] = useState<SkillSpaceSkill | null>(null);
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -568,9 +588,15 @@ export function SkillCenterView({
     void listSkillSpacesPage({ region, page: spacePage, pageSize: SPACE_PAGE_SIZE })
       .then((result) => {
         if (!active) return;
+        const totalCount = result.totalCount || 0;
+        const lastPage = Math.max(1, Math.ceil(totalCount / SPACE_PAGE_SIZE));
+        setSpaceTotal(totalCount);
+        if (spacePage > lastPage) {
+          setSpacePage(lastPage);
+          return;
+        }
         const items = result.items || [];
         setSpaces(items);
-        setSpaceTotal(result.totalCount || 0);
         setSelectedSpace((current) => {
           const focusedSpaceId = focus?.region === region ? focus.skillSpaceIds[0] : "";
           return items.find((space) => space.id === focusedSpaceId)
@@ -583,13 +609,13 @@ export function SkillCenterView({
         setSpaces([]);
         setSpaceTotal(0);
         setSelectedSpace(null);
-        setSpacesError(error instanceof Error ? error.message : "读取技能空间失败，请稍后重试");
+        setSpacesError(error instanceof Error ? error.message : "读取 Skill 空间失败，请稍后重试。");
       })
       .finally(() => {
         if (active) setSpacesLoading(false);
       });
     return () => { active = false; };
-  }, [focus, region, spacePage]);
+  }, [focus, region, spacePage, spacesRevision]);
 
   useEffect(() => {
     if (!selectedSpace) {
@@ -608,20 +634,26 @@ export function SkillCenterView({
     })
       .then((result) => {
         if (!active) return;
+        const totalCount = result.totalCount || 0;
+        const lastPage = Math.max(1, Math.ceil(totalCount / SKILL_PAGE_SIZE));
+        setSkillTotal(totalCount);
+        if (skillPage > lastPage) {
+          setSkillPage(lastPage);
+          return;
+        }
         setSkills(result.items || []);
-        setSkillTotal(result.totalCount || 0);
       })
       .catch((error: unknown) => {
         if (!active) return;
         setSkills([]);
         setSkillTotal(0);
-        setSkillsError(error instanceof Error ? error.message : "读取技能失败，请稍后重试");
+        setSkillsError(error instanceof Error ? error.message : "读取 Skill 失败，请稍后重试。");
       })
       .finally(() => {
         if (active) setSkillsLoading(false);
       });
     return () => { active = false; };
-  }, [region, selectedSpace, skillPage]);
+  }, [region, selectedSpace, skillPage, skillsRevision]);
 
   const changeRegion = (nextRegion: SkillRegion) => {
     if (nextRegion === region) return;
@@ -666,7 +698,7 @@ export function SkillCenterView({
       if (detailRequest.current === request) setDetail(result);
     } catch (error) {
       if (detailRequest.current === request) {
-        setDetailError(error instanceof Error ? error.message : "读取技能详情失败，请稍后重试");
+        setDetailError(error instanceof Error ? error.message : "读取 Skill 详情失败，请稍后重试。");
       }
     } finally {
       if (detailRequest.current === request) setDetailLoading(false);
@@ -691,6 +723,52 @@ export function SkillCenterView({
     setSelectingSource(false);
     setSetupOpen(true);
     closeDetail();
+  };
+
+  const sourceFromSkill = (
+    skill: SkillSpaceSkill,
+  ): SkillCenterOptimizationSource | null => {
+    if (!selectedSpace) return null;
+    return {
+      kind: "skill-center",
+      skillId: skill.skillId,
+      version: skill.version,
+      region,
+      projectName: selectedSpace.projectName,
+      skillSpaceId: selectedSpace.id,
+      name: skill.skillName,
+      description: skill.skillDescription,
+    };
+  };
+
+  const beginOptimization = () => {
+    setSetupOperation("optimize");
+    setSource(null);
+    setFile(null);
+    setIntent("");
+    setComposerError("");
+    setSelectingSource(true);
+    setSetupOpen(false);
+    closeDetail();
+  };
+
+  const chooseUpload = (nextFile: File | null) => {
+    if (!nextFile) return;
+    if (
+      capability?.maxUploadBytes &&
+      nextFile.size > capability.maxUploadBytes
+    ) {
+      const limitMiB = capability.maxUploadBytes / (1024 * 1024);
+      setComposerError(`Skill ZIP 不能超过 ${limitMiB} MiB。`);
+      return;
+    }
+    setSetupOperation("optimize");
+    setSource(null);
+    setFile(nextFile);
+    setIntent("");
+    setComposerError("");
+    setSelectingSource(false);
+    setSetupOpen(true);
   };
 
   const openSetup = (operation: SkillWorkbenchOperation) => {
@@ -732,7 +810,10 @@ export function SkillCenterView({
         error={composerError}
         onError={setComposerError}
         composerRef={composerRef}
-        onBack={() => setSetupOpen(false)}
+        onBack={() => {
+          setSetupOpen(false);
+          setSelectingSource(setupOperation === "optimize");
+        }}
         onBrowseSources={() => {
           setSetupOpen(false);
           setSelectingSource(true);
@@ -756,35 +837,69 @@ export function SkillCenterView({
                 setSkills([]);
               }}
             >
-              返回技能空间
+              返回 Skill 空间
             </button>
           ) : null}
-          <h1>{selectedSpace?.name || "技能中心"}</h1>
+          <h1>
+            {selectingSource ? "选择要优化的 Skill" : selectedSpace?.name || "技能中心"}
+          </h1>
           <p>
             {selectedSpace
-              ? `${selectedSpace.description || "浏览并管理空间中的 Skill"} · ${skillTotal} 个技能`
+              ? selectingSource
+                ? `${selectedSpace.name} · 选择一个 Skill 后即可说明优化目标。`
+                : `${selectedSpace.description || "浏览并管理空间中的 Skill"} · ${skillTotal} 个 Skill`
               : selectingSource
-                ? "选择要优化的 Skill，查看详情后开始优化。"
-                : "浏览 Skill Space，或通过 Codex 创建和优化可复用技能。"}
+                ? "进入 Skill 空间选择已有 Skill，或直接上传 ZIP。"
+                : "浏览 Skill 空间，或通过 Codex 创建和优化可复用 Skill。"}
           </p>
         </div>
         <div className="skillcenter-page-actions">
-          <button
-            type="button"
-            className="skillcenter-optimize-action"
-            disabled={capability?.enabled === false}
-            onClick={() => openSetup("optimize")}
-          >
-            优化 Skill
-          </button>
-          <button
-            type="button"
-            className="skillcenter-create-action"
-            disabled={capability?.enabled === false}
-            onClick={() => openSetup("create")}
-          >
-            创建 Skill
-          </button>
+          {selectingSource ? (
+            <>
+              <button
+                type="button"
+                className="skillcenter-optimize-action"
+                onClick={() => {
+                  setSelectingSource(false);
+                  setComposerError("");
+                }}
+              >
+                退出选择
+              </button>
+              <label className="skillcenter-create-action skillcenter-selection-upload">
+                <ComposerUploadIcon />
+                <span>上传 ZIP</span>
+                <input
+                  type="file"
+                  accept=".zip,application/zip"
+                  disabled={capability?.enabled === false}
+                  onChange={(event) => {
+                    chooseUpload(event.target.files?.[0] ?? null);
+                    event.target.value = "";
+                  }}
+                />
+              </label>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="skillcenter-optimize-action"
+                disabled={capability?.enabled === false}
+                onClick={beginOptimization}
+              >
+                优化 Skill
+              </button>
+              <button
+                type="button"
+                className="skillcenter-create-action"
+                disabled={capability?.enabled === false}
+                onClick={() => openSetup("create")}
+              >
+                创建 Skill
+              </button>
+            </>
+          )}
         </div>
       </header>
 
@@ -801,18 +916,24 @@ export function SkillCenterView({
             </button>
           ))}
         </div>
-        <span>{selectedSpace ? `${skillTotal} 个 Skill` : `${spaceTotal} 个 Skill Space`}</span>
+        <span>{selectedSpace ? `${skillTotal} 个 Skill` : `${spaceTotal} 个 Skill 空间`}</span>
       </div>
 
       <div className="skillcenter-results">
+        {selectingSource && composerError ? (
+          <div className="skillcenter-selection-error" role="alert">{composerError}</div>
+        ) : null}
         {selectedSpace ? (
           <>
             {skillsLoading ? (
               <div className="skillcenter-loading"><LoadingMark />正在读取技能…</div>
             ) : skillsError ? (
-              <div className="skillcenter-error">{skillsError}</div>
+              <ErrorState
+                message={skillsError}
+                onRetry={() => setSkillsRevision((revision) => revision + 1)}
+              />
             ) : skills.length === 0 ? (
-              <EmptyState>这个空间中暂无技能</EmptyState>
+              <EmptyState>这个空间中暂无 Skill</EmptyState>
             ) : (
               <div className="skillcenter-skill-grid">
                 {skills.map((skill) => (
@@ -820,7 +941,14 @@ export function SkillCenterView({
                     type="button"
                     key={`${skill.skillId}:${skill.version}`}
                     className="skillcenter-skill-card"
-                    onClick={() => void openDetail(skill)}
+                    onClick={() => {
+                      const nextSource = sourceFromSkill(skill);
+                      if (selectingSource && nextSource) {
+                        chooseOptimizationSource(nextSource);
+                      } else {
+                        void openDetail(skill);
+                      }
+                    }}
                   >
                     <span className="skillcenter-card-title-row">
                       <span className="skillcenter-symbol skillcenter-symbol--skill"><SkillIcon /></span>
@@ -841,11 +969,14 @@ export function SkillCenterView({
         ) : (
           <>
             {spacesLoading ? (
-              <div className="skillcenter-loading"><LoadingMark />正在读取技能空间…</div>
+              <div className="skillcenter-loading"><LoadingMark />正在读取 Skill 空间…</div>
             ) : spacesError ? (
-              <div className="skillcenter-error">{spacesError}</div>
+              <ErrorState
+                message={spacesError}
+                onRetry={() => setSpacesRevision((revision) => revision + 1)}
+              />
             ) : spaces.length === 0 ? (
-              <EmptyState>当前地域暂无可访问的技能空间</EmptyState>
+              <EmptyState>当前地域暂无可访问的 Skill 空间</EmptyState>
             ) : (
               <div className="skillcenter-space-grid">
                 {spaces.map((space) => (
@@ -894,6 +1025,7 @@ export function SkillCenterView({
           loading={detailLoading}
           error={detailError}
           onClose={closeDetail}
+          onRetry={() => void openDetail(detailSkill)}
           onOptimize={chooseOptimizationSource}
         />
       )}

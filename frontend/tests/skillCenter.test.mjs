@@ -14,6 +14,14 @@ const stylesSource = readFileSync(
   new URL("../src/styles.css", import.meta.url),
   "utf8",
 );
+const browserSource = readFileSync(
+  new URL("../src/ui/CodeBrowserDialog.tsx", import.meta.url),
+  "utf8",
+);
+const browserStylesSource = readFileSync(
+  new URL("../src/ui/CodeBrowserDialog.css", import.meta.url),
+  "utf8",
+);
 test("skill center defaults to paged AgentKit Skill Space cards", () => {
   assert.doesNotMatch(skillCenterSource, /Find Skill|findskill|SKILL_URL|skill-frame/);
   assert.match(skillCenterSource, /defaultCloudRegion\(cloudProvider\)/);
@@ -24,11 +32,14 @@ test("skill center defaults to paged AgentKit Skill Space cards", () => {
     /focus\?\.region \?\? defaultCloudRegion\(cloudProvider\)/,
   );
   assert.doesNotMatch(skillCenterSource, /changeRegion\("all"\)/);
-  assert.match(skillCenterSource, /<h1>\{selectedSpace\?\.name \|\| "技能中心"\}<\/h1>/);
+  assert.match(
+    skillCenterSource,
+    /\{selectingSource \? "选择要优化的 Skill" : selectedSpace\?\.name \|\| "技能中心"\}/,
+  );
   assert.match(skillCenterSource, /className="skillcenter-space-grid"/);
   assert.match(skillCenterSource, /className="skillcenter-space-card"/);
   assert.match(skillCenterSource, /查看技能/);
-  assert.match(skillCenterSource, /返回技能空间/);
+  assert.match(skillCenterSource, /返回 Skill 空间/);
   assert.match(
     skillCenterSource,
     /items\.find\(\(space\) => space\.id === current\?\.id\)\s*\|\| null/,
@@ -43,6 +54,24 @@ test("space and skill requests are paged server-side without exposing credential
   assert.match(skillCenterSource, /<Pager page=\{spacePage\}/);
   assert.match(skillCenterSource, /<Pager page=\{skillPage\}/);
   assert.doesNotMatch(skillCenterSource, /VOLCENGINE_ACCESS_KEY|VOLCENGINE_SECRET_KEY/);
+});
+
+test("pagination appears only for multiple pages and clamps deleted last pages", () => {
+  assert.match(skillCenterSource, /if \(pageCount <= 1\) return null/);
+  assert.match(
+    skillCenterSource,
+    /const lastPage = Math\.max\(1, Math\.ceil\([^)]*totalCount[^)]*\/ SPACE_PAGE_SIZE\)\)/,
+  );
+  assert.match(skillCenterSource, /if \(spacePage > lastPage\)/);
+  assert.match(
+    skillCenterSource,
+    /const lastPage = Math\.max\(1, Math\.ceil\([^)]*totalCount[^)]*\/ SKILL_PAGE_SIZE\)\)/,
+  );
+  assert.match(skillCenterSource, /if \(skillPage > lastPage\)/);
+  assert.doesNotMatch(
+    stylesSource,
+    /\.skillcenter-results\s*>\s*\.skillcenter-pager\s*\{[^}]*margin-top:\s*auto/,
+  );
 });
 
 test("SkillSpace downloads prefer full package files over SKILL.md only", () => {
@@ -62,12 +91,18 @@ test("ZIP selection rejects files above the server-advertised upload limit", () 
   assert.match(skillCenterSource, /setComposerError/);
 });
 
-test("skill details show the complete package in a read-only file browser", () => {
+test("skill details render Markdown safely while preserving the complete file browser", () => {
   assert.match(skillCenterSource, /<CodeBrowserWorkspace/);
   assert.match(skillCenterSource, /detail\.files\?\.length/);
   assert.match(skillCenterSource, /\[\{ path: "SKILL\.md", content: detail\.skillMd \}\]/);
   assert.match(skillCenterSource, /readOnly/);
-  assert.doesNotMatch(skillCenterSource, /allowRawHtml/);
+  assert.match(skillCenterSource, /renderMarkdown/);
+  assert.match(browserSource, /renderMarkdown\?: boolean/);
+  assert.match(browserSource, /<Markdown[\s\S]*allowRawHtml=\{false\}/);
+  assert.match(
+    browserStylesSource,
+    /\.code-browser-editor\s*>\s*\.code-browser-markdown\s*\{[^}]*overflow-wrap:\s*anywhere;/,
+  );
   assert.match(skillCenterSource, /numeric \* 1000/);
   assert.match(skillCenterSource, /detailRequest\.current/);
   assert.match(skillCenterSource, /closeDetail\(\);\s*setRegion/);
@@ -82,6 +117,10 @@ test("skill browser uses bounded card grids and resilient long text", () => {
   assert.match(stylesSource, /\.skillcenter-pager\s*\{[^}]*flex:\s*0 0 44px;/);
   assert.match(stylesSource, /\.skillcenter-item-title\s*\{[^}]*text-overflow:\s*ellipsis;/);
   assert.match(stylesSource, /\.skillcenter-item-description\s*\{[^}]*overflow-wrap:\s*anywhere;/);
+  assert.match(
+    stylesSource,
+    /\.skillcenter-primary-action\s*\{[^}]*white-space:\s*nowrap;/,
+  );
   assert.match(stylesSource, /@media \(max-width: 760px\)/);
 });
 

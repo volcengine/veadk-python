@@ -75,7 +75,7 @@ function stageLabel(task: SkillWorkbenchTask): string {
   if (task.state === "ready") return "Skill 已就绪";
   if (task.state === "failed") return "会话执行失败";
   if (task.state === "cancelled") return "会话已取消";
-  if (task.state === "expired") return "DevEnv Session 已过期";
+  if (task.state === "expired") return "DevEnv 已到期";
   if (task.stage === "validating") return "正在校验 Skill";
   if (task.stage === "packaging") return "正在打包 Skill";
   return "Codex 正在处理";
@@ -83,6 +83,11 @@ function stageLabel(task: SkillWorkbenchTask): string {
 
 function regionLabel(region: SkillRegion): string {
   return region === "cn-shanghai" ? "上海" : "北京";
+}
+
+function ttlLabel(seconds: number): string {
+  if (seconds % 3600 === 0) return `${seconds / 3600} 小时`;
+  return `${Math.ceil(seconds / 60)} 分钟`;
 }
 
 function ExecutionStages({ task }: { task: SkillWorkbenchTask }) {
@@ -195,6 +200,8 @@ export function SkillWorkbench({
   const [publishResult, setPublishResult] =
     useState<SkillWorkbenchPublishResult | null>(null);
   const publishControllerRef = useRef<AbortController | null>(null);
+  const activityRef = useRef<HTMLDivElement>(null);
+  const followActivityRef = useRef(true);
 
   const ready = task?.state === "ready" || task?.state === "published";
   const persistedPublication = task && task.publication?.revision === task.revision
@@ -237,6 +244,25 @@ export function SkillWorkbench({
   }, [publishRegion, ready]);
 
   useEffect(() => () => publishControllerRef.current?.abort(), []);
+
+  useEffect(() => {
+    followActivityRef.current = true;
+  }, [task?.jobId]);
+
+  useEffect(() => {
+    if (!task || !followActivityRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      if (!activityRef.current || !followActivityRef.current) return;
+      activityRef.current.scrollTop = activityRef.current.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [task?.activities, task?.stage, task?.state]);
+
+  const handleActivityScroll = () => {
+    if (!activityRef.current) return;
+    const { scrollHeight, scrollTop, clientHeight } = activityRef.current;
+    followActivityRef.current = scrollHeight - scrollTop - clientHeight <= 48;
+  };
 
   async function deleteConversation() {
     const jobId = task?.jobId ?? provisioningTask?.jobId;
@@ -415,7 +441,11 @@ export function SkillWorkbench({
               )}
               <span className="skill-workbench__user-intent">{task.intent}</span>
             </div>
-            <div className="skill-workbench__activity">
+            <div
+              ref={activityRef}
+              className="skill-workbench__activity"
+              onScroll={handleActivityScroll}
+            >
               <ExecutionStages task={task} />
               <SkillConversationStream activities={task.activities} />
               {task.error ? (
@@ -423,7 +453,11 @@ export function SkillWorkbench({
               ) : null}
               {task.state === "failed" || task.state === "expired" ? (
                 <div className="skill-workbench__recovery">
-                  <p>返回技能中心后可以调整意图或重新选择来源，再开始一段新会话。</p>
+                  <p>
+                    {task.state === "expired"
+                      ? "临时文件已无法访问。返回技能中心后可重新开始。"
+                      : "返回技能中心后可以调整意图或重新选择来源，再开始一段新会话。"}
+                  </p>
                   <button type="button" onClick={onBack}>返回技能中心</button>
                 </div>
               ) : null}
@@ -485,6 +519,13 @@ export function SkillWorkbench({
                     <span>下载 ZIP</span>
                   </button>
                 </header>
+
+                {task.sessionTtlSeconds ? (
+                  <div className="skill-workbench__ttl-note" role="note">
+                    DevEnv 最长保留 {ttlLabel(task.sessionTtlSeconds)}，从创建时开始计算。
+                    请及时下载或发布。超过保留时间后将无法下载或发布，产物也无法恢复。
+                  </div>
+                ) : null}
 
                 <div className="skill-workbench__artifact">
                   {artifactLoading ? (

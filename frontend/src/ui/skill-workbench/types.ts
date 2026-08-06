@@ -68,6 +68,8 @@ export interface SkillWorkbenchTask {
   operation: SkillWorkbenchOperation;
   intent: string;
   revision: number;
+  sessionTtlSeconds?: number;
+  expiresAt?: string;
   source?: SkillWorkbenchSource | null;
   state: SkillWorkbenchState;
   stage: string;
