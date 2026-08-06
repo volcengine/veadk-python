@@ -654,6 +654,43 @@ def test_application_logs_use_latest_revision_and_bounded_limit(
     }
 
 
+def test_release_failure_includes_status_when_logs_are_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = object.__new__(VeFaaS)
+    monkeypatch.setattr(
+        service,
+        "_start_application_release",
+        lambda _app_id: {"Result": {"RevisionNumber": 9}},
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_application_status",
+        lambda _app_id: (
+            "deploy_fail",
+            {
+                "Result": {
+                    "Status": "deploy_fail",
+                    "NewRevisionNumber": 9,
+                    "Message": "runtime start failed",
+                    "ApiKey": "sensitive-token-value",
+                }
+            },
+        ),
+    )
+    monkeypatch.setattr(service, "_get_application_logs", lambda **_kwargs: [])
+
+    with pytest.raises(Exception) as exc:
+        service._release_application("application-id")
+
+    message = str(exc.value)
+    assert "No application revision logs were returned" in message
+    assert "Application status response" in message
+    assert "runtime start failed" in message
+    assert "sensitive-token-value" not in message
+    assert "******" in message
+
+
 def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

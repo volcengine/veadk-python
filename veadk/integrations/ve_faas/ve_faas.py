@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import re
 import time
 import shutil
 import tempfile
@@ -52,6 +53,35 @@ _APPLICATION_TEMPLATE_IDS = {
     "cn-beijing": "6874f3360bdbc40008ecf8c7",
     "cn-shanghai": "6a685988162bcd00083c9001",
 }
+
+
+def _redact_release_text(text: str) -> str:
+    return re.sub(
+        r'([{"\']?(key|secret|token|pass|auth|credential|access|api|ak|sk|doubao|volces|coze)[^"\'\s]*["\']?\s*[:=]\s*)(["\']?)([^"\'\s]+)(["\']?)|([A-Za-z0-9+/=]{20,})',
+        lambda m: (
+            f"{m.group(1)}{m.group(3)}******{m.group(5)}" if m.group(1) else "******"
+        ),
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
+def _release_revision_number(response: dict[str, Any]) -> int | None:
+    """Best-effort extraction across slightly different VeFaaS response shapes."""
+    stack: list[Any] = [response]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if key in {"RevisionNumber", "NewRevisionNumber"}:
+                    try:
+                        return int(cast(Any, nested))
+                    except (TypeError, ValueError):
+                        pass
+                stack.append(nested)
+        elif isinstance(value, list):
+            stack.extend(value)
+    return None
 
 
 class VeFaaS:
@@ -266,9 +296,9 @@ class VeFaaS:
         except Exception as _:
             raise ValueError(f"Create application failed: {response}")
 
-    def _start_application_release(self, app_id: str) -> None:
+    def _start_application_release(self, app_id: str) -> dict[str, Any]:
         """Submit an Application release without waiting for completion."""
-        ve_request(
+        return ve_request(
             request_body={"Id": app_id},
             action="ReleaseApplication",
             ak=self.ak,
@@ -281,7 +311,8 @@ class VeFaaS:
         )
 
     def _release_application(self, app_id: str):
-        self._start_application_release(app_id)
+        release_response = self._start_application_release(app_id)
+        release_revision_number = _release_revision_number(release_response)
 
         status, full_response = self._get_application_status(app_id)
         while status not in ["deploy_success", "deploy_fail"]:
@@ -297,19 +328,26 @@ class VeFaaS:
             logger.error(
                 f"Release application failed. Application ID: {app_id}, Status: {status}"
             )
-            import re
-
-            logs = "\n".join(self._get_application_logs(app_id=app_id))
-            log_text = re.sub(
-                r'([{"\']?(key|secret|token|pass|auth|credential|access|api|ak|sk|doubao|volces|coze)[^"\'\s]*["\']?\s*[:=]\s*)(["\']?)([^"\'\s]+)(["\']?)|([A-Za-z0-9+/=]{20,})',
-                lambda m: (
-                    f"{m.group(1)}{m.group(3)}******{m.group(5)}"
-                    if m.group(1)
-                    else "******"
-                ),
-                logs,
-                flags=re.IGNORECASE,
+            logs = "\n".join(
+                self._get_application_logs(
+                    app_id=app_id,
+                    revision_number=release_revision_number,
+                )
             )
+            log_text = _redact_release_text(logs)
+            if not log_text.strip():
+                log_text = "No application revision logs were returned."
+            status_text = _redact_release_text(
+                json.dumps(
+                    full_response.get("Result", full_response),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                )
+            )
+            if len(status_text) > 4000:
+                status_text = f"{status_text[:4000]}…"
+            log_text = f"{log_text}\n\nApplication status response:\n{status_text}"
             raise Exception(f"Release application failed. Logs:\n{log_text}")
 
     def _get_application_status(self, app_id: str):
