@@ -66,6 +66,12 @@ export interface SkillWorkbenchPublishResult {
   projectName: string;
 }
 
+export type SkillWorkbenchRecoveryStatus =
+  | "pending"
+  | "ready"
+  | "failed"
+  | "unknown";
+
 export interface SkillWorkbenchTask {
   jobId: string;
   operation: SkillWorkbenchOperation;
@@ -76,6 +82,7 @@ export interface SkillWorkbenchTask {
   sessionTtlSeconds?: number;
   expiresAt?: string;
   recoveryAvailable?: boolean;
+  recoveryStatus?: SkillWorkbenchRecoveryStatus;
   recoveredFromSnapshot?: boolean;
   source?: SkillWorkbenchSource | null;
   state: SkillWorkbenchState;
@@ -112,6 +119,7 @@ export interface SkillWorkbenchTaskSummary {
   name?: string;
   sourceName?: string;
   recoveryAvailable?: boolean;
+  recoveryStatus?: SkillWorkbenchRecoveryStatus;
 }
 
 export type SkillWorkbenchTaskListItem =

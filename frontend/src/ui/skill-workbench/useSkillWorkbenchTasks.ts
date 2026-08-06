@@ -21,6 +21,7 @@ import type {
 
 const LIST_POLL_INTERVAL_MS = 10_000;
 const DETAIL_POLL_INTERVAL_MS = 2_000;
+const RECOVERY_POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_INTERVAL_MS = 16_000;
 const SYNC_ERROR_REVEAL_THRESHOLD = 3;
 const ARTIFACT_RETRY_INTERVAL_MS = 900;
@@ -121,6 +122,7 @@ function taskSummary(task: SkillWorkbenchTask): SkillWorkbenchTaskSummary {
     ...(typeof task.recoveryAvailable === "boolean"
       ? { recoveryAvailable: task.recoveryAvailable }
       : {}),
+    ...(task.recoveryStatus ? { recoveryStatus: task.recoveryStatus } : {}),
   };
 }
 
@@ -160,6 +162,12 @@ function expiredTask(
     previous && "recoveryAvailable" in previous
       ? previous.recoveryAvailable
       : undefined;
+  const recoveryStatus =
+    previous && "recoveryStatus" in previous
+      ? previous.recoveryStatus === "pending"
+        ? "unknown"
+        : previous.recoveryStatus
+      : undefined;
   const toolId = previous && "toolId" in previous ? previous.toolId : undefined;
   const sessionId = previous && "sessionId" in previous ? previous.sessionId : undefined;
   return {
@@ -175,6 +183,7 @@ function expiredTask(
     ...(sessionId ? { sessionId } : {}),
     ...(name ? { name } : {}),
     ...(typeof recoveryAvailable === "boolean" ? { recoveryAvailable } : {}),
+    ...(recoveryStatus ? { recoveryStatus } : {}),
     error: RELEASED_DEVENV_MESSAGE,
   };
 }
@@ -451,7 +460,11 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     return () => controller.abort();
   }, [enabled, identityKey, refreshTasks]);
 
-  const hasActiveTask = tasks.some((task) => task.state === "running" || task.state === "provisioning");
+  const hasActiveTask = tasks.some((task) =>
+    task.state === "running" ||
+    task.state === "provisioning" ||
+    task.recoveryStatus === "pending"
+  );
   const hasPendingCleanup = referencesRef.current.some((reference) => reference.cancelRequested);
   useEffect(() => {
     if (!enabled || !identityKey || (!hasActiveTask && !hasPendingCleanup)) return;
@@ -485,8 +498,16 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   }, [activeJobId, activeSelectionRevision, refreshActiveTask]);
 
   const activeIsProvisioning = tasks.some((task) => task.jobId === activeJobId && task.state === "provisioning");
+  const activeRecoveryPending = activeTask?.recoveryStatus === "pending";
   useEffect(() => {
-    if (!activeJobId || (!activeIsProvisioning && (!activeTask || TERMINAL_STATES.has(activeTask.state)))) return;
+    if (
+      !activeJobId ||
+      (
+        !activeIsProvisioning &&
+        !activeRecoveryPending &&
+        (!activeTask || TERMINAL_STATES.has(activeTask.state))
+      )
+    ) return;
     let timer: number | undefined;
     let stopped = false;
     const poll = async () => {
@@ -494,16 +515,32 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       if (!stopped) {
         timer = window.setTimeout(
           poll,
-          pollDelay(DETAIL_POLL_INTERVAL_MS, detailFailureCountRef.current),
+          pollDelay(
+            activeRecoveryPending
+              ? RECOVERY_POLL_INTERVAL_MS
+              : DETAIL_POLL_INTERVAL_MS,
+            detailFailureCountRef.current,
+          ),
         );
       }
     };
-    timer = window.setTimeout(poll, DETAIL_POLL_INTERVAL_MS);
+    timer = window.setTimeout(
+      poll,
+      activeRecoveryPending
+        ? RECOVERY_POLL_INTERVAL_MS
+        : DETAIL_POLL_INTERVAL_MS,
+    );
     return () => {
       stopped = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [activeIsProvisioning, activeJobId, activeTask?.state, refreshActiveTask]);
+  }, [
+    activeIsProvisioning,
+    activeJobId,
+    activeRecoveryPending,
+    activeTask?.state,
+    refreshActiveTask,
+  ]);
 
   const refreshActiveArtifact = useCallback(async (signal?: AbortSignal) => {
     if (

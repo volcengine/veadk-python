@@ -111,6 +111,15 @@ function stageLabel(task: SkillWorkbenchTask): string {
   return "Codex 正在处理";
 }
 
+function recoveryStatusLabel(
+  status: SkillWorkbenchTask["recoveryStatus"],
+): string {
+  if (status === "pending") return "创建中";
+  if (status === "ready") return "已就绪";
+  if (status === "failed") return "创建失败";
+  return "状态待确认";
+}
+
 function regionLabel(region: SkillRegion): string {
   return region === "cn-shanghai" ? "上海" : "北京";
 }
@@ -263,7 +272,12 @@ export function SkillWorkbench({
   const effectivePublishResult = publishResult ?? persistedPublication;
   const recoveryUnavailable =
     task?.state === "expired" && task.recoveryAvailable === false;
-  const canRefine = task && task.state !== "running" && !recoveryUnavailable;
+  const recoveryPending = task?.recoveryStatus === "pending";
+  const canRefine =
+    task &&
+    task.state !== "running" &&
+    !recoveryUnavailable &&
+    !recoveryPending;
 
   useEffect(() => {
     if (!ready) return;
@@ -525,7 +539,7 @@ export function SkillWorkbench({
                     </TextShimmer>
                   )}
                 </div>
-                {task.toolId || task.sessionId ? (
+                {task.toolId || task.sessionId || task.recoveryStatus ? (
                   <dl className="skill-workbench__runtime-meta">
                     {task.toolId ? (
                       <div>
@@ -537,6 +551,12 @@ export function SkillWorkbench({
                       <div>
                         <dt>Session ID</dt>
                         <dd title={task.sessionId}>{task.sessionId}</dd>
+                      </div>
+                    ) : null}
+                    {task.recoveryStatus ? (
+                      <div>
+                        <dt>恢复点</dt>
+                        <dd>{recoveryStatusLabel(task.recoveryStatus)}</dd>
                       </div>
                     ) : null}
                   </dl>
@@ -601,10 +621,12 @@ export function SkillWorkbench({
                     rows={1}
                     maxLength={20_000}
                     value={refinement}
-                    disabled={Boolean(action) || recoveryUnavailable}
+                    disabled={Boolean(action) || recoveryUnavailable || recoveryPending}
                     aria-label="Skill 调整要求"
                     placeholder={task.state === "running"
                       ? "可以先输入下一步要求；停止当前任务后即可提交…"
+                      : recoveryPending
+                        ? "正在保存当前会话恢复点…"
                       : task.state === "expired"
                         ? recoveryUnavailable
                           ? "当前会话没有可用恢复点"
@@ -640,7 +662,7 @@ export function SkillWorkbench({
                     type="button"
                     className="comp-send"
                     disabled={
-                      !refinement.trim() || Boolean(action) || recoveryUnavailable
+                      !refinement.trim() || Boolean(action) || !canRefine
                     }
                     onClick={submitRefinement}
                     aria-label="提交调整"

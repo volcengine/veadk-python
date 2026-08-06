@@ -19,6 +19,7 @@ import re
 import stat
 import subprocess
 import threading
+import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
@@ -2043,18 +2044,30 @@ def test_get_task_returns_the_live_session_expiration(
     assert detail["sessionId"] == "session-1"
 
 
-def test_get_task_checkpoints_a_completed_revision_for_recovery(
+def test_get_task_waits_for_snapshot_get_before_marking_recovery_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     job_id = SkillWorkbenchService._new_job_id("alice")
     snapshots = []
-    uploads = []
-    remote_commands = []
+    snapshot_reads = []
+    persisted: dict[str, object] = {}
+    snapshot_statuses = iter(("Pending", "Ready"))
 
     class Tools:
         def create_session_snapshot(self, request):
             snapshots.append(request)
-            return SimpleNamespace(snapshot_id="snapshot-1", status="Ready")
+            return SimpleNamespace(snapshot_id="snapshot-1", status="Pending")
+
+        def get_session_snapshot(self, request):
+            snapshot_reads.append(request)
+            return SimpleNamespace(
+                snapshot=SimpleNamespace(
+                    snapshot_id="snapshot-1",
+                    session_id="session-1",
+                    tool_id="tool",
+                    status=next(snapshot_statuses),
+                )
+            )
 
     service = SkillWorkbenchService(
         tool_id="tool", tools_client_factory=lambda region: Tools()
@@ -2077,6 +2090,48 @@ def test_get_task_checkpoints_a_completed_revision_for_recovery(
         "createdAt": 1,
     }
 
+    def claim_snapshot(
+        endpoint: str,
+        requested_job_id: str,
+        revision: int,
+        request_token: str,
+    ) -> tuple[bool, dict[str, object]]:
+        del endpoint
+        assert requested_job_id == job_id
+        assert revision == 2
+        if persisted:
+            return False, dict(persisted)
+        persisted.update(
+            {
+                "recoverySnapshotRevision": revision,
+                "recoverySnapshotStatus": "requesting",
+                "recoverySnapshotRequestedAt": int(time.time()),
+                "recoverySnapshotRequestToken": request_token,
+            }
+        )
+        return True, dict(persisted)
+
+    def persist_snapshot(
+        endpoint: str,
+        requested_job_id: str,
+        revision: int,
+        request_token: str,
+        *,
+        snapshot_id: str,
+        status: str,
+    ) -> dict[str, object]:
+        del endpoint
+        assert requested_job_id == job_id
+        assert revision == 2
+        assert request_token == persisted["recoverySnapshotRequestToken"]
+        persisted.update(
+            {
+                "recoverySnapshotId": snapshot_id,
+                "recoverySnapshotStatus": status,
+            }
+        )
+        return dict(persisted)
+
     def remote_command(
         endpoint: str,
         command: str,
@@ -2084,13 +2139,13 @@ def test_get_task_checkpoints_a_completed_revision_for_recovery(
         job_id: str = "",
     ) -> dict[str, object]:
         del job_id
-        remote_commands.append((endpoint, command))
+        assert endpoint == "https://devenv.example"
         if "status.json" in command:
             return {
-                "request": dict(task),
+                "request": {**task, **persisted},
                 "status": {"status": "succeeded", "stage": "packaging"},
             }
-        return dict(task)
+        return {**task, **persisted}
 
     monkeypatch.setattr(
         service,
@@ -2099,19 +2154,402 @@ def test_get_task_checkpoints_a_completed_revision_for_recovery(
     )
     monkeypatch.setattr(
         service,
-        "_upload_file",
-        lambda endpoint, path, content, **kwargs: uploads.append(
-            (endpoint, path, json.loads(content))
-        ),
+        "_claim_recovery_snapshot",
+        claim_snapshot,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        service,
+        "_persist_recovery_snapshot_state",
+        persist_snapshot,
+        raising=False,
     )
 
-    detail = service.get_task(job_id, "alice")
+    pending = service.get_task(job_id, "alice")
+    ready = service.get_task(job_id, "alice")
 
-    assert detail["recoveryAvailable"] is True
+    assert "recoveryAvailable" not in pending
+    assert pending["recoveryStatus"] == "pending"
+    assert ready["recoveryAvailable"] is True
+    assert ready["recoveryStatus"] == "ready"
+    assert len(snapshots) == 1
+    assert len(snapshot_reads) == 2
     assert snapshots[0].session_id == "session-1"
-    assert uploads[0][2]["recoverySnapshotId"] == "snapshot-1"
-    assert uploads[0][2]["recoverySnapshotRevision"] == 2
-    assert len(remote_commands) == 1
+    assert snapshot_reads[0].snapshot_id == "snapshot-1"
+    assert persisted["recoverySnapshotId"] == "snapshot-1"
+    assert persisted["recoverySnapshotRevision"] == 2
+    assert persisted["recoverySnapshotStatus"] == "ready"
+
+
+@pytest.mark.parametrize(
+    ("create_result", "expected_status"),
+    [
+        (requests.ReadTimeout("ambiguous snapshot response"), "unknown"),
+        (SimpleNamespace(snapshot_id="", status="Pending"), "unknown"),
+    ],
+)
+def test_snapshot_unknown_outcome_is_not_created_again_for_the_same_revision(
+    monkeypatch: pytest.MonkeyPatch,
+    create_result: object,
+    expected_status: str,
+) -> None:
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    create_calls = 0
+    persisted: dict[str, object] = {}
+
+    class Tools:
+        def create_session_snapshot(self, request):
+            nonlocal create_calls
+            del request
+            create_calls += 1
+            if isinstance(create_result, BaseException):
+                raise create_result
+            return create_result
+
+    service = SkillWorkbenchService(
+        tool_id="tool", tools_client_factory=lambda region: Tools()
+    )
+    task = {
+        "jobId": job_id,
+        "operation": "create",
+        "intent": "Create it",
+        "revision": 2,
+        "createdAt": 1,
+    }
+
+    def claim_snapshot(
+        endpoint: str,
+        requested_job_id: str,
+        revision: int,
+        request_token: str,
+    ) -> tuple[bool, dict[str, object]]:
+        del endpoint, requested_job_id
+        if persisted:
+            return False, dict(persisted)
+        persisted.update(
+            {
+                "recoverySnapshotRevision": revision,
+                "recoverySnapshotStatus": "requesting",
+                "recoverySnapshotRequestedAt": int(time.time()),
+                "recoverySnapshotRequestToken": request_token,
+            }
+        )
+        return True, dict(persisted)
+
+    def persist_snapshot(
+        endpoint: str,
+        requested_job_id: str,
+        revision: int,
+        request_token: str,
+        *,
+        snapshot_id: str,
+        status: str,
+    ) -> dict[str, object]:
+        del endpoint, requested_job_id, revision
+        assert request_token == persisted["recoverySnapshotRequestToken"]
+        persisted.update(
+            {
+                "recoverySnapshotId": snapshot_id,
+                "recoverySnapshotStatus": status,
+            }
+        )
+        return dict(persisted)
+
+    monkeypatch.setattr(
+        service, "_claim_recovery_snapshot", claim_snapshot, raising=False
+    )
+    monkeypatch.setattr(
+        service,
+        "_persist_recovery_snapshot_state",
+        persist_snapshot,
+        raising=False,
+    )
+
+    for _ in range(2):
+        observed = dict(task)
+        observed.update(persisted)
+        available = service._ensure_recovery_snapshot(
+            "tool",
+            {
+                "instanceId": "session-1",
+                "endpoint": "https://devenv.example",
+            },
+            observed,
+            request_data=observed,
+        )
+        assert available is None
+        assert observed["recoverySnapshotStatus"] == expected_status
+
+    assert create_calls == 1
+
+
+def test_failed_snapshot_is_terminal_and_not_created_or_read_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    create_calls = 0
+    get_calls = 0
+    persisted: dict[str, object] = {}
+
+    class Tools:
+        def create_session_snapshot(self, request):
+            nonlocal create_calls
+            del request
+            create_calls += 1
+            return SimpleNamespace(snapshot_id="snapshot-1", status="Pending")
+
+        def get_session_snapshot(self, request):
+            nonlocal get_calls
+            del request
+            get_calls += 1
+            return SimpleNamespace(
+                snapshot=SimpleNamespace(
+                    snapshot_id="snapshot-1",
+                    session_id="session-1",
+                    tool_id="tool",
+                    status="Failed",
+                    reason="snapshot capacity unavailable",
+                )
+            )
+
+    service = SkillWorkbenchService(
+        tool_id="tool", tools_client_factory=lambda region: Tools()
+    )
+    task = {
+        "jobId": job_id,
+        "operation": "create",
+        "intent": "Create it",
+        "revision": 2,
+        "createdAt": 1,
+    }
+
+    def claim_snapshot(
+        endpoint: str,
+        requested_job_id: str,
+        revision: int,
+        request_token: str,
+    ) -> tuple[bool, dict[str, object]]:
+        del endpoint, requested_job_id
+        if persisted:
+            return False, dict(persisted)
+        persisted.update(
+            {
+                "recoverySnapshotRevision": revision,
+                "recoverySnapshotStatus": "requesting",
+                "recoverySnapshotRequestedAt": int(time.time()),
+                "recoverySnapshotRequestToken": request_token,
+            }
+        )
+        return True, dict(persisted)
+
+    def persist_snapshot(
+        endpoint: str,
+        requested_job_id: str,
+        revision: int,
+        request_token: str,
+        *,
+        snapshot_id: str,
+        status: str,
+    ) -> dict[str, object]:
+        del endpoint, requested_job_id, revision
+        assert request_token == persisted["recoverySnapshotRequestToken"]
+        persisted.update(
+            {
+                "recoverySnapshotId": snapshot_id,
+                "recoverySnapshotStatus": status,
+            }
+        )
+        return dict(persisted)
+
+    monkeypatch.setattr(service, "_claim_recovery_snapshot", claim_snapshot)
+    monkeypatch.setattr(
+        service,
+        "_persist_recovery_snapshot_state",
+        persist_snapshot,
+    )
+
+    for _ in range(2):
+        observed = {**task, **persisted}
+        available = service._ensure_recovery_snapshot(
+            "tool",
+            {
+                "instanceId": "session-1",
+                "endpoint": "https://devenv.example",
+            },
+            observed,
+            request_data=observed,
+        )
+        assert available is False
+        assert observed["recoverySnapshotStatus"] == "failed"
+
+    assert create_calls == 1
+    assert get_calls == 1
+
+
+def test_snapshot_claim_is_reentrant_for_its_owner_and_exclusive_across_instances(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    request_path = job_dir / "request.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "jobId": job_id,
+                "operation": "create",
+                "intent": "Create it",
+                "revision": 2,
+                "createdAt": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = SkillWorkbenchService(tool_id="tool")
+    monkeypatch.setattr(
+        service,
+        "_remote_dir",
+        lambda requested_job_id: str(job_dir),
+    )
+
+    def execute_remote(
+        endpoint: str,
+        command: str,
+        *,
+        job_id: str = "",
+    ) -> dict[str, object]:
+        del endpoint, job_id
+        completed = subprocess.run(
+            command,
+            shell=True,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return json.loads(completed.stdout)
+
+    monkeypatch.setattr(service, "_remote_command_json", execute_remote)
+    owner_token = "a" * 32
+    competing_token = "b" * 32
+
+    first_claim, _ = service._claim_recovery_snapshot(
+        "https://devenv.example",
+        job_id,
+        2,
+        owner_token,
+    )
+    replayed_claim, _ = service._claim_recovery_snapshot(
+        "https://devenv.example",
+        job_id,
+        2,
+        owner_token,
+    )
+    competing_claim, _ = service._claim_recovery_snapshot(
+        "https://devenv.example",
+        job_id,
+        2,
+        competing_token,
+    )
+    state = service._persist_recovery_snapshot_state(
+        "https://devenv.example",
+        job_id,
+        2,
+        owner_token,
+        snapshot_id="snapshot-1",
+        status="pending",
+    )
+
+    assert first_claim is True
+    assert replayed_claim is True
+    assert competing_claim is False
+    assert state["recoverySnapshotId"] == "snapshot-1"
+    assert state["recoverySnapshotStatus"] == "pending"
+    stored = json.loads(request_path.read_text(encoding="utf-8"))
+    assert stored["recoverySnapshotRequestToken"] == owner_token
+    stored.pop("recoverySnapshotRequestToken")
+    stored.pop("recoverySnapshotStatus")
+    request_path.write_text(json.dumps(stored), encoding="utf-8")
+
+    migrated = service._persist_recovery_snapshot_state(
+        "https://devenv.example",
+        job_id,
+        2,
+        "",
+        snapshot_id="snapshot-1",
+        status="ready",
+    )
+
+    assert migrated["recoverySnapshotStatus"] == "ready"
+
+
+def test_pending_snapshot_timeout_stops_observation_without_another_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = SkillWorkbenchService._new_job_id("alice")
+
+    class Tools:
+        def create_session_snapshot(self, request):
+            raise AssertionError("must not create a second snapshot")
+
+        def get_session_snapshot(self, request):
+            raise AssertionError("must stop polling an overdue snapshot")
+
+    service = SkillWorkbenchService(
+        tool_id="tool", tools_client_factory=lambda region: Tools()
+    )
+    task = {
+        "jobId": job_id,
+        "operation": "create",
+        "intent": "Create it",
+        "revision": 2,
+        "createdAt": 1,
+        "recoverySnapshotId": "snapshot-1",
+        "recoverySnapshotRevision": 2,
+        "recoverySnapshotStatus": "pending",
+        "recoverySnapshotRequestedAt": int(time.time()) - 601,
+        "recoverySnapshotRequestToken": "a" * 32,
+    }
+
+    def persist_snapshot(
+        endpoint: str,
+        requested_job_id: str,
+        revision: int,
+        request_token: str,
+        *,
+        snapshot_id: str,
+        status: str,
+    ) -> dict[str, object]:
+        del endpoint
+        assert requested_job_id == job_id
+        assert revision == 2
+        assert request_token == "a" * 32
+        assert snapshot_id == "snapshot-1"
+        assert status == "unknown"
+        return {
+            **task,
+            "recoverySnapshotStatus": "unknown",
+        }
+
+    monkeypatch.setattr(
+        service,
+        "_persist_recovery_snapshot_state",
+        persist_snapshot,
+    )
+
+    available = service._ensure_recovery_snapshot(
+        "tool",
+        {
+            "instanceId": "session-1",
+            "endpoint": "https://devenv.example",
+        },
+        task,
+        request_data=task,
+    )
+
+    assert available is None
+    assert task["recoverySnapshotStatus"] == "unknown"
 
 
 @pytest.mark.parametrize(
@@ -2168,6 +2606,46 @@ def test_refine_only_marks_transient_idempotent_launch_failures_retryable(
     assert caught.value.retryable is retryable
 
 
+def test_refine_waits_until_the_current_recovery_snapshot_is_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    service = SkillWorkbenchService(tool_id="tool")
+    monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool")
+    monkeypatch.setattr(
+        service,
+        "_get_task_with_session",
+        lambda requested_job_id, owner_id, **kwargs: (
+            {
+                "jobId": requested_job_id,
+                "operation": "create",
+                "intent": "Create it",
+                "revision": 2,
+                "state": "ready",
+                "recoveryStatus": "pending",
+            },
+            {
+                "instanceId": "session-1",
+                "endpoint": "https://devenv.example",
+            },
+        ),
+    )
+
+    with pytest.raises(SkillWorkbenchError) as caught:
+        service.refine(
+            job_id,
+            "alice",
+            RefineSkillTaskBody(
+                intent="Change it",
+                expectedRevision=2,
+            ),
+        )
+
+    assert caught.value.code == "SKILL_TASK_RECOVERY_PENDING"
+    assert caught.value.status_code == 409
+    assert caught.value.retryable is True
+
+
 def test_refine_resumes_an_expired_task_from_the_latest_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2175,6 +2653,9 @@ def test_refine_resumes_an_expired_task_from_the_latest_snapshot(
     resumed = []
 
     class Tools:
+        def list_sessions(self, request):
+            return SimpleNamespace(session_infos=[], next_token=None)
+
         def list_session_snapshots(self, request):
             return SimpleNamespace(
                 snapshots=[
@@ -2251,6 +2732,58 @@ def test_refine_resumes_an_expired_task_from_the_latest_snapshot(
     assert resumed[0].snapshot_id == "snapshot-1"
     assert resumed[0].create_new_instance is True
     assert resumed[0].ttl == 3600
+
+
+def test_recovery_reuses_an_already_creating_resumed_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    session_reads = []
+
+    class Tools:
+        def list_sessions(self, request):
+            return SimpleNamespace(
+                session_infos=[
+                    SimpleNamespace(
+                        session_id="session-resumed",
+                        user_session_id=job_id,
+                        endpoint="",
+                        status="Creating",
+                        created_at="2099-08-05T12:00:00Z",
+                        expire_at="2099-08-05T13:00:00Z",
+                    )
+                ],
+                next_token=None,
+            )
+
+        def get_session(self, request):
+            session_reads.append(request)
+            return SimpleNamespace(
+                session_id="session-resumed",
+                endpoint="https://resumed.example",
+                status="Ready",
+                expire_at="2099-08-05T13:00:00Z",
+            )
+
+        def list_session_snapshots(self, request):
+            raise AssertionError("must reconcile the creating Session first")
+
+        def resume_session_from_snapshot(self, request):
+            raise AssertionError("must not issue Resume twice")
+
+    service = SkillWorkbenchService(
+        tool_id="tool", tools_client_factory=lambda region: Tools()
+    )
+
+    session = service._resume_latest_snapshot("tool", job_id)
+
+    assert session == {
+        "instanceId": "session-resumed",
+        "endpoint": "https://resumed.example",
+        "expireAt": "2099-08-05T13:00:00Z",
+    }
+    assert len(session_reads) == 1
+    assert session_reads[0].session_id == "session-resumed"
 
 
 def test_refine_serializes_concurrent_expired_recovery(
@@ -2377,6 +2910,9 @@ def test_resume_timeout_after_create_is_not_marked_retryable(
     job_id = SkillWorkbenchService._new_job_id("alice")
 
     class Tools:
+        def list_sessions(self, request):
+            return SimpleNamespace(session_infos=[], next_token=None)
+
         def list_session_snapshots(self, request):
             return SimpleNamespace(
                 snapshots=[

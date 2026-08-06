@@ -191,7 +191,15 @@ test("keeps task polling above the workbench and supports safe reopening", () =>
   assert.match(api, /params\.set\("exclude_job_id",\s*excludeJobId\)/);
   assert.match(controller, /visibilitychange/);
   assert.match(controller, /pollDelay\(LIST_POLL_INTERVAL_MS,\s*listFailureCountRef\.current\)/);
-  assert.match(controller, /pollDelay\(DETAIL_POLL_INTERVAL_MS,\s*detailFailureCountRef\.current\)/);
+  assert.match(controller, /RECOVERY_POLL_INTERVAL_MS\s*=\s*5_000/);
+  assert.match(controller, /activeRecoveryPending\s*\?\s*RECOVERY_POLL_INTERVAL_MS\s*:\s*DETAIL_POLL_INTERVAL_MS/);
+  assert.match(controller, /task\.recoveryStatus === "pending"/);
+  assert.match(controller, /previous\.recoveryStatus === "pending"[\s\S]*?"unknown"/);
+  assert.match(api, /optionalRecoveryStatus\(task\.recoveryStatus\)/);
+  assert.match(types, /SkillWorkbenchRecoveryStatus/);
+  assert.match(workbench, /recoveryStatusLabel\(task\.recoveryStatus\)/);
+  assert.match(workbench, /const recoveryPending = task\?\.recoveryStatus === "pending"/);
+  assert.match(workbench, /正在保存当前会话恢复点/);
   assert.match(controller, /activeSelectionRevision/);
   assert.match(controller, /setActiveSelectionRevision\(\(revision\) => revision \+ 1\)/);
   assert.doesNotMatch(workbench, /setTimeout\(poll/);
@@ -410,7 +418,10 @@ test("warns ready users that DevEnv TTL limits download and publishing", () => {
 });
 
 test("keeps one composer across running, stopped, failed, ready, and expired states", () => {
-  assert.match(workbench, /const canRefine = task && task\.state !== "running"/);
+  assert.match(
+    workbench,
+    /const canRefine =[\s\S]*?task\.state !== "running"[\s\S]*?!recoveryPending/,
+  );
   assert.match(workbench, /placeholder=\{task\.state === "running"/);
   assert.match(workbench, /disabled=\{Boolean\(action\)\}/);
   assert.match(workbench, /stop\(\)/);

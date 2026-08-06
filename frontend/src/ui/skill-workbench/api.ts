@@ -13,6 +13,7 @@ import type {
   SkillWorkbenchOperation,
   SkillWorkbenchPublishProgress,
   SkillWorkbenchPublishResult,
+  SkillWorkbenchRecoveryStatus,
   SkillWorkbenchTask,
   SkillWorkbenchTaskSummary,
 } from "./types";
@@ -44,6 +45,19 @@ function optionalIdentifier(value: unknown, label: string): string | undefined {
     throw new Error(`${label}格式错误。`);
   }
   return value.trim();
+}
+
+function optionalRecoveryStatus(
+  value: unknown,
+): SkillWorkbenchRecoveryStatus | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (
+    value === "pending" ||
+    value === "ready" ||
+    value === "failed" ||
+    value === "unknown"
+  ) return value;
+  throw new Error("Skill 恢复点状态格式错误。");
 }
 
 async function request(
@@ -173,6 +187,7 @@ function normalizeTask(value: unknown): SkillWorkbenchTask {
   if (!allowedStates.includes(task.state)) throw new Error("Skill 会话状态无法识别。");
   const toolId = optionalIdentifier(task.toolId, "Tool ID");
   const sessionId = optionalIdentifier(task.sessionId, "Session ID");
+  const recoveryStatus = optionalRecoveryStatus(task.recoveryStatus);
   return {
     jobId: task.jobId,
     operation: task.operation,
@@ -187,6 +202,7 @@ function normalizeTask(value: unknown): SkillWorkbenchTask {
     ...(typeof task.recoveryAvailable === "boolean"
       ? { recoveryAvailable: task.recoveryAvailable }
       : {}),
+    ...(recoveryStatus ? { recoveryStatus } : {}),
     ...(typeof task.recoveredFromSnapshot === "boolean"
       ? { recoveredFromSnapshot: task.recoveredFromSnapshot }
       : {}),
@@ -304,6 +320,7 @@ function normalizeTaskSummary(value: unknown): SkillWorkbenchTaskSummary {
     !allowedStates.includes(task.state) ||
     typeof task.createdAt !== "number"
   ) throw new Error("Skill 会话摘要格式错误。");
+  const recoveryStatus = optionalRecoveryStatus(task.recoveryStatus);
   return {
     jobId: task.jobId,
     operation: task.operation,
@@ -317,6 +334,7 @@ function normalizeTaskSummary(value: unknown): SkillWorkbenchTaskSummary {
     ...(typeof task.recoveryAvailable === "boolean"
       ? { recoveryAvailable: task.recoveryAvailable }
       : {}),
+    ...(recoveryStatus ? { recoveryStatus } : {}),
   };
 }
 
