@@ -358,7 +358,7 @@
 }
 
 .sandbox-dialog {
-  width: min(440px, calc(100vw - 40px));
+  width: min(480px, calc(100vw - 40px));
   overflow: hidden;
   border: 1px solid hsl(var(--border));
   border-radius: 12px;
@@ -484,6 +484,121 @@
   opacity: 0.66;
 }
 
+.sandbox-dialog-retention {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 18px 0 0;
+  padding: 0;
+  border: 0;
+  text-align: left;
+}
+
+.sandbox-dialog-retention legend {
+  margin-bottom: 7px;
+  padding: 0;
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.sandbox-dialog-retention-options {
+  display: grid;
+  gap: 8px;
+}
+
+.sandbox-dialog-retention-option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 11px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+  background: hsl(var(--background));
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.sandbox-dialog-retention-option:hover:not([data-disabled]) {
+  border-color: hsl(var(--primary) / 0.46);
+}
+
+.sandbox-dialog-retention-option[data-selected] {
+  border-color: hsl(var(--primary) / 0.7);
+  background: hsl(var(--primary) / 0.05);
+  box-shadow: 0 0 0 1px hsl(var(--primary) / 0.08);
+}
+
+.sandbox-dialog-retention-option[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.sandbox-dialog-retention-option input {
+  width: 15px;
+  height: 15px;
+  margin: 2px 0 0;
+  accent-color: hsl(var(--primary));
+}
+
+.sandbox-dialog-retention-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sandbox-dialog-retention-copy strong {
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.sandbox-dialog-retention-copy small {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.sandbox-dialog-retention-copy .sandbox-dialog-retention-reason {
+  color: hsl(var(--destructive));
+}
+
+.sandbox-dialog-capabilities-loading {
+  min-height: 54px;
+  padding: 16px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+}
+
+.sandbox-dialog-capabilities-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 54px;
+  padding: 10px 12px;
+  border: 1px solid hsl(var(--destructive) / 0.28);
+  border-radius: 9px;
+  background: hsl(var(--destructive) / 0.04);
+  color: hsl(var(--destructive));
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.sandbox-dialog-capabilities-error button {
+  flex: none;
+  padding: 4px 8px;
+  border: 1px solid hsl(var(--destructive) / 0.32);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .sandbox-dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -508,6 +623,11 @@
 
 .sandbox-dialog-actions button:hover {
   background: hsl(var(--secondary));
+}
+
+.sandbox-dialog-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .sandbox-dialog-actions button:focus-visible {

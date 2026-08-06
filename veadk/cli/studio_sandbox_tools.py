@@ -52,6 +52,7 @@ def _wait_for_ready_tool(
     poll_interval: float,
     sleep: Callable[[float], None],
     enable_snapshot: bool = False,
+    before_mutation: Callable[[], None] | None = None,
 ) -> str:
     deadline = time.monotonic() + timeout_seconds
     snapshot_update_requested = False
@@ -62,7 +63,12 @@ def _wait_for_ready_tool(
             if not enable_snapshot or getattr(tool, "enable_snapshot", None) is True:
                 return tool_id
             if not snapshot_update_requested:
-                _enable_tool_snapshot(tools_client, tools_types, tool_id)
+                _enable_tool_snapshot(
+                    tools_client,
+                    tools_types,
+                    tool_id,
+                    before_mutation=before_mutation,
+                )
                 snapshot_update_requested = True
         if status in _FAILED_STATUSES:
             raise RuntimeError(
@@ -73,7 +79,13 @@ def _wait_for_ready_tool(
         sleep(poll_interval)
 
 
-def _enable_tool_snapshot(tools_client: Any, tools_types: Any, tool_id: str) -> None:
+def _enable_tool_snapshot(
+    tools_client: Any,
+    tools_types: Any,
+    tool_id: str,
+    *,
+    before_mutation: Callable[[], None] | None = None,
+) -> None:
     """Enable snapshots across SDK releases whose UpdateTool model lags the API."""
     from pydantic import Field
 
@@ -88,6 +100,8 @@ def _enable_tool_snapshot(tools_client: Any, tools_types: Any, tool_id: str) -> 
             enable_snapshot: bool = Field(alias="EnableSnapshot")
 
         request_type = _UpdateToolSnapshotRequest
+    if before_mutation is not None:
+        before_mutation()
     tools_client.update_tool(request_type(ToolId=tool_id, EnableSnapshot=True))
 
 
@@ -143,6 +157,7 @@ def ensure_studio_code_env_tool(
     poll_interval: float = 5.0,
     sleep: Callable[[float], None] = time.sleep,
     enable_snapshot: bool = True,
+    before_mutation: Callable[[], None] | None = None,
 ) -> str:
     """Reuse or create one Ready CodeEnv Tool and return its Tool ID."""
     from agentkit.sdk.tools import types as tools_types
@@ -190,6 +205,8 @@ def ensure_studio_code_env_tool(
         if not tool_id:
             raise RuntimeError(f"AgentKit Tool '{name}' did not return a Tool ID.")
     else:
+        if before_mutation is not None:
+            before_mutation()
         response = tools_client.create_tool(
             tools_types.CreateToolRequest(
                 Name=name,
@@ -197,7 +214,7 @@ def ensure_studio_code_env_tool(
                 ProjectName=_PROJECT_NAME,
                 CpuMilli=4000,
                 MemoryMb=8192,
-                EnableSnapshot=True if enable_snapshot else None,
+                EnableSnapshot=enable_snapshot,
                 AuthorizerConfiguration=tools_types.AuthorizerForCreateTool(
                     KeyAuth=tools_types.AuthorizerKeyAuthForCreateTool(
                         ApiKeyName=f"studio-{secrets.token_hex(8)}",
@@ -225,6 +242,7 @@ def ensure_studio_code_env_tool(
         poll_interval=poll_interval,
         sleep=sleep,
         enable_snapshot=enable_snapshot,
+        before_mutation=before_mutation,
     )
 
 
@@ -242,6 +260,7 @@ def ensure_studio_agent_tool(
     poll_interval: float = 5.0,
     sleep: Callable[[float], None] = time.sleep,
     enable_snapshot: bool = True,
+    before_mutation: Callable[[], None] | None = None,
 ) -> str:
     """Reuse or create one ready managed Hermes/OpenClaw Tool."""
     from agentkit.sdk.tools import types as tools_types
@@ -271,6 +290,8 @@ def ensure_studio_agent_tool(
         if not tool_id:
             raise RuntimeError(f"AgentKit Tool '{name}' did not return a Tool ID.")
     else:
+        if before_mutation is not None:
+            before_mutation()
         response = tools_client.create_tool(
             tools_types.CreateToolRequest(
                 Name=name,
@@ -279,7 +300,7 @@ def ensure_studio_agent_tool(
                 ModelAgentName=normalized_model_name,
                 CpuMilli=4000,
                 MemoryMb=8192,
-                EnableSnapshot=True if enable_snapshot else None,
+                EnableSnapshot=enable_snapshot,
                 AuthorizerConfiguration=tools_types.AuthorizerForCreateTool(
                     KeyAuth=tools_types.AuthorizerKeyAuthForCreateTool(
                         ApiKeyName=f"studio-{kind}-{secrets.token_hex(8)}",
@@ -307,6 +328,7 @@ def ensure_studio_agent_tool(
         poll_interval=poll_interval,
         sleep=sleep,
         enable_snapshot=enable_snapshot,
+        before_mutation=before_mutation,
     )
 
 
@@ -322,6 +344,7 @@ def ensure_studio_tool_snapshot(
     timeout_seconds: float = 600.0,
     poll_interval: float = 5.0,
     sleep: Callable[[float], None] = time.sleep,
+    before_mutation: Callable[[], None] | None = None,
 ) -> str:
     """Ensure an explicitly configured Studio Tool has snapshots enabled."""
     from agentkit.sdk.tools import types as tools_types
@@ -342,6 +365,7 @@ def ensure_studio_tool_snapshot(
         poll_interval=poll_interval,
         sleep=sleep,
         enable_snapshot=True,
+        before_mutation=before_mutation,
     )
 
 
@@ -355,6 +379,7 @@ def ensure_studio_agent_model_credential(
     session_token: str | None = None,
     region: str = "cn-beijing",
     model_base_url: str = "https://ark.cn-beijing.volces.com/api/v3",
+    before_update: Callable[[], None] | None = None,
 ) -> None:
     """Bind the complete model environment required by Hermes/OpenClaw."""
     if kind not in _AGENT_TOOL_TYPES:
@@ -400,6 +425,8 @@ def ensure_studio_agent_model_credential(
     if all(envs.get(key) == value for key, value in updates.items()):
         return
     envs.update(updates)
+    if before_update is not None:
+        before_update()
     api.call(
         "agentkit",
         "UpdateTool",

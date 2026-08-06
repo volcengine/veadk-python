@@ -28,7 +28,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field, replace
-from typing import Annotated, Any, Protocol
+from typing import Annotated, Any, Literal, Protocol
 
 from fastapi import File, Request, UploadFile
 
@@ -77,9 +77,14 @@ STUDIO_SANDBOX_MAX_ACTIVE = 20
 STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH = SESSION_DISPLAY_NAME_MAX_LENGTH
 STUDIO_SANDBOX_USER_SESSION_ID_MAX_LENGTH = 200
 _SANDBOX_CHAT_TOOL_ENV = "SANDBOX_CHAT_CODEX"
+_SANDBOX_CHAT_SNAPSHOT_TOOL_ENV = "SANDBOX_CHAT_CODEX_SNAPSHOT"
 _SANDBOX_AGENT_TOOL_ENVS = {
     "openclaw": ("SANDBOX_CHAT_OPENCLAW", "SANDBOX_OPENCLAW_TOOL"),
     "hermes": ("SANDBOX_CHAT_HERMES", "SANDBOX_HERMES_TOOL"),
+}
+_SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS = {
+    "openclaw": ("SANDBOX_CHAT_OPENCLAW_SNAPSHOT",),
+    "hermes": ("SANDBOX_CHAT_HERMES_SNAPSHOT",),
 }
 _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 _SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
@@ -91,6 +96,8 @@ _STUDIO_USER_SESSION_UUID_LENGTH = 32
 _ACTIVE_SESSION_STATUSES = frozenset(
     {"creating", "starting", "initializing", "pending", "ready", "running"}
 )
+SandboxRetentionMode = Literal["temporary", "recoverable"]
+_SANDBOX_RETENTION_MODES = frozenset({"temporary", "recoverable"})
 _SENSITIVE_PATTERN = re.compile(
     r"(?i)((?:api[_-]?key|access[_-]?key|secret|token|authorization|password)"
     r"\s*[:=]\s*)(?:[\"'][^\"']*[\"']|[^\s,;]+)"
@@ -1072,56 +1079,163 @@ class AgentkitSandboxGateway:
         return connection
 
 
+def _sandbox_tool_ids(
+    temporary_tool_id: str,
+    snapshot_tool_id: str,
+) -> tuple[str, str]:
+    """Resolve dual-Tool mode while preserving legacy one-Tool deployments."""
+    temporary_tool_id = temporary_tool_id.strip()
+    snapshot_tool_id = snapshot_tool_id.strip()
+    if snapshot_tool_id and snapshot_tool_id != temporary_tool_id:
+        return temporary_tool_id, snapshot_tool_id
+    return "", snapshot_tool_id or temporary_tool_id
+
+
+def _sandbox_capabilities(
+    temporary_tool_id: str,
+    recoverable_tool_id: str,
+) -> dict[str, object]:
+    enabled = bool(temporary_tool_id or recoverable_tool_id)
+    reason = "" if enabled else "管理员未配置"
+    return {
+        "enabled": enabled,
+        "reason": reason,
+        "defaultRetentionMode": ("recoverable" if recoverable_tool_id else "temporary"),
+        "retentionModes": {
+            "temporary": {
+                "enabled": bool(temporary_tool_id),
+                "reason": "" if temporary_tool_id else "管理员未配置临时会话 Tool",
+            },
+            "recoverable": {
+                "enabled": bool(recoverable_tool_id),
+                "reason": (
+                    "" if recoverable_tool_id else "管理员未配置可恢复会话 Tool"
+                ),
+            },
+        },
+    }
+
+
+def _sandbox_create_tool_id(
+    retention_mode: object,
+    *,
+    temporary_tool_id: str,
+    recoverable_tool_id: str,
+) -> str:
+    if not isinstance(retention_mode, str) or retention_mode not in (
+        _SANDBOX_RETENTION_MODES
+    ):
+        raise SandboxValidationError("会话类型必须是 temporary 或 recoverable。")
+    tool_id = (
+        temporary_tool_id if retention_mode == "temporary" else recoverable_tool_id
+    )
+    if not tool_id:
+        label = "临时会话" if retention_mode == "temporary" else "可恢复会话"
+        raise SandboxConfigurationError(f"管理员未配置{label} Tool。")
+    return tool_id
+
+
+def _unique_tool_ids(*tool_ids: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(tool_id for tool_id in tool_ids if tool_id))
+
+
+async def _list_tool_sessions(
+    gateway: SandboxCloudGateway,
+    tool_ids: tuple[str, ...],
+    username: str | None,
+) -> list[SandboxCloudSession]:
+    if not tool_ids:
+        raise SandboxConfigurationError("管理员未配置")
+    pages = await asyncio.gather(
+        *(gateway.list_sessions(tool_id, username) for tool_id in tool_ids)
+    )
+    sessions = {
+        (session.tool_id, session.instance_id): session
+        for page in pages
+        for session in page
+    }
+    return sorted(
+        sessions.values(),
+        key=lambda item: item.created_at,
+        reverse=True,
+    )
+
+
+async def _get_tool_session(
+    gateway: SandboxCloudGateway,
+    tool_ids: tuple[str, ...],
+    session_id: str,
+) -> SandboxCloudSession:
+    if not tool_ids:
+        raise SandboxConfigurationError("管理员未配置")
+    for tool_id in tool_ids:
+        try:
+            return await gateway.get_session(tool_id, session_id)
+        except SandboxSessionNotFoundError:
+            continue
+    raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
+
+
 class SandboxConversationService:
     """Manage reusable cloud Sessions and per-user conversation connections."""
 
     def __init__(
-        self, gateway: SandboxCloudGateway, tool_id: str | None = None
+        self,
+        gateway: SandboxCloudGateway,
+        tool_id: str | None = None,
+        snapshot_tool_id: str | None = None,
     ) -> None:
         self._gateway = gateway
         self._configured_tool_id = (tool_id or "").strip()
+        self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
         self._sessions: dict[tuple[str, str], SandboxConversation] = {}
         self._registry_lock = asyncio.Lock()
         self._sessions_starting = 0
 
     def capabilities(self) -> dict[str, object]:
-        """Report whether the dedicated Codex Tool is configured."""
-        enabled = bool(self._tool_id(required=False))
-        return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
+        """Report the configured Codex retention modes."""
+        return _sandbox_capabilities(*self._tool_ids())
 
-    def _tool_id(self, *, required: bool = True) -> str:
-        tool_id = (
+    def _tool_ids(self) -> tuple[str, str]:
+        temporary_tool_id = (
             self._configured_tool_id
             or (os.getenv(_SANDBOX_CHAT_TOOL_ENV) or "").strip()
         )
-        if required and not tool_id:
-            raise SandboxConfigurationError("管理员未配置")
-        return tool_id
+        snapshot_tool_id = (
+            self._configured_snapshot_tool_id
+            or (os.getenv(_SANDBOX_CHAT_SNAPSHOT_TOOL_ENV) or "").strip()
+        )
+        return _sandbox_tool_ids(temporary_tool_id, snapshot_tool_id)
+
+    def _all_tool_ids(self) -> tuple[str, ...]:
+        return _unique_tool_ids(*self._tool_ids())
 
     async def list_sessions(
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSession]:
         """List the configured account's Sessions without exposing Endpoints."""
-        return await self._gateway.list_sessions(
-            self._tool_id(),
+        return await _list_tool_sessions(
+            self._gateway,
+            self._all_tool_ids(),
             None if is_admin else owner_id,
         )
 
     async def list_snapshots(
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSnapshot]:
+        _temporary_tool_id, recoverable_tool_id = self._tool_ids()
+        if not recoverable_tool_id:
+            return []
         return await self._gateway.list_snapshots(
-            self._tool_id(),
-            None if is_admin else owner_id,
+            recoverable_tool_id, None if is_admin else owner_id
         )
 
     async def list_resources(
         self, owner_id: str, *, is_admin: bool = False
     ) -> tuple[list[SandboxCloudSession], list[SandboxCloudSnapshot]]:
-        tool_id = self._tool_id()
         sessions, snapshots = await asyncio.gather(
-            self._gateway.list_sessions(tool_id, None if is_admin else owner_id),
-            self._gateway.list_snapshots(tool_id, None if is_admin else owner_id),
+            self.list_sessions(owner_id, is_admin=is_admin),
+            self.list_snapshots(owner_id, is_admin=is_admin),
         )
         return sessions, _restorable_snapshots(sessions, snapshots)
 
@@ -1167,6 +1281,7 @@ class SandboxConversationService:
         owner_id: str,
         display_name: object = "",
         creator_name: str = "",
+        retention_mode: object = "recoverable",
     ) -> SandboxCloudSession:
         """Create a cloud Session without opening a conversation connection."""
         if not isinstance(display_name, str):
@@ -1176,7 +1291,12 @@ class SandboxConversationService:
             raise SandboxValidationError(
                 f"智能体名称不能超过 {STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH} 个字符。"
             )
-        tool_id = self._tool_id()
+        temporary_tool_id, recoverable_tool_id = self._tool_ids()
+        tool_id = _sandbox_create_tool_id(
+            retention_mode,
+            temporary_tool_id=temporary_tool_id,
+            recoverable_tool_id=recoverable_tool_id,
+        )
         await self.cleanup_expired()
         async with self._registry_lock:
             if len(self._sessions) + self._sessions_starting >= (
@@ -1215,7 +1335,11 @@ class SandboxConversationService:
                 raise SandboxCapacityError("智能体连接数已达上限，请稍后重试。")
             self._sessions_starting += 1
         try:
-            cloud = await self._gateway.get_session(self._tool_id(), session_id)
+            cloud = await _get_tool_session(
+                self._gateway,
+                self._all_tool_ids(),
+                session_id,
+            )
             _require_session_access(cloud, owner_id, is_admin=is_admin)
             if cloud.status.lower() != "ready" or not cloud.endpoint:
                 status = cloud.status or "Unknown"
@@ -1609,7 +1733,11 @@ class SandboxConversationService:
             raise SandboxSessionNotFoundError("智能体 Session 不存在或不属于当前用户。")
         session = self._sessions.pop(key, None)
         if session is None:
-            cloud = await self._gateway.get_session(self._tool_id(), session_id)
+            cloud = await _get_tool_session(
+                self._gateway,
+                self._all_tool_ids(),
+                session_id,
+            )
             _require_session_access(cloud, owner_id, is_admin=is_admin)
         else:
             cloud = session.cloud
@@ -1666,20 +1794,22 @@ class SandboxAgentSessionService:
         *,
         kind: str,
         tool_id: str | None = None,
+        snapshot_tool_id: str | None = None,
     ) -> None:
         if kind not in _SANDBOX_AGENT_TOOL_ENVS:
             raise ValueError(f"Unsupported Studio sandbox agent kind: {kind}")
         self._gateway = gateway
         self.kind = kind
         self._configured_tool_id = (tool_id or "").strip()
+        self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
         self._workspaces: dict[
             tuple[str, str], tuple[SandboxCloudSession, str, float]
         ] = {}
 
-    def _tool_id(self, *, required: bool = True) -> str:
-        tool_id = self._configured_tool_id
-        if not tool_id:
-            tool_id = next(
+    def _tool_ids(self) -> tuple[str, str]:
+        temporary_tool_id = self._configured_tool_id
+        if not temporary_tool_id:
+            temporary_tool_id = next(
                 (
                     value
                     for env_name in _SANDBOX_AGENT_TOOL_ENVS[self.kind]
@@ -1687,37 +1817,49 @@ class SandboxAgentSessionService:
                 ),
                 "",
             )
-        if required and not tool_id:
-            raise SandboxConfigurationError("管理员未配置")
-        return tool_id
+        snapshot_tool_id = self._configured_snapshot_tool_id
+        if not snapshot_tool_id:
+            snapshot_tool_id = next(
+                (
+                    value
+                    for env_name in _SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS[self.kind]
+                    if (value := (os.getenv(env_name) or "").strip())
+                ),
+                "",
+            )
+        return _sandbox_tool_ids(temporary_tool_id, snapshot_tool_id)
+
+    def _all_tool_ids(self) -> tuple[str, ...]:
+        return _unique_tool_ids(*self._tool_ids())
 
     def capabilities(self) -> dict[str, object]:
-        enabled = bool(self._tool_id(required=False))
-        return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
+        return _sandbox_capabilities(*self._tool_ids())
 
     async def list_sessions(
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSession]:
-        return await self._gateway.list_sessions(
-            self._tool_id(),
+        return await _list_tool_sessions(
+            self._gateway,
+            self._all_tool_ids(),
             None if is_admin else owner_id,
         )
 
     async def list_snapshots(
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSnapshot]:
+        _temporary_tool_id, recoverable_tool_id = self._tool_ids()
+        if not recoverable_tool_id:
+            return []
         return await self._gateway.list_snapshots(
-            self._tool_id(),
-            None if is_admin else owner_id,
+            recoverable_tool_id, None if is_admin else owner_id
         )
 
     async def list_resources(
         self, owner_id: str, *, is_admin: bool = False
     ) -> tuple[list[SandboxCloudSession], list[SandboxCloudSnapshot]]:
-        tool_id = self._tool_id()
         sessions, snapshots = await asyncio.gather(
-            self._gateway.list_sessions(tool_id, None if is_admin else owner_id),
-            self._gateway.list_snapshots(tool_id, None if is_admin else owner_id),
+            self.list_sessions(owner_id, is_admin=is_admin),
+            self.list_snapshots(owner_id, is_admin=is_admin),
         )
         return sessions, _restorable_snapshots(sessions, snapshots)
 
@@ -1763,6 +1905,7 @@ class SandboxAgentSessionService:
         owner_id: str,
         display_name: object = "",
         creator_name: str = "",
+        retention_mode: object = "recoverable",
     ) -> SandboxCloudSession:
         if not isinstance(display_name, str):
             raise SandboxValidationError("智能体名称必须是文本。")
@@ -1771,8 +1914,14 @@ class SandboxAgentSessionService:
             raise SandboxValidationError(
                 f"智能体名称不能超过 {STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH} 个字符。"
             )
+        temporary_tool_id, recoverable_tool_id = self._tool_ids()
+        tool_id = _sandbox_create_tool_id(
+            retention_mode,
+            temporary_tool_id=temporary_tool_id,
+            recoverable_tool_id=recoverable_tool_id,
+        )
         return await self._gateway.create_session(
-            self._tool_id(), display_name, owner_id, creator_name
+            tool_id, display_name, owner_id, creator_name
         )
 
     async def open(
@@ -1784,7 +1933,11 @@ class SandboxAgentSessionService:
     ) -> tuple[SandboxCloudSession, str]:
         """Resolve one ready Session and issue an opaque WebUI capability."""
         self._cleanup_expired()
-        cloud = await self._gateway.get_session(self._tool_id(), session_id)
+        cloud = await _get_tool_session(
+            self._gateway,
+            self._all_tool_ids(),
+            session_id,
+        )
         _require_session_access(cloud, owner_id, is_admin=is_admin)
         if cloud.status.lower() != "ready" or not cloud.endpoint:
             status = cloud.status or "Unknown"
@@ -1812,7 +1965,11 @@ class SandboxAgentSessionService:
             for candidate_owner, candidate_id in self._workspaces
         ):
             raise SandboxSessionNotFoundError("智能体 Session 不存在或不属于当前用户。")
-        cloud = await self._gateway.get_session(self._tool_id(), session_id)
+        cloud = await _get_tool_session(
+            self._gateway,
+            self._all_tool_ids(),
+            session_id,
+        )
         _require_session_access(cloud, owner_id, is_admin=is_admin)
         self._workspaces = {
             key: workspace
@@ -2010,6 +2167,7 @@ def mount_sandbox_agent_routes(
                 owner_id,
                 data.get("displayName", ""),
                 creator_resolver(request) if creator_resolver else owner_id,
+                data.get("retentionMode", "recoverable"),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -2254,6 +2412,7 @@ def mount_sandbox_routes(
                 owner_id,
                 data.get("displayName", ""),
                 creator_resolver(request) if creator_resolver else owner_id,
+                data.get("retentionMode", "recoverable"),
             )
         except SandboxError as error:
             raise _http_error(error) from error

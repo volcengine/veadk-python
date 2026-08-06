@@ -31,10 +31,11 @@ import sys
 import tempfile
 import unicodedata
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from time import monotonic
+from threading import Lock
+from time import monotonic, sleep
 from typing import Any, Literal
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -53,6 +54,38 @@ from veadk.consts import STUDIO_APMPLUS_ENV
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_STUDIO_TOOL_MUTATIONS_PER_SECOND = 3.0
+
+
+class _StudioOpenApiRateLimiter:
+    """Reserve evenly spaced OpenAPI mutation slots across worker threads."""
+
+    def __init__(
+        self,
+        requests_per_second: float,
+        *,
+        clock: Callable[[], float] = monotonic,
+        sleeper: Callable[[float], None] = sleep,
+    ) -> None:
+        if requests_per_second <= 0:
+            raise ValueError("requests_per_second must be positive")
+        self._interval_seconds = 1.0 / requests_per_second
+        self._clock = clock
+        self._sleep = sleeper
+        self._lock = Lock()
+        self._next_request_at = 0.0
+
+    def wait(self) -> None:
+        """Wait until this caller's reserved request slot is available."""
+        with self._lock:
+            now = self._clock()
+            request_at = max(now, self._next_request_at)
+            self._next_request_at = request_at + self._interval_seconds
+        delay = request_at - now
+        if delay > 0:
+            self._sleep(delay)
+
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _BUILD_ERROR_MARKERS = (
@@ -693,6 +726,13 @@ def _serve_options(f):
             "(env: SANDBOX_CHAT_CODEX).",
         ),
         click.option(
+            "--sandbox-chat-codex-snapshot-tool-id",
+            default=None,
+            envvar="SANDBOX_CHAT_CODEX_SNAPSHOT",
+            help="Snapshot-enabled AgentKit CodeEnv Tool ID used by recoverable "
+            "chats (env: SANDBOX_CHAT_CODEX_SNAPSHOT).",
+        ),
+        click.option(
             "--sandbox-chat-openclaw-tool-id",
             default=None,
             envvar="SANDBOX_CHAT_OPENCLAW",
@@ -700,11 +740,25 @@ def _serve_options(f):
             "(env: SANDBOX_CHAT_OPENCLAW).",
         ),
         click.option(
+            "--sandbox-chat-openclaw-snapshot-tool-id",
+            default=None,
+            envvar="SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+            help="Snapshot-enabled AgentKit ArkClawEnv Tool ID used by recoverable "
+            "OpenClaw agents (env: SANDBOX_CHAT_OPENCLAW_SNAPSHOT).",
+        ),
+        click.option(
             "--sandbox-chat-hermes-tool-id",
             default=None,
             envvar="SANDBOX_CHAT_HERMES",
             help="AgentKit HermesEnv Tool ID used by Hermes agents "
             "(env: SANDBOX_CHAT_HERMES).",
+        ),
+        click.option(
+            "--sandbox-chat-hermes-snapshot-tool-id",
+            default=None,
+            envvar="SANDBOX_CHAT_HERMES_SNAPSHOT",
+            help="Snapshot-enabled AgentKit HermesEnv Tool ID used by recoverable "
+            "Hermes agents (env: SANDBOX_CHAT_HERMES_SNAPSHOT).",
         ),
         click.option(
             "--sandbox-skill-creator-tool-id",
@@ -770,8 +824,11 @@ def frontend(
     auth_mode: str,
     generated_agent_test_run_ttl: int,
     sandbox_chat_codex_tool_id: str | None,
+    sandbox_chat_codex_snapshot_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
+    sandbox_chat_openclaw_snapshot_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
+    sandbox_chat_hermes_snapshot_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
@@ -800,8 +857,11 @@ def frontend(
         auth_mode=auth_mode,
         generated_agent_test_run_ttl=generated_agent_test_run_ttl,
         sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
+        sandbox_chat_codex_snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,
         sandbox_chat_openclaw_tool_id=sandbox_chat_openclaw_tool_id,
+        sandbox_chat_openclaw_snapshot_tool_id=(sandbox_chat_openclaw_snapshot_tool_id),
         sandbox_chat_hermes_tool_id=sandbox_chat_hermes_tool_id,
+        sandbox_chat_hermes_snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,
         sandbox_skill_creator_tool_id=sandbox_skill_creator_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
@@ -834,8 +894,11 @@ def studio(
     auth_mode: str,
     generated_agent_test_run_ttl: int,
     sandbox_chat_codex_tool_id: str | None,
+    sandbox_chat_codex_snapshot_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
+    sandbox_chat_openclaw_snapshot_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
+    sandbox_chat_hermes_snapshot_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
@@ -869,8 +932,11 @@ def studio(
         auth_mode=auth_mode,
         generated_agent_test_run_ttl=generated_agent_test_run_ttl,
         sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
+        sandbox_chat_codex_snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,
         sandbox_chat_openclaw_tool_id=sandbox_chat_openclaw_tool_id,
+        sandbox_chat_openclaw_snapshot_tool_id=(sandbox_chat_openclaw_snapshot_tool_id),
         sandbox_chat_hermes_tool_id=sandbox_chat_hermes_tool_id,
+        sandbox_chat_hermes_snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,
         sandbox_skill_creator_tool_id=sandbox_skill_creator_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
@@ -899,8 +965,11 @@ def _run_frontend_server(
     auth_mode: str,
     generated_agent_test_run_ttl: int,
     sandbox_chat_codex_tool_id: str | None = None,
+    sandbox_chat_codex_snapshot_tool_id: str | None = None,
     sandbox_chat_openclaw_tool_id: str | None = None,
+    sandbox_chat_openclaw_snapshot_tool_id: str | None = None,
     sandbox_chat_hermes_tool_id: str | None = None,
+    sandbox_chat_hermes_snapshot_tool_id: str | None = None,
     sandbox_skill_creator_tool_id: str | None = None,
     studio_admins: str | None = None,
     studio_developers: str | None = None,
@@ -938,10 +1007,20 @@ def _run_frontend_server(
 
     if sandbox_chat_codex_tool_id:
         os.environ["SANDBOX_CHAT_CODEX"] = sandbox_chat_codex_tool_id
+    if sandbox_chat_codex_snapshot_tool_id:
+        os.environ["SANDBOX_CHAT_CODEX_SNAPSHOT"] = sandbox_chat_codex_snapshot_tool_id
     if sandbox_chat_openclaw_tool_id:
         os.environ["SANDBOX_CHAT_OPENCLAW"] = sandbox_chat_openclaw_tool_id
+    if sandbox_chat_openclaw_snapshot_tool_id:
+        os.environ["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] = (
+            sandbox_chat_openclaw_snapshot_tool_id
+        )
     if sandbox_chat_hermes_tool_id:
         os.environ["SANDBOX_CHAT_HERMES"] = sandbox_chat_hermes_tool_id
+    if sandbox_chat_hermes_snapshot_tool_id:
+        os.environ["SANDBOX_CHAT_HERMES_SNAPSHOT"] = (
+            sandbox_chat_hermes_snapshot_tool_id
+        )
     if sandbox_skill_creator_tool_id:
         os.environ["SANDBOX_SKILL_CREATOR"] = sandbox_skill_creator_tool_id
 
@@ -1344,17 +1423,20 @@ def _run_frontend_server(
     sandbox_service = SandboxConversationService(
         sandbox_gateway,
         tool_id=sandbox_chat_codex_tool_id,
+        snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,
     )
     sandbox_agent_services = {
         "openclaw": SandboxAgentSessionService(
             sandbox_gateway,
             kind="openclaw",
             tool_id=sandbox_chat_openclaw_tool_id,
+            snapshot_tool_id=sandbox_chat_openclaw_snapshot_tool_id,
         ),
         "hermes": SandboxAgentSessionService(
             sandbox_gateway,
             kind="hermes",
             tool_id=sandbox_chat_hermes_tool_id,
+            snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,
         ),
     }
 
@@ -6674,6 +6756,14 @@ def _resolve_studio_cloud_credentials(
     "Default: create one during deployment.",
 )
 @click.option(
+    "--sandbox-chat-codex-snapshot-tool-id",
+    "sandbox_chat_codex_snapshot_tool_id",
+    default=None,
+    envvar="SANDBOX_CHAT_CODEX_SNAPSHOT",
+    help="Dedicated snapshot-enabled AgentKit CodeEnv Tool ID used by "
+    "recoverable chats. Default: create one during deployment.",
+)
+@click.option(
     "--sandbox-chat-openclaw-tool-id",
     "sandbox_chat_openclaw_tool_id",
     default=None,
@@ -6682,11 +6772,27 @@ def _resolve_studio_cloud_credentials(
     "Default: create one during deployment.",
 )
 @click.option(
+    "--sandbox-chat-openclaw-snapshot-tool-id",
+    "sandbox_chat_openclaw_snapshot_tool_id",
+    default=None,
+    envvar="SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+    help="Dedicated snapshot-enabled AgentKit ArkClawEnv Tool ID. "
+    "Default: create one during deployment.",
+)
+@click.option(
     "--sandbox-chat-hermes-tool-id",
     "sandbox_chat_hermes_tool_id",
     default=None,
     envvar="SANDBOX_CHAT_HERMES",
     help="Dedicated ready AgentKit HermesEnv Tool ID. "
+    "Default: create one during deployment.",
+)
+@click.option(
+    "--sandbox-chat-hermes-snapshot-tool-id",
+    "sandbox_chat_hermes_snapshot_tool_id",
+    default=None,
+    envvar="SANDBOX_CHAT_HERMES_SNAPSHOT",
+    help="Dedicated snapshot-enabled AgentKit HermesEnv Tool ID. "
     "Default: create one during deployment.",
 )
 @click.option(
@@ -6757,8 +6863,11 @@ def frontend_deploy(
     studio_admins: str | None,
     studio_developers: str | None,
     sandbox_chat_codex_tool_id: str | None,
+    sandbox_chat_codex_snapshot_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
+    sandbox_chat_openclaw_snapshot_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
+    sandbox_chat_hermes_snapshot_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
     studio_update_bucket: str,
     studio_update_prefix: str,
@@ -6837,23 +6946,44 @@ def frontend_deploy(
     # shipped as a plain env var.
     os.environ["IAM_ROLE"] = role_trn
 
+    # A single legacy Tool was snapshot-enabled. Preserve it as the recoverable
+    # Tool and provision a new temporary Tool when the new pair is incomplete.
+    if sandbox_chat_codex_tool_id and not sandbox_chat_codex_snapshot_tool_id:
+        sandbox_chat_codex_snapshot_tool_id = sandbox_chat_codex_tool_id
+        sandbox_chat_codex_tool_id = None
+    if sandbox_chat_openclaw_tool_id and not sandbox_chat_openclaw_snapshot_tool_id:
+        sandbox_chat_openclaw_snapshot_tool_id = sandbox_chat_openclaw_tool_id
+        sandbox_chat_openclaw_tool_id = None
+    if sandbox_chat_hermes_tool_id and not sandbox_chat_hermes_snapshot_tool_id:
+        sandbox_chat_hermes_snapshot_tool_id = sandbox_chat_hermes_tool_id
+        sandbox_chat_hermes_tool_id = None
+
     sandbox_tool_ids = {
         "codex": sandbox_chat_codex_tool_id,
+        "codex_snapshot": sandbox_chat_codex_snapshot_tool_id,
         "skill_creator": sandbox_skill_creator_tool_id,
         "openclaw": sandbox_chat_openclaw_tool_id,
+        "openclaw_snapshot": sandbox_chat_openclaw_snapshot_tool_id,
         "hermes": sandbox_chat_hermes_tool_id,
+        "hermes_snapshot": sandbox_chat_hermes_snapshot_tool_id,
     }
     sandbox_tool_labels = {
-        "codex": "Codex",
+        "codex": "Codex temporary",
+        "codex_snapshot": "Codex recoverable",
         "skill_creator": "Skill Creator",
-        "openclaw": "OpenClaw",
-        "hermes": "Hermes",
+        "openclaw": "OpenClaw temporary",
+        "openclaw_snapshot": "OpenClaw recoverable",
+        "hermes": "Hermes temporary",
+        "hermes_snapshot": "Hermes recoverable",
     }
     sandbox_tool_purposes = {
-        "codex": "chat",
+        "codex": "chat-temporary",
+        "codex_snapshot": "chat-snapshot",
         "skill_creator": "skill",
-        "openclaw": "openclaw",
-        "hermes": "hermes",
+        "openclaw": "openclaw-temporary",
+        "openclaw_snapshot": "openclaw-snapshot",
+        "hermes": "hermes-temporary",
+        "hermes_snapshot": "hermes-snapshot",
     }
     from veadk.cli.studio_sandbox_tools import (
         STUDIO_SANDBOX_AGENT_MODEL_NAME,
@@ -6863,6 +6993,8 @@ def frontend_deploy(
         ensure_studio_tool_snapshot,
         studio_sandbox_tool_name,
     )
+
+    tool_mutation_limiter = _StudioOpenApiRateLimiter(_STUDIO_TOOL_MUTATIONS_PER_SECOND)
 
     missing_sandbox_tools: dict[str, str] = {}
     for kind, tool_id in sandbox_tool_ids.items():
@@ -6881,7 +7013,9 @@ def frontend_deploy(
         with ThreadPoolExecutor(max_workers=len(missing_sandbox_tools)) as executor:
             tool_futures = {}
             for kind, tool_name in missing_sandbox_tools.items():
-                if kind in {"codex", "skill_creator"}:
+                base_kind = kind.removesuffix("_snapshot")
+                enable_snapshot = kind.endswith("_snapshot")
+                if base_kind in {"codex", "skill_creator"}:
                     future = executor.submit(
                         ensure_studio_code_env_tool,
                         name=tool_name,
@@ -6889,18 +7023,21 @@ def frontend_deploy(
                         access_key=ak,
                         secret_key=sk,
                         session_token=session_token or "",
-                        enable_snapshot=kind == "codex",
+                        enable_snapshot=enable_snapshot,
+                        before_mutation=tool_mutation_limiter.wait,
                     )
                 else:
                     future = executor.submit(
                         ensure_studio_agent_tool,
                         name=tool_name,
-                        kind=kind,
+                        kind=base_kind,
                         model_name=STUDIO_SANDBOX_AGENT_MODEL_NAME,
                         region=region,
                         access_key=ak,
                         secret_key=sk,
                         session_token=session_token or "",
+                        enable_snapshot=enable_snapshot,
+                        before_mutation=tool_mutation_limiter.wait,
                     )
                 tool_futures[kind] = future
 
@@ -6931,7 +7068,7 @@ def frontend_deploy(
             )
         resolved_sandbox_tool_ids[kind] = tool_id
 
-    snapshot_kinds = ("codex", "openclaw", "hermes")
+    snapshot_kinds = ("codex_snapshot", "openclaw_snapshot", "hermes_snapshot")
     with ThreadPoolExecutor(max_workers=len(snapshot_kinds)) as executor:
         snapshot_futures = {
             kind: executor.submit(
@@ -6942,6 +7079,7 @@ def frontend_deploy(
                 access_key=ak,
                 secret_key=sk,
                 session_token=session_token or "",
+                before_mutation=tool_mutation_limiter.wait,
             )
             for kind in snapshot_kinds
         }
@@ -6966,7 +7104,8 @@ def frontend_deploy(
     with ThreadPoolExecutor(max_workers=len(resolved_sandbox_tool_ids)) as executor:
         credential_futures = {}
         for kind, tool_id in resolved_sandbox_tool_ids.items():
-            if kind in {"codex", "skill_creator"}:
+            base_kind = kind.removesuffix("_snapshot")
+            if base_kind in {"codex", "skill_creator"}:
                 future = executor.submit(
                     ensure_skill_creator_model_credential,
                     tool_id=tool_id,
@@ -6974,17 +7113,19 @@ def frontend_deploy(
                     access_key=ak,
                     secret_key=sk,
                     session_token=session_token,
+                    before_update=tool_mutation_limiter.wait,
                 )
             else:
                 future = executor.submit(
                     ensure_studio_agent_model_credential,
                     tool_id=tool_id,
-                    kind=kind,
+                    kind=base_kind,
                     model_name=STUDIO_SANDBOX_AGENT_MODEL_NAME,
                     region=region,
                     access_key=ak,
                     secret_key=sk,
                     session_token=session_token,
+                    before_update=tool_mutation_limiter.wait,
                 )
             credential_futures[kind] = future
 
@@ -7004,9 +7145,12 @@ def frontend_deploy(
             click.echo(f"AgentKit {label} model credential is ready.")
 
     chat_codex_tool_id = resolved_sandbox_tool_ids["codex"]
+    chat_codex_snapshot_tool_id = resolved_sandbox_tool_ids["codex_snapshot"]
     skill_creator_tool_id = resolved_sandbox_tool_ids["skill_creator"]
     openclaw_tool_id = resolved_sandbox_tool_ids["openclaw"]
+    openclaw_snapshot_tool_id = resolved_sandbox_tool_ids["openclaw_snapshot"]
     hermes_tool_id = resolved_sandbox_tool_ids["hermes"]
+    hermes_snapshot_tool_id = resolved_sandbox_tool_ids["hermes_snapshot"]
 
     # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
     # (i.e. the deployer's whole .env) as function env vars. The frontend must
@@ -7032,9 +7176,12 @@ def frontend_deploy(
     if studio_developers:
         veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
+    veadk_environments["SANDBOX_CHAT_CODEX_SNAPSHOT"] = chat_codex_snapshot_tool_id
     veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
     veadk_environments["SANDBOX_CHAT_OPENCLAW"] = openclaw_tool_id
+    veadk_environments["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] = openclaw_snapshot_tool_id
     veadk_environments["SANDBOX_CHAT_HERMES"] = hermes_tool_id
+    veadk_environments["SANDBOX_CHAT_HERMES_SNAPSHOT"] = hermes_snapshot_tool_id
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
     veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
     veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] = studio_update_prefix
@@ -7228,16 +7375,34 @@ def frontend_deploy(
     help="Replace the temporary-chat AgentKit CodeEnv Tool ID.",
 )
 @click.option(
+    "--sandbox-chat-codex-snapshot-tool-id",
+    "sandbox_chat_codex_snapshot_tool_id",
+    default=None,
+    help="Replace the recoverable-chat AgentKit CodeEnv Tool ID.",
+)
+@click.option(
     "--sandbox-chat-openclaw-tool-id",
     "sandbox_chat_openclaw_tool_id",
     default=None,
     help="Replace the OpenClaw AgentKit Tool ID.",
 )
 @click.option(
+    "--sandbox-chat-openclaw-snapshot-tool-id",
+    "sandbox_chat_openclaw_snapshot_tool_id",
+    default=None,
+    help="Replace the recoverable OpenClaw AgentKit Tool ID.",
+)
+@click.option(
     "--sandbox-chat-hermes-tool-id",
     "sandbox_chat_hermes_tool_id",
     default=None,
     help="Replace the Hermes AgentKit Tool ID.",
+)
+@click.option(
+    "--sandbox-chat-hermes-snapshot-tool-id",
+    "sandbox_chat_hermes_snapshot_tool_id",
+    default=None,
+    help="Replace the recoverable Hermes AgentKit Tool ID.",
 )
 @click.option(
     "--sandbox-skill-creator-tool-id",
@@ -7256,8 +7421,11 @@ def frontend_update(
     site_logo: str | None,
     site_title: str | None,
     sandbox_chat_codex_tool_id: str | None,
+    sandbox_chat_codex_snapshot_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
+    sandbox_chat_openclaw_snapshot_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
+    sandbox_chat_hermes_snapshot_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
@@ -7357,12 +7525,24 @@ def frontend_update(
             environment_overrides["VEADK_SITE_TITLE"] = branding_title
         if sandbox_chat_codex_tool_id is not None:
             environment_overrides["SANDBOX_CHAT_CODEX"] = sandbox_chat_codex_tool_id
+        if sandbox_chat_codex_snapshot_tool_id is not None:
+            environment_overrides["SANDBOX_CHAT_CODEX_SNAPSHOT"] = (
+                sandbox_chat_codex_snapshot_tool_id
+            )
         if sandbox_chat_openclaw_tool_id is not None:
             environment_overrides["SANDBOX_CHAT_OPENCLAW"] = (
                 sandbox_chat_openclaw_tool_id
             )
+        if sandbox_chat_openclaw_snapshot_tool_id is not None:
+            environment_overrides["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] = (
+                sandbox_chat_openclaw_snapshot_tool_id
+            )
         if sandbox_chat_hermes_tool_id is not None:
             environment_overrides["SANDBOX_CHAT_HERMES"] = sandbox_chat_hermes_tool_id
+        if sandbox_chat_hermes_snapshot_tool_id is not None:
+            environment_overrides["SANDBOX_CHAT_HERMES_SNAPSHOT"] = (
+                sandbox_chat_hermes_snapshot_tool_id
+            )
         if sandbox_skill_creator_tool_id is not None:
             environment_overrides["SANDBOX_SKILL_CREATOR"] = (
                 sandbox_skill_creator_tool_id

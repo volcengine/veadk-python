@@ -49,8 +49,11 @@ def test_sandbox_tool_options_are_shared_by_local_serve_commands(
 ) -> None:
     captured: dict[str, Any] = {}
     monkeypatch.setenv("SANDBOX_CHAT_CODEX", "chat-from-env")
+    monkeypatch.setenv("SANDBOX_CHAT_CODEX_SNAPSHOT", "chat-shot-from-env")
     monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW", "openclaw-from-env")
+    monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW_SNAPSHOT", "openclaw-shot-from-env")
     monkeypatch.setenv("SANDBOX_CHAT_HERMES", "hermes-from-env")
+    monkeypatch.setenv("SANDBOX_CHAT_HERMES_SNAPSHOT", "hermes-shot-from-env")
     monkeypatch.setenv("SANDBOX_SKILL_CREATOR", "skill-from-env")
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._run_frontend_server",
@@ -62,10 +65,16 @@ def test_sandbox_tool_options_are_shared_by_local_serve_commands(
         [
             "--sandbox-chat-codex-tool-id",
             "chat-from-cli",
+            "--sandbox-chat-codex-snapshot-tool-id",
+            "chat-shot-from-cli",
             "--sandbox-chat-openclaw-tool-id",
             "openclaw-from-cli",
+            "--sandbox-chat-openclaw-snapshot-tool-id",
+            "openclaw-shot-from-cli",
             "--sandbox-chat-hermes-tool-id",
             "hermes-from-cli",
+            "--sandbox-chat-hermes-snapshot-tool-id",
+            "hermes-shot-from-cli",
             "--sandbox-skill-creator-tool-id",
             "skill-from-cli",
         ],
@@ -73,8 +82,13 @@ def test_sandbox_tool_options_are_shared_by_local_serve_commands(
 
     assert result.exit_code == 0, result.output
     assert captured["sandbox_chat_codex_tool_id"] == "chat-from-cli"
+    assert captured["sandbox_chat_codex_snapshot_tool_id"] == "chat-shot-from-cli"
     assert captured["sandbox_chat_openclaw_tool_id"] == "openclaw-from-cli"
+    assert (
+        captured["sandbox_chat_openclaw_snapshot_tool_id"] == "openclaw-shot-from-cli"
+    )
     assert captured["sandbox_chat_hermes_tool_id"] == "hermes-from-cli"
+    assert captured["sandbox_chat_hermes_snapshot_tool_id"] == "hermes-shot-from-cli"
     assert captured["sandbox_skill_creator_tool_id"] == "skill-from-cli"
 
 
@@ -83,8 +97,11 @@ def test_local_sandbox_tool_options_fall_back_to_environment(
 ) -> None:
     captured: dict[str, Any] = {}
     monkeypatch.setenv("SANDBOX_CHAT_CODEX", "chat-from-env")
+    monkeypatch.setenv("SANDBOX_CHAT_CODEX_SNAPSHOT", "chat-shot-from-env")
     monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW", "openclaw-from-env")
+    monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW_SNAPSHOT", "openclaw-shot-from-env")
     monkeypatch.setenv("SANDBOX_CHAT_HERMES", "hermes-from-env")
+    monkeypatch.setenv("SANDBOX_CHAT_HERMES_SNAPSHOT", "hermes-shot-from-env")
     monkeypatch.setenv("SANDBOX_SKILL_CREATOR", "skill-from-env")
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._run_frontend_server",
@@ -95,8 +112,13 @@ def test_local_sandbox_tool_options_fall_back_to_environment(
 
     assert result.exit_code == 0, result.output
     assert captured["sandbox_chat_codex_tool_id"] == "chat-from-env"
+    assert captured["sandbox_chat_codex_snapshot_tool_id"] == "chat-shot-from-env"
     assert captured["sandbox_chat_openclaw_tool_id"] == "openclaw-from-env"
+    assert (
+        captured["sandbox_chat_openclaw_snapshot_tool_id"] == "openclaw-shot-from-env"
+    )
     assert captured["sandbox_chat_hermes_tool_id"] == "hermes-from-env"
+    assert captured["sandbox_chat_hermes_snapshot_tool_id"] == "hermes-shot-from-env"
     assert captured["sandbox_skill_creator_tool_id"] == "skill-from-env"
 
 

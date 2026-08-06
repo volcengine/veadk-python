@@ -178,8 +178,23 @@ export interface SandboxRequestOptions {
   onUsage?: (update: SandboxTokenUsageUpdate) => void;
 }
 
+export type SandboxRetentionMode = "temporary" | "recoverable";
+
+export interface SandboxRetentionCapability {
+  enabled: boolean;
+  reason?: string;
+}
+
+export interface SandboxLaunchCapabilities {
+  enabled: boolean;
+  reason?: string;
+  defaultRetentionMode: SandboxRetentionMode;
+  retentionModes: Record<SandboxRetentionMode, SandboxRetentionCapability>;
+}
+
 export interface SandboxStartOptions extends SandboxRequestOptions {
   displayName?: string;
+  retentionMode?: SandboxRetentionMode;
 }
 
 export interface SandboxSession {
@@ -237,6 +252,10 @@ export interface SandboxReply {
 }
 
 export interface AgentKitSandboxClient {
+  getLaunchCapabilities(
+    kind: "codex" | SandboxAgentKind,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxLaunchCapabilities>;
   listSessions(options?: SandboxRequestOptions): Promise<SandboxAgentResource[]>;
   startSession(options?: SandboxStartOptions): Promise<SandboxSession>;
   listAgentSessions(
@@ -420,6 +439,13 @@ interface SandboxErrorPayload {
   detail?: unknown;
   error?: unknown;
   message?: unknown;
+}
+
+interface SandboxCapabilitiesResponse {
+  enabled?: unknown;
+  reason?: unknown;
+  defaultRetentionMode?: unknown;
+  retentionModes?: unknown;
 }
 
 interface SandboxStreamPayload {
@@ -900,7 +926,65 @@ async function sandboxJson(
   return response.json();
 }
 
+function parseLaunchCapabilities(
+  data: SandboxCapabilitiesResponse,
+): SandboxLaunchCapabilities {
+  const modes = data.retentionModes;
+  if (
+    typeof data.enabled !== "boolean" ||
+    !modes ||
+    typeof modes !== "object"
+  ) {
+    throw new Error("AgentKit 沙箱返回了无效的会话类型配置。");
+  }
+  const modeRecord = modes as Record<string, unknown>;
+  const parseMode = (mode: SandboxRetentionMode): SandboxRetentionCapability => {
+    const value = modeRecord[mode];
+    if (!value || typeof value !== "object") {
+      throw new Error("AgentKit 沙箱返回了无效的会话类型配置。");
+    }
+    const capability = value as Record<string, unknown>;
+    if (typeof capability.enabled !== "boolean") {
+      throw new Error("AgentKit 沙箱返回了无效的会话类型配置。");
+    }
+    return {
+      enabled: capability.enabled,
+      ...(typeof capability.reason === "string"
+        ? { reason: capability.reason }
+        : {}),
+    };
+  };
+  const defaultRetentionMode = data.defaultRetentionMode;
+  if (defaultRetentionMode !== "temporary" && defaultRetentionMode !== "recoverable") {
+    throw new Error("AgentKit 沙箱返回了无效的默认会话类型。");
+  }
+  return {
+    enabled: data.enabled,
+    ...(typeof data.reason === "string" ? { reason: data.reason } : {}),
+    defaultRetentionMode,
+    retentionModes: {
+      temporary: parseMode("temporary"),
+      recoverable: parseMode("recoverable"),
+    },
+  };
+}
+
 export const sandboxClient: AgentKitSandboxClient = {
+  async getLaunchCapabilities(kind, options = {}) {
+    const root = kind === "codex" ? "sandbox" : kind;
+    const response = await fetch(withAuth(`/web/${root}/capabilities`), {
+      method: "GET",
+      headers: sandboxHeaders(),
+      signal: requestSignal(options.signal, LIST_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      throw await responseError(response, "无法读取智能体会话类型，请稍后重试。");
+    }
+    return parseLaunchCapabilities(
+      (await response.json()) as SandboxCapabilitiesResponse,
+    );
+  },
+
   async listSessions(options = {}) {
     const response = await fetch(withAuth(SANDBOX_API), {
       method: "GET",
@@ -927,7 +1011,10 @@ export const sandboxClient: AgentKitSandboxClient = {
     const response = await fetch(withAuth(SANDBOX_API), {
       method: "POST",
       headers: sandboxHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ displayName: options.displayName?.trim() ?? "" }),
+      body: JSON.stringify({
+        displayName: options.displayName?.trim() ?? "",
+        retentionMode: options.retentionMode ?? "recoverable",
+      }),
       signal: requestSignal(options.signal, START_TIMEOUT_MS),
     });
     if (!response.ok) {
@@ -962,7 +1049,10 @@ export const sandboxClient: AgentKitSandboxClient = {
     const response = await fetch(withAuth(`/web/${kind}/sessions`), {
       method: "POST",
       headers: sandboxHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ displayName: options.displayName?.trim() ?? "" }),
+      body: JSON.stringify({
+        displayName: options.displayName?.trim() ?? "",
+        retentionMode: options.retentionMode ?? "recoverable",
+      }),
       signal: requestSignal(options.signal, START_TIMEOUT_MS),
     });
     if (!response.ok) {

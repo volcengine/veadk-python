@@ -399,18 +399,28 @@ assistant messages returned by the generator. Private chain-of-thought and
 credentials never enter the UI. Completed candidates still support preview,
 ZIP download, and AgentKit publish.
 
-Configure separate ready AgentKit Tools for Codex, OpenClaw, Hermes, and Skill
-creation before starting the server. The Tool IDs are intentionally server-only
-and cannot be supplied by the browser. Snapshot support must be enabled on the
-three Agent Tools; Skill Creator does not use snapshots:
+Configure a temporary and a snapshot-enabled AgentKit Tool for each of Codex,
+OpenClaw, and Hermes, plus a separate Skill Creator Tool, before starting the
+server. The Tool IDs are intentionally server-only and cannot be supplied by
+the browser. Studio defaults new agents to a recoverable session; users can
+instead select a temporary session that is destroyed at expiry without keeping
+a workspace snapshot. Skill Creator does not use snapshots:
 
 ```bash
-export SANDBOX_CHAT_CODEX=<chat-code-env-tool-id>
-export SANDBOX_CHAT_OPENCLAW=<openclaw-env-tool-id>
-export SANDBOX_CHAT_HERMES=<hermes-env-tool-id>
+export SANDBOX_CHAT_CODEX=<temporary-code-env-tool-id>
+export SANDBOX_CHAT_CODEX_SNAPSHOT=<recoverable-code-env-tool-id>
+export SANDBOX_CHAT_OPENCLAW=<temporary-openclaw-env-tool-id>
+export SANDBOX_CHAT_OPENCLAW_SNAPSHOT=<recoverable-openclaw-env-tool-id>
+export SANDBOX_CHAT_HERMES=<temporary-hermes-env-tool-id>
+export SANDBOX_CHAT_HERMES_SNAPSHOT=<recoverable-hermes-env-tool-id>
 export SANDBOX_SKILL_CREATOR=<skill-code-env-tool-id>
 veadk frontend --agents-dir examples
 ```
+
+For backward compatibility, when only a legacy `SANDBOX_CHAT_*` Tool is
+configured, Studio treats it as the recoverable Tool and disables the temporary
+choice. A new cloud deployment automatically provisions the missing temporary
+Tool.
 
 Studio creates new Agent Sandbox sessions with a
 `studio-<safe-user-name>-<uuid>` UserSessionId. When listing snapshots, the
@@ -429,14 +439,13 @@ memory, so polling and downloads continue to work when FaaS requests reach a
 different instance.
 
 For local Studio, run the AgentKit `credential-hosting` command and bind its
-result to both CodeEnv Tools. A cloud deployment creates both Tools in parallel
-when their IDs are omitted and enables snapshots on the Codex, OpenClaw, and
-Hermes Tools. Alternatively, select existing Tools with
-`--sandbox-chat-codex-tool-id`, `--sandbox-chat-openclaw-tool-id`,
-`--sandbox-chat-hermes-tool-id`, and `--sandbox-skill-creator-tool-id`. The
-deploy command obtains the Ark key with the deployer's Volcengine credentials,
-stores it through AgentKit credential hosting, and binds only the returned
-ticket and relay URL to the Tools:
+result to the Tools. A cloud deployment creates all missing Tools in parallel,
+with snapshots enabled only on the three recoverable Tools. Alternatively,
+select existing Tools with the `--sandbox-chat-*-tool-id` and
+`--sandbox-chat-*-snapshot-tool-id` option pairs, plus
+`--sandbox-skill-creator-tool-id`. The deploy command obtains the Ark key with
+the deployer's Volcengine credentials, stores it through AgentKit credential
+hosting, and binds only the returned ticket and relay URL to the Tools:
 
 ```bash
 veadk studio deploy \

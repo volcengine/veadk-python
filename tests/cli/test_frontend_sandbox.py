@@ -401,9 +401,17 @@ def test_studio_user_session_id_owner_encoding_avoids_escape_collisions() -> Non
     assert _build_studio_user_session_id("user_name").startswith("studio-user_name-")
 
 
-def _app(gateway: _FakeGateway, tool_id: str | None = "tool-studio") -> FastAPI:
+def _app(
+    gateway: _FakeGateway,
+    tool_id: str | None = "tool-studio",
+    snapshot_tool_id: str | None = None,
+) -> FastAPI:
     app = FastAPI()
-    service = SandboxConversationService(gateway, tool_id=tool_id)
+    service = SandboxConversationService(
+        gateway,
+        tool_id=tool_id,
+        snapshot_tool_id=snapshot_tool_id,
+    )
 
     def _owner(request: Request) -> str:
         owner = request.headers.get("X-Test-User", "")
@@ -427,7 +435,7 @@ def _app(gateway: _FakeGateway, tool_id: str | None = "tool-studio") -> FastAPI:
     return app
 
 
-def _agent_app(gateway: _FakeGateway) -> FastAPI:
+def _agent_app(gateway: _FakeGateway, *, dual_tools: bool = False) -> FastAPI:
     app = FastAPI()
 
     def _owner(request: Request) -> str:
@@ -449,11 +457,13 @@ def _agent_app(gateway: _FakeGateway) -> FastAPI:
                 gateway,
                 kind="openclaw",
                 tool_id="tool-openclaw",
+                snapshot_tool_id=("tool-openclaw-snapshot" if dual_tools else None),
             ),
             "hermes": SandboxAgentSessionService(
                 gateway,
                 kind="hermes",
                 tool_id="tool-hermes",
+                snapshot_tool_id="tool-hermes-snapshot" if dual_tools else None,
             ),
         },
         _owner,
@@ -545,6 +555,80 @@ def test_managed_agent_routes_create_session_and_return_card_data(
     assert deleted.json() == {"deleted": True}
     assert listed_after_delete.json() == {"sessions": []}
     assert [session.instance_id for session in gateway.deleted] == [session_id]
+
+
+@pytest.mark.parametrize(
+    ("kind", "temporary_tool_id", "snapshot_tool_id"),
+    [
+        ("sandbox", "tool-studio", "tool-studio-snapshot"),
+        ("openclaw", "tool-openclaw", "tool-openclaw-snapshot"),
+        ("hermes", "tool-hermes", "tool-hermes-snapshot"),
+    ],
+)
+def test_sandbox_create_routes_select_tool_by_retention_mode(
+    kind: str,
+    temporary_tool_id: str,
+    snapshot_tool_id: str,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.snapshots["snapshot-temporary-tool"] = SandboxCloudSnapshot(
+        tool_id=temporary_tool_id,
+        snapshot_id="snapshot-temporary-tool",
+        session_id="expired-temporary",
+        user_session_id="studio-alice-temporary",
+        created_by="alice",
+    )
+    gateway.snapshots["snapshot-recoverable-tool"] = SandboxCloudSnapshot(
+        tool_id=snapshot_tool_id,
+        snapshot_id="snapshot-recoverable-tool",
+        session_id="expired-recoverable",
+        user_session_id="studio-alice-recoverable",
+        created_by="alice",
+    )
+    app = (
+        _app(gateway, temporary_tool_id, snapshot_tool_id)
+        if kind == "sandbox"
+        else _agent_app(gateway, dual_tools=True)
+    )
+    root = "/web/sandbox" if kind == "sandbox" else f"/web/{kind}"
+    headers = {"X-Test-User": "alice"}
+
+    with TestClient(app) as client:
+        capabilities = client.get(f"{root}/capabilities", headers=headers)
+        temporary = client.post(
+            f"{root}/sessions",
+            headers=headers,
+            json={"displayName": "临时", "retentionMode": "temporary"},
+        )
+        recoverable = client.post(
+            f"{root}/sessions",
+            headers=headers,
+            json={"displayName": "可恢复", "retentionMode": "recoverable"},
+        )
+        invalid = client.post(
+            f"{root}/sessions",
+            headers=headers,
+            json={"displayName": "无效", "retentionMode": "forever"},
+        )
+        created_tool_ids = gateway.tool_ids[-2:]
+        listed = client.get(f"{root}/sessions", headers=headers)
+
+    assert capabilities.status_code == 200
+    assert capabilities.json()["retentionModes"] == {
+        "temporary": {"enabled": True, "reason": ""},
+        "recoverable": {"enabled": True, "reason": ""},
+    }
+    assert temporary.status_code == 200
+    assert recoverable.status_code == 200
+    assert invalid.status_code == 422
+    assert created_tool_ids == [temporary_tool_id, snapshot_tool_id]
+    assert {item["displayName"] for item in listed.json()["sessions"]} >= {
+        "临时",
+        "可恢复",
+    }
+    assert [item["snapshotId"] for item in listed.json()["snapshots"]] == [
+        "snapshot-recoverable-tool"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -820,8 +904,8 @@ def test_sandbox_list_scope_follows_user_role() -> None:
         )
 
     assert [item["sessionId"] for item in alice_list.json()["sessions"]] == [
-        "remote-existing",
         alice["sessionId"],
+        "remote-existing",
     ]
     assert [item["sessionId"] for item in developer_list.json()["sessions"]] == [
         bob["sessionId"]
@@ -1077,7 +1161,18 @@ def test_sandbox_capabilities_report_configured_tool(
         )
 
     assert response.status_code == 200
-    assert response.json() == {"enabled": True, "reason": ""}
+    assert response.json() == {
+        "enabled": True,
+        "reason": "",
+        "defaultRetentionMode": "recoverable",
+        "retentionModes": {
+            "temporary": {
+                "enabled": False,
+                "reason": "管理员未配置临时会话 Tool",
+            },
+            "recoverable": {"enabled": True, "reason": ""},
+        },
+    }
 
 
 def test_sandbox_capabilities_report_admin_not_configured(
@@ -1090,7 +1185,21 @@ def test_sandbox_capabilities_report_admin_not_configured(
         )
 
     assert response.status_code == 200
-    assert response.json() == {"enabled": False, "reason": "管理员未配置"}
+    assert response.json() == {
+        "enabled": False,
+        "reason": "管理员未配置",
+        "defaultRetentionMode": "temporary",
+        "retentionModes": {
+            "temporary": {
+                "enabled": False,
+                "reason": "管理员未配置临时会话 Tool",
+            },
+            "recoverable": {
+                "enabled": False,
+                "reason": "管理员未配置可恢复会话 Tool",
+            },
+        },
+    }
 
 
 @pytest.mark.asyncio
