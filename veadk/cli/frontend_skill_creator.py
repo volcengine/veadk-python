@@ -699,10 +699,33 @@ def _runner_source() -> str:
 
             set_stage_activity("正在打包 Skill", "packaging")
             archive_path = job_dir / "skill.zip"
-            with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
-                for item in files:
-                    source = root / item["path"]
-                    archive.write(source, f"{name}/{item['path']}")
+            artifacts_dir = job_dir / "artifacts"
+            artifacts_dir.mkdir(exist_ok=True)
+            revision_archive = artifacts_dir / f"revision-{revision}.zip"
+            temporary_archive = job_dir / f".skill-{revision}-{os.getpid()}.tmp"
+            legacy_temporary = job_dir / f".skill-legacy-{os.getpid()}.tmp"
+            try:
+                with zipfile.ZipFile(
+                    temporary_archive, "w", zipfile.ZIP_DEFLATED
+                ) as archive:
+                    for item in files:
+                        source = root / item["path"]
+                        archive.write(source, f"{name}/{item['path']}")
+                archive_content = temporary_archive.read_bytes()
+                archive_sha256 = hashlib.sha256(archive_content).hexdigest()
+                try:
+                    os.link(temporary_archive, revision_archive)
+                except FileExistsError:
+                    existing_sha256 = hashlib.sha256(
+                        revision_archive.read_bytes()
+                    ).hexdigest()
+                    if existing_sha256 != archive_sha256:
+                        raise ValueError("同一 Skill 版本的产物内容发生冲突")
+                legacy_temporary.write_bytes(revision_archive.read_bytes())
+                legacy_temporary.replace(archive_path)
+            finally:
+                temporary_archive.unlink(missing_ok=True)
+                legacy_temporary.unlink(missing_ok=True)
             if current_status_id:
                 for item in activities:
                     if item["id"] == current_status_id:
@@ -716,6 +739,12 @@ def _runner_source() -> str:
                 skillMd=skill_md,
                 files=files,
                 validation={"valid": True, "errors": []},
+                artifact={
+                    "revision": revision,
+                    "path": f"artifacts/revision-{revision}.zip",
+                    "sha256": archive_sha256,
+                    "size": revision_archive.stat().st_size,
+                },
             )
         except Exception as error:
             safe_error = redact(error)[:1000]

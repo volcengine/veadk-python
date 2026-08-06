@@ -52,7 +52,8 @@ server that `veadk frontend` launches — no separate backend.
   `doubao-seed-evolving` default Codex model to the chat CodeEnv and Skill
   Workbench DevEnv. Publishing streams each AgentKit stage, requires a concrete
   Skill Space destination, and links the completed version back to that
-  destination in the center.
+  destination in the center. Preview, ZIP download, and publishing are bound to
+  the same immutable revision and content digest.
 - **Automation directory**: browse development and message-channel integrations
   from the Studio sidebar. The local Coding Agents integration detects Trae,
   Claude Code, and Codex across macOS, Linux, and Windows, then globally installs

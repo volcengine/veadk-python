@@ -250,7 +250,13 @@ export function SkillWorkbench({
   const refinementInputRef = useAutoGrowingTextarea(refinement);
 
   const ready = task?.state === "ready" || task?.state === "published";
-  const artifactReady = Boolean(ready && artifact);
+  const artifactReady = Boolean(
+    ready &&
+    task &&
+    artifact &&
+    artifact.jobId === task.jobId &&
+    artifact.revision === task.revision,
+  );
   const persistedPublication = task && task.publication?.revision === task.revision
     ? task.publication
     : null;
@@ -369,6 +375,14 @@ export function SkillWorkbench({
 
   async function publish(disposition: "create-new" | "update-source") {
     if (!task || action) return;
+    if (
+      !artifact ||
+      artifact.jobId !== task.jobId ||
+      artifact.revision !== task.revision
+    ) {
+      setError("当前版本的 Skill 产物仍在准备，请等待预览完成后再发布。");
+      return;
+    }
     const selectedSpace = publishSpaces.find(
       (space) => space.id === selectedPublishSpaceId,
     );
@@ -389,6 +403,7 @@ export function SkillWorkbench({
       const result = await publishSkillWorkbenchTask({
         jobId: task.jobId,
         expectedRevision: task.revision,
+        expectedArtifactSha256: artifact.sha256,
         disposition,
         skillSpaceIds,
         region: disposition === "update-source"
@@ -527,7 +542,7 @@ export function SkillWorkbench({
                   </dl>
                 ) : null}
                 <SkillConversationStream activities={task.activities} />
-                {ready && !artifact && !artifactError ? (
+                {ready && !artifactReady && !artifactError ? (
                   <div className="skill-workbench__artifact-loading" role="status">
                     <TextShimmer duration={2.2} spread={16}>
                       生成已完成，正在下载产物
@@ -545,7 +560,7 @@ export function SkillWorkbench({
                     ) : null}
                   </div>
                 ) : null}
-                {ready && !artifact && artifactError ? (
+                {ready && !artifactReady && artifactError ? (
                   <div className="skill-workbench__artifact-error" role="alert">
                     <div>
                       <strong>无法获取 Skill 产物</strong>
@@ -668,7 +683,11 @@ export function SkillWorkbench({
                       <button
                         type="button"
                         className="skill-workbench__download"
-                        onClick={() => void downloadSkillWorkbenchTask(task.jobId).catch((cause) =>
+                        onClick={() => void downloadSkillWorkbenchTask(
+                          task.jobId,
+                          task.revision,
+                          artifact!.sha256,
+                        ).catch((cause) =>
                           setError(cause instanceof Error ? cause.message : String(cause))
                         )}
                         title="下载 ZIP"

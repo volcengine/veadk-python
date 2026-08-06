@@ -511,12 +511,26 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       !activeTask ||
       (activeTask.state !== "ready" && activeTask.state !== "published")
     ) return;
+    const requestedJobId = activeJobId;
+    const requestedRevision = activeTask.revision;
     const request = ++artifactRequestRef.current;
     setActiveArtifactLoading(true);
     setActiveArtifactError("");
     try {
-      const artifact = await getSkillWorkbenchArtifact(activeJobId, signal);
-      if (request === artifactRequestRef.current) setActiveArtifact(artifact);
+      const artifact = await getSkillWorkbenchArtifact(
+        requestedJobId,
+        requestedRevision,
+        signal,
+      );
+      const currentTask = activeTaskRef.current;
+      if (
+        request === artifactRequestRef.current &&
+        activeJobIdRef.current === requestedJobId &&
+        currentTask?.jobId === requestedJobId &&
+        currentTask.revision === requestedRevision &&
+        artifact.jobId === requestedJobId &&
+        artifact.revision === requestedRevision
+      ) setActiveArtifact(artifact);
     } catch (cause) {
       if (signal?.aborted || request !== artifactRequestRef.current) return;
       setActiveArtifactError(cause instanceof Error ? cause.message : String(cause));
@@ -538,6 +552,11 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       setActiveArtifactError("");
       return;
     }
+    setActiveArtifact((current) => (
+      current?.jobId === activeJobId && current.revision === activeTask.revision
+        ? current
+        : null
+    ));
     const controller = new AbortController();
     let timer: number | undefined;
     let attempts = 0;
@@ -580,6 +599,10 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
 
   const selectTask = useCallback((jobId: string) => {
     selectedTaskRef.current = tasks.find((task) => task.jobId === jobId) ?? null;
+    artifactRequestRef.current += 1;
+    setActiveArtifact(null);
+    setActiveArtifactLoading(false);
+    setActiveArtifactError("");
     setActiveJobId(jobId);
     setActiveSelectionRevision((revision) => revision + 1);
     setActiveTask((current) => current?.jobId === jobId ? current : null);
@@ -590,6 +613,14 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
 
   const upsertTask = useCallback((task: SkillWorkbenchTask) => {
     persistReferences(referencesRef.current.filter((item) => item.jobId !== task.jobId));
+    if (
+      !activeArtifact ||
+      activeArtifact.jobId !== task.jobId ||
+      activeArtifact.revision !== task.revision
+    ) {
+      artifactRequestRef.current += 1;
+      setActiveArtifact(null);
+    }
     setActiveJobId(task.jobId);
     selectedTaskRef.current = taskSummary(task);
     setActiveTask(task);
@@ -601,7 +632,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       const summary = { ...taskSummary(task), ...(existing ? { createdAt: existing.createdAt } : {}) };
       return [summary, ...current.filter((item) => item.jobId !== task.jobId)];
     });
-  }, [persistReferences]);
+  }, [activeArtifact, persistReferences]);
 
   const startTask = useCallback(async (args: StartSkillWorkbenchTaskArgs) => {
     setStartingTask(true);
@@ -644,6 +675,10 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       createdAt: reference.reservedAt,
     };
     setTasks((current) => [placeholder, ...current.filter((item) => item.jobId !== reference.jobId)]);
+    artifactRequestRef.current += 1;
+    setActiveArtifact(null);
+    setActiveArtifactLoading(false);
+    setActiveArtifactError("");
     setActiveJobId(reference.jobId);
     setActiveTask(null);
     setStartingTask(false);
@@ -698,9 +733,15 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     setTasks((current) => current.filter((item) => item.jobId !== jobId));
     setActiveJobId((current) => current === jobId ? "" : current);
     setActiveTask((current) => current?.jobId === jobId ? null : current);
+    if (activeArtifact?.jobId === jobId) {
+      artifactRequestRef.current += 1;
+      setActiveArtifact(null);
+      setActiveArtifactLoading(false);
+      setActiveArtifactError("");
+    }
     if (activeTaskRef.current?.jobId === jobId) activeTaskRef.current = null;
     if (selectedTaskRef.current?.jobId === jobId) selectedTaskRef.current = null;
-  }, [persistReferences]);
+  }, [activeArtifact?.jobId, persistReferences]);
 
   const deleteTask = useCallback(async (jobId: string) => {
     if (referencesRef.current.some((item) => item.jobId === jobId)) {

@@ -102,6 +102,7 @@ _MAX_STORED_TTL_SECONDS = 24 * 60 * 60
 _REMOTE_READ_ATTEMPTS = 2
 _REMOTE_WRITE_ATTEMPTS = 2
 _SDK_READ_ATTEMPTS = 2
+_ARTIFACT_READ_ATTEMPTS = 3
 _RETRYABLE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 _RETRYABLE_ERROR_CODES = {
     "internalerror",
@@ -113,6 +114,7 @@ _RETRYABLE_ERROR_CODES = {
 }
 _JOB_ID_RE = re.compile(r"^sw-[0-9a-f]{12}-[0-9a-f]{24}$")
 _SKILL_NAME_RE = re.compile(r"^[a-z0-9-]+$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _TERMINAL_STATES = {"ready", "failed", "cancelled", "expired", "published"}
 _RELEASED_SESSION_STATUSES = {
     "createfailed",
@@ -333,6 +335,12 @@ class PublishSkillTaskBody(BaseModel):
         le=_MAX_TASK_REVISION,
         strict=True,
     )
+    expected_artifact_sha256: str | None = Field(
+        default=None,
+        alias="expectedArtifactSha256",
+        min_length=64,
+        max_length=64,
+    )
 
     model_config = {"populate_by_name": True, "extra": "forbid"}
 
@@ -348,6 +356,11 @@ class PublishSkillTaskBody(BaseModel):
         self.skill_space_ids = normalized
         if self.project_name is not None:
             self.project_name = self.project_name.strip() or None
+        if self.expected_artifact_sha256 is not None:
+            digest = self.expected_artifact_sha256.strip().lower()
+            if not _SHA256_RE.fullmatch(digest):
+                raise ValueError("Skill 产物摘要格式无效")
+            self.expected_artifact_sha256 = digest
         return self
 
 
@@ -1334,6 +1347,13 @@ class SkillWorkbenchService:
                 "state": self._normalize_task_state(status["status"]),
             }
             revision = _json_int(result.get("revision"), 1)
+            artifact = _json_object(result.get("artifact"))
+            if artifact and _json_int(artifact.get("revision"), 0) != revision:
+                raise SkillWorkbenchError(
+                    "SKILL_TASK_STATE_INVALID",
+                    "Skill 会话状态异常，请稍后重试。",
+                    status_code=502,
+                )
             publication = _json_object(result.get("publication"))
             if (
                 result["state"] == "ready"
@@ -1533,6 +1553,46 @@ class SkillWorkbenchService:
                 "valid": validation["valid"],
                 "errors": errors[:100],
                 "warnings": warnings[:100],
+            }
+        artifact = value.get("artifact")
+        if artifact is not None:
+            if not isinstance(artifact, dict) or set(artifact) != {
+                "revision",
+                "path",
+                "sha256",
+                "size",
+            }:
+                raise SkillWorkbenchError(
+                    "SKILL_TASK_STATE_INVALID",
+                    "Skill 会话状态异常，请稍后重试。",
+                    status_code=502,
+                )
+            artifact_revision = artifact.get("revision")
+            artifact_path = artifact.get("path")
+            artifact_sha256 = artifact.get("sha256")
+            artifact_size = artifact.get("size")
+            if (
+                state != "ready"
+                or isinstance(artifact_revision, bool)
+                or not isinstance(artifact_revision, int)
+                or not 1 <= artifact_revision <= _MAX_TASK_REVISION
+                or artifact_path != f"artifacts/revision-{artifact_revision}.zip"
+                or not isinstance(artifact_sha256, str)
+                or not _SHA256_RE.fullmatch(artifact_sha256)
+                or isinstance(artifact_size, bool)
+                or not isinstance(artifact_size, int)
+                or not 1 <= artifact_size <= _MAX_ARCHIVE_BYTES
+            ):
+                raise SkillWorkbenchError(
+                    "SKILL_TASK_STATE_INVALID",
+                    "Skill 会话状态异常，请稍后重试。",
+                    status_code=502,
+                )
+            status["artifact"] = {
+                "revision": artifact_revision,
+                "path": artifact_path,
+                "sha256": artifact_sha256,
+                "size": artifact_size,
             }
         elapsed = value.get("elapsedMs")
         if elapsed is not None:
@@ -1865,67 +1925,400 @@ class SkillWorkbenchService:
         )
         return stopped
 
-    def _download_archive(self, job_id: str, owner_id: str) -> SkillArchive:
-        self._validate_job_owner(job_id, owner_id)
-        session = self._find_session(self._validated_tool_id(), job_id)
-        return self._download_archive_from_session(job_id, session)
-
-    def _download_archive_from_session(
-        self,
-        job_id: str,
-        session: dict[str, str],
-    ) -> SkillArchive:
-        def read_archive() -> Any:
-            response = requests.get(
-                build_file_url(session["endpoint"], SANDBOX_FILE_DOWNLOAD_ROUTE),
-                params={
-                    "path": f"{self._remote_dir(job_id)}/skill.zip",
-                    "change_policy": "abort",
-                },
-                timeout=(10, 120),
+    @staticmethod
+    def _revision_artifact_relative_path(revision: int) -> str:
+        if not 1 <= revision <= _MAX_TASK_REVISION:
+            raise SkillWorkbenchError(
+                "SKILL_TASK_REVISION_CONFLICT",
+                "Skill 版本无效，请刷新后重试",
+                status_code=409,
             )
+        return f"artifacts/revision-{revision}.zip"
+
+    def _read_remote_artifact(
+        self,
+        endpoint: str,
+        path: str,
+        *,
+        job_id: str,
+        revision: int,
+    ) -> Any:
+        """Read one immutable artifact with bounded transport/conflict retries."""
+        for attempt in range(1, _ARTIFACT_READ_ATTEMPTS + 1):
+            try:
+                response = requests.get(
+                    build_file_url(endpoint, SANDBOX_FILE_DOWNLOAD_ROUTE),
+                    params={"path": path, "change_policy": "abort"},
+                    timeout=(10, 120),
+                )
+            except Exception as error:
+                if attempt < _ARTIFACT_READ_ATTEMPTS and _is_transient_dependency_error(
+                    error
+                ):
+                    delay = 0.2 * (2 ** (attempt - 1))
+                    logger.warning(
+                        "Skill artifact transport retry job_id=%s revision=%s "
+                        "attempt=%s max_attempts=%s error_type=%s",
+                        job_id,
+                        revision,
+                        attempt,
+                        _ARTIFACT_READ_ATTEMPTS,
+                        type(error).__name__,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise SkillWorkbenchError(
+                    "SKILL_ARTIFACT_DOWNLOAD_FAILED",
+                    "下载 Skill ZIP 失败，请稍后重试。",
+                    status_code=502,
+                    retryable=_is_transient_dependency_error(error),
+                ) from error
+            if response.status_code == 409:
+                if attempt < _ARTIFACT_READ_ATTEMPTS:
+                    delay = 0.2 * (2 ** (attempt - 1))
+                    logger.warning(
+                        "Skill artifact file conflict retry job_id=%s revision=%s "
+                        "attempt=%s max_attempts=%s",
+                        job_id,
+                        revision,
+                        attempt,
+                        _ARTIFACT_READ_ATTEMPTS,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise SkillWorkbenchError(
+                    "SKILL_ARTIFACT_DOWNLOAD_CONFLICT",
+                    "Skill 产物传输期间发生文件冲突，请稍后重新读取。",
+                    status_code=502,
+                    retryable=True,
+                )
             if response.status_code in _RETRYABLE_HTTP_STATUSES:
-                raise requests.HTTPError(
+                error = requests.HTTPError(
                     "transient artifact response",
                     response=response,
                 )
+                if attempt < _ARTIFACT_READ_ATTEMPTS:
+                    delay = 0.2 * (2 ** (attempt - 1))
+                    logger.warning(
+                        "Skill artifact server retry job_id=%s revision=%s "
+                        "attempt=%s max_attempts=%s status_code=%s",
+                        job_id,
+                        revision,
+                        attempt,
+                        _ARTIFACT_READ_ATTEMPTS,
+                        response.status_code,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise SkillWorkbenchError(
+                    "SKILL_ARTIFACT_DOWNLOAD_FAILED",
+                    "下载 Skill ZIP 失败，请稍后重试。",
+                    status_code=502,
+                    retryable=True,
+                ) from error
             return response
+        raise RuntimeError("artifact read retry loop exited unexpectedly")
 
-        try:
-            response = self._idempotent_dependency_call(
-                "download_artifact",
-                read_archive,
-                attempts=_REMOTE_READ_ATTEMPTS,
-                job_id=job_id,
+    def _materialize_legacy_revision_artifact(
+        self,
+        endpoint: str,
+        job_id: str,
+        revision: int,
+    ) -> str:
+        """Atomically pin a completed legacy skill.zip while holding bootstrap.lock."""
+        relative_path = self._revision_artifact_relative_path(revision)
+        source = textwrap.dedent(
+            f"""
+            import fcntl
+            import hashlib
+            import json
+            import os
+            from pathlib import Path
+
+            job = Path({self._remote_dir(job_id)!r})
+            revision = {revision!r}
+            destination = job / {relative_path!r}
+            result = {{"outcome": "invalid"}}
+
+            def archive_metadata(path):
+                size = path.stat().st_size
+                if not 1 <= size <= {_MAX_ARCHIVE_BYTES!r}:
+                    return None
+                content = path.read_bytes()
+                return {{
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "size": size,
+                }}
+
+            def declared_matches(declared, metadata):
+                if declared is None:
+                    return True
+                return (
+                    isinstance(declared, dict)
+                    and set(declared) == {{"revision", "path", "sha256", "size"}}
+                    and declared.get("revision") == revision
+                    and declared.get("path") == {relative_path!r}
+                    and declared.get("sha256") == metadata["sha256"]
+                    and declared.get("size") == metadata["size"]
+                )
+
+            job.mkdir(parents=True, exist_ok=True)
+            with (job / "bootstrap.lock").open("a+", encoding="ascii") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                request_path = job / "request.json"
+                status_path = job / "status.json"
+                if not request_path.is_file() or not status_path.is_file():
+                    result = {{"outcome": "not-ready"}}
+                else:
+                    request = json.loads(request_path.read_text(encoding="utf-8"))
+                    status = json.loads(status_path.read_text(encoding="utf-8"))
+                    if request.get("revision") != revision:
+                        result = {{"outcome": "revision-conflict"}}
+                    elif status.get("status") != "succeeded":
+                        result = {{"outcome": "not-ready"}}
+                    elif destination.is_file():
+                        metadata = archive_metadata(destination)
+                        declared = status.get("artifact")
+                        if metadata is None:
+                            result = {{"outcome": "invalid"}}
+                        elif not declared_matches(declared, metadata):
+                            result = {{"outcome": "invalid"}}
+                        else:
+                            result = {{"outcome": "ready", **metadata}}
+                    elif status.get("artifact") is not None:
+                        declared = status["artifact"]
+                        if (
+                            isinstance(declared, dict)
+                            and set(declared)
+                            == {{"revision", "path", "sha256", "size"}}
+                            and declared.get("revision") == revision
+                            and declared.get("path") == {relative_path!r}
+                        ):
+                            result = {{"outcome": "missing"}}
+                        else:
+                            result = {{"outcome": "invalid"}}
+                    else:
+                        legacy = job / "skill.zip"
+                        metadata = archive_metadata(legacy) if legacy.is_file() else None
+                        if metadata is None:
+                            result = {{"outcome": "missing"}}
+                        else:
+                            destination.parent.mkdir(exist_ok=True)
+                            temporary = destination.with_name(
+                                f".{{destination.name}}.{{os.getpid()}}.tmp"
+                            )
+                            try:
+                                temporary.write_bytes(legacy.read_bytes())
+                                temporary.replace(destination)
+                            finally:
+                                temporary.unlink(missing_ok=True)
+                            result = {{"outcome": "ready", **metadata}}
+            print(json.dumps(result))
+            """
+        ).strip()
+        result = self._remote_command_json(
+            endpoint,
+            f"python3 -c {shlex.quote(source)}",
+            job_id=job_id,
+        )
+        outcome = result.get("outcome")
+        if outcome == "ready":
+            digest = result.get("sha256")
+            size = result.get("size")
+            if (
+                not isinstance(digest, str)
+                or not _SHA256_RE.fullmatch(digest)
+                or isinstance(size, bool)
+                or not isinstance(size, int)
+                or not 1 <= size <= _MAX_ARCHIVE_BYTES
+            ):
+                raise SkillWorkbenchError(
+                    "SKILL_ARTIFACT_INVALID",
+                    "Skill 产物元数据无效，无法预览或发布。",
+                    status_code=502,
+                )
+            logger.info(
+                "Pinned legacy Skill artifact job_id=%s revision=%s sha256=%s",
+                job_id,
+                revision,
+                digest,
             )
-        except Exception as error:
+            return digest
+        if outcome == "revision-conflict":
             raise SkillWorkbenchError(
-                "SKILL_ARTIFACT_DOWNLOAD_FAILED",
-                "下载 Skill ZIP 失败，请稍后重试。",
-                status_code=502,
-                retryable=_is_transient_dependency_error(error),
-            ) from error
-        if response.status_code in {404, 409}:
+                "SKILL_TASK_REVISION_CONFLICT",
+                "Skill 已被其他操作更新，请刷新后重试",
+                status_code=409,
+            )
+        if outcome == "not-ready":
             raise SkillWorkbenchError(
                 "SKILL_TASK_NOT_READY",
                 "Skill 产物尚未准备完成",
                 status_code=409,
             )
+        if outcome == "missing":
+            raise SkillWorkbenchError(
+                "SKILL_ARTIFACT_MISSING",
+                "Skill 已完成，但产物文件缺失，无法预览或发布。",
+                status_code=502,
+            )
+        raise SkillWorkbenchError(
+            "SKILL_ARTIFACT_INVALID",
+            "Skill 产物元数据无效，无法预览或发布。",
+            status_code=502,
+        )
+
+    def _download_archive(
+        self,
+        job_id: str,
+        owner_id: str,
+        *,
+        expected_revision: int | None = None,
+        expected_sha256: str | None = None,
+    ) -> SkillArchive:
+        self._validate_job_owner(job_id, owner_id)
+        if expected_revision is None:
+            task, session = self._get_task_with_session(job_id, owner_id)
+            if task.get("state") not in {"ready", "published"}:
+                raise SkillWorkbenchError(
+                    "SKILL_TASK_NOT_READY",
+                    "Skill 产物尚未准备完成",
+                    status_code=409,
+                )
+            expected_revision = _json_int(task.get("revision"), 1)
+            descriptor = _json_object(task.get("artifact"))
+            if _json_int(descriptor.get("revision"), 0) == expected_revision:
+                expected_sha256 = str(descriptor.get("sha256") or "") or None
+        else:
+            session = self._find_session(self._validated_tool_id(), job_id)
+        return self._download_archive_from_session(
+            job_id,
+            session,
+            revision=expected_revision,
+            expected_sha256=expected_sha256,
+        )
+
+    def _download_archive_from_session(
+        self,
+        job_id: str,
+        session: dict[str, str],
+        *,
+        revision: int,
+        expected_sha256: str | None = None,
+    ) -> SkillArchive:
+        relative_path = self._revision_artifact_relative_path(revision)
+        path = f"{self._remote_dir(job_id)}/{relative_path}"
+        response = self._read_remote_artifact(
+            session["endpoint"],
+            path,
+            job_id=job_id,
+            revision=revision,
+        )
+        materialized_sha256: str | None = None
+        if response.status_code == 404:
+            materialized_sha256 = self._materialize_legacy_revision_artifact(
+                session["endpoint"],
+                job_id,
+                revision,
+            )
+            response = self._read_remote_artifact(
+                session["endpoint"],
+                path,
+                job_id=job_id,
+                revision=revision,
+            )
+        if response.status_code == 404:
+            raise SkillWorkbenchError(
+                "SKILL_ARTIFACT_MISSING",
+                "Skill 已完成，但产物文件缺失，无法预览或发布。",
+                status_code=502,
+            )
         if response.status_code >= 400:
             raise SkillWorkbenchError(
                 "SKILL_ARTIFACT_DOWNLOAD_FAILED",
-                "下载 Skill ZIP 失败，请稍后重试。",
+                f"下载 Skill ZIP 失败（HTTP {response.status_code}）。",
                 status_code=502,
             )
-        return validate_skill_archive(response.content)
+        try:
+            archive = validate_skill_archive(response.content)
+        except SkillWorkbenchError as error:
+            logger.warning(
+                "Rejected invalid generated Skill artifact "
+                "job_id=%s revision=%s error_code=%s",
+                job_id,
+                revision,
+                error.code,
+            )
+            raise SkillWorkbenchError(
+                "SKILL_ARTIFACT_INVALID",
+                "Skill 产物校验失败，无法预览或发布。",
+                status_code=502,
+            ) from error
+        authoritative_sha256 = expected_sha256 or materialized_sha256
+        if authoritative_sha256 is not None and archive.sha256 != authoritative_sha256:
+            logger.warning(
+                "Skill artifact digest mismatch job_id=%s revision=%s",
+                job_id,
+                revision,
+            )
+            raise SkillWorkbenchError(
+                "SKILL_ARTIFACT_REVISION_CONFLICT",
+                "Skill 产物版本与当前预览不一致，请刷新后重试。",
+                status_code=409,
+            )
+        return archive
 
-    def download(self, job_id: str, owner_id: str) -> tuple[bytes, str]:
-        archive = self._download_archive(job_id, owner_id)
+    def download(
+        self,
+        job_id: str,
+        owner_id: str,
+        *,
+        expected_revision: int | None = None,
+        expected_sha256: str | None = None,
+    ) -> tuple[bytes, str]:
+        archive = self._download_archive(
+            job_id,
+            owner_id,
+            expected_revision=expected_revision,
+            expected_sha256=expected_sha256,
+        )
         return archive.content, f"{archive.name}.zip"
 
-    def artifact(self, job_id: str, owner_id: str) -> dict[str, object]:
+    def artifact(
+        self,
+        job_id: str,
+        owner_id: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> dict[str, object]:
         """Return every validated text file for the read-only artifact browser."""
-        archive = self._download_archive(job_id, owner_id)
+        if expected_revision is None:
+            task, session = self._get_task_with_session(job_id, owner_id)
+            if task.get("state") not in {"ready", "published"}:
+                raise SkillWorkbenchError(
+                    "SKILL_TASK_NOT_READY",
+                    "Skill 产物尚未准备完成",
+                    status_code=409,
+                )
+            expected_revision = _json_int(task.get("revision"), 1)
+            descriptor = _json_object(task.get("artifact"))
+            expected_sha256 = (
+                str(descriptor.get("sha256") or "")
+                if _json_int(descriptor.get("revision"), 0) == expected_revision
+                else ""
+            )
+            archive = self._download_archive_from_session(
+                job_id,
+                session,
+                revision=expected_revision,
+                expected_sha256=expected_sha256 or None,
+            )
+        else:
+            archive = self._download_archive(
+                job_id,
+                owner_id,
+                expected_revision=expected_revision,
+            )
         files: list[dict[str, object]] = []
         with zipfile.ZipFile(io.BytesIO(archive.content)) as source:
             root = archive.name
@@ -1951,6 +2344,9 @@ class SkillWorkbenchService:
                     }
                 )
         return {
+            "jobId": job_id,
+            "revision": expected_revision,
+            "sha256": archive.sha256,
             "name": archive.name,
             "description": archive.description,
             "files": files,
@@ -1974,6 +2370,13 @@ class SkillWorkbenchService:
                 )
         except SkillWorkbenchError as error:
             if not error.retryable:
+                raise
+            if error.code in {
+                "SKILL_TASK_LOOKUP_FAILED",
+                "SKILL_TASK_SYNC_FAILED",
+                "SKILL_ARTIFACT_DOWNLOAD_FAILED",
+                "SKILL_ARTIFACT_DOWNLOAD_CONFLICT",
+            }:
                 raise
             logger.warning(
                 "Skill workbench publish returned a retryable dependency error "
@@ -2046,7 +2449,30 @@ class SkillWorkbenchService:
                 "此来源不能更新原 Skill，请发布为新 Skill",
                 status_code=409,
             )
-        archive = self._download_archive_from_session(job_id, session)
+        descriptor = _json_object(task.get("artifact"))
+        descriptor_sha256 = (
+            str(descriptor.get("sha256") or "")
+            if _json_int(descriptor.get("revision"), 0) == revision
+            else ""
+        )
+        if (
+            body.expected_artifact_sha256
+            and descriptor_sha256
+            and body.expected_artifact_sha256 != descriptor_sha256
+        ):
+            raise SkillWorkbenchError(
+                "SKILL_ARTIFACT_REVISION_CONFLICT",
+                "Skill 产物版本与当前预览不一致，请刷新后重试。",
+                status_code=409,
+            )
+        archive = self._download_archive_from_session(
+            job_id,
+            session,
+            revision=revision,
+            expected_sha256=(
+                body.expected_artifact_sha256 or descriptor_sha256 or None
+            ),
+        )
         from agentkit.toolkit.cli.cli_skills_workflow import (
             _ensure_bucket_ready,
             _make_content_hashed_zip_copy,
@@ -3281,12 +3707,31 @@ def mount_skill_workbench_routes(
         )
 
     @app.get("/web/skill-workbench/tasks/{job_id}/download")
-    async def download(job_id: str, request: Request) -> Response:
+    async def download(
+        job_id: str,
+        request: Request,
+        expected_revision: int | None = Query(
+            default=None,
+            ge=1,
+            le=_MAX_TASK_REVISION,
+        ),
+        expected_sha256: str | None = Query(
+            default=None,
+            min_length=64,
+            max_length=64,
+            pattern=r"^[0-9a-f]{64}$",
+        ),
+    ) -> Response:
         owner_id = owner_resolver(request)
         content, filename = await invoke(
             "download_task",
             request,
-            lambda: service.download(job_id, owner_id),
+            lambda: service.download(
+                job_id,
+                owner_id,
+                expected_revision=expected_revision,
+                expected_sha256=expected_sha256,
+            ),
             job_id=job_id,
         )
         return Response(
@@ -3296,12 +3741,24 @@ def mount_skill_workbench_routes(
         )
 
     @app.get("/web/skill-workbench/tasks/{job_id}/artifact")
-    async def artifact(job_id: str, request: Request) -> dict[str, object]:
+    async def artifact(
+        job_id: str,
+        request: Request,
+        expected_revision: int | None = Query(
+            default=None,
+            ge=1,
+            le=_MAX_TASK_REVISION,
+        ),
+    ) -> dict[str, object]:
         owner_id = owner_resolver(request)
         return await invoke(
             "get_artifact",
             request,
-            lambda: service.artifact(job_id, owner_id),
+            lambda: service.artifact(
+                job_id,
+                owner_id,
+                expected_revision=expected_revision,
+            ),
             job_id=job_id,
         )
 

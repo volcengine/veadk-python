@@ -88,7 +88,10 @@ test("keeps the chat single-column while the completed artifact is downloading",
   assert.match(workbench, /SkillUserTurn/);
   assert.match(workbench, /skill-workbench__assistant-turn/);
   assert.match(workbench, /skill-workbench__run-grid is-process-only/);
-  assert.match(workbench, /const artifactReady = Boolean\(ready && artifact\)/);
+  assert.match(
+    workbench,
+    /const artifactReady = Boolean\([\s\S]*artifact\.jobId === task\.jobId[\s\S]*artifact\.revision === task\.revision/,
+  );
   assert.match(
     workbench,
     /artifactReady \? "" : " is-process-only"/,
@@ -264,6 +267,45 @@ test("retries artifact reads only when transport or server semantics allow it", 
   assert.doesNotMatch(
     api,
     /发布进度流提前结束，请重试/,
+  );
+});
+
+test("binds preview, download, and publish to one immutable task revision", () => {
+  assert.match(types, /jobId:\s*string;[\s\S]*revision:\s*number;[\s\S]*sha256:\s*string;/);
+  assert.match(
+    api,
+    /getSkillWorkbenchArtifact\([\s\S]*expectedRevision:\s*number[\s\S]*params\.set\("expected_revision",\s*String\(expectedRevision\)\)/,
+  );
+  assert.match(api, /expectedArtifactSha256:\s*string/);
+  assert.match(
+    api,
+    /expectedArtifactSha256:\s*args\.expectedArtifactSha256/,
+  );
+  assert.match(
+    api,
+    /downloadSkillWorkbenchTask\([\s\S]*expectedRevision:\s*number[\s\S]*expectedSha256:\s*string/,
+  );
+  assert.match(controller, /const requestedJobId = activeJobId/);
+  assert.match(controller, /const requestedRevision = activeTask\.revision/);
+  assert.match(
+    controller,
+    /artifact\.jobId === requestedJobId[\s\S]*artifact\.revision === requestedRevision/,
+  );
+  assert.match(
+    controller,
+    /selectTask[\s\S]*artifactRequestRef\.current \+= 1[\s\S]*setActiveArtifact\(null\)/,
+  );
+  assert.match(
+    workbench,
+    /artifact\.jobId === task\.jobId[\s\S]*artifact\.revision === task\.revision/,
+  );
+  assert.match(
+    workbench,
+    /expectedArtifactSha256:\s*artifact\.sha256/,
+  );
+  assert.match(
+    workbench,
+    /downloadSkillWorkbenchTask\(\s*task\.jobId,\s*task\.revision,\s*artifact!\.sha256/,
   );
 });
 

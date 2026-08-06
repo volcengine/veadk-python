@@ -155,6 +155,17 @@ def test_optimization_runner_packages_the_only_changed_skill_from_real_layout(
     status = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
     assert status["status"] == "succeeded"
     assert status["name"] == "xiaohongshu-copy-generator"
+    revision_archive = tmp_path / "artifacts" / "revision-1.zip"
+    assert revision_archive.read_bytes() == (tmp_path / "skill.zip").read_bytes()
+    assert status["artifact"] == {
+        "revision": 1,
+        "path": "artifacts/revision-1.zip",
+        "sha256": __import__("hashlib")
+        .sha256(revision_archive.read_bytes())
+        .hexdigest(),
+        "size": revision_archive.stat().st_size,
+    }
+    assert not list(tmp_path.glob(".skill-*.tmp"))
     with zipfile.ZipFile(tmp_path / "skill.zip") as archive:
         assert archive.namelist() == [
             "xiaohongshu-copy-generator/SKILL.md",
@@ -307,6 +318,69 @@ def test_create_follow_up_packages_the_only_changed_manifest_handoff(
     with zipfile.ZipFile(tmp_path / "skill.zip") as archive:
         assert archive.namelist() == ["release-notes/SKILL.md"]
         assert "# Refined" in archive.read("release-notes/SKILL.md").decode("utf-8")
+
+
+def test_runner_never_overwrites_one_revision_with_different_content(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = tmp_path / "runner.py"
+    runner.write_text(_runner_source(), encoding="utf-8")
+    (tmp_path / "prompt.txt").write_text("Create the Skill", encoding="utf-8")
+    (tmp_path / "request.json").write_text(
+        json.dumps({"operation": "create", "revision": 1}),
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_codex = fake_bin / "codex"
+
+    def write_fake_codex(instructions: str) -> None:
+        fake_codex.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            "import pathlib\n"
+            "import sys\n"
+            "work = pathlib.Path(sys.argv[sys.argv.index('-C') + 1])\n"
+            "root = work / '.veadk-output' / 'release-notes'\n"
+            "root.mkdir(parents=True)\n"
+            "(root / 'SKILL.md').write_text(\n"
+            "    '---\\nname: release-notes\\n"
+            "description: Deterministic release notes.\\n---\\n\\n"
+            f"{instructions}\\n',\n"
+            "    encoding='utf-8',\n"
+            ")\n"
+            "(root.parent / 'result.json').write_text(\n"
+            "    json.dumps({'skillRoot': '.veadk-output/release-notes'}),\n"
+            "    encoding='utf-8',\n"
+            ")\n",
+            encoding="utf-8",
+        )
+        fake_codex.chmod(0o755)
+
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+    write_fake_codex("# First")
+    subprocess.run(
+        [__import__("sys").executable, str(runner)],
+        check=True,
+        timeout=10,
+    )
+    revision_archive = tmp_path / "artifacts" / "revision-1.zip"
+    first = revision_archive.read_bytes()
+
+    __import__("shutil").rmtree(tmp_path / "work")
+    write_fake_codex("# Different")
+    subprocess.run(
+        [__import__("sys").executable, str(runner)],
+        check=True,
+        timeout=10,
+    )
+
+    status = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "failed"
+    assert status["error"] == "同一 Skill 版本的产物内容发生冲突"
+    assert revision_archive.read_bytes() == first
+    assert (tmp_path / "skill.zip").read_bytes() == first
+    assert not list(tmp_path.glob(".skill-*.tmp"))
 
 
 def test_runner_rejects_manifest_with_undeclared_fields(
@@ -1711,6 +1785,41 @@ def test_task_state_rejects_malformed_remote_payload(
     assert str(caught.value) == "Skill 会话状态异常，请稍后重试。"
 
 
+def test_task_state_rejects_artifact_metadata_for_a_different_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    job_id = service._new_job_id("alice")
+    monkeypatch.setattr(
+        service,
+        "_remote_task_payload",
+        lambda endpoint, requested_job_id: (
+            {
+                "jobId": job_id,
+                "operation": "create",
+                "intent": "Create release notes",
+                "revision": 2,
+                "createdAt": 1,
+            },
+            {
+                "status": "succeeded",
+                "stage": "completed",
+                "artifact": {
+                    "revision": 1,
+                    "path": "artifacts/revision-1.zip",
+                    "sha256": "a" * 64,
+                    "size": 100,
+                },
+            },
+        ),
+    )
+
+    with pytest.raises(SkillWorkbenchError) as caught:
+        service._task_from_session("https://devenv.example", job_id)
+
+    assert caught.value.code == "SKILL_TASK_STATE_INVALID"
+
+
 def test_task_status_cannot_override_immutable_request_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2799,6 +2908,9 @@ def test_publish_reuses_one_authoritative_devenv_state_read(
         "expireAt": "2099-01-01T00:00:00Z",
     }
     calls = {"find_session": 0, "read_state": 0}
+    archive_content = skill_zip()
+    archive_sha256 = __import__("hashlib").sha256(archive_content).hexdigest()
+    downloaded_paths: list[str] = []
 
     class Skills:
         def create_skill(self, request):
@@ -2828,7 +2940,16 @@ def test_publish_reuses_one_authoritative_devenv_state_read(
                 "revision": 1,
                 "createdAt": 1,
             },
-            {"status": "succeeded", "stage": "packaging"},
+            {
+                "status": "succeeded",
+                "stage": "packaging",
+                "artifact": {
+                    "revision": 1,
+                    "path": "artifacts/revision-1.zip",
+                    "sha256": archive_sha256,
+                    "size": len(archive_content),
+                },
+            },
         )
 
     monkeypatch.setattr(service, "_find_session", find_session)
@@ -2836,13 +2957,12 @@ def test_publish_reuses_one_authoritative_devenv_state_read(
     monkeypatch.setattr(
         service, "_ensure_recovery_snapshot", lambda *args, **kwargs: False
     )
-    monkeypatch.setattr(
-        "veadk.cli.frontend_skill_workbench.requests.get",
-        lambda *args, **kwargs: SimpleNamespace(
-            status_code=200,
-            content=skill_zip(),
-        ),
-    )
+
+    def get_archive(*args, **kwargs):
+        downloaded_paths.append(kwargs["params"]["path"])
+        return SimpleNamespace(status_code=200, content=archive_content)
+
+    monkeypatch.setattr("veadk.cli.frontend_skill_workbench.requests.get", get_archive)
     monkeypatch.setattr(
         cli_skills_workflow,
         "_ensure_bucket_ready",
@@ -2878,11 +2998,201 @@ def test_publish_reuses_one_authoritative_devenv_state_read(
         PublishSkillTaskBody(
             disposition="create-new",
             expectedRevision=1,
+            expectedArtifactSha256=archive_sha256,
         ),
     )
 
     assert result["skillId"] == "skill-1"
     assert calls == {"find_session": 1, "read_state": 1}
+    assert downloaded_paths == [
+        f"{service._remote_dir(job_id)}/artifacts/revision-1.zip"
+    ]
+
+
+def test_preview_materializes_one_legacy_archive_for_the_requested_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    job_id = service._new_job_id("alice")
+    content = skill_zip()
+    digest = __import__("hashlib").sha256(content).hexdigest()
+    responses = iter(
+        [
+            SimpleNamespace(status_code=404, content=b""),
+            SimpleNamespace(status_code=200, content=content),
+        ]
+    )
+    paths: list[str] = []
+    materialized: list[tuple[str, str, int]] = []
+    monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool")
+    monkeypatch.setattr(
+        service,
+        "_find_session",
+        lambda tool_id, requested_job_id: {
+            "instanceId": "session-1",
+            "endpoint": "https://devenv.example",
+        },
+    )
+
+    def get_archive(*args, **kwargs):
+        paths.append(kwargs["params"]["path"])
+        return next(responses)
+
+    monkeypatch.setattr("veadk.cli.frontend_skill_workbench.requests.get", get_archive)
+
+    def materialize(endpoint: str, requested_job_id: str, revision: int) -> str:
+        materialized.append((endpoint, requested_job_id, revision))
+        return digest
+
+    monkeypatch.setattr(
+        service,
+        "_materialize_legacy_revision_artifact",
+        materialize,
+        raising=False,
+    )
+
+    artifact = service.artifact(job_id, "alice", expected_revision=2)
+
+    assert artifact["jobId"] == job_id
+    assert artifact["revision"] == 2
+    assert artifact["sha256"] == digest
+    assert materialized == [("https://devenv.example", job_id, 2)]
+    expected_path = f"{service._remote_dir(job_id)}/artifacts/revision-2.zip"
+    assert paths == [expected_path, expected_path]
+
+
+def test_legacy_materialization_is_atomic_and_keeps_the_first_revision(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    job_id = service._new_job_id("alice")
+    job = tmp_path / "job"
+    job.mkdir()
+    first = skill_zip(description="First accepted artifact.")
+    second = skill_zip(description="Later mutable legacy artifact.")
+    (job / "request.json").write_text(
+        json.dumps({"revision": 4}),
+        encoding="utf-8",
+    )
+    (job / "status.json").write_text(
+        json.dumps({"status": "succeeded", "stage": "completed"}),
+        encoding="utf-8",
+    )
+    (job / "skill.zip").write_bytes(first)
+    monkeypatch.setattr(service, "_remote_dir", lambda requested_job_id: str(job))
+
+    def execute(endpoint: str, command: str, *, job_id: str = ""):
+        completed = subprocess.run(
+            ["bash", "-c", command],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return json.loads(completed.stdout)
+
+    monkeypatch.setattr(service, "_remote_command_json", execute)
+
+    first_digest = service._materialize_legacy_revision_artifact(
+        "https://devenv.example",
+        job_id,
+        4,
+    )
+    (job / "skill.zip").write_bytes(second)
+    second_digest = service._materialize_legacy_revision_artifact(
+        "https://devenv.example",
+        job_id,
+        4,
+    )
+
+    revision_archive = job / "artifacts" / "revision-4.zip"
+    assert revision_archive.read_bytes() == first
+    assert first_digest == __import__("hashlib").sha256(first).hexdigest()
+    assert second_digest == first_digest
+    assert not list((job / "artifacts").glob("*.tmp"))
+
+
+def test_artifact_download_retries_a_file_change_conflict_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    job_id = service._new_job_id("alice")
+    content = skill_zip()
+    responses = iter(
+        [
+            SimpleNamespace(status_code=409, content=b""),
+            SimpleNamespace(status_code=200, content=content),
+        ]
+    )
+    attempts = 0
+
+    def get_archive(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        return next(responses)
+
+    monkeypatch.setattr("veadk.cli.frontend_skill_workbench.requests.get", get_archive)
+    monkeypatch.setattr("veadk.cli.frontend_skill_workbench.time.sleep", lambda _: None)
+
+    archive = service._download_archive_from_session(
+        job_id,
+        {"endpoint": "https://devenv.example", "instanceId": "session-1"},
+        revision=1,
+    )
+
+    assert archive.content == content
+    assert attempts == 2
+
+
+def test_artifact_download_reports_an_exhausted_conflict_without_saying_not_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    job_id = service._new_job_id("alice")
+    attempts = 0
+
+    def get_archive(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        return SimpleNamespace(status_code=409, content=b"")
+
+    monkeypatch.setattr("veadk.cli.frontend_skill_workbench.requests.get", get_archive)
+    monkeypatch.setattr("veadk.cli.frontend_skill_workbench.time.sleep", lambda _: None)
+
+    with pytest.raises(SkillWorkbenchError) as caught:
+        service._download_archive_from_session(
+            job_id,
+            {"endpoint": "https://devenv.example", "instanceId": "session-1"},
+            revision=1,
+        )
+
+    assert attempts == 3
+    assert caught.value.code == "SKILL_ARTIFACT_DOWNLOAD_CONFLICT"
+    assert caught.value.retryable is True
+    assert "尚未准备完成" not in str(caught.value)
+
+
+def test_artifact_download_rejects_a_preview_hash_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    content = skill_zip()
+    monkeypatch.setattr(
+        "veadk.cli.frontend_skill_workbench.requests.get",
+        lambda *args, **kwargs: SimpleNamespace(status_code=200, content=content),
+    )
+
+    with pytest.raises(SkillWorkbenchError) as caught:
+        service._download_archive_from_session(
+            service._new_job_id("alice"),
+            {"endpoint": "https://devenv.example", "instanceId": "session-1"},
+            revision=1,
+            expected_sha256="0" * 64,
+        )
+
+    assert caught.value.code == "SKILL_ARTIFACT_REVISION_CONFLICT"
+    assert caught.value.retryable is False
 
 
 @pytest.mark.parametrize(
@@ -2957,6 +3267,37 @@ def test_publish_does_not_expose_retryable_after_an_unknown_side_effect(
     assert str(caught.value) == (
         "发布 Skill 失败，无法确认本次发布结果，请刷新 Skill 中心确认。"
     )
+
+
+def test_publish_preserves_a_retryable_preflight_artifact_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    monkeypatch.setattr(
+        service,
+        "_publish_once",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            SkillWorkbenchError(
+                "SKILL_ARTIFACT_DOWNLOAD_CONFLICT",
+                "Skill 产物传输期间发生文件冲突，请稍后重新读取。",
+                status_code=502,
+                retryable=True,
+            )
+        ),
+    )
+
+    with pytest.raises(SkillWorkbenchError) as caught:
+        service.publish(
+            service._new_job_id("alice"),
+            "alice",
+            PublishSkillTaskBody(
+                disposition="create-new",
+                expectedRevision=1,
+            ),
+        )
+
+    assert caught.value.code == "SKILL_ARTIFACT_DOWNLOAD_CONFLICT"
+    assert caught.value.retryable is True
 
 
 def test_publish_reuses_the_persisted_result_for_the_same_revision(
@@ -3448,15 +3789,20 @@ def test_artifact_returns_every_validated_nested_text_file(
     monkeypatch.setattr(
         service,
         "_download_archive",
-        lambda job_id, owner_id: validate_skill_archive(content),
+        lambda job_id, owner_id, **kwargs: validate_skill_archive(content),
     )
+    job_id = SkillWorkbenchService._new_job_id("alice")
 
     artifact = service.artifact(
-        SkillWorkbenchService._new_job_id("alice"),
+        job_id,
         "alice",
+        expected_revision=3,
     )
 
     assert artifact == {
+        "jobId": job_id,
+        "revision": 3,
+        "sha256": __import__("hashlib").sha256(content).hexdigest(),
         "name": "release-notes",
         "description": "Create concise release notes.",
         "files": [
@@ -3529,11 +3875,88 @@ def test_artifact_handoff_does_not_resynchronize_ready_task_state(
         ),
     )
 
-    artifact = service.artifact(job_id, "alice")
+    artifact = service.artifact(job_id, "alice", expected_revision=1)
 
     assert artifact["name"] == "release-notes"
+    assert artifact["revision"] == 1
     assert session_lookups == 1
     assert state_reads == 0
+
+
+def test_artifact_route_forwards_the_expected_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    service = mount_skill_workbench_routes(
+        app,
+        lambda request: "alice",
+        lambda request: "Alice",
+    )
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    captured: dict[str, object] = {}
+
+    def artifact(
+        requested_job_id: str,
+        owner_id: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> dict[str, object]:
+        captured.update(
+            job_id=requested_job_id,
+            owner_id=owner_id,
+            expected_revision=expected_revision,
+        )
+        return {
+            "jobId": requested_job_id,
+            "revision": expected_revision,
+            "sha256": "a" * 64,
+            "name": "release-notes",
+            "description": "Release notes.",
+            "files": [],
+        }
+
+    monkeypatch.setattr(service, "artifact", artifact)
+
+    with TestClient(app) as client:
+        response = client.get(
+            f"/web/skill-workbench/tasks/{job_id}/artifact",
+            params={"expected_revision": 7},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["revision"] == 7
+    assert captured == {
+        "job_id": job_id,
+        "owner_id": "alice",
+        "expected_revision": 7,
+    }
+
+
+def test_download_route_rejects_an_invalid_expected_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    service = mount_skill_workbench_routes(
+        app,
+        lambda request: "alice",
+        lambda request: "Alice",
+    )
+    monkeypatch.setattr(
+        service,
+        "download",
+        lambda *args, **kwargs: pytest.fail(
+            "invalid artifact identity must fail at the HTTP boundary"
+        ),
+    )
+    job_id = SkillWorkbenchService._new_job_id("alice")
+
+    with TestClient(app) as client:
+        response = client.get(
+            f"/web/skill-workbench/tasks/{job_id}/download",
+            params={"expected_revision": 1, "expected_sha256": "not-a-digest"},
+        )
+
+    assert response.status_code == 422
 
 
 def test_publish_stream_reports_progress_and_destination(

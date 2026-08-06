@@ -44,6 +44,9 @@ export interface SkillWorkbenchArtifactFile extends SkillWorkbenchFile {
 }
 
 export interface SkillWorkbenchArtifact {
+  jobId: string;
+  revision: number;
+  sha256: string;
   name: string;
   description: string;
   files: SkillWorkbenchArtifactFile[];

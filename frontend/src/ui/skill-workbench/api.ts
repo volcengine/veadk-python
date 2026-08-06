@@ -347,13 +347,25 @@ export async function getSkillWorkbenchTask(
 
 export async function getSkillWorkbenchArtifact(
   jobId: string,
+  expectedRevision: number,
   signal?: AbortSignal,
 ): Promise<SkillWorkbenchArtifact> {
+  const params = new URLSearchParams();
+  params.set("expected_revision", String(expectedRevision));
   const artifact = record(await json(
-    await request(`/tasks/${encodeURIComponent(jobId)}/artifact`, { signal }),
+    await request(
+      `/tasks/${encodeURIComponent(jobId)}/artifact?${params.toString()}`,
+      { signal },
+    ),
     "读取 Skill 产物失败",
   ), "Skill 产物");
   if (
+    artifact.jobId !== jobId ||
+    artifact.revision !== expectedRevision ||
+    !Number.isSafeInteger(artifact.revision) ||
+    artifact.revision < 1 ||
+    typeof artifact.sha256 !== "string" ||
+    !/^[0-9a-f]{64}$/.test(artifact.sha256) ||
     typeof artifact.name !== "string" ||
     typeof artifact.description !== "string" ||
     !Array.isArray(artifact.files)
@@ -368,6 +380,9 @@ export async function getSkillWorkbenchArtifact(
     return { path: file.path, size: file.size, content: file.content };
   });
   return {
+    jobId: artifact.jobId,
+    revision: artifact.revision,
+    sha256: artifact.sha256,
     name: artifact.name,
     description: artifact.description,
     files,
@@ -405,6 +420,7 @@ export async function stopSkillWorkbenchTask(args: {
 export async function publishSkillWorkbenchTask(args: {
   jobId: string;
   expectedRevision: number;
+  expectedArtifactSha256: string;
   disposition: "create-new" | "update-source";
   skillSpaceIds?: string[];
   projectName?: string;
@@ -421,6 +437,7 @@ export async function publishSkillWorkbenchTask(args: {
     body: JSON.stringify({
       disposition: args.disposition,
       expectedRevision: args.expectedRevision,
+      expectedArtifactSha256: args.expectedArtifactSha256,
       skillSpaceIds: args.skillSpaceIds ?? [],
       projectName: args.projectName,
       region: args.region,
@@ -515,9 +532,16 @@ export async function deleteSkillWorkbenchTask(jobId: string): Promise<void> {
   );
 }
 
-export async function downloadSkillWorkbenchTask(jobId: string): Promise<void> {
+export async function downloadSkillWorkbenchTask(
+  jobId: string,
+  expectedRevision: number,
+  expectedSha256: string,
+): Promise<void> {
+  const params = new URLSearchParams();
+  params.set("expected_revision", String(expectedRevision));
+  params.set("expected_sha256", expectedSha256);
   const response = await request(
-    `/tasks/${encodeURIComponent(jobId)}/download`,
+    `/tasks/${encodeURIComponent(jobId)}/download?${params.toString()}`,
     {},
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
