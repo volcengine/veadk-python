@@ -841,7 +841,7 @@ def studio(
     studio_developers: str | None,
     open_browser: bool,
 ) -> None:
-    """Launch VeADK Studio — the frontend trimmed to add & manage agents.
+    """Launch AgentKit Studio — the frontend trimmed to add & manage agents.
 
     Same server as `veadk frontend`, but studio mode: the UI feature-gates off
     chat/search/skill-center/history and lands on the add-agent page.

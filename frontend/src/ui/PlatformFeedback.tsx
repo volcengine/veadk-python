@@ -114,7 +114,7 @@ export function PlatformFeedback({
     <div className="platform-feedback-page">
       <header className="platform-feedback-header">
         <h1>问题反馈</h1>
-        <p>告诉我们您在使用 VeADK Studio 时遇到的问题。</p>
+        <p>告诉我们您在使用 AgentKit Studio 时遇到的问题。</p>
       </header>
 
       <div className="platform-feedback-scroll">

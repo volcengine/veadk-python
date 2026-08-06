@@ -2117,7 +2117,7 @@ export interface UiConfig {
 }
 
 export const DEFAULT_SITE_BRANDING: SiteBranding = {
-  title: "VeADK Studio",
+  title: "AgentKit Studio",
   logoUrl: "",
 };
 

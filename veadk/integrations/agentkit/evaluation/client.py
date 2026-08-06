@@ -194,7 +194,7 @@ class AgentKitEvaluationDatasetsClient:
             query={**self._project_query, "WorkspaceId": workspace_id},
             payload={
                 "Name": name,
-                "Description": "VeADK Studio 对话反馈自动回流评测集",
+                "Description": "AgentKit Studio 对话反馈自动回流评测集",
                 "EvaluationSetSchema": {
                     "FieldSchemas": _feedback_field_schemas(),
                 },

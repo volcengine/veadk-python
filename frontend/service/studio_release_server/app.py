@@ -75,7 +75,7 @@ def create_app(
         yield
 
     app = FastAPI(
-        title="VeADK Studio Release Server",
+        title="AgentKit Studio Release Server",
         version="1.0.0",
         docs_url=None,
         redoc_url=None,

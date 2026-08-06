@@ -117,7 +117,7 @@ customModule 必须为 null。同一模块同一优先级合并为一个 group�
     ) -> OutputT:
         agent = Agent(
             name=name,
-            description="VeADK Studio evaluation automation.",
+            description="AgentKit Studio evaluation automation.",
             instruction=instruction,
             model_name=self._model_name,
             output_schema=schema,

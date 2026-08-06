@@ -27,7 +27,7 @@ import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
 import { AgentFaceIcon } from "./AgentFaceIcon";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
-import volcengineLogo from "../assets/volcengine.svg";
+import defaultSiteLogo from "../assets/logo.svg";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 
@@ -351,7 +351,7 @@ export function Sidebar({
           >
             <img
               className="brand-logo"
-              src={branding.logoUrl || volcengineLogo}
+              src={branding.logoUrl || defaultSiteLogo}
               width={20}
               height={20}
               alt=""

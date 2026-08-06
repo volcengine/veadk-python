@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Resolve the optional title and logo used to brand VeADK Studio."""
+"""Resolve the optional title and logo used to brand AgentKit Studio."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 import filetype
 import httpx
 
-DEFAULT_SITE_TITLE = "VeADK Studio"
+DEFAULT_SITE_TITLE = "AgentKit Studio"
 MAX_SITE_TITLE_LENGTH = 6
 MAX_SITE_LOGO_BYTES = 5 * 1024 * 1024
 

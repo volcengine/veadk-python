@@ -12,4 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Server-side modules shipped with the VeADK Studio frontend."""
+"""Server-side modules shipped with the AgentKit Studio frontend."""

@@ -155,7 +155,7 @@ browser reach the same instance.
 
 All frontend changes must follow [`SPEC.md`](SPEC.md). It defines the required
 code, visual, interaction, security, code-generation, and testing conventions
-for VeADK Studio, including these non-negotiable rules:
+for AgentKit Studio, including these non-negotiable rules:
 
 - New or updated product icons must be repository-owned, hand-drawn SVG React
   components. Do not add generic icon-library, emoji, or remote-icon usage.

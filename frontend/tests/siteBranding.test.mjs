@@ -6,6 +6,10 @@ const appSource = readFileSync(
   new URL("../src/App.tsx", import.meta.url),
   "utf8",
 );
+const clientSource = readFileSync(
+  new URL("../src/adk/client.ts", import.meta.url),
+  "utf8",
+);
 const sidebarSource = readFileSync(
   new URL("../src/ui/Sidebar.tsx", import.meta.url),
   "utf8",
@@ -40,16 +44,20 @@ const htmlSource = readFileSync(
 );
 
 test("applies configured branding to the UI, document title, and favicon", () => {
+  assert.match(clientSource, /title: "AgentKit Studio"/);
+  assert.match(appSource, /import defaultSiteLogo from "\.\/assets\/logo\.svg"/);
   assert.match(appSource, /document\.title = siteBranding\.title/);
   assert.match(appSource, /favicon\.href = siteBranding\.logoUrl \|\| defaultSiteLogo/);
   assert.match(sidebarSource, /\{branding\.title\}/);
-  assert.match(sidebarSource, /branding\.logoUrl \|\| volcengineLogo/);
+  assert.match(sidebarSource, /import defaultSiteLogo from "\.\.\/assets\/logo\.svg"/);
+  assert.match(sidebarSource, /branding\.logoUrl \|\| defaultSiteLogo/);
   assert.match(sidebarSource, /width=\{20\}\s*height=\{20\}/);
   assert.match(
     sidebarSource,
     /className="brand"[\s\S]*?onClick=\{onNewChat\}[\s\S]*?aria-label="返回首页"/,
   );
   assert.match(loginSource, /width=\{20\}\s*height=\{20\}/);
+  assert.match(loginSource, /import defaultSiteLogo from "\.\.\/assets\/logo\.svg"/);
   assert.match(
     loginSource,
     /<TextShimmer as="h1" className="login-title"[\s\S]*?\{branding\.title\}[\s\S]*?<\/TextShimmer>/,
@@ -69,8 +77,8 @@ test("applies configured branding to the UI, document title, and favicon", () =>
     stylesSource,
     /\.login-brand-logo,[\s\S]*?\.login-brand,[\s\S]*?\.login-title\s*\{[\s\S]*?cursor:\s*text;/,
   );
-  assert.match(htmlSource, /<link rel="icon"/);
-  assert.match(htmlSource, /<title>VeADK Studio<\/title>/);
+  assert.match(htmlSource, /<link rel="icon" type="image\/svg\+xml" href="\/src\/assets\/logo\.svg" \/>/);
+  assert.match(htmlSource, /<title>AgentKit Studio<\/title>/);
 });
 
 test("global sidebar can collapse to a compact icon rail", () => {

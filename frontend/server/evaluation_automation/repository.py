@@ -231,7 +231,7 @@ class AgentKitAutoEvaluationRepository:
             query={**self._project_query, "WorkspaceId": workspace_id},
             payload={
                 "Name": name,
-                "Description": "VeADK Studio 会话静默自动评测集",
+                "Description": "AgentKit Studio 会话静默自动评测集",
                 "EvaluationSetSchema": {
                     "FieldSchemas": [
                         {

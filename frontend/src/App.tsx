@@ -165,7 +165,7 @@ import { SandboxAgentWorkspace } from "./ui/SandboxAgentWorkspace";
 import { SandboxComposer } from "./ui/SandboxComposer";
 import { sandboxSnapshotTurns } from "./ui/sandboxCommands";
 import { useSandboxCodexCommands } from "./ui/useSandboxCodexCommands";
-import defaultSiteLogo from "./assets/volcengine.svg";
+import defaultSiteLogo from "./assets/logo.svg";
 import {
   FeedbackDownIcon,
   FeedbackUpIcon,
