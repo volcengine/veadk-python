@@ -249,7 +249,11 @@ export function SkillWorkbench({
   const [publishProgress, setPublishProgress] =
     useState<SkillWorkbenchPublishProgress | null>(null);
   const [publishResult, setPublishResult] =
-    useState<SkillWorkbenchPublishResult | null>(null);
+    useState<{
+      jobId: string;
+      revision: number;
+      result: SkillWorkbenchPublishResult;
+    } | null>(null);
   const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
   const publishControllerRef = useRef<AbortController | null>(null);
   const activityRef = useRef<HTMLDivElement>(null);
@@ -269,14 +273,18 @@ export function SkillWorkbench({
   const persistedPublication = task && task.publication?.revision === task.revision
     ? task.publication
     : null;
-  const effectivePublishResult = publishResult ?? persistedPublication;
-  const recoveryUnavailable =
-    task?.state === "expired" && task.recoveryAvailable === false;
+  const activePublishResult =
+    task &&
+    publishResult?.jobId === task.jobId &&
+    publishResult.revision === task.revision
+      ? publishResult.result
+      : null;
+  const effectivePublishResult = activePublishResult ?? persistedPublication;
   const recoveryPending = task?.recoveryStatus === "pending";
   const canRefine =
     task &&
     task.state !== "running" &&
-    !recoveryUnavailable &&
+    task.state !== "expired" &&
     !recoveryPending;
 
   useEffect(() => {
@@ -429,7 +437,11 @@ export function SkillWorkbench({
         signal: controller.signal,
         onProgress: setPublishProgress,
       });
-      setPublishResult(result);
+      setPublishResult({
+        jobId: task.jobId,
+        revision: task.revision,
+        result,
+      });
       setPublishProgress(null);
     } catch (cause) {
       if (!controller.signal.aborted) {
@@ -592,86 +604,95 @@ export function SkillWorkbench({
                 {task.error ? (
                   <div className="skill-workbench__error" role="alert">{task.error}</div>
                 ) : null}
-                {["failed", "cancelled", "expired"].includes(task.state) ? (
+                {task.state === "expired" ? (
                   <div className="skill-workbench__recovery">
                     <p>
-                      {task.state === "expired"
-                        ? task.recoveryAvailable === true
-                          ? "当前 DevEnv 已释放，当前产物无法下载或发布。提交后将创建新的 DevEnv，并从最近的恢复点继续。"
-                          : task.recoveryAvailable === false
-                            ? "当前 DevEnv 已释放，当前产物无法下载或发布，并且没有可用恢复点。请返回技能中心重新创建。"
-                            : "当前 DevEnv 已释放，当前产物无法下载或发布。提交后会尝试从最近可用的恢复点创建新 DevEnv；如果恢复点不可用，系统会提示重新创建。"
-                        : task.state === "cancelled"
-                          ? "当前任务已停止，DevEnv 和已完成内容仍保留。可以在下方继续输入。"
-                          : "本轮执行失败，但 DevEnv 和已完成内容仍保留。调整要求后可以继续。"}
+                      {effectivePublishResult
+                        ? "当前 DevEnv 已释放，无法继续调整、下载或发布。已发布的 Skill 不受影响，可以前往技能中心查看。"
+                        : "当前 DevEnv 已释放，无法继续调整、下载或发布。你可以前往技能中心查看已有 Skill，或重新发起创建/优化。"}
                     </p>
-                    {recoveryUnavailable ? (
-                      <button type="button" onClick={onBack}>返回技能中心</button>
-                    ) : null}
+                    {effectivePublishResult ? (
+                      <button
+                        type="button"
+                        onClick={() => onViewPublished(effectivePublishResult)}
+                      >
+                        查看已发布 Skill
+                      </button>
+                    ) : (
+                      <button type="button" onClick={() => onBack()}>
+                        前往技能中心查看 Skill
+                      </button>
+                    )}
+                  </div>
+                ) : ["failed", "cancelled"].includes(task.state) ? (
+                  <div className="skill-workbench__recovery">
+                    <p>
+                      {task.state === "cancelled"
+                        ? "当前任务已停止，DevEnv 和已完成内容仍保留。可以在下方继续输入。"
+                        : "本轮执行失败，但 DevEnv 和已完成内容仍保留。调整要求后可以继续。"}
+                    </p>
                   </div>
                 ) : null}
               </div>
             </div>
-            <div className="composer skill-workbench__composer">
-              <div className="composer-box">
-                <div className="composer-input-stack">
-                  <textarea
-                    ref={refinementInputRef}
-                    className="comp-input scroll"
-                    rows={1}
-                    maxLength={20_000}
-                    value={refinement}
-                    disabled={Boolean(action) || recoveryUnavailable || recoveryPending}
-                    aria-label="Skill 调整要求"
-                    placeholder={task.state === "running"
-                      ? "可以先输入下一步要求；停止当前任务后即可提交…"
-                      : recoveryPending
-                        ? "正在保存当前会话恢复点…"
-                      : task.state === "expired"
-                        ? recoveryUnavailable
-                          ? "当前会话没有可用恢复点"
-                          : "描述下一步 Skill 调整，提交后将恢复到新的 DevEnv…"
-                        : "继续告诉 Codex 需要调整什么…"}
-                    onChange={(event) => setRefinement(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (isImeCompositionEvent(event.nativeEvent)) return;
-                      if (
-                        event.key === "Enter" &&
-                        !event.shiftKey &&
-                        canRefine
-                      ) {
-                        event.preventDefault();
-                        submitRefinement();
+            {task.state !== "expired" ? (
+              <div className="composer skill-workbench__composer">
+                <div className="composer-box">
+                  <div className="composer-input-stack">
+                    <textarea
+                      ref={refinementInputRef}
+                      className="comp-input scroll"
+                      rows={1}
+                      maxLength={20_000}
+                      value={refinement}
+                      disabled={Boolean(action) || recoveryPending}
+                      aria-label="Skill 调整要求"
+                      placeholder={task.state === "running"
+                        ? "可以先输入下一步要求；停止当前任务后即可提交…"
+                        : recoveryPending
+                          ? "正在确认当前会话恢复点…"
+                          : "继续告诉 Codex 需要调整什么…"}
+                      onChange={(event) => setRefinement(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (isImeCompositionEvent(event.nativeEvent)) return;
+                        if (
+                          event.key === "Enter" &&
+                          !event.shiftKey &&
+                          canRefine
+                        ) {
+                          event.preventDefault();
+                          submitRefinement();
+                        }
+                      }}
+                    />
+                  </div>
+                  {task.state === "running" ? (
+                    <button
+                      type="button"
+                      className="comp-send is-stop"
+                      disabled={Boolean(action)}
+                      onClick={() => void stop()}
+                      aria-label="停止当前任务"
+                      title="停止当前任务"
+                    >
+                      <StopIcon />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="comp-send"
+                      disabled={
+                        !refinement.trim() || Boolean(action) || !canRefine
                       }
-                    }}
-                  />
+                      onClick={submitRefinement}
+                      aria-label="提交调整"
+                    >
+                      <SendIcon />
+                    </button>
+                  )}
                 </div>
-                {task.state === "running" ? (
-                  <button
-                    type="button"
-                    className="comp-send is-stop"
-                    disabled={Boolean(action)}
-                    onClick={() => void stop()}
-                    aria-label="停止当前任务"
-                    title="停止当前任务"
-                  >
-                    <StopIcon />
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="comp-send"
-                    disabled={
-                      !refinement.trim() || Boolean(action) || !canRefine
-                    }
-                    onClick={submitRefinement}
-                    aria-label="提交调整"
-                  >
-                    <SendIcon />
-                  </button>
-                )}
               </div>
-            </div>
+            ) : null}
           </section>
 
           {artifactReady ? (

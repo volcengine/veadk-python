@@ -26,6 +26,7 @@ const MAX_POLL_INTERVAL_MS = 16_000;
 const SYNC_ERROR_REVEAL_THRESHOLD = 3;
 const ARTIFACT_RETRY_INTERVAL_MS = 900;
 const ARTIFACT_RETRY_LIMIT = 1;
+const SESSION_CACHE_LIMIT = 8;
 const PROVISIONING_TTL_SECONDS = 10 * 60;
 const TERMINAL_STATES = new Set(["ready", "failed", "cancelled", "expired", "published"]);
 const JOB_ID_PATTERN = /^sw-[0-9a-f]{12}-[0-9a-f]{24}$/;
@@ -53,6 +54,35 @@ function pollDelay(baseDelay: number, failures: number): number {
     baseDelay * 2 ** Math.min(failures, 3),
     MAX_POLL_INTERVAL_MS,
   );
+}
+
+function rememberCachedValue<Value>(
+  cache: Map<string, Value>,
+  key: string,
+  value: Value,
+): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > SESSION_CACHE_LIMIT) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) break;
+    cache.delete(oldestKey);
+  }
+}
+
+function readCachedValue<Value>(
+  cache: Map<string, Value>,
+  key: string,
+): Value | undefined {
+  const value = cache.get(key);
+  if (value === undefined) return undefined;
+  cache.delete(key);
+  cache.set(key, value);
+  return value;
+}
+
+function artifactCacheKey(jobId: string, revision: number): string {
+  return `${jobId}:${revision}`;
 }
 
 export interface StartSkillWorkbenchTaskArgs {
@@ -168,6 +198,8 @@ function expiredTask(
         ? "unknown"
         : previous.recoveryStatus
       : undefined;
+  const publication =
+    previous && "publication" in previous ? previous.publication : undefined;
   const toolId = previous && "toolId" in previous ? previous.toolId : undefined;
   const sessionId = previous && "sessionId" in previous ? previous.sessionId : undefined;
   return {
@@ -184,6 +216,7 @@ function expiredTask(
     ...(name ? { name } : {}),
     ...(typeof recoveryAvailable === "boolean" ? { recoveryAvailable } : {}),
     ...(recoveryStatus ? { recoveryStatus } : {}),
+    ...(publication?.revision === previous?.revision ? { publication } : {}),
     error: RELEASED_DEVENV_MESSAGE,
   };
 }
@@ -216,6 +249,9 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   const selectedTaskRef = useRef<SkillWorkbenchTaskListItem | null>(null);
   const tasksRef = useRef<SkillWorkbenchTaskListItem[]>([]);
   const activeTaskRef = useRef<SkillWorkbenchTask | null>(null);
+  const taskCacheRef = useRef<Map<string, SkillWorkbenchTask>>(new Map());
+  const artifactCacheRef =
+    useRef<Map<string, SkillWorkbenchArtifact>>(new Map());
 
   useEffect(() => {
     tasksRef.current = tasks;
@@ -351,12 +387,15 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     const request = ++detailRequestRef.current;
     const requestedJobId = activeJobId;
     const provisioning = referencesRef.current.find((item) => item.jobId === requestedJobId);
-    setActiveTaskLoading(!provisioning);
+    const hasVisibleTask = activeTaskRef.current?.jobId === requestedJobId;
+    setActiveTaskLoading(!provisioning && !hasVisibleTask);
     try {
       const next = await getSkillWorkbenchTask(requestedJobId, signal);
       if (generation !== generationRef.current || request !== detailRequestRef.current || requestedJobId !== activeJobId) return;
       detailFailureCountRef.current = 0;
       persistReferences(referencesRef.current.filter((item) => item.jobId !== requestedJobId));
+      rememberCachedValue(taskCacheRef.current, next.jobId, next);
+      activeTaskRef.current = next;
       setActiveTask(next);
       setActiveTaskError("");
       setActiveTaskRecovering(false);
@@ -389,11 +428,15 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       ) {
         const released = expiredTask(
           requestedJobId,
-          selectedTaskRef.current,
+          activeTaskRef.current?.jobId === requestedJobId
+            ? activeTaskRef.current
+            : selectedTaskRef.current,
         );
         persistReferences(
           referencesRef.current.filter((item) => item.jobId !== requestedJobId),
         );
+        rememberCachedValue(taskCacheRef.current, released.jobId, released);
+        activeTaskRef.current = released;
         setActiveTask(released);
         setActiveTaskError("");
         setActiveTaskRecovering(false);
@@ -440,6 +483,9 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       ? loadProvisioningReferences(localStorage, identityKey)
       : [];
     referencesRef.current = references;
+    taskCacheRef.current.clear();
+    artifactCacheRef.current.clear();
+    artifactRequestRef.current += 1;
     setTasks(references.filter((item) => !item.cancelRequested).map(restoredProvisioning));
     selectedTaskRef.current = null;
     setTasksError("");
@@ -488,6 +534,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
 
   useEffect(() => {
     if (!activeJobId) {
+      activeTaskRef.current = null;
       setActiveTask(null);
       setActiveTaskError("");
       return;
@@ -559,9 +606,14 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
         requestedRevision,
         signal,
       );
+      if (signal?.aborted || request !== artifactRequestRef.current) return;
+      rememberCachedValue(
+        artifactCacheRef.current,
+        artifactCacheKey(requestedJobId, requestedRevision),
+        artifact,
+      );
       const currentTask = activeTaskRef.current;
       if (
-        request === artifactRequestRef.current &&
         activeJobIdRef.current === requestedJobId &&
         currentTask?.jobId === requestedJobId &&
         currentTask.revision === requestedRevision &&
@@ -589,11 +641,17 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       setActiveArtifactError("");
       return;
     }
-    setActiveArtifact((current) => (
-      current?.jobId === activeJobId && current.revision === activeTask.revision
-        ? current
-        : null
-    ));
+    const cachedArtifact = readCachedValue(
+      artifactCacheRef.current,
+      artifactCacheKey(activeJobId, activeTask.revision),
+    );
+    if (cachedArtifact) {
+      setActiveArtifact(cachedArtifact);
+      setActiveArtifactLoading(false);
+      setActiveArtifactError("");
+      return;
+    }
+    setActiveArtifact(null);
     const controller = new AbortController();
     let timer: number | undefined;
     let attempts = 0;
@@ -635,14 +693,35 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   }, [enabled, identityKey, refreshTasks]);
 
   const selectTask = useCallback((jobId: string) => {
-    selectedTaskRef.current = tasks.find((task) => task.jobId === jobId) ?? null;
+    const selectedTask = tasks.find((task) => task.jobId === jobId) ?? null;
+    selectedTaskRef.current = selectedTask;
+    const candidate = jobId
+      ? readCachedValue(taskCacheRef.current, jobId)
+      : undefined;
+    const cachedTask =
+      candidate &&
+      selectedTask &&
+      candidate.revision === selectedTask.revision &&
+      candidate.state === selectedTask.state
+        ? candidate
+        : null;
+    const cachedArtifact =
+      cachedTask &&
+      (cachedTask.state === "ready" || cachedTask.state === "published")
+        ? readCachedValue(
+            artifactCacheRef.current,
+            artifactCacheKey(cachedTask.jobId, cachedTask.revision),
+          ) ?? null
+        : null;
     artifactRequestRef.current += 1;
-    setActiveArtifact(null);
+    setActiveArtifact(cachedArtifact);
     setActiveArtifactLoading(false);
     setActiveArtifactError("");
     setActiveJobId(jobId);
     setActiveSelectionRevision((revision) => revision + 1);
-    setActiveTask((current) => current?.jobId === jobId ? current : null);
+    activeTaskRef.current = cachedTask;
+    setActiveTask(cachedTask);
+    setActiveTaskLoading(false);
     setActiveTaskError("");
     setActiveTaskRecovering(false);
     detailFailureCountRef.current = 0;
@@ -650,6 +729,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
 
   const upsertTask = useCallback((task: SkillWorkbenchTask) => {
     persistReferences(referencesRef.current.filter((item) => item.jobId !== task.jobId));
+    rememberCachedValue(taskCacheRef.current, task.jobId, task);
     if (
       !activeArtifact ||
       activeArtifact.jobId !== task.jobId ||
@@ -660,6 +740,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     }
     setActiveJobId(task.jobId);
     selectedTaskRef.current = taskSummary(task);
+    activeTaskRef.current = task;
     setActiveTask(task);
     setActiveTaskError("");
     setActiveTaskRecovering(false);
@@ -767,6 +848,10 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
 
   const removeTask = useCallback((jobId: string) => {
     persistReferences(referencesRef.current.filter((item) => item.jobId !== jobId));
+    taskCacheRef.current.delete(jobId);
+    for (const key of artifactCacheRef.current.keys()) {
+      if (key.startsWith(`${jobId}:`)) artifactCacheRef.current.delete(key);
+    }
     setTasks((current) => current.filter((item) => item.jobId !== jobId));
     setActiveJobId((current) => current === jobId ? "" : current);
     setActiveTask((current) => current?.jobId === jobId ? null : current);

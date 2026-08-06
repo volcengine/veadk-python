@@ -199,7 +199,7 @@ test("keeps task polling above the workbench and supports safe reopening", () =>
   assert.match(types, /SkillWorkbenchRecoveryStatus/);
   assert.match(workbench, /recoveryStatusLabel\(task\.recoveryStatus\)/);
   assert.match(workbench, /const recoveryPending = task\?\.recoveryStatus === "pending"/);
-  assert.match(workbench, /正在保存当前会话恢复点/);
+  assert.match(workbench, /正在确认当前会话恢复点/);
   assert.match(controller, /activeSelectionRevision/);
   assert.match(controller, /setActiveSelectionRevision\(\(revision\) => revision \+ 1\)/);
   assert.doesNotMatch(workbench, /setTimeout\(poll/);
@@ -301,7 +301,7 @@ test("binds preview, download, and publish to one immutable task revision", () =
   );
   assert.match(
     controller,
-    /selectTask[\s\S]*artifactRequestRef\.current \+= 1[\s\S]*setActiveArtifact\(null\)/,
+    /selectTask[\s\S]*artifactCacheKey\(cachedTask\.jobId,\s*cachedTask\.revision\)[\s\S]*artifactRequestRef\.current \+= 1/,
   );
   assert.match(
     workbench,
@@ -314,6 +314,43 @@ test("binds preview, download, and publish to one immutable task revision", () =
   assert.match(
     workbench,
     /downloadSkillWorkbenchTask\(\s*task\.jobId,\s*task\.revision,\s*artifact!\.sha256/,
+  );
+});
+
+test("reopens cached Skill conversations without loading or downloading them again", () => {
+  assert.match(controller, /const SESSION_CACHE_LIMIT = \d+/);
+  assert.match(controller, /taskCacheRef = useRef<Map<string, SkillWorkbenchTask>>/);
+  assert.match(
+    controller,
+    /artifactCacheRef =\s*useRef<Map<string, SkillWorkbenchArtifact>>/,
+  );
+  assert.match(
+    controller,
+    /selectTask[\s\S]*cachedTask[\s\S]*setActiveTask\(cachedTask\)/,
+  );
+  assert.match(
+    controller,
+    /selectTask[\s\S]*cachedArtifact[\s\S]*setActiveArtifact\(cachedArtifact\)/,
+  );
+  assert.match(
+    controller,
+    /const cachedArtifact = readCachedValue\([\s\S]*if \(cachedArtifact\) \{[\s\S]*return;/,
+  );
+  assert.match(
+    controller,
+    /rememberCachedValue\(\s*artifactCacheRef\.current,[\s\S]*artifactCacheKey/,
+  );
+  assert.match(
+    controller,
+    /setActiveTaskLoading\(!provisioning && !hasVisibleTask\)/,
+  );
+  assert.match(
+    controller,
+    /taskCacheRef\.current\.clear\(\)[\s\S]*artifactCacheRef\.current\.clear\(\)/,
+  );
+  assert.doesNotMatch(
+    controller,
+    /localStorage\.(?:setItem|getItem)\([^)]*artifact/i,
   );
 });
 
@@ -396,10 +433,30 @@ test("turns a released remote DevEnv into an actionable expired conversation", (
     /current\.filter\(\(task\) =>\s*task\.state !== "provisioning"/,
   );
   assert.match(workbench, /DevEnv 已到期/);
-  assert.match(workbench, /最近可用的恢复点/);
-  assert.match(workbench, /没有可用恢复点/);
-  assert.match(workbench, /恢复点不可用/);
+  assert.match(workbench, /无法继续调整、下载或发布/);
   assert.match(workbench, /task\.state === "expired"/);
+  assert.match(
+    workbench,
+    /task\.state !== "expired" \? \([\s\S]*className="composer skill-workbench__composer"/,
+  );
+  assert.match(workbench, /查看已发布 Skill/);
+  assert.match(workbench, /前往技能中心查看 Skill/);
+  assert.match(
+    workbench,
+    /effectivePublishResult[\s\S]*onViewPublished\(effectivePublishResult\)[\s\S]*onBack\(\)/,
+  );
+  assert.match(
+    workbench,
+    /publishResult\?\.jobId === task\.jobId[\s\S]*publishResult\.revision === task\.revision/,
+  );
+  assert.match(
+    controller,
+    /const publication =[\s\S]*publication\?\.revision === previous\?\.revision[\s\S]*\{ publication \}/,
+  );
+  assert.match(
+    controller,
+    /expiredTask\(\s*requestedJobId,\s*activeTaskRef\.current\?\.jobId === requestedJobId/,
+  );
   assert.match(api, /\/refinements/);
   assert.doesNotMatch(controller, /recoveryAvailable: true/);
   assert.doesNotMatch(workbench, /DevEnv Session 已过期/);
@@ -417,10 +474,10 @@ test("warns ready users that DevEnv TTL limits download and publishing", () => {
   assert.doesNotMatch(workbench, /AgentKit 版本生效/);
 });
 
-test("keeps one composer across running, stopped, failed, ready, and expired states", () => {
+test("keeps one composer across active states and removes it after DevEnv expiry", () => {
   assert.match(
     workbench,
-    /const canRefine =[\s\S]*?task\.state !== "running"[\s\S]*?!recoveryPending/,
+    /const canRefine =[\s\S]*?task\.state !== "running"[\s\S]*?task\.state !== "expired"[\s\S]*?!recoveryPending/,
   );
   assert.match(workbench, /placeholder=\{task\.state === "running"/);
   assert.match(workbench, /disabled=\{Boolean\(action\)\}/);

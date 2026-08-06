@@ -3306,7 +3306,7 @@ class SkillWorkbenchService:
         *,
         request_data: dict[str, Any] | None = None,
     ) -> bool | None:
-        """Start one checkpoint per revision and observe it through GetSnapshot."""
+        """Observe a previously requested checkpoint without creating one."""
         revision = _json_int(task.get("revision"), 1)
         session_id = session.get("instanceId", "")
         endpoint = session.get("endpoint", "")
@@ -3327,6 +3327,20 @@ class SkillWorkbenchService:
             snapshot_status = str(task.get("recoverySnapshotStatus") or "").strip()
             if existing is not None:
                 return existing
+            if (
+                snapshot_status in {"requesting", "pending", "unknown"}
+                and not snapshot_id
+            ):
+                reconciled = self._reconcile_recovery_snapshot(
+                    tool_id,
+                    session_id,
+                    endpoint,
+                    job_id,
+                    revision,
+                    task,
+                )
+                if str(task.get("recoverySnapshotId") or "").strip():
+                    return reconciled
             if snapshot_status == "unknown":
                 return None
             if snapshot_status in {
@@ -3358,109 +3372,7 @@ class SkillWorkbenchService:
                     revision,
                     task,
                 )
-
-            if snapshot_status in {"requesting", "pending"}:
-                return None
-
-            request_token = uuid.uuid4().hex
-            claimed, checkpoint_state = self._claim_recovery_snapshot(
-                endpoint,
-                job_id,
-                revision,
-                request_token,
-            )
-            self._adopt_recovery_snapshot_state(task, checkpoint_state, revision)
-            if not claimed:
-                snapshot_id = str(task.get("recoverySnapshotId") or "").strip()
-                if snapshot_id:
-                    return self._refresh_recovery_snapshot(
-                        tool_id,
-                        session_id,
-                        endpoint,
-                        job_id,
-                        revision,
-                        task,
-                    )
-                return self._recovery_snapshot_availability(task, revision)
-
-            client = self._tools_client_factory(self._region)
-            try:
-                response = client.create_session_snapshot(
-                    tools_types.CreateSessionSnapshotRequest(
-                        ToolId=tool_id,
-                        SessionId=session_id,
-                    )
-                )
-            except Exception as error:
-                checkpoint_state = self._persist_recovery_snapshot_state(
-                    endpoint,
-                    job_id,
-                    revision,
-                    request_token,
-                    snapshot_id="",
-                    status="unknown",
-                )
-                self._adopt_recovery_snapshot_state(task, checkpoint_state, revision)
-                logger.warning(
-                    "Skill workbench recovery checkpoint outcome unknown "
-                    "job_id=%s revision=%s error_type=%s",
-                    job_id,
-                    revision,
-                    type(error).__name__,
-                )
-                return None
-
-            snapshot_id = str(getattr(response, "snapshot_id", "") or "").strip()
-            create_status = self._normalize_recovery_snapshot_status(
-                getattr(response, "status", "")
-            )
-            if not snapshot_id:
-                outcome = "failed" if create_status == "failed" else "unknown"
-                checkpoint_state = self._persist_recovery_snapshot_state(
-                    endpoint,
-                    job_id,
-                    revision,
-                    request_token,
-                    snapshot_id="",
-                    status=outcome,
-                )
-                self._adopt_recovery_snapshot_state(task, checkpoint_state, revision)
-                logger.warning(
-                    "Skill workbench recovery checkpoint returned no snapshot "
-                    "job_id=%s revision=%s status=%s",
-                    job_id,
-                    revision,
-                    create_status,
-                )
-                return self._recovery_snapshot_availability(task, revision)
-
-            checkpoint_state = self._persist_recovery_snapshot_state(
-                endpoint,
-                job_id,
-                revision,
-                request_token,
-                snapshot_id=snapshot_id,
-                status="failed" if create_status == "failed" else "pending",
-            )
-            self._adopt_recovery_snapshot_state(task, checkpoint_state, revision)
-            logger.info(
-                "Requested Skill workbench recovery checkpoint "
-                "job_id=%s revision=%s snapshot_id=%s create_status=%s",
-                job_id,
-                revision,
-                snapshot_id,
-                create_status,
-            )
-            if create_status == "failed":
-                return False
-            return self._refresh_recovery_snapshot(
-                tool_id,
-                session_id,
-                endpoint,
-                job_id,
-                revision,
-                task,
-            )
+            return None
         except Exception as error:
             logger.warning(
                 "Skill workbench recovery checkpoint observation failed "
@@ -3560,80 +3472,6 @@ class SkillWorkbenchService:
         ):
             task.pop(key, None)
 
-    def _claim_recovery_snapshot(
-        self,
-        endpoint: str,
-        job_id: str,
-        revision: int,
-        request_token: str,
-    ) -> tuple[bool, dict[str, object]]:
-        request_path = repr(f"{self._remote_dir(job_id)}/request.json")
-        script = (
-            textwrap.dedent(
-                """
-                python3 - <<'PY'
-                import fcntl
-                import json
-                import os
-                import time
-                from pathlib import Path
-
-                request_path = Path(__REQUEST_PATH__)
-                revision = __REVISION__
-                request_token = __REQUEST_TOKEN__
-                lock_path = request_path.with_name(".recovery-snapshot.lock")
-                keys = (
-                    "recoverySnapshotId",
-                    "recoverySnapshotRevision",
-                    "recoverySnapshotStatus",
-                    "recoverySnapshotRequestedAt",
-                    "recoverySnapshotRequestToken",
-                )
-                with lock_path.open("a+", encoding="utf-8") as lock:
-                    fcntl.flock(lock, fcntl.LOCK_EX)
-                    request = json.loads(request_path.read_text(encoding="utf-8"))
-                    claimed = False
-                    if request.get("revision") == revision:
-                        if request.get("recoverySnapshotRevision") == revision:
-                            claimed = (
-                                request.get("recoverySnapshotStatus") == "requesting"
-                                and request.get("recoverySnapshotRequestToken")
-                                == request_token
-                            )
-                        else:
-                            request["recoverySnapshotRevision"] = revision
-                            request["recoverySnapshotStatus"] = "requesting"
-                            request["recoverySnapshotRequestedAt"] = int(time.time())
-                            request["recoverySnapshotRequestToken"] = request_token
-                            request.pop("recoverySnapshotId", None)
-                            temporary = request_path.with_name(
-                                f".request.snapshot-{request_token}.tmp"
-                            )
-                            temporary.write_text(
-                                json.dumps(request, ensure_ascii=False),
-                                encoding="utf-8",
-                            )
-                            os.replace(temporary, request_path)
-                            claimed = True
-                    state = {
-                        key: request[key] for key in keys if request.get(key) is not None
-                    }
-                print(json.dumps({"claimed": claimed, "state": state}))
-                PY
-                """
-            )
-            .replace("__REQUEST_PATH__", request_path)
-            .replace("__REVISION__", str(revision))
-            .replace("__REQUEST_TOKEN__", repr(request_token))
-            .strip()
-        )
-        payload = self._remote_command_json(endpoint, script, job_id=job_id)
-        claimed = payload.get("claimed")
-        state = payload.get("state")
-        if not isinstance(claimed, bool) or not isinstance(state, dict):
-            raise RuntimeError("DevEnv returned an invalid snapshot claim")
-        return claimed, self._recovery_snapshot_state(state)
-
     def _persist_recovery_snapshot_state(
         self,
         endpoint: str,
@@ -3729,7 +3567,7 @@ class SkillWorkbenchService:
             raise RuntimeError("DevEnv returned an invalid snapshot transition")
         return self._recovery_snapshot_state(payload["state"])
 
-    def _refresh_recovery_snapshot(
+    def _reconcile_recovery_snapshot(
         self,
         tool_id: str,
         session_id: str,
@@ -3738,10 +3576,95 @@ class SkillWorkbenchService:
         revision: int,
         task: dict[str, object],
     ) -> bool | None:
-        snapshot_id = str(task.get("recoverySnapshotId") or "").strip()
-        if not snapshot_id:
+        """Find an asynchronously created checkpoint without creating another."""
+        requested_at = _json_int(task.get("recoverySnapshotRequestedAt"), 0)
+        if requested_at <= 0:
             return None
         client = self._tools_client_factory(self._region)
+        candidates: list[tuple[int, str]] = []
+        next_token: str | None = None
+        seen_tokens: set[str] = set()
+        for _page in range(100):
+            request = tools_types.ListSessionSnapshotsRequest(
+                ToolId=tool_id,
+                SessionId=session_id,
+                UserSessionId=job_id,
+                MaxResults=100,
+                NextToken=next_token,
+            )
+            response = self._idempotent_dependency_call(
+                "reconcile_recovery_snapshot",
+                lambda request=request: client.list_session_snapshots(request),
+                job_id=job_id,
+            )
+            for snapshot in getattr(response, "snapshots", None) or []:
+                snapshot_id = str(getattr(snapshot, "snapshot_id", "") or "").strip()
+                created_at = _session_time(getattr(snapshot, "created_at", None))
+                if (
+                    snapshot_id
+                    and str(getattr(snapshot, "tool_id", "") or "").strip() == tool_id
+                    and str(getattr(snapshot, "session_id", "") or "").strip()
+                    == session_id
+                    and str(getattr(snapshot, "user_session_id", "") or "").strip()
+                    == job_id
+                    and created_at is not None
+                    and created_at >= requested_at
+                ):
+                    candidates.append((created_at, snapshot_id))
+            next_token = str(getattr(response, "next_token", "") or "").strip() or None
+            if next_token is None:
+                break
+            if next_token in seen_tokens:
+                raise RuntimeError("AgentKit returned a repeated snapshot page")
+            seen_tokens.add(next_token)
+        else:
+            raise RuntimeError("AgentKit returned too many snapshot pages")
+        if not candidates:
+            return None
+        _created_at, snapshot_id = max(
+            candidates,
+            key=lambda candidate: (candidate[0], candidate[1]),
+        )
+        status = self._read_recovery_snapshot_status(
+            client,
+            tool_id,
+            session_id,
+            snapshot_id,
+            job_id,
+        )
+        if status is None:
+            return None
+        request_token = str(task.get("recoverySnapshotRequestToken") or "").strip()
+        state = self._persist_recovery_snapshot_state(
+            endpoint,
+            job_id,
+            revision,
+            request_token,
+            snapshot_id=snapshot_id,
+            status=status,
+        )
+        self._adopt_recovery_snapshot_state(task, state, revision)
+        reconciled_snapshot_id = str(task.get("recoverySnapshotId") or "").strip()
+        if not reconciled_snapshot_id:
+            return self._recovery_snapshot_availability(task, revision)
+        logger.info(
+            "Reconciled asynchronous Skill workbench recovery checkpoint "
+            "job_id=%s revision=%s snapshot_id=%s",
+            job_id,
+            revision,
+            reconciled_snapshot_id,
+        )
+        return self._recovery_snapshot_availability(task, revision)
+
+    def _read_recovery_snapshot_status(
+        self,
+        client: Any,
+        tool_id: str,
+        session_id: str,
+        snapshot_id: str,
+        job_id: str,
+    ) -> str | None:
+        """Read and validate the authoritative state of one checkpoint."""
         request = tools_types.GetSessionSnapshotRequest(
             ToolId=tool_id,
             SnapshotId=snapshot_id,
@@ -3770,13 +3693,30 @@ class SkillWorkbenchService:
         status = self._normalize_recovery_snapshot_status(
             getattr(snapshot, "status", "")
         )
-        if status == "unknown":
-            status = "pending"
-        state: dict[str, object] = {
-            "recoverySnapshotId": snapshot_id,
-            "recoverySnapshotRevision": revision,
-            "recoverySnapshotStatus": status,
-        }
+        return "pending" if status == "unknown" else status
+
+    def _refresh_recovery_snapshot(
+        self,
+        tool_id: str,
+        session_id: str,
+        endpoint: str,
+        job_id: str,
+        revision: int,
+        task: dict[str, object],
+    ) -> bool | None:
+        snapshot_id = str(task.get("recoverySnapshotId") or "").strip()
+        if not snapshot_id:
+            return None
+        client = self._tools_client_factory(self._region)
+        status = self._read_recovery_snapshot_status(
+            client,
+            tool_id,
+            session_id,
+            snapshot_id,
+            job_id,
+        )
+        if status is None:
+            return None
         request_token = str(task.get("recoverySnapshotRequestToken") or "").strip()
         state = self._persist_recovery_snapshot_state(
             endpoint,
