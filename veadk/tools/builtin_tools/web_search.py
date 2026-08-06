@@ -26,6 +26,55 @@ from veadk.utils.logger import get_logger
 from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
+_BYTEPLUS_WEB_SEARCH_URL = "https://torchlight.byteintlapi.com/search_api/web_search"
+
+
+def _extract_web_results(response: object) -> list[dict]:
+    if isinstance(response, list):
+        return [item for item in response if isinstance(item, dict)]
+    if not isinstance(response, dict):
+        return []
+    candidates: list[object] = [
+        ((response.get("Result") or {}).get("WebResults")),
+        ((response.get("Result") or {}).get("Results")),
+        ((response.get("Result") or {}).get("SearchResults")),
+        ((response.get("Data") or {}).get("WebResults")),
+        ((response.get("Data") or {}).get("Results")),
+        ((response.get("data") or {}).get("web_results")),
+        ((response.get("data") or {}).get("results")),
+        response.get("WebResults"),
+        response.get("results"),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, list):
+            return [item for item in candidate if isinstance(item, dict)]
+    return []
+
+
+def _result_summary(item: dict) -> str:
+    for key in ("Summary", "summary", "Snippet", "snippet", "Content", "content"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _byteplus_web_search(query: str, count: int = 5) -> dict:
+    api_key = os.getenv("BYTEPLUS_WEB_SEARCH_API_KEY")
+    if not api_key:
+        raise ValueError("BYTEPLUS_WEB_SEARCH_API_KEY is not set.")
+    response = requests.post(
+        url=os.getenv("BYTEPLUS_WEB_SEARCH_URL", _BYTEPLUS_WEB_SEARCH_URL),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={"Query": query, "Count": count},
+        timeout=60,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, dict) else {"results": data}
 
 
 def web_search(query: str, tool_context: ToolContext | None = None) -> list[str]:
@@ -37,6 +86,22 @@ def web_search(query: str, tool_context: ToolContext | None = None) -> list[str]
     Returns:
         A list of result documents.
     """
+    provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+    logger.info(f"Cloud provider: {provider}")
+    if provider == "byteplus":
+        try:
+            response = _byteplus_web_search(query, count=5)
+            return [
+                summary
+                for summary in (
+                    _result_summary(item) for item in _extract_web_results(response)
+                )
+                if summary
+            ]
+        except Exception as e:
+            logger.error(f"BytePlus web search failed {e}")
+            return [f"Web search failed: {e}"]
+
     ak = None
     sk = None
     # First try to get tool-specific AK/SK
@@ -64,48 +129,22 @@ def web_search(query: str, tool_context: ToolContext | None = None) -> list[str]
     else:
         logger.debug("Successfully get AK/SK from tool context.")
 
-    provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
-    logger.info(f"Cloud provider: {provider}")
-
-    if provider == "byteplus":
-        request_body = {
+    response = ve_request(
+        request_body={
             "Query": query,
+            "SearchType": "web",
             "Count": 5,
-        }
-        api_key = os.getenv("BYTEPLUS_WEB_SEARCH_API_KEY")
-        if not api_key:
-            logger.error("BYTEPLUS_WEB_SEARCH_API_KEY is not set.")
-            return ["Web search failed: API key is not set."]
-        header = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-
-        response = requests.post(
-            url="https://torchlight.byteintlapi.com/search_api/web_search",
-            headers=header,
-            json=request_body,
-            timeout=60,
-        )
-        response.raise_for_status()
-        response = response.json()
-    else:
-        response = ve_request(
-            request_body={
-                "Query": query,
-                "SearchType": "web",
-                "Count": 5,
-                "NeedSummary": True,
-            },
-            action="WebSearch",
-            ak=ak,
-            sk=sk,
-            service="volc_torchlight_api",
-            version="2025-01-01",
-            region="cn-beijing",
-            host="mercury.volcengineapi.com",
-            header={"X-Security-Token": session_token},
-        )
+            "NeedSummary": True,
+        },
+        action="WebSearch",
+        ak=ak,
+        sk=sk,
+        service="volc_torchlight_api",
+        version="2025-01-01",
+        region="cn-beijing",
+        host="mercury.volcengineapi.com",
+        header={"X-Security-Token": session_token},
+    )
 
     try:
         results: list = response["Result"]["WebResults"]

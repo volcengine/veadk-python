@@ -7,12 +7,18 @@ import {
   type SkillSpaceRef,
   type SkillSpaceSkill,
 } from "../create/skills/skillspace";
+import {
+  cloudRegionOptions,
+  defaultCloudRegion,
+  formatCloudRegion,
+  type CloudProvider,
+} from "../adk/cloudProvider";
 import { Markdown } from "./Markdown";
 
 const SPACE_PAGE_SIZE = 6;
 const SKILL_PAGE_SIZE = 7;
 
-type SkillRegion = "cn-beijing" | "cn-shanghai";
+type SkillRegion = string;
 
 const STATUS_LABELS: Record<string, string> = {
   active: "可用",
@@ -156,6 +162,7 @@ function SkillDetailDialog({
   skill,
   space,
   region,
+  cloudProvider,
   detail,
   loading,
   error,
@@ -164,6 +171,7 @@ function SkillDetailDialog({
   skill: SkillSpaceSkill;
   space: SkillSpaceRef;
   region: SkillRegion;
+  cloudProvider: CloudProvider;
   detail: SkillDetail | null;
   loading: boolean;
   error: string;
@@ -205,7 +213,7 @@ function SkillDetailDialog({
           <div><dt>状态</dt><dd>{statusLabel(skill.skillStatus)}</dd></div>
           <div><dt>技能空间</dt><dd title={space.name}>{space.name}</dd></div>
           <div><dt>Project</dt><dd title={space.projectName || "default"}>{space.projectName || "default"}</dd></div>
-          <div><dt>地域</dt><dd>{region === "cn-beijing" ? "北京" : "上海"}</dd></div>
+          <div><dt>地域</dt><dd>{formatCloudRegion(region, cloudProvider)}</dd></div>
         </dl>
 
         <div className="skill-detail-content">
@@ -240,8 +248,15 @@ export function SkillCenterButton({ onClick }: { onClick: () => void }) {
 }
 
 /** Native AgentKit Skill space browser. */
-export function SkillCenterView() {
-  const [region, setRegion] = useState<SkillRegion>("cn-beijing");
+export function SkillCenterView({
+  cloudProvider = "volcengine",
+}: {
+  cloudProvider?: CloudProvider;
+}) {
+  const regionOptions = cloudRegionOptions(cloudProvider);
+  const [region, setRegion] = useState<SkillRegion>(
+    defaultCloudRegion(cloudProvider),
+  );
   const [spaces, setSpaces] = useState<SkillSpaceRef[]>([]);
   const [spacePage, setSpacePage] = useState(1);
   const [spaceTotal, setSpaceTotal] = useState(0);
@@ -258,6 +273,16 @@ export function SkillCenterView() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const detailRequest = useRef(0);
+
+  useEffect(() => {
+    if (regionOptions.some((option) => option.value === region)) return;
+    closeDetail();
+    setRegion(defaultCloudRegion(cloudProvider));
+    setSpacePage(1);
+    setSkillPage(1);
+    setSelectedSpace(null);
+    setSkills([]);
+  }, [cloudProvider, region, regionOptions]);
 
   useEffect(() => {
     let active = true;
@@ -376,8 +401,16 @@ export function SkillCenterView() {
                 <span className="skillcenter-count-badge">{spaceTotal}</span>
               </div>
               <div className="skillcenter-regions" aria-label="地域">
-                <button type="button" className={region === "cn-beijing" ? "active" : ""} onClick={() => changeRegion("cn-beijing")}>北京</button>
-                <button type="button" className={region === "cn-shanghai" ? "active" : ""} onClick={() => changeRegion("cn-shanghai")}>上海</button>
+                {regionOptions.map((option) => (
+                  <button
+                    type="button"
+                    key={option.value}
+                    className={region === option.value ? "active" : ""}
+                    onClick={() => changeRegion(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
               </div>
             </header>
             <div className="skillcenter-listwrap">
@@ -456,6 +489,7 @@ export function SkillCenterView() {
           skill={detailSkill}
           space={selectedSpace}
           region={region}
+          cloudProvider={cloudProvider}
           detail={detail}
           loading={detailLoading}
           error={detailError}

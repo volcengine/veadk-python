@@ -7,6 +7,10 @@ import {
 } from "react";
 import { deployAgentkitProject, type DeployStage } from "../adk/client";
 import {
+  defaultCloudRegion,
+  type CloudProvider,
+} from "../adk/cloudProvider";
+import {
   ProjectPreview,
   type DeployResult,
   type DeploymentTaskUpdate,
@@ -28,6 +32,7 @@ interface CodePackageCreateProps {
   onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
   onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
   initialDeployRegion?: string;
+  cloudProvider?: CloudProvider;
 }
 
 function packageProjectName(fileName: string): string {
@@ -88,7 +93,8 @@ export function CodePackageCreate({
   onDeploymentTaskChange,
   onDeploymentStarted,
   onDeploymentComplete,
-  initialDeployRegion = "cn-beijing",
+  cloudProvider = "volcengine",
+  initialDeployRegion = defaultCloudRegion(cloudProvider),
 }: CodePackageCreateProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const loadRunRef = useRef(0);
@@ -178,6 +184,7 @@ export function CodePackageCreate({
   return (
     <div className="package-create package-create-preview">
       <ProjectPreview
+        cloudProvider={cloudProvider}
         project={project ?? EMPTY_PACKAGE_PROJECT}
         agentName={project?.name || "代码包"}
         onChange={project ? setProject : undefined}

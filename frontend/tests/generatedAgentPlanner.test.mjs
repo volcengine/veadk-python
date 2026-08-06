@@ -74,7 +74,7 @@ test("dims the input and shows a spinner while generation is active", () => {
 test("names the planner model and preserves generation errors verbatim", () => {
   assert.match(
     createSource,
-    /placeholder="描述目标，使用 doubao-seed-2-0-lite-260428 模型一键生成配置"/,
+    /placeholder=\{`描述目标，使用 \$\{plannerModelName\(cloudProvider\)\} 模型一键生成配置`\}/,
   );
   assert.match(
     createSource,

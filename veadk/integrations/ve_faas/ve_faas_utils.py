@@ -204,7 +204,19 @@ def norm_query(params):
     return query.replace("+", "%20")
 
 
-def request(method, date, query, header, ak, sk, token, action, body, region=Region):
+def request(
+    method,
+    date,
+    query,
+    header,
+    ak,
+    sk,
+    token,
+    action,
+    body,
+    region=Region,
+    host=Host,
+):
     credential = {
         "access_key_id": ak,
         "secret_access_key": sk,
@@ -233,7 +245,7 @@ def request(method, date, query, header, ak, sk, token, action, body, region=Reg
 
     request_param = {
         "body": body,
-        "host": Host,
+        "host": host,
         "path": "/",
         "method": method,
         "content_type": content_type,
@@ -317,6 +329,7 @@ def signed_request(
     body: dict,
     region: str = Region,
     session_token: str = "",
+    host: str = Host,
 ):
     now = datetime.datetime.utcnow()
 
@@ -332,6 +345,7 @@ def signed_request(
             target,
             json.dumps(body),
             region=region,
+            host=host,
         )
         return response_body
     except Exception as e:

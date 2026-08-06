@@ -24,9 +24,15 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from veadk import Agent, Runner
 from veadk.cli.generated_agent_codegen import AgentDraft, CustomTool, MemoryConfig
+from veadk.consts import DEFAULT_MODEL_AGENT_NAME
+from veadk.utils.cloud_provider import cloud_provider_from_env
 
-PLANNER_MODEL_NAME = "doubao-seed-2-0-lite-260428"
-DEFAULT_GENERATED_MODEL_NAME = "doubao-seed-2-1-pro-260628"
+PLANNER_MODEL_NAME = (
+    "seed-2-0-lite-260228"
+    if cloud_provider_from_env() == "byteplus"
+    else "doubao-seed-2-0-lite-260428"
+)
+DEFAULT_GENERATED_MODEL_NAME = DEFAULT_MODEL_AGENT_NAME
 
 
 class GeneratedCustomToolPlan(BaseModel):
@@ -50,9 +56,11 @@ class GeneratedAgentPlan(BaseModel):
     maxIterations: int = Field(
         description="Positive loop limit; use 3 for non-loop Agents."
     )
-    modelName: Literal["", "doubao-seed-2-1-pro-260628"] = Field(
-        description="Fixed model for an llm Agent; empty for an orchestrator."
-    )
+    modelName: Literal[
+        "",
+        "doubao-seed-2-1-pro-260628",
+        "seed-2-0-lite-260228",
+    ] = Field(description="Fixed model for an llm Agent; empty for an orchestrator.")
     builtinTools: list[
         Literal[
             "web_search",
@@ -88,6 +96,8 @@ class GeneratedAgentPlan(BaseModel):
         if self.agentType == "llm":
             if not self.instruction.strip() or not self.modelName:
                 raise ValueError(f"{self.name} is missing llm configuration")
+            if self.modelName != DEFAULT_GENERATED_MODEL_NAME:
+                raise ValueError(f"{self.name} must use {DEFAULT_GENERATED_MODEL_NAME}")
             if self.subAgents:
                 raise ValueError(f"llm Agent {self.name} must be a leaf")
         else:

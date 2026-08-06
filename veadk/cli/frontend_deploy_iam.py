@@ -27,6 +27,11 @@ from veadk.cli.frontend_deploy_policy import (
     FRONTEND_DEPLOY_SYSTEM_POLICIES,
     FRONTEND_DEPLOY_TRUST_POLICY,
 )
+from veadk.utils.cloud_provider import (
+    DEFAULT_CLOUD_PROVIDER,
+    CloudProvider,
+    iam_openapi_host,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -147,6 +152,7 @@ def ensure_frontend_role(
     role_name: str = DEFAULT_ROLE_NAME,
     policy_name: str = DEFAULT_POLICY_NAME,
     session_token: str = "",
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
 ) -> str:
     """Get-or-create the frontend's IAM role and return its TRN.
 
@@ -159,6 +165,9 @@ def ensure_frontend_role(
     svc = IamService()
     svc.set_ak(access_key)
     svc.set_sk(secret_key)
+    svc.set_host(iam_openapi_host(provider))
+    if provider == "byteplus":
+        svc.set_scheme("https")
     if session_token:
         svc.set_session_token(session_token)
     _ensure_custom_policy(svc, policy_name)

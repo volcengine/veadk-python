@@ -124,6 +124,18 @@ import type {
   GeneratedAgentTestRun,
   UiFeatures,
 } from "../adk/client";
+import {
+  BYTEPLUS_DEFAULT_MODEL_NAME,
+  BYTEPLUS_MODELARK_BASE_URL,
+  defaultCloudRegion,
+  defaultEmbeddingModelName,
+  defaultModelApiBase,
+  defaultModelName,
+  plannerModelName,
+  VOLCENGINE_DEFAULT_MODEL_NAME,
+  VOLCENGINE_MODELARK_BASE_URL,
+  type CloudProvider,
+} from "../adk/cloudProvider";
 import { applyEvent, emptyAcc, type Block } from "../blocks";
 import "./CustomCreate.css";
 
@@ -379,6 +391,23 @@ function a2aRegistryEnvValues(
   }
   return values;
 }
+
+function providerRuntimeEnv(
+  env: EnvVar[],
+  cloudProvider: CloudProvider,
+): EnvVar[] {
+  if (cloudProvider !== "byteplus") return env;
+  return env.map((item) => {
+    if (item.key === "MODEL_EMBEDDING_NAME") {
+      return { ...item, placeholder: defaultEmbeddingModelName(cloudProvider) };
+    }
+    if (item.key === "MODEL_EMBEDDING_API_BASE") {
+      return { ...item, placeholder: defaultModelApiBase(cloudProvider) };
+    }
+    return item;
+  });
+}
+
 /* ---------------------------------------------------------------- *
  * Multi-select checklist. Each row = label + desc, toggling the id in
  * `selected`. Used for built-in tools and tracing exporters.
@@ -564,7 +593,9 @@ function a2aSpaceDisplayName(space: A2aSpaceRef): string {
 }
 
 function vikingKnowledgebaseDisplayName(item: VikingKnowledgebaseRef): string {
-  return item.name.trim() || item.id || "未命名知识库";
+  const name = item.name.trim() || item.id || "未命名知识库";
+  const details = [item.sourceLabel, item.projectName].filter(Boolean);
+  return details.length ? `${name} · ${details.join(" · ")}` : name;
 }
 
 function A2aSpaceSelect({
@@ -664,7 +695,7 @@ function A2aSpaceSelect({
   };
 
   return (
-    <div className="cw-a2a-space-picker" ref={pickerRef}>
+    <div className={`cw-a2a-space-picker${open ? " is-open" : ""}`} ref={pickerRef}>
       <div className="cw-a2a-space-row">
         <div className="cw-a2a-space-select-wrap">
           <button
@@ -783,7 +814,7 @@ function VikingKnowledgebaseSelect({
   onChange,
 }: {
   value: string;
-  onChange: (index: string) => void;
+  onChange: (item: VikingKnowledgebaseRef) => void;
 }) {
   const [items, setItems] = useState<VikingKnowledgebaseRef[]>([]);
   const [loading, setLoading] = useState(false);
@@ -832,6 +863,10 @@ function VikingKnowledgebaseSelect({
           item.id,
           item.description,
           item.projectName,
+          item.resourceId,
+          item.agentkitKnowledgeId,
+          item.providerKnowledgeId,
+          item.sourceLabel,
         ]),
       ),
     [items, searchQuery],
@@ -863,8 +898,8 @@ function VikingKnowledgebaseSelect({
     };
   }, [open]);
 
-  const selectItem = (index: string) => {
-    onChange(index);
+  const selectItem = (item: VikingKnowledgebaseRef) => {
+    onChange(item);
     setOpen(false);
   };
 
@@ -878,7 +913,10 @@ function VikingKnowledgebaseSelect({
   }
 
   return (
-    <div className="cw-a2a-space-picker cw-viking-kb-picker" ref={pickerRef}>
+    <div
+      className={`cw-a2a-space-picker cw-viking-kb-picker${open ? " is-open" : ""}`}
+      ref={pickerRef}
+    >
       <div className="cw-a2a-space-row">
         <div className="cw-a2a-space-select-wrap">
           <button
@@ -925,7 +963,18 @@ function VikingKnowledgebaseSelect({
                     role="option"
                     aria-selected
                     className="cw-a2a-space-option is-selected"
-                    onClick={() => selectItem(value)}
+                    onClick={() =>
+                      selectItem({
+                        id: value,
+                        name: value,
+                        description: "",
+                        projectName: "",
+                        region: "",
+                        sourceKind: "knowledge",
+                        sourceLabel: "Knowledge Engine",
+                        resourceId: "",
+                      })
+                    }
                   >
                     {value}
                   </button>
@@ -933,6 +982,14 @@ function VikingKnowledgebaseSelect({
                 {filteredItems.map((item) => {
                   const optionLabel = vikingKnowledgebaseDisplayName(item);
                   const selected = item.id === value;
+                  const optionIds = [
+                    item.id,
+                    item.resourceId,
+                    item.agentkitKnowledgeId,
+                    item.providerKnowledgeId,
+                  ]
+                    .filter(Boolean)
+                    .join(" / ");
                   return (
                     <button
                       key={item.id}
@@ -942,8 +999,8 @@ function VikingKnowledgebaseSelect({
                       className={`cw-a2a-space-option ${
                         selected ? "is-selected" : ""
                       }`}
-                      title={`${optionLabel} (${item.id})`}
-                      onClick={() => selectItem(item.id)}
+                      title={optionIds ? `${optionLabel} (${optionIds})` : optionLabel}
+                      onClick={() => selectItem(item)}
                     >
                       {optionLabel}
                     </button>
@@ -1226,9 +1283,11 @@ const SKILL_SOURCES: {
 function SkillsSourceTabs({
   selected,
   onChange,
+  cloudProvider,
 }: {
   selected: SelectedSkill[];
   onChange: (next: SelectedSkill[]) => void;
+  cloudProvider: CloudProvider;
 }) {
   const [active, setActive] = useState<SkillSource>("local");
   const [open, setOpen] = useState(false);
@@ -1355,7 +1414,11 @@ function SkillsSourceTabs({
                     <LocalPicker selected={selected} onChange={onChange} />
                   )}
                   {active === "skillspace" && (
-                    <SkillSpacePicker selected={selected} onChange={onChange} />
+                    <SkillSpacePicker
+                      selected={selected}
+                      onChange={onChange}
+                      cloudProvider={cloudProvider}
+                    />
                   )}
                 </div>
               </div>
@@ -1445,10 +1508,14 @@ function updateNode(
   return { ...root, subAgents };
 }
 
-function addChild(root: AgentDraft, path: NodePath): AgentDraft {
+function addChild(
+  root: AgentDraft,
+  path: NodePath,
+  cloudProvider: CloudProvider = "volcengine",
+): AgentDraft {
   return updateNode(root, path, (n) => ({
     ...n,
-    subAgents: [...n.subAgents, emptyDraft()],
+    subAgents: [...n.subAgents, emptyDraft(cloudProvider)],
   }));
 }
 
@@ -1456,10 +1523,11 @@ function insertChild(
   root: AgentDraft,
   parentPath: NodePath,
   index: number,
+  cloudProvider: CloudProvider = "volcengine",
 ): AgentDraft {
   return updateNode(root, parentPath, (n) => {
     const subAgents = n.subAgents.slice();
-    subAgents.splice(index, 0, emptyDraft());
+    subAgents.splice(index, 0, emptyDraft(cloudProvider));
     return { ...n, subAgents };
   });
 }
@@ -1575,10 +1643,11 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
   const prepared = prepareMcpAuth(root);
   const selections: RuntimeEnvSelection[] = [];
   const fixedValues: Record<string, string> = { ...prepared.envValues };
+  const cloudProvider = prepared.draft.cloudProvider ?? "volcengine";
   const visit = (node: AgentDraft) => {
     for (const toolId of node.builtinTools ?? []) {
       const tool = BUILTIN_TOOLS.find((item) => item.id === toolId);
-      if (tool) selections.push({ env: tool.env });
+      if (tool) selections.push({ env: providerRuntimeEnv(tool.env, cloudProvider) });
     }
     for (const mcpTool of node.mcpTools ?? []) {
       if (mcpTool.authTokenEnv) {
@@ -1603,26 +1672,35 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
     if (node.memory.shortTerm) {
       selections.push({
         env:
-          STM_BACKENDS.find(
-            (item) => item.id === (node.shortTermBackend ?? "local"),
-          )?.env ?? [],
+          providerRuntimeEnv(
+            STM_BACKENDS.find(
+              (item) => item.id === (node.shortTermBackend ?? "local"),
+            )?.env ?? [],
+            cloudProvider,
+          ),
       });
     }
     if (node.memory.longTerm) {
       selections.push({
         env:
-          LTM_BACKENDS.find(
-            (item) => item.id === (node.longTermBackend ?? "local"),
-          )?.env ?? [],
+          providerRuntimeEnv(
+            LTM_BACKENDS.find(
+              (item) => item.id === (node.longTermBackend ?? "local"),
+            )?.env ?? [],
+            cloudProvider,
+          ),
       });
     }
     if (node.knowledgebase) {
       selections.push({
         env:
-          KB_BACKENDS.find(
-            (item) =>
-              item.id === (node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND),
-          )?.env ?? [],
+          providerRuntimeEnv(
+            KB_BACKENDS.find(
+              (item) =>
+                item.id === (node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND),
+            )?.env ?? [],
+            cloudProvider,
+          ),
       });
     }
     if (node.tracing) {
@@ -2490,6 +2568,8 @@ interface CustomCreateProps extends CreateModeProps {
   };
   /** Region selected before entering the create flow. */
   initialDeployRegion?: string;
+  /** Cloud provider selected by the Studio shell. */
+  cloudProvider?: CloudProvider;
   /** Called after an existing Runtime has been updated and released. */
   onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
   /** Called once the persistent deployment task has been created. */
@@ -2509,7 +2589,8 @@ export function CustomCreate({
   onDeploymentTaskChange,
   createMode = "custom",
   deploymentTarget,
-  initialDeployRegion = "cn-beijing",
+  cloudProvider = "volcengine",
+  initialDeployRegion = defaultCloudRegion(cloudProvider),
   onDeploymentComplete,
   onDeploymentStarted,
   onDraftChange,
@@ -2519,8 +2600,37 @@ export function CustomCreate({
   void onBack; // no footer nav in the single-scroll layout; back lives in app chrome
   void onDiscard; // the discard action is intentionally hidden in this flow
   const [draft, setDraft] = useState<AgentDraft>(
-    () => initialDraft ?? emptyDraft(),
+    () => initialDraft ?? emptyDraft(cloudProvider),
   );
+  useEffect(() => {
+    const otherProviderModel = cloudProvider === "byteplus"
+      ? VOLCENGINE_DEFAULT_MODEL_NAME
+      : BYTEPLUS_DEFAULT_MODEL_NAME;
+    const otherProviderBase = cloudProvider === "byteplus"
+      ? VOLCENGINE_MODELARK_BASE_URL
+      : BYTEPLUS_MODELARK_BASE_URL;
+    setDraft((current) => {
+      const nextModelName =
+        current.modelName?.trim() === otherProviderModel
+          ? defaultModelName(cloudProvider)
+          : current.modelName;
+      const nextModelApiBase =
+        current.modelApiBase?.trim() === otherProviderBase
+          ? defaultModelApiBase(cloudProvider)
+          : current.modelApiBase;
+      if (
+        nextModelName === current.modelName &&
+        nextModelApiBase === current.modelApiBase
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        modelName: nextModelName,
+        modelApiBase: nextModelApiBase,
+      };
+    });
+  }, [cloudProvider]);
   const [aiRequirement, setAiRequirement] = useState("");
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiGenerated, setAiGenerated] = useState(false);
@@ -2561,9 +2671,9 @@ export function CustomCreate({
     {
       id: "baseline",
       name: "基准组",
-      modelName: defaultDebugModelName(initialDraft ?? emptyDraft()),
-      description: (initialDraft ?? emptyDraft()).description,
-      instruction: (initialDraft ?? emptyDraft()).instruction,
+      modelName: defaultDebugModelName(initialDraft ?? emptyDraft(cloudProvider)),
+      description: (initialDraft ?? emptyDraft(cloudProvider)).description,
+      instruction: (initialDraft ?? emptyDraft(cloudProvider)).instruction,
       optimizations: [],
       configOpen: false,
       phase: "idle",
@@ -2779,7 +2889,7 @@ export function CustomCreate({
   const addCanvasStep = (path: NodePath) => {
     const parent = getNode(draft, path);
     if (!nodeAcceptsChildren(parent) || path.length >= MAX_TREE_DEPTH) return;
-    const next = addChild(draft, path);
+    const next = addChild(draft, path, cloudProvider);
     const childIndex = getNode(next, path).subAgents.length - 1;
     applyTree(next, [...path, childIndex]);
   };
@@ -2793,7 +2903,7 @@ export function CustomCreate({
       return;
     }
     const safeIndex = Math.max(0, Math.min(index, parent.subAgents.length));
-    const next = insertChild(draft, parentPath, safeIndex);
+    const next = insertChild(draft, parentPath, safeIndex, cloudProvider);
     applyTree(next, [...parentPath, safeIndex]);
   };
 
@@ -2803,7 +2913,7 @@ export function CustomCreate({
     ) {
       return;
     }
-    setDraft(emptyDraft());
+    setDraft(emptyDraft(cloudProvider));
     setSelectedPath([]);
     setShowErrors(false);
   };
@@ -3399,7 +3509,7 @@ export function CustomCreate({
                 value={aiRequirement}
                 maxLength={8000}
                 disabled={aiGenerating}
-                placeholder="描述目标，使用 doubao-seed-2-0-lite-260428 模型一键生成配置"
+                placeholder={`描述目标，使用 ${plannerModelName(cloudProvider)} 模型一键生成配置`}
                 aria-invalid={Boolean(aiRequirementError)}
                 aria-describedby={
                   aiRequirementError ? "ai-requirement-error" : undefined
@@ -3735,7 +3845,7 @@ export function CustomCreate({
                       <input
                         className="cw-input"
                         value={node.modelName ?? ""}
-                        placeholder="doubao-seed-2-1-pro-260628"
+                        placeholder={defaultModelName(cloudProvider)}
                               onChange={(e) =>
                                 patch({ modelName: e.target.value })
                               }
@@ -3786,7 +3896,7 @@ export function CustomCreate({
                             <input
                               className="cw-input"
                               value={node.modelApiBase ?? ""}
-                              placeholder="https://ark.cn-beijing.volces.com/api/v3/"
+                              placeholder={defaultModelApiBase(cloudProvider)}
                               onChange={(e) =>
                                 patch({ modelApiBase: e.target.value })
                               }
@@ -3862,6 +3972,7 @@ export function CustomCreate({
                     <SkillsSourceTabs
                       selected={selectedSkills}
                       onChange={(next) => patch({ selectedSkills: next })}
+                      cloudProvider={cloudProvider}
                     />
                   </div>
             </Section>
@@ -3897,9 +4008,33 @@ export function CustomCreate({
                             <label className="cw-label">VikingDB 知识库</label>
                             <VikingKnowledgebaseSelect
                               value={node.knowledgebaseIndex ?? ""}
-                              onChange={(knowledgebaseIndex) =>
-                                patch({ knowledgebaseIndex })
-                              }
+                              onChange={(knowledgebase) => {
+                                patch({
+                                  knowledgebaseIndex: knowledgebase.id,
+                                });
+                                if (knowledgebase.projectName) {
+                                  patchDeploymentEnv(
+                                    "DATABASE_VIKING_PROJECT",
+                                    knowledgebase.projectName,
+                                  );
+                                }
+                                if (knowledgebase.region) {
+                                  patchDeploymentEnv(
+                                    "DATABASE_VIKING_REGION",
+                                    knowledgebase.region,
+                                  );
+                                }
+                                if (knowledgebase.sourceKind) {
+                                  patchDeploymentEnv(
+                                    "DATABASE_VIKING_COLLECTION_KIND",
+                                    knowledgebase.sourceKind,
+                                  );
+                                }
+                                patchDeploymentEnv(
+                                  "DATABASE_VIKING_RESOURCE_ID",
+                                  knowledgebase.resourceId ?? "",
+                                );
+                              }}
                             />
                           </div>
                         )}
@@ -4067,6 +4202,7 @@ export function CustomCreate({
           {project ? (
             <ProjectPreview
               embedded
+              cloudProvider={cloudProvider}
               project={project}
               agentDraft={draft}
               agentName={draft.name || "未命名 Agent"}

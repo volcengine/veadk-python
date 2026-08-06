@@ -24,6 +24,11 @@ from veadk.cli.studio_deploy_serverless_policy import (
     SYSTEM_POLICIES,
     TRUST_POLICY,
 )
+from veadk.utils.cloud_provider import (
+    DEFAULT_CLOUD_PROVIDER,
+    CloudProvider,
+    iam_openapi_host,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -115,10 +120,37 @@ def _attach_role_policies(service: Any) -> None:
         logger.info(f"Attached IAM policy {policy_name} to {ROLE_NAME}.")
 
 
+def _sync_existing_role_policies(service: Any) -> None:
+    """Attach only missing policies for an already existing role."""
+    result = _result(service.list_attached_role_policies({"RoleName": ROLE_NAME}))
+    attached = {
+        policy["PolicyName"]
+        for policy in result.get("AttachedPolicyMetadata", [])
+        if policy.get("PolicyName")
+    }
+    policies = ((CUSTOM_POLICY_NAME, "Custom"),) + tuple(
+        (policy_name, "System") for policy_name in SYSTEM_POLICIES
+    )
+    for policy_name, policy_type in policies:
+        if policy_name in attached:
+            continue
+        _result(
+            service.attach_role_policy(
+                {
+                    "RoleName": ROLE_NAME,
+                    "PolicyName": policy_name,
+                    "PolicyType": policy_type,
+                }
+            )
+        )
+        logger.info(f"Attached IAM policy {policy_name} to {ROLE_NAME}.")
+
+
 def ensure_serverless_application_role(
     access_key: str,
     secret_key: str,
     session_token: str = "",
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
 ) -> bool:
     """Ensure Studio's VeFaaS deployment role has its required policies.
 
@@ -134,10 +166,16 @@ def ensure_serverless_application_role(
     service = IamService()
     service.set_ak(access_key)
     service.set_sk(secret_key)
+    if provider == "byteplus":
+        service.set_host(iam_openapi_host(provider))
+        service.set_scheme("https")
     if session_token:
         service.set_session_token(session_token)
 
     if _get_role(service) is not None:
+        if provider == "byteplus":
+            _ensure_custom_policy(service)
+            _sync_existing_role_policies(service)
         logger.info(f"IAM role {ROLE_NAME} is ready.")
         return False
 

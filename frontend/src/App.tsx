@@ -58,6 +58,7 @@ import {
   type SiteBranding,
   type SessionCapabilities,
   type StudioAccess,
+  type UiConfig,
   type UiFeatures,
 } from "./adk/client";
 import {
@@ -100,6 +101,7 @@ import {
   type AgentEntry,
   type RemoteConnection,
 } from "./adk/connections";
+import { defaultCloudRegion, formatCloudRegion } from "./adk/cloudProvider";
 import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
 import { Composer } from "./ui/Composer";
 import { InvocationChips } from "./ui/InvocationChips";
@@ -165,6 +167,7 @@ import { SandboxAgentWorkspace } from "./ui/SandboxAgentWorkspace";
 import { SandboxComposer } from "./ui/SandboxComposer";
 import { sandboxSnapshotTurns } from "./ui/sandboxCommands";
 import { useSandboxCodexCommands } from "./ui/useSandboxCodexCommands";
+import byteplusLogo from "./assets/byteplus.svg";
 import defaultSiteLogo from "./assets/logo.svg";
 import {
   FeedbackDownIcon,
@@ -945,6 +948,8 @@ export default function App() {
   });
   const [agentsSource, setAgentsSource] = useState<"local" | "cloud">("cloud");
   const [siteBranding, setSiteBranding] = useState<SiteBranding>(DEFAULT_SITE_BRANDING);
+  const [cloudProvider, setCloudProvider] =
+    useState<UiConfig["provider"]>("volcengine");
   const [version, setVersion] = useState("");
   const [uiConfigLoaded, setUiConfigLoaded] = useState(false);
   const [localMode, setLocalMode] = useState(false);
@@ -1135,7 +1140,7 @@ export default function App() {
       return next;
     });
   }, []);
-  // Whether the server has Volcengine AK/SK. The agent-creation workbench needs
+  // Whether the server has cloud AK/SK. The agent-creation workbench needs
   // them; assume present until the runtime-config check says otherwise (avoids
   // flashing the notice in the common, configured case).
   const [hasCreds, setHasCreds] = useState(true);
@@ -1198,7 +1203,9 @@ export default function App() {
     appName?: string;
     currentVersion?: number | null;
   } | null>(null);
-  const [newRuntimeRegion, setNewRuntimeRegion] = useState("cn-beijing");
+  const [newRuntimeRegion, setNewRuntimeRegion] = useState(
+    defaultCloudRegion(cloudProvider),
+  );
   const [focusedDeploymentTaskId, setFocusedDeploymentTaskId] = useState("");
   const [focusedWorkspaceAgentId, setFocusedWorkspaceAgentId] = useState("");
   const [agentDetailTarget, setAgentDetailTarget] =
@@ -1849,6 +1856,7 @@ export default function App() {
       trackStudioLoaded({ agentsSource: cfg.agentsSource });
       setFeatures(cfg.features);
       setAgentsSource(cfg.agentsSource);
+      setCloudProvider(cfg.provider);
       setSiteBranding(cfg.branding);
       setVersion(cfg.version);
       setUiConfigLoaded(true);
@@ -1863,6 +1871,20 @@ export default function App() {
       local: localMode,
     });
   }, [access, authStatus, localMode, userInfo]);
+
+  useEffect(() => {
+    setNewRuntimeRegion((region) => {
+      const providerDefault = defaultCloudRegion(cloudProvider);
+      if (!region) return providerDefault;
+      if (cloudProvider === "byteplus" && region.startsWith("cn-")) {
+        return providerDefault;
+      }
+      if (cloudProvider === "volcengine" && region.startsWith("ap-")) {
+        return providerDefault;
+      }
+      return region;
+    });
+  }, [cloudProvider]);
 
   useEffect(() => {
     if (!access) return;
@@ -1898,10 +1920,11 @@ export default function App() {
       document.head.appendChild(favicon);
     }
     favicon.removeAttribute("type");
-    favicon.href = siteBranding.logoUrl || defaultSiteLogo;
-  }, [siteBranding]);
+    favicon.href = siteBranding.logoUrl
+      || (cloudProvider === "byteplus" ? byteplusLogo : defaultSiteLogo);
+  }, [cloudProvider, siteBranding]);
 
-  // Check whether the server has Volcengine AK/SK (needed by the workbench).
+  // Check whether the server has cloud AK/SK (needed by the workbench).
   useEffect(() => {
     fetch("/web/runtime-config", { signal: AbortSignal.timeout(10_000) })
       .then((r) => (r.ok ? r.json() : null))
@@ -3686,7 +3709,13 @@ export default function App() {
     return <div className="boot" />; // resolving identity
   }
   if (authStatus === "unauthenticated") {
-    return <LoginPage branding={siteBranding} onUsername={onUsername} />;
+    return (
+      <LoginPage
+        branding={siteBranding}
+        cloudProvider={cloudProvider}
+        onUsername={onUsername}
+      />
+    );
   }
   if (!access) {
     return <div className="boot" />;
@@ -3842,7 +3871,7 @@ export default function App() {
     if (currentConn?.runtimeId && currentRuntimeAppName) {
       upsertCachedAgentFeedbackCase({
         runtimeId: currentConn.runtimeId,
-        region: currentConn.region ?? "cn-beijing",
+        region: currentConn.region ?? defaultCloudRegion(cloudProvider),
         appName: currentRuntimeAppName,
         userId,
         sessionId: sid,
@@ -3887,7 +3916,7 @@ export default function App() {
       if (currentConn?.runtimeId && currentRuntimeAppName) {
         upsertCachedAgentFeedbackCase({
           runtimeId: currentConn.runtimeId,
-          region: currentConn.region ?? "cn-beijing",
+          region: currentConn.region ?? defaultCloudRegion(cloudProvider),
           appName: currentRuntimeAppName,
           userId,
           sessionId: sid,
@@ -3902,7 +3931,7 @@ export default function App() {
         });
         refreshAgentFeedbackCases({
           runtimeId: currentConn.runtimeId,
-          region: currentConn.region ?? "cn-beijing",
+          region: currentConn.region ?? defaultCloudRegion(cloudProvider),
           appName: currentRuntimeAppName,
           pageSize: 100,
         });
@@ -3918,7 +3947,7 @@ export default function App() {
       if (currentConn?.runtimeId && currentRuntimeAppName) {
         upsertCachedAgentFeedbackCase({
           runtimeId: currentConn.runtimeId,
-          region: currentConn.region ?? "cn-beijing",
+          region: currentConn.region ?? defaultCloudRegion(cloudProvider),
           appName: currentRuntimeAppName,
           userId,
           sessionId: sid,
@@ -4110,7 +4139,7 @@ export default function App() {
         const agentId = await connectRuntime(
           agent.runtimeId,
           agent.label,
-          agent.region ?? "cn-beijing",
+          agent.region ?? defaultCloudRegion(cloudProvider),
           agent.currentVersion,
         );
         trackAgentConnectSucceeded({
@@ -4170,6 +4199,7 @@ export default function App() {
     <div className="layout">
       <Sidebar
         branding={siteBranding}
+        cloudProvider={cloudProvider}
         access={access}
         features={features}
         sessions={sessions}
@@ -4214,7 +4244,7 @@ export default function App() {
           setApplicationsView(null);
           setCreateView(null);
           setImportedDraft(null);
-          setNewRuntimeRegion("cn-beijing");
+          setNewRuntimeRegion(defaultCloudRegion(cloudProvider));
           setAddMenu(true);
           setError("");
         }}
@@ -4462,8 +4492,10 @@ export default function App() {
                     description: runtime.description?.trim() || "暂无描述",
                     createdAt: runtime.createdAt ?? "",
                     specificationLabel: "地域",
-                    specification:
-                      runtime.region === "cn-shanghai" ? "上海" : "北京",
+                    specification: formatCloudRegion(
+                      runtime.region,
+                      cloudProvider,
+                    ),
                     isMine: runtime.isMine,
                     runtime: {
                       runtimeId: runtime.runtimeId,
@@ -4584,6 +4616,7 @@ export default function App() {
               />
             ) : myAgents ? (
               <MyAgents
+                cloudProvider={cloudProvider}
                 canCreate={canCreateAgents}
                 runtimeScope={access.capabilities.runtimeScope}
                 onCreateAgent={openAgentCreateFromMyAgents}
@@ -4656,7 +4689,7 @@ export default function App() {
                   setCreateView(null);
                   setImportedDraft(null);
                   setRuntimeUpdateTarget(null);
-                  setNewRuntimeRegion("cn-beijing");
+                  setNewRuntimeRegion(defaultCloudRegion(cloudProvider));
                   setEditingDraftId("");
                   editingDraftBaselineRef.current = null;
                   setFocusedDeploymentTaskId("");
@@ -4787,7 +4820,7 @@ export default function App() {
                 onCancel={() => setAddAgent(false)}
               />
             ) : skillCenter ? (
-              <SkillCenterView />
+              <SkillCenterView cloudProvider={cloudProvider} />
             ) : visibleCreateView !== null && !hasCreds ? (
               <div
                 style={{
@@ -4803,13 +4836,24 @@ export default function App() {
                 }}
               >
                 <div style={{ fontSize: 18, fontWeight: 600 }}>
-                  需要配置火山引擎 AK/SK
+                  需要配置{cloudProvider === "byteplus" ? "BytePlus" : "火山引擎"} AK/SK
                 </div>
                 <div style={{ maxWidth: 420, lineHeight: 1.6 }}>
-                  智能体工作台需要 Volcengine 凭据才能使用。请在运行环境中设置
-                  {" "}
-                  <code>VOLCENGINE_ACCESS_KEY</code> 与{" "}
-                  <code>VOLCENGINE_SECRET_KEY</code> 后重试。
+                  智能体工作台需要
+                  {cloudProvider === "byteplus" ? " BytePlus " : " Volcengine "}
+                  凭据才能使用。请在运行环境中设置{" "}
+                  <code>
+                    {cloudProvider === "byteplus"
+                      ? "BYTEPLUS_ACCESS_KEY"
+                      : "VOLCENGINE_ACCESS_KEY"}
+                  </code>{" "}
+                  与{" "}
+                  <code>
+                    {cloudProvider === "byteplus"
+                      ? "BYTEPLUS_SECRET_KEY"
+                      : "VOLCENGINE_SECRET_KEY"}
+                  </code>{" "}
+                  后重试。
                 </div>
               </div>
             ) : visibleCreateView === "menu" ? (
@@ -4840,6 +4884,7 @@ export default function App() {
             ) : visibleCreateView === "intelligent" ? (
               <IntelligentCreate
                 userId={userId}
+                cloudProvider={cloudProvider}
                 onBack={() => setCreateView("menu")}
                 onCreate={onCreate}
                 onAgentAdded={onAgentAdded}
@@ -4848,6 +4893,7 @@ export default function App() {
             ) : visibleCreateView === "custom" ? (
               <CustomCreate
                 key={editingDraftId || "custom"}
+                cloudProvider={cloudProvider}
                 initialDraft={importedDraft ?? undefined}
                 onBack={() => setCreateView("menu")}
                 onCreate={onCreate}
@@ -4886,11 +4932,20 @@ export default function App() {
                 onDeploymentComplete={finishDeployment}
               />
             ) : visibleCreateView === "template" ? (
-              <TemplateCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
+              <TemplateCreate
+                cloudProvider={cloudProvider}
+                onBack={() => setCreateView("menu")}
+                onCreate={onCreate}
+              />
             ) : visibleCreateView === "workflow" ? (
-              <WorkflowCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
+              <WorkflowCreate
+                cloudProvider={cloudProvider}
+                onBack={() => setCreateView("menu")}
+                onCreate={onCreate}
+              />
             ) : visibleCreateView === "package" ? (
               <CodePackageCreate
+                cloudProvider={cloudProvider}
                 onBack={() => {
                   setCreateView(null);
                   setAddMenu(true);

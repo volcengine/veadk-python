@@ -78,6 +78,10 @@ function asAgentType(v: unknown): NonNullable<AgentDraft["agentType"]> {
     : "llm";
 }
 
+function asCloudProvider(v: unknown): NonNullable<AgentDraft["cloudProvider"]> {
+  return v === "byteplus" ? "byteplus" : "volcengine";
+}
+
 function asMaxIterations(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 3;
 }
@@ -93,10 +97,14 @@ function asA2aRegistry(v: unknown): A2aRegistryConfig {
   };
 }
 
-function parseSubAgents(v: unknown): AgentDraft[] {
+function parseSubAgents(
+  v: unknown,
+  cloudProvider: NonNullable<AgentDraft["cloudProvider"]> = "volcengine",
+): AgentDraft[] {
   if (!Array.isArray(v)) return [];
   return v.map((s) => {
     const so = (s && typeof s === "object" ? s : {}) as Record<string, unknown>;
+    const childCloudProvider = asCloudProvider(so.cloudProvider ?? cloudProvider);
     const mem = (
       so.memory && typeof so.memory === "object" ? so.memory : {}
     ) as Record<string, unknown>;
@@ -105,7 +113,8 @@ function parseSubAgents(v: unknown): AgentDraft[] {
     const agentType =
       a2aRegistry.enabled && parsedType === "llm" ? "a2a" : parsedType;
     return {
-      ...emptyDraft(),
+      ...emptyDraft(childCloudProvider),
+      cloudProvider: childCloudProvider,
       name: asString(so.name),
       description: asString(so.description),
       instruction: asString(so.instruction),
@@ -134,7 +143,7 @@ function parseSubAgents(v: unknown): AgentDraft[] {
       ),
       a2aRegistry:
         agentType === "a2a" ? { ...a2aRegistry, enabled: true } : a2aRegistry,
-      subAgents: parseSubAgents(so.subAgents),
+      subAgents: parseSubAgents(so.subAgents, childCloudProvider),
       selectedSkills: parseSelectedSkills(so),
     };
   });
@@ -215,6 +224,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
   const parsedType = asAgentType(o.agentType);
   const agentType =
     a2aRegistry.enabled && parsedType === "llm" ? "a2a" : parsedType;
+  const cloudProvider = asCloudProvider(o.cloudProvider);
 
   const mcpTools = Array.isArray(o.mcpTools)
     ? (o.mcpTools as unknown[])
@@ -235,7 +245,8 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     : [];
 
   return {
-    ...emptyDraft(),
+    ...emptyDraft(cloudProvider),
+    cloudProvider,
     name: asString(o.name) || "my_agent",
     description: asString(o.description),
     instruction: asString(o.instruction) || "You are a helpful assistant.",
@@ -267,7 +278,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
         ? { envValues: deploymentEnvValues }
         : {}),
     },
-    subAgents: parseSubAgents(o.subAgents),
+    subAgents: parseSubAgents(o.subAgents, cloudProvider),
     selectedSkills: parseSelectedSkills(o),
   };
 }

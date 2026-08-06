@@ -256,13 +256,22 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
         (output_dir / "index.html").write_text("built", encoding="utf-8")
 
     def _build_requirements(
-        _: Path, package_dir: Path, *, frontend_assets: Path
+        _: Path,
+        package_dir: Path,
+        *,
+        frontend_assets: Path,
+        provider: str,
     ) -> str:
         captured["frontend"] = (frontend_assets / "index.html").read_text()
+        captured["requirements_provider"] = provider
         return "./veadk.whl\n"
 
     def _write_package(
-        package_dir: Path, *, requirements: str, site_logo: SiteLogo | None
+        package_dir: Path,
+        *,
+        requirements: str,
+        site_logo: SiteLogo | None,
+        provider: str = "volcengine",
     ) -> None:
         package_dir.mkdir(parents=True, exist_ok=True)
         (package_dir / "run.sh").write_text("run", encoding="utf-8")
@@ -306,19 +315,144 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
 
     assert result.exit_code == 0, result.output
     assert captured["frontend"] == "built"
+    assert captured["requirements_provider"] == "volcengine"
     assert captured["requirements"] == "./veadk.whl\n"
     assert captured["logo"] == logo
     assert captured["scope"] == {
         "access_key": "ak",
         "secret_key": "sk",
+        "session_token": "",
         "region": "cn-beijing",
         "project_name": "default",
+        "provider": "volcengine",
     }
     update = captured["update"]
     assert isinstance(update, dict)
     assert update["application_id"] == "app-id"
     assert update["function_id"] == "function-app-id"
-    assert update["environment_overrides"] == {"AGENTKIT_SANDBOX_REGION": "cn-beijing"}
+    assert update["environment_overrides"] == {
+        "AGENTKIT_SANDBOX_REGION": "cn-beijing",
+    }
+
+
+def test_studio_update_supports_byteplus_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    target = _target(region="ap-southeast-1")
+    captured: dict[str, object] = {}
+
+    def _find(**kwargs: object) -> list[StudioDeploymentTarget]:
+        captured["search"] = kwargs
+        return [target]
+
+    monkeypatch.setattr("veadk.cli.studio_update.find_studio_deployments", _find)
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.load_deployed_site_logo",
+        lambda _: None,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_frontend_assets",
+        lambda *_: None,
+    )
+
+    def _build_requirements(
+        _: Path,
+        package_dir: Path,
+        *,
+        frontend_assets: Path,
+        provider: str,
+    ) -> str:
+        captured["requirements_provider"] = provider
+        package_dir.mkdir(parents=True, exist_ok=True)
+        return "./veadk.whl\n./pydantic.whl\n"
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_local_studio_requirements",
+        _build_requirements,
+    )
+
+    def _write_package(
+        package_dir: Path,
+        *,
+        requirements: str,
+        site_logo: SiteLogo | None,
+        provider: str,
+    ) -> None:
+        from veadk.cli.studio_package import studio_run_script
+
+        captured["package_requirements"] = requirements
+        captured["package_logo"] = site_logo
+        captured["package_provider"] = provider
+        run_script = studio_run_script(provider=provider)  # type: ignore[arg-type]
+        captured["run_script"] = run_script
+        package_dir.mkdir(parents=True, exist_ok=True)
+        (package_dir / "run.sh").write_text(run_script, encoding="utf-8")
+
+    monkeypatch.setattr("veadk.cli.studio_package.write_studio_package", _write_package)
+
+    class _FakeVeFaaS:
+        def __init__(self, **kwargs: str) -> None:
+            captured["scope"] = kwargs
+
+        def update_application_code_bundle(self, **kwargs: object) -> str:
+            captured["update"] = kwargs
+            return target.url
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _FakeVeFaaS)
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "update",
+            "--provider",
+            "byteplus",
+            "--vefaas-app-name",
+            "studio-app",
+            "--path",
+            str(tmp_path),
+            "--byteplus-access-key",
+            "bp-ak",
+            "--byteplus-secret-key",
+            "bp-sk",
+            "--byteplus-session-token",
+            "bp-token",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["requirements_provider"] == "byteplus"
+    assert captured["package_provider"] == "byteplus"
+    assert captured["package_requirements"] == "./veadk.whl\n./pydantic.whl\n"
+    update = captured["update"]
+    assert isinstance(update, dict)
+    run_script = str(captured["run_script"])
+    assert "--provider byteplus" in run_script
+    assert "--provider volcengine" not in run_script
+    assert captured["search"] == {
+        "access_key": "bp-ak",
+        "secret_key": "bp-sk",
+        "session_token": "bp-token",
+        "application_name": "studio-app",
+        "region": "ap-southeast-1",
+        "project": None,
+        "provider": "byteplus",
+    }
+    assert captured["scope"] == {
+        "access_key": "bp-ak",
+        "secret_key": "bp-sk",
+        "session_token": "bp-token",
+        "region": "ap-southeast-1",
+        "project_name": "default",
+        "provider": "byteplus",
+    }
+    assert update["environment_overrides"] == {
+        "AGENTKIT_SANDBOX_REGION": "ap-southeast-1",
+        "CLOUD_PROVIDER": "byteplus",
+        "AGENTKIT_CLOUD_PROVIDER": "byteplus",
+        "BYTEPLUS_REGION": "ap-southeast-1",
+        "DATABASE_VIKING_REGION": "ap-southeast-1",
+    }
 
 
 def test_studio_update_rejects_ambiguous_name_before_build(
@@ -415,7 +549,11 @@ def test_studio_update_explicit_branding_overrides_cloud_values(
     )
 
     def _write_package(
-        package_dir: Path, *, requirements: str, site_logo: SiteLogo | None
+        package_dir: Path,
+        *,
+        requirements: str,
+        site_logo: SiteLogo | None,
+        provider: str = "volcengine",
     ) -> None:
         package_dir.mkdir(parents=True, exist_ok=True)
         captured["logo"] = site_logo
@@ -652,6 +790,43 @@ def test_application_logs_use_latest_revision_and_bounded_limit(
         "Limit": 500,
         "RevisionNumber": 8,
     }
+
+
+def test_release_failure_includes_status_when_logs_are_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = object.__new__(VeFaaS)
+    monkeypatch.setattr(
+        service,
+        "_start_application_release",
+        lambda _app_id: {"Result": {"RevisionNumber": 9}},
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_application_status",
+        lambda _app_id: (
+            "deploy_fail",
+            {
+                "Result": {
+                    "Status": "deploy_fail",
+                    "NewRevisionNumber": 9,
+                    "Message": "runtime start failed",
+                    "ApiKey": "sensitive-token-value",
+                }
+            },
+        ),
+    )
+    monkeypatch.setattr(service, "_get_application_logs", lambda **_kwargs: [])
+
+    with pytest.raises(Exception) as exc:
+        service._release_application("application-id")
+
+    message = str(exc.value)
+    assert "No application revision logs were returned" in message
+    assert "Application status response" in message
+    assert "runtime start failed" in message
+    assert "sensitive-token-value" not in message
+    assert "******" in message
 
 
 def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(

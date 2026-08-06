@@ -47,10 +47,10 @@ test("runtime connection probing is shared with the Agent selector", () => {
   assert.match(connectionsSource, /return remoteAppId\(connection\.id, apps\[0\]\)/);
 });
 
-test("management defaults to Beijing without trailing list whitespace", () => {
-  assert.match(manageSource, /useState<string>\("cn-beijing"\)/);
-  assert.match(manageSource, /\{ value: "cn-beijing", label: "北京" \}/);
-  assert.match(manageSource, /\{ value: "cn-shanghai", label: "上海" \}/);
+test("management defaults to the active provider region without trailing list whitespace", () => {
+  assert.match(manageSource, /defaultCloudRegion\(cloudProvider\)/);
+  assert.match(manageSource, /cloudRegionOptions\(cloudProvider\)/);
+  assert.match(manageSource, /formatCloudRegion\(regionFilter, cloudProvider\)/);
   assert.doesNotMatch(manageSource, /value: "all"/);
   assert.match(manageSource, /role="listbox" aria-label="区域"/);
   assert.match(manageSource, /role="option"[\s\S]*?aria-selected=\{selected\}/);

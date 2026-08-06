@@ -26,6 +26,11 @@ import volcenginesdkvefaas
 
 from veadk.cli.frontend_branding import SiteLogo, resolve_site_logo
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
+from veadk.utils.cloud_provider import (
+    DEFAULT_CLOUD_PROVIDER,
+    CloudProvider,
+    default_region,
+)
 
 SUPPORTED_STUDIO_REGIONS = ("cn-beijing", "cn-shanghai")
 
@@ -46,19 +51,31 @@ def find_studio_deployments(
     *,
     access_key: str,
     secret_key: str,
+    session_token: str = "",
     application_name: str,
     region: str | None,
     project: str | None,
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
 ) -> list[StudioDeploymentTarget]:
     """Find exact-name Studio Applications in the requested cloud scopes."""
-    regions = (region,) if region is not None else SUPPORTED_STUDIO_REGIONS
+    regions = (
+        (region,)
+        if region is not None
+        else (
+            (default_region(provider),)
+            if provider == "byteplus"
+            else SUPPORTED_STUDIO_REGIONS
+        )
+    )
     targets = []
     for candidate_region in regions:
         service = VeFaaS(
             access_key=access_key,
             secret_key=secret_key,
+            session_token=session_token,
             region=candidate_region,
             project_name=project or "default",
+            provider=provider,
         )
         applications = service._list_application(app_name=application_name)
         for application in applications:

@@ -22,6 +22,11 @@ import os
 from google.adk.tools import ToolContext
 
 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
+from veadk.tools.builtin_tools.web_search import (
+    _byteplus_web_search,
+    _extract_web_results,
+    _result_summary,
+)
 from veadk.utils.logger import get_logger
 from veadk.utils.volcengine_sign import ve_request
 
@@ -57,6 +62,17 @@ def do_search(query: str, ak: str, sk: str, session_token: str) -> list[str]:
         return [response]
 
 
+def do_byteplus_search(query: str) -> list[str]:
+    response = _byteplus_web_search(query, count=5)
+    return [
+        summary
+        for summary in (
+            _result_summary(item) for item in _extract_web_results(response)
+        )
+        if summary
+    ]
+
+
 async def parallel_web_search(
     queries: list[str], tool_context: ToolContext | None = None
 ) -> dict[str, list[str]]:
@@ -68,6 +84,22 @@ async def parallel_web_search(
     Returns:
         A dict of query to result documents.
     """
+    if (os.getenv("CLOUD_PROVIDER") or "").lower() == "byteplus":
+        logger.info(f"Start to search {queries} in parallel via BytePlus.")
+        results_list = await asyncio.gather(
+            *(asyncio.to_thread(do_byteplus_search, query) for query in queries),
+            return_exceptions=True,
+        )
+        results: dict[str, list[str]] = {}
+        for query, result in zip(queries, results_list):
+            if isinstance(result, Exception):
+                logger.error(f"BytePlus web search failed for {query}: {result}")
+                results[query] = [f"Web search failed: {result}"]
+            else:
+                results[query] = result
+        logger.debug(f"Search results: {results}")
+        return results
+
     ak = None
     sk = None
     # First try to get tool-specific AK/SK

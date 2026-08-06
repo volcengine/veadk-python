@@ -20,8 +20,9 @@ const stylesSource = readFileSync(
 );
 test("skill center defaults to paged AgentKit Skill space browsing", () => {
   assert.doesNotMatch(skillCenterSource, /Find Skill|findskill|SKILL_URL|skill-frame/);
-  assert.match(skillCenterSource, /useState<SkillRegion>\("cn-beijing"\)/);
-  assert.match(skillCenterSource, /changeRegion\("cn-shanghai"\)/);
+  assert.match(skillCenterSource, /defaultCloudRegion\(cloudProvider\)/);
+  assert.match(skillCenterSource, /cloudRegionOptions\(cloudProvider\)/);
+  assert.match(skillCenterSource, /changeRegion\(option\.value\)/);
   assert.doesNotMatch(skillCenterSource, /changeRegion\("all"\)/);
   assert.match(
     skillCenterSource,

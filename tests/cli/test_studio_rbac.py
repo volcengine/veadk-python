@@ -52,6 +52,7 @@ def _create_studio_app(
     developers: str | None = None,
     oauth2_user_pool_uid: str | None = None,
     oauth2_user_pool_client_uid: str | None = None,
+    provider: str = "volcengine",
 ) -> FastAPI:
     captured: dict[str, Any] = {}
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
@@ -82,6 +83,7 @@ def _create_studio_app(
         studio_admins=admins,
         studio_developers=developers,
         open_browser=False,
+        provider=provider,  # type: ignore[arg-type]
         studio=True,
     )
     return captured["app"]
@@ -323,6 +325,115 @@ def test_current_user_pool_deployment_forwards_studio_jwt_to_run_sse(
     assert run_response.text == 'data: {"author":"runtime"}\n\n'
     assert upstream_headers["Authorization"] == authorization
     assert unauthenticated_response.status_code == 401
+
+
+def test_byteplus_deploy_agentkit_uses_iam_file_for_sdk_templates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("BYTEPLUS_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SESSION_TOKEN", raising=False)
+    monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-1")
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("DATABASE_VIKING_REGION", "cn-beijing")
+    captured_config: dict[str, Any] = {}
+    captured_env: dict[str, str | None] = {}
+
+    import builtins
+    import os
+
+    real_open = builtins.open
+
+    def _fake_open(path: object, *args: object, **kwargs: object):
+        if path == "/var/run/secrets/iam/credential":
+            return real_open(tmp_path / "iam-credential.json", *args, **kwargs)
+        return real_open(path, *args, **kwargs)
+
+    (tmp_path / "iam-credential.json").write_text(
+        json.dumps(
+            {
+                "access_key_id": "iam-ak",
+                "secret_access_key": "iam-sk",
+                "session_token": "iam-token",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(builtins, "open", _fake_open)
+    monkeypatch.setattr(
+        "agentkit.utils.template_utils.render_template",
+        lambda template: template.replace("{{account_id}}", "3001037806"),
+    )
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        captured_config.update(yaml.safe_load(Path(config_file).read_text()))
+        captured_env.update(
+            {
+                "BYTEPLUS_ACCESS_KEY": os.environ.get("BYTEPLUS_ACCESS_KEY"),
+                "BYTEPLUS_SECRET_KEY": os.environ.get("BYTEPLUS_SECRET_KEY"),
+                "BYTEPLUS_SESSION_TOKEN": os.environ.get("BYTEPLUS_SESSION_TOKEN"),
+            }
+        )
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": "runtime-bp",
+                    "runtime_name": "byteplus-agent",
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        )
+
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+        provider="byteplus",
+    )
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "byteplus-agent",
+                "createEvaluationSets": False,
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "ap-southeast-1", "projectName": "default"},
+            },
+        ) as response:
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert captured_env == {
+        "BYTEPLUS_ACCESS_KEY": "iam-ak",
+        "BYTEPLUS_SECRET_KEY": "iam-sk",
+        "BYTEPLUS_SESSION_TOKEN": "iam-token",
+    }
+    cloud = captured_config["launch_types"]["cloud"]
+    assert cloud["region"] == "ap-southeast-1"
+    assert cloud["tos_bucket"] == "agentkit-platform-3001037806-ap-southeast-1"
+    assert cloud["cr_instance_name"] == "agentkit-platform-3001037806"
+    runtime_envs = cloud["runtime_envs"]
+    assert runtime_envs["CLOUD_PROVIDER"] == "byteplus"
+    assert runtime_envs["AGENTKIT_CLOUD_PROVIDER"] == "byteplus"
+    assert runtime_envs["DATABASE_VIKING_REGION"] == "ap-southeast-1"
+    assert "BYTEPLUS_ACCESS_KEY" not in runtime_envs
+    assert "BYTEPLUS_SECRET_KEY" not in runtime_envs
+    assert "BYTEPLUS_SESSION_TOKEN" not in runtime_envs
+    assert os.environ.get("BYTEPLUS_ACCESS_KEY") is None
 
 
 def _unsigned_jwt(claims: dict[str, str]) -> str:

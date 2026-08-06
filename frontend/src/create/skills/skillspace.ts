@@ -1,5 +1,5 @@
 // AgentKit SkillSpace client. These hit the new /web/skill-spaces* backend
-// routes, which sign requests server-side with the server's Volcengine AK/SK
+// routes, which sign requests server-side with the server's cloud AK/SK
 // (the browser never sees credentials) and are gated by SSO when enabled.
 
 import type { ProjectFile } from "../project";
@@ -55,7 +55,7 @@ async function jfetch<T>(url: string): Promise<T> {
     signal: requestSignal(undefined, DEFAULT_REQUEST_TIMEOUT_MS),
   });
   if (res.status === 409) {
-    throw new Error("服务端未配置 Volcengine AK/SK，无法访问 AgentKit Skills 中心");
+    throw new Error("服务端未配置云厂商 AK/SK，无法访问 AgentKit Skills 中心");
   }
   if (res.status === 401) {
     throw new Error("请先登录以访问 AgentKit Skills 中心");
@@ -164,8 +164,13 @@ export async function downloadSkillSpaceSkill(
   return [{ path: `skills/${folder}/SKILL.md`, content: d.skillMd }];
 }
 
-/** Get the Volcengine console URL for a SkillSpace. */
-export function getSkillSpaceConsoleUrl(spaceId: string, region?: string): string {
+/** Get the cloud console URL for a SkillSpace when the provider exposes one. */
+export function getSkillSpaceConsoleUrl(
+  spaceId: string,
+  region?: string,
+  provider: "volcengine" | "byteplus" = "volcengine",
+): string {
+  if (provider === "byteplus") return "";
   const r = region || "cn-beijing";
   const consoleRegion = r === "cn-beijing" ? "cn" : "cn-shanghai";
   return `https://console.volcengine.com/agentkit/${consoleRegion}/skillspace/detail/${encodeURIComponent(spaceId)}`;

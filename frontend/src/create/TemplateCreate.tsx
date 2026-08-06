@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { motion } from "motion/react";
 import {
   ArrowLeft,
@@ -18,6 +18,13 @@ import {
 } from "lucide-react";
 import { type CreateModeProps, type AgentDraft, emptyDraft } from "./types";
 import { displayDescription } from "./displayText";
+import {
+  defaultModelApiBase,
+  defaultModelName,
+  VOLCENGINE_DEFAULT_MODEL_NAME,
+  VOLCENGINE_MODELARK_BASE_URL,
+  type CloudProvider,
+} from "../adk/cloudProvider";
 import "./TemplateCreate.css";
 
 /** A gallery preset: an AgentDraft plus presentation metadata. */
@@ -154,6 +161,29 @@ const TEMPLATES: Template[] = [
   },
 ];
 
+function providerTemplateDraft(
+  draft: AgentDraft,
+  cloudProvider: CloudProvider,
+): AgentDraft {
+  if (cloudProvider !== "byteplus") return draft;
+  const byteplusModelName = defaultModelName(cloudProvider);
+  return {
+    ...draft,
+    model: draft.model === "doubao-1.5-pro-32k" ? byteplusModelName : draft.model,
+    modelName:
+      draft.modelName === VOLCENGINE_DEFAULT_MODEL_NAME
+        ? byteplusModelName
+        : draft.modelName,
+    modelApiBase:
+      !draft.modelApiBase || draft.modelApiBase === VOLCENGINE_MODELARK_BASE_URL
+        ? defaultModelApiBase(cloudProvider)
+        : draft.modelApiBase,
+    subAgents: draft.subAgents.map((child) =>
+      providerTemplateDraft(child, cloudProvider),
+    ),
+  };
+}
+
 /** Which built-in components a draft uses → tags on the card. */
 function components(d: AgentDraft) {
   const out: { icon: LucideIcon; label: string }[] = [];
@@ -165,8 +195,20 @@ function components(d: AgentDraft) {
   return out;
 }
 
-export function TemplateCreate({ onBack, onCreate }: CreateModeProps) {
+export function TemplateCreate({
+  cloudProvider = "volcengine",
+  onBack,
+  onCreate,
+}: CreateModeProps) {
   const [selected, setSelected] = useState<Template | null>(null);
+  const templates = useMemo(
+    () =>
+      TEMPLATES.map((template) => ({
+        ...template,
+        draft: providerTemplateDraft(template.draft, cloudProvider),
+      })),
+    [cloudProvider],
+  );
   // `onBack` is kept in props (an app-level breadcrumb handles leaving this
   // mode); we intentionally do not render a top-level back control here.
   void onBack;
@@ -180,7 +222,7 @@ export function TemplateCreate({ onBack, onCreate }: CreateModeProps) {
           onCreate={onCreate}
         />
       ) : (
-        <Gallery onPick={setSelected} />
+        <Gallery templates={templates} onPick={setSelected} />
       )}
     </div>
   );
@@ -188,7 +230,13 @@ export function TemplateCreate({ onBack, onCreate }: CreateModeProps) {
 
 /* ---------------- gallery ---------------- */
 
-function Gallery({ onPick }: { onPick: (t: Template) => void }) {
+function Gallery({
+  templates,
+  onPick,
+}: {
+  templates: Template[];
+  onPick: (t: Template) => void;
+}) {
   return (
     <div className="tpl-scroll">
       <div className="tpl-head">
@@ -196,7 +244,7 @@ function Gallery({ onPick }: { onPick: (t: Template) => void }) {
         <p className="tpl-sub">选择一个预制 agent 模板，按需微调后即可创建。</p>
       </div>
       <div className="tpl-grid">
-        {TEMPLATES.map((t, i) => (
+        {templates.map((t, i) => (
           <motion.button
             key={t.id}
             type="button"

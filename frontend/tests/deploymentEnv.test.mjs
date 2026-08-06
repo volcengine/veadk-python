@@ -422,7 +422,10 @@ test("collects non-automatic built-in tool settings for deployment", () => {
     customCreateSource,
     /BUILTIN_TOOLS\.find\(\(item\) => item\.id === toolId\)/,
   );
-  assert.match(customCreateSource, /selections\.push\(\{ env: tool\.env \}\)/);
+  assert.match(
+    customCreateSource,
+    /selections\.push\(\{ env: providerRuntimeEnv\(tool\.env, cloudProvider\) \}\)/,
+  );
 });
 
 test("materializes A2A registry defaults for deployment env", () => {

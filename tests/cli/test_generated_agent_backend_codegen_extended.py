@@ -946,6 +946,10 @@ def test_generated_project_and_debug_run_api_lifecycle(
     _FakeAsyncClient.listed_apps = ["demo_agent"]
     monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
     monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "byteplus-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "byteplus-sk")
+    monkeypatch.setenv("BYTEPLUS_SESSION_TOKEN", "byteplus-token")
+    monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-1")
 
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
@@ -1066,6 +1070,12 @@ def test_generated_project_and_debug_run_api_lifecycle(
         process = _FakeProcess.created[-2]
         assert process.env["VOLCENGINE_ACCESS_KEY"] == "test-ak"
         assert process.env["VOLCENGINE_SECRET_KEY"] == "test-sk"
+        assert process.env["BYTEPLUS_ACCESS_KEY"] == "byteplus-ak"
+        assert process.env["BYTEPLUS_SECRET_KEY"] == "byteplus-sk"
+        assert process.env["BYTEPLUS_SESSION_TOKEN"] == "byteplus-token"
+        assert process.env["BYTEPLUS_REGION"] == "ap-southeast-1"
+        assert process.env["AGENTKIT_CLOUD_PROVIDER"] == "volcengine"
+        assert process.env["CLOUD_PROVIDER"] == "volcengine"
         assert process.env["AGENTKIT_TOOL_ID"] == "t-debug"
         assert process.env["AGENTKIT_TOOL_REGION"] == "cn-shanghai"
         assert process.env["MCP_DEMO_AGENT_ORDERS_AUTH_TOKEN"] == "runtime-mcp-token"
@@ -1358,7 +1368,7 @@ def test_studio_deploy_run_script_allows_generated_agent_debug() -> None:
     run_script = _studio_deploy_run_script("site-logo.png")
 
     assert "HOST=0.0.0.0" in run_script
-    assert "studio --auth-mode frontend" in run_script
+    assert "studio --provider volcengine --auth-mode frontend" in run_script
     assert '--site-logo "$ROOT_DIR/site-logo.png"' in run_script
     assert "--allow-remote-generated-agent-test-run" not in run_script
 
