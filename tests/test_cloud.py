@@ -46,6 +46,27 @@ def test_vefaas_create_function_uses_configured_project() -> None:
     assert request.project_name == "studio-project"
 
 
+def test_vefaas_deploy_cleans_created_resources_on_release_failure() -> None:
+    service = object.__new__(VeFaaS)
+    service._create_function = Mock(return_value=("studio-app-fn", "function-id"))
+    service._create_application = Mock(return_value="application-id")
+    service._release_application = Mock(side_effect=RuntimeError("release failed"))
+    service.delete = Mock()
+    service.delete_function = Mock()
+
+    with pytest.raises(RuntimeError, match="release failed"):
+        service.deploy(
+            "studio-app",
+            ".",
+            gateway_name="gateway",
+            gateway_service_name="service",
+            gateway_upstream_name="upstream",
+        )
+
+    service.delete.assert_called_once_with("application-id")
+    service.delete_function.assert_called_once_with("function-id")
+
+
 def test_apig_uses_session_token() -> None:
     gateway = APIGateway(
         access_key="test_access_key",

@@ -650,6 +650,14 @@ class VeFaaS:
         except Exception as e:
             logger.error(f"Delete application failed. Response: {e}")
 
+    def delete_function(self, function_id: str):
+        try:
+            self.client.delete_function(
+                volcenginesdkvefaas.DeleteFunctionRequest(id=function_id)
+            )
+        except Exception as e:
+            logger.error(f"Delete function failed. Function ID: {function_id}. {e}")
+
     def update_function_envs_and_release(
         self, function_id: str, extra_envs: dict
     ) -> None:
@@ -735,27 +743,44 @@ class VeFaaS:
             gateway_upstream_name = f"{name}-gw-us-{formatted_timestamp()}"
 
         function_name = f"{name}-fn"
+        function_id = ""
+        app_id = ""
 
         logger.info(
             f"Start to create VeFaaS function {function_name} with path {path}. Gateway: {gateway_name}, Gateway Service: {gateway_service_name}, Gateway Upstream: {gateway_upstream_name}."
         )
-        function_name, function_id = self._create_function(function_name, path)
-        logger.info(f"VeFaaS function {function_name} with ID {function_id} created.")
+        try:
+            function_name, function_id = self._create_function(function_name, path)
+            logger.info(
+                f"VeFaaS function {function_name} with ID {function_id} created."
+            )
 
-        logger.info(f"Start to create VeFaaS application {name}.")
-        app_id = self._create_application(
-            name,
-            function_name,
-            gateway_name,
-            gateway_upstream_name,
-            gateway_service_name,
-            enable_key_auth,
-        )
+            logger.info(f"Start to create VeFaaS application {name}.")
+            app_id = self._create_application(
+                name,
+                function_name,
+                gateway_name,
+                gateway_upstream_name,
+                gateway_service_name,
+                enable_key_auth,
+            )
 
-        logger.info(f"VeFaaS application {name} with ID {app_id} created.")
-        logger.info(f"Start to release VeFaaS application {app_id}.")
-        url = self._release_application(app_id)
-        logger.info(f"VeFaaS application {name} with ID {app_id} released.")
+            logger.info(f"VeFaaS application {name} with ID {app_id} created.")
+            logger.info(f"Start to release VeFaaS application {app_id}.")
+            url = self._release_application(app_id)
+            logger.info(f"VeFaaS application {name} with ID {app_id} released.")
+        except Exception:
+            if app_id:
+                logger.info(
+                    f"Cleaning up VeFaaS application {app_id} after failed deploy."
+                )
+                self.delete(app_id)
+            if function_id:
+                logger.info(
+                    f"Cleaning up VeFaaS function {function_id} after failed deploy."
+                )
+                self.delete_function(function_id)
+            raise
 
         logger.info(f"VeFaaS application {name} with ID {app_id} deployed on {url}.")
 
