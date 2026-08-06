@@ -220,7 +220,7 @@ def test_vefaas_code_upload_callback_uses_byteplus_host() -> None:
             "veadk.integrations.ve_faas.ve_faas.zip_and_encode_folder",
             return_value=(b"archive", 7, None),
         ),
-        patch("veadk.integrations.ve_faas.ve_faas.requests.put") as upload,
+        patch("veadk.integrations.ve_faas.ve_faas.httpx.put") as upload,
         patch("veadk.integrations.ve_faas.ve_faas.signed_request") as callback,
     ):
         upload.return_value = Mock(status_code=200)
