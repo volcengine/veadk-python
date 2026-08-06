@@ -52,6 +52,7 @@ class _LogoStream:
 
 
 def test_normalize_site_title_uses_default_and_accepts_six_characters() -> None:
+    assert DEFAULT_SITE_TITLE == "AgentKit Studio"
     assert normalize_site_title(None) == DEFAULT_SITE_TITLE
     assert normalize_site_title(" 火山助手 ") == "火山助手"
     assert normalize_site_title("ABC123") == "ABC123"

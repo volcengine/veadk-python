@@ -391,7 +391,7 @@ class CodexAppServerSession:
                 {
                     "clientInfo": {
                         "name": "agentkit_codex_app_server_client",
-                        "title": "VeADK Studio",
+                        "title": "AgentKit Studio",
                         "version": "1",
                     },
                     "capabilities": {"experimentalApi": True},
