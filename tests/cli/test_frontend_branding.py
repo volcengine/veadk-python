@@ -15,24 +15,32 @@
 """Tests for Studio title and logo validation."""
 
 import base64
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Iterator
 
 import pytest
 from click.testing import CliRunner
 
+from veadk.cli.cli_frontend import studio
 from veadk.cli.frontend_branding import (
     DEFAULT_SITE_TITLE,
     normalize_site_title,
     resolve_site_logo,
 )
-from veadk.cli.cli_frontend import studio
 
 _PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUB"
     "AScY42YAAAAASUVORK5CYII="
 )
+
+
+@pytest.fixture(autouse=True)
+def _skip_snapshot_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_tool_snapshot",
+        lambda **kwargs: str(kwargs["tool_id"]),
+    )
 
 
 class _LogoResponse:

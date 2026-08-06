@@ -25,10 +25,22 @@ from veadk.cli.studio_sandbox_tools import (
     ensure_studio_agent_model_credential,
     ensure_studio_agent_tool,
     ensure_studio_code_env_tool,
+    ensure_studio_tool_snapshot,
 )
 
 
 def test_ensure_studio_code_env_tool_reuses_ready_exact_name() -> None:
+    snapshot_enabled = False
+
+    def _update(request: object) -> SimpleNamespace:
+        nonlocal snapshot_enabled
+        assert request.model_dump(by_alias=True, exclude_none=True) == {
+            "EnableSnapshot": True,
+            "ToolId": "tool-existing",
+        }
+        snapshot_enabled = True
+        return SimpleNamespace(tool_id="tool-existing")
+
     client = SimpleNamespace(
         list_tools=lambda _: SimpleNamespace(
             tools=[
@@ -41,7 +53,10 @@ def test_ensure_studio_code_env_tool_reuses_ready_exact_name() -> None:
             ],
             next_token=None,
         ),
-        get_tool=lambda _: SimpleNamespace(status="Ready"),
+        get_tool=lambda _: SimpleNamespace(
+            status="Ready", enable_snapshot=snapshot_enabled
+        ),
+        update_tool=_update,
         create_tool=lambda _: (_ for _ in ()).throw(
             AssertionError("ready Tool must be reused")
         ),
@@ -51,7 +66,9 @@ def test_ensure_studio_code_env_tool_reuses_ready_exact_name() -> None:
         ensure_studio_code_env_tool(
             name="veadk-studio-demo-chat-12345678",
             client=client,
-            timeout_seconds=0,
+            timeout_seconds=1,
+            poll_interval=0,
+            sleep=lambda _: None,
         )
         == "tool-existing"
     )
@@ -66,7 +83,7 @@ def test_ensure_studio_code_env_tool_creates_ready_code_env() -> None:
 
     client = SimpleNamespace(
         list_tools=lambda _: SimpleNamespace(tools=[], next_token=None),
-        get_tool=lambda _: SimpleNamespace(status="Ready"),
+        get_tool=lambda _: SimpleNamespace(status="Ready", enable_snapshot=True),
         create_tool=_create,
     )
 
@@ -79,12 +96,13 @@ def test_ensure_studio_code_env_tool_creates_ready_code_env() -> None:
         == "tool-created"
     )
     request = requests[0]
-    assert getattr(request, "name") == "veadk-studio-demo-skill-12345678"
-    assert getattr(request, "tool_type") == "CodeEnv"
-    assert getattr(request, "project_name") == "default"
-    assert getattr(request, "cpu_milli") == 4000
-    assert getattr(request, "memory_mb") == 8192
-    assert getattr(request, "envs") is None
+    assert request.name == "veadk-studio-demo-skill-12345678"
+    assert request.tool_type == "CodeEnv"
+    assert request.project_name == "default"
+    assert request.cpu_milli == 4000
+    assert request.memory_mb == 8192
+    assert request.enable_snapshot is True
+    assert request.envs is None
 
 
 @pytest.mark.parametrize(
@@ -98,7 +116,7 @@ def test_ensure_studio_agent_tool_creates_managed_tool(
     requests: list[object] = []
     client = SimpleNamespace(
         list_tools=lambda _: SimpleNamespace(tools=[], next_token=None),
-        get_tool=lambda _: SimpleNamespace(status="Ready"),
+        get_tool=lambda _: SimpleNamespace(status="Ready", enable_snapshot=True),
         create_tool=lambda request: (
             requests.append(request) or SimpleNamespace(tool_id=f"tool-{kind}")
         ),
@@ -117,7 +135,36 @@ def test_ensure_studio_agent_tool_creates_managed_tool(
     request = requests[0]
     assert request.tool_type == tool_type
     assert request.model_agent_name == "doubao-seed-evolving"
+    assert request.enable_snapshot is True
     assert request.envs is None
+
+
+def test_ensure_configured_studio_tool_enables_snapshots() -> None:
+    updates: list[dict[str, object]] = []
+
+    class Client:
+        enabled = False
+
+        def get_tool(self, _request: object) -> SimpleNamespace:
+            return SimpleNamespace(status="Ready", enable_snapshot=self.enabled)
+
+        def update_tool(self, request: object) -> SimpleNamespace:
+            updates.append(request.model_dump(by_alias=True, exclude_none=True))
+            self.enabled = True
+            return SimpleNamespace(tool_id="tool-configured")
+
+    assert (
+        ensure_studio_tool_snapshot(
+            tool_id="tool-configured",
+            name="Codex",
+            client=Client(),
+            timeout_seconds=1,
+            poll_interval=0,
+            sleep=lambda _: None,
+        )
+        == "tool-configured"
+    )
+    assert updates == [{"EnableSnapshot": True, "ToolId": "tool-configured"}]
 
 
 def test_agent_model_credential_is_bound_to_tool_as_complete_env_set() -> None:

@@ -43,6 +43,7 @@ from veadk.cli.frontend_sandbox import (
     AgentkitSandboxGateway,
     SandboxAgentSessionService,
     SandboxCloudSession,
+    SandboxCloudSnapshot,
     SandboxConfigurationError,
     SandboxConversationService,
     SandboxProvisioningError,
@@ -261,6 +262,7 @@ class _FakeGateway:
         self.usernames: list[str | None] = []
         self.creator_names: list[str] = []
         self.deleted: list[SandboxCloudSession] = []
+        self.deleted_snapshots: list[SandboxCloudSnapshot] = []
         self.thread_ids: list[str] = []
         self.connections: list[_FakeCodex] = []
         self.sessions: dict[str, SandboxCloudSession] = {
@@ -277,6 +279,7 @@ class _FakeGateway:
                 created_by="alice",
             )
         }
+        self.snapshots: dict[str, SandboxCloudSnapshot] = {}
 
     async def list_sessions(
         self, tool_id: str, username: str | None = None
@@ -296,6 +299,17 @@ class _FakeGateway:
         if session is None or session.tool_id != tool_id:
             raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
         return session
+
+    async def list_snapshots(
+        self, tool_id: str, username: str | None = None
+    ) -> list[SandboxCloudSnapshot]:
+        self.tool_ids.append(tool_id)
+        return [
+            snapshot
+            for snapshot in self.snapshots.values()
+            if snapshot.tool_id == tool_id
+            and (username is None or snapshot.created_by == username)
+        ]
 
     async def create_session(
         self,
@@ -328,6 +342,29 @@ class _FakeGateway:
     async def delete_session(self, session: SandboxCloudSession) -> None:
         self.deleted.append(session)
         self.sessions.pop(session.instance_id, None)
+
+    async def resume_snapshot(
+        self, snapshot: SandboxCloudSnapshot
+    ) -> SandboxCloudSession:
+        session = SandboxCloudSession(
+            tool_id=snapshot.tool_id,
+            instance_id=f"resumed-{snapshot.snapshot_id}",
+            user_session_id=snapshot.user_session_id,
+            endpoint="https://sandbox.example/resumed?Authorization=secret",
+            region=snapshot.region,
+            status="Ready",
+            created_at="2026-08-06T10:00:00Z",
+            expire_at="2026-08-06T18:00:00Z",
+            tool_type="CodeEnv",
+            display_name=snapshot.display_name,
+            created_by=snapshot.created_by,
+        )
+        self.sessions[session.instance_id] = session
+        return session
+
+    async def delete_snapshot(self, snapshot: SandboxCloudSnapshot) -> None:
+        self.deleted_snapshots.append(snapshot)
+        self.snapshots.pop(snapshot.snapshot_id, None)
 
     async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
         del session
@@ -464,7 +501,7 @@ def test_managed_agent_routes_create_session_and_return_card_data(
     assert created.json()["toolName"] == kind
     assert created.json()["displayName"] == f"我的 {kind}"
     assert "endpoint" not in created.json()
-    assert gateway.tool_ids == [tool_id, tool_id, tool_id, tool_id, tool_id]
+    assert gateway.tool_ids == [tool_id] * 7
     assert listed.status_code == 200
     assert [item["sessionId"] for item in listed.json()["sessions"]] == [
         created.json()["sessionId"]
@@ -483,6 +520,100 @@ def test_managed_agent_routes_create_session_and_return_card_data(
     assert deleted.json() == {"deleted": True}
     assert listed_after_delete.json() == {"sessions": []}
     assert [session.instance_id for session in gateway.deleted] == [session_id]
+
+
+@pytest.mark.parametrize(
+    ("kind", "tool_id"),
+    [("sandbox", "tool-studio"), ("openclaw", "tool-openclaw")],
+)
+def test_sandbox_snapshot_is_wakeable_and_resumes_to_a_ready_session(
+    kind: str,
+    tool_id: str,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.snapshots["snapshot-1"] = SandboxCloudSnapshot(
+        tool_id=tool_id,
+        snapshot_id="snapshot-1",
+        session_id="expired-1",
+        user_session_id="studio2-owner-random-name",
+        region="cn-beijing",
+        status="Ready",
+        reason="Expired",
+        created_at="2026-08-06T09:00:00Z",
+        display_name="可恢复智能体",
+        created_by="alice",
+    )
+    app = _app(gateway) if kind == "sandbox" else _agent_app(gateway)
+    root = f"/web/{kind}"
+    headers = {"X-Test-User": "alice"}
+    with TestClient(app) as client:
+        listed = client.get(f"{root}/sessions", headers=headers)
+        # A Session can become active after the list response but before the
+        # user clicks wake. Authorization must use the owned raw snapshot list,
+        # not the presentation list that now hides this snapshot.
+        gateway.sessions["already-running"] = SandboxCloudSession(
+            tool_id=tool_id,
+            instance_id="already-running",
+            user_session_id="studio2-owner-random-name",
+            endpoint="https://sandbox.example/already-running",
+            status="Ready",
+            display_name="可恢复智能体",
+            created_by="alice",
+        )
+        resumed = client.post(
+            f"{root}/snapshots/snapshot-1/resume",
+            headers=headers,
+        )
+        listed_after_resume = client.get(f"{root}/sessions", headers=headers)
+
+    assert listed.status_code == 200
+    assert listed.json()["snapshots"] == [
+        {
+            "snapshotId": "snapshot-1",
+            "sessionId": "expired-1",
+            "userSessionId": "studio2-owner-random-name",
+            "status": "Wakeable",
+            "snapshotStatus": "Ready",
+            "reason": "Expired",
+            "createdAt": "2026-08-06T09:00:00Z",
+            "createdBy": "alice",
+            "displayName": "可恢复智能体",
+            "toolName": "veadk-studio-codex" if kind == "sandbox" else kind,
+        }
+    ]
+    assert resumed.status_code == 200
+    assert resumed.json()["sessionId"] == "resumed-snapshot-1"
+    assert resumed.json()["status"] == "Ready"
+    assert "snapshots" not in listed_after_resume.json()
+
+
+def test_sandbox_snapshot_routes_enforce_owner_and_support_delete() -> None:
+    gateway = _FakeGateway()
+    gateway.snapshots["snapshot-alice"] = SandboxCloudSnapshot(
+        tool_id="tool-openclaw",
+        snapshot_id="snapshot-alice",
+        session_id="expired-alice",
+        user_session_id="studio2-owner-random-name",
+        status="Ready",
+        display_name="Alice Agent",
+        created_by="alice",
+    )
+    with TestClient(_agent_app(gateway)) as client:
+        denied = client.post(
+            "/web/openclaw/snapshots/snapshot-alice/resume",
+            headers={"X-Test-User": "bob"},
+        )
+        deleted = client.delete(
+            "/web/openclaw/snapshots/snapshot-alice",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert denied.status_code == 404
+    assert deleted.status_code == 200
+    assert deleted.json() == {"deleted": True}
+    assert [item.snapshot_id for item in gateway.deleted_snapshots] == [
+        "snapshot-alice"
+    ]
 
 
 def test_managed_agent_routes_enforce_username_scope() -> None:
@@ -1200,6 +1331,114 @@ async def test_gateway_creates_session_with_username_metadata() -> None:
     ]
     assert session.created_by == "alice"
     assert session.creator_name == "alice@example.com"
+
+
+@pytest.mark.asyncio
+async def test_gateway_lists_only_owned_studio_snapshots_and_restores_one() -> None:
+    from agentkit.sdk.tools import types as tools_types
+
+    requests: list[tuple[str, dict[str, object]]] = []
+    created_user_session_id = ""
+    resumed_once = False
+
+    class _Client:
+        def create_session(self, request: object) -> SimpleNamespace:
+            nonlocal created_user_session_id
+            created_user_session_id = request.user_session_id
+            return SimpleNamespace(
+                session_id="expired-alice",
+                user_session_id=created_user_session_id,
+                endpoint="https://sandbox.example",
+            )
+
+        def list_session_snapshots(
+            self, request: tools_types.ListSessionSnapshotsRequest
+        ) -> tools_types.ListSessionSnapshotsResponse:
+            requests.append(
+                (
+                    "list",
+                    request.model_dump(by_alias=True, exclude_none=True),
+                )
+            )
+            return tools_types.ListSessionSnapshotsResponse(
+                Snapshots=[
+                    tools_types.SnapshotsForListSessionSnapshots(
+                        SnapshotId="snapshot-alice",
+                        SessionId="expired-alice",
+                        UserSessionId=created_user_session_id,
+                        Status="Ready",
+                        Reason="Expired",
+                        CreatedAt="2026-08-06T09:00:00Z",
+                    ),
+                    tools_types.SnapshotsForListSessionSnapshots(
+                        SnapshotId="snapshot-legacy",
+                        SessionId="expired-legacy",
+                        UserSessionId="studio-random-legacy",
+                        Status="Ready",
+                    ),
+                ]
+            )
+
+        def list_sessions(self, request: object) -> SimpleNamespace:
+            requests.append(
+                (
+                    "sessions",
+                    request.model_dump(by_alias=True, exclude_none=True),
+                )
+            )
+            session_infos = []
+            if resumed_once:
+                session_infos.append(
+                    SimpleNamespace(
+                        session_id="resumed-alice",
+                        user_session_id=created_user_session_id,
+                        endpoint="https://sandbox.example/resumed",
+                        status="Ready",
+                        tool_type="CodeEnv",
+                    )
+                )
+            return SimpleNamespace(session_infos=session_infos, next_token=None)
+
+        def resume_session_from_snapshot(self, request: object) -> SimpleNamespace:
+            nonlocal resumed_once
+            requests.append(
+                (
+                    "resume",
+                    request.model_dump(by_alias=True, exclude_none=True),
+                )
+            )
+            resumed_once = True
+            return SimpleNamespace(session_id="resumed-alice")
+
+        def get_session(self, request: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                session_id="resumed-alice",
+                user_session_id=created_user_session_id,
+                endpoint="https://sandbox.example/resumed",
+                status="Ready",
+                tool_type="CodeEnv",
+            )
+
+    gateway = AgentkitSandboxGateway(_Client())
+    await gateway.create_session("tool-sdk", "Alice 智能体", "alice")
+    snapshots = await gateway.list_snapshots("tool-sdk", "alice")
+    resumed = await gateway.resume_snapshot(snapshots[0])
+    reused = await gateway.resume_snapshot(snapshots[0])
+
+    assert created_user_session_id.startswith("studio2-")
+    assert len(created_user_session_id) <= 200
+    assert [snapshot.snapshot_id for snapshot in snapshots] == ["snapshot-alice"]
+    assert snapshots[0].display_name == "Alice 智能体"
+    assert resumed.instance_id == "resumed-alice"
+    assert reused.instance_id == "resumed-alice"
+    assert [action for action, _ in requests].count("resume") == 1
+    resume_request = next(body for action, body in requests if action == "resume")
+    assert resume_request == {
+        "CreateNewInstance": False,
+        "SnapshotId": "snapshot-alice",
+        "ToolId": "tool-sdk",
+        "Ttl": 28800,
+    }
 
 
 @pytest.mark.asyncio

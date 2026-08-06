@@ -63,6 +63,10 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda **kwargs: f"auto-{kwargs['name']}",
     )
     monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_tool_snapshot",
+        lambda **kwargs: str(kwargs["tool_id"]),
+    )
+    monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_model_credential",
         lambda **_: None,
     )
@@ -543,6 +547,7 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     credential_tool_ids: list[str] = []
     agent_tool_kinds: list[str] = []
     agent_credential_kinds: list[str] = []
+    snapshot_tool_ids: list[str] = []
     creation_barrier = threading.Barrier(4)
     created_kinds_lock = threading.Lock()
 
@@ -581,6 +586,12 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
         assert len(created_kinds) == 4
         agent_credential_kinds.append(str(kwargs["kind"]))
 
+    def _ensure_snapshot(**kwargs: object) -> str:
+        assert len(created_kinds) == 4
+        tool_id = str(kwargs["tool_id"])
+        snapshot_tool_ids.append(tool_id)
+        return tool_id
+
     monkeypatch.setattr(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
     )
@@ -598,6 +609,10 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_model_credential",
         _ensure_agent_credential,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_tool_snapshot",
+        _ensure_snapshot,
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
@@ -637,6 +652,7 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     assert sorted(credential_tool_ids) == ["chat-tool", "skill-tool"]
     assert sorted(agent_tool_kinds) == ["hermes", "openclaw"]
     assert sorted(agent_credential_kinds) == ["hermes", "openclaw"]
+    assert sorted(snapshot_tool_ids) == ["chat-tool", "hermes-tool", "openclaw-tool"]
     assert veadk_environments["SANDBOX_CHAT_OPENCLAW"] == "openclaw-tool"
     assert veadk_environments["SANDBOX_CHAT_HERMES"] == "hermes-tool"
     for label in ("Codex", "Skill Creator", "OpenClaw", "Hermes"):

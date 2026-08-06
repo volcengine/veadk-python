@@ -29,6 +29,14 @@ from veadk.cli.studio_deploy_serverless_iam import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _skip_snapshot_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_tool_snapshot",
+        lambda **kwargs: str(kwargs["tool_id"]),
+    )
+
+
 def _install_iam_service(monkeypatch: pytest.MonkeyPatch, service: MagicMock) -> None:
     iam_module = importlib.import_module("volcengine.iam.IamService")
     monkeypatch.setattr(iam_module, "IamService", lambda: service)

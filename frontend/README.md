@@ -41,7 +41,9 @@ server that `veadk frontend` launches — no separate backend.
   explicit deletion. Codex streams reasoning, tool activity, and replies into
   the normal conversation renderer; leaving the conversation only disconnects
   it, so the Agent remains available until the user deletes it. OpenClaw and
-  Hermes expose their main interface and Terminal through Studio.
+  Hermes expose their main interface and Terminal through Studio. If a running
+  Session has been reclaimed after AgentKit saved it, Studio presents its latest
+  snapshot as **Wakeable** and restores it before opening the Agent.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
 - **Automation directory**: browse development and message-channel integrations
@@ -399,7 +401,8 @@ ZIP download, and AgentKit publish.
 
 Configure separate ready AgentKit Tools for Codex, OpenClaw, Hermes, and Skill
 creation before starting the server. The Tool IDs are intentionally server-only
-and cannot be supplied by the browser:
+and cannot be supplied by the browser. Snapshot support must be enabled on the
+three Agent Tools; Skill Creator does not use snapshots:
 
 ```bash
 export SANDBOX_CHAT_CODEX=<chat-code-env-tool-id>
@@ -419,7 +422,8 @@ different instance.
 
 For local Studio, run the AgentKit `credential-hosting` command and bind its
 result to both CodeEnv Tools. A cloud deployment creates both Tools in parallel
-when their IDs are omitted. Alternatively, select existing Tools with
+when their IDs are omitted and enables snapshots on the Codex, OpenClaw, and
+Hermes Tools. Alternatively, select existing Tools with
 `--sandbox-chat-codex-tool-id`, `--sandbox-chat-openclaw-tool-id`,
 `--sandbox-chat-hermes-tool-id`, and `--sandbox-skill-creator-tool-id`. The
 deploy command obtains the Ark key with the deployer's Volcengine credentials,

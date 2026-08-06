@@ -6860,6 +6860,7 @@ def frontend_deploy(
         ensure_studio_agent_model_credential,
         ensure_studio_agent_tool,
         ensure_studio_code_env_tool,
+        ensure_studio_tool_snapshot,
         studio_sandbox_tool_name,
     )
 
@@ -6888,6 +6889,7 @@ def frontend_deploy(
                         access_key=ak,
                         secret_key=sk,
                         session_token=session_token or "",
+                        enable_snapshot=kind == "codex",
                     )
                 else:
                     future = executor.submit(
@@ -6928,6 +6930,37 @@ def frontend_deploy(
                 f"AgentKit {sandbox_tool_labels[kind]} Tool did not return a Tool ID."
             )
         resolved_sandbox_tool_ids[kind] = tool_id
+
+    snapshot_kinds = ("codex", "openclaw", "hermes")
+    with ThreadPoolExecutor(max_workers=len(snapshot_kinds)) as executor:
+        snapshot_futures = {
+            kind: executor.submit(
+                ensure_studio_tool_snapshot,
+                tool_id=resolved_sandbox_tool_ids[kind],
+                name=sandbox_tool_labels[kind],
+                region=region,
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token or "",
+            )
+            for kind in snapshot_kinds
+        }
+        for kind, future in snapshot_futures.items():
+            label = sandbox_tool_labels[kind]
+            try:
+                future.result()
+            except Exception as error:
+                detail = _safe_exception_detail(
+                    error,
+                    secrets=(ak, sk, session_token),
+                )
+                raise click.ClickException(
+                    f"Failed to enable AgentKit {label} snapshots. "
+                    f"Underlying error:\n{detail}"
+                ) from error
+            click.echo(f"AgentKit {label} snapshots are enabled.")
+
+    for kind in resolved_sandbox_tool_ids:
         click.echo(f"Creating AgentKit {sandbox_tool_labels[kind]} model credential…")
 
     with ThreadPoolExecutor(max_workers=len(resolved_sandbox_tool_ids)) as executor:

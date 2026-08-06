@@ -49,6 +49,8 @@ test("sandbox access is isolated behind a reusable typed client", () => {
   assert.match(sandboxClientSource, /listAgentSessions\([\s\S]*kind: SandboxAgentKind/);
   assert.match(sandboxClientSource, /startAgentSession\([\s\S]*kind: SandboxAgentKind/);
   assert.match(sandboxClientSource, /deleteAgentSession\([\s\S]*kind: SandboxAgentKind/);
+  assert.match(sandboxClientSource, /resumeSnapshot\([\s\S]*snapshotId: string/);
+  assert.match(sandboxClientSource, /deleteSnapshot\([\s\S]*snapshotId: string/);
   assert.match(sandboxClientSource, /sendMessage\([\s\S]*options\?: SandboxRequestOptions/);
   assert.match(sandboxClientSource, /closeSession\([\s\S]*options\?: SandboxRequestOptions/);
   assert.match(sandboxClientSource, /signal\?: AbortSignal/);
@@ -117,12 +119,15 @@ test("active sandbox conversation identifies the selected agent and never uses n
 });
 
 test("sandbox agents expose detail deletion and reusable workspaces", () => {
-  assert.match(detailsSource, /Session 详情/);
+  assert.match(detailsSource, /wakeable \? "Snapshot" : "Session"/);
+  assert.match(detailsSource, /wakeable \? "唤醒智能体" : "打开智能体"/);
   assert.match(detailsSource, /删除智能体/);
   assert.match(detailsSource, /role="alertdialog"/);
   assert.match(detailsSource, /确认删除/);
   assert.match(appSource, /sandboxClient\.deleteSession\(session\.id\)/);
   assert.match(appSource, /sandboxClient\.deleteAgentSession\(session\.toolName, session\.id\)/);
+  assert.match(appSource, /sandboxClient\.resumeSnapshot\(resource\.toolName, resource\.snapshotId\)/);
+  assert.match(appSource, /sandboxClient\.deleteSnapshot\(session\.toolName, session\.snapshotId\)/);
   assert.match(workspaceSource, /主界面/);
   assert.match(workspaceSource, /终端/);
   assert.match(workspaceSource, /sandboxClient\.launchAgentTerminal/);

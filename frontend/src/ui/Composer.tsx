@@ -24,7 +24,7 @@ import type {
   FrontendInvocation,
   RuntimeScope,
 } from "../adk/client";
-import type { SandboxSession } from "../adk/sandbox";
+import type { SandboxAgentResource } from "../adk/sandbox";
 import { InvocationChips } from "./InvocationChips";
 import { MediaGroup } from "./Media";
 import { isImeCompositionEvent } from "./composerKeyboard";
@@ -141,7 +141,7 @@ export interface ComposerProps {
   selectedRuntimeId?: string;
   runtimeScope?: RuntimeScope;
   onSelectRuntime?: (runtime: CloudRuntime) => Promise<void>;
-  onSelectSandboxSession?: (session: SandboxSession) => Promise<void>;
+  onSelectSandboxSession?: (session: SandboxAgentResource) => Promise<void>;
 }
 
 export function Composer({
