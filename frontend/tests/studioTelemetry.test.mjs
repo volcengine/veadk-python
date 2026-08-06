@@ -80,7 +80,7 @@ test("initializes APMPlus lazily and sends Studio custom events", () => {
   assert.match(telemetrySource, /ev_type: "custom"/);
 });
 
-test("tracks Studio load, authenticated users, Agent deploy, Sandbox creation, Agent debug, and Agent connect results", () => {
+test("tracks Studio load, authenticated users, Agent deploy, Sandbox creation, Agent debug, Agent connect, and Agent message results", () => {
   assert.match(appSource, /initStudioTelemetry\(cfg\.telemetry\)/);
   assert.match(appSource, /trackStudioLoaded/);
   assert.match(telemetryEventsSource, /"studio_instance_loaded"/);
@@ -92,6 +92,7 @@ test("tracks Studio load, authenticated users, Agent deploy, Sandbox creation, A
   assert.match(telemetrySource, /"studio_sandbox_create"/);
   assert.match(telemetrySource, /"studio_agent_debug"/);
   assert.match(telemetrySource, /"studio_agent_connect"/);
+  assert.match(telemetrySource, /"studio_agent_message"/);
   assert.doesNotMatch(telemetrySource, /"studio_agent_deploy_succeeded"/);
   assert.doesNotMatch(telemetrySource, /"studio_agent_deploy_failed"/);
   assert.doesNotMatch(telemetrySource, /"studio_sandbox_create_succeeded"/);
@@ -150,6 +151,22 @@ test("tracks Studio load, authenticated users, Agent deploy, Sandbox creation, A
   assert.match(appSource, /trackAgentConnectFailed/);
   assert.match(agentSelectorSource, /trackAgentConnectSucceeded/);
   assert.match(agentSelectorSource, /trackAgentConnectFailed/);
+  assert.match(telemetryEventsSource, /trackStudioEvent\(\s*"studio_agent_message"/);
+  assert.match(telemetryEventsSource, /message_status: "succeeded"/);
+  assert.match(telemetryEventsSource, /message_status: "failed"/);
+  assert.match(telemetryEventsSource, /agent_kind: args\.kind/);
+  assert.match(telemetryEventsSource, /message_source: args\.source/);
+  assert.match(telemetryEventsSource, /session_state: args\.sessionState/);
+  assert.match(telemetryEventsSource, /failed_phase: args\.phase/);
+  assert.match(telemetryEventsSource, /error_kind: agentMessageErrorKind\(args\.error\)/);
+  assert.match(telemetryEventsSource, /duration_ms: args\.durationMs/);
+  assert.match(appSource, /trackAgentMessageSucceeded/);
+  assert.match(appSource, /trackAgentMessageFailed/);
+  assert.match(appSource, /phase: "create_session"/);
+  assert.match(appSource, /phase: "mount_task_capabilities"/);
+  assert.match(appSource, /phase: "run_sse"/);
+  assert.match(appSource, /phase: "sandbox_send"/);
+  assert.match(appSource, /"a2ui_action"/);
 });
 
 test("keeps telemetry event schema and error classification outside UI components", () => {
@@ -160,10 +177,14 @@ test("keeps telemetry event schema and error classification outside UI component
   assert.match(telemetryEventsSource, /export type SandboxTelemetryKind = "codex" \| SandboxAgentKind/);
   assert.match(telemetryEventsSource, /export type AgentConnectKind/);
   assert.match(telemetryEventsSource, /export type AgentConnectSource/);
+  assert.match(telemetryEventsSource, /export type AgentMessageKind/);
+  assert.match(telemetryEventsSource, /export type AgentMessageSource/);
+  assert.match(telemetryEventsSource, /export type AgentMessageFailedPhase/);
   assert.match(telemetryEventsSource, /function agentDeployCategories/);
   assert.match(telemetryClassifiersSource, /export function agentDeployErrorKind/);
   assert.match(telemetryClassifiersSource, /export function agentDebugErrorKind/);
   assert.match(telemetryClassifiersSource, /export function agentConnectErrorKind/);
+  assert.match(telemetryClassifiersSource, /export function agentMessageErrorKind/);
   assert.match(telemetryClassifiersSource, /export function sandboxCreateErrorKind/);
   assert.match(telemetryClassifiersSource, /export function telemetryErrorSummary/);
   assert.match(telemetryClassifiersSource, /name === "RuntimeProbeError"/);

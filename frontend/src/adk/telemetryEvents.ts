@@ -2,6 +2,7 @@ import {
   agentConnectErrorKind,
   agentDebugErrorKind,
   agentDeployErrorKind,
+  agentMessageErrorKind,
   sandboxCreateErrorKind,
   telemetryErrorSummary,
 } from "./telemetryClassifiers";
@@ -104,6 +105,30 @@ export interface AgentConnectSucceededTelemetry extends AgentConnectTelemetryBas
 }
 
 export interface AgentConnectFailedTelemetry extends AgentConnectTelemetryBase {
+  error: unknown;
+}
+
+export type AgentMessageKind =
+  | "runtime"
+  | SandboxTelemetryKind;
+
+export type AgentMessageSource = "composer" | "a2ui_action";
+export type AgentMessageSessionState = "new" | "existing";
+export type AgentMessageFailedPhase =
+  | "create_session"
+  | "mount_task_capabilities"
+  | "run_sse"
+  | "sandbox_send";
+
+export interface AgentMessageTelemetryBase {
+  kind: AgentMessageKind;
+  source: AgentMessageSource;
+  sessionState: AgentMessageSessionState;
+  durationMs: number;
+}
+
+export interface AgentMessageFailedTelemetry extends AgentMessageTelemetryBase {
+  phase: AgentMessageFailedPhase;
   error: unknown;
 }
 
@@ -227,6 +252,41 @@ export function trackAgentConnectFailed(args: AgentConnectFailedTelemetry): void
       agent_kind: args.kind,
       connect_source: args.source,
       error_kind: agentConnectErrorKind(args.error),
+      error_summary: telemetryErrorSummary(args.error),
+    },
+    {
+      duration_ms: args.durationMs,
+    },
+  );
+}
+
+export function trackAgentMessageSucceeded(
+  args: AgentMessageTelemetryBase,
+): void {
+  trackStudioEvent(
+    "studio_agent_message",
+    {
+      message_status: "succeeded",
+      agent_kind: args.kind,
+      message_source: args.source,
+      session_state: args.sessionState,
+    },
+    {
+      duration_ms: args.durationMs,
+    },
+  );
+}
+
+export function trackAgentMessageFailed(args: AgentMessageFailedTelemetry): void {
+  trackStudioEvent(
+    "studio_agent_message",
+    {
+      message_status: "failed",
+      agent_kind: args.kind,
+      message_source: args.source,
+      session_state: args.sessionState,
+      failed_phase: args.phase,
+      error_kind: agentMessageErrorKind(args.error),
       error_summary: telemetryErrorSummary(args.error),
     },
     {

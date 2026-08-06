@@ -310,10 +310,13 @@ import {
 import {
   trackAgentConnectFailed,
   trackAgentConnectSucceeded,
+  trackAgentMessageFailed,
+  trackAgentMessageSucceeded,
   trackSandboxCreateFailed,
   trackSandboxCreateSucceeded,
   trackStudioLoaded,
   type AgentConnectSource,
+  type AgentMessageSource,
 } from "./adk/telemetryEvents";
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
 import { buildSurfaces } from "./a2ui/Surface";
@@ -2729,6 +2732,7 @@ export default function App() {
     setError("");
     setSandboxApproval(null);
     setSandboxApprovalError("");
+    const messageStartedAt = Date.now();
     const controller = new AbortController();
     sandboxMessageAbortRef.current?.abort();
     sandboxMessageAbortRef.current = controller;
@@ -2850,6 +2854,12 @@ export default function App() {
         },
       );
       if (sandboxMessageAbortRef.current !== controller) return;
+      trackAgentMessageSucceeded({
+        kind: activeSession.toolName,
+        source: "composer",
+        sessionState: "existing",
+        durationMs: Date.now() - messageStartedAt,
+      });
       setSandboxTurns((current) => {
         const next = current.slice();
         const assistantIndex = next.findIndex(
@@ -2878,6 +2888,14 @@ export default function App() {
       if (sandboxMessageAbortRef.current !== controller) {
         return;
       }
+      trackAgentMessageFailed({
+        kind: activeSession.toolName,
+        source: "composer",
+        sessionState: "existing",
+        durationMs: Date.now() - messageStartedAt,
+        phase: "sandbox_send",
+        error: messageError,
+      });
       setSandboxTurns((current) =>
         current.filter(
           (turn) =>
@@ -3265,6 +3283,7 @@ export default function App() {
     text: string,
     atts: Attachment[] = [],
     selectedInvocation: FrontendInvocation = emptyInvocation(),
+    messageSource: AgentMessageSource = "composer",
   ) {
     // `busy` here = the CURRENT session is already streaming (can't double-send
     // to it). Other sessions can stream concurrently.
@@ -3276,6 +3295,10 @@ export default function App() {
       !userId
     ) return;
     setError("");
+    const messageStartedAt = Date.now();
+    const createsSession = !sessionId;
+    const sessionState = createsSession ? "new" : "existing";
+    const trackRuntimeMessage = Boolean(currentRuntime);
 
     const userBlocks: Turn["blocks"] = [];
     if (selectedInvocation.skills.length > 0 || selectedInvocation.targetAgent) {
@@ -3298,7 +3321,6 @@ export default function App() {
       { role: "user", blocks: userBlocks, meta: { ts: Date.now() / 1000 } },
       { role: "assistant", blocks: [] },
     ];
-    const createsSession = !sessionId;
     if (createsSession) {
       setPendingTurns(optimisticTurns);
       setInitializingSession(true);
@@ -3314,6 +3336,16 @@ export default function App() {
         setInitializingSession(false);
         setInput(text);
         setInvocation(selectedInvocation);
+      }
+      if (trackRuntimeMessage) {
+        trackAgentMessageFailed({
+          kind: "runtime",
+          source: messageSource,
+          sessionState,
+          durationMs: Date.now() - messageStartedAt,
+          phase: "create_session",
+          error: e,
+        });
       }
       setError(String(e));
       return;
@@ -3350,6 +3382,16 @@ export default function App() {
           setInput(text);
           setInvocation(selectedInvocation);
         }
+        if (trackRuntimeMessage) {
+          trackAgentMessageFailed({
+            kind: "runtime",
+            source: messageSource,
+            sessionState,
+            durationMs: Date.now() - messageStartedAt,
+            phase: "mount_task_capabilities",
+            error: e,
+          });
+        }
         setError(`任务能力挂载失败：${String(e)}`);
         return;
       }
@@ -3384,6 +3426,7 @@ export default function App() {
       let eventId = "";
       let invocationId = "";
       let streamFailed = false;
+      let streamError: unknown = null;
       for await (const event of runSSE({
         appName,
         userId,
@@ -3398,6 +3441,7 @@ export default function App() {
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
         if (typeof errMsg === "string" && errMsg) {
           streamFailed = true;
+          streamError = errMsg;
           if (viewSidRef.current === sid) setError(errMsg);
           break;
         }
@@ -3440,6 +3484,25 @@ export default function App() {
         });
       }
       void refreshSessions(appName);
+      if (!ctrl.signal.aborted && trackRuntimeMessage) {
+        if (streamFailed) {
+          trackAgentMessageFailed({
+            kind: "runtime",
+            source: messageSource,
+            sessionState,
+            durationMs: Date.now() - messageStartedAt,
+            phase: "run_sse",
+            error: streamError ?? "run_sse failed",
+          });
+        } else {
+          trackAgentMessageSucceeded({
+            kind: "runtime",
+            source: messageSource,
+            sessionState,
+            durationMs: Date.now() - messageStartedAt,
+          });
+        }
+      }
       if (!ctrl.signal.aborted && !streamFailed && eventId) {
         automaticEvaluationStatusRefreshRef.current();
       }
@@ -3451,6 +3514,16 @@ export default function App() {
         !ctrl.signal.aborted &&
         viewSidRef.current === sid
       ) {
+        if (trackRuntimeMessage) {
+          trackAgentMessageFailed({
+            kind: "runtime",
+            source: messageSource,
+            sessionState,
+            durationMs: Date.now() - messageStartedAt,
+            phase: "run_sse",
+            error: e,
+          });
+        }
         setError(String(e));
       }
     } finally {
@@ -3465,7 +3538,12 @@ export default function App() {
   function onAction(action: A2uiAction | undefined, node: A2uiComponent) {
     const name = action?.event?.name ?? node.id;
     const context = action?.event?.context ?? {};
-    send(`[ui-action] ${name}: ${JSON.stringify(context)}`);
+    void send(
+      `[ui-action] ${name}: ${JSON.stringify(context)}`,
+      [],
+      emptyInvocation(),
+      "a2ui_action",
+    );
   }
 
   /** Complete an MCP/tool OAuth request: open the authorize URL, capture the
