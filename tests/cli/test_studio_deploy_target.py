@@ -595,6 +595,7 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
 
         def deploy(self, **kwargs: object) -> SimpleNamespace:
             deploy_path = Path(str(kwargs["path"]))
+            captured["deploy"] = kwargs
             captured["run_script"] = (deploy_path / "run.sh").read_text(
                 encoding="utf-8"
             )
@@ -688,6 +689,7 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
     assert isinstance(identity, dict)
     assert identity["provider"] == "byteplus"
     assert identity["region"] == "ap-southeast-1"
+    assert captured["deploy"]["enable_mcp_session"] is False
     assert "--provider byteplus --auth-mode frontend" in str(captured["run_script"])
     assert veadk_environments["CLOUD_PROVIDER"] == "byteplus"
     assert veadk_environments["AGENTKIT_CLOUD_PROVIDER"] == "byteplus"

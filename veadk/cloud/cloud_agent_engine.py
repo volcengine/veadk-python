@@ -244,6 +244,7 @@ class CloudAgentEngine(BaseModel):
         client_secret: str = "",
         reuse_gateway: bool = False,
         local_test: bool = False,
+        enable_mcp_session: bool = True,
     ) -> CloudApp:
         """Deploys a local agent project to Volcengine FaaS, creating necessary resources.
 
@@ -320,6 +321,7 @@ class CloudAgentEngine(BaseModel):
                 gateway_service_name=gateway_service_name,
                 gateway_upstream_name=gateway_upstream_name,
                 enable_key_auth=enable_key_auth,
+                enable_mcp_session=enable_mcp_session,
             )
             _ = function_id  # for future use
 

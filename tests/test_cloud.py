@@ -193,6 +193,32 @@ def test_vefaas_byteplus_application_uses_configured_template() -> None:
     request_body = request.call_args.kwargs["request_body"]
     assert request_body["TemplateId"] == "byteplus-template-id"
     assert request_body["Config"]["Region"] == "ap-southeast-1"
+    assert request_body["Config"]["EnableMcpSession"] is True
+
+
+def test_vefaas_application_can_disable_mcp_session() -> None:
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        region="ap-southeast-1",
+        provider="byteplus",
+        application_template_id="byteplus-template-id",
+    )
+
+    with patch("veadk.integrations.ve_faas.ve_faas.ve_request") as request:
+        request.return_value = {"Result": {"Status": "create_success", "Id": "app-id"}}
+
+        service._create_application(
+            "studio-app",
+            "studio-function",
+            "gateway",
+            "upstream",
+            "service",
+            enable_mcp_session=False,
+        )
+
+    request_body = request.call_args.kwargs["request_body"]
+    assert request_body["Config"]["EnableMcpSession"] is False
 
 
 def test_vefaas_byteplus_application_requires_template() -> None:

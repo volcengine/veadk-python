@@ -7529,6 +7529,7 @@ def frontend_deploy(
             gateway_upstream_name=gateway_upstream_name,
             use_adk_web=False,
             auth_method="none",
+            enable_mcp_session=False,
         )
         url = (app.vefaas_endpoint or "").rstrip("/")
         redirect_uri = f"{url}/oauth2/callback"
