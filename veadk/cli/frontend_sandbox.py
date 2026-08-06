@@ -85,7 +85,9 @@ _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 _SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
 _RESUME_SESSION_ATTEMPTS = 60
 _RESUME_SESSION_INTERVAL_SECONDS = 5
-_STUDIO_USER_SESSION_PREFIX = "studio2"
+_STUDIO_USER_SESSION_PREFIX = "studio"
+_LEGACY_STUDIO_USER_SESSION_PREFIX = "studio2"
+_STUDIO_USER_SESSION_UUID_LENGTH = 32
 _ACTIVE_SESSION_STATUSES = frozenset(
     {"creating", "starting", "initializing", "pending", "ready", "running"}
 )
@@ -162,37 +164,40 @@ def _owner_fingerprint(owner_id: str) -> str:
     return hashlib.sha256(owner_id.encode("utf-8")).hexdigest()[:16]
 
 
-def _encode_snapshot_display_name(display_name: str, maximum: int) -> str:
-    raw = display_name.encode("utf-8")
-    while raw and len(base64.urlsafe_b64encode(raw).rstrip(b"=")) > maximum:
-        raw = raw[:-1]
-        while raw:
-            try:
-                raw.decode("utf-8")
-                break
-            except UnicodeDecodeError:
-                raw = raw[:-1]
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+def _safe_user_session_owner(owner_id: str) -> str:
+    """Encode one owner using AgentKit's UserSessionId-safe characters."""
+    if re.fullmatch(r"[A-Za-z0-9_]+", owner_id) and not owner_id.startswith("u_"):
+        value = owner_id
+    else:
+        encoded = base64.b32encode(owner_id.encode("utf-8"))
+        value = f"u_{encoded.decode('ascii').rstrip('=')}"
 
-
-def _build_studio_user_session_id(owner_id: str, display_name: str) -> str:
-    prefix = (
-        f"{_STUDIO_USER_SESSION_PREFIX}-{_owner_fingerprint(owner_id)}-"
-        f"{uuid.uuid4().hex[:16]}-"
+    maximum = (
+        STUDIO_SANDBOX_USER_SESSION_ID_MAX_LENGTH
+        - len(_STUDIO_USER_SESSION_PREFIX)
+        - _STUDIO_USER_SESSION_UUID_LENGTH
+        - 2
     )
-    encoded_name = _encode_snapshot_display_name(
-        display_name,
-        STUDIO_SANDBOX_USER_SESSION_ID_MAX_LENGTH - len(prefix),
-    )
-    return f"{prefix}{encoded_name}"
+    if len(value) > maximum:
+        fingerprint = hashlib.sha256(owner_id.encode("utf-8")).hexdigest()[:32]
+        value = f"{value[: maximum - len(fingerprint) - 1]}_{fingerprint}"
+    return value
 
 
-def _snapshot_display_name_for_owner(
+def _studio_user_session_prefix(owner_id: str) -> str:
+    return f"{_STUDIO_USER_SESSION_PREFIX}-{_safe_user_session_owner(owner_id)}-"
+
+
+def _build_studio_user_session_id(owner_id: str) -> str:
+    return f"{_studio_user_session_prefix(owner_id)}{uuid.uuid4().hex}"
+
+
+def _legacy_snapshot_display_name_for_owner(
     user_session_id: str,
     owner_id: str | None,
 ) -> str | None:
     parts = user_session_id.split("-", 3)
-    if len(parts) != 4 or parts[0] != _STUDIO_USER_SESSION_PREFIX:
+    if len(parts) != 4 or parts[0] != _LEGACY_STUDIO_USER_SESSION_PREFIX:
         return None
     if owner_id is not None and not secrets.compare_digest(
         parts[1], _owner_fingerprint(owner_id)
@@ -206,6 +211,26 @@ def _snapshot_display_name_for_owner(
         return base64.urlsafe_b64decode(encoded_name + padding).decode("utf-8")
     except (UnicodeDecodeError, ValueError):
         return None
+
+
+def _snapshot_display_name_for_owner(
+    user_session_id: str,
+    owner_id: str | None,
+) -> str | None:
+    legacy_name = _legacy_snapshot_display_name_for_owner(
+        user_session_id,
+        owner_id,
+    )
+    if legacy_name is not None:
+        return legacy_name
+    if owner_id is None:
+        return user_session_id
+    owner_prefix = _studio_user_session_prefix(owner_id)
+    if not user_session_id.startswith(owner_prefix) or not user_session_id.removeprefix(
+        owner_prefix
+    ):
+        return None
+    return user_session_id
 
 
 def _safe_error_message(error: object) -> str:
@@ -304,7 +329,7 @@ class SandboxCloudSnapshot:
     created_by: str = ""
 
 
-def _latest_restorable_snapshots(
+def _restorable_snapshots(
     sessions: list[SandboxCloudSession],
     snapshots: list[SandboxCloudSnapshot],
 ) -> list[SandboxCloudSnapshot]:
@@ -319,7 +344,7 @@ def _latest_restorable_snapshots(
         for session in sessions
         if session.status.lower() in _ACTIVE_SESSION_STATUSES
     }
-    latest: dict[str, SandboxCloudSnapshot] = {}
+    restorable: list[SandboxCloudSnapshot] = []
     for snapshot in sorted(
         snapshots,
         key=lambda item: item.created_at,
@@ -332,9 +357,8 @@ def _latest_restorable_snapshots(
             continue
         if not snapshot.user_session_id and snapshot.session_id in active_session_ids:
             continue
-        key = snapshot.user_session_id or snapshot.session_id or snapshot.snapshot_id
-        latest.setdefault(key, snapshot)
-    return list(latest.values())
+        restorable.append(snapshot)
+    return restorable
 
 
 @dataclass
@@ -642,6 +666,8 @@ class AgentkitSandboxGateway:
         display_name = _snapshot_display_name_for_owner(user_session_id, owner_id)
         if not snapshot_id or display_name is None:
             return None
+        if not display_name:
+            display_name = user_session_id or snapshot_id
         return SandboxCloudSnapshot(
             tool_id=tool_id,
             snapshot_id=snapshot_id,
@@ -911,7 +937,7 @@ class AgentkitSandboxGateway:
         username: str = "",
         creator_name: str = "",
     ) -> SandboxCloudSession:
-        user_session_id = _build_studio_user_session_id(username, display_name)
+        user_session_id = _build_studio_user_session_id(username)
         regions = self._region_candidates or ("",)
         for index, region in enumerate(regions):
             request = build_create_session_request(
@@ -1097,7 +1123,7 @@ class SandboxConversationService:
             self._gateway.list_sessions(tool_id, None if is_admin else owner_id),
             self._gateway.list_snapshots(tool_id, None if is_admin else owner_id),
         )
-        return sessions, _latest_restorable_snapshots(sessions, snapshots)
+        return sessions, _restorable_snapshots(sessions, snapshots)
 
     async def resume_snapshot(
         self,
@@ -1693,7 +1719,7 @@ class SandboxAgentSessionService:
             self._gateway.list_sessions(tool_id, None if is_admin else owner_id),
             self._gateway.list_snapshots(tool_id, None if is_admin else owner_id),
         )
-        return sessions, _latest_restorable_snapshots(sessions, snapshots)
+        return sessions, _restorable_snapshots(sessions, snapshots)
 
     async def resume_snapshot(
         self,

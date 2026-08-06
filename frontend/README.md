@@ -412,6 +412,14 @@ export SANDBOX_SKILL_CREATOR=<skill-code-env-tool-id>
 veadk frontend --agents-dir examples
 ```
 
+Studio creates new Agent Sandbox sessions with a
+`studio-<safe-user-name>-<uuid>` UserSessionId. When listing snapshots, the
+server follows every `NextToken` page and filters this prefix for the signed-in
+user before returning results to the browser. Local administrators can see all
+snapshots from the configured Tool, including legacy `studio2-*` snapshots.
+Multiple restorable historical snapshots are kept in the result instead of
+being collapsed to only the latest one.
+
 Publishing a generated Skill uses TOS and the AgentKit Skills API. Set
 `VEADK_SKILL_CREATOR_TOS_BUCKET`, `VEADK_SKILL_CREATOR_TOS_PREFIX`, and
 `VEADK_SKILL_CREATOR_PROJECT_NAME` only when their defaults are unsuitable.

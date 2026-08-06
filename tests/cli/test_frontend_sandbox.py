@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
@@ -48,6 +49,7 @@ from veadk.cli.frontend_sandbox import (
     SandboxConversationService,
     SandboxProvisioningError,
     SandboxSessionNotFoundError,
+    _build_studio_user_session_id,
     mount_sandbox_agent_routes,
     mount_sandbox_routes,
 )
@@ -376,6 +378,29 @@ class _FakeGateway:
         return None
 
 
+@pytest.mark.parametrize(
+    "owner_id",
+    ["hanzhi", "alice@example.com", "张三", "user_name-with-dashes"],
+)
+def test_studio_user_session_id_only_uses_agentkit_safe_characters(
+    owner_id: str,
+) -> None:
+    user_session_id = _build_studio_user_session_id(owner_id)
+
+    assert re.fullmatch(r"studio-[A-Za-z0-9_-]+-[0-9a-f]{32}", user_session_id)
+    assert len(user_session_id) <= 200
+
+
+def test_studio_user_session_id_owner_encoding_avoids_escape_collisions() -> None:
+    escaped_prefix = _build_studio_user_session_id("/").rsplit("-", 1)[0]
+    literal_prefix = _build_studio_user_session_id("_2F").rsplit("-", 1)[0]
+    dashed_owner = _build_studio_user_session_id("alice-bob").split("-", 2)[1]
+
+    assert escaped_prefix != literal_prefix
+    assert "-" not in dashed_owner
+    assert _build_studio_user_session_id("user_name").startswith("studio-user_name-")
+
+
 def _app(gateway: _FakeGateway, tool_id: str | None = "tool-studio") -> FastAPI:
     app = FastAPI()
     service = SandboxConversationService(gateway, tool_id=tool_id)
@@ -543,6 +568,18 @@ def test_sandbox_snapshot_is_wakeable_and_resumes_to_a_ready_session(
         display_name="可恢复智能体",
         created_by="alice",
     )
+    gateway.snapshots["snapshot-older"] = SandboxCloudSnapshot(
+        tool_id=tool_id,
+        snapshot_id="snapshot-older",
+        session_id="expired-older",
+        user_session_id="studio2-owner-random-name",
+        region="cn-beijing",
+        status="Ready",
+        reason="Expired",
+        created_at="2026-08-05T09:00:00Z",
+        display_name="更早的快照",
+        created_by="alice",
+    )
     app = _app(gateway) if kind == "sandbox" else _agent_app(gateway)
     root = f"/web/{kind}"
     headers = {"X-Test-User": "alice"}
@@ -579,7 +616,19 @@ def test_sandbox_snapshot_is_wakeable_and_resumes_to_a_ready_session(
             "createdBy": "alice",
             "displayName": "可恢复智能体",
             "toolName": "veadk-studio-codex" if kind == "sandbox" else kind,
-        }
+        },
+        {
+            "snapshotId": "snapshot-older",
+            "sessionId": "expired-older",
+            "userSessionId": "studio2-owner-random-name",
+            "status": "Wakeable",
+            "snapshotStatus": "Ready",
+            "reason": "Expired",
+            "createdAt": "2026-08-05T09:00:00Z",
+            "createdBy": "alice",
+            "displayName": "更早的快照",
+            "toolName": "veadk-studio-codex" if kind == "sandbox" else kind,
+        },
     ]
     assert resumed.status_code == 200
     assert resumed.json()["sessionId"] == "resumed-snapshot-1"
@@ -1360,20 +1409,53 @@ async def test_gateway_lists_only_owned_studio_snapshots_and_restores_one() -> N
                     request.model_dump(by_alias=True, exclude_none=True),
                 )
             )
+            if request.next_token is None:
+                return tools_types.ListSessionSnapshotsResponse(
+                    NextToken="snapshot-page-2",
+                    Snapshots=[
+                        tools_types.SnapshotsForListSessionSnapshots(
+                            SnapshotId="snapshot-alice",
+                            SessionId="expired-alice",
+                            UserSessionId=created_user_session_id,
+                            Status="Ready",
+                            Reason="Expired",
+                            CreatedAt="2026-08-06T09:00:00Z",
+                        ),
+                        tools_types.SnapshotsForListSessionSnapshots(
+                            SnapshotId="snapshot-bob",
+                            SessionId="expired-bob",
+                            UserSessionId=(
+                                "studio-bob-0123456789abcdef0123456789abcdef"
+                            ),
+                            Status="Ready",
+                        ),
+                        tools_types.SnapshotsForListSessionSnapshots(
+                            SnapshotId="snapshot-custom-suffix",
+                            SessionId="expired-custom-suffix",
+                            UserSessionId=(
+                                "studio-alice-84a286wese63c484a299ac9b461cf94asd2"
+                            ),
+                            Status="Ready",
+                        ),
+                    ],
+                )
             return tools_types.ListSessionSnapshotsResponse(
                 Snapshots=[
                     tools_types.SnapshotsForListSessionSnapshots(
-                        SnapshotId="snapshot-alice",
-                        SessionId="expired-alice",
-                        UserSessionId=created_user_session_id,
+                        SnapshotId="snapshot-legacy-owned",
+                        SessionId="expired-legacy-owned",
+                        UserSessionId="studio2-2bd806c97f0e00af-random-QWxpY2UgT2xk",
                         Status="Ready",
-                        Reason="Expired",
-                        CreatedAt="2026-08-06T09:00:00Z",
                     ),
                     tools_types.SnapshotsForListSessionSnapshots(
                         SnapshotId="snapshot-legacy",
                         SessionId="expired-legacy",
                         UserSessionId="studio-random-legacy",
+                        Status="Ready",
+                    ),
+                    tools_types.SnapshotsForListSessionSnapshots(
+                        SnapshotId="snapshot-without-user-session-id",
+                        SessionId="expired-without-user-session-id",
                         Status="Ready",
                     ),
                 ]
@@ -1422,13 +1504,39 @@ async def test_gateway_lists_only_owned_studio_snapshots_and_restores_one() -> N
     gateway = AgentkitSandboxGateway(_Client())
     await gateway.create_session("tool-sdk", "Alice 智能体", "alice")
     snapshots = await gateway.list_snapshots("tool-sdk", "alice")
+    admin_snapshots = await gateway.list_snapshots("tool-sdk")
     resumed = await gateway.resume_snapshot(snapshots[0])
     reused = await gateway.resume_snapshot(snapshots[0])
 
-    assert created_user_session_id.startswith("studio2-")
+    assert re.fullmatch(
+        r"studio-alice-[0-9a-f]{32}",
+        created_user_session_id,
+    )
     assert len(created_user_session_id) <= 200
-    assert [snapshot.snapshot_id for snapshot in snapshots] == ["snapshot-alice"]
-    assert snapshots[0].display_name == "Alice 智能体"
+    assert [snapshot.snapshot_id for snapshot in snapshots] == [
+        "snapshot-alice",
+        "snapshot-custom-suffix",
+        "snapshot-legacy-owned",
+    ]
+    assert snapshots[0].display_name == created_user_session_id
+    assert snapshots[1].display_name.startswith("studio-alice-")
+    assert snapshots[2].display_name == "Alice Old"
+    assert {snapshot.snapshot_id for snapshot in admin_snapshots} == {
+        "snapshot-alice",
+        "snapshot-bob",
+        "snapshot-custom-suffix",
+        "snapshot-legacy-owned",
+        "snapshot-legacy",
+        "snapshot-without-user-session-id",
+    }
+    assert (
+        next(
+            snapshot
+            for snapshot in admin_snapshots
+            if snapshot.snapshot_id == "snapshot-without-user-session-id"
+        ).display_name
+        == "snapshot-without-user-session-id"
+    )
     assert resumed.instance_id == "resumed-alice"
     assert reused.instance_id == "resumed-alice"
     assert [action for action, _ in requests].count("resume") == 1
