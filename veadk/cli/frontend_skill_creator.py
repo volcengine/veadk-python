@@ -55,6 +55,7 @@ from veadk.cli.agentkit_sandbox_region import (
     is_agentkit_resource_not_found,
     sandbox_region_candidates,
 )
+from veadk.cli.studio_sandbox_tools import studio_sandbox_agent_model_name
 
 _MODELS = (
     ("a", "doubao-seed-2-0-pro-260215", "豆包 Seed 2.0 Pro"),
@@ -866,7 +867,7 @@ def ensure_skill_creator_model_credential(
         )
     model_provider, model_base_url = _sandbox_model_config(provider)
     session_envs = build_exec_session_envs(
-        model_name=model_name or _MODELS[0][1],
+        model_name=model_name or studio_sandbox_agent_model_name(provider),
         model_api_key=resolved_model_api_key,
         model_provider=model_provider,
         model_base_url=model_base_url,

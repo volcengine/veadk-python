@@ -48,9 +48,11 @@ server that `veadk frontend` launches — no separate backend.
   selected Skill or an uploaded ZIP as the optimization source. Skill
   conversations share the normal sidebar history, preserve DevEnv progress
   across navigation, and expose the complete generated file tree in a
-  read-only browser. Publishing streams each AgentKit stage, requires a
-  concrete Skill Space destination, and links the completed version back to
-  that destination in the center.
+  read-only browser. Cloud deployment binds the same hosted Ark key and
+  `doubao-seed-evolving` default Codex model to the chat CodeEnv and Skill
+  Workbench DevEnv. Publishing streams each AgentKit stage, requires a concrete
+  Skill Space destination, and links the completed version back to that
+  destination in the center.
 - **Automation directory**: browse development and message-channel integrations
   from the Studio sidebar. The local Coding Agents integration detects Trae,
   Claude Code, and Codex across macOS, Linux, and Windows, then globally installs

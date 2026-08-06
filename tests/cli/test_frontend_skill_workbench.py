@@ -92,6 +92,8 @@ def test_delegation_brief_delegates_outcome_without_dictating_steps() -> None:
     assert "Handoff protocol" in brief
     assert "Acceptance checks" in brief
     assert "Do not report completion before" in brief
+    assert "Detect the user's language" in brief
+    assert "same language as the user" in brief
     assert "no more than 100 files" in brief
     assert re.search(r"no more\s+than 2 MiB", brief)
 
@@ -418,6 +420,53 @@ def test_request_models_trim_strings_and_reject_blank_refinement() -> None:
     assert request.source.skill_space_name == "Shared"
     with pytest.raises(ValueError, match="请描述希望 Skill 达成的目标"):
         RefineSkillTaskBody(intent=" \n ", expectedRevision=1)
+
+
+@pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        (
+            CreateSkillTaskBody,
+            {"operation": "create", "intent": "Create it", "unexpected": True},
+        ),
+        (
+            RefineSkillTaskBody,
+            {"intent": "Improve it", "expectedRevision": 1, "unexpected": True},
+        ),
+        (
+            StopSkillTaskBody,
+            {"expectedRevision": 1, "unexpected": True},
+        ),
+        (
+            PublishSkillTaskBody,
+            {
+                "disposition": "create-new",
+                "expectedRevision": 1,
+                "unexpected": True,
+            },
+        ),
+    ],
+)
+def test_request_models_reject_unknown_fields(model, payload) -> None:
+    with pytest.raises(ValueError):
+        model.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "expected_revision",
+    [True, 1.0, "1"],
+    ids=["boolean", "float", "string"],
+)
+def test_mutation_requests_require_a_strict_integer_revision(
+    expected_revision: object,
+) -> None:
+    with pytest.raises(ValueError):
+        PublishSkillTaskBody.model_validate(
+            {
+                "disposition": "create-new",
+                "expectedRevision": expected_revision,
+            }
+        )
 
 
 @pytest.mark.parametrize(
@@ -830,6 +879,109 @@ def test_create_returns_and_persists_devenv_identifiers(
     assert launched_request["sessionId"] == "session-1"
 
 
+def test_create_retries_transient_idempotent_bootstrap_without_deleting_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launch_attempts = 0
+    deleted_sessions: list[str] = []
+
+    class Tools:
+        def create_session(self, request):
+            return SimpleNamespace(
+                session_id="session-1",
+                endpoint="https://devenv.example",
+                expire_at="2026-08-05T12:00:00Z",
+            )
+
+        def delete_session(self, request):
+            deleted_sessions.append(request.session_id)
+
+    service = SkillWorkbenchService(
+        tool_id="tool-1",
+        tools_client_factory=lambda region: Tools(),
+    )
+    monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool-1")
+
+    def post(url: str, **kwargs):
+        nonlocal launch_attempts
+        launch_attempts += 1
+        if launch_attempts == 1:
+            raise requests.ConnectTimeout("temporary bootstrap timeout")
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"data": {"status": "completed", "exit_code": 0}},
+        )
+
+    monkeypatch.setattr(
+        "veadk.cli.frontend_skill_workbench.requests.post",
+        post,
+    )
+    monkeypatch.setattr("veadk.cli.frontend_skill_workbench.time.sleep", lambda _: None)
+
+    result = service.create_task(
+        CreateSkillTaskBody(operation="create", intent="Create it"),
+        "alice",
+        "Alice",
+    )
+
+    assert result["sessionId"] == "session-1"
+    assert launch_attempts == 2
+    assert deleted_sessions == []
+
+
+def test_create_retries_transient_idempotent_source_directory_prepare(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_attempts = 0
+    deleted_sessions: list[str] = []
+
+    class Tools:
+        def create_session(self, request):
+            return SimpleNamespace(
+                session_id="session-1",
+                endpoint="https://devenv.example",
+                expire_at="2026-08-05T12:00:00Z",
+            )
+
+        def delete_session(self, request):
+            deleted_sessions.append(request.session_id)
+
+    service = SkillWorkbenchService(
+        tool_id="tool-1",
+        tools_client_factory=lambda region: Tools(),
+    )
+    monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool-1")
+    monkeypatch.setattr(service, "_upload_file", lambda *args, **kwargs: None)
+
+    def post(url: str, **kwargs):
+        nonlocal prepare_attempts
+        if str(kwargs.get("json", {}).get("command", "")).startswith("mkdir -p "):
+            prepare_attempts += 1
+            if prepare_attempts == 1:
+                raise requests.ConnectTimeout("temporary directory prepare timeout")
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"data": {"status": "completed", "exit_code": 0}},
+        )
+
+    monkeypatch.setattr(
+        "veadk.cli.frontend_skill_workbench.requests.post",
+        post,
+    )
+    monkeypatch.setattr("veadk.cli.frontend_skill_workbench.time.sleep", lambda _: None)
+
+    result = service.create_task(
+        CreateSkillTaskBody(operation="optimize", intent="Improve it"),
+        "alice",
+        "Alice",
+        uploaded_archive=skill_zip(),
+    )
+
+    assert result["sessionId"] == "session-1"
+    assert prepare_attempts == 2
+    assert deleted_sessions == []
+
+
 def test_create_optimization_brief_uses_the_extracted_source_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1126,7 +1278,7 @@ def test_list_tasks_keeps_transport_failure_retryable(
     with pytest.raises(SkillWorkbenchError) as caught:
         service.list_tasks("alice")
 
-    assert attempts == 3
+    assert attempts == 2
     assert caught.value.code == "SKILL_TASK_LIST_FAILED"
     assert caught.value.retryable is True
 
@@ -1346,7 +1498,7 @@ def test_center_source_transient_version_failure_does_not_fall_back(
     with pytest.raises(SkillWorkbenchError) as caught:
         service._resolve_center_source(source)
 
-    assert version_attempts == 3
+    assert version_attempts == 2
     assert info_attempts == 0
     assert caught.value.code == "SKILL_SOURCE_READ_FAILED"
     assert caught.value.status_code == 502
@@ -1425,6 +1577,28 @@ def test_find_session_does_not_mark_non_transient_failure_retryable() -> None:
         service._find_session("tool", job_id)
 
     assert caught.value.code == "SKILL_TASK_LOOKUP_FAILED"
+    assert caught.value.retryable is False
+
+
+def test_find_session_rejects_a_repeated_pagination_token() -> None:
+    calls = 0
+
+    class Tools:
+        def list_sessions(self, request):
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(session_infos=[], next_token="same-token")
+
+    service = SkillWorkbenchService(
+        tool_id="tool",
+        tools_client_factory=lambda region: Tools(),
+    )
+
+    with pytest.raises(SkillWorkbenchError) as caught:
+        service._find_session("tool", service._new_job_id("alice"))
+
+    assert calls == 2
+    assert caught.value.code == "SKILL_TASK_LOOKUP_INVALID"
     assert caught.value.retryable is False
 
 
@@ -1588,6 +1762,15 @@ def test_task_state_uses_one_remote_exec_for_request_and_status(
             "createdAt": 1,
         },
         "status": {"status": "succeeded", "stage": "packaging"},
+        "publication": {
+            "revision": 1,
+            "skillId": "skill-1",
+            "version": "2",
+            "skillSpaceIds": [],
+            "disposition": "create-new",
+            "region": "cn-beijing",
+            "projectName": "default",
+        },
     }
 
     def post(url: str, *, json: dict[str, object], timeout: int) -> SimpleNamespace:
@@ -1610,7 +1793,7 @@ def test_task_state_uses_one_remote_exec_for_request_and_status(
 
     detail = service._task_from_session("https://devenv.example", job_id)
 
-    assert detail["state"] == "ready"
+    assert detail["state"] == "published"
     assert len(calls) == 1
     assert calls[0]["timeout"] == (5, 12)
     request_json = calls[0]["json"]
@@ -1618,8 +1801,64 @@ def test_task_state_uses_one_remote_exec_for_request_and_status(
     command = str(request_json["command"])
     assert "request.json" in command
     assert "status.json" in command
+    assert "publication.json" in command
     assert "\n" not in command
     assert "<<" not in command
+
+
+def test_concurrent_task_state_reads_share_one_remote_exec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    service = SkillWorkbenchService(tool_id="tool")
+    first_entered = threading.Event()
+    both_entered = threading.Event()
+    release = threading.Event()
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def remote_payload(endpoint, requested_job_id):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+            if calls == 1:
+                first_entered.set()
+            if calls == 2:
+                both_entered.set()
+        assert release.wait(timeout=2)
+        return (
+            {
+                "jobId": requested_job_id,
+                "operation": "create",
+                "intent": "Create it",
+                "revision": 1,
+                "createdAt": 1,
+            },
+            {"status": "running", "stage": "generating"},
+        )
+
+    monkeypatch.setattr(service, "_remote_task_payload", remote_payload)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(
+            service._task_and_request_from_session,
+            "https://devenv.example",
+            job_id,
+        )
+        assert first_entered.wait(timeout=2)
+        second = executor.submit(
+            service._task_and_request_from_session,
+            "https://devenv.example",
+            job_id,
+        )
+        both_entered.wait(timeout=0.2)
+        release.set()
+        first_result = first.result(timeout=2)
+        second_result = second.result(timeout=2)
+
+    assert calls == 1
+    assert first_result == second_result
+    assert first_result is not second_result
 
 
 def test_task_state_reports_bootstrap_files_as_initializing(
@@ -1781,26 +2020,25 @@ def test_refine_only_marks_transient_idempotent_launch_failures_retryable(
     job_id = SkillWorkbenchService._new_job_id("alice")
     service = SkillWorkbenchService(tool_id="tool")
     monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool")
+    session = {
+        "instanceId": "session-1",
+        "endpoint": "https://devenv.example",
+        "expireAt": "2026-08-05T13:00:00Z",
+    }
     monkeypatch.setattr(
         service,
-        "get_task",
-        lambda requested_job_id, owner_id: {
-            "jobId": requested_job_id,
-            "operation": "create",
-            "intent": "Create release notes",
-            "revision": 1,
-            "state": "ready",
-            "createdAt": 1,
-        },
-    )
-    monkeypatch.setattr(
-        service,
-        "_find_session",
-        lambda tool_id, requested_job_id: {
-            "instanceId": "session-1",
-            "endpoint": "https://devenv.example",
-            "expireAt": "2026-08-05T13:00:00Z",
-        },
+        "_get_task_with_session",
+        lambda requested_job_id, owner_id, **kwargs: (
+            {
+                "jobId": requested_job_id,
+                "operation": "create",
+                "intent": "Create release notes",
+                "revision": 1,
+                "state": "ready",
+                "createdAt": 1,
+            },
+            session,
+        ),
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_skill_workbench.requests.post",
@@ -1857,8 +2095,8 @@ def test_refine_resumes_an_expired_task_from_the_latest_snapshot(
     monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool")
     monkeypatch.setattr(
         service,
-        "get_task",
-        lambda requested_job_id, owner_id: (_ for _ in ()).throw(
+        "_get_task_with_session",
+        lambda requested_job_id, owner_id, **kwargs: (_ for _ in ()).throw(
             SkillWorkbenchError(
                 "SKILL_TASK_EXPIRED",
                 "DevEnv 已到期并自动释放",
@@ -1920,16 +2158,29 @@ def test_refine_serializes_concurrent_expired_recovery(
 
     monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool")
 
-    def get_task(requested_job_id: str, owner_id: str) -> dict[str, object]:
+    session = {
+        "instanceId": "session-resumed",
+        "endpoint": "https://resumed.example",
+        "expireAt": "2026-08-05T13:00:00Z",
+    }
+
+    def get_task_with_session(
+        requested_job_id: str,
+        owner_id: str,
+        **kwargs,
+    ) -> tuple[dict[str, object], dict[str, str]]:
         with state_lock:
             if state["active"]:
-                return {
-                    "jobId": requested_job_id,
-                    "operation": "create",
-                    "intent": "Create release notes",
-                    "revision": 4,
-                    "state": "running",
-                }
+                return (
+                    {
+                        "jobId": requested_job_id,
+                        "operation": "create",
+                        "intent": "Create release notes",
+                        "revision": 4,
+                        "state": "running",
+                    },
+                    session,
+                )
             state["expiredReads"] += 1
             if state["expiredReads"] >= 2:
                 second_expired_read.set()
@@ -1950,17 +2201,8 @@ def test_refine_serializes_concurrent_expired_recovery(
             "expireAt": "2026-08-05T13:00:00Z",
         }
 
-    monkeypatch.setattr(service, "get_task", get_task)
+    monkeypatch.setattr(service, "_get_task_with_session", get_task_with_session)
     monkeypatch.setattr(service, "_resume_latest_snapshot", resume)
-    monkeypatch.setattr(
-        service,
-        "_find_session",
-        lambda tool_id, requested_job_id: {
-            "instanceId": "session-resumed",
-            "endpoint": "https://resumed.example",
-            "expireAt": "2026-08-05T13:00:00Z",
-        },
-    )
     monkeypatch.setattr(
         service,
         "_task_from_session",
@@ -2060,25 +2302,24 @@ def test_stop_task_preserves_the_session_and_returns_cancelled_state(
     commands = []
     service = SkillWorkbenchService(tool_id="tool")
     monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool")
+    session = {
+        "instanceId": "session-1",
+        "endpoint": "https://devenv.example",
+        "expireAt": "2026-08-05T12:00:00Z",
+    }
     monkeypatch.setattr(
         service,
-        "get_task",
-        lambda requested_job_id, owner_id: {
-            "jobId": job_id,
-            "operation": "create",
-            "intent": "Create it",
-            "revision": 2,
-            "state": "running",
-        },
-    )
-    monkeypatch.setattr(
-        service,
-        "_find_session",
-        lambda tool_id, requested_job_id: {
-            "instanceId": "session-1",
-            "endpoint": "https://devenv.example",
-            "expireAt": "2026-08-05T12:00:00Z",
-        },
+        "_get_task_with_session",
+        lambda requested_job_id, owner_id, **kwargs: (
+            {
+                "jobId": job_id,
+                "operation": "create",
+                "intent": "Create it",
+                "revision": 2,
+                "state": "running",
+            },
+            session,
+        ),
     )
 
     def post(url, *, json, timeout):
@@ -2135,25 +2376,24 @@ def test_stop_non_transient_failure_is_not_marked_retryable(
     job_id = SkillWorkbenchService._new_job_id("alice")
     service = SkillWorkbenchService(tool_id="tool")
     monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool")
+    session = {
+        "instanceId": "session-1",
+        "endpoint": "https://devenv.example",
+        "expireAt": "2026-08-05T12:00:00Z",
+    }
     monkeypatch.setattr(
         service,
-        "get_task",
-        lambda requested_job_id, owner_id: {
-            "jobId": requested_job_id,
-            "operation": "create",
-            "intent": "Create it",
-            "revision": 2,
-            "state": "running",
-        },
-    )
-    monkeypatch.setattr(
-        service,
-        "_find_session",
-        lambda tool_id, requested_job_id: {
-            "instanceId": "session-1",
-            "endpoint": "https://devenv.example",
-            "expireAt": "2026-08-05T12:00:00Z",
-        },
+        "_get_task_with_session",
+        lambda requested_job_id, owner_id, **kwargs: (
+            {
+                "jobId": requested_job_id,
+                "operation": "create",
+                "intent": "Create it",
+                "revision": 2,
+                "state": "running",
+            },
+            session,
+        ),
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_skill_workbench.requests.post",
@@ -2497,13 +2737,16 @@ def test_publish_update_requires_trusted_center_source(
     service = SkillWorkbenchService(tool_id="tool")
     monkeypatch.setattr(
         service,
-        "get_task",
-        lambda job_id, owner_id: {
-            "jobId": job_id,
-            "state": "ready",
-            "revision": 1,
-            "source": {"kind": "upload", "name": "release-notes"},
-        },
+        "_get_task_with_session",
+        lambda job_id, owner_id: (
+            {
+                "jobId": job_id,
+                "state": "ready",
+                "revision": 1,
+                "source": {"kind": "upload", "name": "release-notes"},
+            },
+            {"instanceId": "session-1", "endpoint": "https://devenv.example"},
+        ),
     )
     body = PublishSkillTaskBody(
         disposition="update-source",
@@ -2521,13 +2764,16 @@ def test_publish_rejects_stale_revision(monkeypatch: pytest.MonkeyPatch) -> None
     service = SkillWorkbenchService(tool_id="tool")
     monkeypatch.setattr(
         service,
-        "get_task",
-        lambda job_id, owner_id: {
-            "jobId": job_id,
-            "state": "ready",
-            "revision": 3,
-            "source": None,
-        },
+        "_get_task_with_session",
+        lambda job_id, owner_id: (
+            {
+                "jobId": job_id,
+                "state": "ready",
+                "revision": 3,
+                "source": None,
+            },
+            {"instanceId": "session-1", "endpoint": "https://devenv.example"},
+        ),
     )
     body = PublishSkillTaskBody(
         disposition="create-new",
@@ -2538,6 +2784,105 @@ def test_publish_rejects_stale_revision(monkeypatch: pytest.MonkeyPatch) -> None
         service.publish(service._new_job_id("alice"), "alice", body)
 
     assert caught.value.code == "SKILL_TASK_REVISION_CONFLICT"
+
+
+def test_publish_reuses_one_authoritative_devenv_state_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agentkit.toolkit.cli import cli_skills_workflow
+    from agentkit.toolkit.config import GlobalConfigManager
+
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    session = {
+        "instanceId": "session-1",
+        "endpoint": "https://devenv.example",
+        "expireAt": "2099-01-01T00:00:00Z",
+    }
+    calls = {"find_session": 0, "read_state": 0}
+
+    class Skills:
+        def create_skill(self, request):
+            return SimpleNamespace(id="skill-1")
+
+    service = SkillWorkbenchService(
+        tool_id="tool",
+        skills_client_factory=lambda region: Skills(),
+    )
+    monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool")
+
+    def find_session(tool_id: str, requested_job_id: str) -> dict[str, str]:
+        calls["find_session"] += 1
+        assert tool_id == "tool"
+        assert requested_job_id == job_id
+        return session
+
+    def remote_task_payload(endpoint: str, requested_job_id: str):
+        calls["read_state"] += 1
+        assert endpoint == session["endpoint"]
+        assert requested_job_id == job_id
+        return (
+            {
+                "jobId": job_id,
+                "operation": "create",
+                "intent": "Create release notes",
+                "revision": 1,
+                "createdAt": 1,
+            },
+            {"status": "succeeded", "stage": "packaging"},
+        )
+
+    monkeypatch.setattr(service, "_find_session", find_session)
+    monkeypatch.setattr(service, "_remote_task_payload", remote_task_payload)
+    monkeypatch.setattr(
+        service, "_ensure_recovery_snapshot", lambda *args, **kwargs: False
+    )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_skill_workbench.requests.get",
+        lambda *args, **kwargs: SimpleNamespace(
+            status_code=200,
+            content=skill_zip(),
+        ),
+    )
+    monkeypatch.setattr(
+        cli_skills_workflow,
+        "_ensure_bucket_ready",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        cli_skills_workflow,
+        "_make_content_hashed_zip_copy",
+        lambda archive_path, name, directory: archive_path,
+    )
+    monkeypatch.setattr(
+        cli_skills_workflow,
+        "_tos_upload",
+        lambda *args, **kwargs: "tos://bucket/release-notes.zip",
+    )
+    monkeypatch.setattr(
+        cli_skills_workflow,
+        "_wait_for_running_version",
+        lambda **kwargs: SimpleNamespace(version="1"),
+    )
+    monkeypatch.setattr(
+        GlobalConfigManager,
+        "load",
+        lambda self: SimpleNamespace(
+            tos=SimpleNamespace(bucket="bucket", prefix="agentkit/skills")
+        ),
+    )
+    monkeypatch.setattr(service, "_persist_publication", lambda *args, **kwargs: None)
+
+    result = service.publish(
+        job_id,
+        "alice",
+        PublishSkillTaskBody(
+            disposition="create-new",
+            expectedRevision=1,
+        ),
+    )
+
+    assert result["skillId"] == "skill-1"
+    assert calls == {"find_session": 1, "read_state": 1}
 
 
 @pytest.mark.parametrize(
@@ -2628,14 +2973,17 @@ def test_publish_reuses_the_persisted_result_for_the_same_revision(
     }
     monkeypatch.setattr(
         service,
-        "get_task",
-        lambda job_id, owner_id: {
-            "jobId": job_id,
-            "state": "published",
-            "revision": 3,
-            "source": None,
-            "publication": {"revision": 3, **result},
-        },
+        "_get_task_with_session",
+        lambda job_id, owner_id: (
+            {
+                "jobId": job_id,
+                "state": "published",
+                "revision": 3,
+                "source": None,
+                "publication": {"revision": 3, **result},
+            },
+            {"instanceId": "session-1", "endpoint": "https://devenv.example"},
+        ),
     )
     monkeypatch.setattr(
         service,
@@ -2721,22 +3069,25 @@ def test_publish_rejects_a_different_disposition_after_revision_is_published(
     service = SkillWorkbenchService(tool_id="tool")
     monkeypatch.setattr(
         service,
-        "get_task",
-        lambda job_id, owner_id: {
-            "jobId": job_id,
-            "state": "published",
-            "revision": 3,
-            "source": {"kind": "skill-center", "skillId": "source-1"},
-            "publication": {
+        "_get_task_with_session",
+        lambda job_id, owner_id: (
+            {
+                "jobId": job_id,
+                "state": "published",
                 "revision": 3,
-                "skillId": "source-1",
-                "version": "4",
-                "skillSpaceIds": ["space-1"],
-                "disposition": "update-source",
-                "region": "cn-beijing",
-                "projectName": "default",
+                "source": {"kind": "skill-center", "skillId": "source-1"},
+                "publication": {
+                    "revision": 3,
+                    "skillId": "source-1",
+                    "version": "4",
+                    "skillSpaceIds": ["space-1"],
+                    "disposition": "update-source",
+                    "region": "cn-beijing",
+                    "projectName": "default",
+                },
             },
-        },
+            {"instanceId": "session-1", "endpoint": "https://devenv.example"},
+        ),
     )
 
     with pytest.raises(SkillWorkbenchError) as caught:
@@ -2754,7 +3105,7 @@ def test_publish_rejects_a_different_disposition_after_revision_is_published(
     assert caught.value.status_code == 409
 
 
-def test_persist_publication_writes_the_owner_bound_task_request(
+def test_persist_publication_writes_an_owner_bound_sidecar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = SkillWorkbenchService(tool_id="tool")
@@ -2767,16 +3118,6 @@ def test_persist_publication_writes_the_owner_bound_task_request(
         lambda tool_id, requested_job_id: {
             "endpoint": "https://devenv.example",
             "instanceId": "session-1",
-        },
-    )
-    monkeypatch.setattr(
-        service,
-        "_remote_json",
-        lambda endpoint, requested_job_id, filename: {
-            "jobId": job_id,
-            "operation": "create",
-            "intent": "Create it",
-            "revision": 2,
         },
     )
 
@@ -2801,11 +3142,11 @@ def test_persist_publication_writes_the_owner_bound_task_request(
     service._persist_publication(job_id, "alice", 2, result)
 
     assert uploaded["endpoint"] == "https://devenv.example"
-    assert uploaded["path"] == f"{service._remote_dir(job_id)}/request.json"
+    assert uploaded["path"] == f"{service._remote_dir(job_id)}/publication.json"
     assert uploaded["media_type"] == "application/json"
     uploaded_body = uploaded["body"]
     assert isinstance(uploaded_body, dict)
-    assert uploaded_body["publication"] == {"revision": 2, **result}
+    assert uploaded_body == {"revision": 2, **result}
 
 
 def test_upload_route_accepts_a_valid_skill_zip(
@@ -3025,6 +3366,74 @@ def test_upload_route_rejects_invalid_transport_metadata_before_starting_task(
     assert response.json()["detail"]["code"] == error_code
 
 
+def test_list_route_returns_bounded_error_and_logs_request_context(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = FastAPI()
+    service = mount_skill_workbench_routes(
+        app,
+        lambda request: "alice",
+        lambda request: "Alice",
+    )
+    monkeypatch.setattr(
+        service,
+        "list_tasks",
+        lambda owner_id, exclude_job_id=None: (_ for _ in ()).throw(
+            RuntimeError("private dependency response")
+        ),
+    )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(
+            "/web/skill-workbench/tasks",
+            headers={"x-request-id": "request-123"},
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == {
+        "code": "SKILL_WORKBENCH_INTERNAL",
+        "message": "Skill 工作台服务异常，请稍后重试。",
+        "retryable": False,
+    }
+    assert "operation=list_tasks" in caplog.text
+    assert "request_id=request-123" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert "private dependency response" not in caplog.text
+
+
+def test_list_route_excludes_the_task_already_polled_by_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    service = mount_skill_workbench_routes(
+        app,
+        lambda request: "alice",
+        lambda request: "Alice",
+    )
+    active_job_id = SkillWorkbenchService._new_job_id("alice")
+    captured: dict[str, object] = {}
+
+    def list_tasks(owner_id, exclude_job_id=None):
+        captured["owner_id"] = owner_id
+        captured["exclude_job_id"] = exclude_job_id
+        return {"tasks": []}
+
+    monkeypatch.setattr(service, "list_tasks", list_tasks)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(
+            "/web/skill-workbench/tasks",
+            params={"exclude_job_id": active_job_id},
+        )
+
+    assert response.status_code == 200
+    assert captured == {
+        "owner_id": "alice",
+        "exclude_job_id": active_job_id,
+    }
+
+
 def test_artifact_returns_every_validated_nested_text_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3082,6 +3491,49 @@ def test_artifact_returns_every_validated_nested_text_file(
             },
         ],
     }
+
+
+def test_artifact_handoff_does_not_resynchronize_ready_task_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    state_reads = 0
+    session_lookups = 0
+
+    monkeypatch.setattr(service, "_validated_tool_id", lambda: "tool")
+
+    def find_session(tool_id: str, requested_job_id: str) -> dict[str, str]:
+        nonlocal session_lookups
+        session_lookups += 1
+        assert tool_id == "tool"
+        assert requested_job_id == job_id
+        return {
+            "instanceId": "session-1",
+            "endpoint": "https://devenv.example",
+            "expireAt": "2099-01-01T00:00:00Z",
+        }
+
+    def read_state(endpoint: str, requested_job_id: str):
+        nonlocal state_reads
+        state_reads += 1
+        raise AssertionError("artifact handoff must not reread task state")
+
+    monkeypatch.setattr(service, "_find_session", find_session)
+    monkeypatch.setattr(service, "_task_and_request_from_session", read_state)
+    monkeypatch.setattr(
+        "veadk.cli.frontend_skill_workbench.requests.get",
+        lambda *args, **kwargs: SimpleNamespace(
+            status_code=200,
+            content=skill_zip(),
+        ),
+    )
+
+    artifact = service.artifact(job_id, "alice")
+
+    assert artifact["name"] == "release-notes"
+    assert session_lookups == 1
+    assert state_reads == 0
 
 
 def test_publish_stream_reports_progress_and_destination(

@@ -83,12 +83,18 @@ test("sends complete Skill Center identity when starting an optimization", () =>
   assert.match(api, /skillSpaceName:\s*args\.source\.skillSpaceName/);
 });
 
-test("renders a single-column process until a complete artifact is available", () => {
+test("keeps the chat single-column while the completed artifact is downloading", () => {
   assert.match(workbench, /SkillConversationStream/);
   assert.match(workbench, /SkillUserTurn/);
   assert.match(workbench, /skill-workbench__assistant-turn/);
   assert.match(workbench, /skill-workbench__run-grid is-process-only/);
-  assert.match(workbench, /ready \? \(/);
+  assert.match(workbench, /const artifactReady = Boolean\(ready && artifact\)/);
+  assert.match(
+    workbench,
+    /artifactReady \? "" : " is-process-only"/,
+  );
+  assert.match(workbench, /生成已完成，正在下载产物/);
+  assert.match(workbench, /\{artifactReady \? \(/);
   assert.match(workbench, /<CodeBrowserWorkspace/);
   assert.match(workbench, /artifact\.files/);
   assert.match(workbench, /readOnly/);
@@ -112,7 +118,7 @@ test("uses contextual deletion and never offers cancellation after success", () 
   assert.match(workbench, /task\.state === "running"/);
   assert.doesNotMatch(workbench, /is-stopping/);
   assert.doesNotMatch(styles, /\.comp-send\.is-stopping/);
-  assert.match(workbench, /Square/);
+  assert.match(workbench, /StopIcon/);
   assert.match(sidebar, /onDeleteSkillConversation/);
 });
 
@@ -177,6 +183,9 @@ test("streams publish stages and returns a concrete destination", () => {
 test("keeps task polling above the workbench and supports safe reopening", () => {
   assert.match(app, /useSkillWorkbenchTasks/);
   assert.match(controller, /listSkillWorkbenchTasks/);
+  assert.match(controller, /activeJobIdRef/);
+  assert.match(controller, /listSkillWorkbenchTasks\(signal,\s*activeJobIdRef\.current/);
+  assert.match(api, /params\.set\("exclude_job_id",\s*excludeJobId\)/);
   assert.match(controller, /visibilitychange/);
   assert.match(controller, /pollDelay\(LIST_POLL_INTERVAL_MS,\s*listFailureCountRef\.current\)/);
   assert.match(controller, /pollDelay\(DETAIL_POLL_INTERVAL_MS,\s*detailFailureCountRef\.current\)/);
@@ -243,6 +252,7 @@ test("recovers transient task polling failures without discarding the last good 
 });
 
 test("retries artifact reads only when transport or server semantics allow it", () => {
+  assert.match(controller, /const ARTIFACT_RETRY_LIMIT = 1/);
   assert.match(
     controller,
     /const retryable = isRetryableSyncFailure\(cause\)/,
@@ -254,6 +264,15 @@ test("retries artifact reads only when transport or server semantics allow it", 
   assert.doesNotMatch(
     api,
     /发布进度流提前结束，请重试/,
+  );
+});
+
+test("bounds malformed gateway errors without exposing their response body", () => {
+  assert.match(api, /Content-Type/);
+  assert.match(api, /检查代理或网关配置/);
+  assert.doesNotMatch(
+    api,
+    /text \|\| `\$\{fallback\}（HTTP \$\{response\.status\}）`/,
   );
 });
 
@@ -276,13 +295,21 @@ test("shows authoritative DevEnv identifiers after initialization", () => {
   assert.match(styles, /\.skill-workbench__runtime-meta/);
 });
 
-test("centers the conversation, keeps artifacts in a side rail, and reduces motion", () => {
-  assert.match(styles, /grid-template-columns:\s*minmax\(480px,\s*1\.35fr\)\s+minmax\(360px,\s*\.65fr\)/);
-  assert.match(styles, /\.skill-workbench__run-grid\.is-process-only\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*860px\)/);
+test("reuses the normal chat transcript and opens a complete artifact in a side rail", () => {
+  assert.match(workbench, /className="turn turn--user"/);
+  assert.match(workbench, /className="bubble skill-workbench__user-bubble"/);
+  assert.match(workbench, /className="turn turn--assistant skill-workbench__assistant-turn"/);
+  assert.match(workbench, /className="composer skill-workbench__composer"/);
+  assert.match(workbench, /useAutoGrowingTextarea/);
+  assert.match(workbench, /Math\.min\(input\.scrollHeight,\s*200\)/);
+  assert.doesNotMatch(workbench, /composer composer--new-chat skill-workbench__composer/);
+  assert.match(styles, /grid-template-columns:\s*minmax\(0,\s*768px\)\s+minmax\(0,\s*1fr\)/);
+  assert.match(styles, /\.skill-workbench__run-grid\.is-process-only\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*768px\)/);
+  assert.match(styles, /\.skill-workbench__timeline\s*\{[^}]*border:\s*0/);
   assert.match(styles, /min-height:\s*0/);
   assert.match(styles, /overflow-y:\s*auto/);
   assert.match(styles, /@media \(max-width: 1160px\)/);
-  assert.match(workbench, /PanelRightOpen/);
+  assert.match(workbench, /ArtifactPanelIcon/);
   assert.match(workbench, /artifactPanelOpen/);
   assert.match(workbench, /skill-workbench__artifact-toggle/);
   assert.match(workbench, /skill-workbench__artifact-scrim/);
@@ -333,7 +360,7 @@ test("warns ready users that DevEnv TTL limits download and publishing", () => {
   assert.match(workbench, /DevEnv 最长保留/);
   assert.match(workbench, /请及时下载或发布/);
   assert.match(workbench, /超过保留时间后将无法下载或发布/);
-  assert.match(workbench, /文件预览正在同步，下载与发布仍可使用/);
+  assert.match(workbench, /正在从 DevEnv 获取并校验文件/);
   assert.doesNotMatch(workbench, /下载与发布能力将在产物校验完成后可用/);
   assert.doesNotMatch(workbench, /产物也无法恢复/);
   assert.match(workbench, /Skill 版本生效/);

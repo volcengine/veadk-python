@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import hashlib
 import io
 import json
@@ -38,6 +39,7 @@ import uuid
 import weakref
 import zipfile
 from collections.abc import AsyncIterator, Callable
+from concurrent.futures import Future
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
@@ -99,7 +101,7 @@ _MAX_TASK_REVISION = 1_000_000
 _MAX_STORED_TTL_SECONDS = 24 * 60 * 60
 _REMOTE_READ_ATTEMPTS = 2
 _REMOTE_WRITE_ATTEMPTS = 2
-_SDK_READ_ATTEMPTS = 3
+_SDK_READ_ATTEMPTS = 2
 _RETRYABLE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 _RETRYABLE_ERROR_CODES = {
     "internalerror",
@@ -247,7 +249,7 @@ class SkillCenterSource(BaseModel):
         default=None, alias="skillSpaceName", max_length=256
     )
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "forbid"}
 
     @model_validator(mode="after")
     def normalize_strings(self) -> SkillCenterSource:
@@ -272,7 +274,7 @@ class CreateSkillTaskBody(BaseModel):
     source: SkillCenterSource | None = None
     job_id: str | None = Field(default=None, alias="jobId")
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_source(self) -> CreateSkillTaskBody:
@@ -292,9 +294,10 @@ class RefineSkillTaskBody(BaseModel):
         alias="expectedRevision",
         ge=1,
         le=_MAX_TASK_REVISION,
+        strict=True,
     )
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "forbid"}
 
     @model_validator(mode="after")
     def normalize_intent(self) -> RefineSkillTaskBody:
@@ -309,9 +312,10 @@ class StopSkillTaskBody(BaseModel):
         alias="expectedRevision",
         ge=1,
         le=_MAX_TASK_REVISION,
+        strict=True,
     )
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "forbid"}
 
 
 class PublishSkillTaskBody(BaseModel):
@@ -327,9 +331,10 @@ class PublishSkillTaskBody(BaseModel):
         alias="expectedRevision",
         ge=1,
         le=_MAX_TASK_REVISION,
+        strict=True,
     )
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "forbid"}
 
     @model_validator(mode="after")
     def normalize_destination(self) -> PublishSkillTaskBody:
@@ -620,6 +625,11 @@ def build_delegation_brief(
             points to that exact root. Do not report completion before both the final Skill
             and result.json have been written and checked.
 
+            Communication protocol
+            Detect the user's language from the requested outcome and conversation context.
+            Always use the same language as the user for progress updates, questions, and
+            the final response. Keep code, file paths, and required schema fields unchanged.
+
             Do not read, copy, transform, or disclose credentials or files outside the
             assigned workspace. Independently inspect the context, choose the approach,
             implement it, validate the final handoff, and only then report completion.
@@ -751,6 +761,11 @@ class SkillWorkbenchService:
             weakref.WeakValueDictionary()
         )
         self._snapshot_locks_guard = threading.Lock()
+        self._task_read_flights: dict[
+            tuple[str, str],
+            Future[tuple[dict[str, object], dict[str, Any]]],
+        ] = {}
+        self._task_read_flights_guard = threading.Lock()
 
     def _idempotent_dependency_call(
         self,
@@ -996,16 +1011,30 @@ class SkillWorkbenchService:
             remote_dir = self._remote_dir(job_id)
             source_remote_path = None
             if source_archive is not None:
-                prepare = requests.post(
-                    build_exec_url(endpoint),
-                    json={
-                        "id": "",
-                        "exec_dir": "/home/gem",
-                        "command": f"mkdir -p {remote_dir}",
-                    },
-                    timeout=30,
+
+                def prepare_source_directory() -> Any:
+                    response = requests.post(
+                        build_exec_url(endpoint),
+                        json={
+                            "id": "",
+                            "exec_dir": "/home/gem",
+                            "command": f"mkdir -p {remote_dir}",
+                        },
+                        timeout=30,
+                    )
+                    if response.status_code in _RETRYABLE_HTTP_STATUSES:
+                        raise requests.HTTPError(
+                            "transient DevEnv source directory response",
+                            response=response,
+                        )
+                    return _safe_json_response(response, "准备 Skill 来源目录")
+
+                self._idempotent_dependency_call(
+                    "prepare_source_directory",
+                    prepare_source_directory,
+                    attempts=_REMOTE_WRITE_ATTEMPTS,
+                    job_id=job_id,
                 )
-                _safe_json_response(prepare, "准备 Skill 来源目录")
                 source_remote_path = f"{remote_dir}/source.zip"
                 self._upload_file(endpoint, source_remote_path, source_archive.content)
             brief = build_delegation_brief(
@@ -1018,28 +1047,49 @@ class SkillWorkbenchService:
                 source_sha256=source_archive.sha256 if source_archive else None,
                 source_files=source_archive.files if source_archive else None,
             )
-            launch = requests.post(
-                build_bash_exec_url(endpoint),
-                json={
-                    "timeout": 30,
-                    "hard_timeout": 1200,
-                    "env": {
-                        "VEADK_SKILL_JOB_DIR": remote_dir,
-                        "VEADK_SKILL_PROMPT_B64": base64.b64encode(
-                            brief.encode()
-                        ).decode(),
-                        "VEADK_SKILL_RUNNER_B64": base64.b64encode(
-                            _runner_source().encode()
-                        ).decode(),
-                        "VEADK_SKILL_REQUEST_B64": base64.b64encode(
-                            json.dumps(request_payload, ensure_ascii=False).encode()
-                        ).decode(),
+
+            def launch_task() -> Any:
+                response = requests.post(
+                    build_bash_exec_url(endpoint),
+                    json={
+                        "timeout": 30,
+                        "hard_timeout": 1200,
+                        "env": {
+                            "VEADK_SKILL_JOB_DIR": remote_dir,
+                            "VEADK_SKILL_PROMPT_B64": base64.b64encode(
+                                brief.encode()
+                            ).decode(),
+                            "VEADK_SKILL_RUNNER_B64": base64.b64encode(
+                                _runner_source().encode()
+                            ).decode(),
+                            "VEADK_SKILL_REQUEST_B64": base64.b64encode(
+                                json.dumps(
+                                    request_payload,
+                                    ensure_ascii=False,
+                                ).encode()
+                            ).decode(),
+                        },
+                        "command": _BOOTSTRAP,
                     },
-                    "command": _BOOTSTRAP,
-                },
-                timeout=90,
+                    timeout=90,
+                )
+                if response.status_code in _RETRYABLE_HTTP_STATUSES:
+                    raise requests.HTTPError(
+                        "transient DevEnv bootstrap response",
+                        response=response,
+                    )
+                return _safe_json_response(
+                    response,
+                    "启动 Skill 工作台任务",
+                    allow_running=True,
+                )
+
+            self._idempotent_dependency_call(
+                "bootstrap_task",
+                launch_task,
+                attempts=_REMOTE_WRITE_ATTEMPTS,
+                job_id=job_id,
             )
-            _safe_json_response(launch, "启动 Skill 工作台任务", allow_running=True)
         except Exception as error:
             logger.error(
                 "Skill workbench task launch failed job_id=%s operation=%s "
@@ -1071,8 +1121,14 @@ class SkillWorkbenchService:
             "expiresAt": expire_at,
         }
 
-    def list_tasks(self, owner_id: str) -> dict[str, list[dict[str, object]]]:
+    def list_tasks(
+        self,
+        owner_id: str,
+        exclude_job_id: str | None = None,
+    ) -> dict[str, list[dict[str, object]]]:
         """List recoverable Skill tasks owned by the current Studio principal."""
+        if exclude_job_id is not None:
+            self._validate_job_owner(exclude_job_id, owner_id)
         tool_id = self._validated_tool_id()
         for index, region in enumerate(sandbox_region_candidates(self._region)):
             tasks_by_job: dict[str, dict[str, object]] = {}
@@ -1100,6 +1156,8 @@ class SkillWorkbenchService:
                         job_id = str(session.user_session_id or "").strip()
                         username = session_username(session)
                         if username != owner_id or not _JOB_ID_RE.fullmatch(job_id):
+                            continue
+                        if job_id == exclude_job_id:
                             continue
                         try:
                             self._validate_job_owner(job_id, owner_id)
@@ -1200,30 +1258,68 @@ class SkillWorkbenchService:
         )
 
     def get_task(self, job_id: str, owner_id: str) -> dict[str, object]:
+        task, _session = self._get_task_with_session(job_id, owner_id)
+        return task
+
+    def _get_task_with_session(
+        self,
+        job_id: str,
+        owner_id: str,
+        *,
+        tool_id: str | None = None,
+    ) -> tuple[dict[str, object], dict[str, str]]:
         self._validate_job_owner(job_id, owner_id)
-        tool_id = self._validated_tool_id()
-        session = self._find_session(tool_id, job_id)
+        effective_tool_id = tool_id or self._validated_tool_id()
+        session = self._find_session(effective_tool_id, job_id)
         task, request_data = self._task_and_request_from_session(
             session["endpoint"],
             job_id,
         )
-        task["toolId"] = tool_id
+        task["toolId"] = effective_tool_id
         task["sessionId"] = session["instanceId"]
         task["expiresAt"] = session.get("expireAt", "")
         if task.get("state") in _TERMINAL_STATES - {"expired"}:
             task["recoveryAvailable"] = self._ensure_recovery_snapshot(
-                tool_id,
+                effective_tool_id,
                 session,
                 task,
                 request_data=request_data,
             )
-        return task
+        return task, session
 
     def _task_from_session(self, endpoint: str, job_id: str) -> dict[str, object]:
         task, _request_data = self._task_and_request_from_session(endpoint, job_id)
         return task
 
     def _task_and_request_from_session(
+        self,
+        endpoint: str,
+        job_id: str,
+    ) -> tuple[dict[str, object], dict[str, Any]]:
+        key = (endpoint, job_id)
+        with self._task_read_flights_guard:
+            future = self._task_read_flights.get(key)
+            leader = future is None
+            if future is None:
+                future = Future()
+                self._task_read_flights[key] = future
+        if leader:
+            try:
+                value = self._read_task_and_request_from_session(endpoint, job_id)
+            except BaseException as error:
+                future.set_exception(error)
+                raise
+            else:
+                future.set_result(value)
+            finally:
+                with self._task_read_flights_guard:
+                    if self._task_read_flights.get(key) is future:
+                        self._task_read_flights.pop(key, None)
+        else:
+            value = future.result()
+        return copy.deepcopy(value)
+
+    def _read_task_and_request_from_session(
         self,
         endpoint: str,
         job_id: str,
@@ -1533,8 +1629,11 @@ class SkillWorkbenchService:
         tool_id = self._validated_tool_id()
         recovered = False
         try:
-            task = self.get_task(job_id, owner_id)
-            session = self._find_session(tool_id, job_id)
+            task, session = self._get_task_with_session(
+                job_id,
+                owner_id,
+                tool_id=tool_id,
+            )
         except SkillWorkbenchError as error:
             if error.code != "SKILL_TASK_EXPIRED":
                 raise
@@ -1622,30 +1721,46 @@ class SkillWorkbenchService:
             previous_intents=previous_intents,
         )
         try:
-            response = requests.post(
-                build_bash_exec_url(session["endpoint"]),
-                json={
-                    "timeout": 30,
-                    "hard_timeout": 1200,
-                    "env": {
-                        "VEADK_SKILL_JOB_DIR": self._remote_dir(job_id),
-                        "VEADK_SKILL_PROMPT_B64": base64.b64encode(
-                            brief.encode("utf-8")
-                        ).decode("ascii"),
-                        "VEADK_SKILL_REQUEST_B64": base64.b64encode(
-                            json.dumps(request_data, ensure_ascii=False).encode("utf-8")
-                        ).decode("ascii"),
+
+            def launch_refinement() -> Any:
+                response = requests.post(
+                    build_bash_exec_url(session["endpoint"]),
+                    json={
+                        "timeout": 30,
+                        "hard_timeout": 1200,
+                        "env": {
+                            "VEADK_SKILL_JOB_DIR": self._remote_dir(job_id),
+                            "VEADK_SKILL_PROMPT_B64": base64.b64encode(
+                                brief.encode("utf-8")
+                            ).decode("ascii"),
+                            "VEADK_SKILL_REQUEST_B64": base64.b64encode(
+                                json.dumps(
+                                    request_data,
+                                    ensure_ascii=False,
+                                ).encode("utf-8")
+                            ).decode("ascii"),
+                        },
+                        "command": _REFINE_BOOTSTRAP,
                     },
-                    "command": _REFINE_BOOTSTRAP,
-                },
-                timeout=90,
-            )
-            if response.status_code in _RETRYABLE_HTTP_STATUSES:
-                raise requests.HTTPError(
-                    "transient DevEnv refinement response",
-                    response=response,
+                    timeout=90,
                 )
-            _safe_json_response(response, "启动 Skill 调整任务", allow_running=True)
+                if response.status_code in _RETRYABLE_HTTP_STATUSES:
+                    raise requests.HTTPError(
+                        "transient DevEnv refinement response",
+                        response=response,
+                    )
+                return _safe_json_response(
+                    response,
+                    "启动 Skill 调整任务",
+                    allow_running=True,
+                )
+
+            self._idempotent_dependency_call(
+                "refine_task",
+                launch_refinement,
+                attempts=_REMOTE_WRITE_ATTEMPTS,
+                job_id=job_id,
+            )
         except Exception as error:
             retryable = not recovered and _is_transient_dependency_error(error)
             raise SkillWorkbenchError(
@@ -1685,7 +1800,11 @@ class SkillWorkbenchService:
     ) -> dict[str, object]:
         self._validate_job_owner(job_id, owner_id)
         tool_id = self._validated_tool_id()
-        task = self.get_task(job_id, owner_id)
+        task, session = self._get_task_with_session(
+            job_id,
+            owner_id,
+            tool_id=tool_id,
+        )
         revision = _json_int(task.get("revision"), 1)
         if body.expected_revision != revision:
             raise SkillWorkbenchError(
@@ -1695,24 +1814,32 @@ class SkillWorkbenchService:
             )
         if task.get("state") != "running":
             return task
-        session = self._find_session(tool_id, job_id)
         command = self._stop_runner_command(job_id)
         try:
-            response = requests.post(
-                build_exec_url(session["endpoint"]),
-                json={
-                    "id": "",
-                    "exec_dir": "/home/gem",
-                    "command": command,
-                },
-                timeout=30,
-            )
-            if response.status_code in _RETRYABLE_HTTP_STATUSES:
-                raise requests.HTTPError(
-                    "transient DevEnv stop response",
-                    response=response,
+
+            def stop_runner() -> Any:
+                response = requests.post(
+                    build_exec_url(session["endpoint"]),
+                    json={
+                        "id": "",
+                        "exec_dir": "/home/gem",
+                        "command": command,
+                    },
+                    timeout=30,
                 )
-            _safe_json_response(response, "停止当前 Skill 任务")
+                if response.status_code in _RETRYABLE_HTTP_STATUSES:
+                    raise requests.HTTPError(
+                        "transient DevEnv stop response",
+                        response=response,
+                    )
+                return _safe_json_response(response, "停止当前 Skill 任务")
+
+            self._idempotent_dependency_call(
+                "stop_task",
+                stop_runner,
+                attempts=_REMOTE_WRITE_ATTEMPTS,
+                job_id=job_id,
+            )
             stopped, request_data = self._task_and_request_from_session(
                 session["endpoint"],
                 job_id,
@@ -1741,12 +1868,13 @@ class SkillWorkbenchService:
     def _download_archive(self, job_id: str, owner_id: str) -> SkillArchive:
         self._validate_job_owner(job_id, owner_id)
         session = self._find_session(self._validated_tool_id(), job_id)
-        task = self._task_from_session(session["endpoint"], job_id)
-        if task.get("state") not in {"ready", "published"}:
-            raise SkillWorkbenchError(
-                "SKILL_TASK_NOT_READY", "Skill 尚未生成完成", status_code=409
-            )
+        return self._download_archive_from_session(job_id, session)
 
+    def _download_archive_from_session(
+        self,
+        job_id: str,
+        session: dict[str, str],
+    ) -> SkillArchive:
         def read_archive() -> Any:
             response = requests.get(
                 build_file_url(session["endpoint"], SANDBOX_FILE_DOWNLOAD_ROUTE),
@@ -1777,6 +1905,12 @@ class SkillWorkbenchService:
                 status_code=502,
                 retryable=_is_transient_dependency_error(error),
             ) from error
+        if response.status_code in {404, 409}:
+            raise SkillWorkbenchError(
+                "SKILL_TASK_NOT_READY",
+                "Skill 产物尚未准备完成",
+                status_code=409,
+            )
         if response.status_code >= 400:
             raise SkillWorkbenchError(
                 "SKILL_ARTIFACT_DOWNLOAD_FAILED",
@@ -1881,7 +2015,7 @@ class SkillWorkbenchService:
                 report_progress({"phase": phase, "message": message})
 
         report("preparing", "正在校验 Skill 产物")
-        task = self.get_task(job_id, owner_id)
+        task, session = self._get_task_with_session(job_id, owner_id)
         revision = _json_int(task.get("revision"), 1)
         if body.expected_revision != revision:
             raise SkillWorkbenchError(
@@ -1912,8 +2046,7 @@ class SkillWorkbenchService:
                 "此来源不能更新原 Skill，请发布为新 Skill",
                 status_code=409,
             )
-        archive_bytes, _ = self.download(job_id, owner_id)
-        archive = validate_skill_archive(archive_bytes)
+        archive = self._download_archive_from_session(job_id, session)
         from agentkit.toolkit.cli.cli_skills_workflow import (
             _ensure_bucket_ready,
             _make_content_hashed_zip_copy,
@@ -2031,7 +2164,13 @@ class SkillWorkbenchService:
             "region": effective_region,
             "projectName": effective_project or "default",
         }
-        self._persist_publication(job_id, owner_id, revision, result)
+        self._persist_publication(
+            job_id,
+            owner_id,
+            revision,
+            result,
+            session=session,
+        )
         return result
 
     @staticmethod
@@ -2073,21 +2212,17 @@ class SkillWorkbenchService:
         owner_id: str,
         revision: int,
         result: dict[str, object],
+        *,
+        session: dict[str, str] | None = None,
     ) -> None:
         self._validate_job_owner(job_id, owner_id)
-        session = self._find_session(self._validated_tool_id(), job_id)
-        request_data = self._remote_json(session["endpoint"], job_id, "request.json")
-        if _json_int(request_data.get("revision"), 1) != revision:
-            raise SkillWorkbenchError(
-                "SKILL_TASK_REVISION_CONFLICT",
-                "Skill 已被其他操作更新，请刷新后重试",
-                status_code=409,
-            )
-        request_data["publication"] = {"revision": revision, **result}
+        if session is None:
+            session = self._find_session(self._validated_tool_id(), job_id)
+        publication = {"revision": revision, **result}
         self._upload_file(
             session["endpoint"],
-            f"{self._remote_dir(job_id)}/request.json",
-            json.dumps(request_data, ensure_ascii=False).encode("utf-8"),
+            f"{self._remote_dir(job_id)}/publication.json",
+            json.dumps(publication, ensure_ascii=False).encode("utf-8"),
             media_type="application/json",
         )
 
@@ -2301,6 +2436,7 @@ class SkillWorkbenchService:
     def _find_session(self, tool_id: str, job_id: str) -> dict[str, str]:
         for index, region in enumerate(sandbox_region_candidates(self._region)):
             next_token: str | None = None
+            seen_tokens: set[str] = set()
             released = False
             active: list[Any] = []
             try:
@@ -2335,6 +2471,21 @@ class SkillWorkbenchService:
                     )
                     if next_token is None:
                         break
+                    if next_token in seen_tokens:
+                        raise SkillWorkbenchError(
+                            "SKILL_TASK_LOOKUP_INVALID",
+                            "Skill 会话分页响应异常，请联系管理员检查服务状态。",
+                            status_code=502,
+                        )
+                    seen_tokens.add(next_token)
+                else:
+                    raise SkillWorkbenchError(
+                        "SKILL_TASK_LOOKUP_INVALID",
+                        "Skill 会话数量超过当前可查找上限，请联系管理员处理。",
+                        status_code=502,
+                    )
+            except SkillWorkbenchError:
+                raise
             except Exception as error:
                 if is_agentkit_resource_not_found(error) and index == 0:
                     continue
@@ -2472,11 +2623,14 @@ class SkillWorkbenchService:
             "import json,pathlib;"
             f"job=pathlib.Path({job_dir});"
             "request=job/'request.json';status=job/'status.json';"
+            "publication=job/'publication.json';"
             "print(json.dumps("
             "{'initializing':True} if not request.is_file() or not status.is_file() "
             "else {"
             "'request':json.loads(request.read_text(encoding='utf-8')),"
-            "'status':json.loads(status.read_text(encoding='utf-8'))"
+            "'status':json.loads(status.read_text(encoding='utf-8')),"
+            "'publication':json.loads(publication.read_text(encoding='utf-8')) "
+            "if publication.is_file() else None"
             "}))"
         )
         command = f"python3 -c {shlex.quote(source)}"
@@ -2496,6 +2650,15 @@ class SkillWorkbenchService:
                 "Skill 会话状态异常，请稍后重试。",
                 status_code=502,
             )
+        publication = payload.get("publication")
+        if publication is not None:
+            if not isinstance(publication, dict):
+                raise SkillWorkbenchError(
+                    "SKILL_TASK_STATE_INVALID",
+                    "Skill 会话状态异常，请稍后重试。",
+                    status_code=502,
+                )
+            request_data = {**request_data, "publication": publication}
         return request_data, status
 
     def _task_lock(self, job_id: str) -> threading.Lock:
@@ -2894,35 +3057,111 @@ def mount_skill_workbench_routes(
     def http_error(error: SkillWorkbenchError) -> HTTPException:
         return HTTPException(status_code=error.status_code, detail=error.detail())
 
+    def request_id(request: Request) -> str:
+        value = request.headers.get("x-request-id", "").strip()
+        if value and len(value) <= 128 and re.fullmatch(r"[A-Za-z0-9._:-]+", value):
+            return value
+        return uuid.uuid4().hex
+
+    def log_boundary_error(
+        operation: str,
+        request: Request,
+        error: BaseException,
+        *,
+        job_id: str = "",
+        code: str,
+        status_code: int,
+        retryable: bool,
+    ) -> None:
+        logger.error(
+            "Skill workbench request failed "
+            "operation=%s request_id=%s job_id=%s code=%s status=%s "
+            "retryable=%s error_type=%s",
+            operation,
+            request_id(request),
+            job_id or "none",
+            code,
+            status_code,
+            str(retryable).lower(),
+            type(error).__name__,
+        )
+
+    async def invoke(
+        operation: str,
+        request: Request,
+        call: Callable[[], Any],
+        *,
+        job_id: str = "",
+    ) -> Any:
+        try:
+            return await run_in_threadpool(call)
+        except SkillWorkbenchError as error:
+            log_boundary_error(
+                operation,
+                request,
+                error,
+                job_id=job_id,
+                code=error.code,
+                status_code=error.status_code,
+                retryable=error.retryable,
+            )
+            raise http_error(error) from error
+        except Exception as error:
+            internal = SkillWorkbenchError(
+                "SKILL_WORKBENCH_INTERNAL",
+                "Skill 工作台服务异常，请稍后重试。",
+                status_code=500,
+            )
+            log_boundary_error(
+                operation,
+                request,
+                error,
+                job_id=job_id,
+                code=internal.code,
+                status_code=internal.status_code,
+                retryable=internal.retryable,
+            )
+            raise http_error(internal) from error
+
     @app.get("/web/skill-workbench/capabilities")
     async def capabilities(request: Request) -> dict[str, object]:
         owner_resolver(request)
-        return await run_in_threadpool(service.capabilities)
+        return await invoke("capabilities", request, service.capabilities)
 
     @app.post("/web/skill-workbench/tasks/reservations")
     async def reserve_task(request: Request) -> dict[str, object]:
-        return await run_in_threadpool(service.reserve_task, owner_resolver(request))
+        owner_id = owner_resolver(request)
+        return await invoke(
+            "reserve_task",
+            request,
+            lambda: service.reserve_task(owner_id),
+        )
 
     @app.get("/web/skill-workbench/tasks")
-    async def list_tasks(request: Request) -> dict[str, list[dict[str, object]]]:
-        try:
-            return await run_in_threadpool(service.list_tasks, owner_resolver(request))
-        except SkillWorkbenchError as error:
-            raise http_error(error) from error
+    async def list_tasks(
+        request: Request,
+        exclude_job_id: str | None = Query(default=None),
+    ) -> dict[str, list[dict[str, object]]]:
+        owner_id = owner_resolver(request)
+        return await invoke(
+            "list_tasks",
+            request,
+            lambda: service.list_tasks(owner_id, exclude_job_id),
+            job_id=exclude_job_id or "",
+        )
 
     @app.post("/web/skill-workbench/tasks")
     async def create_task(
         body: CreateSkillTaskBody, request: Request
     ) -> dict[str, object]:
-        try:
-            return await run_in_threadpool(
-                service.create_task,
-                body,
-                owner_resolver(request),
-                creator_resolver(request),
-            )
-        except SkillWorkbenchError as error:
-            raise http_error(error) from error
+        owner_id = owner_resolver(request)
+        creator_name = creator_resolver(request)
+        return await invoke(
+            "create_task",
+            request,
+            lambda: service.create_task(body, owner_id, creator_name),
+            job_id=body.job_id or "",
+        )
 
     @app.post("/web/skill-workbench/tasks/from-upload")
     async def create_upload_task(
@@ -2990,28 +3229,28 @@ def mount_skill_workbench_routes(
                     )
                 )
             content.extend(chunk)
-        try:
-            body = CreateSkillTaskBody(
-                operation="optimize", intent=intent, jobId=job_id
-            )
-            return await run_in_threadpool(
-                service.create_task,
+        body = CreateSkillTaskBody(operation="optimize", intent=intent, jobId=job_id)
+        return await invoke(
+            "create_upload_task",
+            request,
+            lambda: service.create_task(
                 body,
                 owner_id,
                 creator_name,
                 uploaded_archive=bytes(content),
-            )
-        except SkillWorkbenchError as error:
-            raise http_error(error) from error
+            ),
+            job_id=job_id or "",
+        )
 
     @app.get("/web/skill-workbench/tasks/{job_id}")
     async def get_task(job_id: str, request: Request) -> dict[str, object]:
-        try:
-            return await run_in_threadpool(
-                service.get_task, job_id, owner_resolver(request)
-            )
-        except SkillWorkbenchError as error:
-            raise http_error(error) from error
+        owner_id = owner_resolver(request)
+        return await invoke(
+            "get_task",
+            request,
+            lambda: service.get_task(job_id, owner_id),
+            job_id=job_id,
+        )
 
     @app.post("/web/skill-workbench/tasks/{job_id}/refinements")
     async def refine_task(
@@ -3019,15 +3258,13 @@ def mount_skill_workbench_routes(
         body: RefineSkillTaskBody,
         request: Request,
     ) -> dict[str, object]:
-        try:
-            return await run_in_threadpool(
-                service.refine,
-                job_id,
-                owner_resolver(request),
-                body,
-            )
-        except SkillWorkbenchError as error:
-            raise http_error(error) from error
+        owner_id = owner_resolver(request)
+        return await invoke(
+            "refine_task",
+            request,
+            lambda: service.refine(job_id, owner_id, body),
+            job_id=job_id,
+        )
 
     @app.post("/web/skill-workbench/tasks/{job_id}/stop")
     async def stop_task(
@@ -3035,24 +3272,23 @@ def mount_skill_workbench_routes(
         body: StopSkillTaskBody,
         request: Request,
     ) -> dict[str, object]:
-        try:
-            return await run_in_threadpool(
-                service.stop,
-                job_id,
-                owner_resolver(request),
-                body,
-            )
-        except SkillWorkbenchError as error:
-            raise http_error(error) from error
+        owner_id = owner_resolver(request)
+        return await invoke(
+            "stop_task",
+            request,
+            lambda: service.stop(job_id, owner_id, body),
+            job_id=job_id,
+        )
 
     @app.get("/web/skill-workbench/tasks/{job_id}/download")
     async def download(job_id: str, request: Request) -> Response:
-        try:
-            content, filename = await run_in_threadpool(
-                service.download, job_id, owner_resolver(request)
-            )
-        except SkillWorkbenchError as error:
-            raise http_error(error) from error
+        owner_id = owner_resolver(request)
+        content, filename = await invoke(
+            "download_task",
+            request,
+            lambda: service.download(job_id, owner_id),
+            job_id=job_id,
+        )
         return Response(
             content=content,
             media_type="application/zip",
@@ -3061,12 +3297,13 @@ def mount_skill_workbench_routes(
 
     @app.get("/web/skill-workbench/tasks/{job_id}/artifact")
     async def artifact(job_id: str, request: Request) -> dict[str, object]:
-        try:
-            return await run_in_threadpool(
-                service.artifact, job_id, owner_resolver(request)
-            )
-        except SkillWorkbenchError as error:
-            raise http_error(error) from error
+        owner_id = owner_resolver(request)
+        return await invoke(
+            "get_artifact",
+            request,
+            lambda: service.artifact(job_id, owner_id),
+            job_id=job_id,
+        )
 
     @app.post("/web/skill-workbench/tasks/{job_id}/publish-stream")
     async def publish_task_stream(
@@ -3096,12 +3333,32 @@ def mount_skill_workbench_routes(
                 )
                 await progress_queue.put({"type": "complete", "result": result})
             except SkillWorkbenchError as error:
+                log_boundary_error(
+                    "publish_task_stream",
+                    request,
+                    error,
+                    job_id=job_id,
+                    code=error.code,
+                    status_code=error.status_code,
+                    retryable=error.retryable,
+                )
                 await progress_queue.put({"type": "error", "error": error.detail()})
-            except Exception:
-                logger.exception(
-                    "Skill publish stream failed job_id=%s disposition=%s",
+            except Exception as error:
+                log_boundary_error(
+                    "publish_task_stream",
+                    request,
+                    error,
+                    job_id=job_id,
+                    code="SKILL_PUBLISH_FAILED",
+                    status_code=500,
+                    retryable=False,
+                )
+                logger.error(
+                    "Skill publish stream failed job_id=%s disposition=%s "
+                    "error_type=%s",
                     job_id,
                     body.disposition,
+                    type(error).__name__,
                 )
                 await progress_queue.put(
                     {
@@ -3142,24 +3399,23 @@ def mount_skill_workbench_routes(
         body: PublishSkillTaskBody,
         request: Request,
     ) -> dict[str, object]:
-        try:
-            return await run_in_threadpool(
-                service.publish,
-                job_id,
-                owner_resolver(request),
-                body,
-            )
-        except SkillWorkbenchError as error:
-            raise http_error(error) from error
+        owner_id = owner_resolver(request)
+        return await invoke(
+            "publish_task",
+            request,
+            lambda: service.publish(job_id, owner_id, body),
+            job_id=job_id,
+        )
 
     @app.delete("/web/skill-workbench/tasks/{job_id}")
     async def delete_task(job_id: str, request: Request) -> dict[str, bool]:
-        try:
-            await run_in_threadpool(
-                service.delete_task, job_id, owner_resolver(request)
-            )
-        except SkillWorkbenchError as error:
-            raise http_error(error) from error
+        owner_id = owner_resolver(request)
+        await invoke(
+            "delete_task",
+            request,
+            lambda: service.delete_task(job_id, owner_id),
+            job_id=job_id,
+        )
         return {"deleted": True}
 
     return service

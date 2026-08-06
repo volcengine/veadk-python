@@ -72,8 +72,11 @@ async function errorFrom(response: Response, fallback: string): Promise<Error> {
       detail.retryable === true,
     );
   } catch {
+    const contentType =
+      response.headers.get("content-type")?.split(";", 1)[0] ||
+      "Content-Type 缺失";
     return new SkillWorkbenchApiError(
-      text || `${fallback}（HTTP ${response.status}）`,
+      `${fallback}（HTTP ${response.status}，Content-Type: ${contentType}）。请检查代理或网关配置。`,
       response.status,
     );
   }
@@ -83,7 +86,10 @@ async function json(response: Response, fallback: string): Promise<unknown> {
   if (!response.ok) throw await errorFrom(response, fallback);
   const type = response.headers.get("content-type") ?? "";
   if (!type.includes("application/json")) {
-    throw new Error(`${fallback}：服务端返回了非 JSON 响应。`);
+    const responseType = type.split(";", 1)[0] || "Content-Type 缺失";
+    throw new Error(
+      `${fallback}：服务端返回非 JSON 响应（HTTP ${response.status}，Content-Type: ${responseType}），请检查代理或网关配置。`,
+    );
   }
   return response.json();
 }
@@ -316,9 +322,13 @@ function normalizeTaskSummary(value: unknown): SkillWorkbenchTaskSummary {
 
 export async function listSkillWorkbenchTasks(
   signal?: AbortSignal,
+  excludeJobId?: string,
 ): Promise<SkillWorkbenchTaskSummary[]> {
+  const params = new URLSearchParams();
+  if (excludeJobId) params.set("exclude_job_id", excludeJobId);
+  const query = params.size > 0 ? `?${params.toString()}` : "";
   const body = record(await json(
-    await request("/tasks", { signal }),
+    await request(`/tasks${query}`, { signal }),
     "读取 Skill 会话列表失败",
   ), "Skill 会话列表");
   if (!Array.isArray(body.tasks)) throw new Error("Skill 会话列表格式错误。");

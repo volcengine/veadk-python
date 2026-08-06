@@ -437,7 +437,7 @@ def test_model_credential_reuses_the_key_selected_for_the_primary_code_env() -> 
     }
     assert resolved_key == selected_key
     assert envs["CODEX_API_KEY"] == selected_key
-    assert envs["CODEX_MODEL"] == "doubao-seed-2-0-pro-260215"
+    assert envs["CODEX_MODEL"] == "doubao-seed-2-1-pro-260628"
 
 
 def test_candidate_session_never_overrides_tool_model_credential(monkeypatch) -> None:

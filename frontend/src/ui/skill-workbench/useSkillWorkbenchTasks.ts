@@ -24,7 +24,7 @@ const DETAIL_POLL_INTERVAL_MS = 2_000;
 const MAX_POLL_INTERVAL_MS = 16_000;
 const SYNC_ERROR_REVEAL_THRESHOLD = 3;
 const ARTIFACT_RETRY_INTERVAL_MS = 900;
-const ARTIFACT_RETRY_LIMIT = 4;
+const ARTIFACT_RETRY_LIMIT = 1;
 const PROVISIONING_TTL_SECONDS = 10 * 60;
 const TERMINAL_STATES = new Set(["ready", "failed", "cancelled", "expired", "published"]);
 const JOB_ID_PATTERN = /^sw-[0-9a-f]{12}-[0-9a-f]{24}$/;
@@ -196,6 +196,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   const [startError, setStartError] = useState("");
   const [cleanupError, setCleanupError] = useState("");
   const generationRef = useRef(0);
+  const activeJobIdRef = useRef("");
   const listRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const artifactRequestRef = useRef(0);
@@ -214,6 +215,10 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   useEffect(() => {
     activeTaskRef.current = activeTask;
   }, [activeTask]);
+
+  useEffect(() => {
+    activeJobIdRef.current = activeJobId;
+  }, [activeJobId]);
 
   const persistReferences = useCallback((next: ProvisioningReference[]) => {
     referencesRef.current = next;
@@ -306,7 +311,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     const request = ++listRequestRef.current;
     if (tasksRef.current.length === 0) setTasksLoading(true);
     try {
-      const next = await listSkillWorkbenchTasks(signal);
+      const next = await listSkillWorkbenchTasks(signal, activeJobIdRef.current);
       if (generation !== generationRef.current || request !== listRequestRef.current) return;
       listFailureCountRef.current = 0;
       reconcileTasks(next);
