@@ -87,7 +87,7 @@ export function MediaGroup({ appName, items, compact = false, onRemove }: MediaG
               type="button"
               className="media-card-main"
               disabled={disabled}
-              onClick={() => setOpen(item)}
+              onClick={kind === "image" ? undefined : () => setOpen(item)}
               aria-label={`预览 ${item.name ?? "附件"}`}
             >
               {kind === "image" && source ? (
