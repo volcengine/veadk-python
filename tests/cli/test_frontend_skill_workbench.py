@@ -187,7 +187,7 @@ def test_capabilities_fail_closed_without_tool(monkeypatch: pytest.MonkeyPatch) 
 
     assert value == {
         "enabled": False,
-        "reason": "管理员未配置 DevEnv Tool",
+        "reason": "DevEnv 暂不可用，请联系管理员检查配置。",
         "operations": ["create", "optimize"],
     }
 
@@ -212,6 +212,21 @@ def test_capabilities_require_ready_devenv_and_optional_image(
     assert value["enabled"] is True
     assert value["reason"] == ""
     assert value["maxUploadBytes"] == 20 * 1024 * 1024
+
+
+def test_delete_session_failure_is_actionable() -> None:
+    class Tools:
+        def delete_session(self, request) -> None:
+            raise RuntimeError("upstream unavailable")
+
+    with pytest.raises(SkillWorkbenchError) as caught:
+        SkillWorkbenchService._delete_session(Tools(), "tool-1", "session-1")
+
+    assert caught.value.code == "SKILL_TASK_CLEANUP_FAILED"
+    assert str(caught.value) == (
+        "删除 Skill 会话失败，临时 DevEnv 可能仍在运行，请稍后重试。"
+    )
+    assert caught.value.retryable is True
 
 
 def test_reserve_task_returns_owner_bound_id_without_agentkit() -> None:

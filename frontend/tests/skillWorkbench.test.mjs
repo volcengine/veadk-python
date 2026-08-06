@@ -63,7 +63,10 @@ test("opens optimization sources in the dedicated conversation setup", () => {
   assert.match(center, /选择要优化的 Skill/);
   assert.match(center, /if \(selectingSource && nextSource\)[\s\S]*chooseOptimizationSource\(nextSource\)/);
   assert.match(center, /更换 Skill/);
-  assert.match(center, /onOptimize=\{chooseOptimizationSource\}/);
+  assert.match(
+    center,
+    /onOptimize=\{capability\?\.enabled === true \? chooseOptimizationSource : undefined\}/,
+  );
   assert.doesNotMatch(workbench, /从技能中心选择/);
 });
 
@@ -90,6 +93,7 @@ test("uses contextual deletion and never offers cancellation after success", () 
   assert.match(workbench, /task\.state !== "ready"/);
   assert.match(workbench, /task\.state !== "published"/);
   assert.match(workbench, /StudioConfirmDialog/);
+  assert.match(workbench, /description=\{error[\s\S]*`删除失败：\$\{error\}`/);
   assert.doesNotMatch(workbench, /skill-workbench__danger/);
   assert.match(sidebar, /onDeleteSkillConversation/);
 });
@@ -109,6 +113,30 @@ test("sidebar deletion marks an in-flight provisioning request before cleanup", 
   assert.match(
     controller,
     /const deleteTask[\s\S]*referencesRef\.current\.some[\s\S]*cancelProvisioning/,
+  );
+});
+
+test("retains cancelled provisioning references until DevEnv cleanup is confirmed", () => {
+  assert.match(controller, /requestProvisioningCleanup/);
+  assert.match(controller, /confirmProvisioningCleanup/);
+  assert.match(
+    controller,
+    /cancelProvisioning[\s\S]*cancelRequested: true[\s\S]*await requestProvisioningCleanup/,
+  );
+  assert.match(
+    controller,
+    /confirmProvisioningCleanup[\s\S]*await requestProvisioningCleanup[\s\S]*persistReferences/,
+  );
+  assert.match(controller, /setCleanupError/);
+  assert.match(controller, /hasPendingCleanup/);
+  assert.match(
+    controller,
+    /if \(!enabled \|\| !identityKey \|\| \(!hasActiveTask && !hasPendingCleanup\)\) return/,
+  );
+  assert.doesNotMatch(controller, /\.catch\(\(\) => undefined\)/);
+  assert.doesNotMatch(
+    controller,
+    /deleteSkillWorkbenchTask\([^)]*\)\.finally\(\(\) => \{[\s\S]*?persistReferences/,
   );
 });
 
@@ -188,6 +216,8 @@ test("warns ready users that DevEnv TTL limits download and publishing", () => {
   assert.match(workbench, /请及时下载或发布/);
   assert.match(workbench, /超过保留时间后将无法下载或发布/);
   assert.match(workbench, /产物也无法恢复/);
+  assert.match(workbench, /Skill 版本生效/);
+  assert.doesNotMatch(workbench, /AgentKit 版本生效/);
 });
 
 test("uses the user intent for Skill conversation titles and no Skill Center badge", () => {

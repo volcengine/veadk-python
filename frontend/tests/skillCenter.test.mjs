@@ -91,6 +91,18 @@ test("ZIP selection rejects files above the server-advertised upload limit", () 
   assert.match(skillCenterSource, /setComposerError/);
 });
 
+test("capability failures remain visible in the Skill browser and can be retried", () => {
+  assert.match(skillCenterSource, /capabilityLoading/);
+  assert.match(skillCenterSource, /capabilityError/);
+  assert.match(skillCenterSource, /capabilityRevision/);
+  assert.match(skillCenterSource, /setCapabilityRevision\(\(revision\) => revision \+ 1\)/);
+  assert.match(skillCenterSource, /skillcenter-capability-notice/);
+  assert.match(skillCenterSource, /role=\{capabilityError \? "alert" : "status"\}/);
+  assert.match(skillCenterSource, />重试<\/button>/);
+  assert.match(skillCenterSource, /disabled=\{capability\?\.enabled !== true\}/);
+  assert.match(stylesSource, /\.skillcenter-capability-notice/);
+});
+
 test("skill details render Markdown safely while preserving the complete file browser", () => {
   assert.match(skillCenterSource, /<CodeBrowserWorkspace/);
   assert.match(skillCenterSource, /detail\.files\?\.length/);

@@ -471,7 +471,7 @@ class SkillWorkbenchService:
         if not tool_id:
             return {
                 "enabled": False,
-                "reason": "管理员未配置 DevEnv Tool",
+                "reason": "DevEnv 暂不可用，请联系管理员检查配置。",
                 "operations": ["create", "optimize"],
             }
         try:
@@ -483,7 +483,7 @@ class SkillWorkbenchService:
             )
             return {
                 "enabled": False,
-                "reason": "无法访问配置的 DevEnv Tool",
+                "reason": "DevEnv 暂不可用，请联系管理员检查配置。",
                 "operations": ["create", "optimize"],
             }
         expected_image = (os.getenv("VEADK_SKILL_DEVENV_IMAGE") or "").strip()
@@ -492,7 +492,7 @@ class SkillWorkbenchService:
             valid = valid and tool.image_url == expected_image
         return {
             "enabled": valid,
-            "reason": "" if valid else "配置的 Tool 必须是 Ready DevEnv",
+            "reason": ("" if valid else "DevEnv 暂不可用，请联系管理员检查配置。"),
             "operations": ["create", "optimize"],
             "maxUploadBytes": _MAX_ARCHIVE_BYTES,
         }
@@ -867,7 +867,7 @@ class SkillWorkbenchService:
         else:
             raise SkillWorkbenchError(
                 "SKILL_TASK_STATE_INVALID",
-                "Skill 任务状态格式错误",
+                "Skill 会话状态异常，请稍后重试。",
                 status_code=502,
             )
         brief = build_delegation_brief(
@@ -920,7 +920,9 @@ class SkillWorkbenchService:
         )
         if response.status_code >= 400:
             raise SkillWorkbenchError(
-                "SKILL_ARTIFACT_DOWNLOAD_FAILED", "下载 Skill ZIP 失败", status_code=502
+                "SKILL_ARTIFACT_DOWNLOAD_FAILED",
+                "下载 Skill ZIP 失败，请稍后重试。",
+                status_code=502,
             )
         return validate_skill_archive(response.content)
 
@@ -1286,7 +1288,7 @@ class SkillWorkbenchService:
         except Exception as error:
             raise SkillWorkbenchError(
                 "SKILL_DEVENV_UNAVAILABLE",
-                "无法访问配置的 DevEnv Tool",
+                "DevEnv 暂不可用，请联系管理员检查配置。",
                 status_code=503,
                 retryable=True,
             ) from error
@@ -1294,13 +1296,13 @@ class SkillWorkbenchService:
         if tool.tool_type != _EXPECTED_TOOL_TYPE or tool.status != "Ready":
             raise SkillWorkbenchError(
                 "SKILL_DEVENV_INVALID",
-                "配置的 Tool 必须是 Ready DevEnv",
+                "DevEnv 暂不可用，请联系管理员检查配置。",
                 status_code=503,
             )
         if expected_image and tool.image_url != expected_image:
             raise SkillWorkbenchError(
                 "SKILL_DEVENV_INVALID",
-                "配置的 Tool 不是指定的 DevEnv 镜像",
+                "DevEnv 暂不可用，请联系管理员检查配置。",
                 status_code=503,
             )
         return tool_id
@@ -1312,7 +1314,7 @@ class SkillWorkbenchService:
         if required and not value:
             raise SkillWorkbenchError(
                 "SKILL_DEVENV_NOT_CONFIGURED",
-                "管理员未配置 DevEnv Tool",
+                "DevEnv 暂不可用，请联系管理员检查配置。",
                 status_code=503,
             )
         return value
@@ -1328,7 +1330,10 @@ class SkillWorkbenchService:
                 raise
             self._region = region
             return result
-        raise SkillWorkbenchError("SKILL_DEVENV_UNAVAILABLE", "DevEnv Tool 不存在")
+        raise SkillWorkbenchError(
+            "SKILL_DEVENV_UNAVAILABLE",
+            "DevEnv 暂不可用，请联系管理员检查配置。",
+        )
 
     def _find_session(self, tool_id: str, job_id: str) -> dict[str, str]:
         request = tools_types.ListSessionsRequest(
@@ -1384,18 +1389,22 @@ class SkillWorkbenchService:
             },
             timeout=30,
         )
-        payload = _safe_json_response(response, "读取 Skill 任务状态")
+        payload = _safe_json_response(response, "读取 Skill 会话状态")
         data = payload.get("data")
         output = data.get("output") if isinstance(data, dict) else None
         try:
             value = json.loads(output) if isinstance(output, str) else None
         except ValueError as error:
             raise SkillWorkbenchError(
-                "SKILL_TASK_STATE_INVALID", "Skill 任务状态格式错误", status_code=502
+                "SKILL_TASK_STATE_INVALID",
+                "Skill 会话状态异常，请稍后重试。",
+                status_code=502,
             ) from error
         if not isinstance(value, dict):
             raise SkillWorkbenchError(
-                "SKILL_TASK_STATE_INVALID", "Skill 任务状态格式错误", status_code=502
+                "SKILL_TASK_STATE_INVALID",
+                "Skill 会话状态异常，请稍后重试。",
+                status_code=502,
             )
         return value
 
@@ -1431,7 +1440,7 @@ class SkillWorkbenchService:
             if "NotFound" not in str(error):
                 raise SkillWorkbenchError(
                     "SKILL_TASK_CLEANUP_FAILED",
-                    "清理 DevEnv Session 失败",
+                    "删除 Skill 会话失败，临时 DevEnv 可能仍在运行，请稍后重试。",
                     status_code=502,
                     retryable=True,
                 ) from error

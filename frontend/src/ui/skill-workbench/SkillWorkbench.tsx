@@ -390,13 +390,14 @@ export function SkillWorkbench({
                   onClick={() => setMenuOpen(false)}
                 />
                 <div className="skill-workbench__menu">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      setConfirmDelete(true);
-                    }}
-                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setError("");
+                        setConfirmDelete(true);
+                      }}
+                    >
                     {deleteLabel}
                   </button>
                 </div>
@@ -578,7 +579,7 @@ export function SkillWorkbench({
                       <TextShimmer duration={2.2} spread={16}>
                         {publishProgress.message}
                       </TextShimmer>
-                      <span>发布会持续到 AgentKit 版本生效，请保持当前会话打开。</span>
+                      <span>发布会持续到 Skill 版本生效，请保持当前会话打开。</span>
                     </div>
                   ) : (
                     <div className="skill-workbench__publish-controls">
@@ -649,13 +650,18 @@ export function SkillWorkbench({
       {confirmDelete ? (
         <StudioConfirmDialog
           title={`${deleteLabel}？`}
-          description={task?.state === "running" || provisioningTask
-            ? "这会停止当前处理、删除临时 DevEnv，并从会话列表移除。"
-            : "这会删除临时 DevEnv，并从会话列表移除。"}
+          description={error
+            ? `删除失败：${error}`
+            : task?.state === "running" || provisioningTask
+              ? "这会停止当前处理、删除临时 DevEnv，并从会话列表移除。"
+              : "这会删除临时 DevEnv，并从会话列表移除。"}
           confirmLabel={action === "delete" ? "正在删除…" : deleteLabel}
           variant="danger"
           busy={action === "delete"}
-          onCancel={() => setConfirmDelete(false)}
+          onCancel={() => {
+            setConfirmDelete(false);
+            setError("");
+          }}
           onConfirm={() => void deleteConversation()}
         />
       ) : null}

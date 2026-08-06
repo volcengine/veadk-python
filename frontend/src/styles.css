@@ -4523,6 +4523,11 @@ body {
   outline: 2px solid hsl(var(--ring) / 0.34);
   outline-offset: 1px;
 }
+.skillcenter-selection-upload.is-disabled {
+  cursor: not-allowed;
+  opacity: .46;
+  pointer-events: none;
+}
 .skillcenter-create-action:hover:not(:disabled),
 .skillcenter-primary-action:hover:not(:disabled) {
   border-color: hsl(var(--foreground) / .84);
@@ -4534,6 +4539,49 @@ body {
   cursor: not-allowed;
   opacity: .46;
 }
+.skillcenter-capability-notice {
+  min-height: 38px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 8px 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 7px;
+  background: hsl(var(--panel));
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+.skillcenter-capability-notice.is-error {
+  border-color: hsl(var(--destructive) / .2);
+  background: hsl(var(--destructive) / .06);
+  color: hsl(var(--destructive));
+}
+.skillcenter-capability-notice > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.skillcenter-capability-notice button {
+  min-height: 28px;
+  flex: 0 0 auto;
+  padding: 0 9px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.skillcenter-capability-notice button:hover { background: hsl(var(--muted)); }
+.skillcenter-capability-notice button:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.28);
+  outline-offset: 1px;
+}
+.skillcenter-capability-notice + .skillcenter-toolbar { margin-top: 10px; }
 .skillcenter-toolbar {
   min-height: 54px;
   flex: 0 0 auto;

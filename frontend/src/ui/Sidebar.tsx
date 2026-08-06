@@ -606,7 +606,7 @@ export function Sidebar({
           })}
           {skillConversationsError ? (
             <div className="history-load-error" role="alert">
-              <span>Skill 会话更新失败</span>
+              <span>{skillConversationsError}</span>
               <button type="button" onClick={onRetrySkillConversations}>重试</button>
             </div>
           ) : null}

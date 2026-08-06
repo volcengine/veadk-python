@@ -514,6 +514,9 @@ export function SkillCenterView({
   const [file, setFile] = useState<File | null>(null);
   const [intent, setIntent] = useState("");
   const [capability, setCapability] = useState<SkillWorkbenchCapability | null>(null);
+  const [capabilityLoading, setCapabilityLoading] = useState(true);
+  const [capabilityError, setCapabilityError] = useState("");
+  const [capabilityRevision, setCapabilityRevision] = useState(0);
   const [composerBusy, setComposerBusy] = useState(false);
   const [composerError, setComposerError] = useState("");
   const regionOptions = cloudRegionOptions(cloudProvider);
@@ -549,15 +552,24 @@ export function SkillCenterView({
 
   useEffect(() => {
     const controller = new AbortController();
+    setCapability(null);
+    setCapabilityLoading(true);
+    setCapabilityError("");
     void getSkillWorkbenchCapability(controller.signal)
       .then(setCapability)
       .catch((cause) => {
         if (!controller.signal.aborted) {
-          setComposerError(cause instanceof Error ? cause.message : String(cause));
+          const message = cause instanceof Error
+            ? cause.message
+            : "无法检查 DevEnv 是否可用。";
+          setCapabilityError(`${message.replace(/[。.]$/, "")}，请重试。`);
         }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setCapabilityLoading(false);
       });
     return () => controller.abort();
-  }, []);
+  }, [capabilityRevision]);
 
   useEffect(() => {
     if (!focus) return;
@@ -866,13 +878,17 @@ export function SkillCenterView({
               >
                 退出选择
               </button>
-              <label className="skillcenter-create-action skillcenter-selection-upload">
+              <label
+                className={`skillcenter-create-action skillcenter-selection-upload${
+                  capability?.enabled === true ? "" : " is-disabled"
+                }`}
+              >
                 <ComposerUploadIcon />
                 <span>上传 ZIP</span>
                 <input
                   type="file"
                   accept=".zip,application/zip"
-                  disabled={capability?.enabled === false}
+                  disabled={capability?.enabled !== true}
                   onChange={(event) => {
                     chooseUpload(event.target.files?.[0] ?? null);
                     event.target.value = "";
@@ -885,7 +901,7 @@ export function SkillCenterView({
               <button
                 type="button"
                 className="skillcenter-optimize-action"
-                disabled={capability?.enabled === false}
+                disabled={capability?.enabled !== true}
                 onClick={beginOptimization}
               >
                 优化 Skill
@@ -893,7 +909,7 @@ export function SkillCenterView({
               <button
                 type="button"
                 className="skillcenter-create-action"
-                disabled={capability?.enabled === false}
+                disabled={capability?.enabled !== true}
                 onClick={() => openSetup("create")}
               >
                 创建 Skill
@@ -902,6 +918,27 @@ export function SkillCenterView({
           )}
         </div>
       </header>
+
+      {capabilityLoading || capabilityError || capability?.enabled === false ? (
+        <div
+          className={`skillcenter-capability-notice${capabilityError ? " is-error" : ""}`}
+          role={capabilityError ? "alert" : "status"}
+          aria-live="polite"
+        >
+          <span>
+            {capabilityLoading
+              ? "正在检查 DevEnv 是否可用…"
+              : capabilityError || capability?.reason ||
+                "DevEnv 暂不可用，请联系管理员检查配置。"}
+          </span>
+          {!capabilityLoading ? (
+            <button
+              type="button"
+              onClick={() => setCapabilityRevision((revision) => revision + 1)}
+            >重试</button>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="skillcenter-toolbar">
         <div className="skillcenter-regions" aria-label="地域">
@@ -1026,7 +1063,7 @@ export function SkillCenterView({
           error={detailError}
           onClose={closeDetail}
           onRetry={() => void openDetail(detailSkill)}
-          onOptimize={chooseOptimizationSource}
+          onOptimize={capability?.enabled === true ? chooseOptimizationSource : undefined}
         />
       )}
     </section>

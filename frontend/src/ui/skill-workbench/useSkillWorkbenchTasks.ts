@@ -54,17 +54,18 @@ export function loadProvisioningReferences(
     return value.flatMap((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return [];
       const record = item as Record<string, unknown>;
+      const cancelRequested = record.cancelRequested === true;
       if (
         typeof record.jobId !== "string" ||
         !JOB_ID_PATTERN.test(record.jobId) ||
         typeof record.reservedAt !== "number" ||
         record.reservedAt > nowSeconds + 60 ||
-        nowSeconds - record.reservedAt > PROVISIONING_TTL_SECONDS
+        (!cancelRequested && nowSeconds - record.reservedAt > PROVISIONING_TTL_SECONDS)
       ) return [];
       return [{
         jobId: record.jobId,
         reservedAt: record.reservedAt,
-        ...(record.cancelRequested === true ? { cancelRequested: true as const } : {}),
+        ...(cancelRequested ? { cancelRequested: true as const } : {}),
       }];
     });
   } catch {
@@ -112,6 +113,15 @@ function restoredProvisioning(reference: ProvisioningReference): SkillWorkbenchP
 
 const RELEASED_DEVENV_MESSAGE =
   "DevEnv 已到期或被释放，临时文件已无法访问。请返回技能中心重新开始。";
+const CLEANUP_FAILED_MESSAGE =
+  "删除 Skill 会话失败，临时 DevEnv 可能仍在运行，请稍后重试。";
+
+function cleanupFailureMessage(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message.trim() : "";
+  return message.includes("临时 DevEnv 可能仍在运行")
+    ? message
+    : CLEANUP_FAILED_MESSAGE;
+}
 
 function expiredTask(
   jobId: string,
@@ -149,11 +159,13 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   const [activeArtifactError, setActiveArtifactError] = useState("");
   const [startingTask, setStartingTask] = useState(false);
   const [startError, setStartError] = useState("");
+  const [cleanupError, setCleanupError] = useState("");
   const generationRef = useRef(0);
   const listRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const artifactRequestRef = useRef(0);
   const referencesRef = useRef<ProvisioningReference[]>([]);
+  const cleanupRequestsRef = useRef<Map<string, Promise<void>>>(new Map());
   const selectedTaskRef = useRef<SkillWorkbenchTaskListItem | null>(null);
 
   const persistReferences = useCallback((next: ProvisioningReference[]) => {
@@ -163,33 +175,76 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     }
   }, [identityKey]);
 
+  const requestProvisioningCleanup = useCallback((jobId: string): Promise<void> => {
+    const pending = cleanupRequestsRef.current.get(jobId);
+    if (pending) return pending;
+    const request = (async () => {
+      try {
+        await deleteSkillWorkbenchTask(jobId);
+      } finally {
+        cleanupRequestsRef.current.delete(jobId);
+      }
+    })();
+    cleanupRequestsRef.current.set(jobId, request);
+    return request;
+  }, []);
+
+  const confirmProvisioningCleanup = useCallback(async (jobId: string) => {
+    const generation = generationRef.current;
+    await requestProvisioningCleanup(jobId);
+    if (generation !== generationRef.current) return;
+    persistReferences(referencesRef.current.filter((item) => item.jobId !== jobId));
+    setTasks((current) => current.filter((item) => item.jobId !== jobId));
+    setActiveJobId((current) => current === jobId ? "" : current);
+    setActiveTask((current) => current?.jobId === jobId ? null : current);
+    setCleanupError("");
+  }, [persistReferences, requestProvisioningCleanup]);
+
   const reconcileTasks = useCallback((durable: SkillWorkbenchTaskSummary[]) => {
     const durableIds = new Set(durable.map((task) => task.jobId));
     const now = Math.floor(Date.now() / 1_000);
-    const remaining = referencesRef.current.filter((reference) =>
-      !durableIds.has(reference.jobId) && now - reference.reservedAt <= PROVISIONING_TTL_SECONDS
-    );
+    const remaining = referencesRef.current.filter((reference) => (
+      reference.cancelRequested ||
+      (
+        !durableIds.has(reference.jobId) &&
+        now - reference.reservedAt <= PROVISIONING_TTL_SECONDS
+      )
+    ));
     if (remaining.length !== referencesRef.current.length) persistReferences(remaining);
     setTasks((current) => {
+      const cancelledIds = new Set(
+        remaining
+          .filter((reference) => reference.cancelRequested)
+          .map((reference) => reference.jobId),
+      );
+      const cancelledPlaceholders = current.filter(
+        (task) => task.state === "provisioning" && cancelledIds.has(task.jobId),
+      );
       const missing = current.filter((task) =>
         task.state !== "provisioning" && !durableIds.has(task.jobId)
       );
       return [
+        ...cancelledPlaceholders,
         ...remaining.filter((reference) => !reference.cancelRequested).map(restoredProvisioning),
-        ...durable,
+        ...durable.filter((task) => !cancelledIds.has(task.jobId)),
         ...missing,
       ].sort((a, b) => b.createdAt - a.createdAt);
     });
 
-    for (const reference of referencesRef.current) {
-      if (reference.cancelRequested && durableIds.has(reference.jobId)) {
-        void deleteSkillWorkbenchTask(reference.jobId).finally(() => {
-          persistReferences(referencesRef.current.filter((item) => item.jobId !== reference.jobId));
-          setTasks((current) => current.filter((item) => item.jobId !== reference.jobId));
+    for (const reference of remaining) {
+      if (
+        reference.cancelRequested &&
+        (
+          durableIds.has(reference.jobId) ||
+          now - reference.reservedAt > PROVISIONING_TTL_SECONDS
+        )
+      ) {
+        void confirmProvisioningCleanup(reference.jobId).catch((cause) => {
+          setCleanupError(cleanupFailureMessage(cause));
         });
       }
     }
-  }, [persistReferences]);
+  }, [confirmProvisioningCleanup, persistReferences]);
 
   const refreshTasks = useCallback(async (signal?: AbortSignal) => {
     if (!enabled || !identityKey) return;
@@ -283,6 +338,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
     setActiveArtifact(null);
     setActiveArtifactError("");
     setStartError("");
+    setCleanupError("");
     setStartingTask(false);
     if (!enabled || !identityKey) return;
     const controller = new AbortController();
@@ -291,8 +347,9 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   }, [enabled, identityKey, refreshTasks]);
 
   const hasActiveTask = tasks.some((task) => task.state === "running" || task.state === "provisioning");
+  const hasPendingCleanup = referencesRef.current.some((reference) => reference.cancelRequested);
   useEffect(() => {
-    if (!enabled || !identityKey || !hasActiveTask) return;
+    if (!enabled || !identityKey || (!hasActiveTask && !hasPendingCleanup)) return;
     let timer: number | undefined;
     let stopped = false;
     const poll = async () => {
@@ -304,7 +361,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       stopped = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [enabled, hasActiveTask, identityKey, refreshTasks]);
+  }, [enabled, hasActiveTask, hasPendingCleanup, identityKey, refreshTasks]);
 
   useEffect(() => {
     if (!activeJobId) {
@@ -475,9 +532,12 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       if (generation !== generationRef.current) return task;
       const cancelled = referencesRef.current.find((item) => item.jobId === reference.jobId)?.cancelRequested;
       if (cancelled) {
-        await deleteSkillWorkbenchTask(reference.jobId).catch(() => undefined);
-        persistReferences(referencesRef.current.filter((item) => item.jobId !== reference.jobId));
-        setTasks((current) => current.filter((item) => item.jobId !== reference.jobId));
+        try {
+          await confirmProvisioningCleanup(reference.jobId);
+        } catch (cause) {
+          setCleanupError(cleanupFailureMessage(cause));
+          throw cause;
+        }
         return task;
       }
       upsertTask(task);
@@ -490,18 +550,28 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
       }
       throw cause;
     }
-  }, [persistReferences, upsertTask]);
+  }, [confirmProvisioningCleanup, persistReferences, upsertTask]);
 
   const cancelProvisioning = useCallback(async (jobId: string) => {
     const current = referencesRef.current.find((item) => item.jobId === jobId);
     if (!current) return;
+    const generation = generationRef.current;
     persistReferences(referencesRef.current.map((item) => item.jobId === jobId
       ? { ...item, cancelRequested: true }
       : item));
-    setTasks((tasksNow) => tasksNow.filter((item) => item.jobId !== jobId));
-    setActiveJobId((value) => value === jobId ? "" : value);
-    await deleteSkillWorkbenchTask(jobId).catch(() => undefined);
-  }, [persistReferences]);
+    try {
+      await requestProvisioningCleanup(jobId);
+      if (generation !== generationRef.current) return;
+      setTasks((tasksNow) => tasksNow.filter((item) => item.jobId !== jobId));
+      setActiveJobId((value) => value === jobId ? "" : value);
+      setCleanupError("");
+    } catch (cause) {
+      if (generation !== generationRef.current) throw cause;
+      const message = cleanupFailureMessage(cause);
+      setCleanupError(message);
+      throw new Error(message);
+    }
+  }, [persistReferences, requestProvisioningCleanup]);
 
   const removeTask = useCallback((jobId: string) => {
     persistReferences(referencesRef.current.filter((item) => item.jobId !== jobId));
@@ -523,7 +593,7 @@ export function useSkillWorkbenchTasks(enabled: boolean, identityKey: string) {
   return {
     tasks,
     tasksLoading,
-    tasksError,
+    tasksError: cleanupError || tasksError,
     activeJobId,
     activeTask,
     activeProvisioningTask: tasks.find(
