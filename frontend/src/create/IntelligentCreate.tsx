@@ -471,7 +471,11 @@ export function IntelligentCreate({
               onDeploy={handleDeploy}
               onAgentAdded={onAgentAdded}
               onDeploymentTaskChange={onDeploymentTaskChange}
-              deploymentTelemetrySource="intelligent_create"
+              deploymentTelemetry={{
+                source: "scratch",
+                createMode: "intelligent",
+                aiAssisted: true,
+              }}
             />
           ) : (
             <div className="ic-preview-empty">

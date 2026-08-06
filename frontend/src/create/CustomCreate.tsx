@@ -114,6 +114,11 @@ import {
   generateAgentProject,
   runGeneratedAgentTestSSE,
 } from "../adk/client";
+import {
+  trackAgentDebugFailed,
+  trackAgentDebugSucceeded,
+  type AgentDebugFailedPhase,
+} from "../adk/telemetryEvents";
 import type {
   DeployStage,
   GeneratedAgentTestRun,
@@ -2473,6 +2478,8 @@ interface CustomCreateProps extends CreateModeProps {
   features?: UiFeatures;
   /** Publish deploy progress into the persistent app header. */
   onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;
+  /** Specific creation path inside the scratch flow. */
+  createMode?: "custom" | "yaml_import";
   /** Existing Runtime target when editing an Agent from the library. */
   deploymentTarget?: {
     runtimeId: string;
@@ -2500,6 +2507,7 @@ export function CustomCreate({
   initialDraft,
   features,
   onDeploymentTaskChange,
+  createMode = "custom",
   deploymentTarget,
   initialDeployRegion = "cn-beijing",
   onDeploymentComplete,
@@ -2516,6 +2524,7 @@ export function CustomCreate({
   const [aiRequirement, setAiRequirement] = useState("");
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiGenerated, setAiGenerated] = useState(false);
+  const [usedAiGeneration, setUsedAiGeneration] = useState(false);
   const [aiErrorDialog, setAiErrorDialog] = useState<string | null>(null);
   const trimmedAiRequirement = aiRequirement.trim();
   const aiRequirementError =
@@ -2757,6 +2766,7 @@ export function CustomCreate({
       setShowErrors(false);
       setBuildErr("");
       setAiGenerated(true);
+      setUsedAiGeneration(true);
     } catch (error) {
       setAiErrorDialog(
         error instanceof Error ? error.message : String(error),
@@ -3040,6 +3050,9 @@ export function CustomCreate({
     setDebugInput("");
 
     let createdRun: GeneratedAgentTestRun | null = null;
+    let failedPhase: AgentDebugFailedPhase | undefined;
+    const debugStartedAt = Date.now();
+    const variantType = id === "baseline" ? "baseline" : "comparison";
     try {
       await cleanupDebugVariantRun(id);
       await cleanupStoredDebugRuns();
@@ -3049,6 +3062,7 @@ export function CustomCreate({
         description: variant.description,
         instruction: variant.instruction,
       };
+      failedPhase = "create_test_run";
       createdRun = await createGeneratedAgentTestRun(
         debugRuntimeDraft(variantDraft),
         deploymentTarget
@@ -3059,6 +3073,7 @@ export function CustomCreate({
           : undefined,
       );
       rememberDebugTestRun(createdRun.runId);
+      failedPhase = "create_test_session";
       const sessionId = await createGeneratedAgentTestSession(
         createdRun.runId,
         "test_user",
@@ -3072,6 +3087,10 @@ export function CustomCreate({
             : item,
         ),
       );
+      trackAgentDebugSucceeded({
+        durationMs: Date.now() - debugStartedAt,
+        variantType,
+      });
     } catch (err) {
       if (createdRun) {
         try {
@@ -3093,6 +3112,12 @@ export function CustomCreate({
             : item,
         ),
       );
+      trackAgentDebugFailed({
+        durationMs: Date.now() - debugStartedAt,
+        variantType,
+        phase: failedPhase,
+        error: err,
+      });
     }
   };
 
@@ -4104,7 +4129,11 @@ export function CustomCreate({
               }
               deployRegion={deployRegion}
               onDeployRegionChange={setDeployRegion}
-              deploymentTelemetrySource="custom_create"
+              deploymentTelemetry={{
+                source: "scratch",
+                createMode,
+                aiAssisted: usedAiGeneration,
+              }}
               onExportYaml={() =>
                 downloadText(
                   `${draft.name || "agent"}.yaml`,

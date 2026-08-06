@@ -219,6 +219,7 @@ async function probeNewChatCapabilities(
 type CreateMode = QuickCreateKind | "package";
 
 type CreateView = "menu" | CreateMode | null;
+type CustomCreateMode = "custom" | "yaml_import";
 
 // Persist the last view so a page refresh restores where the user was.
 const LS = { app: "veadk.appName", view: "veadk.view", session: "veadk.sessionId" } as const;
@@ -307,9 +308,15 @@ import {
   initStudioTelemetry,
 } from "./adk/telemetry";
 import {
+  trackAgentConnectFailed,
+  trackAgentConnectSucceeded,
+  trackAgentMessageFailed,
+  trackAgentMessageSucceeded,
   trackSandboxCreateFailed,
   trackSandboxCreateSucceeded,
   trackStudioLoaded,
+  type AgentConnectSource,
+  type AgentMessageSource,
 } from "./adk/telemetryEvents";
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
 import { buildSurfaces } from "./a2ui/Surface";
@@ -1138,6 +1145,8 @@ export default function App() {
   const [addMenu, setAddMenu] = useState(false);
   // A draft imported from YAML, used to pre-fill the custom wizard once.
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
+  const [customCreateMode, setCustomCreateMode] =
+    useState<CustomCreateMode>("custom");
   const [savedAgentDrafts, setSavedAgentDrafts] = useState<WorkspaceAgentDraft[]>([]);
   const savedAgentDraftsRef = useRef<WorkspaceAgentDraft[]>([]);
   const pendingWorkspaceDraftRef = useRef<WorkspaceAgentDraft | null>(null);
@@ -2349,32 +2358,59 @@ export default function App() {
     }
   }
 
-  async function openSandboxAgent(session: SandboxSessionInfo) {
+  async function openSandboxAgent(
+    session: SandboxSessionInfo,
+    source: AgentConnectSource = "my_agents",
+  ) {
     setError("");
-    if (session.toolName === "codex") {
-      const connected = await sandboxClient.connectSession(session.id);
-      viewSidRef.current = "";
-      setSessionId("");
-      setPendingTurns([]);
-      setInput("");
-      setInvocation(emptyInvocation());
-      releaseAllSandboxPreviews();
-      setSandboxTurns([]);
-      setSandboxSession(connected);
+    const startedAt = Date.now();
+    try {
+      if (session.toolName === "codex") {
+        const connected = await sandboxClient.connectSession(session.id);
+        trackAgentConnectSucceeded({
+          kind: session.toolName,
+          source,
+          durationMs: Date.now() - startedAt,
+          sandboxStatus: connected.status,
+        });
+        viewSidRef.current = "";
+        setSessionId("");
+        setPendingTurns([]);
+        setInput("");
+        setInvocation(emptyInvocation());
+        releaseAllSandboxPreviews();
+        setSandboxTurns([]);
+        setSandboxSession(connected);
+        setSandboxAgentDetailTarget(null);
+        setSandboxAgentWorkspace(null);
+        setMyAgents(false);
+        setManageAgents(false);
+        return;
+      }
+      const workspace = await sandboxClient.openAgentSession(
+        session.toolName,
+        session.id,
+      );
+      trackAgentConnectSucceeded({
+        kind: session.toolName,
+        source,
+        durationMs: Date.now() - startedAt,
+        sandboxStatus: workspace.session.status,
+      });
+      setSandboxAgentWorkspace(workspace);
       setSandboxAgentDetailTarget(null);
-      setSandboxAgentWorkspace(null);
       setMyAgents(false);
       setManageAgents(false);
-      return;
+    } catch (cause) {
+      trackAgentConnectFailed({
+        kind: session.toolName,
+        source,
+        durationMs: Date.now() - startedAt,
+        error: cause,
+      });
+      setError(cause instanceof Error ? cause.message : String(cause));
+      throw cause;
     }
-    const workspace = await sandboxClient.openAgentSession(
-      session.toolName,
-      session.id,
-    );
-    setSandboxAgentWorkspace(workspace);
-    setSandboxAgentDetailTarget(null);
-    setMyAgents(false);
-    setManageAgents(false);
   }
 
   function openSandboxAgentDetails(session: SandboxSessionInfo) {
@@ -2696,6 +2732,7 @@ export default function App() {
     setError("");
     setSandboxApproval(null);
     setSandboxApprovalError("");
+    const messageStartedAt = Date.now();
     const controller = new AbortController();
     sandboxMessageAbortRef.current?.abort();
     sandboxMessageAbortRef.current = controller;
@@ -2817,6 +2854,12 @@ export default function App() {
         },
       );
       if (sandboxMessageAbortRef.current !== controller) return;
+      trackAgentMessageSucceeded({
+        kind: activeSession.toolName,
+        source: "composer",
+        sessionState: "existing",
+        durationMs: Date.now() - messageStartedAt,
+      });
       setSandboxTurns((current) => {
         const next = current.slice();
         const assistantIndex = next.findIndex(
@@ -2845,6 +2888,14 @@ export default function App() {
       if (sandboxMessageAbortRef.current !== controller) {
         return;
       }
+      trackAgentMessageFailed({
+        kind: activeSession.toolName,
+        source: "composer",
+        sessionState: "existing",
+        durationMs: Date.now() - messageStartedAt,
+        phase: "sandbox_send",
+        error: messageError,
+      });
       setSandboxTurns((current) =>
         current.filter(
           (turn) =>
@@ -3232,6 +3283,7 @@ export default function App() {
     text: string,
     atts: Attachment[] = [],
     selectedInvocation: FrontendInvocation = emptyInvocation(),
+    messageSource: AgentMessageSource = "composer",
   ) {
     // `busy` here = the CURRENT session is already streaming (can't double-send
     // to it). Other sessions can stream concurrently.
@@ -3243,6 +3295,10 @@ export default function App() {
       !userId
     ) return;
     setError("");
+    const messageStartedAt = Date.now();
+    const createsSession = !sessionId;
+    const sessionState = createsSession ? "new" : "existing";
+    const trackRuntimeMessage = Boolean(currentRuntime);
 
     const userBlocks: Turn["blocks"] = [];
     if (selectedInvocation.skills.length > 0 || selectedInvocation.targetAgent) {
@@ -3265,7 +3321,6 @@ export default function App() {
       { role: "user", blocks: userBlocks, meta: { ts: Date.now() / 1000 } },
       { role: "assistant", blocks: [] },
     ];
-    const createsSession = !sessionId;
     if (createsSession) {
       setPendingTurns(optimisticTurns);
       setInitializingSession(true);
@@ -3281,6 +3336,16 @@ export default function App() {
         setInitializingSession(false);
         setInput(text);
         setInvocation(selectedInvocation);
+      }
+      if (trackRuntimeMessage) {
+        trackAgentMessageFailed({
+          kind: "runtime",
+          source: messageSource,
+          sessionState,
+          durationMs: Date.now() - messageStartedAt,
+          phase: "create_session",
+          error: e,
+        });
       }
       setError(String(e));
       return;
@@ -3317,6 +3382,16 @@ export default function App() {
           setInput(text);
           setInvocation(selectedInvocation);
         }
+        if (trackRuntimeMessage) {
+          trackAgentMessageFailed({
+            kind: "runtime",
+            source: messageSource,
+            sessionState,
+            durationMs: Date.now() - messageStartedAt,
+            phase: "mount_task_capabilities",
+            error: e,
+          });
+        }
         setError(`任务能力挂载失败：${String(e)}`);
         return;
       }
@@ -3351,6 +3426,7 @@ export default function App() {
       let eventId = "";
       let invocationId = "";
       let streamFailed = false;
+      let streamError: unknown = null;
       for await (const event of runSSE({
         appName,
         userId,
@@ -3365,6 +3441,7 @@ export default function App() {
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
         if (typeof errMsg === "string" && errMsg) {
           streamFailed = true;
+          streamError = errMsg;
           if (viewSidRef.current === sid) setError(errMsg);
           break;
         }
@@ -3407,6 +3484,25 @@ export default function App() {
         });
       }
       void refreshSessions(appName);
+      if (!ctrl.signal.aborted && trackRuntimeMessage) {
+        if (streamFailed) {
+          trackAgentMessageFailed({
+            kind: "runtime",
+            source: messageSource,
+            sessionState,
+            durationMs: Date.now() - messageStartedAt,
+            phase: "run_sse",
+            error: streamError ?? "run_sse failed",
+          });
+        } else {
+          trackAgentMessageSucceeded({
+            kind: "runtime",
+            source: messageSource,
+            sessionState,
+            durationMs: Date.now() - messageStartedAt,
+          });
+        }
+      }
       if (!ctrl.signal.aborted && !streamFailed && eventId) {
         automaticEvaluationStatusRefreshRef.current();
       }
@@ -3418,6 +3514,16 @@ export default function App() {
         !ctrl.signal.aborted &&
         viewSidRef.current === sid
       ) {
+        if (trackRuntimeMessage) {
+          trackAgentMessageFailed({
+            kind: "runtime",
+            source: messageSource,
+            sessionState,
+            durationMs: Date.now() - messageStartedAt,
+            phase: "run_sse",
+            error: e,
+          });
+        }
         setError(String(e));
       }
     } finally {
@@ -3432,7 +3538,12 @@ export default function App() {
   function onAction(action: A2uiAction | undefined, node: A2uiComponent) {
     const name = action?.event?.name ?? node.id;
     const context = action?.event?.context ?? {};
-    send(`[ui-action] ${name}: ${JSON.stringify(context)}`);
+    void send(
+      `[ui-action] ${name}: ${JSON.stringify(context)}`,
+      [],
+      emptyInvocation(),
+      "a2ui_action",
+    );
   }
 
   /** Complete an MCP/tool OAuth request: open the authorize URL, capture the
@@ -3880,8 +3991,12 @@ export default function App() {
     setError("");
   };
 
-  const connectMyAgent = async (agent: MyAgentCardData, rethrow = false) => {
-    if (!agent.runtime) return;
+  const connectRuntimeForUser = async (
+    agent: MyAgentCardData,
+    source: AgentConnectSource,
+  ): Promise<string> => {
+    if (!agent.runtime) throw new Error("缺少 Runtime 信息，无法连接智能体。");
+    const startedAt = Date.now();
     try {
       const agentId = await connectRuntime(
         agent.runtime.runtimeId,
@@ -3889,11 +4004,40 @@ export default function App() {
         agent.runtime.region,
         agent.runtime.currentVersion,
       );
+      trackAgentConnectSucceeded({
+        kind: "runtime",
+        source,
+        durationMs: Date.now() - startedAt,
+        runtimeRegion: agent.runtime.region,
+        runtimeIsMine: agent.isMine,
+      });
+      return agentId;
+    } catch (error) {
+      trackAgentConnectFailed({
+        kind: "runtime",
+        source,
+        durationMs: Date.now() - startedAt,
+        error,
+      });
+      throw error;
+    }
+  };
+
+  const connectMyAgent = async (
+    agent: MyAgentCardData,
+    options: { rethrow?: boolean; source?: AgentConnectSource } = {},
+  ) => {
+    if (!agent.runtime) return;
+    try {
+      const agentId = await connectRuntimeForUser(
+        agent,
+        options.source ?? "my_agents",
+      );
       await refreshCurrentAgentAndStartNewChat(agentId);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       setError(message);
-      if (rethrow) throw new Error(message);
+      if (options.rethrow) throw new Error(message);
     }
   };
 
@@ -3961,6 +4105,7 @@ export default function App() {
     setFeedbackCaseReturnAgentId("");
     setFeedbackTargetEventId("");
     if (agent.runtimeId && agent.id.startsWith("detail:")) {
+      const startedAt = Date.now();
       try {
         const agentId = await connectRuntime(
           agent.runtimeId,
@@ -3968,8 +4113,20 @@ export default function App() {
           agent.region ?? "cn-beijing",
           agent.currentVersion,
         );
+        trackAgentConnectSucceeded({
+          kind: "runtime",
+          source: "agent_workspace",
+          durationMs: Date.now() - startedAt,
+          runtimeRegion: agent.region,
+        });
         await refreshCurrentAgentAndStartNewChat(agentId);
       } catch (cause) {
+        trackAgentConnectFailed({
+          kind: "runtime",
+          source: "agent_workspace",
+          durationMs: Date.now() - startedAt,
+          error: cause,
+        });
         setError(cause instanceof Error ? cause.message : String(cause));
       }
       return;
@@ -4298,24 +4455,29 @@ export default function App() {
               selectedRuntimeId={currentRuntime?.runtimeId}
               runtimeScope={access.capabilities.runtimeScope}
               onSelectRuntime={async (runtime) => {
-                await connectMyAgent({
-                  id: runtime.runtimeId,
-                  name: runtime.name,
-                  description: runtime.description?.trim() || "暂无描述",
-                  createdAt: runtime.createdAt ?? "",
-                  specificationLabel: "地域",
-                  specification:
-                    runtime.region === "cn-shanghai" ? "上海" : "北京",
-                  isMine: runtime.isMine,
-                  runtime: {
-                    runtimeId: runtime.runtimeId,
-                    region: runtime.region,
-                    currentVersion: runtime.currentVersion,
-                    canDelete: runtime.canDelete,
+                await connectMyAgent(
+                  {
+                    id: runtime.runtimeId,
+                    name: runtime.name,
+                    description: runtime.description?.trim() || "暂无描述",
+                    createdAt: runtime.createdAt ?? "",
+                    specificationLabel: "地域",
+                    specification:
+                      runtime.region === "cn-shanghai" ? "上海" : "北京",
+                    isMine: runtime.isMine,
+                    runtime: {
+                      runtimeId: runtime.runtimeId,
+                      region: runtime.region,
+                      currentVersion: runtime.currentVersion,
+                      canDelete: runtime.canDelete,
+                    },
                   },
-                }, true);
+                  { rethrow: true, source: "new_chat_picker" },
+                );
               }}
-              onSelectSandboxSession={openSandboxAgent}
+              onSelectSandboxSession={(session) =>
+                openSandboxAgent(session, "new_chat_picker")
+              }
               showModeSelector={false}
               temporaryEnabled={newChatCapabilitiesReady && newChatCapabilities.temporaryEnabled}
               skillCreateEnabled={newChatCapabilitiesReady && newChatCapabilities.skillCreateEnabled}
@@ -4415,7 +4577,9 @@ export default function App() {
               <SandboxAgentDetails
                 session={sandboxAgentDetailTarget}
                 onBack={openMyAgentsPage}
-                onOpen={() => openSandboxAgent(sandboxAgentDetailTarget)}
+                onOpen={() =>
+                  openSandboxAgent(sandboxAgentDetailTarget, "sandbox_detail")
+                }
                 onDelete={() => deleteSandboxAgent(sandboxAgentDetailTarget)}
               />
             ) : myAgents ? (
@@ -4423,10 +4587,14 @@ export default function App() {
                 canCreate={canCreateAgents}
                 runtimeScope={access.capabilities.runtimeScope}
                 onCreateAgent={openAgentCreateFromMyAgents}
-                onUseAgent={connectMyAgent}
+                onUseAgent={(agent) =>
+                  connectMyAgent(agent, { source: "my_agents" })
+                }
                 onViewAgentDetails={openMyAgentDetails}
                 onCreateSandboxAgent={openSandboxAgentCreate}
-                onUseSandboxAgent={openSandboxAgent}
+                onUseSandboxAgent={(session) =>
+                  openSandboxAgent(session, "my_agents")
+                }
                 onViewSandboxAgentDetails={openSandboxAgentDetails}
                 sandboxRefreshKey={sandboxAgentRefreshKey}
                 connectedRuntimeId={connectedRuntimeId}
@@ -4438,6 +4606,7 @@ export default function App() {
                 onEditDraft={(item) => {
                   setMyAgents(false);
                   setImportedDraft(item.draft);
+                  setCustomCreateMode("custom");
                   setEditingDraftId(item.id);
                   editingDraftBaselineRef.current = item;
                   setRuntimeUpdateTarget(item.deploymentTarget ?? null);
@@ -4531,6 +4700,7 @@ export default function App() {
                   };
                   setManageAgents(false);
                   setImportedDraft(hydratedDraft);
+                  setCustomCreateMode("custom");
                   const nextDraftId = `runtime-${capability.runtime.runtimeId}`;
                   setEditingDraftId(nextDraftId);
                   editingDraftBaselineRef.current =
@@ -4550,6 +4720,7 @@ export default function App() {
                 onEditDraft={(item) => {
                   setManageAgents(false);
                   setImportedDraft(item.draft);
+                  setCustomCreateMode("custom");
                   setEditingDraftId(item.id);
                   editingDraftBaselineRef.current = item;
                   setRuntimeUpdateTarget(item.deploymentTarget ?? null);
@@ -4648,6 +4819,7 @@ export default function App() {
                   setRuntimeUpdateTarget(null);
                   setFocusedDeploymentTaskId("");
                   setFocusedWorkspaceAgentId("");
+                  if (k === "custom") setCustomCreateMode("custom");
                   setEditingDraftId(
                     k === "custom" ? `draft-${Date.now().toString(36)}` : "",
                   );
@@ -4656,6 +4828,7 @@ export default function App() {
                 }}
                 onImport={(d) => {
                   setImportedDraft(d);
+                  setCustomCreateMode("yaml_import");
                   setRuntimeUpdateTarget(null);
                   setFocusedDeploymentTaskId("");
                   setFocusedWorkspaceAgentId("");
@@ -4681,6 +4854,7 @@ export default function App() {
                 onAgentAdded={onAgentAdded}
                 features={features}
                 onDeploymentTaskChange={updateDeploymentTask}
+                createMode={customCreateMode}
                 deploymentTarget={runtimeUpdateTarget ?? undefined}
                 initialDeployRegion={newRuntimeRegion}
                 onDraftChange={(draft, dirty) => {

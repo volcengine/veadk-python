@@ -78,7 +78,9 @@ import {
 import {
   trackAgentDeployFailed,
   trackAgentDeploySucceeded,
-  type DeploymentTelemetrySource,
+  trackAgentSourceDownloadFailed,
+  trackAgentSourceDownloadSucceeded,
+  type DeploymentTelemetryOrigin,
 } from "../adk/telemetryEvents";
 import feishuLogo from "../assets/feishu-logo.svg";
 import { buildZip } from "./zip";
@@ -703,8 +705,8 @@ export interface ProjectPreviewProps {
   deployRegion?: string;
   /** Called when the user changes the deploy region. */
   onDeployRegionChange?: (region: string) => void;
-  /** Creation entry used to group Studio deployment telemetry. */
-  deploymentTelemetrySource?: DeploymentTelemetrySource;
+  /** Creation entry and method used to group Studio deployment telemetry. */
+  deploymentTelemetry?: DeploymentTelemetryOrigin;
   /** Deploy-page toolbar actions. */
   onBack?: () => void;
   backLabel?: string;
@@ -830,7 +832,11 @@ export function ProjectPreview({
   onNetworkChange,
   deployRegion = "cn-beijing",
   onDeployRegionChange,
-  deploymentTelemetrySource = "unknown",
+  deploymentTelemetry = {
+    source: "unknown",
+    createMode: "unknown",
+    aiAssisted: false,
+  },
   onBack,
   backLabel = "返回配置",
   onExportYaml,
@@ -1000,7 +1006,7 @@ export function ProjectPreview({
     project.files.find((f) => f.path === selected) ?? null;
   const networkMode = network?.mode ?? "public";
   const deploymentTelemetryBase = () => ({
-    source: deploymentTelemetrySource,
+    telemetry: deploymentTelemetry,
     action: deploymentRuntimeId ? "update" as const : "create" as const,
     region: deployRegion,
     networkType: networkMode,
@@ -1481,15 +1487,35 @@ export function ProjectPreview({
   }
 
   function handleDownloadZip() {
-    const blob = buildZip(project.files);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${project.name || "project"}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const startedAt = Date.now();
+    const action = deploymentRuntimeId ? "update" as const : "create" as const;
+    try {
+      const blob = buildZip(project.files);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${project.name || "project"}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      trackAgentSourceDownloadSucceeded({
+        telemetry: deploymentTelemetry,
+        action,
+        fileCount: project.files.length,
+        zipSizeBytes: blob.size,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      trackAgentSourceDownloadFailed({
+        telemetry: deploymentTelemetry,
+        action,
+        fileCount: project.files.length,
+        durationMs: Date.now() - startedAt,
+        error,
+      });
+      throw error;
+    }
   }
 
   const artifactActions = (

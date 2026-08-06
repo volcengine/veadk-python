@@ -28,6 +28,10 @@ const projectPreviewSource = readFileSync(
   new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
   "utf8",
 );
+const agentSelectorSource = readFileSync(
+  new URL("../src/ui/AgentSelector.tsx", import.meta.url),
+  "utf8",
+);
 const customCreateSource = readFileSync(
   new URL("../src/create/CustomCreate.tsx", import.meta.url),
   "utf8",
@@ -38,6 +42,10 @@ const intelligentCreateSource = readFileSync(
 );
 const codePackageCreateSource = readFileSync(
   new URL("../src/create/CodePackageCreate.tsx", import.meta.url),
+  "utf8",
+);
+const feishuIntegrationSource = readFileSync(
+  new URL("../src/automations/feishu/FeishuBotIntegration.tsx", import.meta.url),
   "utf8",
 );
 
@@ -72,7 +80,7 @@ test("initializes APMPlus lazily and sends Studio custom events", () => {
   assert.match(telemetrySource, /ev_type: "custom"/);
 });
 
-test("tracks Studio load, authenticated users, Agent deploy results, and Sandbox creation results", () => {
+test("tracks Studio load, authenticated users, Agent deploy, Sandbox creation, Agent debug, Agent connect, Agent message, and source download results", () => {
   assert.match(appSource, /initStudioTelemetry\(cfg\.telemetry\)/);
   assert.match(appSource, /trackStudioLoaded/);
   assert.match(telemetryEventsSource, /"studio_instance_loaded"/);
@@ -80,25 +88,37 @@ test("tracks Studio load, authenticated users, Agent deploy results, and Sandbox
   assert.match(appSource, /userId: access\.telemetry\.userId/);
   assert.doesNotMatch(telemetrySource, /function identityName/);
   assert.match(telemetrySource, /name !== "studio_instance_loaded"/);
-  assert.match(telemetrySource, /"studio_agent_deploy_succeeded"/);
-  assert.match(telemetrySource, /"studio_agent_deploy_failed"/);
-  assert.match(telemetrySource, /"studio_sandbox_create_succeeded"/);
-  assert.match(telemetrySource, /"studio_sandbox_create_failed"/);
+  assert.match(telemetrySource, /"studio_agent_deploy"/);
+  assert.match(telemetrySource, /"studio_sandbox_create"/);
+  assert.match(telemetrySource, /"studio_agent_debug"/);
+  assert.match(telemetrySource, /"studio_agent_connect"/);
+  assert.match(telemetrySource, /"studio_agent_message"/);
+  assert.match(telemetrySource, /"studio_agent_source_download"/);
+  assert.doesNotMatch(telemetrySource, /"studio_agent_deploy_succeeded"/);
+  assert.doesNotMatch(telemetrySource, /"studio_agent_deploy_failed"/);
+  assert.doesNotMatch(telemetrySource, /"studio_sandbox_create_succeeded"/);
+  assert.doesNotMatch(telemetrySource, /"studio_sandbox_create_failed"/);
   assert.match(telemetrySource, /user_id: userId/);
   assert.doesNotMatch(clientSource, /deployerId/);
   assert.doesNotMatch(telemetrySource, /deployer_id/);
-  assert.match(telemetryEventsSource, /trackStudioEvent\("studio_agent_deploy_succeeded"/);
-  assert.match(telemetryEventsSource, /trackStudioEvent\("studio_agent_deploy_failed"/);
+  assert.match(telemetryEventsSource, /trackStudioEvent\("studio_agent_deploy"/);
+  assert.match(telemetryEventsSource, /deploy_status: "succeeded"/);
+  assert.match(telemetryEventsSource, /deploy_status: "failed"/);
+  assert.match(telemetryEventsSource, /deploy_source: args\.telemetry\.source/);
+  assert.match(telemetryEventsSource, /create_mode: args\.telemetry\.createMode/);
+  assert.match(telemetryEventsSource, /ai_assisted: args\.telemetry\.aiAssisted/);
   assert.match(telemetryEventsSource, /runtime_id: args\.runtimeId/);
   assert.match(telemetryEventsSource, /failed_phase: args\.phase/);
   assert.match(telemetryEventsSource, /error_kind: agentDeployErrorKind\(args\.error, args\.phase\)/);
+  assert.match(telemetryEventsSource, /error_summary: telemetryErrorSummary\(args\.error\)/);
   assert.match(projectPreviewSource, /trackAgentDeploySucceeded/);
   assert.match(projectPreviewSource, /trackAgentDeployFailed/);
   assert.doesNotMatch(projectPreviewSource, /trackStudioEvent/);
   assert.doesNotMatch(projectPreviewSource, /function deploymentErrorKind/);
   assert.doesNotMatch(projectPreviewSource, /studio_agent_deploy_started/);
-  assert.match(telemetryEventsSource, /trackStudioEvent\("studio_sandbox_create_succeeded"/);
-  assert.match(telemetryEventsSource, /trackStudioEvent\("studio_sandbox_create_failed"/);
+  assert.match(telemetryEventsSource, /trackStudioEvent\("studio_sandbox_create"/);
+  assert.match(telemetryEventsSource, /sandbox_status: "succeeded"/);
+  assert.match(telemetryEventsSource, /sandbox_status: "failed"/);
   assert.match(telemetryEventsSource, /sandbox_kind: args\.kind/);
   assert.match(telemetryEventsSource, /sandbox_source: args\.source/);
   assert.match(telemetryEventsSource, /sandbox_session_id: args\.sessionId/);
@@ -109,18 +129,80 @@ test("tracks Studio load, authenticated users, Agent deploy results, and Sandbox
   assert.doesNotMatch(appSource, /function sandboxTelemetryErrorKind/);
   assert.doesNotMatch(appSource, /studio_sandbox_create_started/);
   assert.doesNotMatch(telemetrySource, /studio_sandbox_create_started/);
+  assert.match(telemetryEventsSource, /trackStudioEvent\(\s*"studio_agent_debug"/);
+  assert.match(telemetryEventsSource, /debug_status: "succeeded"/);
+  assert.match(telemetryEventsSource, /debug_status: "failed"/);
+  assert.match(telemetryEventsSource, /variant_type: args\.variantType/);
+  assert.match(telemetryEventsSource, /failed_phase: args\.phase/);
+  assert.match(telemetryEventsSource, /error_kind: agentDebugErrorKind\(args\.error\)/);
+  assert.match(telemetryEventsSource, /duration_ms: args\.durationMs/);
+  assert.match(customCreateSource, /trackAgentDebugSucceeded/);
+  assert.match(customCreateSource, /trackAgentDebugFailed/);
+  assert.match(telemetryEventsSource, /trackStudioEvent\(\s*"studio_agent_connect"/);
+  assert.match(telemetryEventsSource, /connect_status: "succeeded"/);
+  assert.match(telemetryEventsSource, /connect_status: "failed"/);
+  assert.match(telemetryEventsSource, /agent_kind: args\.kind/);
+  assert.match(telemetryEventsSource, /connect_source: args\.source/);
+  assert.match(telemetryEventsSource, /runtime_region: args\.runtimeRegion/);
+  assert.match(telemetryEventsSource, /runtime_is_mine: args\.runtimeIsMine/);
+  assert.match(telemetryEventsSource, /sandbox_status: args\.sandboxStatus/);
+  assert.match(telemetryEventsSource, /error_kind: agentConnectErrorKind\(args\.error\)/);
+  assert.match(telemetryEventsSource, /duration_ms: args\.durationMs/);
+  assert.match(appSource, /trackAgentConnectSucceeded/);
+  assert.match(appSource, /trackAgentConnectFailed/);
+  assert.match(agentSelectorSource, /trackAgentConnectSucceeded/);
+  assert.match(agentSelectorSource, /trackAgentConnectFailed/);
+  assert.match(telemetryEventsSource, /trackStudioEvent\(\s*"studio_agent_message"/);
+  assert.match(telemetryEventsSource, /message_status: "succeeded"/);
+  assert.match(telemetryEventsSource, /message_status: "failed"/);
+  assert.match(telemetryEventsSource, /agent_kind: args\.kind/);
+  assert.match(telemetryEventsSource, /message_source: args\.source/);
+  assert.match(telemetryEventsSource, /session_state: args\.sessionState/);
+  assert.match(telemetryEventsSource, /failed_phase: args\.phase/);
+  assert.match(telemetryEventsSource, /error_kind: agentMessageErrorKind\(args\.error\)/);
+  assert.match(telemetryEventsSource, /duration_ms: args\.durationMs/);
+  assert.match(appSource, /trackAgentMessageSucceeded/);
+  assert.match(appSource, /trackAgentMessageFailed/);
+  assert.match(appSource, /phase: "create_session"/);
+  assert.match(appSource, /phase: "mount_task_capabilities"/);
+  assert.match(appSource, /phase: "run_sse"/);
+  assert.match(appSource, /phase: "sandbox_send"/);
+  assert.match(appSource, /"a2ui_action"/);
+  assert.match(telemetryEventsSource, /trackStudioEvent\(\s*"studio_agent_source_download"/);
+  assert.match(telemetryEventsSource, /download_status: "succeeded"/);
+  assert.match(telemetryEventsSource, /download_status: "failed"/);
+  assert.match(telemetryEventsSource, /zip_size_bytes: args\.zipSizeBytes/);
+  assert.match(telemetryEventsSource, /file_count: args\.fileCount/);
+  assert.match(telemetryEventsSource, /error_kind: agentSourceDownloadErrorKind\(args\.error\)/);
+  assert.match(projectPreviewSource, /trackAgentSourceDownloadSucceeded/);
+  assert.match(projectPreviewSource, /trackAgentSourceDownloadFailed/);
+  assert.match(projectPreviewSource, /zipSizeBytes: blob\.size/);
 });
 
 test("keeps telemetry event schema and error classification outside UI components", () => {
   assert.match(telemetryEventsSource, /export type DeploymentTelemetrySource/);
+  assert.match(telemetryEventsSource, /export type DeploymentCreateMode/);
+  assert.match(telemetryEventsSource, /export interface DeploymentTelemetryOrigin/);
   assert.match(telemetryEventsSource, /agentsSource: "local" \| "cloud"/);
   assert.match(telemetryEventsSource, /export type SandboxTelemetryKind = "codex" \| SandboxAgentKind/);
+  assert.match(telemetryEventsSource, /export type AgentConnectKind/);
+  assert.match(telemetryEventsSource, /export type AgentConnectSource/);
+  assert.match(telemetryEventsSource, /export type AgentMessageKind/);
+  assert.match(telemetryEventsSource, /export type AgentMessageSource/);
+  assert.match(telemetryEventsSource, /export type AgentMessageFailedPhase/);
+  assert.match(telemetryEventsSource, /export interface AgentSourceDownloadTelemetryBase/);
   assert.match(telemetryEventsSource, /function agentDeployCategories/);
+  assert.match(telemetryEventsSource, /function deploymentOriginCategories/);
   assert.match(telemetryClassifiersSource, /export function agentDeployErrorKind/);
+  assert.match(telemetryClassifiersSource, /export function agentDebugErrorKind/);
+  assert.match(telemetryClassifiersSource, /export function agentConnectErrorKind/);
+  assert.match(telemetryClassifiersSource, /export function agentMessageErrorKind/);
+  assert.match(telemetryClassifiersSource, /export function agentSourceDownloadErrorKind/);
   assert.match(telemetryClassifiersSource, /export function sandboxCreateErrorKind/);
+  assert.match(telemetryClassifiersSource, /export function telemetryErrorSummary/);
   assert.match(telemetryClassifiersSource, /name === "RuntimeProbeError"/);
   assert.doesNotMatch(telemetryClassifiersSource, /from "\.\/client"/);
-  assert.doesNotMatch(projectPreviewSource, /export type DeploymentTelemetrySource/);
+  assert.doesNotMatch(projectPreviewSource, /export type DeploymentTelemetryOrigin/);
   assert.doesNotMatch(projectPreviewSource, /deploy_source:/);
   assert.doesNotMatch(projectPreviewSource, /runtime_network_type:/);
   assert.doesNotMatch(appSource, /sandbox_kind:/);
@@ -141,8 +223,22 @@ test("keeps raw Studio event reporting behind telemetry event wrappers", () => {
   assert.deepEqual(offenders, []);
 });
 
-test("tags deploy telemetry with the creation workflow source", () => {
-  assert.match(customCreateSource, /deploymentTelemetrySource="custom_create"/);
-  assert.match(intelligentCreateSource, /deploymentTelemetrySource="intelligent_create"/);
-  assert.match(codePackageCreateSource, /deploymentTelemetrySource="code_package"/);
+test("tags deploy telemetry with source, create mode, and AI assistance", () => {
+  assert.match(appSource, /setCustomCreateMode\("custom"\)/);
+  assert.match(appSource, /setCustomCreateMode\("yaml_import"\)/);
+  assert.match(appSource, /createMode=\{customCreateMode\}/);
+  assert.match(customCreateSource, /source: "scratch"/);
+  assert.match(customCreateSource, /createMode,/);
+  assert.match(customCreateSource, /aiAssisted: usedAiGeneration/);
+  assert.match(customCreateSource, /setUsedAiGeneration\(true\)/);
+  assert.match(intelligentCreateSource, /source: "scratch"/);
+  assert.match(intelligentCreateSource, /createMode: "intelligent"/);
+  assert.match(intelligentCreateSource, /aiAssisted: true/);
+  assert.match(codePackageCreateSource, /source: "code_package"/);
+  assert.match(codePackageCreateSource, /createMode: "code_package"/);
+  assert.match(codePackageCreateSource, /aiAssisted: false/);
+  assert.match(feishuIntegrationSource, /source: "feishu_automation"/);
+  assert.match(feishuIntegrationSource, /createMode: "feishu_template"/);
+  assert.match(feishuIntegrationSource, /trackAgentDeploySucceeded/);
+  assert.match(feishuIntegrationSource, /trackAgentDeployFailed/);
 });
