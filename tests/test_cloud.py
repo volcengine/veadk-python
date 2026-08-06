@@ -14,7 +14,7 @@
 
 import os
 import tempfile
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import httpx
 import pytest
@@ -147,16 +147,22 @@ def test_vefaas_code_upload_failure_logs_safe_diagnostics() -> None:
         ),
         patch("veadk.integrations.ve_faas.ve_faas.logger.error") as log_error,
     ):
-        with pytest.raises(ValueError, match="ConnectError.*uploads.example.com"):
+        with pytest.raises(ValueError) as error:
             service._upload_and_mount_code("function-id", ".")
 
-    logged = " ".join(
-        str(value) for call in log_error.call_args_list for value in call.args
+    assert str(error.value) == (
+        "Function code upload request failed (ConnectError, host=uploads.example.com)."
     )
-    assert "ConnectError" in logged
-    assert "uploads.example.com" in logged
-    assert "top-secret" not in logged
-    assert "signed URL must stay private" not in logged
+    assert log_error.call_args_list == [
+        call(
+            "Function code upload request failed function_id=%s size_bytes=%s "
+            "host=%s error_type=%s",
+            "function-id",
+            7,
+            "uploads.example.com",
+            "ConnectError",
+        )
+    ]
 
 
 def test_vefaas_code_upload_allows_slow_upload_and_uses_configured_region() -> None:
