@@ -308,9 +308,12 @@ import {
   initStudioTelemetry,
 } from "./adk/telemetry";
 import {
+  trackAgentConnectFailed,
+  trackAgentConnectSucceeded,
   trackSandboxCreateFailed,
   trackSandboxCreateSucceeded,
   trackStudioLoaded,
+  type AgentConnectSource,
 } from "./adk/telemetryEvents";
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
 import { buildSurfaces } from "./a2ui/Surface";
@@ -2352,32 +2355,59 @@ export default function App() {
     }
   }
 
-  async function openSandboxAgent(session: SandboxSessionInfo) {
+  async function openSandboxAgent(
+    session: SandboxSessionInfo,
+    source: AgentConnectSource = "my_agents",
+  ) {
     setError("");
-    if (session.toolName === "codex") {
-      const connected = await sandboxClient.connectSession(session.id);
-      viewSidRef.current = "";
-      setSessionId("");
-      setPendingTurns([]);
-      setInput("");
-      setInvocation(emptyInvocation());
-      releaseAllSandboxPreviews();
-      setSandboxTurns([]);
-      setSandboxSession(connected);
+    const startedAt = Date.now();
+    try {
+      if (session.toolName === "codex") {
+        const connected = await sandboxClient.connectSession(session.id);
+        trackAgentConnectSucceeded({
+          kind: session.toolName,
+          source,
+          durationMs: Date.now() - startedAt,
+          sandboxStatus: connected.status,
+        });
+        viewSidRef.current = "";
+        setSessionId("");
+        setPendingTurns([]);
+        setInput("");
+        setInvocation(emptyInvocation());
+        releaseAllSandboxPreviews();
+        setSandboxTurns([]);
+        setSandboxSession(connected);
+        setSandboxAgentDetailTarget(null);
+        setSandboxAgentWorkspace(null);
+        setMyAgents(false);
+        setManageAgents(false);
+        return;
+      }
+      const workspace = await sandboxClient.openAgentSession(
+        session.toolName,
+        session.id,
+      );
+      trackAgentConnectSucceeded({
+        kind: session.toolName,
+        source,
+        durationMs: Date.now() - startedAt,
+        sandboxStatus: workspace.session.status,
+      });
+      setSandboxAgentWorkspace(workspace);
       setSandboxAgentDetailTarget(null);
-      setSandboxAgentWorkspace(null);
       setMyAgents(false);
       setManageAgents(false);
-      return;
+    } catch (cause) {
+      trackAgentConnectFailed({
+        kind: session.toolName,
+        source,
+        durationMs: Date.now() - startedAt,
+        error: cause,
+      });
+      setError(cause instanceof Error ? cause.message : String(cause));
+      throw cause;
     }
-    const workspace = await sandboxClient.openAgentSession(
-      session.toolName,
-      session.id,
-    );
-    setSandboxAgentWorkspace(workspace);
-    setSandboxAgentDetailTarget(null);
-    setMyAgents(false);
-    setManageAgents(false);
   }
 
   function openSandboxAgentDetails(session: SandboxSessionInfo) {
@@ -3883,8 +3913,12 @@ export default function App() {
     setError("");
   };
 
-  const connectMyAgent = async (agent: MyAgentCardData, rethrow = false) => {
-    if (!agent.runtime) return;
+  const connectRuntimeForUser = async (
+    agent: MyAgentCardData,
+    source: AgentConnectSource,
+  ): Promise<string> => {
+    if (!agent.runtime) throw new Error("缺少 Runtime 信息，无法连接智能体。");
+    const startedAt = Date.now();
     try {
       const agentId = await connectRuntime(
         agent.runtime.runtimeId,
@@ -3892,11 +3926,40 @@ export default function App() {
         agent.runtime.region,
         agent.runtime.currentVersion,
       );
+      trackAgentConnectSucceeded({
+        kind: "runtime",
+        source,
+        durationMs: Date.now() - startedAt,
+        runtimeRegion: agent.runtime.region,
+        runtimeIsMine: agent.isMine,
+      });
+      return agentId;
+    } catch (error) {
+      trackAgentConnectFailed({
+        kind: "runtime",
+        source,
+        durationMs: Date.now() - startedAt,
+        error,
+      });
+      throw error;
+    }
+  };
+
+  const connectMyAgent = async (
+    agent: MyAgentCardData,
+    options: { rethrow?: boolean; source?: AgentConnectSource } = {},
+  ) => {
+    if (!agent.runtime) return;
+    try {
+      const agentId = await connectRuntimeForUser(
+        agent,
+        options.source ?? "my_agents",
+      );
       await refreshCurrentAgentAndStartNewChat(agentId);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       setError(message);
-      if (rethrow) throw new Error(message);
+      if (options.rethrow) throw new Error(message);
     }
   };
 
@@ -3964,6 +4027,7 @@ export default function App() {
     setFeedbackCaseReturnAgentId("");
     setFeedbackTargetEventId("");
     if (agent.runtimeId && agent.id.startsWith("detail:")) {
+      const startedAt = Date.now();
       try {
         const agentId = await connectRuntime(
           agent.runtimeId,
@@ -3971,8 +4035,20 @@ export default function App() {
           agent.region ?? "cn-beijing",
           agent.currentVersion,
         );
+        trackAgentConnectSucceeded({
+          kind: "runtime",
+          source: "agent_workspace",
+          durationMs: Date.now() - startedAt,
+          runtimeRegion: agent.region,
+        });
         await refreshCurrentAgentAndStartNewChat(agentId);
       } catch (cause) {
+        trackAgentConnectFailed({
+          kind: "runtime",
+          source: "agent_workspace",
+          durationMs: Date.now() - startedAt,
+          error: cause,
+        });
         setError(cause instanceof Error ? cause.message : String(cause));
       }
       return;
@@ -4301,24 +4377,29 @@ export default function App() {
               selectedRuntimeId={currentRuntime?.runtimeId}
               runtimeScope={access.capabilities.runtimeScope}
               onSelectRuntime={async (runtime) => {
-                await connectMyAgent({
-                  id: runtime.runtimeId,
-                  name: runtime.name,
-                  description: runtime.description?.trim() || "暂无描述",
-                  createdAt: runtime.createdAt ?? "",
-                  specificationLabel: "地域",
-                  specification:
-                    runtime.region === "cn-shanghai" ? "上海" : "北京",
-                  isMine: runtime.isMine,
-                  runtime: {
-                    runtimeId: runtime.runtimeId,
-                    region: runtime.region,
-                    currentVersion: runtime.currentVersion,
-                    canDelete: runtime.canDelete,
+                await connectMyAgent(
+                  {
+                    id: runtime.runtimeId,
+                    name: runtime.name,
+                    description: runtime.description?.trim() || "暂无描述",
+                    createdAt: runtime.createdAt ?? "",
+                    specificationLabel: "地域",
+                    specification:
+                      runtime.region === "cn-shanghai" ? "上海" : "北京",
+                    isMine: runtime.isMine,
+                    runtime: {
+                      runtimeId: runtime.runtimeId,
+                      region: runtime.region,
+                      currentVersion: runtime.currentVersion,
+                      canDelete: runtime.canDelete,
+                    },
                   },
-                }, true);
+                  { rethrow: true, source: "new_chat_picker" },
+                );
               }}
-              onSelectSandboxSession={openSandboxAgent}
+              onSelectSandboxSession={(session) =>
+                openSandboxAgent(session, "new_chat_picker")
+              }
               showModeSelector={false}
               temporaryEnabled={newChatCapabilitiesReady && newChatCapabilities.temporaryEnabled}
               skillCreateEnabled={newChatCapabilitiesReady && newChatCapabilities.skillCreateEnabled}
@@ -4418,7 +4499,9 @@ export default function App() {
               <SandboxAgentDetails
                 session={sandboxAgentDetailTarget}
                 onBack={openMyAgentsPage}
-                onOpen={() => openSandboxAgent(sandboxAgentDetailTarget)}
+                onOpen={() =>
+                  openSandboxAgent(sandboxAgentDetailTarget, "sandbox_detail")
+                }
                 onDelete={() => deleteSandboxAgent(sandboxAgentDetailTarget)}
               />
             ) : myAgents ? (
@@ -4426,10 +4509,14 @@ export default function App() {
                 canCreate={canCreateAgents}
                 runtimeScope={access.capabilities.runtimeScope}
                 onCreateAgent={openAgentCreateFromMyAgents}
-                onUseAgent={connectMyAgent}
+                onUseAgent={(agent) =>
+                  connectMyAgent(agent, { source: "my_agents" })
+                }
                 onViewAgentDetails={openMyAgentDetails}
                 onCreateSandboxAgent={openSandboxAgentCreate}
-                onUseSandboxAgent={openSandboxAgent}
+                onUseSandboxAgent={(session) =>
+                  openSandboxAgent(session, "my_agents")
+                }
                 onViewSandboxAgentDetails={openSandboxAgentDetails}
                 sandboxRefreshKey={sandboxAgentRefreshKey}
                 connectedRuntimeId={connectedRuntimeId}

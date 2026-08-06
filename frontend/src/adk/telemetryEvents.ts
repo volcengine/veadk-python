@@ -1,4 +1,5 @@
 import {
+  agentConnectErrorKind,
   agentDebugErrorKind,
   agentDeployErrorKind,
   sandboxCreateErrorKind,
@@ -75,6 +76,34 @@ export interface AgentDebugTelemetryBase {
 
 export interface AgentDebugFailedTelemetry extends AgentDebugTelemetryBase {
   phase?: AgentDebugFailedPhase;
+  error: unknown;
+}
+
+export type AgentConnectKind =
+  | "runtime"
+  | "local"
+  | SandboxTelemetryKind;
+
+export type AgentConnectSource =
+  | "new_chat_picker"
+  | "my_agents"
+  | "agent_workspace"
+  | "navbar_picker"
+  | "sandbox_detail";
+
+export interface AgentConnectTelemetryBase {
+  kind: AgentConnectKind;
+  source: AgentConnectSource;
+  durationMs: number;
+}
+
+export interface AgentConnectSucceededTelemetry extends AgentConnectTelemetryBase {
+  runtimeRegion?: string;
+  runtimeIsMine?: boolean;
+  sandboxStatus?: string;
+}
+
+export interface AgentConnectFailedTelemetry extends AgentConnectTelemetryBase {
   error: unknown;
 }
 
@@ -163,6 +192,41 @@ export function trackAgentDebugFailed(args: AgentDebugFailedTelemetry): void {
       variant_type: args.variantType,
       failed_phase: args.phase,
       error_kind: agentDebugErrorKind(args.error),
+      error_summary: telemetryErrorSummary(args.error),
+    },
+    {
+      duration_ms: args.durationMs,
+    },
+  );
+}
+
+export function trackAgentConnectSucceeded(
+  args: AgentConnectSucceededTelemetry,
+): void {
+  trackStudioEvent(
+    "studio_agent_connect",
+    {
+      connect_status: "succeeded",
+      agent_kind: args.kind,
+      connect_source: args.source,
+      runtime_region: args.runtimeRegion,
+      runtime_is_mine: args.runtimeIsMine,
+      sandbox_status: args.sandboxStatus,
+    },
+    {
+      duration_ms: args.durationMs,
+    },
+  );
+}
+
+export function trackAgentConnectFailed(args: AgentConnectFailedTelemetry): void {
+  trackStudioEvent(
+    "studio_agent_connect",
+    {
+      connect_status: "failed",
+      agent_kind: args.kind,
+      connect_source: args.source,
+      error_kind: agentConnectErrorKind(args.error),
       error_summary: telemetryErrorSummary(args.error),
     },
     {

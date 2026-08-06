@@ -63,8 +63,8 @@ test("renders a two-level Agent type and runtime menu", () => {
   assert.match(pickerSource, /sandboxClient\.listSessions/);
   assert.match(pickerSource, /sandboxClient\.listAgentSessions/);
   assert.match(pickerSource, /onSelectSandboxSession\(session\)/);
-  assert.match(appSource, /onSelectRuntime=\{async \(runtime\) => \{[\s\S]*?connectMyAgent/);
-  assert.match(appSource, /onSelectSandboxSession=\{openSandboxAgent\}/);
+  assert.match(appSource, /onSelectRuntime=\{async \(runtime\) => \{[\s\S]*?source: "new_chat_picker"/);
+  assert.match(appSource, /onSelectSandboxSession=\{\(session\) =>[\s\S]*?openSandboxAgent\(session, "new_chat_picker"\)/);
   assert.doesNotMatch(pickerSource, /暂未开放/);
   assert.match(pickerSource, /disabled/);
   assert.match(pickerStyles, /\.new-chat-agent-picker__submenu/);

@@ -28,6 +28,10 @@ const projectPreviewSource = readFileSync(
   new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
   "utf8",
 );
+const agentSelectorSource = readFileSync(
+  new URL("../src/ui/AgentSelector.tsx", import.meta.url),
+  "utf8",
+);
 const customCreateSource = readFileSync(
   new URL("../src/create/CustomCreate.tsx", import.meta.url),
   "utf8",
@@ -76,7 +80,7 @@ test("initializes APMPlus lazily and sends Studio custom events", () => {
   assert.match(telemetrySource, /ev_type: "custom"/);
 });
 
-test("tracks Studio load, authenticated users, Agent deploy, Sandbox creation, and Agent debug results", () => {
+test("tracks Studio load, authenticated users, Agent deploy, Sandbox creation, Agent debug, and Agent connect results", () => {
   assert.match(appSource, /initStudioTelemetry\(cfg\.telemetry\)/);
   assert.match(appSource, /trackStudioLoaded/);
   assert.match(telemetryEventsSource, /"studio_instance_loaded"/);
@@ -87,6 +91,7 @@ test("tracks Studio load, authenticated users, Agent deploy, Sandbox creation, a
   assert.match(telemetrySource, /"studio_agent_deploy"/);
   assert.match(telemetrySource, /"studio_sandbox_create"/);
   assert.match(telemetrySource, /"studio_agent_debug"/);
+  assert.match(telemetrySource, /"studio_agent_connect"/);
   assert.doesNotMatch(telemetrySource, /"studio_agent_deploy_succeeded"/);
   assert.doesNotMatch(telemetrySource, /"studio_agent_deploy_failed"/);
   assert.doesNotMatch(telemetrySource, /"studio_sandbox_create_succeeded"/);
@@ -131,6 +136,20 @@ test("tracks Studio load, authenticated users, Agent deploy, Sandbox creation, a
   assert.match(telemetryEventsSource, /duration_ms: args\.durationMs/);
   assert.match(customCreateSource, /trackAgentDebugSucceeded/);
   assert.match(customCreateSource, /trackAgentDebugFailed/);
+  assert.match(telemetryEventsSource, /trackStudioEvent\(\s*"studio_agent_connect"/);
+  assert.match(telemetryEventsSource, /connect_status: "succeeded"/);
+  assert.match(telemetryEventsSource, /connect_status: "failed"/);
+  assert.match(telemetryEventsSource, /agent_kind: args\.kind/);
+  assert.match(telemetryEventsSource, /connect_source: args\.source/);
+  assert.match(telemetryEventsSource, /runtime_region: args\.runtimeRegion/);
+  assert.match(telemetryEventsSource, /runtime_is_mine: args\.runtimeIsMine/);
+  assert.match(telemetryEventsSource, /sandbox_status: args\.sandboxStatus/);
+  assert.match(telemetryEventsSource, /error_kind: agentConnectErrorKind\(args\.error\)/);
+  assert.match(telemetryEventsSource, /duration_ms: args\.durationMs/);
+  assert.match(appSource, /trackAgentConnectSucceeded/);
+  assert.match(appSource, /trackAgentConnectFailed/);
+  assert.match(agentSelectorSource, /trackAgentConnectSucceeded/);
+  assert.match(agentSelectorSource, /trackAgentConnectFailed/);
 });
 
 test("keeps telemetry event schema and error classification outside UI components", () => {
@@ -139,9 +158,12 @@ test("keeps telemetry event schema and error classification outside UI component
   assert.match(telemetryEventsSource, /export interface DeploymentTelemetryOrigin/);
   assert.match(telemetryEventsSource, /agentsSource: "local" \| "cloud"/);
   assert.match(telemetryEventsSource, /export type SandboxTelemetryKind = "codex" \| SandboxAgentKind/);
+  assert.match(telemetryEventsSource, /export type AgentConnectKind/);
+  assert.match(telemetryEventsSource, /export type AgentConnectSource/);
   assert.match(telemetryEventsSource, /function agentDeployCategories/);
   assert.match(telemetryClassifiersSource, /export function agentDeployErrorKind/);
   assert.match(telemetryClassifiersSource, /export function agentDebugErrorKind/);
+  assert.match(telemetryClassifiersSource, /export function agentConnectErrorKind/);
   assert.match(telemetryClassifiersSource, /export function sandboxCreateErrorKind/);
   assert.match(telemetryClassifiersSource, /export function telemetryErrorSummary/);
   assert.match(telemetryClassifiersSource, /name === "RuntimeProbeError"/);

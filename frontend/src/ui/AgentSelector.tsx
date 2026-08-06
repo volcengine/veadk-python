@@ -30,6 +30,10 @@ import {
   type RuntimeDetail,
 } from "../adk/client";
 import { connectRuntime } from "../adk/connections";
+import {
+  trackAgentConnectFailed,
+  trackAgentConnectSucceeded,
+} from "../adk/telemetryEvents";
 import { AgentIdentityIcon } from "./AgentIdentityIcon";
 import { SkillCapabilityIcon, ToolCapabilityIcon } from "./CapabilityIcons";
 import { RuntimeIdentityIcon } from "./RuntimeIdentityIcon";
@@ -279,13 +283,27 @@ export function AgentSelector({
     (pageCache[page + 1] !== undefined || tokens[page + 1] !== undefined);
 
   function connect(rt: CloudRuntime) {
+    const startedAt = Date.now();
     setConnecting(rt.runtimeId);
     connectRuntime(rt.runtimeId, rt.name, rt.region)
       .then(async (agentId) => {
         await onSelect(agentId);
+        trackAgentConnectSucceeded({
+          kind: "runtime",
+          source: "navbar_picker",
+          durationMs: Date.now() - startedAt,
+          runtimeRegion: rt.region,
+          runtimeIsMine: rt.isMine,
+        });
         onClose();
       })
       .catch((error) => {
+        trackAgentConnectFailed({
+          kind: "runtime",
+          source: "navbar_picker",
+          durationMs: Date.now() - startedAt,
+          error,
+        });
         if (error instanceof RuntimeAccessDeniedError) {
           setError(error.message);
           return;
@@ -300,6 +318,27 @@ export function AgentSelector({
         setUnsupported((s) => new Set(s).add(rt.runtimeId));
       })
       .finally(() => setConnecting(null));
+  }
+
+  async function selectLocalApp(app: string) {
+    const startedAt = Date.now();
+    try {
+      await onSelect(app);
+      trackAgentConnectSucceeded({
+        kind: "local",
+        source: "navbar_picker",
+        durationMs: Date.now() - startedAt,
+      });
+      onClose();
+    } catch (error) {
+      trackAgentConnectFailed({
+        kind: "local",
+        source: "navbar_picker",
+        durationMs: Date.now() - startedAt,
+        error,
+      });
+      setError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   if (!open) return null;
@@ -359,10 +398,7 @@ export function AgentSelector({
                     <li key={app}>
                       <button
                         className={`agentsel-item ${app === currentId ? "active" : ""}`}
-                        onClick={() => {
-                          onSelect(app);
-                          onClose();
-                        }}
+                        onClick={() => void selectLocalApp(app)}
                       >
                         <AgentIdentityIcon />
                         <span className="agentsel-item-name">{app}</span>
