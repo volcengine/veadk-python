@@ -12,12 +12,61 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from veadk.tools.builtin_tools import ppt_generate as presentation_tool
+
+
+@pytest.mark.asyncio
+async def test_create_pptx_has_no_node_runtime_dependency(tmp_path: Path) -> None:
+    output = tmp_path / "deck.pptx"
+    preview = tmp_path / "deck.webp"
+
+    await presentation_tool._create_pptx(
+        {
+            "title": "Runtime independent",
+            "subtitle": "Pure Python",
+            "theme": "blue",
+            "slides": [
+                {
+                    "title": "Result",
+                    "summary": "The deck is valid OOXML.",
+                    "bullets": ["No Node.js", "No private npm package"],
+                    "sources": [],
+                }
+            ],
+        },
+        output,
+        preview,
+    )
+
+    assert zipfile.is_zipfile(output)
+    assert preview.read_bytes().startswith(b"RIFF")
+
+
+def test_preview_depends_on_real_slide_content(tmp_path: Path) -> None:
+    first = tmp_path / "first.webp"
+    second = tmp_path / "second.webp"
+    theme = presentation_tool._THEMES["blue"]
+
+    presentation_tool._write_preview(
+        {"title": "First deck", "subtitle": "Actual preview"},
+        [{"title": "Revenue", "summary": "Growth", "bullets": ["Up 20%"]}],
+        theme,
+        first,
+    )
+    presentation_tool._write_preview(
+        {"title": "Second deck", "subtitle": "Different content"},
+        [{"title": "Risk", "summary": "Watchlist", "bullets": ["Churn"]}],
+        theme,
+        second,
+    )
+
+    assert first.read_bytes() != second.read_bytes()
 
 
 @pytest.mark.asyncio

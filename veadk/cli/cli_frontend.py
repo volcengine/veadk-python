@@ -1098,6 +1098,7 @@ def _run_frontend_server(
         runtime_id: str,
         region: str,
         session_id: str,
+        event_id: str = "",
         invocation_id: str = "",
         end_time_ms: int | None = None,
     ) -> list[dict]:
@@ -1113,6 +1114,7 @@ def _run_frontend_server(
             project_name=str(getattr(runtime, "project_name", "") or "default"),
             runtime_id=runtime_id,
             session_id=session_id,
+            event_id=event_id,
             invocation_id=invocation_id,
             now_ms=end_time_ms,
         )
@@ -1130,6 +1132,7 @@ def _run_frontend_server(
                 runtime_id=report.runtime_id,
                 region=report.region,
                 session_id=report.session_id,
+                event_id=report.event_id,
                 invocation_id=report.invocation_id,
             )
         except Exception as error:  # noqa: BLE001 - feedback must remain usable
@@ -1147,6 +1150,8 @@ def _run_frontend_server(
         sessionId: str = "",
         region: str = "cn-beijing",
         endTimeMs: int | None = None,
+        eventId: str = "",
+        invocationId: str = "",
     ) -> list[dict]:
         if not runtimeId or not sessionId:
             raise HTTPException(
@@ -1165,6 +1170,8 @@ def _run_frontend_server(
                 runtime_id=runtimeId,
                 region=region,
                 session_id=sessionId,
+                event_id=eventId,
+                invocation_id=invocationId,
                 end_time_ms=endTimeMs,
             )
         except Exception as error:
@@ -1177,11 +1184,6 @@ def _run_frontend_server(
                 status_code=502,
                 detail="加载调用链路失败，请稍后重试。",
             ) from error
-        if not spans:
-            raise HTTPException(
-                status_code=404,
-                detail="该 Agent 暂未开启链路观测，请到控制台打开后使用。",
-            )
         from veadk.cli.frontend_apmplus_trace import normalize_apmplus_trace
 
         return normalize_apmplus_trace(spans)
@@ -1277,6 +1279,14 @@ def _run_frontend_server(
                 status_code=403,
                 detail="Only Studio administrators can update Studio",
             )
+
+    from veadk.cli.frontend_client_tools import mount_frontend_client_tool_routes
+
+    mount_frontend_client_tool_routes(
+        app,
+        authorize=_request_role,
+        credentials=_resolve_ve_credentials,
+    )
 
     from veadk.cli.studio_self_update import (
         StudioSelfUpdater,

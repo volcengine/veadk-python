@@ -111,6 +111,16 @@ function MarkdownImpl({
         remarkPlugins={[remarkGfm]}
         rehypePlugins={allowRawHtml ? [rehypeRaw, rehypeHighlight] : [rehypeHighlight]}
         components={{
+          table: ({ node, ...props }) => (
+            <div
+              className="md-table-scroll"
+              role="region"
+              aria-label="表格，可横向滚动"
+              tabIndex={0}
+            >
+              <table {...props} />
+            </div>
+          ),
           a: ({ node, ...props }) => {
             const href = props.href;
             if (href && (isVideoUrl(href) || isVideoLink(node))) {

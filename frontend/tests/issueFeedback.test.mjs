@@ -81,13 +81,28 @@ test("report includes the full turn details and invocation trace", () => {
   assert.match(appSource, /region: currentRuntime\?\.region \?\? "cn-beijing"/);
 });
 
-test("remote runtime trace 404 explains that tracing must be enabled", () => {
+test("remote runtime trace lets an empty session render the neutral empty state", () => {
   assert.match(clientSource, /if \(ep\.runtimeId\)/);
   assert.match(clientSource, /\/web\/runtime-trace/);
   assert.match(clientSource, /String\(Math\.round\(endTimeMs\)\)/);
+  assert.match(clientSource, /params\.set\("eventId", eventId\)/);
+  assert.match(clientSource, /params\.set\("invocationId", invocationId\)/);
+  assert.doesNotMatch(clientSource, /暂未开启链路观测/);
+  assert.match(traceDrawerSource, /该会话暂无调用链路（可能尚未产生调用）。/);
+});
+
+test("selected assistant turn scopes the remote trace request by event", () => {
+  assert.match(appSource, /setTraceEventId\(turn\.meta\?\.eventId\)/);
+  assert.match(appSource, /setTraceInvocationId\(turn\.meta\?\.invocationId\)/);
+  assert.match(appSource, /eventId=\{traceEventId\}/);
+  assert.match(appSource, /invocationId=\{traceInvocationId\}/);
   assert.match(
-    clientSource,
-    /该 Agent 暂未开启链路观测，请到控制台打开后使用。/,
+    traceDrawerSource,
+    /getSessionTrace\([\s\S]*?appName,[\s\S]*?sessionId,[\s\S]*?endTimeMs,[\s\S]*?eventId,[\s\S]*?invocationId,[\s\S]*?\)/,
+  );
+  assert.match(
+    traceDrawerSource,
+    /\[appName, endTimeMs, eventId, invocationId, sessionId, testRunId\]/,
   );
 });
 

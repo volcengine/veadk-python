@@ -20,6 +20,7 @@ import {
 import type { AgentProject } from "../create/project";
 import type { AgentDraft, NetworkConfig } from "../create/types";
 import type { IssueFeedbackReport } from "./issueFeedback";
+import type { ClientToolDeclaration } from "../client-tools/types";
 
 /** An ADK event as serialised over `/run_sse` (camelCase, by_alias=True). */
 export interface AdkUsage {
@@ -44,6 +45,8 @@ export interface AdkEvent {
   error?: string;
   errorMessage?: string;
   error_message?: string;
+  longRunningToolIds?: string[];
+  long_running_tool_ids?: string[];
   content?: {
     role?: string;
     parts?: AdkPart[];
@@ -1168,6 +1171,8 @@ export async function getSessionTrace(
   appName: string,
   sessionId: string,
   endTimeMs?: number,
+  eventId?: string,
+  invocationId?: string,
 ): Promise<TraceSpan[]> {
   const { app, ep } = resolve(appName);
   let res: Response;
@@ -1178,10 +1183,9 @@ export async function getSessionTrace(
       region: ep.region ?? "cn-beijing",
     });
     if (endTimeMs) params.set("endTimeMs", String(Math.round(endTimeMs)));
+    if (eventId) params.set("eventId", eventId);
+    if (invocationId) params.set("invocationId", invocationId);
     res = await apiFetch(`/web/runtime-trace?${params.toString()}`);
-    if (res.status === 404) {
-      throw new Error("该 Agent 暂未开启链路观测，请到控制台打开后使用。");
-    }
   } else {
     res = await apiFetch(
       `/dev/apps/${encodeURIComponent(app)}/debug/trace/session/${encodeURIComponent(sessionId)}`,
@@ -1698,11 +1702,20 @@ export interface RunArgs {
   invocation?: FrontendInvocation;
   /** Function responses to send instead of/alongside text — used to resume a
    *  long-running call (e.g. answering ADK's `adk_request_credential`). */
-  functionResponses?: { id: string; name: string; response: unknown }[];
+  functionResponses?: {
+    id: string;
+    name: string;
+    response: unknown;
+  }[];
   /** Abort the stream (e.g. when the user switches to another session). */
   signal?: AbortSignal;
   /** Use the session-aware harness runner when the server exposes it. */
   sessionCapabilities?: boolean;
+  /** Client-executed tools mounted for this turn through client_tools/v1. */
+  clientTools?: readonly ClientToolDeclaration[];
+  /** Resume a paused long-running function call. */
+  functionCallEventId?: string;
+  invocationId?: string;
 }
 
 /** Stream agent events for one user turn. */
@@ -1716,6 +1729,9 @@ export async function* runSSE({
   functionResponses = [],
   signal,
   sessionCapabilities = false,
+  clientTools = [],
+  functionCallEventId,
+  invocationId,
 }: RunArgs): AsyncGenerator<AdkEvent, void, unknown> {
   const { app, ep } = resolve(appName);
   const attachmentParts = attachments.flatMap<Record<string, unknown>>((a) => {
@@ -1761,7 +1777,7 @@ export async function* runSSE({
     };
   }
   const res = await apiFetch(
-    sessionCapabilities ? `/harness/run_sse` : `/run_sse`,
+    sessionCapabilities || clientTools.length > 0 ? `/harness/run_sse` : `/run_sse`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1774,6 +1790,9 @@ export async function* runSSE({
         custom_metadata: invocationMetadata
           ? { veadkInvocation: invocationMetadata }
           : undefined,
+        client_tools: clientTools.length > 0 ? clientTools : undefined,
+        function_call_event_id: functionCallEventId,
+        invocation_id: invocationId,
       }),
       signal,
     },

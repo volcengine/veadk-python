@@ -17,8 +17,11 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
+import json
 import os
+import re
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -29,8 +32,17 @@ from fastapi import APIRouter, FastAPI, HTTPException, Query
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.events import Event, EventActions
 from google.adk.sessions import BaseSessionService, Session
+from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.skill_toolset import SkillToolset
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from google.genai import types
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from veadk.agent_metadata import agent_skill_summaries
 from veadk.tools import get_builtin_tool, list_builtin_tools
@@ -38,9 +50,100 @@ from veadk.tools import get_builtin_tool, list_builtin_tools
 SESSION_CAPABILITIES_STATE_KEY = "__agentkit_harness__"
 SESSION_CAPABILITIES_SCHEMA_VERSION = 1
 FINDSKILL_SOURCE_PREFIX = "findskill:"
+MAX_CLIENT_TOOLS = 16
+MAX_CLIENT_TOOL_SCHEMA_BYTES = 32 * 1024
+_CLIENT_TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 FINDSKILL_SEARCH_URL = os.getenv(
     "FINDSKILL_SEARCH_URL", "https://skills.volces.com/v1/skills"
 )
+
+
+class ClientToolDefinition(BaseModel):
+    """A client-executed tool advertised for one harness run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    description: str = Field(min_length=1, max_length=4096)
+    input_schema: dict[str, Any]
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if not _CLIENT_TOOL_NAME_PATTERN.fullmatch(value):
+            raise ValueError("name must match ^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+        return value
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("description must not be blank")
+        return value
+
+    @field_validator("input_schema")
+    @classmethod
+    def validate_input_schema(cls, value: dict[str, Any]) -> dict[str, Any]:
+        try:
+            encoded = json.dumps(
+                value,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode()
+        except (TypeError, ValueError) as exc:
+            raise ValueError("input_schema must be valid JSON") from exc
+        if len(encoded) > MAX_CLIENT_TOOL_SCHEMA_BYTES:
+            raise ValueError(
+                f"input_schema must not exceed {MAX_CLIENT_TOOL_SCHEMA_BYTES} bytes"
+            )
+        if value.get("type") != "object":
+            raise ValueError("input_schema.type must be 'object'")
+        properties = value.get("properties", {})
+        if not isinstance(properties, dict):
+            raise ValueError(  # noqa: TRY004 - Pydantic does not wrap TypeError.
+                "input_schema.properties must be an object"
+            )
+        invalid_properties = [
+            name for name in properties if not _CLIENT_TOOL_NAME_PATTERN.fullmatch(name)
+        ]
+        if invalid_properties:
+            raise ValueError(
+                "input_schema property names must match ^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+            )
+        required = value.get("required", [])
+        if (
+            not isinstance(required, list)
+            or any(not isinstance(name, str) for name in required)
+            or len(set(required)) != len(required)
+            or any(name not in properties for name in required)
+        ):
+            raise ValueError("input_schema.required must contain unique property names")
+        return copy.deepcopy(value)
+
+
+class ClientLongRunningTool(BaseTool):
+    """A declared tool whose implementation runs in the Studio client."""
+
+    def __init__(self, definition: ClientToolDefinition) -> None:
+        super().__init__(
+            name=definition.name,
+            description=definition.description,
+            is_long_running=True,
+        )
+        self.input_schema = copy.deepcopy(definition.input_schema)
+
+    def _get_declaration(self) -> types.FunctionDeclaration:
+        return types.FunctionDeclaration(
+            name=self.name,
+            description=self.description,
+            parameters_json_schema=copy.deepcopy(self.input_schema),
+        )
+
+    async def run_async(self, *, args: dict[str, Any], tool_context: Any) -> None:
+        del args, tool_context
+        # An empty response pauses the long-running call. Studio executes the
+        # tool locally and resumes it with a matching functionResponse.
 
 
 class StoredTool(BaseModel):
@@ -424,6 +527,7 @@ class SessionCapabilityService:
         app_name: str,
         user_id: str,
         session_id: str,
+        client_tools: list[ClientToolDefinition] | None = None,
     ) -> BaseAgent:
         session = await self.get_session(
             app_name=app_name,
@@ -440,46 +544,40 @@ class SessionCapabilityService:
             )
         if agent_tools is None:
             agent_tools = []
+        requested_client_tools = list(client_tools or [])
+        if len(requested_client_tools) > MAX_CLIENT_TOOLS:
+            raise CapabilityError(
+                f"At most {MAX_CLIENT_TOOLS} client tools can be mounted per run."
+            )
+
         existing_tools = {_tool_name(tool) for tool in agent_tools}
+        reserved_tool_names = existing_tools | {
+            tool.ref.removeprefix("builtin:") for tool in overlay.tools
+        }
+        requested_names = [tool.name for tool in requested_client_tools]
+        duplicate_names = {
+            name for name in requested_names if requested_names.count(name) > 1
+        }
+        if duplicate_names:
+            raise CapabilityConflictError(
+                "Client tool names must be unique: "
+                + ", ".join(sorted(duplicate_names))
+            )
+        for definition in requested_client_tools:
+            # A client tool may never shadow an implementation already mounted
+            # by the agent or this session. This also makes mixed-version
+            # Studio clients safe: the native implementation wins even when
+            # the client advertises a fallback with the same name.
+            if definition.name in reserved_tool_names:
+                continue
+            agent_tools.append(ClientLongRunningTool(definition))
+            existing_tools.add(definition.name)
+
         for stored_tool in overlay.tools:
             name = stored_tool.ref.removeprefix("builtin:")
             if name not in existing_tools:
                 agent_tools.append(get_builtin_tool(name))
                 existing_tools.add(name)
-
-        generation_hints = []
-        if "ppt_generate" in existing_tools:
-            generation_hints.append(
-                "A PowerPoint generation tool is mounted for this session. "
-                "When the user requests a presentation, plan concise "
-                "audience-facing slide content and call `ppt_generate`; do "
-                "not merely describe the deck. Include source URLs per slide "
-                "when external claims or assets are used."
-            )
-        if "image_generate" in existing_tools:
-            generation_hints.append(
-                "An image generation tool is mounted for this session. When "
-                "the user requests an image, call `image_generate`; do not "
-                "claim that image generation is unavailable."
-            )
-        if "video_generate" in existing_tools:
-            generation_hints.append(
-                "Video generation tools are mounted for this session. When "
-                "the user requests a video, call `video_generate` and use "
-                "`video_task_query` when the result requires status polling; "
-                "do not claim that video generation is unavailable."
-            )
-        if generation_hints:
-            instruction = getattr(agent, "instruction", None)
-            if isinstance(instruction, str):
-                hint = "\n\n".join(generation_hints)
-                setattr(
-                    agent,
-                    "instruction",
-                    f"{instruction.rstrip()}\n\n{hint}"
-                    if instruction.strip()
-                    else hint,
-                )
 
         loaded_skills = []
         for stored_skill in overlay.skills:
@@ -654,6 +752,23 @@ def mount_session_capability_routes(
         return await service_resolver(app_name)
 
     router = APIRouter(prefix="/harness")
+
+    @router.get("/capabilities")
+    async def get_harness_capabilities(
+        app_name: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        base_tools: list[str] = []
+        if service is not None:
+            base_tools = service._base_tool_names()
+        elif app_name:
+            base_tools = (await resolve_service(app_name))._base_tool_names()
+        return {
+            "protocols": {"client_tools": {"version": 1}},
+            "tools": {
+                "base": base_tools,
+                "session_mountable": sorted(list_builtin_tools()),
+            },
+        }
 
     @router.get("/capabilities/tools")
     async def list_tools() -> dict[str, list[dict[str, str]]]:

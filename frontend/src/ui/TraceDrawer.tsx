@@ -96,6 +96,8 @@ type TraceSource =
 export type TraceDrawerProps = TraceSource & {
   sessionId: string;
   endTimeMs?: number;
+  eventId?: string;
+  invocationId?: string;
   onClose: () => void;
   title?: string;
 };
@@ -105,6 +107,8 @@ export function TraceDrawer({
   testRunId,
   sessionId,
   endTimeMs,
+  eventId,
+  invocationId,
   onClose,
   title = "调用链路观测",
 }: TraceDrawerProps) {
@@ -120,7 +124,13 @@ export function TraceDrawer({
     if (testRunId) {
       request = getGeneratedAgentTestTrace(testRunId, sessionId);
     } else if (appName) {
-      request = getSessionTrace(appName, sessionId, endTimeMs);
+      request = getSessionTrace(
+        appName,
+        sessionId,
+        endTimeMs,
+        eventId,
+        invocationId,
+      );
     } else {
       setErr("缺少调用链路来源");
       return;
@@ -131,7 +141,7 @@ export function TraceDrawer({
         setSelectedId(s.length ? s.reduce((a, b) => (a.start_time <= b.start_time ? a : b)).span_id : null);
       })
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
-  }, [appName, endTimeMs, sessionId, testRunId]);
+  }, [appName, endTimeMs, eventId, invocationId, sessionId, testRunId]);
 
   const { rootNodes, min, total } = useMemo(() => buildTree(spans ?? []), [spans]);
   const rows = useMemo(() => flatten(rootNodes, collapsed), [rootNodes, collapsed]);
