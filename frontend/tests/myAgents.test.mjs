@@ -338,6 +338,10 @@ test("wires card details and connect actions into App navigation", () => {
     appSource,
     /const connectMyAgent[\s\S]*?connectRuntime[\s\S]*?await refreshCurrentAgentAndStartNewChat\(agentId\)/,
   );
+  const useAgentHandler = appSource.match(
+    /const refreshCurrentAgentAndStartNewChat = async \(id: string\) => \{([\s\S]*?)\n  \};\n\n  const selectAgent/,
+  )?.[1] ?? "";
+  assert.match(useAgentHandler, /setSkillWorkbenchOpen\(false\)/);
   assert.match(appSource, /const openMyAgentDetails[\s\S]*?setAgentDetailTarget\(agent\)[\s\S]*?setManageAgents\(true\)/);
   const detailHandler = appSource.slice(
     appSource.indexOf("const openMyAgentDetails"),

@@ -3026,6 +3026,7 @@ export default function App() {
     setPlatformFeedbackOrigin(null);
     setCreateView(null);
     setSkillCenter(false);
+    setSkillWorkbenchOpen(false);
     setAddAgent(false);
     setAddMenu(false);
     setSearchView(false);
@@ -4008,6 +4009,7 @@ export default function App() {
     setManageAgents(false);
     setCreateView(null);
     setSkillCenter(false);
+    setSkillWorkbenchOpen(false);
     setAddAgent(false);
     setAddMenu(false);
     setSearchView(false);

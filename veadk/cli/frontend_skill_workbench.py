@@ -99,6 +99,7 @@ _MAX_IDENTIFIER_LENGTH = 256
 _MAX_STAGE_LENGTH = 128
 _MAX_TASK_REVISION = 1_000_000
 _MAX_STORED_TTL_SECONDS = 24 * 60 * 60
+_MAX_REMOTE_COMMAND_OUTPUT_BYTES = 16 * 1024 * 1024
 _REMOTE_READ_ATTEMPTS = 2
 _REMOTE_WRITE_ATTEMPTS = 2
 _SDK_READ_ATTEMPTS = 2
@@ -3092,20 +3093,40 @@ class SkillWorkbenchService:
         output = data.get("output") if isinstance(data, dict) else None
         value: object = None
         parse_error: ValueError | None = None
+        complete_output: str | None = None
         if isinstance(output, str):
             try:
                 value = json.loads(output)
             except ValueError as error:
                 parse_error = error
+        if parse_error is not None and isinstance(data, dict):
+            complete_output = self._complete_remote_command_output(
+                endpoint,
+                data,
+                job_id=job_id,
+            )
+            if complete_output is not None:
                 try:
-                    shell_tokens = shlex.split(output)
-                except ValueError:
-                    shell_tokens = []
-                if len(shell_tokens) == 1 and shell_tokens[0] != output:
-                    try:
-                        value = json.loads(shell_tokens[0])
-                    except ValueError as error:
-                        parse_error = error
+                    value = json.loads(complete_output)
+                    parse_error = None
+                except ValueError as error:
+                    parse_error = error
+        if (
+            parse_error is not None
+            and value is None
+            and complete_output is None
+            and isinstance(output, str)
+        ):
+            try:
+                shell_tokens = shlex.split(output)
+            except ValueError:
+                shell_tokens = []
+            if len(shell_tokens) == 1 and shell_tokens[0] != output:
+                try:
+                    value = json.loads(shell_tokens[0])
+                    parse_error = None
+                except ValueError as error:
+                    parse_error = error
         if parse_error is not None and value is None:
             raise SkillWorkbenchError(
                 "SKILL_TASK_STATE_INVALID",
@@ -3119,6 +3140,83 @@ class SkillWorkbenchService:
                 status_code=502,
             )
         return value
+
+    def _complete_remote_command_output(
+        self,
+        endpoint: str,
+        data: dict[str, Any],
+        *,
+        job_id: str,
+    ) -> str | None:
+        path = data.get("full_output_file_path")
+        if (
+            not isinstance(path, str)
+            or not path.startswith("/")
+            or len(path) > _MAX_PATH_LENGTH
+            or "\x00" in path
+        ):
+            return None
+
+        def read_output() -> bytes:
+            response = requests.get(
+                build_file_url(endpoint, SANDBOX_FILE_DOWNLOAD_ROUTE),
+                params={"path": path, "change_policy": "abort"},
+                timeout=(10, 30),
+            )
+            if response.status_code in _RETRYABLE_HTTP_STATUSES:
+                raise requests.HTTPError(
+                    "transient DevEnv complete output response",
+                    response=response,
+                )
+            if response.status_code >= 400:
+                raise requests.HTTPError(
+                    "DevEnv complete output read failed",
+                    response=response,
+                )
+            content = response.content
+            if (
+                not isinstance(content, bytes)
+                or len(content) > _MAX_REMOTE_COMMAND_OUTPUT_BYTES
+            ):
+                raise SkillWorkbenchError(
+                    "SKILL_TASK_STATE_INVALID",
+                    "Skill 会话状态异常，请稍后重试。",
+                    status_code=502,
+                )
+            return content
+
+        try:
+            content = self._idempotent_dependency_call(
+                "read_devenv_complete_output",
+                read_output,
+                attempts=_REMOTE_READ_ATTEMPTS,
+                job_id=job_id,
+            )
+        except SkillWorkbenchError:
+            raise
+        except Exception as error:
+            retryable = _is_transient_dependency_error(error)
+            logger.warning(
+                "Skill workbench DevEnv complete output read failed "
+                "job_id=%s retryable=%s error_type=%s",
+                job_id or "none",
+                retryable,
+                type(error).__name__,
+            )
+            raise SkillWorkbenchError(
+                "SKILL_TASK_SYNC_FAILED",
+                "同步 Skill 会话失败，已保留当前会话，请稍后重试",
+                status_code=502,
+                retryable=retryable,
+            ) from error
+        try:
+            return content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise SkillWorkbenchError(
+                "SKILL_TASK_STATE_INVALID",
+                "Skill 会话状态异常，请稍后重试。",
+                status_code=502,
+            ) from error
 
     def _remote_json(self, endpoint: str, job_id: str, filename: str) -> dict[str, Any]:
         return self._remote_command_json(

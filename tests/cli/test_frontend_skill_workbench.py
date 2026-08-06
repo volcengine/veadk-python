@@ -3168,6 +3168,105 @@ def test_remote_status_retries_timeout_then_succeeds(
     assert "must-not-log" not in caplog.text
 
 
+def test_remote_status_reads_the_complete_output_when_inline_output_is_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    job_id = service._new_job_id("alice")
+    complete = json.dumps(
+        {
+            "request": {"jobId": job_id},
+            "status": {
+                "status": "succeeded",
+                "activities": [{"id": f"activity-{index}"} for index in range(80)],
+            },
+        }
+    )
+    reads: list[tuple[str, dict[str, str], tuple[int, int]]] = []
+
+    def post(*args, **kwargs):
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {
+                "data": {
+                    "status": "completed",
+                    "exit_code": 0,
+                    "output": complete[:100]
+                    + "\n... output truncated ...\n"
+                    + complete[-100:],
+                    "full_output_file_path": (
+                        "/tmp/aio-sandbox-truncated-output/shell/state.log"
+                    ),
+                }
+            },
+        )
+
+    def get(url: str, *, params: dict[str, str], timeout: tuple[int, int]):
+        reads.append((url, params, timeout))
+        return SimpleNamespace(status_code=200, content=complete.encode())
+
+    monkeypatch.setattr("veadk.cli.frontend_skill_workbench.requests.post", post)
+    monkeypatch.setattr("veadk.cli.frontend_skill_workbench.requests.get", get)
+
+    assert service._remote_command_json(
+        "https://devenv.example?credential=secret",
+        "read state",
+        job_id=job_id,
+    ) == json.loads(complete)
+    assert reads == [
+        (
+            "https://devenv.example/v1/file/download?credential=secret",
+            {
+                "path": "/tmp/aio-sandbox-truncated-output/shell/state.log",
+                "change_policy": "abort",
+            },
+            (10, 30),
+        )
+    ]
+
+
+def test_remote_status_retries_complete_output_transport_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    job_id = service._new_job_id("alice")
+    reads = 0
+
+    def post(*args, **kwargs):
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {
+                "data": {
+                    "status": "completed",
+                    "exit_code": 0,
+                    "output": """'{"status":"corrupted"}'""",
+                    "full_output_file_path": "/tmp/complete-state.log",
+                }
+            },
+        )
+
+    def get(*args, **kwargs):
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            raise requests.ConnectTimeout("temporary connect timeout")
+        return SimpleNamespace(
+            status_code=200,
+            content=b'{"status":"running"}',
+        )
+
+    monkeypatch.setattr("veadk.cli.frontend_skill_workbench.requests.post", post)
+    monkeypatch.setattr("veadk.cli.frontend_skill_workbench.requests.get", get)
+    monkeypatch.setattr("veadk.cli.frontend_skill_workbench.time.sleep", lambda _: None)
+
+    assert service._remote_command_json(
+        "https://devenv.example",
+        "read state",
+        job_id=job_id,
+    ) == {"status": "running"}
+    assert reads == 2
+
+
 def test_remote_status_does_not_retry_non_transient_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
