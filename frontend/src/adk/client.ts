@@ -136,6 +136,26 @@ export interface AgentFeedbackCasesResponse {
   items: AgentFeedbackCase[];
 }
 
+export type AutomaticEvaluationState = "pending" | "running";
+
+export interface AutomaticEvaluationStatus {
+  runtimeId: string;
+  appName: string;
+  userId: string;
+  sessionId: string;
+  state: AutomaticEvaluationState;
+  scheduledAt: string;
+  dueAt: string;
+  startedAt: string | null;
+}
+
+export interface AutomaticEvaluationStatusesResponse {
+  runtimeId: string;
+  appName: string;
+  userId: string;
+  items: AutomaticEvaluationStatus[];
+}
+
 export type AgentOptimizationPriority = "high" | "medium" | "low";
 export type AgentOptimizationModule =
   | "agent_structure"
@@ -750,6 +770,29 @@ export async function getAgentFeedbackCases(args: {
       });
     }
   }
+}
+
+export async function getAutomaticEvaluationStatuses(args: {
+  runtimeId: string;
+  region?: string;
+  appName: string;
+  userId: string;
+}): Promise<AutomaticEvaluationStatusesResponse> {
+  let lastError: Error | null = null;
+  for (const region of runtimeRegionCandidates(args.region)) {
+    const query = new URLSearchParams({
+      runtimeId: args.runtimeId,
+      region,
+      appName: args.appName,
+      userId: args.userId,
+    });
+    const res = await apiFetch(`/web/evaluation/statuses?${query.toString()}`);
+    if (res.ok) {
+      return res.json() as Promise<AutomaticEvaluationStatusesResponse>;
+    }
+    lastError = new Error(await httpErrorMessage(res, "读取自动评测状态失败"));
+  }
+  throw lastError ?? new Error("读取自动评测状态失败");
 }
 
 export async function getAgentOptimizations(args: {

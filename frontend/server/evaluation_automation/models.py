@@ -29,6 +29,7 @@ from pydantic import (
 )
 
 EvaluationKind = Literal["good", "bad"]
+AutomaticEvaluationState = Literal["pending", "running"]
 OptimizationPriority = Literal["high", "medium", "low"]
 OptimizationModule = Literal[
     "agent_structure",
@@ -95,6 +96,21 @@ class RunSseActivity(BaseModel):
             runtimeEndpoint=runtime_endpoint.rstrip("/"),
             runtimeAuthorization=SecretStr(runtime_authorization),
         )
+
+
+class AutomaticEvaluationStatus(BaseModel):
+    """Current server-owned automatic evaluation state for one Session."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    runtime_id: str = Field(alias="runtimeId", min_length=1)
+    app_name: str = Field(alias="appName", min_length=1)
+    user_id: str = Field(alias="userId", min_length=1)
+    session_id: str = Field(alias="sessionId", min_length=1)
+    state: AutomaticEvaluationState
+    scheduled_at: datetime = Field(alias="scheduledAt")
+    due_at: datetime = Field(alias="dueAt")
+    started_at: datetime | None = Field(default=None, alias="startedAt")
 
 
 class AutoEvaluationOutput(BaseModel):
