@@ -121,6 +121,12 @@ body {
   gap: 6px;
   padding: 0 0 0 10px;
 }
+.sidebar:not(.is-collapsed) .sidebar-top {
+  padding-right: 0;
+}
+.sidebar:not(.is-collapsed) .sidebar-brand-row {
+  padding-right: 10px;
+}
 .brand {
   flex: 1;
   min-width: 0;
@@ -903,6 +909,7 @@ body {
   cursor: pointer;
 }
 .history-title {
+  flex: 1;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -926,6 +933,41 @@ body {
   }
   50% {
     box-shadow: 0 0 0 4px rgb(34 197 94 / 0);
+  }
+}
+.history-evaluating-status {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: hsl(38 72% 34%);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+}
+.history-evaluating {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: hsl(38 92% 50%);
+  box-shadow: 0 0 0 0 hsl(38 92% 50% / 0.42);
+  animation: history-evaluation-pulse 1.4s ease-in-out infinite;
+}
+@keyframes history-evaluation-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 hsl(38 92% 50% / 0.42);
+  }
+  50% {
+    box-shadow: 0 0 0 4px hsl(38 92% 50% / 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .history-streaming,
+  .history-evaluating {
+    animation: none;
+    box-shadow: none;
   }
 }
 .history-more {

@@ -87,6 +87,17 @@ test("global sidebar can collapse to a compact icon rail", () => {
   );
 });
 
+test("expanded sidebar navigation keeps equal visual gutters beside the main panel", () => {
+  assert.match(
+    stylesSource,
+    /\.sidebar:not\(\.is-collapsed\) \.sidebar-top\s*\{[\s\S]*?padding-right:\s*0;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.sidebar:not\(\.is-collapsed\) \.sidebar-brand-row\s*\{[\s\S]*?padding-right:\s*10px;/,
+  );
+});
+
 test("sidebar persistently highlights only the current top-level page", () => {
   assert.match(
     sidebarSource,
