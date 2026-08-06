@@ -133,6 +133,7 @@ def test_frontend_role_uses_byteplus_iam_host(
     ensure_frontend_role("ak", "sk", provider="byteplus")
 
     service.set_host.assert_called_once_with("iam.byteplusapi.com")
+    service.set_scheme.assert_called_once_with("https")
 
 
 def test_new_frontend_role_gets_custom_and_system_policies(

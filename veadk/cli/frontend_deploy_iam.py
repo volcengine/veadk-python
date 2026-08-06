@@ -166,6 +166,8 @@ def ensure_frontend_role(
     svc.set_ak(access_key)
     svc.set_sk(secret_key)
     svc.set_host(iam_openapi_host(provider))
+    if provider == "byteplus":
+        svc.set_scheme("https")
     if session_token:
         svc.set_session_token(session_token)
     _ensure_custom_policy(svc, policy_name)
