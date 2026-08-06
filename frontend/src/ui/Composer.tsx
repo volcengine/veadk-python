@@ -34,6 +34,7 @@ import type { NewChatMode, NewChatTask } from "./new-chat-modes/types";
 import { NEW_CHAT_TASK_TOOLS } from "./new-chat-modes/taskTools";
 import { SKILL_MODELS } from "./skill-create/types";
 import { VideoGenerateIcon } from "./builtin-tools/icons";
+import type { ClientToolStatus } from "../client-tools/types";
 
 function SkillCreateIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -122,6 +123,7 @@ export interface ComposerProps {
   agents: AgentTarget[];
   invocation: FrontendInvocation;
   capabilitiesLoading?: boolean;
+  clientToolStatuses?: readonly ClientToolStatus[];
   allowAttachments?: boolean;
   onInvocationChange: (value: FrontendInvocation) => void;
   onAddFiles: (files: FileList | File[]) => void;
@@ -160,6 +162,7 @@ export function Composer({
   agents,
   invocation,
   capabilitiesLoading = false,
+  clientToolStatuses = [],
   allowAttachments = true,
   onInvocationChange,
   onAddFiles,
@@ -663,6 +666,20 @@ export function Composer({
             |
           </span>
           <span>回答仅供参考</span>
+          {clientToolStatuses.map((status) => (
+            <span className="composer-client-tool-status-group" key={status.id}>
+              <span className="composer-meta-separator" aria-hidden>
+                |
+              </span>
+              <span
+                className="composer-client-tool-status"
+                aria-label={status.ariaLabel}
+              >
+                <span className="composer-client-tool-status__dot" aria-hidden />
+                {status.label}
+              </span>
+            </span>
+          ))}
         </div>
       )}
 

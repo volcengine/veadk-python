@@ -17,16 +17,19 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import os
 import re
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from google.adk.tools import ToolContext
 from google.genai import types
+from PIL import Image, ImageDraw, ImageFont
+from pptx import Presentation
+from pptx.dml.color import RGBColor
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.text import PP_ALIGN
+from pptx.util import Inches, Pt
 
 PPTX_MIME_TYPE = (
     "application/vnd.openxmlformats-officedocument.presentationml.presentation"
@@ -35,6 +38,49 @@ PPT_PREVIEW_MIME_TYPE = "image/webp"
 _MAX_SLIDES = 20
 _MAX_BULLETS = 7
 _MAX_SOURCES = 12
+
+_THEMES: dict[str, dict[str, str]] = {
+    "blue": {
+        "canvas": "F4F7FB",
+        "cover": "0B1F3A",
+        "title": "10233F",
+        "body": "344760",
+        "muted": "6B7C93",
+        "accent": "2F6FED",
+        "cover_text": "FFFFFF",
+        "cover_muted": "C9D8F0",
+    },
+    "dark": {
+        "canvas": "10151E",
+        "cover": "090D14",
+        "title": "F5F7FA",
+        "body": "CCD4E0",
+        "muted": "8D9AAF",
+        "accent": "74A7FF",
+        "cover_text": "FFFFFF",
+        "cover_muted": "AAB6C8",
+    },
+    "warm": {
+        "canvas": "FBF6EF",
+        "cover": "41281E",
+        "title": "3D2A24",
+        "body": "604A42",
+        "muted": "8C7469",
+        "accent": "D66A3A",
+        "cover_text": "FFF8F2",
+        "cover_muted": "E7CFC2",
+    },
+    "green": {
+        "canvas": "F2F8F5",
+        "cover": "12372B",
+        "title": "173B31",
+        "body": "36594F",
+        "muted": "6D887F",
+        "accent": "2B8A68",
+        "cover_text": "F8FFFC",
+        "cover_muted": "BFD9CF",
+    },
+}
 
 
 def _clean_text(value: object, max_length: int) -> str:
@@ -123,36 +169,288 @@ async def _create_pptx(
     output_path: Path,
     preview_path: Path,
 ) -> None:
-    node = os.getenv("VEADK_PRESENTATION_NODE") or shutil.which("node")
-    if not node:
-        raise RuntimeError(
-            "PPT generation requires Node.js. Configure VEADK_PRESENTATION_NODE."
-        )
-    runner = Path(__file__).with_name("ppt_generate.mjs")
-    input_path = output_path.with_suffix(".json")
-    input_path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
-    process = await asyncio.create_subprocess_exec(
-        node,
-        str(runner),
-        str(input_path),
-        str(output_path),
-        str(preview_path),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120)
-    except TimeoutError:
-        process.kill()
-        await process.communicate()
-        raise RuntimeError("PPT generation timed out after 120 seconds.") from None
-    if process.returncode != 0:
-        detail = (stderr or stdout).decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"PPT generation failed: {detail[-2000:]}")
+    await asyncio.to_thread(_write_presentation, spec, output_path, preview_path)
     if not output_path.is_file() or output_path.stat().st_size == 0:
         raise RuntimeError("PPT generation completed without producing a file.")
     if not preview_path.is_file() or preview_path.stat().st_size == 0:
         raise RuntimeError("PPT generation completed without producing a preview.")
+
+
+def _color(value: str) -> RGBColor:
+    return RGBColor.from_string(value)
+
+
+def _background(slide: Any, value: str) -> None:
+    fill = slide.background.fill
+    fill.solid()
+    fill.fore_color.rgb = _color(value)
+
+
+def _text_box(
+    slide: Any,
+    text: str,
+    *,
+    left: float,
+    top: float,
+    width: float,
+    height: float,
+    font_size: int,
+    color: str,
+    bold: bool = False,
+    alignment: PP_ALIGN = PP_ALIGN.LEFT,
+) -> None:
+    box = slide.shapes.add_textbox(
+        Inches(left), Inches(top), Inches(width), Inches(height)
+    )
+    frame = box.text_frame
+    frame.clear()
+    frame.word_wrap = True
+    paragraph = frame.paragraphs[0]
+    paragraph.text = text
+    paragraph.alignment = alignment
+    paragraph.font.name = "Microsoft YaHei"
+    paragraph.font.size = Pt(font_size)
+    paragraph.font.bold = bold
+    paragraph.font.color.rgb = _color(color)
+
+
+def _write_presentation(
+    spec: dict[str, object],
+    output_path: Path,
+    preview_path: Path,
+) -> None:
+    theme_name = str(spec.get("theme") or "blue")
+    theme = _THEMES.get(theme_name, _THEMES["blue"])
+    raw_slides = spec.get("slides")
+    slides = raw_slides if isinstance(raw_slides, list) else []
+
+    presentation = Presentation()
+    presentation.slide_width = Inches(13.333)
+    presentation.slide_height = Inches(7.5)
+    blank_layout = presentation.slide_layouts[6]
+
+    cover = presentation.slides.add_slide(blank_layout)
+    _background(cover, theme["cover"])
+    marker = cover.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, Inches(0.9), Inches(1.1), Inches(0.12), Inches(4.7)
+    )
+    marker.fill.solid()
+    marker.fill.fore_color.rgb = _color(theme["accent"])
+    marker.line.fill.background()
+    _text_box(
+        cover,
+        str(spec.get("title") or "演示文稿"),
+        left=1.35,
+        top=2.0,
+        width=10.8,
+        height=1.8,
+        font_size=38,
+        color=theme["cover_text"],
+        bold=True,
+    )
+    subtitle = str(spec.get("subtitle") or "")
+    if subtitle:
+        _text_box(
+            cover,
+            subtitle,
+            left=1.38,
+            top=4.1,
+            width=9.8,
+            height=0.9,
+            font_size=20,
+            color=theme["cover_muted"],
+        )
+
+    for index, raw_slide in enumerate(slides):
+        if not isinstance(raw_slide, dict):
+            continue
+        slide = presentation.slides.add_slide(blank_layout)
+        _background(slide, theme["canvas"])
+        _text_box(
+            slide,
+            str(raw_slide.get("title") or f"第 {index + 1} 页"),
+            left=0.8,
+            top=0.55,
+            width=10.8,
+            height=0.65,
+            font_size=27,
+            color=theme["title"],
+            bold=True,
+        )
+        _text_box(
+            slide,
+            str(index + 2).zfill(2),
+            left=11.7,
+            top=0.62,
+            width=0.7,
+            height=0.4,
+            font_size=12,
+            color=theme["accent"],
+            bold=True,
+            alignment=PP_ALIGN.RIGHT,
+        )
+        summary = str(raw_slide.get("summary") or "")
+        content_top = 1.55
+        if summary:
+            _text_box(
+                slide,
+                summary,
+                left=0.85,
+                top=content_top,
+                width=11.35,
+                height=0.72,
+                font_size=18,
+                color=theme["body"],
+                bold=True,
+            )
+            content_top += 0.95
+        bullets = raw_slide.get("bullets")
+        bullet_values = bullets if isinstance(bullets, list) else []
+        for bullet_index, bullet in enumerate(bullet_values[:_MAX_BULLETS]):
+            _text_box(
+                slide,
+                f"•  {bullet}",
+                left=1.0,
+                top=content_top + bullet_index * 0.68,
+                width=11.0,
+                height=0.58,
+                font_size=17 if len(bullet_values) >= 6 else 19,
+                color=theme["body"],
+            )
+        sources = raw_slide.get("sources")
+        source_values = sources if isinstance(sources, list) else []
+        if source_values:
+            _text_box(
+                slide,
+                "Sources: " + " | ".join(str(item) for item in source_values),
+                left=0.85,
+                top=6.9,
+                width=11.6,
+                height=0.3,
+                font_size=8,
+                color=theme["muted"],
+            )
+
+    presentation.save(output_path)
+    _write_preview(spec, slides, theme, preview_path)
+
+
+def _preview_font(
+    size: int, *, bold: bool = False
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    names = (
+        "NotoSansCJK-Bold.ttc" if bold else "NotoSansCJK-Regular.ttc",
+        "NotoSansCJK-Bold.otf" if bold else "NotoSansCJK-Regular.otf",
+        "Hiragino Sans GB.ttc",
+        "Arial Unicode.ttf",
+        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+    )
+    roots = (
+        Path("/usr/share/fonts/opentype/noto"),
+        Path("/usr/share/fonts/truetype/noto"),
+        Path("/usr/share/fonts/truetype/wqy"),
+        Path("/System/Library/Fonts"),
+        Path("/System/Library/Fonts/Supplemental"),
+        Path("C:/Windows/Fonts"),
+    )
+    for root in roots:
+        for name in names:
+            candidate = root / name
+            if candidate.is_file():
+                try:
+                    return ImageFont.truetype(str(candidate), size=size)
+                except OSError:
+                    continue
+    return ImageFont.load_default(size=size)
+
+
+def _fit_preview_text(text: object, limit: int) -> str:
+    value = _clean_text(text, limit + 1)
+    return value if len(value) <= limit else f"{value[: limit - 1]}…"
+
+
+def _write_preview(
+    spec: dict[str, object],
+    slides: list[object],
+    theme: dict[str, str],
+    path: Path,
+) -> None:
+    width, height = 320, 180
+    slide_count = len(slides) + 1
+    columns = min(3, max(1, slide_count))
+    rows = (slide_count + columns - 1) // columns
+    montage = Image.new("RGB", (columns * width, rows * height), "#E7EBF1")
+    draw = ImageDraw.Draw(montage)
+    cover_title_font = _preview_font(19, bold=True)
+    cover_subtitle_font = _preview_font(10)
+    title_font = _preview_font(14, bold=True)
+    summary_font = _preview_font(10, bold=True)
+    body_font = _preview_font(10)
+    page_font = _preview_font(9, bold=True)
+    for index in range(slide_count):
+        left = (index % columns) * width
+        top = (index // columns) * height
+        background = theme["cover"] if index == 0 else theme["canvas"]
+        foreground = theme["cover_text"] if index == 0 else theme["title"]
+        accent = theme["accent"]
+        draw.rectangle(
+            (left + 4, top + 4, left + width - 4, top + height - 4),
+            fill=f"#{background}",
+        )
+        draw.rectangle(
+            (left + 22, top + 28, left + 28, top + height - 28),
+            fill=f"#{accent}",
+        )
+        if index == 0:
+            draw.text(
+                (left + 45, top + 54),
+                _fit_preview_text(spec.get("title"), 22) or "演示文稿",
+                fill=f"#{foreground}",
+                font=cover_title_font,
+            )
+            subtitle = _fit_preview_text(spec.get("subtitle"), 34)
+            if subtitle:
+                draw.text(
+                    (left + 46, top + 91),
+                    subtitle,
+                    fill=f"#{theme['cover_muted']}",
+                    font=cover_subtitle_font,
+                )
+        else:
+            raw_slide = slides[index - 1]
+            slide = raw_slide if isinstance(raw_slide, dict) else {}
+            draw.text(
+                (left + 44, top + 34),
+                _fit_preview_text(slide.get("title"), 30) or f"第 {index} 页",
+                fill=f"#{foreground}",
+                font=title_font,
+            )
+            content_top = top + 67
+            summary = _fit_preview_text(slide.get("summary"), 42)
+            if summary:
+                draw.text(
+                    (left + 45, content_top),
+                    summary,
+                    fill=f"#{theme['body']}",
+                    font=summary_font,
+                )
+                content_top += 23
+            bullets = slide.get("bullets")
+            bullet_values = bullets if isinstance(bullets, list) else []
+            for bullet_index, bullet in enumerate(bullet_values[:4]):
+                draw.text(
+                    (left + 46, content_top + bullet_index * 18),
+                    f"• {_fit_preview_text(bullet, 38)}",
+                    fill=f"#{theme['body']}",
+                    font=body_font,
+                )
+        draw.text(
+            (left + width - 33, top + 14),
+            str(index + 1),
+            fill=f"#{accent}",
+            font=page_font,
+        )
+    montage.save(path, format="WEBP", quality=82, method=4)
 
 
 async def ppt_generate(

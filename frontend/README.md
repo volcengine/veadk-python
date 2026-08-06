@@ -444,6 +444,11 @@ Agent tree.
 
 - `adk/client.ts` calls `/list-apps`, creates a session, and streams `/run_sse`;
   events are normalised into ordered blocks (`blocks.ts`).
+- Studio client tools are declared by the frontend registry and mounted for one
+  Runtime turn through the versioned `client_tools/v1` Harness protocol. The
+  Runtime pauses a client tool call, Studio executes it locally, and Studio
+  resumes the invocation with the matching function response. Adding another
+  client-side provider does not require Agent-specific tool configuration.
 - `veadk.multimodal` validates uploads, abstracts local/TOS storage, resolves
   stable references for model calls, and persists model-returned media.
 - `veadk.cli.frontend_invocation` exposes mounted skills and translates

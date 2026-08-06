@@ -40,6 +40,7 @@ from google.adk.cli.adk_web_server import RunAgentRequest
 from google.adk.runners import Runner as AdkRunner
 from google.adk.utils.context_utils import Aclosing
 from google.genai import types
+from pydantic import Field
 
 from veadk.agent_metadata import (
     agent_component_summaries,
@@ -49,7 +50,9 @@ from veadk.agent_metadata import (
 from veadk.agent_search import search_agent_component
 from veadk.cli.frontend_invocation import FrontendInvocationPlugin
 from veadk.integrations.agentkit.session_capabilities import (
+    MAX_CLIENT_TOOLS,
     CapabilityError,
+    ClientToolDefinition,
     SessionCapabilityService,
     mount_session_capability_routes,
 )
@@ -79,6 +82,18 @@ _SERVER_STATE_KEY = "_veadk_agentkit_server"
 _ADK_SERVER_STATE_KEY = "_veadk_adk_server"
 _DYNAMIC_A2A_ROUTES_ENABLED_STATE_KEY = "_veadk_dynamic_a2a_routes_enabled"
 _SESSION_CAPABILITY_SERVICE_STATE_KEY = "_veadk_session_capability_service"
+
+
+class HarnessRunAgentRequest(RunAgentRequest):
+    """Run request with optional client-executed tool support."""
+
+    client_tools: list[ClientToolDefinition] = Field(
+        default_factory=list,
+        max_length=MAX_CLIENT_TOOLS,
+        alias="client_tools",
+    )
+
+
 _REGISTRY_CONFIG_ATTR = "_veadk_a2a_registry_config"
 _RUNTIME_IDENTITY_REQUIREMENT = (
     "Runtime identity requires agentkit-sdk-python>=0.8.2; "
@@ -512,6 +527,7 @@ def _prioritize_platform_routes(app: FastAPI) -> None:
         "/web/agent-info/{app_name}",
         "/web/agent-graph",
         "/web/search",
+        "/harness/capabilities",
         "/harness/capabilities/tools",
         "/harness/skills/spaces",
         "/harness/skills/spaces/{space_id}/skills",
@@ -874,7 +890,7 @@ def _configure_session_capability_routes(
 
     @app.post("/harness/run_sse")
     async def run_agent_sse_with_session_capabilities(
-        req: RunAgentRequest,
+        req: HarnessRunAgentRequest,
     ) -> StreamingResponse:
         app_name = _resolve_run_app_name(services, root_agent, req)
         try:
@@ -882,6 +898,7 @@ def _configure_session_capability_routes(
                 app_name=app_name,
                 user_id=req.user_id,
                 session_id=req.session_id,
+                client_tools=req.client_tools,
             )
         except CapabilityError as exc:
             raise HTTPException(
@@ -971,7 +988,7 @@ def configure_multi_app_session_capability_routes(
 
     @app.post("/harness/run_sse")
     async def run_multi_app_with_session_capabilities(
-        req: RunAgentRequest,
+        req: HarnessRunAgentRequest,
     ):
         app_name = req.app_name or getattr(adk_server, "default_app_name", None)
         if not app_name:
@@ -983,6 +1000,7 @@ def configure_multi_app_session_capability_routes(
                 app_name=app_name,
                 user_id=req.user_id,
                 session_id=req.session_id,
+                client_tools=req.client_tools,
             )
         except CapabilityError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc

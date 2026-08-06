@@ -814,7 +814,7 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
     assert deleted == ["runtime-developer", "runtime-other"]
 
 
-def test_runtime_trace_reads_apmplus_and_explains_missing_observability(
+def test_runtime_trace_reads_apmplus_and_returns_empty_for_session_without_trace(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -865,6 +865,8 @@ def test_runtime_trace_reads_apmplus_and_explains_missing_observability(
                 "sessionId": "session-1",
                 "region": "cn-beijing",
                 "endTimeMs": 1_800_000_000_000,
+                "eventId": "event-1",
+                "invocationId": "invocation-1",
             },
             headers=headers,
         )
@@ -883,12 +885,12 @@ def test_runtime_trace_reads_apmplus_and_explains_missing_observability(
     assert response.json()[0]["start_time"] == 1_000_000
     assert calls[0]["runtime_id"] == "runtime-developer"
     assert calls[0]["session_id"] == "session-1"
+    assert calls[0]["event_id"] == "event-1"
+    assert calls[0]["invocation_id"] == "invocation-1"
     assert calls[0]["project_name"] == "default"
     assert calls[0]["now_ms"] == 1_800_000_000_000
-    assert missing.status_code == 404
-    assert missing.json()["detail"] == (
-        "该 Agent 暂未开启链路观测，请到控制台打开后使用。"
-    )
+    assert missing.status_code == 200
+    assert missing.json() == []
 
 
 def test_runtime_update_capability_supports_owned_unmanaged_runtime(

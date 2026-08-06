@@ -10,6 +10,10 @@ const registrySource = readFileSync(
   new URL("../src/ui/builtin-tools/registry.ts", import.meta.url),
   "utf8",
 );
+const clientToolRegistrySource = readFileSync(
+  new URL("../src/client-tools/registry.ts", import.meta.url),
+  "utf8",
+);
 const headerSource = readFileSync(
   new URL("../src/ui/builtin-tools/BuiltinToolHeader.tsx", import.meta.url),
   "utf8",
@@ -38,8 +42,11 @@ const shimmerStylesSource = readFileSync(
 test("maps supported built-in tools to dedicated Chinese running and done labels", () => {
   const expected = [
     ["web_search", "正在进行网络搜索", "已完成网络搜索"],
+    ["read_browser_context", "正在查阅浏览器数据", "已查阅浏览器数据"],
     ["image_generate", "正在生成图片", "已完成图片生成"],
+    ["image_edit", "正在编辑图片", "已完成图片编辑"],
     ["video_generate", "正在生成视频", "已完成视频生成"],
+    ["video_task_query", "正在查询视频生成进度", "已查询视频生成进度"],
     ["ppt_generate", "正在生成 PPT", "已完成 PPT 生成"],
     ["run_code", "正在 AgentKit 沙箱中执行代码", "已在 AgentKit 沙箱中完成代码执行"],
     ["load_memory", "正在检索长期记忆", "已完成记忆检索"],
@@ -62,11 +69,18 @@ test("renders built-in tool calls through the extensible dedicated header", () =
   assert.match(toolStylesSource, /data-tool-tone="search"/);
   assert.match(toolStylesSource, /data-tool-tone="skill"/);
   assert.match(blocksSource, /function loadSkillLabel/);
-  assert.match(blocksSource, /label=\{loadSkillLabel\(name, args\)\}/);
+  assert.match(blocksSource, /label=\{toolStatusLabel\(name, args, done\)\}/);
   assert.match(blocksSource, /`使用 \$\{skillName\.trim\(\)\} 技能`/);
   assert.match(headerSource, /label\?: string/);
   assert.doesNotMatch(headerSource, /builtin-tool-state/);
   assert.doesNotMatch(toolStylesSource, /builtin-tool-state|builtin-tool-breathe/);
+});
+
+test("draws a distinct Janus tool span for each browser data action", () => {
+  assert.match(blocksSource, /getClientToolSpanLabel\(name, args, done\)/);
+  assert.match(clientToolRegistrySource, /list_tabs: \["正在查看打开的标签页", "已查看打开的标签页"\]/);
+  assert.match(clientToolRegistrySource, /bookmarks: \["正在查找个人收藏", "已查找个人收藏"\]/);
+  assert.match(clientToolRegistrySource, /read_page: \["正在读取页面内容", "已读取页面内容"\]/);
 });
 
 test("keeps tool rows minimal and aligns larger details with their icons", () => {

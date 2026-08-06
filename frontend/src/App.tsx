@@ -38,6 +38,7 @@ import {
   listSessions,
   removeSessionCapability,
   runSSE,
+  studioFetch,
   refreshAgentFeedbackCases,
   submitIssueFeedback,
   submitMessageFeedback,
@@ -60,6 +61,15 @@ import {
   type StudioAccess,
   type UiFeatures,
 } from "./adk/client";
+import {
+  availableClientTools,
+  availableClientToolStatuses,
+  executeClientTool,
+  isRegisteredClientTool,
+  probeClientToolProviders,
+} from "./client-tools/registry";
+import type { ClientToolProviderAvailability } from "./client-tools/types";
+import { probeRuntimeClientToolsSupport } from "./adk/runtimeClientTools";
 import {
   issueFeedbackToolCalls,
   traceForInvocation,
@@ -191,6 +201,7 @@ interface NewChatCapabilitiesState {
   agentId?: string;
   ready?: boolean;
   harnessEnabled?: boolean;
+  clientToolsEnabled?: boolean;
   builtinTools?: string[];
   temporaryEnabled?: boolean;
   skillCreateEnabled?: boolean;
@@ -199,15 +210,30 @@ interface NewChatCapabilitiesState {
 async function probeNewChatCapabilities(
   agentId: string,
 ): Promise<NewChatCapabilitiesState> {
-  const [sandboxResult, skillResult, harnessResult] = await Promise.allSettled([
-    getSandboxCapability(),
-    getSkillCreatorCapability(),
-    listSessionBuiltinTools(agentId),
-  ]);
+  const runtimeConnection = loadConnections().find(
+    (connection) =>
+      connection.runtimeId &&
+      connection.apps.some((app) => remoteAppId(connection.id, app) === agentId),
+  );
+  const [sandboxResult, skillResult, harnessResult, clientToolsResult] =
+    await Promise.allSettled([
+      getSandboxCapability(),
+      getSkillCreatorCapability(),
+      listSessionBuiltinTools(agentId),
+      runtimeConnection?.runtimeId
+        ? probeRuntimeClientToolsSupport(
+            runtimeConnection.runtimeId,
+            runtimeConnection.region ?? "cn-beijing",
+            { fetcher: (url, init) => studioFetch(url, init) },
+          )
+        : Promise.resolve(false),
+    ]);
   return {
     agentId,
     ready: true,
     harnessEnabled: harnessResult.status === "fulfilled",
+    clientToolsEnabled:
+      clientToolsResult.status === "fulfilled" && clientToolsResult.value,
     builtinTools: harnessResult.status === "fulfilled" ? harnessResult.value : [],
     temporaryEnabled:
       sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
@@ -696,6 +722,41 @@ function automaticEvaluationTargetForSelection(
   return null;
 }
 
+interface PendingClientToolCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  eventId: string;
+  invocationId: string;
+}
+
+function pendingClientToolCalls(
+  event: AdkEvent,
+  activeToolNames: ReadonlySet<string>,
+): PendingClientToolCall[] {
+  const longRunningIds = new Set(
+    event.longRunningToolIds ?? event.long_running_tool_ids ?? [],
+  );
+  if (longRunningIds.size === 0) return [];
+  return (event.content?.parts ?? []).flatMap((part) => {
+    const call = part.functionCall ?? part.function_call;
+    if (
+      !call?.name ||
+      !activeToolNames.has(call.name) ||
+      !isRegisteredClientTool(call.name) ||
+      !call.id ||
+      !longRunningIds.has(call.id)
+    ) return [];
+    return [{
+      id: call.id,
+      name: call.name,
+      args: call.args ?? {},
+      eventId: event.id ?? "",
+      invocationId: event.invocationId ?? event.invocation_id ?? "",
+    }];
+  });
+}
+
 export default function App() {
   const [apps, setApps] = useState<string[]>([]);
   const [appName, setAppName] = useState("");
@@ -844,6 +905,8 @@ export default function App() {
   const [sessionBuiltinTools, setSessionBuiltinTools] = useState<string[]>([]);
   const [sessionCapabilityMutating, setSessionCapabilityMutating] =
     useState(false);
+  const [clientToolAvailability, setClientToolAvailability] =
+    useState<ClientToolProviderAvailability[]>([]);
   const removedAttachmentIdsRef = useRef<Set<string>>(new Set());
   // Streaming state is PER SESSION so multiple sessions can stream at once
   // (each /run_sse is an independent request). `streamingSids` = which sessions
@@ -912,6 +975,8 @@ export default function App() {
     useState<string | null>(null);
   const [traceOpen, setTraceOpen] = useState(false);
   const [traceEndTimeMs, setTraceEndTimeMs] = useState<number>();
+  const [traceEventId, setTraceEventId] = useState<string>();
+  const [traceInvocationId, setTraceInvocationId] = useState<string>();
   const [greeting, setGreeting] = useState(pickGreeting);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [authExpired, setAuthExpired] = useState(false);
@@ -1310,6 +1375,26 @@ export default function App() {
       baseline?.id === id ? [baseline, ...remaining] : remaining,
     );
   }, [cancelPendingWorkspaceDraft, commitWorkspaceDrafts, userId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const probe = () => {
+      void probeClientToolProviders().then((availability) => {
+        if (!cancelled) setClientToolAvailability(availability);
+      });
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") probe();
+    };
+    probe();
+    const interval = window.setInterval(probe, 5000);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     window.addEventListener("pagehide", flushPendingWorkspaceDraft);
@@ -3289,6 +3374,10 @@ export default function App() {
     let runWithSessionCapabilities = requiresSessionCapabilityRunner(
       sessionCapabilities,
     );
+    const nativeToolNames = new Set([
+      ...(agentInfo?.tools ?? []),
+      ...(sessionCapabilities?.tools.map((tool) => tool.name) ?? []),
+    ]);
     if (selectedTask) {
       try {
         let updated = await getSessionCapabilities(appName, userId, sid);
@@ -3308,6 +3397,7 @@ export default function App() {
               updated.revision,
             );
         }
+        for (const tool of updated.tools) nativeToolNames.add(tool.name);
         setSessionCapabilities(updated);
         runWithSessionCapabilities = requiresSessionCapabilityRunner(updated);
       } catch (e) {
@@ -3344,6 +3434,12 @@ export default function App() {
     setExecPathBySession((m) => ({ ...m, [sid]: [] }));
 
     try {
+      const clientTools =
+        newChatCapabilitiesReady &&
+        newChatCapabilities.clientToolsEnabled
+          ? availableClientTools(clientToolAvailability, nativeToolNames)
+          : [];
+      const activeClientToolNames = new Set(clientTools.map((tool) => tool.name));
       let acc = emptyAcc();
       let currentStreamAuthor = "";
       let tokens = 0;
@@ -3351,60 +3447,121 @@ export default function App() {
       let eventId = "";
       let invocationId = "";
       let streamFailed = false;
-      for await (const event of runSSE({
-        appName,
-        userId,
-        sessionId: sid,
-        text,
-        attachments: atts,
-        invocation: selectedInvocation,
-        signal: ctrl.signal,
-        sessionCapabilities: runWithSessionCapabilities,
-      })) {
-        if (ctrl.signal.aborted) break;
-        const errMsg = event.error ?? event.errorMessage ?? event.error_message;
-        if (typeof errMsg === "string" && errMsg) {
-          streamFailed = true;
-          if (viewSidRef.current === sid) setError(errMsg);
-          break;
-        }
-        // Live topology: author + transfer/end signals, keyed by session.
-        applyStreamSignals(sid, event);
-        const eventAuthor = event.author && event.author !== "user"
-          ? event.author
-          : "";
-        if (eventAuthor && eventAuthor !== currentStreamAuthor) {
-          currentStreamAuthor = eventAuthor;
-          acc = emptyAcc();
-        }
-        acc = applyEvent(acc, event);
-        const usage = event.usageMetadata ?? event.usage_metadata;
-        if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
-        if (event.timestamp) ts = event.timestamp;
-        if (event.id) eventId = event.id;
-        const nextInvocationId = event.invocationId ?? event.invocation_id;
-        if (nextInvocationId) invocationId = nextInvocationId;
-        const blocks = acc.blocks;
-        const meta = {
-          author: currentStreamAuthor || undefined,
-          tokens: tokens || undefined,
-          ts,
-          eventId: eventId || undefined,
+      let nextText = text;
+      let nextAttachments = atts;
+      let nextInvocation = selectedInvocation;
+      let functionResponses: {
+        id: string;
+        name: string;
+        response: Record<string, unknown>;
+      }[] = [];
+      let functionCallEventId = "";
+
+      while (!ctrl.signal.aborted) {
+        const pendingCalls: PendingClientToolCall[] = [];
+        for await (const event of runSSE({
+          appName,
+          userId,
+          sessionId: sid,
+          text: nextText,
+          attachments: nextAttachments,
+          invocation: nextInvocation,
+          functionResponses,
+          functionCallEventId: functionCallEventId || undefined,
           invocationId: invocationId || undefined,
+          signal: ctrl.signal,
+          sessionCapabilities: runWithSessionCapabilities,
+          clientTools,
+        })) {
+          if (ctrl.signal.aborted) break;
+          const errMsg = event.error ?? event.errorMessage ?? event.error_message;
+          if (typeof errMsg === "string" && errMsg) {
+            streamFailed = true;
+            if (viewSidRef.current === sid) setError(errMsg);
+            break;
+          }
+          // Live topology: author + transfer/end signals, keyed by session.
+          applyStreamSignals(sid, event);
+          const eventAuthor = event.author && event.author !== "user"
+            ? event.author
+            : "";
+          if (eventAuthor && eventAuthor !== currentStreamAuthor) {
+            currentStreamAuthor = eventAuthor;
+            acc = emptyAcc();
+          }
+          acc = applyEvent(acc, event);
+          const usage = event.usageMetadata ?? event.usage_metadata;
+          if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
+          if (event.timestamp) ts = event.timestamp;
+          if (event.id) eventId = event.id;
+          const nextInvocationId = event.invocationId ?? event.invocation_id;
+          if (nextInvocationId) invocationId = nextInvocationId;
+          pendingCalls.push(...pendingClientToolCalls(event, activeClientToolNames));
+          const blocks = acc.blocks;
+          const meta = {
+            author: currentStreamAuthor || undefined,
+            tokens: tokens || undefined,
+            ts,
+            eventId: eventId || undefined,
+            invocationId: invocationId || undefined,
+          };
+          setTurnsFor(sid, (t) => {
+            const next = t.slice();
+            const last = next[next.length - 1];
+            if (
+              last?.role === "assistant" &&
+              (!last.meta?.author || last.meta.author === currentStreamAuthor)
+            ) {
+              next[next.length - 1] = { ...last, blocks, meta };
+            } else {
+              next.push({ role: "assistant", blocks, meta });
+            }
+            return next;
+          });
+        }
+
+        if (ctrl.signal.aborted || pendingCalls.length === 0) break;
+        functionResponses = await Promise.all(pendingCalls.map(async (call) => {
+          try {
+            const result = await executeClientTool(call.name, call.args);
+            return {
+              id: call.id,
+              name: call.name,
+              response: { result },
+            };
+          } catch (error) {
+            return {
+              id: call.id,
+              name: call.name,
+              response: { error: error instanceof Error ? error.message : String(error) },
+            };
+          }
+        }));
+        const responseEvent: AdkEvent = {
+          author: currentStreamAuthor || undefined,
+          content: {
+            role: "user",
+            parts: functionResponses.map((response) => ({
+              functionResponse: response,
+            })),
+          },
         };
-        setTurnsFor(sid, (t) => {
-          const next = t.slice();
+        acc = applyEvent(acc, responseEvent);
+        const blocks = acc.blocks;
+        setTurnsFor(sid, (turnList) => {
+          const next = turnList.slice();
           const last = next[next.length - 1];
-          if (
-            last?.role === "assistant" &&
-            (!last.meta?.author || last.meta.author === currentStreamAuthor)
-          ) {
-            next[next.length - 1] = { ...last, blocks, meta };
-          } else {
-            next.push({ role: "assistant", blocks, meta });
+          if (last?.role === "assistant") {
+            next[next.length - 1] = { ...last, blocks };
           }
           return next;
         });
+
+        functionCallEventId = pendingCalls[0].eventId;
+        invocationId = pendingCalls[0].invocationId || invocationId;
+        nextText = "";
+        nextAttachments = [];
+        nextInvocation = emptyInvocation();
       }
       void refreshSessions(appName);
       if (!ctrl.signal.aborted && !streamFailed && eventId) {
@@ -4281,6 +4438,13 @@ export default function App() {
               agents={sandboxSession ? [] : availableAgents}
               invocation={sandboxSession ? emptyInvocation() : invocation}
               capabilitiesLoading={!sandboxSession && capabilitiesLoading}
+              clientToolStatuses={
+                !sandboxSession &&
+                newChatCapabilitiesReady &&
+                newChatCapabilities.clientToolsEnabled === true
+                  ? availableClientToolStatuses(clientToolAvailability)
+                  : []
+              }
               allowAttachments={!sandboxSession}
               onInvocationChange={setInvocation}
               onAddFiles={addFiles}
@@ -4972,6 +5136,8 @@ export default function App() {
                                   setTraceEndTimeMs(
                                     turn.meta?.ts ? turn.meta.ts * 1000 : Date.now(),
                                   );
+                                  setTraceEventId(turn.meta?.eventId);
+                                  setTraceInvocationId(turn.meta?.invocationId);
                                   setTraceOpen(true);
                                 }}
                               >
@@ -5028,6 +5194,8 @@ export default function App() {
           appName={appName}
           sessionId={sessionId}
           endTimeMs={traceEndTimeMs}
+          eventId={traceEventId}
+          invocationId={traceInvocationId}
           onClose={() => setTraceOpen(false)}
         />
       )}

@@ -1081,7 +1081,13 @@ body {
   height: 14px;
 }
 
-.transcript { flex: 1; overflow-y: auto; padding: 28px 16px 8px; }
+.transcript {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 28px 16px 8px;
+}
 .transcript.is-streaming { overflow-anchor: none; }
 
 /* new-chat empty state: centered greeting + composer */
@@ -1247,6 +1253,8 @@ body {
 .welcome .composer { padding: 0; }
 
 .turn {
+  width: 100%;
+  min-width: 0;
   max-width: 768px;
   margin: 0 auto 22px;
   display: flex;
@@ -1373,7 +1381,12 @@ body {
   .subagent-run-label { left: 10px; max-width: calc(100% - 20px); }
 }
 
-.bubble { line-height: 1.65; font-size: 14.5px; }
+.bubble {
+  min-width: 0;
+  max-width: 100%;
+  line-height: 1.65;
+  font-size: 14.5px;
+}
 .turn--user .bubble {
   max-width: 85%;
   padding: 10px 16px;
@@ -1383,7 +1396,13 @@ body {
 .turn--assistant .bubble { max-width: 100%; }
 
 /* ---------- markdown (used by both user + assistant message bodies) ---------- */
-.md { font-size: 14.5px; line-height: 1.65; }
+.md {
+  min-width: 0;
+  max-width: 100%;
+  font-size: 14.5px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
 /* tight vertical rhythm: no margin on first/last child so bubbles hug content */
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
@@ -1407,7 +1426,12 @@ body {
 .md ol ol ol { list-style-type: lower-roman; }
 .md li { margin: 0.15em 0; }
 .md li > ul, .md li > ol { margin: 0.15em 0; }
-.md a { color: hsl(var(--primary)); text-decoration: underline; text-underline-offset: 2px; }
+.md a {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
 .md a:hover { opacity: 0.8; }
 .md blockquote {
   margin: 0 0 0.7em;
@@ -1442,12 +1466,26 @@ body {
 }
 .md table {
   width: 100%;
-  margin: 0 0 0.7em;
+  margin: 0;
   border-collapse: collapse;
   font-size: 0.95em;
+}
+.md-table-scroll {
+  max-width: 100%;
+  margin: 0 0 0.7em;
+  overflow-x: auto;
   border-radius: 12px;
-  overflow: hidden;
   box-shadow: 0 2px 8px hsl(var(--foreground) / 0.1), 0 0 0 1px hsl(var(--border));
+  overscroll-behavior-inline: contain;
+}
+.md-table-scroll:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+.md-table-scroll > table {
+  width: max-content;
+  min-width: 100%;
+  box-shadow: none;
 }
 .md table thead th,
 .md table th {
@@ -1465,6 +1503,14 @@ body {
   text-align: left;
   vertical-align: top;
   line-height: 1.65;
+}
+.md table thead th,
+.md table th,
+.md table tbody td,
+.md table td {
+  max-width: min(36rem, 60vw);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .md table tbody tr:nth-child(even) {
   background: hsl(var(--muted) / 0.25);
@@ -2676,6 +2722,38 @@ body {
   color: hsl(var(--muted-foreground));
   font-size: 11px;
   line-height: 1.4;
+}
+.composer-client-tool-status-group,
+.composer-client-tool-status {
+  display: inline-flex;
+  align-items: center;
+}
+.composer-client-tool-status-group {
+  gap: 8px;
+}
+.composer-client-tool-status {
+  gap: 5px;
+  color: hsl(142 55% 34%);
+  white-space: nowrap;
+}
+.composer-client-tool-status__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: hsl(142 71% 45%);
+  box-shadow: 0 0 0 0 hsl(142 71% 45% / 0.34);
+  animation: client-tool-status-breathe 2.2s ease-in-out infinite;
+}
+@keyframes client-tool-status-breathe {
+  50% {
+    opacity: 0.72;
+    box-shadow: 0 0 0 4px hsl(142 71% 45% / 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-client-tool-status__dot {
+    animation: none;
+  }
 }
 .composer-session-line {
   display: flex;

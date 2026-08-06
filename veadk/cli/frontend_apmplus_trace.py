@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any, cast
 
@@ -24,12 +25,23 @@ from volcenginesdkapmplusserver import (
     APMPLUSSERVERApi,
     FilterForListSpanInput,
     ListSpanRequest,
+    TagFilterForListSpanInput,
 )
 
 _SESSION_TAGS = (
     "gen_ai.session.id",
     "gen_ai.conversation.id",
     "gcp.vertex.agent.session_id",
+    "session.id",
+    "session_id",
+)
+_EVENT_TAGS = (
+    "gcp.vertex.agent.event_id",
+    "gcp.vertex.agent.associated_event_ids",
+    "event.id",
+    "gen_ai.event.id",
+    "adk.event.id",
+    "event_id",
 )
 _INVOCATION_TAGS = (
     "invocation.id",
@@ -61,7 +73,22 @@ def _span_tags(span: dict[str, Any]) -> dict[str, Any]:
 
 
 def _matches_tag(tags: dict[str, Any], keys: tuple[str, ...], value: str) -> bool:
-    return any(str(tags.get(key) or "") == value for key in keys)
+    for key in keys:
+        tag_value = tags.get(key)
+        if isinstance(tag_value, (list, tuple, set)):
+            if value in {str(item) for item in tag_value}:
+                return True
+            continue
+        if isinstance(tag_value, str) and tag_value.startswith("["):
+            try:
+                decoded = json.loads(tag_value)
+            except json.JSONDecodeError:
+                decoded = None
+            if isinstance(decoded, list) and value in {str(item) for item in decoded}:
+                return True
+        if str(tag_value or "") == value:
+            return True
+    return False
 
 
 def normalize_apmplus_trace(
@@ -111,6 +138,7 @@ def load_apmplus_trace(
     project_name: str,
     runtime_id: str,
     session_id: str,
+    event_id: str = "",
     invocation_id: str = "",
     now_ms: int | None = None,
 ) -> list[dict[str, Any]]:
@@ -128,32 +156,128 @@ def load_apmplus_trace(
     end_time = now_ms if now_ms is not None else int(time.time() * 1000)
     query_end_time = end_time + (_TRACE_END_BUFFER_MS if now_ms is not None else 0)
 
-    def matching_spans(rows: list[object]) -> list[dict[str, Any]]:
-        session_spans: list[dict[str, Any]] = []
-        invocation_trace_ids: set[str] = set()
-        for row in rows:
-            span = _span_dict(row)
-            tags = _span_tags(span)
-            if not _matches_tag(tags, _SESSION_TAGS, session_id):
+    def session_runtime_spans(rows: list[object]) -> list[dict[str, Any]]:
+        spans = [_span_dict(row) for row in rows]
+        session_trace_ids = {
+            str(span.get("trace_id") or "")
+            for span in spans
+            if span.get("trace_id")
+            and _matches_tag(_span_tags(span), _SESSION_TAGS, session_id)
+        }
+        eligible_trace_ids: set[str] = set()
+        for trace_id in session_trace_ids:
+            runtime_values = {
+                str(tags.get(key) or "")
+                for span in spans
+                if str(span.get("trace_id") or "") == trace_id
+                for tags in [_span_tags(span)]
+                for key in _RUNTIME_TAGS
+                if tags.get(key)
+            }
+            if not runtime_values or runtime_id in runtime_values:
+                eligible_trace_ids.add(trace_id)
+        return [
+            span
+            for span in spans
+            if str(span.get("trace_id") or "") in eligible_trace_ids
+        ]
+
+    def trace_for_tag(
+        spans: list[dict[str, Any]],
+        keys: tuple[str, ...],
+        value: str,
+    ) -> list[dict[str, Any]]:
+        if not value:
+            return []
+        trace_ids = {
+            str(span.get("trace_id") or "")
+            for span in spans
+            if _matches_tag(_span_tags(span), keys, value) and span.get("trace_id")
+        }
+        if not trace_ids:
+            return []
+        return [span for span in spans if str(span.get("trace_id") or "") in trace_ids]
+
+    def fetch_trace(trace_id: str) -> list[dict[str, Any]]:
+        response = cast(
+            Any,
+            api.list_span(
+                ListSpanRequest(
+                    project_name=project_name or "default",
+                    start_time=end_time - _QUERY_WINDOW_MS,
+                    end_time=query_end_time,
+                    limit=_PAGE_SIZE,
+                    offset=0,
+                    min_call_cost_millisecond=0,
+                    max_call_cost_millisecond=86_400_000,
+                    order="desc",
+                    order_by="start_time",
+                    filters=[
+                        FilterForListSpanInput(
+                            key="trace_id",
+                            op="in",
+                            values=[trace_id],
+                        )
+                    ],
+                )
+            ),
+        )
+        return session_runtime_spans(list(response.span_list or []))
+
+    def trace_from_tag_filter(
+        keys: tuple[str, ...],
+        value: str,
+    ) -> list[dict[str, Any]]:
+        if not value:
+            return []
+        for key in keys:
+            try:
+                response = cast(
+                    Any,
+                    api.list_span(
+                        ListSpanRequest(
+                            project_name=project_name or "default",
+                            start_time=end_time - _QUERY_WINDOW_MS,
+                            end_time=query_end_time,
+                            limit=_PAGE_SIZE,
+                            offset=0,
+                            min_call_cost_millisecond=0,
+                            max_call_cost_millisecond=86_400_000,
+                            order="desc",
+                            order_by="start_time",
+                            tag_filters=[
+                                TagFilterForListSpanInput(key=key, values=[value])
+                            ],
+                        )
+                    ),
+                )
+            except Exception:  # noqa: BLE001, S112 - compatibility scan follows
                 continue
-            runtime_tags = [str(tags.get(key) or "") for key in _RUNTIME_TAGS]
-            runtime_tags = [value for value in runtime_tags if value]
-            if runtime_tags and runtime_id not in runtime_tags:
-                continue
-            session_spans.append(span)
-            if invocation_id and _matches_tag(
-                tags,
-                _INVOCATION_TAGS,
-                invocation_id,
-            ):
-                invocation_trace_ids.add(str(span.get("trace_id") or ""))
-        if invocation_trace_ids:
-            return [
-                span
-                for span in session_spans
-                if str(span.get("trace_id") or "") in invocation_trace_ids
-            ]
-        return session_spans
+            trace_ids = list(
+                dict.fromkeys(
+                    str(_span_dict(row).get("trace_id") or "")
+                    for row in response.span_list or []
+                    if _span_dict(row).get("trace_id")
+                )
+            )
+            for trace_id in trace_ids:
+                spans = fetch_trace(trace_id)
+                matched_trace = trace_for_tag(spans, keys, value)
+                if matched_trace:
+                    return matched_trace
+        return []
+
+    direct_event_trace = trace_from_tag_filter(_EVENT_TAGS, event_id)
+    if direct_event_trace:
+        return direct_event_trace
+    direct_invocation_trace = trace_from_tag_filter(
+        _INVOCATION_TAGS,
+        invocation_id,
+    )
+    if direct_invocation_trace and not event_id:
+        return direct_invocation_trace
+
+    candidate_invocation_trace: list[dict[str, Any]] = []
 
     if now_ms is not None:
         candidates = cast(
@@ -173,7 +297,7 @@ def load_apmplus_trace(
                         FilterForListSpanInput(
                             key="operation_name",
                             op="in",
-                            values=["POST /run_sse"],
+                            values=["POST /run_sse", "POST /harness/run_sse"],
                         )
                     ],
                 )
@@ -193,35 +317,28 @@ def load_apmplus_trace(
             )
         )[:_MAX_TRACE_CANDIDATES]
         for trace_id in trace_ids:
-            response = cast(
-                Any,
-                api.list_span(
-                    ListSpanRequest(
-                        project_name=project_name or "default",
-                        start_time=end_time - _QUERY_WINDOW_MS,
-                        end_time=query_end_time,
-                        limit=_PAGE_SIZE,
-                        offset=0,
-                        min_call_cost_millisecond=0,
-                        max_call_cost_millisecond=86_400_000,
-                        order="desc",
-                        order_by="start_time",
-                        filters=[
-                            FilterForListSpanInput(
-                                key="trace_id",
-                                op="in",
-                                values=[trace_id],
-                            )
-                        ],
-                    )
-                ),
+            scoped_spans = fetch_trace(trace_id)
+            if not scoped_spans:
+                continue
+            event_trace = trace_for_tag(scoped_spans, _EVENT_TAGS, event_id)
+            if event_trace:
+                return event_trace
+            invocation_trace = trace_for_tag(
+                scoped_spans,
+                _INVOCATION_TAGS,
+                invocation_id,
             )
-            session_spans = matching_spans(list(response.span_list or []))
-            if session_spans:
-                return session_spans
-        return []
+            if invocation_trace and not event_id:
+                return invocation_trace
+            if invocation_trace and not candidate_invocation_trace:
+                candidate_invocation_trace = invocation_trace
+            if not event_id and not invocation_id:
+                return scoped_spans
+        # Runtime versions do not all use the same HTTP operation name for the
+        # invocation root span. Fall back to the bounded recent-span scan when
+        # the fast candidate lookup cannot identify this session.
 
-    session_spans: list[dict[str, Any]] = []
+    recent_rows: list[object] = []
     for page in range(_MAX_PAGES):
         response = cast(
             Any,
@@ -240,7 +357,20 @@ def load_apmplus_trace(
             ),
         )
         rows = list(response.span_list or [])
-        session_spans.extend(matching_spans(rows))
+        recent_rows.extend(rows)
         if len(rows) < _PAGE_SIZE:
             break
+    session_spans = session_runtime_spans(recent_rows)
+    event_trace = trace_for_tag(session_spans, _EVENT_TAGS, event_id)
+    if event_trace:
+        return event_trace
+    if direct_invocation_trace:
+        return direct_invocation_trace
+    if candidate_invocation_trace:
+        return candidate_invocation_trace
+    invocation_trace = trace_for_tag(session_spans, _INVOCATION_TAGS, invocation_id)
+    if invocation_trace:
+        return invocation_trace
+    if event_id or invocation_id:
+        return []
     return session_spans

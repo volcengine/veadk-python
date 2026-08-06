@@ -36,6 +36,13 @@ const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
     tone: "search",
     icon: WebSearchIcon,
   },
+  read_browser_context: {
+    name: "read_browser_context",
+    runningLabel: "正在查阅浏览器数据",
+    doneLabel: "已查阅浏览器数据",
+    tone: "search",
+    icon: WebSearchIcon,
+  },
   run_code: {
     name: "run_code",
     runningLabel: "正在 AgentKit 沙箱中执行代码",
@@ -50,10 +57,24 @@ const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
     tone: "image",
     icon: ImageGenerateIcon,
   },
+  image_edit: {
+    name: "image_edit",
+    runningLabel: "正在编辑图片",
+    doneLabel: "已完成图片编辑",
+    tone: "image",
+    icon: ImageGenerateIcon,
+  },
   video_generate: {
     name: "video_generate",
     runningLabel: "正在生成视频",
     doneLabel: "已完成视频生成",
+    tone: "video",
+    icon: VideoGenerateIcon,
+  },
+  video_task_query: {
+    name: "video_task_query",
+    runningLabel: "正在查询视频生成进度",
+    doneLabel: "已查询视频生成进度",
     tone: "video",
     icon: VideoGenerateIcon,
   },

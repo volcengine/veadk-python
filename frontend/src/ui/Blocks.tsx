@@ -12,6 +12,7 @@ import { TextShimmer } from "./text-shimmer/TextShimmer";
 import { BuiltinToolHeader } from "./builtin-tools/BuiltinToolHeader";
 import { ToolDisclosureIcon } from "./builtin-tools/icons";
 import { getBuiltinToolDefinition } from "./builtin-tools/registry";
+import { getClientToolSpanLabel } from "../client-tools/registry";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
 const STREAM_FRAME_INTERVAL_MS = 28;
@@ -143,6 +144,14 @@ function loadSkillLabel(name: string, args: unknown): string | undefined {
   return `使用 ${skillName.trim()} 技能`;
 }
 
+function toolStatusLabel(
+  name: string,
+  args: unknown,
+  done: boolean,
+): string | undefined {
+  return getClientToolSpanLabel(name, args, done) ?? loadSkillLabel(name, args);
+}
+
 export function ThinkingBlock({
   text,
   done,
@@ -253,7 +262,7 @@ function ToolBlock({
       {builtinTool ? (
         <BuiltinToolHeader
           definition={builtinTool}
-          label={loadSkillLabel(name, args)}
+          label={toolStatusLabel(name, args, done)}
           done={done}
           open={open}
           onToggle={() => setOpen((value) => !value)}
