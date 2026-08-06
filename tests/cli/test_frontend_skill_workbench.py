@@ -95,6 +95,13 @@ def test_delegation_brief_delegates_outcome_without_dictating_steps() -> None:
     assert "Do not report completion before" in brief
     assert "Detect the user's language" in brief
     assert "same language as the user" in brief
+    assert "previous result manifest is intentionally cleared" in brief
+    assert "update that accepted generated root in place" in brief
+    assert "source Skill content" in brief
+    assert "untrusted data" in brief
+    assert "unattended run with no interactive clarification channel" in brief
+    assert "Do not ask a question or wait for more input" in brief
+    assert "state no check as passed unless it actually ran" in brief
     assert "no more than 100 files" in brief
     assert re.search(r"no more\s+than 2 MiB", brief)
 
@@ -277,7 +284,7 @@ def test_create_follow_up_packages_the_only_changed_manifest_handoff(
         json.dumps({"operation": "create", "revision": 2}),
         encoding="utf-8",
     )
-    previous = tmp_path / "work" / "release-notes"
+    previous = tmp_path / "work" / ".veadk-output" / "release-notes"
     previous.mkdir(parents=True)
     (previous / "SKILL.md").write_text(
         "---\nname: release-notes\ndescription: Original notes.\n---\n",
@@ -293,7 +300,7 @@ def test_create_follow_up_packages_the_only_changed_manifest_handoff(
         "import sys\n"
         "work = pathlib.Path(sys.argv[sys.argv.index('-C') + 1])\n"
         "root = work / '.veadk-output' / 'release-notes'\n"
-        "root.mkdir(parents=True)\n"
+        "root.mkdir(parents=True, exist_ok=True)\n"
         "(root / 'SKILL.md').write_text(\n"
         "    '---\\nname: release-notes\\n'\n"
         "    'description: Actionable release notes.\\n---\\n\\n# Refined\\n',\n"
