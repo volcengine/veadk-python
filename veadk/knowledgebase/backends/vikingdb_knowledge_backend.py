@@ -35,7 +35,6 @@ from veadk.auth.veauth.utils import (
 from veadk.configs.database_configs import NormalTOSConfig, TOSConfig
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.entry import KnowledgebaseEntry
-from veadk.utils.cloud_provider import DEFAULT_BYTEPLUS_REGION
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp, getenv
 from veadk.integrations.ve_tos.ve_tos import VeTOS
@@ -73,8 +72,8 @@ def _viking_session_token_from_env() -> str:
 def _byteplus_viking_region(region: str | None) -> str:
     """Return the supported BytePlus VikingDB Knowledge Base region."""
     region = (region or "").strip()
-    if not region or region.startswith("cn-"):
-        return DEFAULT_BYTEPLUS_REGION
+    if not region or region in {"cn-beijing", "cn-shanghai", "cn-guangzhou"}:
+        return "cn-hongkong"
     return region
 
 

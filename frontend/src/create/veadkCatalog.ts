@@ -5,6 +5,8 @@
 // Each option carries enough metadata to (a) render a picker and (b) emit
 // runnable Python + a complete .env.example.
 
+import type { CloudProvider } from "../adk/cloudProvider";
+
 export interface EnvVar {
   key: string;
   /** Whether the feature is non-functional without it (still emitted, but flagged). */
@@ -250,9 +252,25 @@ const HIDDEN_CREATE_TOOL_IDS = new Set([
   "text_to_speech",
   "vesearch",
 ]);
+
+const BYTEPLUS_HIDDEN_CREATE_TOOL_IDS = new Set([
+  "web_search",
+  "parallel_web_search",
+]);
+
 export const CREATE_BUILTIN_TOOLS = BUILTIN_TOOLS.filter(
   (tool) => !HIDDEN_CREATE_TOOL_IDS.has(tool.id),
 );
+
+export function createBuiltinToolsForProvider(
+  cloudProvider: CloudProvider = "volcengine",
+): ToolOption[] {
+  const hidden =
+    cloudProvider === "byteplus"
+      ? BYTEPLUS_HIDDEN_CREATE_TOOL_IDS
+      : new Set<string>();
+  return CREATE_BUILTIN_TOOLS.filter((tool) => !hidden.has(tool.id));
+}
 
 /* ------------------------------------------------------------------ *
  * Short-term memory backends.

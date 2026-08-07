@@ -32,7 +32,10 @@ from veadk.integrations.ve_viking_db_memory.ve_viking_db_memory import (
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
 )
-from veadk.utils.cloud_provider import DEFAULT_BYTEPLUS_REGION
+from veadk.utils.cloud_provider import (
+    DEFAULT_BYTEPLUS_VIKING_MEMORY_HOST,
+    DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -89,15 +92,11 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
 
     memory_type: list[str] = Field(default_factory=list)
 
-    def model_post_init(self, __context: Any) -> None:
-        if not self.region:
-            if self.cloud_provider.lower() == "byteplus":
-                self.region = os.getenv(
-                    "DATABASE_VIKING_REGION",
-                    DEFAULT_BYTEPLUS_REGION,
-                )
-            else:
-                self.region = os.getenv("DATABASE_VIKING_REGION", "cn-beijing")
+    def model_post_init(self, __context: Any, /) -> None:
+        if self.cloud_provider.lower() == "byteplus":
+            self.region = DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
+        elif not self.region:
+            self.region = os.getenv("DATABASE_VIKING_REGION", "cn-beijing")
 
         # We get memory type from:
         # 1. user input
@@ -136,7 +135,8 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
             )
             logger.info(f"Collection {self.index} exist.")
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001
+            # The VikingDB SDK raises broad service/client errors for missing collections.
             logger.info(f"Collection {self.index} not exist.")
             return False
 
@@ -181,7 +181,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
     def _get_client(self) -> VikingDBMemoryClient:
         ak, sk, sts_token = self._get_ak_sk_sts()
         if self.cloud_provider.lower() == "byteplus":
-            host = f"api-knowledgebase.mlp.{self.region}.bytepluses.com"
+            host = DEFAULT_BYTEPLUS_VIKING_MEMORY_HOST
         else:
             host = f"api-knowledgebase.mlp.{self.region}.volces.com"
         logger.info(f"Cloud provider: {self.cloud_provider.lower()}")
@@ -198,7 +198,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
     def _get_sdk_client(self) -> VikingMem:
         ak, sk, sts_token = self._get_ak_sk_sts()
         if self.cloud_provider.lower() == "byteplus":
-            host = f"api-knowledgebase.mlp.{self.region}.bytepluses.com"
+            host = DEFAULT_BYTEPLUS_VIKING_MEMORY_HOST
         else:
             host = f"api-knowledgebase.mlp.{self.region}.volces.com"
         logger.info(f"Cloud provider: {self.cloud_provider.lower()}")

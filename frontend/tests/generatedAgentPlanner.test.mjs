@@ -25,7 +25,11 @@ test("removes hidden capabilities from every generated Agent", () => {
   );
   const sanitizer = normalizeSource.slice(start);
 
-  assert.match(sanitizer, /GENERATED_TOOL_IDS\.has\(toolId\)/);
+  assert.match(
+    sanitizer,
+    /createBuiltinToolsForProvider\(cloudProvider\)\.map\(\(tool\) => tool\.id\)/,
+  );
+  assert.match(sanitizer, /generatedToolIds\.has\(toolId\)/);
   assert.match(sanitizer, /tracing: false/);
   assert.match(sanitizer, /tracingExporters: \[\]/);
   assert.match(sanitizer, /memory: \{ shortTerm: false, longTerm: false \}/);
@@ -37,7 +41,7 @@ test("removes hidden capabilities from every generated Agent", () => {
   assert.match(sanitizer, /knowledgebaseIndex: ""/);
   assert.match(
     sanitizer,
-    /subAgents: draft\.subAgents\.map\(sanitizeGeneratedDraftCapabilities\)/,
+    /subAgents: draft\.subAgents\.map\(\(child\) =>[\s\S]*?sanitizeGeneratedDraftCapabilities\(child, cloudProvider\)/,
   );
   assert.match(
     createSource,
@@ -49,8 +53,14 @@ test("keeps OpenViking long-term memory when normalizing imported drafts", () =>
   assert.match(normalizeSource, /"openviking"/);
 });
 
-test("feeds supported generated tool ids into the checklist selection", () => {
-  assert.match(createSource, /items=\{CREATE_BUILTIN_TOOLS\}/);
+test("feeds provider-supported generated tool ids into the checklist selection", () => {
+  assert.match(
+    createSource,
+    /createBuiltinToolsForProvider\(cloudProvider\)/,
+  );
+  assert.match(createSource, /new Set\(createBuiltinTools\.map\(\(tool\) => tool\.id\)\)/);
+  assert.match(createSource, /if \(!createBuiltinToolIds\.has\(id\)\) return/);
+  assert.match(createSource, /items=\{createBuiltinTools\}/);
   assert.match(createSource, /selected=\{builtinTools\}/);
 });
 

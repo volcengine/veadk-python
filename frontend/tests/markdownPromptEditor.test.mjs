@@ -581,10 +581,18 @@ test("advanced model connection settings use an accessible disclosure", () => {
 });
 
 test("built-in tools adapt columns and scroll after six rows", () => {
-  assert.match(createSource, /items=\{CREATE_BUILTIN_TOOLS\}[\s\S]*?scrollRows=\{6\}/);
+  assert.match(createSource, /items=\{createBuiltinTools\}[\s\S]*?scrollRows=\{6\}/);
   assert.match(
     catalogSource,
     /HIDDEN_CREATE_TOOL_IDS = new Set\(\[[\s\S]*?"web_scraper"[\s\S]*?"text_to_speech"[\s\S]*?"vesearch"/,
+  );
+  assert.match(
+    catalogSource,
+    /BYTEPLUS_HIDDEN_CREATE_TOOL_IDS = new Set\(\[[\s\S]*?"web_search"[\s\S]*?"parallel_web_search"/,
+  );
+  assert.match(
+    catalogSource,
+    /cloudProvider === "byteplus"[\s\S]*?BYTEPLUS_HIDDEN_CREATE_TOOL_IDS[\s\S]*?return CREATE_BUILTIN_TOOLS\.filter\(\(tool\) => !hidden\.has\(tool\.id\)\)/,
   );
   assert.match(
     createStyles,
