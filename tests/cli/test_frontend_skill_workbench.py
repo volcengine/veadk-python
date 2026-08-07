@@ -4242,18 +4242,15 @@ def test_publish_reuses_one_authoritative_devenv_state_read(
     monkeypatch.setattr("veadk.cli.frontend_skill_workbench.requests.get", get_archive)
     monkeypatch.setattr(
         cli_skills_workflow,
-        "_ensure_bucket_ready",
-        lambda **kwargs: None,
-    )
-    monkeypatch.setattr(
-        cli_skills_workflow,
         "_make_content_hashed_zip_copy",
         lambda archive_path, name, directory: archive_path,
     )
     monkeypatch.setattr(
-        cli_skills_workflow,
-        "_tos_upload",
-        lambda *args, **kwargs: "tos://bucket/release-notes.zip",
+        "veadk.cli.studio_skill_storage.upload_skill_archive",
+        lambda *args, **kwargs: SimpleNamespace(
+            bucket_name="bucket",
+            url="tos://bucket/release-notes.zip",
+        ),
     )
     monkeypatch.setattr(
         cli_skills_workflow,
@@ -4284,6 +4281,165 @@ def test_publish_reuses_one_authoritative_devenv_state_read(
     assert downloaded_paths == [
         f"{service._remote_dir(job_id)}/artifacts/revision-1.zip"
     ]
+
+
+def test_publish_on_byteplus_uses_vefaas_iam_for_object_storage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli import cli_skills_workflow
+    from agentkit.toolkit.config import GlobalConfigManager
+    from agentkit.toolkit.volcengine.sts import VeSTS
+
+    credential_path = tmp_path / "credential"
+    credential_path.write_text(
+        json.dumps(
+            {
+                "access_key_id": "iam-ak",
+                "secret_access_key": "iam-sk",
+                "session_token": "iam-token",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-1")
+    for key in (
+        "BYTEPLUS_ACCESS_KEY",
+        "BYTEPLUS_SECRET_KEY",
+        "BYTEPLUS_SESSION_TOKEN",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(
+        "veadk.cli.studio_cloud_credentials.VEFAAS_IAM_CRIDENTIAL_PATH",
+        str(credential_path),
+    )
+    monkeypatch.setattr(VeSTS, "get_account_id", lambda self: 1234567890)
+
+    tos_clients = []
+
+    class TosClient:
+        def __init__(
+            self,
+            access_key,
+            secret_key,
+            endpoint,
+            region,
+            *,
+            security_token="",
+            **kwargs,
+        ):
+            self.options = {
+                "access_key": access_key,
+                "secret_key": secret_key,
+                "security_token": security_token,
+                "endpoint": endpoint,
+                "region": region,
+            }
+            self.uploads = []
+            tos_clients.append(self)
+
+        def list_buckets(self):
+            return SimpleNamespace(
+                buckets=[
+                    SimpleNamespace(
+                        name="agentkit-platform-1234567890",
+                        location="ap-southeast-1",
+                    )
+                ]
+            )
+
+        def put_object_from_file(self, *, bucket, key, file_path):
+            self.uploads.append(
+                {
+                    "bucket": bucket,
+                    "key": key,
+                    "file_path": file_path,
+                }
+            )
+
+    monkeypatch.setattr("tos.TosClientV2", TosClient)
+    monkeypatch.setattr(
+        GlobalConfigManager,
+        "load",
+        lambda self: SimpleNamespace(
+            tos=SimpleNamespace(bucket="", prefix="agentkit/skills")
+        ),
+    )
+    monkeypatch.setattr(
+        cli_skills_workflow,
+        "_make_content_hashed_zip_copy",
+        lambda archive_path, name, directory: archive_path,
+    )
+    monkeypatch.setattr(
+        cli_skills_workflow,
+        "_wait_for_running_version",
+        lambda **kwargs: SimpleNamespace(version="1"),
+    )
+
+    class Skills:
+        def create_skill(self, request):
+            assert request.bucket_name == "agentkit-platform-1234567890"
+            assert request.tos_url.startswith(
+                "https://agentkit-platform-1234567890."
+                "tos-ap-southeast-1.bytepluses.com/"
+            )
+            return SimpleNamespace(id="skill-1")
+
+    archive = validate_skill_archive(skill_zip())
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    session = {
+        "instanceId": "session-1",
+        "endpoint": "https://devenv.example",
+    }
+    service = SkillWorkbenchService(
+        tool_id="tool",
+        region="ap-southeast-1",
+        skills_client_factory=lambda region: Skills(),
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_task_with_session",
+        lambda requested_job_id, owner_id: (
+            {
+                "jobId": requested_job_id,
+                "state": "ready",
+                "revision": 1,
+                "source": None,
+            },
+            session,
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_download_archive_from_session",
+        lambda *args, **kwargs: archive,
+    )
+    monkeypatch.setattr(service, "_persist_publication", lambda *args, **kwargs: None)
+
+    result = service.publish(
+        job_id,
+        "alice",
+        PublishSkillTaskBody(
+            disposition="create-new",
+            expectedRevision=1,
+        ),
+    )
+
+    assert result["skillId"] == "skill-1"
+    assert tos_clients[0].options == {
+        "access_key": "iam-ak",
+        "secret_key": "iam-sk",
+        "security_token": "iam-token",
+        "endpoint": "tos-ap-southeast-1.bytepluses.com",
+        "region": "ap-southeast-1",
+    }
+    assert tos_clients[0].uploads[0]["bucket"] == "agentkit-platform-1234567890"
+    assert tos_clients[0].uploads[0]["key"].startswith("agentkit/skills/release-notes")
+    assert os.getenv("BYTEPLUS_ACCESS_KEY") is None
+    assert os.getenv("BYTEPLUS_SECRET_KEY") is None
+    assert os.getenv("BYTEPLUS_SESSION_TOKEN") is None
 
 
 def test_preview_materializes_one_legacy_archive_for_the_requested_revision(
@@ -4574,6 +4730,37 @@ def test_publish_preserves_a_retryable_preflight_artifact_failure(
         )
 
     assert caught.value.code == "SKILL_ARTIFACT_DOWNLOAD_CONFLICT"
+    assert caught.value.retryable is True
+
+
+def test_publish_preserves_a_retryable_preflight_storage_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SkillWorkbenchService(tool_id="tool")
+    monkeypatch.setattr(
+        service,
+        "_publish_once",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            SkillWorkbenchError(
+                "SKILL_PUBLISH_STORAGE_FAILED",
+                "上传 Skill 包失败，请检查对象存储权限或稍后重试。",
+                status_code=502,
+                retryable=True,
+            )
+        ),
+    )
+
+    with pytest.raises(SkillWorkbenchError) as caught:
+        service.publish(
+            service._new_job_id("alice"),
+            "alice",
+            PublishSkillTaskBody(
+                disposition="create-new",
+                expectedRevision=1,
+            ),
+        )
+
+    assert caught.value.code == "SKILL_PUBLISH_STORAGE_FAILED"
     assert caught.value.retryable is True
 
 

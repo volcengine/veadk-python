@@ -2489,6 +2489,7 @@ class SkillWorkbenchService:
                 "SKILL_TASK_SYNC_FAILED",
                 "SKILL_ARTIFACT_DOWNLOAD_FAILED",
                 "SKILL_ARTIFACT_DOWNLOAD_CONFLICT",
+                "SKILL_PUBLISH_STORAGE_FAILED",
             }:
                 raise
             logger.warning(
@@ -2605,13 +2606,11 @@ class SkillWorkbenchService:
             ),
         )
         from agentkit.toolkit.cli.cli_skills_workflow import (
-            _ensure_bucket_ready,
             _make_content_hashed_zip_copy,
-            _tos_upload,
             _wait_for_running_version,
         )
         from agentkit.toolkit.config import GlobalConfigManager
-        from agentkit.toolkit.volcengine.services.tos_service import TOSService
+        from veadk.cli.studio_skill_storage import upload_skill_archive
 
         config = GlobalConfigManager().load()
         effective_region = (
@@ -2623,30 +2622,46 @@ class SkillWorkbenchService:
         configured_bucket = (
             os.getenv("VEADK_SKILL_CREATOR_TOS_BUCKET") or config.tos.bucket or ""
         ).strip()
-        bucket = configured_bucket or TOSService.generate_bucket_name()
         prefix = (
             os.getenv("VEADK_SKILL_CREATOR_TOS_PREFIX")
             or config.tos.prefix
             or "agentkit/skills"
         ).strip()
-        _ensure_bucket_ready(
-            bucket_name=bucket,
-            prefix=prefix,
-            region=effective_region,
-            auto_bucket=not bool(configured_bucket),
-            assume_yes=True,
-            assume_no=False,
-        )
         report("uploading", "正在上传 Skill 包")
-        with tempfile.TemporaryDirectory(prefix="veadk-skill-publish-") as directory:
-            archive_path = Path(directory) / f"{archive.name}.zip"
-            archive_path.write_bytes(archive.content)
-            hashed_path = _make_content_hashed_zip_copy(
-                str(archive_path), archive.name, directory
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="veadk-skill-publish-"
+            ) as directory:
+                archive_path = Path(directory) / f"{archive.name}.zip"
+                archive_path.write_bytes(archive.content)
+                hashed_path = _make_content_hashed_zip_copy(
+                    str(archive_path), archive.name, directory
+                )
+                upload = upload_skill_archive(
+                    hashed_path,
+                    configured_bucket=configured_bucket,
+                    prefix=prefix,
+                    region=effective_region,
+                )
+        except Exception as error:
+            retryable = _is_transient_dependency_error(error)
+            logger.warning(
+                "Skill workbench object storage upload failed "
+                "job_id=%s revision=%s region=%s retryable=%s error_type=%s",
+                job_id,
+                revision,
+                effective_region,
+                retryable,
+                type(error).__name__,
             )
-            tos_url = _tos_upload(
-                hashed_path, bucket, prefix, effective_region, verify_bucket=False
-            )
+            raise SkillWorkbenchError(
+                "SKILL_PUBLISH_STORAGE_FAILED",
+                "上传 Skill 包失败，请检查对象存储权限或稍后重试。",
+                status_code=502,
+                retryable=retryable,
+            ) from error
+        bucket = upload.bucket_name
+        tos_url = upload.url
         report("registering", "正在写入 AgentKit Skill")
         client = self._skills_client_factory(effective_region)
         effective_project = (

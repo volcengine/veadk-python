@@ -1111,32 +1111,21 @@ class SkillCreatorService:
         archive, _ = self.download(job_id, candidate_id, owner_id)
         name, description = self._archive_metadata(archive)
         from agentkit.toolkit.cli.cli_skills_workflow import (
-            _ensure_bucket_ready,
             _make_content_hashed_zip_copy,
-            _tos_upload,
             _wait_for_running_version,
         )
         from agentkit.toolkit.config import GlobalConfigManager
-        from agentkit.toolkit.volcengine.services.tos_service import TOSService
+        from veadk.cli.studio_skill_storage import upload_skill_archive
 
         config = GlobalConfigManager().load()
         configured_bucket = (
             os.getenv("VEADK_SKILL_CREATOR_TOS_BUCKET") or config.tos.bucket or ""
         ).strip()
-        bucket = configured_bucket or TOSService.generate_bucket_name()
         prefix = (
             os.getenv("VEADK_SKILL_CREATOR_TOS_PREFIX")
             or config.tos.prefix
             or "agentkit/skills"
         ).strip()
-        _ensure_bucket_ready(
-            bucket_name=bucket,
-            prefix=prefix,
-            region=self._region,
-            auto_bucket=not bool(configured_bucket),
-            assume_yes=True,
-            assume_no=False,
-        )
 
         with tempfile.TemporaryDirectory(prefix="veadk-skill-publish-") as temp_dir:
             archive_path = Path(temp_dir) / f"{name}.zip"
@@ -1144,9 +1133,14 @@ class SkillCreatorService:
             hashed_path = _make_content_hashed_zip_copy(
                 str(archive_path), name, temp_dir
             )
-            tos_url = _tos_upload(
-                hashed_path, bucket, prefix, self._region, verify_bucket=False
+            upload = upload_skill_archive(
+                hashed_path,
+                configured_bucket=configured_bucket,
+                prefix=prefix,
+                region=self._region,
             )
+        bucket = upload.bucket_name
+        tos_url = upload.url
 
         client = AgentkitSkillsClient(**agentkit_client_options(self._region))
         effective_project = (
