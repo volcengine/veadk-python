@@ -1,5 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
+  cloudRegionOptions,
+  defaultCloudRegion,
+  formatCloudRegion,
+  type CloudProvider,
+  type CloudRegion,
+} from "../../adk/cloudProvider";
+import {
   formatSkillVersion,
   listSkillSpacesPage,
   type SkillSpaceRef,
@@ -22,12 +29,12 @@ import type {
 } from "./types";
 import "./skill-workbench.css";
 
-type SkillRegion = "cn-beijing" | "cn-shanghai";
 type Action = "publish" | "refine" | "stop" | null;
 
 const TERMINAL = new Set(["ready", "failed", "cancelled", "expired", "published"]);
 
 export interface SkillWorkbenchProps {
+  cloudProvider: CloudProvider;
   task: SkillWorkbenchTask | null;
   provisioningTask: SkillWorkbenchProvisioningTask | null;
   taskLoading: boolean;
@@ -120,7 +127,8 @@ function recoveryStatusLabel(
   return "状态待确认";
 }
 
-function regionLabel(region: SkillRegion): string {
+function compactRegionLabel(region: CloudRegion, cloudProvider: CloudProvider): string {
+  if (cloudProvider === "byteplus") return "新加坡";
   return region === "cn-shanghai" ? "上海" : "北京";
 }
 
@@ -220,6 +228,7 @@ function LoadingConversation({
 }
 
 export function SkillWorkbench({
+  cloudProvider,
   task,
   provisioningTask,
   taskLoading,
@@ -236,12 +245,18 @@ export function SkillWorkbench({
   onBack,
   onViewPublished,
 }: SkillWorkbenchProps) {
+  const publishRegionOptions = cloudRegionOptions(cloudProvider);
+  const defaultPublishRegion = defaultCloudRegion(cloudProvider);
+  const taskSourceRegion = task?.source?.region;
+  const sourcePublishRegion = taskSourceRegion && publishRegionOptions.some(
+    (option) => option.value === taskSourceRegion,
+  )
+    ? taskSourceRegion
+    : defaultPublishRegion;
   const [action, setAction] = useState<Action>(null);
   const [error, setError] = useState("");
   const [refinement, setRefinement] = useState("");
-  const [publishRegion, setPublishRegion] = useState<SkillRegion>(
-    task?.source?.region === "cn-shanghai" ? "cn-shanghai" : "cn-beijing",
-  );
+  const [publishRegion, setPublishRegion] = useState(defaultPublishRegion);
   const [publishSpaces, setPublishSpaces] = useState<SkillSpaceRef[]>([]);
   const [publishSpacesLoading, setPublishSpacesLoading] = useState(false);
   const [publishSpacesError, setPublishSpacesError] = useState("");
@@ -319,6 +334,10 @@ export function SkillWorkbench({
   }, [publishRegion, ready]);
 
   useEffect(() => () => publishControllerRef.current?.abort(), []);
+
+  useEffect(() => {
+    setPublishRegion(sourcePublishRegion);
+  }, [sourcePublishRegion, task?.jobId]);
 
   useEffect(() => {
     followActivityRef.current = true;
@@ -429,7 +448,7 @@ export function SkillWorkbench({
         disposition,
         skillSpaceIds,
         region: disposition === "update-source"
-          ? task.source?.region === "cn-shanghai" ? "cn-shanghai" : "cn-beijing"
+          ? sourcePublishRegion
           : publishRegion,
         projectName: disposition === "update-source"
           ? task.source?.projectName
@@ -783,7 +802,7 @@ export function SkillWorkbench({
                         <div>
                           <strong>{task.state === "published" ? "该版本已发布" : "Skill 已发布"}</strong>
                           <span>
-                            {regionLabel(effectivePublishResult.region)} · {effectivePublishResult.projectName}
+                            {formatCloudRegion(effectivePublishResult.region, cloudProvider)} · {effectivePublishResult.projectName}
                             {" · "}{effectivePublishResult.skillSpaceIds[0] || "未关联空间"}
                             {" · "}{formatSkillVersion(effectivePublishResult.version)}
                           </span>
@@ -804,7 +823,7 @@ export function SkillWorkbench({
                       <div className="skill-workbench__publish-controls">
                         <div className="skill-workbench__publish-target">
                           <div className="skill-workbench__publish-regions" aria-label="发布地域">
-                            {(["cn-beijing", "cn-shanghai"] as const).map((region) => (
+                            {publishRegionOptions.map(({ value: region }) => (
                               <button
                                 key={region}
                                 type="button"
@@ -812,7 +831,7 @@ export function SkillWorkbench({
                                 disabled={Boolean(action)}
                                 onClick={() => setPublishRegion(region)}
                               >
-                                {regionLabel(region)}
+                                {compactRegionLabel(region, cloudProvider)}
                               </button>
                             ))}
                           </div>

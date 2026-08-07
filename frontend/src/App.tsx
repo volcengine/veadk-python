@@ -1213,7 +1213,7 @@ export default function App() {
     appName?: string;
     currentVersion?: number | null;
   } | null>(null);
-  const [newRuntimeRegion, setNewRuntimeRegion] = useState(
+  const [newRuntimeRegion, setNewRuntimeRegion] = useState<string>(
     defaultCloudRegion(cloudProvider),
   );
   const [focusedDeploymentTaskId, setFocusedDeploymentTaskId] = useState("");
@@ -4873,6 +4873,7 @@ export default function App() {
               />
             ) : skillWorkbenchOpen ? (
               <SkillWorkbench
+                cloudProvider={cloudProvider}
                 task={skillWorkbenchTasks.activeTask}
                 provisioningTask={skillWorkbenchTasks.activeProvisioningTask}
                 taskLoading={skillWorkbenchTasks.activeTaskLoading || skillWorkbenchTasks.startingTask}

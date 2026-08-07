@@ -183,6 +183,24 @@ test("streams publish stages and returns a concrete destination", () => {
   assert.doesNotMatch(workbench, /v\{effectivePublishResult\.version\}/);
 });
 
+test("uses the active provider regions for Skill publishing", () => {
+  assert.match(app, /<SkillWorkbench[\s\S]*cloudProvider=\{cloudProvider\}/);
+  assert.match(workbench, /cloudRegionOptions\(cloudProvider\)/);
+  assert.match(workbench, /defaultCloudRegion\(cloudProvider\)/);
+  assert.match(
+    workbench,
+    /formatCloudRegion\(effectivePublishResult\.region,\s*cloudProvider\)/,
+  );
+  assert.doesNotMatch(
+    workbench,
+    /\(\["cn-beijing",\s*"cn-shanghai"\]\s+as const\)\.map/,
+  );
+  assert.match(api, /isSupportedCloudRegion\(publication\.region\)/);
+  assert.match(api, /isSupportedCloudRegion\(value\.region\)/);
+  assert.match(types, /import type \{ CloudRegion \}/);
+  assert.match(types, /region:\s*CloudRegion;/);
+});
+
 test("keeps task polling above the workbench and supports safe reopening", () => {
   assert.match(app, /useSkillWorkbenchTasks/);
   assert.match(controller, /listSkillWorkbenchTasks/);

@@ -55,6 +55,7 @@ from veadk.cli.agentkit_sandbox_region import (
     is_agentkit_resource_not_found,
     sandbox_region_candidates,
 )
+from veadk.cli.studio_cloud_credentials import agentkit_client_options
 from veadk.cli.studio_sandbox_tools import studio_sandbox_agent_model_name
 
 _MODELS = (
@@ -1147,7 +1148,7 @@ class SkillCreatorService:
                 hashed_path, bucket, prefix, self._region, verify_bucket=False
             )
 
-        client = AgentkitSkillsClient(region=self._region)
+        client = AgentkitSkillsClient(**agentkit_client_options(self._region))
         effective_project = (
             project_name or os.getenv("VEADK_SKILL_CREATOR_PROJECT_NAME") or None
         )
@@ -1243,7 +1244,7 @@ class SkillCreatorService:
         request: str,
     ) -> dict[str, str]:
         del label
-        client = AgentkitToolsClient(region=self._region)
+        client = AgentkitToolsClient(**agentkit_client_options(self._region))
         session_id = self._session_id(job_id, candidate_id)
         model_provider, _ = _sandbox_model_config()
         session_envs = build_exec_session_envs(
@@ -1379,7 +1380,9 @@ class SkillCreatorService:
         regions = sandbox_region_candidates(self._region, provider=_sandbox_provider())
         for index, region in enumerate(regions):
             try:
-                response = AgentkitToolsClient(region=region).list_sessions(request)
+                response = AgentkitToolsClient(
+                    **agentkit_client_options(region)
+                ).list_sessions(request)
             except Exception as error:
                 if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
                     continue
@@ -1406,7 +1409,9 @@ class SkillCreatorService:
         failed = 0
         for tool_id, instance_id in instances:
             try:
-                AgentkitToolsClient(region=self._region).delete_session(
+                AgentkitToolsClient(
+                    **agentkit_client_options(self._region)
+                ).delete_session(
                     tools_types.DeleteSessionRequest(
                         ToolId=tool_id, SessionId=instance_id
                     )
@@ -1433,7 +1438,9 @@ class SkillCreatorService:
         regions = sandbox_region_candidates(self._region, provider=_sandbox_provider())
         for index, region in enumerate(regions):
             try:
-                tool = AgentkitToolsClient(region=region).get_tool(request)
+                tool = AgentkitToolsClient(**agentkit_client_options(region)).get_tool(
+                    request
+                )
             except Exception as error:
                 if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
                     continue

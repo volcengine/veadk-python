@@ -1,3 +1,5 @@
+import type { CloudRegion } from "../../adk/cloudProvider";
+
 export type SkillWorkbenchOperation = "create" | "optimize";
 export type SkillWorkbenchState =
   | "running"
@@ -12,7 +14,7 @@ export interface SkillWorkbenchSource {
   name?: string;
   skillId?: string;
   version?: string;
-  region?: string;
+  region?: CloudRegion;
   projectName?: string;
   skillSpaceId?: string;
   sha256?: string;
@@ -62,7 +64,7 @@ export interface SkillWorkbenchPublishResult {
   version: string;
   skillSpaceIds: string[];
   disposition: "create-new" | "update-source";
-  region: "cn-beijing" | "cn-shanghai";
+  region: CloudRegion;
   projectName: string;
 }
 

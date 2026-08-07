@@ -35,6 +35,7 @@ from veadk.cli.frontend_skill_workbench import (
     CreateSkillTaskBody,
     PublishSkillTaskBody,
     RefineSkillTaskBody,
+    SkillCenterSource,
     SkillWorkbenchError,
     SkillWorkbenchService,
     StopSkillTaskBody,
@@ -708,6 +709,100 @@ def test_capabilities_fail_closed_without_tool(monkeypatch: pytest.MonkeyPatch) 
     }
 
 
+def test_byteplus_regions_are_valid_workbench_contracts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+
+    source = SkillCenterSource.model_validate(
+        {
+            "kind": "skill-center",
+            "skillId": "skill-1",
+            "version": "1.0.0",
+            "region": "ap-southeast-1",
+        }
+    )
+    publication = PublishSkillTaskBody.model_validate(
+        {
+            "disposition": "create-new",
+            "expectedRevision": 1,
+            "region": "ap-southeast-1",
+        }
+    )
+    persisted = SkillWorkbenchService(tool_id="tool")._validated_publication_result(
+        {
+            "skillId": "skill-1",
+            "version": "1.0.0",
+            "skillSpaceIds": [],
+            "disposition": "create-new",
+            "region": "ap-southeast-1",
+            "projectName": "default",
+        }
+    )
+
+    assert source.region == "ap-southeast-1"
+    assert publication.region == "ap-southeast-1"
+    assert persisted["region"] == "ap-southeast-1"
+
+
+def test_byteplus_source_region_defaults_to_active_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+
+    source = SkillCenterSource.model_validate(
+        {
+            "kind": "skill-center",
+            "skillId": "skill-1",
+            "version": "1.0.0",
+        }
+    )
+
+    assert source.region == "ap-southeast-1"
+
+
+def test_publish_rejects_cross_provider_region_before_artifact_download(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    service = SkillWorkbenchService(tool_id="tool")
+    job_id = SkillWorkbenchService._new_job_id("alice")
+    monkeypatch.setattr(
+        service,
+        "_get_task_with_session",
+        lambda *_: (
+            {
+                "revision": 1,
+                "state": "ready",
+                "source": None,
+                "artifact": {"revision": 1, "sha256": "a" * 64},
+            },
+            {"endpoint": "https://sandbox", "instanceId": "session"},
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_download_archive_from_session",
+        lambda *_args, **_kwargs: pytest.fail(
+            "artifact must not be downloaded for an invalid provider region"
+        ),
+    )
+
+    with pytest.raises(SkillWorkbenchError) as caught:
+        service._publish_once(
+            job_id,
+            "alice",
+            PublishSkillTaskBody(
+                disposition="create-new",
+                expectedRevision=1,
+                region="cn-beijing",
+            ),
+        )
+
+    assert caught.value.code == "SKILL_PUBLISH_DESTINATION_INVALID"
+    assert caught.value.status_code == 422
+
+
 def test_capabilities_require_ready_devenv_and_optional_image(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -729,6 +824,36 @@ def test_capabilities_require_ready_devenv_and_optional_image(
     assert value["enabled"] is True
     assert value["reason"] == ""
     assert value["maxUploadBytes"] == 20 * 1024 * 1024
+
+
+def test_byteplus_capabilities_accept_provider_model_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    tools = SimpleNamespace(
+        get_tool=lambda request: SimpleNamespace(
+            tool_type="DevEnv",
+            status="Ready",
+            image_url="registry/dev:1",
+            envs=[
+                SimpleNamespace(key="CODEX_MODEL", value="seed-2-0-lite-260228"),
+                SimpleNamespace(key="CODEX_API_KEY", value=os.urandom(24).hex()),
+                SimpleNamespace(
+                    key="CODEX_BASE_URL",
+                    value="https://ark.ap-southeast.bytepluses.com/api/v3",
+                ),
+            ],
+        )
+    )
+    service = SkillWorkbenchService(
+        tool_id="tool-1",
+        tools_client_factory=lambda region: tools,
+    )
+
+    value = service.capabilities()
+
+    assert value["enabled"] is True
+    assert value["reason"] == ""
 
 
 def test_get_tool_retries_one_transient_read_failure(

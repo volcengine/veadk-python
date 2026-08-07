@@ -1,4 +1,8 @@
 import { withAuth } from "../../adk/auth";
+import {
+  isSupportedCloudRegion,
+  type CloudRegion,
+} from "../../adk/cloudProvider";
 import { withLocalUser } from "../../adk/identity";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
@@ -152,7 +156,7 @@ function normalizePublication(
     !Array.isArray(publication.skillSpaceIds) ||
     !publication.skillSpaceIds.every((item) => typeof item === "string") ||
     (publication.disposition !== "create-new" && publication.disposition !== "update-source") ||
-    (publication.region !== "cn-beijing" && publication.region !== "cn-shanghai") ||
+    !isSupportedCloudRegion(publication.region) ||
     typeof publication.projectName !== "string"
   ) throw new Error("Skill 发布结果格式错误。");
   return {
@@ -442,7 +446,7 @@ export async function publishSkillWorkbenchTask(args: {
   disposition: "create-new" | "update-source";
   skillSpaceIds?: string[];
   projectName?: string;
-  region?: "cn-beijing" | "cn-shanghai";
+  region?: CloudRegion;
   signal?: AbortSignal;
   onProgress?: (progress: SkillWorkbenchPublishProgress) => void;
 }): Promise<SkillWorkbenchPublishResult> {
@@ -513,7 +517,7 @@ export async function publishSkillWorkbenchTask(args: {
       !Array.isArray(value.skillSpaceIds) ||
       !value.skillSpaceIds.every((item) => typeof item === "string") ||
       (value.disposition !== "create-new" && value.disposition !== "update-source") ||
-      (value.region !== "cn-beijing" && value.region !== "cn-shanghai") ||
+      !isSupportedCloudRegion(value.region) ||
       typeof value.projectName !== "string"
     ) throw new Error("发布结果格式错误。");
     result = {

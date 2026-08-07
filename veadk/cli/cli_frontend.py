@@ -1311,51 +1311,19 @@ def _run_frontend_server(
         credential file so long-lived deployer AK/SK do not need to be shipped
         as function env vars.
         """
+        from veadk.cli.studio_cloud_credentials import (
+            StudioCloudCredentialError,
+            resolve_studio_cloud_credentials,
+        )
 
-        def _read_vefaas_iam_credentials() -> tuple[str, str, str | None] | None:
-            try:
-                with open("/var/run/secrets/iam/credential", encoding="utf-8") as f:
-                    data = json.load(f)
-                ak = data.get("access_key_id") or data.get("AccessKeyId")
-                sk = data.get("secret_access_key") or data.get("SecretAccessKey")
-                token = data.get("session_token") or data.get("SessionToken")
-                if ak and sk:
-                    return ak, sk, token or None
-            except (OSError, ValueError):
-                pass
-            return None
-
-        if provider == "byteplus":
-            ak = os.getenv("BYTEPLUS_ACCESS_KEY")
-            sk = os.getenv("BYTEPLUS_SECRET_KEY")
-            token = os.getenv("BYTEPLUS_SESSION_TOKEN")
-            if ak and sk:
-                return ak, sk, token or None
-            credentials = _read_vefaas_iam_credentials()
-            if credentials is not None:
-                return credentials
-            raise HTTPException(
-                status_code=400,
-                detail="BytePlus credentials not found (set BYTEPLUS_ACCESS_KEY/"
-                "BYTEPLUS_SECRET_KEY, or run inside a VeFaaS function with an "
-                "IAM role)",
-            )
-
-        ak = os.getenv("VOLCENGINE_ACCESS_KEY")
-        sk = os.getenv("VOLCENGINE_SECRET_KEY")
-        if ak and sk:
-            # STS / temporary credentials carry a session token; don't drop it.
-            token = os.getenv("VOLCENGINE_SESSION_TOKEN") or os.getenv(
-                "VOLC_SESSIONTOKEN"
-            )
-            return ak, sk, token or None
-        credentials = _read_vefaas_iam_credentials()
-        if credentials is not None:
-            return credentials
-        raise HTTPException(
-            status_code=400,
-            detail="Volcengine credentials not found (set VOLCENGINE_ACCESS_KEY/"
-            "SECRET_KEY, or run inside a VeFaaS function with an IAM role)",
+        try:
+            credentials = resolve_studio_cloud_credentials(provider)
+        except StudioCloudCredentialError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return (
+            credentials.access_key,
+            credentials.secret_key,
+            credentials.session_token or None,
         )
 
     def _default_cloud_region() -> str:

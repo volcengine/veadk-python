@@ -42,7 +42,7 @@ from collections.abc import AsyncIterator, Callable
 from concurrent.futures import Future
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import requests
 from agentkit.auth.errors import NetworkError
@@ -73,11 +73,12 @@ from veadk.cli.agentkit_session_metadata import (
     session_username,
 )
 from veadk.cli.frontend_skill_creator import (
-    _MODEL_BASE_URL,
     _runner_source,
     _safe_json_response,
+    _sandbox_model_config,
     _validated_activities,
 )
+from veadk.cli.studio_cloud_credentials import agentkit_client_options
 from veadk.skills.skill import Skill
 from veadk.utils.logger import get_logger
 
@@ -135,6 +136,17 @@ _RELEASED_SESSION_STATUSES = {
     "expired",
     "failed",
 }
+SkillRegion = Literal["cn-beijing", "cn-shanghai", "ap-southeast-1"]
+_SKILL_REGIONS: frozenset[str] = frozenset(
+    {"cn-beijing", "cn-shanghai", "ap-southeast-1"}
+)
+
+
+def _default_skill_region() -> SkillRegion:
+    region = sandbox_region_candidates()[0]
+    if region not in _SKILL_REGIONS:
+        raise ValueError(f"Unsupported Skill region: {region}")
+    return cast(SkillRegion, region)
 
 
 def _json_int(value: object, default: int) -> int:
@@ -217,10 +229,11 @@ def _tool_has_codex_model_credential(tool: Any) -> bool:
         for item in (getattr(tool, "envs", None) or [])
         if getattr(item, "key", None)
     }
+    _, expected_base_url = _sandbox_model_config()
     return bool(
         envs.get("CODEX_MODEL")
         and envs.get("CODEX_API_KEY")
-        and envs.get("CODEX_BASE_URL", "").rstrip("/") == _MODEL_BASE_URL
+        and envs.get("CODEX_BASE_URL", "").rstrip("/") == expected_base_url.rstrip("/")
     )
 
 
@@ -253,7 +266,7 @@ class SkillCenterSource(BaseModel):
     skill_id: str = Field(alias="skillId", min_length=1, max_length=256)
     skill_name: str | None = Field(default=None, alias="skillName", max_length=256)
     version: str = Field(min_length=1, max_length=128)
-    region: Literal["cn-beijing", "cn-shanghai"] = "cn-beijing"
+    region: SkillRegion = Field(default_factory=_default_skill_region)
     project_name: str | None = Field(default=None, alias="projectName", max_length=256)
     skill_space_id: str | None = Field(
         default=None, alias="skillSpaceId", max_length=256
@@ -339,7 +352,7 @@ class PublishSkillTaskBody(BaseModel):
         max_length=_MAX_SKILL_SPACE_IDS,
     )
     project_name: str | None = Field(default=None, alias="projectName", max_length=256)
-    region: Literal["cn-beijing", "cn-shanghai"] | None = None
+    region: SkillRegion | None = None
     expected_revision: int = Field(
         alias="expectedRevision",
         ge=1,
@@ -796,10 +809,10 @@ class SkillWorkbenchService:
             region or os.getenv("AGENTKIT_SANDBOX_REGION")
         )[0]
         self._tools_client_factory = tools_client_factory or (
-            lambda region: AgentkitToolsClient(region=region)
+            lambda region: AgentkitToolsClient(**agentkit_client_options(region))
         )
         self._skills_client_factory = skills_client_factory or (
-            lambda region: AgentkitSkillsClient(region=region)
+            lambda region: AgentkitSkillsClient(**agentkit_client_options(region))
         )
         self._task_locks: weakref.WeakValueDictionary[str, threading.Lock] = (
             weakref.WeakValueDictionary()
@@ -2549,6 +2562,24 @@ class SkillWorkbenchService:
                 "此来源不能更新原 Skill，请发布为新 Skill",
                 status_code=409,
             )
+        source_region = str(source.get("region") or "")
+        supported_regions = set(sandbox_region_candidates(self._region))
+        if body.region is not None and body.region not in supported_regions:
+            raise SkillWorkbenchError(
+                "SKILL_PUBLISH_DESTINATION_INVALID",
+                "发布地域与当前云服务商不匹配",
+                status_code=422,
+            )
+        if (
+            body.disposition == "update-source"
+            and source_region
+            and source_region not in supported_regions
+        ):
+            raise SkillWorkbenchError(
+                "SKILL_SOURCE_INVALID",
+                "原 Skill 地域与当前云服务商不匹配",
+                status_code=422,
+            )
         descriptor = _json_object(task.get("artifact"))
         descriptor_sha256 = (
             str(descriptor.get("sha256") or "")
@@ -2583,11 +2614,10 @@ class SkillWorkbenchService:
         from agentkit.toolkit.volcengine.services.tos_service import TOSService
 
         config = GlobalConfigManager().load()
-        source_region = str(source.get("region") or "")
         effective_region = (
             source_region
             if body.disposition == "update-source"
-            and source_region in {"cn-beijing", "cn-shanghai"}
+            and source_region in supported_regions
             else body.region or self._region
         )
         configured_bucket = (
@@ -2699,8 +2729,8 @@ class SkillWorkbenchService:
         )
         return result
 
-    @staticmethod
     def _validated_publication_result(
+        self,
         publication: dict[str, object],
     ) -> dict[str, object]:
         skill_id = publication.get("skillId")
@@ -2715,7 +2745,7 @@ class SkillWorkbenchService:
             or not isinstance(skill_space_ids, list)
             or not all(isinstance(item, str) for item in skill_space_ids)
             or disposition not in {"create-new", "update-source"}
-            or region not in {"cn-beijing", "cn-shanghai"}
+            or region not in sandbox_region_candidates(self._region)
             or not isinstance(project_name, str)
         ):
             raise SkillWorkbenchError(
@@ -2768,6 +2798,12 @@ class SkillWorkbenchService:
     def _resolve_center_source(
         self, source: SkillCenterSource
     ) -> tuple[SkillArchive, dict[str, object]]:
+        if source.region not in sandbox_region_candidates(self._region):
+            raise SkillWorkbenchError(
+                "SKILL_SOURCE_INVALID",
+                "Skill 来源地域与当前云服务商不匹配",
+                status_code=422,
+            )
         client = self._skills_client_factory(source.region)
         try:
             version_request = skills_types.GetSkillVersionRequest(

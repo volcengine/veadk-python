@@ -1,7 +1,8 @@
 export type CloudProvider = "volcengine" | "byteplus";
+export type CloudRegion = "cn-beijing" | "cn-shanghai" | "ap-southeast-1";
 
 export interface CloudRegionOption {
-  value: string;
+  value: CloudRegion;
   label: string;
 }
 
@@ -24,13 +25,20 @@ const VOLCENGINE_REGIONS: CloudRegionOption[] = [
 const BYTEPLUS_REGIONS: CloudRegionOption[] = [
   { value: BYTEPLUS_DEFAULT_REGION, label: BYTEPLUS_DEFAULT_REGION },
 ];
+const SUPPORTED_CLOUD_REGIONS: ReadonlySet<string> = new Set(
+  [...VOLCENGINE_REGIONS, ...BYTEPLUS_REGIONS].map((option) => option.value),
+);
 
 export function cloudRegionOptions(provider: CloudProvider): CloudRegionOption[] {
   return provider === "byteplus" ? BYTEPLUS_REGIONS : VOLCENGINE_REGIONS;
 }
 
-export function defaultCloudRegion(provider: CloudProvider): string {
+export function defaultCloudRegion(provider: CloudProvider): CloudRegion {
   return cloudRegionOptions(provider)[0]?.value || VOLCENGINE_DEFAULT_REGION;
+}
+
+export function isSupportedCloudRegion(value: unknown): value is CloudRegion {
+  return typeof value === "string" && SUPPORTED_CLOUD_REGIONS.has(value);
 }
 
 export function formatCloudRegion(region: string, provider?: CloudProvider): string {
