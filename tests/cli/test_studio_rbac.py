@@ -436,7 +436,7 @@ def test_byteplus_deploy_agentkit_uses_iam_file_for_sdk_templates(
     runtime_envs = cloud["runtime_envs"]
     assert runtime_envs["CLOUD_PROVIDER"] == "byteplus"
     assert runtime_envs["AGENTKIT_CLOUD_PROVIDER"] == "byteplus"
-    assert runtime_envs["DATABASE_VIKING_REGION"] == "ap-southeast-1"
+    assert runtime_envs["DATABASE_VIKING_REGION"] == "cn-hongkong"
     assert "BYTEPLUS_ACCESS_KEY" not in runtime_envs
     assert "BYTEPLUS_SECRET_KEY" not in runtime_envs
     assert "BYTEPLUS_SESSION_TOKEN" not in runtime_envs

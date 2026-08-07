@@ -44,7 +44,7 @@ import {
   A2A_REGISTRY_DEFAULTS,
   A2A_REGISTRY_ENV,
   BUILTIN_TOOLS,
-  CREATE_BUILTIN_TOOLS,
+  createBuiltinToolsForProvider,
   STM_BACKENDS,
   LTM_BACKENDS,
   KB_BACKENDS,
@@ -2928,14 +2928,24 @@ export function CustomCreate({
 
   // Root-only rich sections read these off the root draft directly.
   const builtinTools = node.builtinTools ?? [];
+  const createBuiltinTools = useMemo(
+    () => createBuiltinToolsForProvider(cloudProvider),
+    [cloudProvider],
+  );
+  const createBuiltinToolIds = useMemo(
+    () => new Set(createBuiltinTools.map((tool) => tool.id)),
+    [createBuiltinTools],
+  );
   const mcpTools = node.mcpTools ?? [];
   const selectedSkills = node.selectedSkills ?? [];
-  const toggleBuiltin = (id: string) =>
+  const toggleBuiltin = (id: string) => {
+    if (!createBuiltinToolIds.has(id)) return;
     patch({
       builtinTools: builtinTools.includes(id)
         ? builtinTools.filter((x) => x !== id)
         : [...builtinTools, id],
     });
+  };
 
   // Detail-pane branching is driven by the SELECTED node's type.
   const orchestrator = isOrchestratorType(node.agentType);
@@ -3923,7 +3933,7 @@ export function CustomCreate({
                       </span>
                       <div className="cw-tools-list-shell">
                         <Checklist
-                          items={CREATE_BUILTIN_TOOLS}
+                          items={createBuiltinTools}
                           selected={builtinTools}
                           onToggle={toggleBuiltin}
                           scrollRows={6}

@@ -24,6 +24,10 @@ CloudProvider = Literal["volcengine", "byteplus"]
 SUPPORTED_CLOUD_PROVIDERS: tuple[CloudProvider, ...] = ("volcengine", "byteplus")
 DEFAULT_CLOUD_PROVIDER: CloudProvider = "volcengine"
 DEFAULT_BYTEPLUS_REGION = "ap-southeast-1"
+DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION = "cn-hongkong"
+DEFAULT_BYTEPLUS_VIKING_MEMORY_HOST = (
+    f"api-knowledgebase.mlp.{DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION}.bytepluses.com"
+)
 DEFAULT_VOLCENGINE_REGION = "cn-beijing"
 _VEFAAS_APPLICATION_TEMPLATE_IDS: dict[CloudProvider, dict[str, str]] = {
     "volcengine": {
