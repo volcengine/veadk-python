@@ -87,6 +87,17 @@ test("aligns resource fields on one shared grid without gray card fills", () => 
   );
 });
 
+test("keeps resource dropdown menus outside the generic clipped config section", () => {
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-config-section\s*\{[\s\S]*?overflow:\s*hidden/,
+  );
+  assert.match(
+    resourceStyles,
+    /\.pp-config-section\.pp-resource-section\s*\{[\s\S]*?overflow:\s*visible/,
+  );
+});
+
 test("resource requests expose loading empty error retry and cancellation", () => {
   assert.match(resourceSource, /new AbortController\(\)/);
   assert.match(resourceSource, /requestRef\.current\?\.abort\(\)/);
