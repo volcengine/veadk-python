@@ -8122,16 +8122,7 @@ def frontend_update(
             environment_overrides["BYTEPLUS_REGION"] = target.region
             environment_overrides["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_REGION
             service_client = getattr(service, "client", None)
-            has_explicit_sandbox_tool = any(
-                tool_id is not None
-                for tool_id in (
-                    sandbox_chat_codex_tool_id,
-                    sandbox_skill_creator_tool_id,
-                    sandbox_chat_openclaw_tool_id,
-                    sandbox_chat_hermes_tool_id,
-                )
-            )
-            if service_client is None and not has_explicit_sandbox_tool:
+            if service_client is None:
                 current_env: dict[str, str] = {}
                 repair_sandbox_tools = False
             else:
@@ -8152,6 +8143,9 @@ def frontend_update(
                 "skill_creator": sandbox_skill_creator_tool_id
                 if sandbox_skill_creator_tool_id is not None
                 else current_env.get("SANDBOX_SKILL_CREATOR", ""),
+                "dev": sandbox_dev_tool_id
+                if sandbox_dev_tool_id is not None
+                else current_env.get("SANDBOX_DEV", ""),
                 "openclaw": sandbox_chat_openclaw_tool_id
                 if sandbox_chat_openclaw_tool_id is not None
                 else current_env.get("SANDBOX_CHAT_OPENCLAW", ""),
@@ -8162,12 +8156,14 @@ def frontend_update(
             byteplus_sandbox_labels = {
                 "codex": "Codex",
                 "skill_creator": "Skill Creator",
+                "dev": "Dev Sandbox",
                 "openclaw": "OpenClaw",
                 "hermes": "Hermes",
             }
             byteplus_sandbox_purposes = {
                 "codex": "chat",
                 "skill_creator": "skill",
+                "dev": "dev",
                 "openclaw": "openclaw",
                 "hermes": "hermes",
             }
@@ -8179,6 +8175,7 @@ def frontend_update(
                     ensure_studio_agent_model_credential,
                     ensure_studio_agent_tool,
                     ensure_studio_code_env_tool,
+                    ensure_studio_dev_env_tool,
                     studio_sandbox_agent_model_name,
                     studio_sandbox_model_base_url,
                     studio_sandbox_tool_name,
@@ -8205,7 +8202,17 @@ def frontend_update(
                     ) as ex:
                         tool_futures = {}
                         for kind, tool_name in missing_sandbox_tools.items():
-                            if kind in {"codex", "skill_creator"}:
+                            if kind == "dev":
+                                future = ex.submit(
+                                    ensure_studio_dev_env_tool,
+                                    name=tool_name,
+                                    provider=provider_id,
+                                    region=target.region,
+                                    access_key=ak,
+                                    secret_key=sk,
+                                    session_token=session_token or "",
+                                )
+                            elif kind in {"codex", "skill_creator"}:
                                 future = ex.submit(
                                     ensure_studio_code_env_tool,
                                     name=tool_name,
@@ -8241,19 +8248,53 @@ def frontend_update(
                                 ) from error
                             click.echo(f"AgentKit {label} Tool is ready.")
 
+                primary_codex_tool_id = str(
+                    byteplus_sandbox_tool_ids.get("codex") or ""
+                ).strip()
+                shared_codex_model_api_key: str | None = None
+                if primary_codex_tool_id:
+                    click.echo("Creating AgentKit Codex model credential…")
+                    try:
+                        shared_codex_model_api_key = (
+                            ensure_skill_creator_model_credential(
+                                tool_id=primary_codex_tool_id,
+                                region=target.region,
+                                access_key=ak,
+                                secret_key=sk,
+                                session_token=session_token,
+                                provider=provider_id,
+                                model_name=sandbox_agent_model_name,
+                            )
+                        )
+                    except Exception as error:
+                        detail = _safe_exception_detail(
+                            error,
+                            secrets=(ak, sk, session_token),
+                        )
+                        raise click.ClickException(
+                            "Failed to provision the AgentKit Codex model "
+                            f"credential. Underlying error:\n{detail}"
+                        ) from error
+                    click.echo("AgentKit Codex model credential is ready.")
+
+                remaining_sandbox_tool_ids = {
+                    kind: tool_id
+                    for kind, tool_id in byteplus_sandbox_tool_ids.items()
+                    if kind != "codex"
+                }
                 credential_futures = {}
                 with ThreadPoolExecutor(
-                    max_workers=len(byteplus_sandbox_tool_ids)
+                    max_workers=max(1, len(remaining_sandbox_tool_ids))
                 ) as ex:
-                    for kind, tool_id in byteplus_sandbox_tool_ids.items():
+                    for kind, tool_id in remaining_sandbox_tool_ids.items():
                         tool_id = str(tool_id or "").strip()
                         if not tool_id:
                             continue
                         label = byteplus_sandbox_labels[kind]
                         click.echo(f"Creating AgentKit {label} model credential…")
-                        if kind in {"codex", "skill_creator"}:
+                        if kind in {"skill_creator", "dev"}:
                             code_model_name = (
-                                sandbox_agent_model_name if kind == "codex" else None
+                                sandbox_agent_model_name if kind == "dev" else None
                             )
                             future = ex.submit(
                                 ensure_skill_creator_model_credential,
@@ -8264,6 +8305,7 @@ def frontend_update(
                                 session_token=session_token,
                                 provider=provider_id,
                                 model_name=code_model_name,
+                                model_api_key=shared_codex_model_api_key,
                             )
                         else:
                             future = ex.submit(
@@ -8299,6 +8341,9 @@ def frontend_update(
                 )
                 environment_overrides["SANDBOX_SKILL_CREATOR"] = str(
                     byteplus_sandbox_tool_ids["skill_creator"] or ""
+                )
+                environment_overrides["SANDBOX_DEV"] = str(
+                    byteplus_sandbox_tool_ids["dev"] or ""
                 )
                 environment_overrides["SANDBOX_CHAT_OPENCLAW"] = str(
                     byteplus_sandbox_tool_ids["openclaw"] or ""

@@ -691,6 +691,7 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     target = _target(region="ap-southeast-1")
     captured: dict[str, object] = {}
     code_tools: list[dict[str, object]] = []
+    dev_tools: list[dict[str, object]] = []
     agent_tools: list[dict[str, object]] = []
     code_credentials: list[dict[str, object]] = []
     agent_credentials: list[dict[str, object]] = []
@@ -715,12 +716,16 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
         lambda **kwargs: code_tools.append(kwargs) or f"{kwargs['name']}-tool",
     )
     monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_dev_env_tool",
+        lambda **kwargs: dev_tools.append(kwargs) or f"{kwargs['name']}-tool",
+    )
+    monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_tool",
         lambda **kwargs: agent_tools.append(kwargs) or f"{kwargs['kind']}-tool",
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
-        lambda **kwargs: code_credentials.append(kwargs),
+        lambda **kwargs: code_credentials.append(kwargs) or "shared-model-api-key",
     )
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_model_credential",
@@ -735,7 +740,11 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
                         SimpleNamespace(
                             key="SANDBOX_CHAT_CODEX",
                             value="existing-codex-tool",
-                        )
+                        ),
+                        SimpleNamespace(
+                            key="SANDBOX_DEV",
+                            value="existing-dev-tool",
+                        ),
                     ]
                 )
             )
@@ -766,8 +775,26 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     assert result.exit_code == 0, result.output
     assert len(code_tools) == 1
     assert "skill" in str(code_tools[0]["name"])
+    assert dev_tools == []
     assert {str(call["kind"]) for call in agent_tools} == {"openclaw", "hermes"}
     assert {str(call["provider"]) for call in code_credentials} == {"byteplus"}
+    code_credentials_by_tool = {str(call["tool_id"]): call for call in code_credentials}
+    assert code_credentials_by_tool["existing-codex-tool"]["model_name"] == (
+        "dola-seed-2-1-turbo-260628"
+    )
+    assert code_credentials_by_tool["existing-dev-tool"]["model_name"] == (
+        "dola-seed-2-1-turbo-260628"
+    )
+    assert code_credentials_by_tool["existing-dev-tool"]["model_api_key"] == (
+        "shared-model-api-key"
+    )
+    skill_credential = next(
+        call
+        for tool_id, call in code_credentials_by_tool.items()
+        if tool_id not in {"existing-codex-tool", "existing-dev-tool"}
+    )
+    assert skill_credential["model_name"] is None
+    assert skill_credential["model_api_key"] == "shared-model-api-key"
     assert {str(call["provider"]) for call in agent_credentials} == {"byteplus"}
     assert {str(call["model_base_url"]) for call in agent_credentials} == {
         "https://ark.ap-southeast.bytepluses.com/api/v3"
@@ -776,6 +803,7 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     assert isinstance(overrides, dict)
     assert overrides["SANDBOX_CHAT_CODEX"] == "existing-codex-tool"
     assert str(overrides["SANDBOX_SKILL_CREATOR"]).endswith("-tool")
+    assert overrides["SANDBOX_DEV"] == "existing-dev-tool"
     assert overrides["SANDBOX_CHAT_OPENCLAW"] == "openclaw-tool"
     assert overrides["SANDBOX_CHAT_HERMES"] == "hermes-tool"
     assert overrides["CLOUD_PROVIDER"] == "byteplus"
