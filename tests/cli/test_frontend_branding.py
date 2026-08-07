@@ -27,7 +27,7 @@ from veadk.cli.frontend_branding import (
     normalize_site_title,
     resolve_site_logo,
 )
-from veadk.cli.cli_frontend import studio
+from veadk.cli.cli_frontend import _default_provider_label, studio
 
 _PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUB"
@@ -69,6 +69,23 @@ def test_studio_cli_rejects_overlong_site_title() -> None:
 
     assert result.exit_code == 1
     assert "at most 6 characters" in result.output
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "cloud_provider", "expected"),
+    [
+        ("veidentity", "volcengine", "火山引擎 Identity"),
+        ("veidentity", "byteplus", "BytePlus Identity"),
+        ("github", "byteplus", "GitHub"),
+        ("custom_oidc", "byteplus", "Custom Oidc"),
+    ],
+)
+def test_default_identity_label_matches_cloud_provider(
+    provider_id: str,
+    cloud_provider: str,
+    expected: str,
+) -> None:
+    assert _default_provider_label(provider_id, cloud_provider) == expected
 
 
 def test_resolve_site_logo_reads_and_validates_local_image(tmp_path: Path) -> None:

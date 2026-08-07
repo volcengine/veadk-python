@@ -519,6 +519,12 @@ _PROVIDER_LABELS = {
 }
 
 
+def _default_provider_label(provider_id: str, cloud_provider: str) -> str:
+    if provider_id == "veidentity" and cloud_provider == "byteplus":
+        return "BytePlus Identity"
+    return _PROVIDER_LABELS.get(provider_id) or provider_id.replace("_", " ").title()
+
+
 def _agentkit_authorization_header(api_key: str) -> str:
     """Normalize AgentKit credential input to an Authorization header value."""
     value = api_key.strip()
@@ -5143,10 +5149,8 @@ def _run_frontend_server(
             oauth2_config.end_session_url = None
 
             # Expose the configured provider to the login page (unauthenticated).
-            label = (
-                oauth2_provider_label
-                or _PROVIDER_LABELS.get(provider_id)
-                or provider_id.replace("_", " ").title()
+            label = oauth2_provider_label or _default_provider_label(
+                provider_id, provider
             )
             providers = [
                 {"id": provider_id, "label": label, "loginUrl": "/oauth2/login"}
