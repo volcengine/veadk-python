@@ -49,6 +49,11 @@ export interface SkillSpacePageOptions {
   project?: string;
 }
 
+export function formatSkillVersion(version?: string): string {
+  const normalized = (version || "").trim().replace(/^v+/i, "");
+  return normalized ? `v${normalized}` : "—";
+}
+
 async function jfetch<T>(url: string): Promise<T> {
   const res = await fetch(url, {
     headers: { accept: "application/json" },

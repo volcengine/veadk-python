@@ -27,6 +27,9 @@ import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
 import { AgentFaceIcon } from "./AgentFaceIcon";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
+import { SkillSpaceIcon } from "./SkillCenter";
+import { StudioConfirmDialog } from "./StudioConfirmDialog";
+import type { SkillWorkbenchTaskListItem } from "./skill-workbench/types";
 import defaultSiteLogo from "../assets/logo.svg";
 import byteplusLogo from "../assets/byteplus.svg";
 
@@ -72,6 +75,13 @@ export interface SidebarProps {
   streamingSids?: Set<string>;
   /** Session ids whose latest reply is currently being evaluated. */
   evaluatingSids?: Set<string>;
+  skillConversations?: SkillWorkbenchTaskListItem[];
+  skillConversationsLoading?: boolean;
+  skillConversationsError?: string;
+  activeSkillConversationId?: string;
+  onOpenSkillConversation: (jobId: string) => void;
+  onDeleteSkillConversation: (jobId: string) => Promise<void>;
+  onRetrySkillConversations: () => void;
   onNewChat: () => void;
   onSearch: () => void;
   onQuickCreate: () => void;
@@ -85,6 +95,68 @@ export interface SidebarProps {
   userInfo?: Record<string, unknown>;
   version: string;
   onLogout: () => void;
+}
+
+type SidebarConversation =
+  | {
+      kind: "session";
+      id: string;
+      updatedAt: number;
+      session: AdkSession;
+    }
+  | {
+      kind: "skill";
+      id: string;
+      updatedAt: number;
+      task: SkillWorkbenchTaskListItem;
+    };
+
+export function mergeSidebarConversations(
+  sessions: AdkSession[],
+  skillConversations: SkillWorkbenchTaskListItem[],
+): SidebarConversation[] {
+  return [
+    ...sessions.map((session): SidebarConversation => ({
+      kind: "session",
+      id: `session:${session.id}`,
+      updatedAt: session.lastUpdateTime ?? 0,
+      session,
+    })),
+    ...skillConversations.map((task): SidebarConversation => ({
+      kind: "skill",
+      id: `skill:${task.jobId}`,
+      updatedAt: task.createdAt,
+      task,
+    })),
+  ].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function skillConversationStatus(task: SkillWorkbenchTaskListItem): string {
+  if (task.state === "provisioning") return "准备 DevEnv";
+  if (task.state === "running") {
+    if (task.stage === "validating") return "校验中";
+    if (task.stage === "packaging") return "打包中";
+    return "生成中";
+  }
+  if (task.state === "ready" || task.state === "published") return "已完成";
+  if (task.state === "failed") return "失败";
+  if (task.state === "expired") return "DevEnv 已释放";
+  return "已结束";
+}
+
+function skillConversationTitle(task: SkillWorkbenchTaskListItem): string {
+  return task.intent ||
+    (task.operation === "create"
+      ? "创建 Skill"
+      : task.operation === "optimize"
+        ? "优化 Skill"
+        : "Skill 会话");
+}
+
+function skillConversationOperation(task: SkillWorkbenchTaskListItem): string {
+  if (task.operation === "create") return "创建";
+  if (task.operation === "optimize") return "优化";
+  return "Skill";
 }
 
 /** Stable per-user blue/cyan smoke palette so avatars feel individual without flicker. */
@@ -289,6 +361,13 @@ export function Sidebar({
   access,
   streamingSids,
   evaluatingSids,
+  skillConversations = [],
+  skillConversationsLoading = false,
+  skillConversationsError = "",
+  activeSkillConversationId = "",
+  onOpenSkillConversation,
+  onDeleteSkillConversation,
+  onRetrySkillConversations,
   onNewChat,
   onSearch,
   onQuickCreate,
@@ -303,21 +382,22 @@ export function Sidebar({
   version,
   onLogout,
 }: SidebarProps) {
-  // Creation and Skill Center live outside the #748-style sidebar.
+  // Agent creation still lives outside the #748-style sidebar.
   void onQuickCreate;
-  void onSkillCenter;
   void onAddAgent;
   // Per-module feature gates; a missing flag defaults to shown.
   const show = (k: keyof NonNullable<typeof features>) => features?.[k] !== false;
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [skillDeleteTarget, setSkillDeleteTarget] =
+    useState<SkillWorkbenchTaskListItem | null>(null);
+  const [deletingSkillConversation, setDeletingSkillConversation] = useState(false);
+  const [skillDeleteError, setSkillDeleteError] = useState("");
   const autoCollapsedRef = useRef(
     typeof window !== "undefined" &&
       window.matchMedia(SIDEBAR_AUTO_COLLAPSE_QUERY).matches,
   );
   const [collapsed, setCollapsed] = useState(autoCollapsedRef.current);
-  const sorted = [...sessions].sort(
-    (a, b) => (b.lastUpdateTime ?? 0) - (a.lastUpdateTime ?? 0),
-  );
+  const conversations = mergeSidebarConversations(sessions, skillConversations);
   const toggleCollapsed = () => {
     autoCollapsedRef.current = false;
     setCollapsed((value) => !value);
@@ -403,6 +483,19 @@ export function Sidebar({
           <AgentFaceIcon />
           <span className="sidebar-nav-label">智能体</span>
         </button>
+        {show("skillCenter") && (
+          <button
+            className="new-chat new-chat--skills"
+            onClick={onSkillCenter}
+            aria-label="技能中心"
+            title="技能中心"
+          >
+            <span className="sidebar-skill-icon">
+              <SkillSpaceIcon />
+            </span>
+            <span className="sidebar-nav-label">技能中心</span>
+          </button>
+        )}
         {show("search") && (
           <SearchButton active={activePage === "search"} onClick={onSearch} />
         )}
@@ -424,7 +517,7 @@ export function Sidebar({
       {show("history") && (
       <div className="sidebar-history">
         <div className="history-head">
-          <span>历史会话</span>
+          <span>会话</span>
           {show("newChat") && (
             <button
               type="button"
@@ -438,28 +531,52 @@ export function Sidebar({
           )}
         </div>
         <div className="history-list">
-          {sorted.length === 0 && (
-            <div className="history-empty">暂无会话</div>
+          {conversations.length === 0 && (
+            <div className="history-empty">
+              {skillConversationsLoading ? "正在读取会话…" : "暂无会话"}
+            </div>
           )}
-          {sorted.map((s) => {
-            const title = sessionTitle(s.events);
-            const streaming = streamingSids?.has(s.id) === true;
-            const evaluating = !streaming && evaluatingSids?.has(s.id) === true;
+          {conversations.map((conversation) => {
+            const isSkill = conversation.kind === "skill";
+            const task = isSkill ? conversation.task : null;
+            const title = isSkill
+              ? skillConversationTitle(conversation.task)
+              : sessionTitle(conversation.session.events);
+            const active = isSkill
+              ? conversation.task.jobId === activeSkillConversationId
+              : conversation.session.id === currentSessionId;
+            const live = isSkill
+              ? conversation.task.state === "running" || conversation.task.state === "provisioning"
+              : streamingSids?.has(conversation.session.id);
+            const evaluating = !isSkill
+              && !live
+              && evaluatingSids?.has(conversation.session.id) === true;
+            const status = task ? skillConversationStatus(task) : "";
+            const skillOperation = task ? skillConversationOperation(task) : "";
             return (
               <div
-                key={s.id}
-                className={`history-item ${s.id === currentSessionId ? "active" : ""}`}
+                key={conversation.id}
+                className={`history-item ${active ? "active" : ""}`}
               >
                 <button
                   className="history-item-btn"
-                  onClick={() => onPickSession(s.id)}
-                  aria-current={s.id === currentSessionId ? "page" : undefined}
-                  title={title}
+                  onClick={() => {
+                    if (conversation.kind === "skill") {
+                      onOpenSkillConversation(conversation.task.jobId);
+                    } else {
+                      onPickSession(conversation.session.id);
+                    }
+                  }}
+                  aria-current={active ? "page" : undefined}
+                  title={task ? `${title} · ${skillOperation} · ${status}` : title}
                 >
-                  {streaming && (
+                  {live && (
                     <span className="history-streaming" title="正在生成…" aria-label="正在生成" />
                   )}
-                  <span className="history-title">{title}</span>
+                  <span className="history-title">
+                    {title}
+                    {task ? <small>{skillOperation} · {status}</small> : null}
+                  </span>
                   {evaluating && (
                     <span className="history-evaluating-status" title="正在自动评测">
                       <span className="history-evaluating" aria-hidden="true" />
@@ -470,11 +587,11 @@ export function Sidebar({
               <button
                 className="history-more"
                 title="更多"
-                onClick={() => setMenuFor((m) => (m === s.id ? null : s.id))}
+                onClick={() => setMenuFor((value) => value === conversation.id ? null : conversation.id)}
               >
                 <MoreHorizontal className="icon" />
               </button>
-              {menuFor === s.id && (
+              {menuFor === conversation.id && (
                 <>
                   <div className="menu-scrim" onClick={() => setMenuFor(null)} />
                   <div className="history-menu">
@@ -482,7 +599,12 @@ export function Sidebar({
                       className="menu-item menu-item--danger"
                       onClick={() => {
                         setMenuFor(null);
-                        onDeleteSession(s.id);
+                        if (conversation.kind === "skill") {
+                          setSkillDeleteError("");
+                          setSkillDeleteTarget(conversation.task);
+                        } else {
+                          onDeleteSession(conversation.session.id);
+                        }
                       }}
                     >
                       <Trash2 className="icon" /> 删除
@@ -493,6 +615,12 @@ export function Sidebar({
               </div>
             );
           })}
+          {skillConversationsError ? (
+            <div className="history-load-error" role="alert">
+              <span>{skillConversationsError}</span>
+              <button type="button" onClick={onRetrySkillConversations}>重试</button>
+            </div>
+          ) : null}
         </div>
       </div>
       )}
@@ -518,6 +646,28 @@ export function Sidebar({
           onLogout={onLogout}
         />
       </div>
+      {skillDeleteTarget ? (
+        <StudioConfirmDialog
+          title="删除 Skill 会话？"
+          description={skillDeleteError
+            ? `删除失败：${skillDeleteError}`
+            : "这会删除对应的临时 DevEnv 和会话记录。"}
+          confirmLabel={deletingSkillConversation ? "正在删除…" : "删除会话"}
+          variant="danger"
+          busy={deletingSkillConversation}
+          onCancel={() => setSkillDeleteTarget(null)}
+          onConfirm={() => {
+            setDeletingSkillConversation(true);
+            setSkillDeleteError("");
+            void onDeleteSkillConversation(skillDeleteTarget.jobId)
+              .then(() => setSkillDeleteTarget(null))
+              .catch((cause) => {
+                setSkillDeleteError(cause instanceof Error ? cause.message : String(cause));
+              })
+              .finally(() => setDeletingSkillConversation(false));
+          }}
+        />
+      ) : null}
     </aside>
   );
 }

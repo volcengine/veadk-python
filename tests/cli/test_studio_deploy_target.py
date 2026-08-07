@@ -76,6 +76,10 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda *_args, **_kwargs: "",
     )
     monkeypatch.setattr(
+        "veadk.cli.studio_update.find_studio_deployments",
+        lambda **_: [],
+    )
+    monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
         lambda **_: None,
     )
@@ -421,17 +425,23 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert veadk_environments["SANDBOX_CHAT_HERMES"] == "hermes-tool-id"
     assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "skill-code-env-id"
     assert veadk_environments["SANDBOX_DEV"] == "dev-env-id"
+    assert "SANDBOX_SKILL_WORKBENCH" not in veadk_environments
+    assert veadk_environments["VEADK_DEVENV_IMAGE"] == (
+        "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/devenv:0.0.1"
+    )
     assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == expected_region
     assert veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] == expected_update_bucket
     assert veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] == "veadk/studio/main"
     assert veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] == expected_region
     assert veadk_environments["VEADK_STUDIO_PROJECT"] == expected_project
     assert "VEADK_STUDIO_UPDATE_REGION" not in veadk_environments
-    assert sorted(credential_tool_ids) == [
-        "chat-code-env-id",
-        "dev-env-id",
-        "skill-code-env-id",
-    ]
+    assert sorted(credential_tool_ids) == sorted(
+        [
+            "chat-code-env-id",
+            "dev-env-id",
+            "skill-code-env-id",
+        ]
+    )
     assert f"{expected_region}/{expected_project}" in result.output
     assert ("Warning:" in result.output) == (
         expected_identity_region != expected_region
@@ -681,6 +691,8 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
             "hermes-tool-id",
             "--sandbox-skill-creator-tool-id",
             "skill-code-env-id",
+            "--sandbox-dev-tool-id",
+            "byteplus-dev-env-id",
             "--iam-role",
             "trn:iam::role/test",
             "--gateway-name",
@@ -724,17 +736,27 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
     assert veadk_environments["BYTEPLUS_WEB_SEARCH_API_KEY"] == "bp-search-key"
     assert veadk_environments["VEIDENTITY_REGION"] == "ap-southeast-1"
     assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == "ap-southeast-1"
-    assert sorted(credential_tool_ids) == [
-        "chat-code-env-id",
-        "skill-code-env-id",
-    ]
+    dev_tool_id = veadk_environments["SANDBOX_DEV"]
+    assert dev_tool_id == "byteplus-dev-env-id"
+    assert "SANDBOX_SKILL_WORKBENCH" not in veadk_environments
+    assert veadk_environments["VEADK_DEVENV_IMAGE"] == (
+        "enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/devenv:0.0.1"
+    )
+    assert sorted(credential_tool_ids) == sorted(
+        [
+            "chat-code-env-id",
+            dev_tool_id,
+            "skill-code-env-id",
+        ]
+    )
 
 
-def test_studio_deploy_byteplus_auto_provisions_four_sandbox_tools(
+def test_studio_deploy_byteplus_auto_provisions_five_sandbox_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
     code_tools: list[str] = []
+    devenv_tools: list[str] = []
     agent_tools: list[dict[str, object]] = []
     code_credentials: list[dict[str, object]] = []
     agent_credentials: list[dict[str, object]] = []
@@ -766,6 +788,10 @@ def test_studio_deploy_byteplus_auto_provisions_four_sandbox_tools(
         agent_tools.append(kwargs)
         return f"{kwargs['kind']}-tool"
 
+    def _ensure_dev_tool(**kwargs: object) -> str:
+        devenv_tools.append(str(kwargs["name"]))
+        return "dev-tool"
+
     monkeypatch.setattr(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
     )
@@ -784,6 +810,10 @@ def test_studio_deploy_byteplus_auto_provisions_four_sandbox_tools(
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_tool",
         _ensure_agent_tool,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_dev_env_tool",
+        _ensure_dev_tool,
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
@@ -821,23 +851,31 @@ def test_studio_deploy_byteplus_auto_provisions_four_sandbox_tools(
 
     assert result.exit_code == 0, result.output
     assert len(code_tools) == 2
+    assert len(devenv_tools) == 1
+    assert "-dev-" in devenv_tools[0]
     assert {str(call["kind"]) for call in agent_tools} == {"openclaw", "hermes"}
-    assert {str(call["model_name"]) for call in agent_tools} == {"seed-2-0-lite-260228"}
+    assert {str(call["model_name"]) for call in agent_tools} == {
+        "dola-seed-2-1-turbo-260628"
+    }
     assert {str(call["provider"]) for call in code_credentials} == {"byteplus"}
     code_credentials_by_tool = {str(call["tool_id"]): call for call in code_credentials}
     assert code_credentials_by_tool["chat-tool"]["model_name"] == (
-        "seed-2-0-lite-260228"
+        "dola-seed-2-1-turbo-260628"
     )
     assert code_credentials_by_tool["skill-tool"]["model_name"] is None
+    assert code_credentials_by_tool["dev-tool"]["model_name"] == (
+        "dola-seed-2-1-turbo-260628"
+    )
     assert {str(call["provider"]) for call in agent_credentials} == {"byteplus"}
     assert {str(call["model_base_url"]) for call in agent_credentials} == {
         "https://ark.ap-southeast.bytepluses.com/api/v3"
     }
     assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-tool"
     assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "skill-tool"
+    assert veadk_environments["SANDBOX_DEV"] == "dev-tool"
     assert veadk_environments["SANDBOX_CHAT_OPENCLAW"] == "openclaw-tool"
     assert veadk_environments["SANDBOX_CHAT_HERMES"] == "hermes-tool"
-    assert "SANDBOX_DEV" not in veadk_environments
+    assert "SANDBOX_SKILL_WORKBENCH" not in veadk_environments
 
 
 def test_studio_deploy_byteplus_rejects_invalid_application_name() -> None:
@@ -975,6 +1013,7 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     credential_tool_ids: list[str] = []
     agent_tool_kinds: list[str] = []
     agent_credential_kinds: list[str] = []
+    shared_model_api_key = uuid4().hex
     creation_barrier = threading.Barrier(5)
     created_kinds_lock = threading.Lock()
 
@@ -1011,9 +1050,15 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
             created_kinds.append("dev")
         return "dev-tool"
 
-    def _ensure_code_credential(**kwargs: object) -> None:
+    def _ensure_code_credential(**kwargs: object) -> str:
         assert len(created_kinds) == 5
-        credential_tool_ids.append(str(kwargs["tool_id"]))
+        tool_id = str(kwargs["tool_id"])
+        credential_tool_ids.append(tool_id)
+        if tool_id == "chat-tool":
+            assert "model_api_key" not in kwargs
+        else:
+            assert kwargs["model_api_key"] == shared_model_api_key
+        return shared_model_api_key
 
     def _ensure_agent_credential(**kwargs: object) -> None:
         assert len(created_kinds) == 5
@@ -1077,13 +1122,24 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     ]
     assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-tool"
     assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "skill-tool"
-    assert sorted(credential_tool_ids) == ["chat-tool", "dev-tool", "skill-tool"]
+    assert "SANDBOX_SKILL_WORKBENCH" not in veadk_environments
+    assert sorted(credential_tool_ids) == [
+        "chat-tool",
+        "dev-tool",
+        "skill-tool",
+    ]
     assert sorted(agent_tool_kinds) == ["hermes", "openclaw"]
     assert sorted(agent_credential_kinds) == ["hermes", "openclaw"]
     assert veadk_environments["SANDBOX_CHAT_OPENCLAW"] == "openclaw-tool"
     assert veadk_environments["SANDBOX_CHAT_HERMES"] == "hermes-tool"
     assert veadk_environments["SANDBOX_DEV"] == "dev-tool"
-    for label in ("Codex", "Skill Creator", "OpenClaw", "Hermes", "Dev Sandbox"):
+    for label in (
+        "Codex",
+        "Skill Creator",
+        "OpenClaw",
+        "Hermes",
+        "Dev Sandbox",
+    ):
         assert f"Creating AgentKit {label} Tool" in result.output
         assert f"AgentKit {label} Tool is ready." in result.output
         assert f"Creating AgentKit {label} model credential" in result.output
@@ -1424,6 +1480,10 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
 
     def _fake_build(command: list[str], check: bool) -> None:
         assert check is True
+        wheel_source = Path(command[3])
+        assert wheel_source.name == "wheel-source"
+        assert (wheel_source / "veadk" / "webui" / "index.html").is_file()
+        assert not (wheel_source / "build").exists()
         output_dir = Path(command[-1])
         (output_dir / "veadk_python-test-py3-none-any.whl").write_bytes(b"wheel")
 

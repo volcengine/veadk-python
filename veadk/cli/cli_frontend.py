@@ -519,6 +519,12 @@ _PROVIDER_LABELS = {
 }
 
 
+def _default_provider_label(provider_id: str, cloud_provider: str) -> str:
+    if provider_id == "veidentity" and cloud_provider == "byteplus":
+        return "BytePlus Identity"
+    return _PROVIDER_LABELS.get(provider_id) or provider_id.replace("_", " ").title()
+
+
 def _agentkit_authorization_header(api_key: str) -> str:
     """Normalize AgentKit credential input to an Authorization header value."""
     value = api_key.strip()
@@ -1271,8 +1277,19 @@ def _run_frontend_server(
         return principal.owner_id if principal else "local"
 
     from veadk.cli.frontend_skill_creator import mount_skill_creator_routes
+    from veadk.cli.frontend_skill_workbench import mount_skill_workbench_routes
 
     mount_skill_creator_routes(app, _skill_creator_owner)
+
+    def _skill_workbench_creator(request: Request) -> str:
+        principal = _current_principal(request)
+        return principal.display_name if principal else "local"
+
+    mount_skill_workbench_routes(
+        app,
+        _skill_creator_owner,
+        _skill_workbench_creator,
+    )
 
     from veadk.cli.frontend_coding_agents import mount_coding_agent_routes
 
@@ -1300,51 +1317,19 @@ def _run_frontend_server(
         credential file so long-lived deployer AK/SK do not need to be shipped
         as function env vars.
         """
+        from veadk.cli.studio_cloud_credentials import (
+            StudioCloudCredentialError,
+            resolve_studio_cloud_credentials,
+        )
 
-        def _read_vefaas_iam_credentials() -> tuple[str, str, str | None] | None:
-            try:
-                with open("/var/run/secrets/iam/credential", encoding="utf-8") as f:
-                    data = json.load(f)
-                ak = data.get("access_key_id") or data.get("AccessKeyId")
-                sk = data.get("secret_access_key") or data.get("SecretAccessKey")
-                token = data.get("session_token") or data.get("SessionToken")
-                if ak and sk:
-                    return ak, sk, token or None
-            except (OSError, ValueError):
-                pass
-            return None
-
-        if provider == "byteplus":
-            ak = os.getenv("BYTEPLUS_ACCESS_KEY")
-            sk = os.getenv("BYTEPLUS_SECRET_KEY")
-            token = os.getenv("BYTEPLUS_SESSION_TOKEN")
-            if ak and sk:
-                return ak, sk, token or None
-            credentials = _read_vefaas_iam_credentials()
-            if credentials is not None:
-                return credentials
-            raise HTTPException(
-                status_code=400,
-                detail="BytePlus credentials not found (set BYTEPLUS_ACCESS_KEY/"
-                "BYTEPLUS_SECRET_KEY, or run inside a VeFaaS function with an "
-                "IAM role)",
-            )
-
-        ak = os.getenv("VOLCENGINE_ACCESS_KEY")
-        sk = os.getenv("VOLCENGINE_SECRET_KEY")
-        if ak and sk:
-            # STS / temporary credentials carry a session token; don't drop it.
-            token = os.getenv("VOLCENGINE_SESSION_TOKEN") or os.getenv(
-                "VOLC_SESSIONTOKEN"
-            )
-            return ak, sk, token or None
-        credentials = _read_vefaas_iam_credentials()
-        if credentials is not None:
-            return credentials
-        raise HTTPException(
-            status_code=400,
-            detail="Volcengine credentials not found (set VOLCENGINE_ACCESS_KEY/"
-            "SECRET_KEY, or run inside a VeFaaS function with an IAM role)",
+        try:
+            credentials = resolve_studio_cloud_credentials(provider)
+        except StudioCloudCredentialError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return (
+            credentials.access_key,
+            credentials.secret_key,
+            credentials.session_token or None,
         )
 
     def _default_cloud_region() -> str:
@@ -5164,10 +5149,8 @@ def _run_frontend_server(
             oauth2_config.end_session_url = None
 
             # Expose the configured provider to the login page (unauthenticated).
-            label = (
-                oauth2_provider_label
-                or _PROVIDER_LABELS.get(provider_id)
-                or provider_id.replace("_", " ").title()
+            label = oauth2_provider_label or _default_provider_label(
+                provider_id, provider
             )
             providers = [
                 {"id": provider_id, "label": label, "loginUrl": "/oauth2/login"}
@@ -7236,8 +7219,8 @@ def _resolve_studio_cloud_credentials(
     "sandbox_dev_tool_id",
     default=None,
     envvar="SANDBOX_DEV",
-    help="Dedicated ready AgentKit DevEnv Tool ID for Studio development. "
-    "Volcengine default: create one during deployment.",
+    help="Ready AgentKit DevEnv Tool ID shared by Studio development and "
+    "Skill Workbench. Default: create one during deployment.",
 )
 @click.option(
     "--sandbox-chat-codex-tool-id",
@@ -7462,28 +7445,23 @@ def frontend_deploy(
     sandbox_tool_ids = {
         "codex": sandbox_chat_codex_tool_id,
         "skill_creator": sandbox_skill_creator_tool_id,
+        "dev": sandbox_dev_tool_id,
         "openclaw": sandbox_chat_openclaw_tool_id,
         "hermes": sandbox_chat_hermes_tool_id,
     }
-    if provider_id == "volcengine":
-        sandbox_tool_ids["dev"] = sandbox_dev_tool_id
-    elif sandbox_dev_tool_id:
-        raise click.ClickException(
-            "--sandbox-dev-tool-id is supported only for Volcengine Studio deployments."
-        )
     sandbox_tool_labels = {
         "codex": "Codex",
         "skill_creator": "Skill Creator",
+        "dev": "Dev Sandbox",
         "openclaw": "OpenClaw",
         "hermes": "Hermes",
-        "dev": "Dev Sandbox",
     }
     sandbox_tool_purposes = {
         "codex": "chat",
         "skill_creator": "skill",
+        "dev": "dev",
         "openclaw": "openclaw",
         "hermes": "hermes",
-        "dev": "dev",
     }
     from veadk.cli.studio_sandbox_tools import (
         ensure_studio_agent_model_credential,
@@ -7491,6 +7469,7 @@ def frontend_deploy(
         ensure_studio_code_env_tool,
         ensure_studio_dev_env_tool,
         studio_sandbox_agent_model_name,
+        studio_sandbox_devenv_image_url,
         studio_sandbox_model_base_url,
         studio_sandbox_tool_name,
     )
@@ -7515,18 +7494,19 @@ def frontend_deploy(
         with ThreadPoolExecutor(max_workers=len(missing_sandbox_tools)) as executor:
             tool_futures = {}
             for kind, tool_name in missing_sandbox_tools.items():
-                if kind in {"codex", "skill_creator"}:
+                if kind == "dev":
                     future = executor.submit(
-                        ensure_studio_code_env_tool,
+                        ensure_studio_dev_env_tool,
                         name=tool_name,
+                        provider=provider_id,
                         region=region,
                         access_key=ak,
                         secret_key=sk,
                         session_token=session_token or "",
                     )
-                elif kind == "dev":
+                elif kind in {"codex", "skill_creator"}:
                     future = executor.submit(
-                        ensure_studio_dev_env_tool,
+                        ensure_studio_code_env_tool,
                         name=tool_name,
                         region=region,
                         access_key=ak,
@@ -7574,15 +7554,43 @@ def frontend_deploy(
         resolved_sandbox_tool_ids[kind] = tool_id
         click.echo(f"Creating AgentKit {sandbox_tool_labels[kind]} model credential…")
 
-    if resolved_sandbox_tool_ids:
-        max_workers = len(resolved_sandbox_tool_ids)
-    else:
-        max_workers = 1
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    primary_codex_kind = "codex"
+    shared_codex_model_api_key: str | None = None
+    primary_codex_tool_id = resolved_sandbox_tool_ids.get(primary_codex_kind)
+    if primary_codex_tool_id:
+        try:
+            shared_codex_model_api_key = ensure_skill_creator_model_credential(
+                tool_id=primary_codex_tool_id,
+                region=region,
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token,
+                provider=provider_id,
+                model_name=sandbox_agent_model_name,
+            )
+        except Exception as error:
+            detail = _safe_exception_detail(
+                error,
+                secrets=(ak, sk, session_token),
+            )
+            raise click.ClickException(
+                "Failed to provision the AgentKit Codex model credential. "
+                f"Underlying error:\n{detail}"
+            ) from error
+        click.echo("AgentKit Codex model credential is ready.")
+
+    remaining_credential_ids = {
+        kind: tool_id
+        for kind, tool_id in resolved_sandbox_tool_ids.items()
+        if kind != primary_codex_kind
+    }
+    with ThreadPoolExecutor(
+        max_workers=max(1, len(remaining_credential_ids))
+    ) as executor:
         credential_futures = {}
-        for kind, tool_id in resolved_sandbox_tool_ids.items():
-            if kind in {"codex", "skill_creator", "dev"}:
-                code_model_name = sandbox_agent_model_name if kind == "codex" else None
+        for kind, tool_id in remaining_credential_ids.items():
+            if kind in {"skill_creator", "dev"}:
+                code_model_name = sandbox_agent_model_name if kind == "dev" else None
                 future = executor.submit(
                     ensure_skill_creator_model_credential,
                     tool_id=tool_id,
@@ -7592,6 +7600,7 @@ def frontend_deploy(
                     session_token=session_token,
                     provider=provider_id,
                     model_name=code_model_name,
+                    model_api_key=shared_codex_model_api_key,
                 )
             else:
                 future = executor.submit(
@@ -7625,9 +7634,9 @@ def frontend_deploy(
 
     chat_codex_tool_id = resolved_sandbox_tool_ids.get("codex", "")
     skill_creator_tool_id = resolved_sandbox_tool_ids.get("skill_creator", "")
+    dev_tool_id = resolved_sandbox_tool_ids.get("dev", "")
     openclaw_tool_id = resolved_sandbox_tool_ids.get("openclaw", "")
     hermes_tool_id = resolved_sandbox_tool_ids.get("hermes", "")
-    dev_tool_id = resolved_sandbox_tool_ids.get("dev", "")
 
     # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
     # (i.e. the deployer's whole .env) as function env vars. The frontend must
@@ -7670,10 +7679,12 @@ def frontend_deploy(
         veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
     veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
+    veadk_environments["SANDBOX_DEV"] = dev_tool_id
+    veadk_environments["VEADK_DEVENV_IMAGE"] = studio_sandbox_devenv_image_url(
+        provider_id
+    )
     veadk_environments["SANDBOX_CHAT_OPENCLAW"] = openclaw_tool_id
     veadk_environments["SANDBOX_CHAT_HERMES"] = hermes_tool_id
-    if provider_id == "volcengine":
-        veadk_environments["SANDBOX_DEV"] = dev_tool_id
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
     veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
     veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] = studio_update_prefix
@@ -7731,6 +7742,7 @@ def frontend_deploy(
                 requirements = build_local_studio_requirements(
                     repo_root,
                     Path(tmp),
+                    frontend_assets=repo_root / "veadk" / "webui",
                     provider=provider_id,
                 )
             except ValueError as error:
@@ -7772,17 +7784,51 @@ def frontend_deploy(
             f"Deploying frontend to VeFaaS as '{vefaas_app_name}' "
             f"in {region}/{project}…"
         )
-        app = engine.deploy(
+        from veadk.cli.studio_update import find_studio_deployments
+        from veadk.cloud.cloud_app import CloudApp
+
+        existing_targets = find_studio_deployments(
+            access_key=ak,
+            secret_key=sk,
             application_name=vefaas_app_name,
-            path=tmp,
-            gateway_name=gateway_name,
-            gateway_service_name=gateway_service_name,
-            gateway_upstream_name=gateway_upstream_name,
-            use_adk_web=False,
-            auth_method="none",
-            enable_mcp_session=False,
-            keep_failed_deploy=keep_failed_deploy,
+            region=region,
+            project=project,
         )
+        if len(existing_targets) > 1:
+            raise click.ClickException(
+                f"Multiple VeFaaS Applications named '{vefaas_app_name}' were found "
+                f"in {region}/{project}; refusing an ambiguous update."
+            )
+        if existing_targets:
+            target = existing_targets[0]
+            click.echo(
+                f"Existing application found; updating Function {target.function_id} "
+                "and preserving its public URL…"
+            )
+            url = engine._vefaas_service.update_application_code_bundle(
+                application_id=target.application_id,
+                function_id=target.function_id,
+                path=tmp,
+                environment_overrides=dict(veadk_environments),
+            )
+            app = CloudApp(
+                vefaas_application_name=vefaas_app_name,
+                vefaas_endpoint=url,
+                vefaas_application_id=target.application_id,
+            )
+            app.vefaas_function_id = target.function_id
+        else:
+            app = engine.deploy(
+                application_name=vefaas_app_name,
+                path=tmp,
+                gateway_name=gateway_name,
+                gateway_service_name=gateway_service_name,
+                gateway_upstream_name=gateway_upstream_name,
+                use_adk_web=False,
+                auth_method="none",
+                enable_mcp_session=False,
+                keep_failed_deploy=keep_failed_deploy,
+            )
         url = (app.vefaas_endpoint or "").rstrip("/")
         redirect_uri = f"{url}/oauth2/callback"
 
@@ -7897,7 +7943,7 @@ def frontend_deploy(
     "--sandbox-dev-tool-id",
     "sandbox_dev_tool_id",
     default=None,
-    help="Replace the Volcengine Studio DevEnv Tool ID.",
+    help="Replace the shared Studio DevEnv Tool ID.",
 )
 @click.option(
     "--sandbox-chat-codex-tool-id",
@@ -7958,6 +8004,7 @@ def frontend_update(
         build_local_studio_requirements,
         write_studio_package,
     )
+    from veadk.cli.studio_sandbox_tools import studio_sandbox_devenv_image_url
     from veadk.cli.studio_update import (
         find_studio_deployments,
         load_deployed_site_logo,
@@ -7966,10 +8013,6 @@ def frontend_update(
 
     provider_id = normalize_cloud_provider(provider)
     if provider_id == "byteplus":
-        if sandbox_dev_tool_id is not None:
-            raise click.ClickException(
-                "--sandbox-dev-tool-id is supported only for Volcengine Studio updates."
-            )
         if region is not None and region != DEFAULT_BYTEPLUS_REGION:
             raise click.ClickException(
                 "BytePlus Studio update currently supports only "
@@ -8069,23 +8112,17 @@ def frontend_update(
             project_name=target.project,
             provider=provider_id,
         )
-        environment_overrides = {"AGENTKIT_SANDBOX_REGION": target.region}
+        environment_overrides = {
+            "AGENTKIT_SANDBOX_REGION": target.region,
+            "VEADK_DEVENV_IMAGE": studio_sandbox_devenv_image_url(provider_id),
+        }
         if provider_id == "byteplus":
             environment_overrides["CLOUD_PROVIDER"] = provider_id
             environment_overrides["AGENTKIT_CLOUD_PROVIDER"] = provider_id
             environment_overrides["BYTEPLUS_REGION"] = target.region
             environment_overrides["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_REGION
             service_client = getattr(service, "client", None)
-            has_explicit_sandbox_tool = any(
-                tool_id is not None
-                for tool_id in (
-                    sandbox_chat_codex_tool_id,
-                    sandbox_skill_creator_tool_id,
-                    sandbox_chat_openclaw_tool_id,
-                    sandbox_chat_hermes_tool_id,
-                )
-            )
-            if service_client is None and not has_explicit_sandbox_tool:
+            if service_client is None:
                 current_env: dict[str, str] = {}
                 repair_sandbox_tools = False
             else:
@@ -8106,6 +8143,9 @@ def frontend_update(
                 "skill_creator": sandbox_skill_creator_tool_id
                 if sandbox_skill_creator_tool_id is not None
                 else current_env.get("SANDBOX_SKILL_CREATOR", ""),
+                "dev": sandbox_dev_tool_id
+                if sandbox_dev_tool_id is not None
+                else current_env.get("SANDBOX_DEV", ""),
                 "openclaw": sandbox_chat_openclaw_tool_id
                 if sandbox_chat_openclaw_tool_id is not None
                 else current_env.get("SANDBOX_CHAT_OPENCLAW", ""),
@@ -8116,12 +8156,14 @@ def frontend_update(
             byteplus_sandbox_labels = {
                 "codex": "Codex",
                 "skill_creator": "Skill Creator",
+                "dev": "Dev Sandbox",
                 "openclaw": "OpenClaw",
                 "hermes": "Hermes",
             }
             byteplus_sandbox_purposes = {
                 "codex": "chat",
                 "skill_creator": "skill",
+                "dev": "dev",
                 "openclaw": "openclaw",
                 "hermes": "hermes",
             }
@@ -8133,6 +8175,7 @@ def frontend_update(
                     ensure_studio_agent_model_credential,
                     ensure_studio_agent_tool,
                     ensure_studio_code_env_tool,
+                    ensure_studio_dev_env_tool,
                     studio_sandbox_agent_model_name,
                     studio_sandbox_model_base_url,
                     studio_sandbox_tool_name,
@@ -8159,7 +8202,17 @@ def frontend_update(
                     ) as ex:
                         tool_futures = {}
                         for kind, tool_name in missing_sandbox_tools.items():
-                            if kind in {"codex", "skill_creator"}:
+                            if kind == "dev":
+                                future = ex.submit(
+                                    ensure_studio_dev_env_tool,
+                                    name=tool_name,
+                                    provider=provider_id,
+                                    region=target.region,
+                                    access_key=ak,
+                                    secret_key=sk,
+                                    session_token=session_token or "",
+                                )
+                            elif kind in {"codex", "skill_creator"}:
                                 future = ex.submit(
                                     ensure_studio_code_env_tool,
                                     name=tool_name,
@@ -8195,19 +8248,53 @@ def frontend_update(
                                 ) from error
                             click.echo(f"AgentKit {label} Tool is ready.")
 
+                primary_codex_tool_id = str(
+                    byteplus_sandbox_tool_ids.get("codex") or ""
+                ).strip()
+                shared_codex_model_api_key: str | None = None
+                if primary_codex_tool_id:
+                    click.echo("Creating AgentKit Codex model credential…")
+                    try:
+                        shared_codex_model_api_key = (
+                            ensure_skill_creator_model_credential(
+                                tool_id=primary_codex_tool_id,
+                                region=target.region,
+                                access_key=ak,
+                                secret_key=sk,
+                                session_token=session_token,
+                                provider=provider_id,
+                                model_name=sandbox_agent_model_name,
+                            )
+                        )
+                    except Exception as error:
+                        detail = _safe_exception_detail(
+                            error,
+                            secrets=(ak, sk, session_token),
+                        )
+                        raise click.ClickException(
+                            "Failed to provision the AgentKit Codex model "
+                            f"credential. Underlying error:\n{detail}"
+                        ) from error
+                    click.echo("AgentKit Codex model credential is ready.")
+
+                remaining_sandbox_tool_ids = {
+                    kind: tool_id
+                    for kind, tool_id in byteplus_sandbox_tool_ids.items()
+                    if kind != "codex"
+                }
                 credential_futures = {}
                 with ThreadPoolExecutor(
-                    max_workers=len(byteplus_sandbox_tool_ids)
+                    max_workers=max(1, len(remaining_sandbox_tool_ids))
                 ) as ex:
-                    for kind, tool_id in byteplus_sandbox_tool_ids.items():
+                    for kind, tool_id in remaining_sandbox_tool_ids.items():
                         tool_id = str(tool_id or "").strip()
                         if not tool_id:
                             continue
                         label = byteplus_sandbox_labels[kind]
                         click.echo(f"Creating AgentKit {label} model credential…")
-                        if kind in {"codex", "skill_creator"}:
+                        if kind in {"skill_creator", "dev"}:
                             code_model_name = (
-                                sandbox_agent_model_name if kind == "codex" else None
+                                sandbox_agent_model_name if kind == "dev" else None
                             )
                             future = ex.submit(
                                 ensure_skill_creator_model_credential,
@@ -8218,6 +8305,7 @@ def frontend_update(
                                 session_token=session_token,
                                 provider=provider_id,
                                 model_name=code_model_name,
+                                model_api_key=shared_codex_model_api_key,
                             )
                         else:
                             future = ex.submit(
@@ -8253,6 +8341,9 @@ def frontend_update(
                 )
                 environment_overrides["SANDBOX_SKILL_CREATOR"] = str(
                     byteplus_sandbox_tool_ids["skill_creator"] or ""
+                )
+                environment_overrides["SANDBOX_DEV"] = str(
+                    byteplus_sandbox_tool_ids["dev"] or ""
                 )
                 environment_overrides["SANDBOX_CHAT_OPENCLAW"] = str(
                     byteplus_sandbox_tool_ids["openclaw"] or ""

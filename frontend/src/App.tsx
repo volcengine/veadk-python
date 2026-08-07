@@ -79,6 +79,9 @@ import {
 import { Sidebar, type SidebarPage } from "./ui/Sidebar";
 import { AgentInfoPanel } from "./ui/AgentTopology";
 import { SkillCenterView } from "./ui/SkillCenter";
+import { SkillWorkbench } from "./ui/skill-workbench/SkillWorkbench";
+import { useSkillWorkbenchTasks } from "./ui/skill-workbench/useSkillWorkbenchTasks";
+import type { SkillWorkbenchPublishResult } from "./ui/skill-workbench/types";
 import { AddAgentKitView } from "./ui/AddAgentKit";
 import { AgentWorkspace } from "./ui/AgentWorkspace";
 import {
@@ -1145,6 +1148,13 @@ export default function App() {
   // flashing the notice in the common, configured case).
   const [hasCreds, setHasCreds] = useState(true);
   const [skillCenter, setSkillCenter] = useState(false);
+  const [skillWorkbenchOpen, setSkillWorkbenchOpen] = useState(false);
+  const [skillCenterFocus, setSkillCenterFocus] =
+    useState<SkillWorkbenchPublishResult | null>(null);
+  const skillWorkbenchTasks = useSkillWorkbenchTasks(
+    features.skillCenter !== false,
+    userId,
+  );
   const [addAgent, setAddAgent] = useState(false);
   // The "添加 Agent" chooser (two cards: AgentKit / 从 0 快速创建).
   const [addMenu, setAddMenu] = useState(false);
@@ -1203,7 +1213,7 @@ export default function App() {
     appName?: string;
     currentVersion?: number | null;
   } | null>(null);
-  const [newRuntimeRegion, setNewRuntimeRegion] = useState(
+  const [newRuntimeRegion, setNewRuntimeRegion] = useState<string>(
     defaultCloudRegion(cloudProvider),
   );
   const [focusedDeploymentTaskId, setFocusedDeploymentTaskId] = useState("");
@@ -1733,6 +1743,7 @@ export default function App() {
           setAppName("");
           setCreateView(null);
           setSkillCenter(false);
+          setSkillWorkbenchOpen(false);
           setAddAgent(false);
           setAddMenu(false);
           setSearchView(false);
@@ -3015,6 +3026,7 @@ export default function App() {
     setPlatformFeedbackOrigin(null);
     setCreateView(null);
     setSkillCenter(false);
+    setSkillWorkbenchOpen(false);
     setAddAgent(false);
     setAddMenu(false);
     setSearchView(false);
@@ -3997,6 +4009,7 @@ export default function App() {
     setManageAgents(false);
     setCreateView(null);
     setSkillCenter(false);
+    setSkillWorkbenchOpen(false);
     setAddAgent(false);
     setAddMenu(false);
     setSearchView(false);
@@ -4192,9 +4205,17 @@ export default function App() {
         ? "search"
         : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
           ? "agents"
-          : sessionId || createView || skillCenter || addAgent || addMenu
+          : sessionId || createView || skillCenter || skillWorkbenchOpen || addAgent || addMenu
             ? null
             : "new-chat";
+
+  const deleteSkillConversation = async (jobId: string) => {
+    await skillWorkbenchTasks.deleteTask(jobId);
+    if (skillWorkbenchTasks.activeJobId === jobId) {
+      setSkillWorkbenchOpen(false);
+      setSkillCenter(true);
+    }
+  };
 
   return (
     <div className="layout">
@@ -4208,12 +4229,38 @@ export default function App() {
         activePage={sidebarActivePage}
         streamingSids={streamingSids}
         evaluatingSids={evaluatingSids}
+        skillConversations={skillWorkbenchTasks.tasks}
+        skillConversationsLoading={skillWorkbenchTasks.tasksLoading}
+        skillConversationsError={skillWorkbenchTasks.tasksError}
+        activeSkillConversationId={skillWorkbenchOpen ? skillWorkbenchTasks.activeJobId : ""}
+        onRetrySkillConversations={() => void skillWorkbenchTasks.refreshTasks()}
+        onDeleteSkillConversation={deleteSkillConversation}
+        onOpenSkillConversation={(jobId) => {
+          if (sandboxSession) exitSandboxSession();
+          viewSidRef.current = "";
+          setSessionId("");
+          setCreateView(null);
+          setAddAgent(false);
+          setAddMenu(false);
+          setSearchView(false);
+          setManageAgents(false);
+          setAgentDetailTarget(null);
+          setSandboxAgentDetailTarget(null);
+          setSandboxAgentWorkspace(null);
+          setMyAgents(false);
+          setApplicationsView(null);
+          setSkillCenter(false);
+          skillWorkbenchTasks.selectTask(jobId);
+          setSkillWorkbenchOpen(true);
+          setError("");
+        }}
         onNewChat={openNewChat}
         onSearch={() => {
           setPlatformFeedbackOrigin(null);
           if (sandboxSession) exitSandboxSession();
           setCreateView(null);
           setSkillCenter(false);
+          setSkillWorkbenchOpen(false);
           setAddAgent(false);
           setAddMenu(false);
           setManageAgents(false);
@@ -4235,6 +4282,7 @@ export default function App() {
           viewSidRef.current = "";
           setSessionId("");
           setSkillCenter(false);
+          setSkillWorkbenchOpen(false);
           setAddAgent(false);
           setSearchView(false);
           setManageAgents(false);
@@ -4261,6 +4309,8 @@ export default function App() {
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
           setApplicationsView(null);
+          setSkillWorkbenchOpen(false);
+          setSkillCenterFocus(null);
           setSkillCenter(true);
           setError("");
         }}
@@ -4303,6 +4353,7 @@ export default function App() {
           setPlatformFeedbackOrigin(null);
           setCreateView(null);
           setSkillCenter(false);
+          setSkillWorkbenchOpen(false);
           setAddAgent(false);
           setAddMenu(false);
           setSearchView(false);
@@ -4820,8 +4871,48 @@ export default function App() {
                 }}
                 onCancel={() => setAddAgent(false)}
               />
+            ) : skillWorkbenchOpen ? (
+              <SkillWorkbench
+                cloudProvider={cloudProvider}
+                task={skillWorkbenchTasks.activeTask}
+                provisioningTask={skillWorkbenchTasks.activeProvisioningTask}
+                taskLoading={skillWorkbenchTasks.activeTaskLoading || skillWorkbenchTasks.startingTask}
+                taskError={skillWorkbenchTasks.activeTaskError || skillWorkbenchTasks.startError}
+                taskRecovering={skillWorkbenchTasks.activeTaskRecovering}
+                artifact={skillWorkbenchTasks.activeArtifact}
+                artifactLoading={skillWorkbenchTasks.activeArtifactLoading}
+                artifactError={skillWorkbenchTasks.activeArtifactError}
+                onTaskChanged={skillWorkbenchTasks.upsertTask}
+                onCancelProvisioning={skillWorkbenchTasks.cancelProvisioning}
+                onStopTask={skillWorkbenchTasks.stopTask}
+                onRetryTask={() => void skillWorkbenchTasks.refreshActiveTask()}
+                onRetryArtifact={() => {
+                  void skillWorkbenchTasks.refreshActiveArtifact().catch(() => undefined);
+                }}
+                onBack={() => {
+                  setSkillWorkbenchOpen(false);
+                  setSkillCenter(true);
+                }}
+                onViewPublished={(result) => {
+                  setSkillCenterFocus(result);
+                  setSkillWorkbenchOpen(false);
+                  setSkillCenter(true);
+                }}
+              />
             ) : skillCenter ? (
-              <SkillCenterView cloudProvider={cloudProvider} />
+              <SkillCenterView
+                cloudProvider={cloudProvider}
+                focus={skillCenterFocus}
+                onFocusHandled={() => setSkillCenterFocus(null)}
+                onStartTask={(args) => {
+                  skillWorkbenchTasks.clearActiveTask();
+                  setSkillCenterFocus(null);
+                  const pending = skillWorkbenchTasks.startTask(args);
+                  setSkillCenter(false);
+                  setSkillWorkbenchOpen(true);
+                  return pending;
+                }}
+              />
             ) : visibleCreateView !== null && !hasCreds ? (
               <div
                 style={{

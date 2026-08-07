@@ -43,6 +43,7 @@ test("opens new chat even when no Agent is active", () => {
     /function openNewChat\(\) \{([\s\S]*?)\n  \}\n\n  async function removeSession/,
   )?.[1] ?? "";
   assert.match(handler, /setMyAgents\(false\)/);
+  assert.match(handler, /setSkillWorkbenchOpen\(false\)/);
   assert.match(handler, /startNewChat\(\)/);
   assert.doesNotMatch(handler, /hasAgentSelection|showToast|setMyAgents\(true\)/);
   assert.match(appSource, /onNewChat=\{openNewChat\}/);

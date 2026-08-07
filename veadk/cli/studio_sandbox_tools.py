@@ -26,8 +26,20 @@ from typing import Any
 _PROJECT_NAME = "default"
 _TOOL_TYPE = "CodeEnv"
 _DEV_TOOL_TYPE = "DevEnv"
+_DEVENV_COMMAND = "/opt/gem/run.sh"
+_DEVENV_PORT = 8080
+_DEVENV_CPU_MILLI = 4000
+_DEVENV_MEMORY_MB = 8192
+_DEVENV_IMAGE_URLS = {
+    "volcengine": (
+        "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/devenv:0.0.1"
+    ),
+    "byteplus": (
+        "enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/devenv:0.0.1"
+    ),
+}
 STUDIO_SANDBOX_AGENT_MODEL_NAME = "doubao-seed-2-1-pro-260628"
-STUDIO_SANDBOX_BYTEPLUS_AGENT_MODEL_NAME = "seed-2-0-lite-260228"
+STUDIO_SANDBOX_BYTEPLUS_AGENT_MODEL_NAME = "dola-seed-2-1-turbo-260628"
 STUDIO_SANDBOX_MODEL_BASE_URLS = {
     "volcengine": "https://ark.cn-beijing.volces.com/api/v3",
     "byteplus": "https://ark.ap-southeast.bytepluses.com/api/v3",
@@ -53,6 +65,13 @@ def studio_sandbox_model_base_url(provider: str) -> str:
         raise ValueError(f"Unsupported Studio cloud provider: {provider}") from error
 
 
+def studio_sandbox_devenv_image_url(provider: str) -> str:
+    try:
+        return _DEVENV_IMAGE_URLS[provider]
+    except KeyError as error:
+        raise ValueError(f"Unsupported Studio cloud provider: {provider}") from error
+
+
 def studio_sandbox_tool_name(application_name: str, purpose: str) -> str:
     """Return a stable, account-local Tool name for one Studio capability."""
     safe_name = re.sub(r"[^a-z0-9-]+", "-", application_name.lower()).strip("-")
@@ -70,12 +89,13 @@ def _wait_for_ready_tool(
     timeout_seconds: float,
     poll_interval: float,
     sleep: Callable[[float], None],
+    ready_check: Callable[[Any], bool] | None = None,
 ) -> str:
     deadline = time.monotonic() + timeout_seconds
     while True:
         tool = tools_client.get_tool(tools_types.GetToolRequest(ToolId=tool_id))
         status = (tool.status or "").strip()
-        if status == _READY_STATUS:
+        if status == _READY_STATUS and (ready_check is None or ready_check(tool)):
             return tool_id
         if status in _FAILED_STATUSES:
             raise RuntimeError(
@@ -201,9 +221,106 @@ def ensure_studio_code_env_tool(**kwargs: Any) -> str:
     return _ensure_studio_environment_tool(tool_type=_TOOL_TYPE, **kwargs)
 
 
-def ensure_studio_dev_env_tool(**kwargs: Any) -> str:
-    """Reuse or create one Ready DevEnv Tool and return its Tool ID."""
-    return _ensure_studio_environment_tool(tool_type=_DEV_TOOL_TYPE, **kwargs)
+def _is_complete_studio_devenv_tool(tool: Any, *, image_url: str) -> bool:
+    return (
+        (tool.image_url or "").strip() == image_url
+        and (tool.command or "").strip() == _DEVENV_COMMAND
+        and tool.port == _DEVENV_PORT
+        and tool.cpu_milli == _DEVENV_CPU_MILLI
+        and tool.memory_mb == _DEVENV_MEMORY_MB
+    )
+
+
+def ensure_studio_dev_env_tool(
+    *,
+    name: str,
+    provider: str = "volcengine",
+    access_key: str = "",
+    secret_key: str = "",
+    region: str = "cn-beijing",
+    session_token: str = "",
+    client: Any | None = None,
+    timeout_seconds: float = 600.0,
+    poll_interval: float = 5.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """Reuse or create the shared Ready DevEnv Tool used by Studio."""
+    from agentkit.sdk.tools import types as tools_types
+    from agentkit.sdk.tools.client import AgentkitToolsClient
+
+    image_url = studio_sandbox_devenv_image_url(provider)
+    tools_client = client or AgentkitToolsClient(
+        access_key=access_key,
+        secret_key=secret_key,
+        region=region,
+        session_token=session_token,
+    )
+    match = _find_exact_tool(
+        tools_client,
+        tools_types,
+        name=name,
+        tool_type=_DEV_TOOL_TYPE,
+    )
+    if match is not None:
+        tool_id = (match.tool_id or "").strip()
+        if not tool_id:
+            raise RuntimeError(f"AgentKit Tool '{name}' did not return a Tool ID.")
+        tool = tools_client.get_tool(
+            tools_types.GetToolRequest(ToolId=tool_id),
+        )
+        if not _is_complete_studio_devenv_tool(tool, image_url=image_url):
+            tools_client.update_tool(
+                tools_types.UpdateToolRequest(
+                    ToolId=tool_id,
+                    ToolType=_DEV_TOOL_TYPE,
+                    ImageUrl=image_url,
+                    Command=_DEVENV_COMMAND,
+                    Port=_DEVENV_PORT,
+                    CpuMilli=_DEVENV_CPU_MILLI,
+                    MemoryMb=_DEVENV_MEMORY_MB,
+                )
+            )
+    else:
+        response = tools_client.create_tool(
+            tools_types.CreateToolRequest(
+                Name=name,
+                ToolType=_DEV_TOOL_TYPE,
+                ProjectName=_PROJECT_NAME,
+                ImageUrl=image_url,
+                Command=_DEVENV_COMMAND,
+                Port=_DEVENV_PORT,
+                CpuMilli=_DEVENV_CPU_MILLI,
+                MemoryMb=_DEVENV_MEMORY_MB,
+                AuthorizerConfiguration=tools_types.AuthorizerForCreateTool(
+                    KeyAuth=tools_types.AuthorizerKeyAuthForCreateTool(
+                        ApiKeyName=f"studio-devenv-{secrets.token_hex(8)}",
+                        ApiKeyLocation="Header",
+                    )
+                ),
+                NetworkConfiguration=tools_types.NetworkForCreateTool(
+                    EnablePublicNetwork=True,
+                    EnablePrivateNetwork=False,
+                ),
+            )
+        )
+        tool_id = (response.tool_id or "").strip()
+        if not tool_id:
+            raise RuntimeError(
+                f"Creating AgentKit DevEnv Tool '{name}' did not return a Tool ID."
+            )
+    return _wait_for_ready_tool(
+        tools_client,
+        tools_types,
+        tool_id=tool_id,
+        name=name,
+        timeout_seconds=timeout_seconds,
+        poll_interval=poll_interval,
+        sleep=sleep,
+        ready_check=lambda tool: _is_complete_studio_devenv_tool(
+            tool,
+            image_url=image_url,
+        ),
+    )
 
 
 def ensure_studio_agent_tool(

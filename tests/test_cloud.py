@@ -14,8 +14,9 @@
 
 import os
 import tempfile
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
+import httpx
 import pytest
 
 os.environ["VOLCENGINE_ACCESS_KEY"] = "test_access_key"
@@ -118,7 +119,53 @@ def test_vefaas_passes_session_token_to_apig() -> None:
     )
 
 
-def test_vefaas_code_upload_callback_uses_configured_region() -> None:
+def test_vefaas_code_upload_failure_logs_safe_diagnostics() -> None:
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        region="cn-beijing",
+    )
+    service.client = Mock()
+    service.client.get_code_upload_address.return_value = Mock(
+        upload_address="https://uploads.example.com/path?signature=top-secret"
+    )
+
+    with (
+        patch(
+            "veadk.integrations.ve_faas.ve_faas.zip_and_encode_folder",
+            return_value=(b"archive", 7, None),
+        ),
+        patch(
+            "veadk.integrations.ve_faas.ve_faas.httpx.put",
+            side_effect=httpx.ConnectError(
+                "signed URL must stay private",
+                request=httpx.Request(
+                    "PUT",
+                    "https://uploads.example.com/path?signature=top-secret",
+                ),
+            ),
+        ),
+        patch("veadk.integrations.ve_faas.ve_faas.logger.error") as log_error,
+    ):
+        with pytest.raises(ValueError) as error:
+            service._upload_and_mount_code("function-id", ".")
+
+    assert str(error.value) == (
+        "Function code upload request failed (ConnectError, host=uploads.example.com)."
+    )
+    assert log_error.call_args_list == [
+        call(
+            "Function code upload request failed function_id=%s size_bytes=%s "
+            "host=%s error_type=%s",
+            "function-id",
+            7,
+            "uploads.example.com",
+            "ConnectError",
+        )
+    ]
+
+
+def test_vefaas_code_upload_allows_slow_upload_and_uses_configured_region() -> None:
     service = VeFaaS(
         access_key="test_access_key",
         secret_key="test_secret_key",
@@ -134,7 +181,7 @@ def test_vefaas_code_upload_callback_uses_configured_region() -> None:
             "veadk.integrations.ve_faas.ve_faas.zip_and_encode_folder",
             return_value=(b"archive", 7, None),
         ),
-        patch("veadk.integrations.ve_faas.ve_faas.requests.put") as upload,
+        patch("veadk.integrations.ve_faas.ve_faas.httpx.put") as upload,
         patch("veadk.integrations.ve_faas.ve_faas.signed_request") as callback,
     ):
         upload.return_value = Mock(status_code=200)
@@ -142,9 +189,14 @@ def test_vefaas_code_upload_callback_uses_configured_region() -> None:
 
     upload.assert_called_once_with(
         url="https://example.com/upload",
-        data=b"archive",
+        content=b"archive",
         headers={"Content-Type": "application/zip"},
-        timeout=(30, 300),
+        timeout=httpx.Timeout(
+            connect=30,
+            write=300,
+            read=300,
+            pool=30,
+        ),
     )
     callback.assert_called_once_with(
         ak="test_access_key",
@@ -174,7 +226,7 @@ def test_vefaas_code_upload_callback_uses_byteplus_host() -> None:
             "veadk.integrations.ve_faas.ve_faas.zip_and_encode_folder",
             return_value=(b"archive", 7, None),
         ),
-        patch("veadk.integrations.ve_faas.ve_faas.requests.put") as upload,
+        patch("veadk.integrations.ve_faas.ve_faas.httpx.put") as upload,
         patch("veadk.integrations.ve_faas.ve_faas.signed_request") as callback,
     ):
         upload.return_value = Mock(status_code=200)

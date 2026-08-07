@@ -1,0 +1,530 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+const center = readFileSync(new URL("../src/ui/SkillCenter.tsx", import.meta.url), "utf8");
+const sidebar = readFileSync(new URL("../src/ui/Sidebar.tsx", import.meta.url), "utf8");
+const workbench = readFileSync(
+  new URL("../src/ui/skill-workbench/SkillWorkbench.tsx", import.meta.url),
+  "utf8",
+);
+const api = readFileSync(
+  new URL("../src/ui/skill-workbench/api.ts", import.meta.url),
+  "utf8",
+);
+const types = readFileSync(
+  new URL("../src/ui/skill-workbench/types.ts", import.meta.url),
+  "utf8",
+);
+const styles = readFileSync(
+  new URL("../src/ui/skill-workbench/skill-workbench.css", import.meta.url),
+  "utf8",
+);
+const shellStyles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+const controller = readFileSync(
+  new URL("../src/ui/skill-workbench/useSkillWorkbenchTasks.ts", import.meta.url),
+  "utf8",
+);
+const browser = readFileSync(
+  new URL("../src/ui/CodeBrowserDialog.tsx", import.meta.url),
+  "utf8",
+);
+const editor = readFileSync(
+  new URL("../src/ui/CodeEditor.tsx", import.meta.url),
+  "utf8",
+);
+
+test("preserves the existing A/B Skill creator beside the DevEnv conversation flow", () => {
+  assert.match(app, /<SkillCreateWorkspace initialJob=\{skillJob\}/);
+  assert.match(app, /<SkillWorkbench/);
+  assert.match(app, /<SkillCenterView/);
+  assert.match(app, /skillWorkbenchOpen/);
+});
+
+test("opens Create and Optimize as chat-first conversations from Skill Center", () => {
+  assert.match(center, /function SkillWorkbenchSetup/);
+  assert.match(center, /className="skillcenter-space-grid"/);
+  assert.match(center, /className="skillcenter-create-action"/);
+  assert.match(center, /className="skillcenter-optimize-action"/);
+  assert.match(center, /openSetup\("create"\)/);
+  assert.match(center, /beginOptimization/);
+  assert.match(center, /onClick=\{beginOptimization\}/);
+  assert.match(center, /className="skillcenter-chat-intro"/);
+  assert.match(center, /className="composer composer--new-chat skillcenter-setup-composer"/);
+  assert.match(center, /className="skillcenter-context-attachment"/);
+  assert.match(center, /上传 ZIP/);
+  assert.match(center, /isImeCompositionEvent/);
+  assert.match(center, /event\.nativeEvent/);
+  assert.match(center, /event\.target\.value = ""/);
+  assert.match(center, /onStartTask/);
+  assert.doesNotMatch(center, /function SkillCenterComposer/);
+  assert.doesNotMatch(center, /role="radiogroup"/);
+  assert.doesNotMatch(center, /<form/);
+});
+
+test("opens optimization sources in the dedicated conversation setup", () => {
+  assert.match(center, /setSetupOperation\("optimize"\)/);
+  assert.match(center, /setSource\(nextSource\)/);
+  assert.match(center, /setSetupOpen\(true\)/);
+  assert.match(center, /选择要优化的 Skill/);
+  assert.match(center, /if \(selectingSource && nextSource\)[\s\S]*chooseOptimizationSource\(nextSource\)/);
+  assert.match(center, /更换 Skill/);
+  assert.match(
+    center,
+    /onOptimize=\{capability\?\.enabled === true \? chooseOptimizationSource : undefined\}/,
+  );
+  assert.doesNotMatch(workbench, /从技能中心选择/);
+});
+
+test("sends complete Skill Center identity when starting an optimization", () => {
+  assert.match(center, /skillSpaceName:\s*selectedSpace\.name/);
+  assert.match(api, /skillName:\s*args\.source\.name/);
+  assert.match(api, /skillSpaceName:\s*args\.source\.skillSpaceName/);
+});
+
+test("keeps the chat single-column while the completed artifact is downloading", () => {
+  assert.match(workbench, /SkillConversationStream/);
+  assert.match(workbench, /SkillUserTurn/);
+  assert.match(workbench, /skill-workbench__assistant-turn/);
+  assert.match(workbench, /skill-workbench__run-grid is-process-only/);
+  assert.match(
+    workbench,
+    /const artifactReady = Boolean\([\s\S]*artifact\.jobId === task\.jobId[\s\S]*artifact\.revision === task\.revision/,
+  );
+  assert.match(
+    workbench,
+    /artifactReady \? "" : " is-process-only"/,
+  );
+  assert.match(workbench, /生成已完成，正在下载产物/);
+  assert.match(workbench, /\{artifactReady \? \(/);
+  assert.match(workbench, /<CodeBrowserWorkspace/);
+  assert.match(workbench, /artifact\.files/);
+  assert.match(workbench, /readOnly/);
+  assert.match(api, /\/artifact/);
+  assert.match(browser, /export function CodeBrowserWorkspace/);
+  assert.match(editor, /readOnly\?: boolean/);
+  assert.match(editor, /editable: !readOnly/);
+  assert.doesNotMatch(workbench, /<pre><code>\{task\.skillMd\}/);
+  assert.doesNotMatch(workbench, /skill-workbench__tabs/);
+  assert.doesNotMatch(workbench, /产物将在生成后显示/);
+  assert.doesNotMatch(workbench, /ExecutionStages/);
+  assert.doesNotMatch(workbench, /skill-workbench__provisioning-steps/);
+});
+
+test("uses contextual deletion and never offers cancellation after success", () => {
+  assert.doesNotMatch(workbench, /skill-workbench__more/);
+  assert.doesNotMatch(workbench, /取消并删除会话/);
+  assert.doesNotMatch(workbench, /StudioConfirmDialog/);
+  assert.match(workbench, /onStopTask/);
+  assert.match(workbench, /aria-label="停止当前任务"/);
+  assert.match(workbench, /task\.state === "running"/);
+  assert.doesNotMatch(workbench, /is-stopping/);
+  assert.doesNotMatch(styles, /\.comp-send\.is-stopping/);
+  assert.match(workbench, /StopIcon/);
+  assert.match(sidebar, /onDeleteSkillConversation/);
+});
+
+test("merges Skill runs into the normal conversation list with delete controls", () => {
+  assert.match(sidebar, /mergeSidebarConversations/);
+  assert.match(sidebar, /conversation\.kind === "skill"/);
+  assert.match(sidebar, /onOpenSkillConversation/);
+  assert.match(sidebar, /onDeleteSkillConversation/);
+  assert.match(sidebar, />会话</);
+  assert.doesNotMatch(sidebar, /sidebar-skill-tasks/);
+  assert.doesNotMatch(sidebar, /Skill 任务/);
+  assert.match(app, /deleteSkillConversation/);
+});
+
+test("sidebar deletion marks an in-flight provisioning request before cleanup", () => {
+  assert.match(
+    controller,
+    /const deleteTask[\s\S]*referencesRef\.current\.some[\s\S]*cancelProvisioning/,
+  );
+});
+
+test("retains cancelled provisioning references until DevEnv cleanup is confirmed", () => {
+  assert.match(controller, /requestProvisioningCleanup/);
+  assert.match(controller, /confirmProvisioningCleanup/);
+  assert.match(
+    controller,
+    /cancelProvisioning[\s\S]*cancelRequested: true[\s\S]*await requestProvisioningCleanup/,
+  );
+  assert.match(
+    controller,
+    /confirmProvisioningCleanup[\s\S]*await requestProvisioningCleanup[\s\S]*persistReferences/,
+  );
+  assert.match(controller, /setCleanupError/);
+  assert.match(controller, /hasPendingCleanup/);
+  assert.match(
+    controller,
+    /if \(!enabled \|\| !identityKey \|\| \(!hasActiveTask && !hasPendingCleanup\)\) return/,
+  );
+  assert.doesNotMatch(controller, /\.catch\(\(\) => undefined\)/);
+  assert.doesNotMatch(
+    controller,
+    /deleteSkillWorkbenchTask\([^)]*\)\.finally\(\(\) => \{[\s\S]*?persistReferences/,
+  );
+});
+
+test("streams publish stages and returns a concrete destination", () => {
+  assert.match(api, /\/publish-stream/);
+  assert.match(api, /application\/x-ndjson/);
+  assert.match(api, /getReader\(\)/);
+  assert.match(api, /timeout,\s*0|request\([\s\S]*?,\s*0\)/);
+  assert.match(workbench, /publishProgress/);
+  assert.match(workbench, /<TextShimmer/);
+  assert.match(workbench, /在技能中心查看/);
+  assert.match(workbench, /onViewPublished/);
+  assert.match(workbench, /skillSpaceIds/);
+  assert.match(workbench, /task\.publication/);
+  assert.match(workbench, /该版本已发布/);
+  assert.match(workbench, /formatSkillVersion\(effectivePublishResult\.version\)/);
+  assert.doesNotMatch(workbench, /v\{effectivePublishResult\.version\}/);
+});
+
+test("uses the active provider regions for Skill publishing", () => {
+  assert.match(app, /<SkillWorkbench[\s\S]*cloudProvider=\{cloudProvider\}/);
+  assert.match(workbench, /cloudRegionOptions\(cloudProvider\)/);
+  assert.match(workbench, /defaultCloudRegion\(cloudProvider\)/);
+  assert.match(
+    workbench,
+    /formatCloudRegion\(effectivePublishResult\.region,\s*cloudProvider\)/,
+  );
+  assert.doesNotMatch(
+    workbench,
+    /\(\["cn-beijing",\s*"cn-shanghai"\]\s+as const\)\.map/,
+  );
+  assert.match(api, /isSupportedCloudRegion\(publication\.region\)/);
+  assert.match(api, /isSupportedCloudRegion\(value\.region\)/);
+  assert.match(types, /import type \{ CloudRegion \}/);
+  assert.match(types, /region:\s*CloudRegion;/);
+});
+
+test("keeps task polling above the workbench and supports safe reopening", () => {
+  assert.match(app, /useSkillWorkbenchTasks/);
+  assert.match(controller, /listSkillWorkbenchTasks/);
+  assert.match(controller, /activeJobIdRef/);
+  assert.match(controller, /listSkillWorkbenchTasks\(signal,\s*activeJobIdRef\.current/);
+  assert.match(api, /params\.set\("exclude_job_id",\s*excludeJobId\)/);
+  assert.match(controller, /visibilitychange/);
+  assert.match(controller, /pollDelay\(LIST_POLL_INTERVAL_MS,\s*listFailureCountRef\.current\)/);
+  assert.match(controller, /RECOVERY_POLL_INTERVAL_MS\s*=\s*5_000/);
+  assert.match(controller, /activeRecoveryPending\s*\?\s*RECOVERY_POLL_INTERVAL_MS\s*:\s*DETAIL_POLL_INTERVAL_MS/);
+  assert.match(controller, /task\.recoveryStatus === "pending"/);
+  assert.match(controller, /previous\.recoveryStatus === "pending"[\s\S]*?"unknown"/);
+  assert.match(api, /optionalRecoveryStatus\(task\.recoveryStatus\)/);
+  assert.match(types, /SkillWorkbenchRecoveryStatus/);
+  assert.match(workbench, /recoveryStatusLabel\(task\.recoveryStatus\)/);
+  assert.match(workbench, /const recoveryPending = task\?\.recoveryStatus === "pending"/);
+  assert.match(workbench, /正在确认当前会话恢复点/);
+  assert.match(controller, /activeSelectionRevision/);
+  assert.match(controller, /setActiveSelectionRevision\(\(revision\) => revision \+ 1\)/);
+  assert.doesNotMatch(workbench, /setTimeout\(poll/);
+  assert.match(controller, /reserveSkillWorkbenchTask/);
+  assert.match(controller, /state: "provisioning"/);
+  assert.match(controller, /PROVISIONING_TTL_SECONDS/);
+  assert.match(controller, /cancelRequested/);
+  assert.match(controller, /saveProvisioningReferences/);
+  assert.doesNotMatch(controller, /localStorage\.setItem\([^\n]*(intent|source|file|activities)/);
+  assert.match(controller, /ARTIFACT_RETRY_INTERVAL_MS/);
+  assert.match(controller, /refreshActiveArtifact/);
+});
+
+test("preserves optimization intent while provisioning and uses neutral reload labels", () => {
+  assert.match(controller, /operation:\s*null/);
+  assert.match(controller, /sourceName:\s*args\.source\?\.name \|\| args\.file\?\.name/);
+  assert.match(workbench, /sourceName=\{provisioningTask\.sourceName\}/);
+  assert.match(
+    controller,
+    /current\.find\(\(task\) =>\s*task\.jobId === reference\.jobId &&\s*task\.state === "provisioning"/,
+  );
+  assert.match(workbench, /\?\s*"优化 Skill"\s*:\s*[^;]*\?\s*"创建 Skill"\s*:\s*"Skill 会话"/);
+  assert.match(sidebar, /\?\s*"创建 Skill"\s*:\s*task\.operation === "optimize"\s*\?\s*"优化 Skill"\s*:\s*"Skill 会话"/);
+  assert.doesNotMatch(
+    controller,
+    /saveProvisioningReferences[\s\S]*operation:\s*reference\.operation/,
+  );
+});
+
+test("recovers transient task polling failures without discarding the last good state", () => {
+  assert.match(controller, /const SYNC_ERROR_REVEAL_THRESHOLD = 3/);
+  assert.match(controller, /function isRetryableSyncFailure/);
+  assert.match(controller, /listFailureCountRef/);
+  assert.match(controller, /detailFailureCountRef/);
+  assert.match(controller, /SKILL_TASK_INITIALIZING/);
+  assert.match(controller, /setActiveTaskRecovering\(reveal\)/);
+  assert.match(
+    controller,
+    /detailFailureCountRef\.current >= SYNC_ERROR_REVEAL_THRESHOLD/,
+  );
+  assert.match(controller, /正在自动重试/);
+  assert.match(controller, /activeTaskRef\.current/);
+  assert.doesNotMatch(
+    controller,
+    /!activeTaskRef\.current\s*\|\|/,
+  );
+  assert.doesNotMatch(
+    controller,
+    /catch \(cause\)[\s\S]{0,500}setActiveTask\(null\)/,
+  );
+  assert.match(workbench, /taskRecovering/);
+  assert.match(workbench, /正在重新连接 DevEnv/);
+  assert.match(
+    controller,
+    /cause\.code === "SKILL_WORKBENCH_ERROR"[\s\S]*includes\(cause\.status\)/,
+  );
+  assert.doesNotMatch(
+    controller,
+    /\[408,\s*429,\s*500,\s*502,\s*503,\s*504\]/,
+  );
+});
+
+test("retries artifact reads only when transport or server semantics allow it", () => {
+  assert.match(controller, /const ARTIFACT_RETRY_LIMIT = 1/);
+  assert.match(
+    controller,
+    /const retryable = isRetryableSyncFailure\(cause\)/,
+  );
+  assert.doesNotMatch(
+    controller,
+    /\[404,\s*409,\s*502,\s*503\]\.includes\(cause\.status\)/,
+  );
+  assert.doesNotMatch(
+    api,
+    /发布进度流提前结束，请重试/,
+  );
+});
+
+test("binds preview, download, and publish to one immutable task revision", () => {
+  assert.match(types, /jobId:\s*string;[\s\S]*revision:\s*number;[\s\S]*sha256:\s*string;/);
+  assert.match(
+    api,
+    /getSkillWorkbenchArtifact\([\s\S]*expectedRevision:\s*number[\s\S]*params\.set\("expected_revision",\s*String\(expectedRevision\)\)/,
+  );
+  assert.match(api, /expectedArtifactSha256:\s*string/);
+  assert.match(
+    api,
+    /expectedArtifactSha256:\s*args\.expectedArtifactSha256/,
+  );
+  assert.match(
+    api,
+    /downloadSkillWorkbenchTask\([\s\S]*expectedRevision:\s*number[\s\S]*expectedSha256:\s*string/,
+  );
+  assert.match(controller, /const requestedJobId = activeJobId/);
+  assert.match(controller, /const requestedRevision = activeTask\.revision/);
+  assert.match(
+    controller,
+    /artifact\.jobId === requestedJobId[\s\S]*artifact\.revision === requestedRevision/,
+  );
+  assert.match(
+    controller,
+    /selectTask[\s\S]*artifactCacheKey\(cachedTask\.jobId,\s*cachedTask\.revision\)[\s\S]*artifactRequestRef\.current \+= 1/,
+  );
+  assert.match(
+    workbench,
+    /artifact\.jobId === task\.jobId[\s\S]*artifact\.revision === task\.revision/,
+  );
+  assert.match(
+    workbench,
+    /expectedArtifactSha256:\s*artifact\.sha256/,
+  );
+  assert.match(
+    workbench,
+    /downloadSkillWorkbenchTask\(\s*task\.jobId,\s*task\.revision,\s*artifact!\.sha256/,
+  );
+});
+
+test("reopens cached Skill conversations without loading or downloading them again", () => {
+  assert.match(controller, /const SESSION_CACHE_LIMIT = \d+/);
+  assert.match(controller, /taskCacheRef = useRef<Map<string, SkillWorkbenchTask>>/);
+  assert.match(
+    controller,
+    /artifactCacheRef =\s*useRef<Map<string, SkillWorkbenchArtifact>>/,
+  );
+  assert.match(
+    controller,
+    /selectTask[\s\S]*cachedTask[\s\S]*setActiveTask\(cachedTask\)/,
+  );
+  assert.match(
+    controller,
+    /selectTask[\s\S]*cachedArtifact[\s\S]*setActiveArtifact\(cachedArtifact\)/,
+  );
+  assert.match(
+    controller,
+    /const cachedArtifact = readCachedValue\([\s\S]*if \(cachedArtifact\) \{[\s\S]*return;/,
+  );
+  assert.match(
+    controller,
+    /rememberCachedValue\(\s*artifactCacheRef\.current,[\s\S]*artifactCacheKey/,
+  );
+  assert.match(
+    controller,
+    /setActiveTaskLoading\(!provisioning && !hasVisibleTask\)/,
+  );
+  assert.match(
+    controller,
+    /taskCacheRef\.current\.clear\(\)[\s\S]*artifactCacheRef\.current\.clear\(\)/,
+  );
+  assert.doesNotMatch(
+    controller,
+    /localStorage\.(?:setItem|getItem)\([^)]*artifact/i,
+  );
+});
+
+test("bounds malformed gateway errors without exposing their response body", () => {
+  assert.match(api, /Content-Type/);
+  assert.match(api, /检查代理或网关配置/);
+  assert.doesNotMatch(
+    api,
+    /text \|\| `\$\{fallback\}（HTTP \$\{response\.status\}）`/,
+  );
+});
+
+test("does not offer a manual retry for non-retryable task failures", () => {
+  assert.match(
+    workbench,
+    /\{taskRecovering \? \(\s*<button type="button" onClick=\{onRetryTask\}>立即重试<\/button>\s*\) : null\}/,
+  );
+});
+
+test("shows authoritative DevEnv identifiers after initialization", () => {
+  assert.match(types, /toolId\?: string/);
+  assert.match(types, /sessionId\?: string/);
+  assert.match(api, /optionalIdentifier\(task\.toolId,\s*"Tool ID"\)/);
+  assert.match(api, /optionalIdentifier\(task\.sessionId,\s*"Session ID"\)/);
+  assert.match(workbench, />Tool ID</);
+  assert.match(workbench, />Session ID</);
+  assert.match(workbench, /task\.toolId/);
+  assert.match(workbench, /task\.sessionId/);
+  assert.match(styles, /\.skill-workbench__runtime-meta/);
+});
+
+test("reuses the normal chat transcript and opens a complete artifact in a side rail", () => {
+  assert.match(workbench, /className="turn turn--user"/);
+  assert.match(workbench, /className="bubble skill-workbench__user-bubble"/);
+  assert.match(workbench, /className="turn turn--assistant skill-workbench__assistant-turn"/);
+  assert.match(workbench, /className="composer skill-workbench__composer"/);
+  assert.match(workbench, /useAutoGrowingTextarea/);
+  assert.match(workbench, /Math\.min\(input\.scrollHeight,\s*200\)/);
+  assert.doesNotMatch(workbench, /composer composer--new-chat skill-workbench__composer/);
+  assert.match(styles, /grid-template-columns:\s*minmax\(0,\s*768px\)\s+minmax\(0,\s*1fr\)/);
+  assert.match(styles, /\.skill-workbench__run-grid\.is-process-only\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*768px\)/);
+  assert.match(styles, /\.skill-workbench__timeline\s*\{[^}]*border:\s*0/);
+  assert.match(styles, /min-height:\s*0/);
+  assert.match(styles, /overflow-y:\s*auto/);
+  assert.match(styles, /@media \(max-width: 1160px\)/);
+  assert.match(workbench, /ArtifactPanelIcon/);
+  assert.match(workbench, /artifactPanelOpen/);
+  assert.match(workbench, /skill-workbench__artifact-toggle/);
+  assert.match(workbench, /skill-workbench__artifact-scrim/);
+  assert.match(styles, /\.skill-workbench__result\.is-open/);
+  assert.doesNotMatch(
+    styles,
+    /@media \(max-width: 1160px\)[\s\S]*grid-template-rows:\s*minmax\(420px,\s*auto\)\s+minmax\(560px,\s*1fr\)/,
+  );
+  assert.match(styles, /prefers-reduced-motion: reduce/);
+  assert.match(shellStyles, /\.skillcenter-regions button\s*\{[^}]*min-width:\s*52px;[^}]*height:\s*32px;/);
+  assert.match(shellStyles, /\.skillcenter-space-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(min\(280px,\s*100%\),\s*1fr\)\)/);
+  assert.doesNotMatch(shellStyles, /sidebar-skill-task__live/);
+});
+
+test("keeps a running Skill conversation at the bottom without stealing manual scroll", () => {
+  assert.match(workbench, /activityRef/);
+  assert.match(workbench, /followActivityRef/);
+  assert.match(workbench, /scrollHeight - scrollTop - clientHeight/);
+  assert.match(workbench, /activityRef\.current\.scrollTop = activityRef\.current\.scrollHeight/);
+  assert.match(workbench, /onScroll=\{handleActivityScroll\}/);
+  assert.match(
+    styles,
+    /\.skill-workbench \.skill-conversation \.(?:think-head|tool-head):focus-visible/,
+  );
+  assert.match(styles, /\.skill-workbench \.skill-conversation \.builtin-tool-head:focus-visible/);
+});
+
+test("turns a released remote DevEnv into an actionable expired conversation", () => {
+  assert.match(controller, /SKILL_TASK_EXPIRED/);
+  assert.match(controller, /DevEnv 已到期或被释放/);
+  assert.match(controller, /state: "expired"/);
+  assert.match(
+    controller,
+    /current\.filter\(\(task\) =>\s*task\.state !== "provisioning"/,
+  );
+  assert.match(workbench, /DevEnv 已到期/);
+  assert.match(workbench, /无法继续调整、下载或发布/);
+  assert.match(workbench, /task\.state === "expired"/);
+  assert.match(
+    workbench,
+    /task\.state !== "expired" \? \([\s\S]*className="composer skill-workbench__composer"/,
+  );
+  assert.match(workbench, /查看已发布 Skill/);
+  assert.match(workbench, /前往技能中心查看 Skill/);
+  assert.match(
+    workbench,
+    /effectivePublishResult[\s\S]*onViewPublished\(effectivePublishResult\)[\s\S]*onBack\(\)/,
+  );
+  assert.match(
+    workbench,
+    /publishResult\?\.jobId === task\.jobId[\s\S]*publishResult\.revision === task\.revision/,
+  );
+  assert.match(
+    controller,
+    /const publication =[\s\S]*publication\?\.revision === previous\?\.revision[\s\S]*\{ publication \}/,
+  );
+  assert.match(
+    controller,
+    /expiredTask\(\s*requestedJobId,\s*activeTaskRef\.current\?\.jobId === requestedJobId/,
+  );
+  assert.match(api, /\/refinements/);
+  assert.doesNotMatch(controller, /recoveryAvailable: true/);
+  assert.doesNotMatch(workbench, /DevEnv Session 已过期/);
+});
+
+test("warns ready users that DevEnv TTL limits download and publishing", () => {
+  assert.match(api, /sessionTtlSeconds/);
+  assert.match(workbench, /DevEnv 最长保留/);
+  assert.match(workbench, /请及时下载或发布/);
+  assert.match(workbench, /超过保留时间后将无法下载或发布/);
+  assert.match(workbench, /正在从 DevEnv 获取并校验文件/);
+  assert.doesNotMatch(workbench, /下载与发布能力将在产物校验完成后可用/);
+  assert.doesNotMatch(workbench, /产物也无法恢复/);
+  assert.match(workbench, /Skill 版本生效/);
+  assert.doesNotMatch(workbench, /AgentKit 版本生效/);
+});
+
+test("keeps one composer across active states and removes it after DevEnv expiry", () => {
+  assert.match(
+    workbench,
+    /const canRefine =[\s\S]*?task\.state !== "running"[\s\S]*?task\.state !== "expired"[\s\S]*?!recoveryPending/,
+  );
+  assert.match(workbench, /placeholder=\{task\.state === "running"/);
+  assert.match(workbench, /disabled=\{Boolean\(action\)\}/);
+  assert.match(workbench, /stop\(\)/);
+  assert.match(workbench, /submitRefinement/);
+  assert.match(api, /export async function stopSkillWorkbenchTask/);
+  assert.match(workbench, /className="comp-send is-stop"/);
+  assert.match(
+    styles,
+    /\.skill-workbench__composer \.comp-send\.is-stop\s*\{[^}]*background:\s*hsl\(var\(--secondary\)\)/,
+  );
+  assert.doesNotMatch(
+    styles,
+    /\.skill-workbench__composer \.comp-send\.is-stop\s*\{[^}]*--destructive/,
+  );
+});
+
+test("renders Markdown and highlights shell files in the artifact browser", () => {
+  assert.match(workbench, /renderMarkdown/);
+  assert.match(browser, /function markdownPreviewText/);
+  assert.match(browser, /text=\{markdownPreviewText\(selectedFile\.content\)\}/);
+  assert.match(editor, /StreamLanguage/);
+  assert.match(editor, /legacy-modes\/mode\/shell/);
+  assert.match(editor, /\["sh", "bash", "zsh"\]/);
+});
+
+test("uses the user intent for Skill conversation titles and no Skill Center badge", () => {
+  assert.match(sidebar, /function skillConversationTitle[\s\S]*task\.intent/);
+  assert.doesNotMatch(sidebar, /\("name" in task \? task\.name/);
+  assert.doesNotMatch(sidebar, /sidebar-skill-count/);
+  assert.doesNotMatch(sidebar, /runningSkillConversations/);
+});

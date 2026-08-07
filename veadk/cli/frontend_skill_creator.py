@@ -29,13 +29,12 @@ import textwrap
 import time
 import uuid
 import zipfile
-
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
 from typing import Any
-import requests
 
+import requests
 from agentkit.sdk.skills import types as skills_types
 from agentkit.sdk.skills.client import AgentkitSkillsClient
 from agentkit.sdk.tools import types as tools_types
@@ -56,7 +55,8 @@ from veadk.cli.agentkit_sandbox_region import (
     is_agentkit_resource_not_found,
     sandbox_region_candidates,
 )
-
+from veadk.cli.studio_cloud_credentials import agentkit_client_options
+from veadk.cli.studio_sandbox_tools import studio_sandbox_agent_model_name
 
 _MODELS = (
     ("a", "doubao-seed-2-0-pro-260215", "豆包 Seed 2.0 Pro"),
@@ -165,6 +165,7 @@ def _runner_source() -> str:
     """Return the fixed program executed inside each isolated CodeEnv."""
     return textwrap.dedent(
         r"""
+        import hashlib
         import json
         import os
         import re
@@ -470,9 +471,95 @@ def _runner_source() -> str:
                 raise ValueError("Skill description 不能包含 XML 标签")
             return name, description
 
+        def skill_roots():
+            roots = [
+                path
+                for path in work_dir.iterdir()
+                if not path.name.startswith(".")
+                and path.is_dir()
+                and (path / "SKILL.md").is_file()
+            ]
+            handoff = work_dir / ".veadk-output"
+            if handoff.is_dir() and not handoff.is_symlink():
+                roots.extend(
+                    path
+                    for path in handoff.iterdir()
+                    if path.is_dir()
+                    and not path.is_symlink()
+                    and (path / "SKILL.md").is_file()
+                )
+            return sorted(roots, key=lambda path: path.relative_to(work_dir).as_posix())
+
+        def skill_fingerprint(root):
+            digest = hashlib.sha256()
+            for path in sorted(root.rglob("*")):
+                relative = path.relative_to(root).as_posix()
+                digest.update(relative.encode("utf-8"))
+                digest.update(b"\0")
+                if path.is_symlink():
+                    digest.update(b"symlink")
+                elif path.is_file():
+                    digest.update(path.read_bytes())
+                digest.update(b"\0")
+            return digest.hexdigest()
+
+        def handoff_root():
+            manifest_path = work_dir / ".veadk-output" / "result.json"
+            if not manifest_path.is_file():
+                return None
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as error:
+                raise ValueError("Skill 交付清单不是有效 JSON") from error
+            if not isinstance(manifest, dict) or set(manifest) != {"skillRoot"}:
+                raise ValueError("Skill 交付清单字段不符合协议")
+            value = manifest.get("skillRoot")
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("Skill 交付清单缺少 skillRoot")
+            relative = Path(value)
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or len(relative.parts) != 2
+                or relative.parts[0] != ".veadk-output"
+            ):
+                raise ValueError("Skill 交付清单包含不安全路径")
+            unresolved = work_dir / relative
+            if unresolved.is_symlink():
+                raise ValueError("Skill 交付清单包含不安全路径")
+            candidate = unresolved.resolve()
+            if not candidate.is_relative_to(work_dir.resolve()):
+                raise ValueError("Skill 交付清单包含不安全路径")
+            if not candidate.is_dir() or not (candidate / "SKILL.md").is_file():
+                raise ValueError("Skill 交付清单指向的产物不存在")
+            return candidate
+
         try:
             work_dir.mkdir(parents=True, exist_ok=True)
             prompt = (job_dir / "prompt.txt").read_text(encoding="utf-8")
+            request = {}
+            request_path = job_dir / "request.json"
+            if request_path.is_file():
+                request_value = json.loads(request_path.read_text(encoding="utf-8"))
+                if not isinstance(request_value, dict):
+                    raise ValueError("Skill 任务请求格式错误")
+                request = request_value
+            operation = request.get("operation")
+            if operation not in {None, "create", "optimize"}:
+                raise ValueError("Skill 任务操作类型错误")
+            revision = request.get("revision", 1)
+            if (
+                isinstance(revision, bool)
+                or not isinstance(revision, int)
+                or revision < 1
+            ):
+                raise ValueError("Skill 任务版本格式错误")
+            baseline = {
+                path.relative_to(work_dir).as_posix(): skill_fingerprint(path)
+                for path in skill_roots()
+            }
+            manifest_path = work_dir / ".veadk-output" / "result.json"
+            manifest_path.unlink(missing_ok=True)
             set_stage_activity("正在生成 Skill", "generating")
             process = subprocess.Popen(
                 [
@@ -545,18 +632,48 @@ def _runner_source() -> str:
             ]
             if any(path.is_symlink() for path in entries):
                 raise ValueError("Skill 根目录不允许使用符号链接")
-            roots = [path for path in entries if path.is_dir()]
-            if len(roots) != 1:
-                raise ValueError("生成结果必须只包含一个 Skill 根目录")
-            if len(entries) != 1:
+            if any(not path.is_dir() for path in entries):
                 raise ValueError("Skill 根目录之外不能包含其他文件")
-            root = roots[0]
+            roots = skill_roots()
+            select_changed_result = operation == "optimize" or (
+                operation == "create" and revision > 1
+            )
+            if select_changed_result:
+                baseline_fingerprints = set(baseline.values())
+                changed_roots = [
+                    path
+                    for path in roots
+                    if (
+                        skill_fingerprint(path)
+                        != baseline.get(path.relative_to(work_dir).as_posix())
+                        and skill_fingerprint(path) not in baseline_fingerprints
+                    )
+                ]
+                if len(changed_roots) != 1:
+                    if operation == "optimize":
+                        raise ValueError("优化结果必须只包含一个发生变更的 Skill")
+                    raise ValueError("本轮生成结果必须只包含一个发生变更的 Skill")
+                root = changed_roots[0]
+                declared_root = handoff_root()
+                if declared_root is not None and declared_root != root.resolve():
+                    raise ValueError("Skill 交付清单与唯一变更产物不一致")
+            else:
+                if len(roots) != 1:
+                    raise ValueError("生成结果必须只包含一个 Skill 根目录")
+                root = roots[0]
+                if operation is None and len(entries) != 1:
+                    raise ValueError("Skill 根目录之外不能包含其他文件")
+                declared_root = handoff_root()
+                if declared_root is not None and declared_root != root.resolve():
+                    raise ValueError("Skill 交付清单与唯一生成产物不一致")
             skill_md_path = root / "SKILL.md"
             if not skill_md_path.is_file():
                 raise ValueError("生成结果缺少 SKILL.md")
             skill_md = skill_md_path.read_text(encoding="utf-8")
             name, description = metadata(skill_md)
-            if root.name != name:
+            handoff_dir = (work_dir / ".veadk-output").resolve()
+            is_handoff_result = root.resolve().parent == handoff_dir
+            if (operation != "optimize" or is_handoff_result) and root.name != name:
                 raise ValueError("Skill 根目录名必须与 frontmatter name 一致")
 
             files = []
@@ -583,10 +700,33 @@ def _runner_source() -> str:
 
             set_stage_activity("正在打包 Skill", "packaging")
             archive_path = job_dir / "skill.zip"
-            with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
-                for item in files:
-                    source = root / item["path"]
-                    archive.write(source, f"{name}/{item['path']}")
+            artifacts_dir = job_dir / "artifacts"
+            artifacts_dir.mkdir(exist_ok=True)
+            revision_archive = artifacts_dir / f"revision-{revision}.zip"
+            temporary_archive = job_dir / f".skill-{revision}-{os.getpid()}.tmp"
+            legacy_temporary = job_dir / f".skill-legacy-{os.getpid()}.tmp"
+            try:
+                with zipfile.ZipFile(
+                    temporary_archive, "w", zipfile.ZIP_DEFLATED
+                ) as archive:
+                    for item in files:
+                        source = root / item["path"]
+                        archive.write(source, f"{name}/{item['path']}")
+                archive_content = temporary_archive.read_bytes()
+                archive_sha256 = hashlib.sha256(archive_content).hexdigest()
+                try:
+                    os.link(temporary_archive, revision_archive)
+                except FileExistsError:
+                    existing_sha256 = hashlib.sha256(
+                        revision_archive.read_bytes()
+                    ).hexdigest()
+                    if existing_sha256 != archive_sha256:
+                        raise ValueError("同一 Skill 版本的产物内容发生冲突")
+                legacy_temporary.write_bytes(revision_archive.read_bytes())
+                legacy_temporary.replace(archive_path)
+            finally:
+                temporary_archive.unlink(missing_ok=True)
+                legacy_temporary.unlink(missing_ok=True)
             if current_status_id:
                 for item in activities:
                     if item["id"] == current_status_id:
@@ -600,6 +740,12 @@ def _runner_source() -> str:
                 skillMd=skill_md,
                 files=files,
                 validation={"valid": True, "errors": []},
+                artifact={
+                    "revision": revision,
+                    "path": f"artifacts/revision-{revision}.zip",
+                    "sha256": archive_sha256,
+                    "size": revision_archive.stat().st_size,
+                },
             )
         except Exception as error:
             safe_error = redact(error)[:1000]
@@ -728,8 +874,9 @@ def ensure_skill_creator_model_credential(
     provider: str = "volcengine",
     model_name: str | None = None,
     client: Any | None = None,
-) -> None:
-    """Resolve an Ark API key and bind it directly to the CodeEnv Tool."""
+    model_api_key: str | None = None,
+) -> str:
+    """Bind the shared Studio Codex model credential directly to one Tool."""
     from veadk.auth.veauth.ark_veauth import get_ark_token
 
     tools_client = client or AgentkitToolsClient(
@@ -740,16 +887,18 @@ def ensure_skill_creator_model_credential(
     )
     tool = tools_client.get_tool(tools_types.GetToolRequest(ToolId=tool_id))
     envs = {item.key: item.value for item in tool.envs or [] if item.key}
-    model_api_key = get_ark_token(
-        region=region,
-        access_key=access_key,
-        secret_key=secret_key,
-        session_token=session_token,
-    )
+    resolved_model_api_key = (model_api_key or "").strip()
+    if not resolved_model_api_key:
+        resolved_model_api_key = get_ark_token(
+            region=region,
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token,
+        )
     model_provider, model_base_url = _sandbox_model_config(provider)
     session_envs = build_exec_session_envs(
-        model_name=model_name or _MODELS[0][1],
-        model_api_key=model_api_key,
+        model_name=model_name or studio_sandbox_agent_model_name(provider),
+        model_api_key=resolved_model_api_key,
         model_provider=model_provider,
         model_base_url=model_base_url,
         model_provider_was_provided=True,
@@ -761,12 +910,13 @@ def ensure_skill_creator_model_credential(
         raise SkillCreatorError("无法生成 Sandbox 模型环境变量")
     updates = {item.key: item.value for item in session_envs}
     if all(envs.get(key) == value for key, value in updates.items()):
-        return
+        return resolved_model_api_key
     envs.update(updates)
     updated_envs = [{"Key": key, "Value": value} for key, value in envs.items()]
     tools_client.update_tool(
         tools_types.UpdateToolRequest(ToolId=tool_id, Envs=updated_envs)
     )
+    return resolved_model_api_key
 
 
 class SkillCreatorService:
@@ -961,32 +1111,21 @@ class SkillCreatorService:
         archive, _ = self.download(job_id, candidate_id, owner_id)
         name, description = self._archive_metadata(archive)
         from agentkit.toolkit.cli.cli_skills_workflow import (
-            _ensure_bucket_ready,
             _make_content_hashed_zip_copy,
-            _tos_upload,
             _wait_for_running_version,
         )
         from agentkit.toolkit.config import GlobalConfigManager
-        from agentkit.toolkit.volcengine.services.tos_service import TOSService
+        from veadk.cli.studio_skill_storage import upload_skill_archive
 
         config = GlobalConfigManager().load()
         configured_bucket = (
             os.getenv("VEADK_SKILL_CREATOR_TOS_BUCKET") or config.tos.bucket or ""
         ).strip()
-        bucket = configured_bucket or TOSService.generate_bucket_name()
         prefix = (
             os.getenv("VEADK_SKILL_CREATOR_TOS_PREFIX")
             or config.tos.prefix
             or "agentkit/skills"
         ).strip()
-        _ensure_bucket_ready(
-            bucket_name=bucket,
-            prefix=prefix,
-            region=self._region,
-            auto_bucket=not bool(configured_bucket),
-            assume_yes=True,
-            assume_no=False,
-        )
 
         with tempfile.TemporaryDirectory(prefix="veadk-skill-publish-") as temp_dir:
             archive_path = Path(temp_dir) / f"{name}.zip"
@@ -994,11 +1133,16 @@ class SkillCreatorService:
             hashed_path = _make_content_hashed_zip_copy(
                 str(archive_path), name, temp_dir
             )
-            tos_url = _tos_upload(
-                hashed_path, bucket, prefix, self._region, verify_bucket=False
+            upload = upload_skill_archive(
+                hashed_path,
+                configured_bucket=configured_bucket,
+                prefix=prefix,
+                region=self._region,
             )
+        bucket = upload.bucket_name
+        tos_url = upload.url
 
-        client = AgentkitSkillsClient(region=self._region)
+        client = AgentkitSkillsClient(**agentkit_client_options(self._region))
         effective_project = (
             project_name or os.getenv("VEADK_SKILL_CREATOR_PROJECT_NAME") or None
         )
@@ -1094,7 +1238,7 @@ class SkillCreatorService:
         request: str,
     ) -> dict[str, str]:
         del label
-        client = AgentkitToolsClient(region=self._region)
+        client = AgentkitToolsClient(**agentkit_client_options(self._region))
         session_id = self._session_id(job_id, candidate_id)
         model_provider, _ = _sandbox_model_config()
         session_envs = build_exec_session_envs(
@@ -1230,7 +1374,9 @@ class SkillCreatorService:
         regions = sandbox_region_candidates(self._region, provider=_sandbox_provider())
         for index, region in enumerate(regions):
             try:
-                response = AgentkitToolsClient(region=region).list_sessions(request)
+                response = AgentkitToolsClient(
+                    **agentkit_client_options(region)
+                ).list_sessions(request)
             except Exception as error:
                 if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
                     continue
@@ -1257,7 +1403,9 @@ class SkillCreatorService:
         failed = 0
         for tool_id, instance_id in instances:
             try:
-                AgentkitToolsClient(region=self._region).delete_session(
+                AgentkitToolsClient(
+                    **agentkit_client_options(self._region)
+                ).delete_session(
                     tools_types.DeleteSessionRequest(
                         ToolId=tool_id, SessionId=instance_id
                     )
@@ -1284,7 +1432,9 @@ class SkillCreatorService:
         regions = sandbox_region_candidates(self._region, provider=_sandbox_provider())
         for index, region in enumerate(regions):
             try:
-                tool = AgentkitToolsClient(region=region).get_tool(request)
+                tool = AgentkitToolsClient(**agentkit_client_options(region)).get_tool(
+                    request
+                )
             except Exception as error:
                 if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
                     continue

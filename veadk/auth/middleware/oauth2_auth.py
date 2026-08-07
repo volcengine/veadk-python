@@ -1797,8 +1797,12 @@ def create_oauth2_middleware(
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        # Browser request: redirect to OAuth2 authorization.
-        _, auth_url = oauth2_handler.build_authorization_request(str(request.url))
+        # Keep the post-login target relative so an internal HTTP hop cannot
+        # downgrade the browser's public HTTPS origin behind a reverse proxy.
+        redirect_after_auth = request.url.path
+        if request.url.query:
+            redirect_after_auth = f"{redirect_after_auth}?{request.url.query}"
+        _, auth_url = oauth2_handler.build_authorization_request(redirect_after_auth)
         return RedirectResponse(url=auth_url, status_code=302)
 
     return oauth2_middleware
