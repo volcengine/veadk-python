@@ -669,6 +669,103 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
     }
 
 
+def test_byteplus_studio_update_repairs_missing_sandbox_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    target = _target(region="ap-southeast-1")
+    captured: dict[str, object] = {}
+    code_tools: list[dict[str, object]] = []
+    agent_tools: list[dict[str, object]] = []
+    code_credentials: list[dict[str, object]] = []
+    agent_credentials: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.find_studio_deployments", lambda **_: [target]
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.load_deployed_site_logo", lambda _: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_frontend_assets", lambda *_: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_local_studio_requirements",
+        lambda *_a, **_k: "./veadk.whl\n",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.write_studio_package", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
+        lambda **kwargs: code_tools.append(kwargs) or f"{kwargs['name']}-tool",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_agent_tool",
+        lambda **kwargs: agent_tools.append(kwargs) or f"{kwargs['kind']}-tool",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
+        lambda **kwargs: code_credentials.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_agent_model_credential",
+        lambda **kwargs: agent_credentials.append(kwargs),
+    )
+
+    class _FakeVeFaaS:
+        def __init__(self, **_: str) -> None:
+            self.client = SimpleNamespace(
+                get_function=lambda _request: SimpleNamespace(
+                    envs=[
+                        SimpleNamespace(
+                            key="SANDBOX_CHAT_CODEX",
+                            value="existing-codex-tool",
+                        )
+                    ]
+                )
+            )
+
+        def update_application_code_bundle(self, **kwargs: object) -> str:
+            captured.update(kwargs)
+            return target.url
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _FakeVeFaaS)
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "update",
+            "--provider",
+            "byteplus",
+            "--vefaas-app-name",
+            "studio-app",
+            "--path",
+            str(tmp_path),
+            "--byteplus-access-key",
+            "ak",
+            "--byteplus-secret-key",
+            "sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(code_tools) == 1
+    assert "skill" in str(code_tools[0]["name"])
+    assert {str(call["kind"]) for call in agent_tools} == {"openclaw", "hermes"}
+    assert {str(call["provider"]) for call in code_credentials} == {"byteplus"}
+    assert {str(call["provider"]) for call in agent_credentials} == {"byteplus"}
+    assert {str(call["model_base_url"]) for call in agent_credentials} == {
+        "https://ark.ap-southeast.bytepluses.com/api/v3"
+    }
+    overrides = captured["environment_overrides"]
+    assert isinstance(overrides, dict)
+    assert overrides["SANDBOX_CHAT_CODEX"] == "existing-codex-tool"
+    assert str(overrides["SANDBOX_SKILL_CREATOR"]).endswith("-tool")
+    assert overrides["SANDBOX_CHAT_OPENCLAW"] == "openclaw-tool"
+    assert overrides["SANDBOX_CHAT_HERMES"] == "hermes-tool"
+    assert overrides["CLOUD_PROVIDER"] == "byteplus"
+
+
 def test_update_application_code_bundle_merges_only_explicit_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
