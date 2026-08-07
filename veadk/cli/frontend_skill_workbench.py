@@ -14,9 +14,9 @@
 
 """DevEnv-backed Skill creation and optimization workbench for Studio.
 
-This is intentionally additive to the legacy A/B Skill creator.  A DevEnv is an
-AgentKit DevEnv Tool backed by the dedicated development image; the Tool ID is
-configured separately so a normal CodeEnv can never be selected by accident.
+This is intentionally additive to the legacy A/B Skill creator. A Skill task
+creates its own Session on Studio's shared Dev Sandbox Tool, backed by the
+provider-specific development image and kept type-isolated from CodeEnv Tools.
 """
 
 from __future__ import annotations
@@ -84,8 +84,8 @@ from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_TOOL_ID_ENV = "SANDBOX_SKILL_WORKBENCH"
-_LEGACY_TOOL_ID_ENV = "SANDBOX_SKILL_CREATOR"
+_TOOL_ID_ENV = "SANDBOX_DEV"
+_DEVENV_IMAGE_ENV = "VEADK_DEVENV_IMAGE"
 _EXPECTED_TOOL_TYPE = "DevEnv"
 _SESSION_TTL_SECONDS = 3600
 _MAX_INTENT_CHARS = 20_000
@@ -888,7 +888,7 @@ class SkillWorkbenchService:
                 "reason": "DevEnv 暂不可用，请联系管理员检查配置。",
                 "operations": ["create", "optimize"],
             }
-        expected_image = (os.getenv("VEADK_SKILL_DEVENV_IMAGE") or "").strip()
+        expected_image = (os.getenv(_DEVENV_IMAGE_ENV) or "").strip()
         valid_tool = tool.tool_type == _EXPECTED_TOOL_TYPE and tool.status == "Ready"
         if expected_image:
             valid_tool = valid_tool and tool.image_url == expected_image
@@ -2942,7 +2942,7 @@ class SkillWorkbenchService:
                 status_code=503,
                 retryable=retryable,
             ) from error
-        expected_image = (os.getenv("VEADK_SKILL_DEVENV_IMAGE") or "").strip()
+        expected_image = (os.getenv(_DEVENV_IMAGE_ENV) or "").strip()
         if tool.tool_type != _EXPECTED_TOOL_TYPE or tool.status != "Ready":
             raise SkillWorkbenchError(
                 "SKILL_DEVENV_INVALID",
@@ -2965,8 +2965,6 @@ class SkillWorkbenchService:
 
     def _tool_id(self, *, required: bool = True) -> str:
         value = self._configured_tool_id or (os.getenv(_TOOL_ID_ENV) or "").strip()
-        if not value:
-            value = (os.getenv(_LEGACY_TOOL_ID_ENV) or "").strip()
         if required and not value:
             raise SkillWorkbenchError(
                 "SKILL_DEVENV_NOT_CONFIGURED",

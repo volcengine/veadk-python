@@ -26,6 +26,10 @@ from typing import Any
 _PROJECT_NAME = "default"
 _TOOL_TYPE = "CodeEnv"
 _DEV_TOOL_TYPE = "DevEnv"
+_DEVENV_COMMAND = "/opt/gem/run.sh"
+_DEVENV_PORT = 8080
+_DEVENV_CPU_MILLI = 4000
+_DEVENV_MEMORY_MB = 8192
 _DEVENV_IMAGE_URLS = {
     "volcengine": (
         "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/devenv:0.0.1"
@@ -85,12 +89,13 @@ def _wait_for_ready_tool(
     timeout_seconds: float,
     poll_interval: float,
     sleep: Callable[[float], None],
+    ready_check: Callable[[Any], bool] | None = None,
 ) -> str:
     deadline = time.monotonic() + timeout_seconds
     while True:
         tool = tools_client.get_tool(tools_types.GetToolRequest(ToolId=tool_id))
         status = (tool.status or "").strip()
-        if status == _READY_STATUS:
+        if status == _READY_STATUS and (ready_check is None or ready_check(tool)):
             return tool_id
         if status in _FAILED_STATUSES:
             raise RuntimeError(
@@ -216,12 +221,17 @@ def ensure_studio_code_env_tool(**kwargs: Any) -> str:
     return _ensure_studio_environment_tool(tool_type=_TOOL_TYPE, **kwargs)
 
 
-def ensure_studio_dev_env_tool(**kwargs: Any) -> str:
-    """Reuse or create one Ready DevEnv Tool and return its Tool ID."""
-    return _ensure_studio_environment_tool(tool_type=_DEV_TOOL_TYPE, **kwargs)
+def _is_complete_studio_devenv_tool(tool: Any, *, image_url: str) -> bool:
+    return (
+        (tool.image_url or "").strip() == image_url
+        and (tool.command or "").strip() == _DEVENV_COMMAND
+        and tool.port == _DEVENV_PORT
+        and tool.cpu_milli == _DEVENV_CPU_MILLI
+        and tool.memory_mb == _DEVENV_MEMORY_MB
+    )
 
 
-def ensure_studio_devenv_tool(
+def ensure_studio_dev_env_tool(
     *,
     name: str,
     provider: str = "volcengine",
@@ -234,10 +244,11 @@ def ensure_studio_devenv_tool(
     poll_interval: float = 5.0,
     sleep: Callable[[float], None] = time.sleep,
 ) -> str:
-    """Reuse or create the Ready DevEnv Tool dedicated to the Skill workbench."""
+    """Reuse or create the shared Ready DevEnv Tool used by Studio."""
     from agentkit.sdk.tools import types as tools_types
     from agentkit.sdk.tools.client import AgentkitToolsClient
 
+    image_url = studio_sandbox_devenv_image_url(provider)
     tools_client = client or AgentkitToolsClient(
         access_key=access_key,
         secret_key=secret_key,
@@ -254,17 +265,32 @@ def ensure_studio_devenv_tool(
         tool_id = (match.tool_id or "").strip()
         if not tool_id:
             raise RuntimeError(f"AgentKit Tool '{name}' did not return a Tool ID.")
+        tool = tools_client.get_tool(
+            tools_types.GetToolRequest(ToolId=tool_id),
+        )
+        if not _is_complete_studio_devenv_tool(tool, image_url=image_url):
+            tools_client.update_tool(
+                tools_types.UpdateToolRequest(
+                    ToolId=tool_id,
+                    ToolType=_DEV_TOOL_TYPE,
+                    ImageUrl=image_url,
+                    Command=_DEVENV_COMMAND,
+                    Port=_DEVENV_PORT,
+                    CpuMilli=_DEVENV_CPU_MILLI,
+                    MemoryMb=_DEVENV_MEMORY_MB,
+                )
+            )
     else:
         response = tools_client.create_tool(
             tools_types.CreateToolRequest(
                 Name=name,
                 ToolType=_DEV_TOOL_TYPE,
                 ProjectName=_PROJECT_NAME,
-                ImageUrl=studio_sandbox_devenv_image_url(provider),
-                Command="/opt/gem/run.sh",
-                Port=8080,
-                CpuMilli=4000,
-                MemoryMb=8192,
+                ImageUrl=image_url,
+                Command=_DEVENV_COMMAND,
+                Port=_DEVENV_PORT,
+                CpuMilli=_DEVENV_CPU_MILLI,
+                MemoryMb=_DEVENV_MEMORY_MB,
                 AuthorizerConfiguration=tools_types.AuthorizerForCreateTool(
                     KeyAuth=tools_types.AuthorizerKeyAuthForCreateTool(
                         ApiKeyName=f"studio-devenv-{secrets.token_hex(8)}",
@@ -290,6 +316,10 @@ def ensure_studio_devenv_tool(
         timeout_seconds=timeout_seconds,
         poll_interval=poll_interval,
         sleep=sleep,
+        ready_check=lambda tool: _is_complete_studio_devenv_tool(
+            tool,
+            image_url=image_url,
+        ),
     )
 
 

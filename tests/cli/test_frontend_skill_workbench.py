@@ -45,6 +45,12 @@ from veadk.cli.frontend_skill_workbench import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _default_cloud_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLOUD_PROVIDER", "volcengine")
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "volcengine")
+
+
 def skill_zip(
     name: str = "release-notes",
     *,
@@ -697,8 +703,9 @@ def _codex_tool_envs() -> list[SimpleNamespace]:
 
 
 def test_capabilities_fail_closed_without_tool(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SANDBOX_SKILL_WORKBENCH", raising=False)
-    monkeypatch.delenv("SANDBOX_SKILL_CREATOR", raising=False)
+    monkeypatch.delenv("SANDBOX_DEV", raising=False)
+    monkeypatch.setenv("SANDBOX_SKILL_WORKBENCH", "retired-tool")
+    monkeypatch.setenv("SANDBOX_SKILL_CREATOR", "unrelated-tool")
 
     value = SkillWorkbenchService().capabilities()
 
@@ -713,6 +720,7 @@ def test_byteplus_regions_are_valid_workbench_contracts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "byteplus")
 
     source = SkillCenterSource.model_validate(
         {
@@ -749,6 +757,7 @@ def test_byteplus_source_region_defaults_to_active_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "byteplus")
 
     source = SkillCenterSource.model_validate(
         {
@@ -765,6 +774,7 @@ def test_publish_rejects_cross_provider_region_before_artifact_download(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "byteplus")
     service = SkillWorkbenchService(tool_id="tool")
     job_id = SkillWorkbenchService._new_job_id("alice")
     monkeypatch.setattr(
@@ -806,7 +816,8 @@ def test_publish_rejects_cross_provider_region_before_artifact_download(
 def test_capabilities_require_ready_devenv_and_optional_image(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("VEADK_SKILL_DEVENV_IMAGE", "registry/dev:1")
+    monkeypatch.setenv("SANDBOX_DEV", "tool-1")
+    monkeypatch.setenv("VEADK_DEVENV_IMAGE", "registry/dev:1")
     tools = SimpleNamespace(
         get_tool=lambda request: SimpleNamespace(
             tool_type="DevEnv",
@@ -815,9 +826,7 @@ def test_capabilities_require_ready_devenv_and_optional_image(
             envs=_codex_tool_envs(),
         )
     )
-    service = SkillWorkbenchService(
-        tool_id="tool-1", tools_client_factory=lambda region: tools
-    )
+    service = SkillWorkbenchService(tools_client_factory=lambda region: tools)
 
     value = service.capabilities()
 
@@ -830,6 +839,7 @@ def test_byteplus_capabilities_accept_provider_model_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "byteplus")
     tools = SimpleNamespace(
         get_tool=lambda request: SimpleNamespace(
             tool_type="DevEnv",
