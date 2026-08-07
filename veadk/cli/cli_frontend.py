@@ -1420,7 +1420,8 @@ def _run_frontend_server(
     sandbox_gateway = AgentkitSandboxGateway(
         _sandbox_client,
         region_candidates=sandbox_region_candidates(
-            os.getenv("AGENTKIT_SANDBOX_REGION")
+            os.getenv("AGENTKIT_SANDBOX_REGION"),
+            provider=provider,
         ),
     )
     sandbox_service = SandboxConversationService(
@@ -7187,6 +7188,14 @@ def _resolve_studio_cloud_credentials(
     help="Comma-separated Studio developer usernames or OAuth emails.",
 )
 @click.option(
+    "--sandbox-dev-tool-id",
+    "sandbox_dev_tool_id",
+    default=None,
+    envvar="SANDBOX_DEV",
+    help="Dedicated ready AgentKit DevEnv Tool ID for Studio development. "
+    "Volcengine default: create one during deployment.",
+)
+@click.option(
     "--sandbox-chat-codex-tool-id",
     "sandbox_chat_codex_tool_id",
     default=None,
@@ -7283,6 +7292,7 @@ def frontend_deploy(
     site_title: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
+    sandbox_dev_tool_id: str | None,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
@@ -7411,43 +7421,44 @@ def frontend_deploy(
         "openclaw": sandbox_chat_openclaw_tool_id,
         "hermes": sandbox_chat_hermes_tool_id,
     }
+    if provider_id == "volcengine":
+        sandbox_tool_ids["dev"] = sandbox_dev_tool_id
+    elif sandbox_dev_tool_id:
+        raise click.ClickException(
+            "--sandbox-dev-tool-id is supported only for Volcengine Studio deployments."
+        )
     sandbox_tool_labels = {
         "codex": "Codex",
         "skill_creator": "Skill Creator",
         "openclaw": "OpenClaw",
         "hermes": "Hermes",
+        "dev": "Dev Sandbox",
     }
     sandbox_tool_purposes = {
         "codex": "chat",
         "skill_creator": "skill",
         "openclaw": "openclaw",
         "hermes": "hermes",
-    }
-    sandbox_tool_flags = {
-        "codex": "--sandbox-chat-codex-tool-id",
-        "skill_creator": "--sandbox-skill-creator-tool-id",
-        "openclaw": "--sandbox-chat-openclaw-tool-id",
-        "hermes": "--sandbox-chat-hermes-tool-id",
+        "dev": "dev",
     }
     from veadk.cli.studio_sandbox_tools import (
-        STUDIO_SANDBOX_AGENT_MODEL_NAME,
         ensure_studio_agent_model_credential,
         ensure_studio_agent_tool,
         ensure_studio_code_env_tool,
+        ensure_studio_dev_env_tool,
+        studio_sandbox_agent_model_name,
+        studio_sandbox_model_base_url,
         studio_sandbox_tool_name,
     )
+
+    sandbox_agent_model_name = studio_sandbox_agent_model_name(provider_id)
+    sandbox_model_base_url = studio_sandbox_model_base_url(provider_id)
 
     missing_sandbox_tools: dict[str, str] = {}
     for kind, tool_id in sandbox_tool_ids.items():
         label = sandbox_tool_labels[kind]
         if tool_id:
             click.echo(f"Using configured AgentKit {label} Tool '{tool_id}'.")
-            continue
-        if provider_id == "byteplus":
-            click.echo(
-                f"Skipping AgentKit {label} Tool auto-provisioning for BytePlus. "
-                f"Pass {sandbox_tool_flags[kind]} to enable it."
-            )
             continue
         tool_name = studio_sandbox_tool_name(
             vefaas_app_name,
@@ -7469,12 +7480,21 @@ def frontend_deploy(
                         secret_key=sk,
                         session_token=session_token or "",
                     )
+                elif kind == "dev":
+                    future = executor.submit(
+                        ensure_studio_dev_env_tool,
+                        name=tool_name,
+                        region=region,
+                        access_key=ak,
+                        secret_key=sk,
+                        session_token=session_token or "",
+                    )
                 else:
                     future = executor.submit(
                         ensure_studio_agent_tool,
                         name=tool_name,
                         kind=kind,
-                        model_name=STUDIO_SANDBOX_AGENT_MODEL_NAME,
+                        model_name=sandbox_agent_model_name,
                         region=region,
                         access_key=ak,
                         secret_key=sk,
@@ -7504,8 +7524,6 @@ def frontend_deploy(
     resolved_sandbox_tool_ids: dict[str, str] = {}
     for kind, tool_id in sandbox_tool_ids.items():
         if not tool_id:
-            if provider_id == "byteplus":
-                continue
             raise click.ClickException(
                 f"AgentKit {sandbox_tool_labels[kind]} Tool did not return a Tool ID."
             )
@@ -7519,7 +7537,8 @@ def frontend_deploy(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         credential_futures = {}
         for kind, tool_id in resolved_sandbox_tool_ids.items():
-            if kind in {"codex", "skill_creator"}:
+            if kind in {"codex", "skill_creator", "dev"}:
+                code_model_name = sandbox_agent_model_name if kind == "codex" else None
                 future = executor.submit(
                     ensure_skill_creator_model_credential,
                     tool_id=tool_id,
@@ -7527,17 +7546,21 @@ def frontend_deploy(
                     access_key=ak,
                     secret_key=sk,
                     session_token=session_token,
+                    provider=provider_id,
+                    model_name=code_model_name,
                 )
             else:
                 future = executor.submit(
                     ensure_studio_agent_model_credential,
                     tool_id=tool_id,
                     kind=kind,
-                    model_name=STUDIO_SANDBOX_AGENT_MODEL_NAME,
+                    model_name=sandbox_agent_model_name,
+                    model_base_url=sandbox_model_base_url,
                     region=region,
                     access_key=ak,
                     secret_key=sk,
                     session_token=session_token,
+                    provider=provider_id,
                 )
             credential_futures[kind] = future
 
@@ -7560,6 +7583,7 @@ def frontend_deploy(
     skill_creator_tool_id = resolved_sandbox_tool_ids.get("skill_creator", "")
     openclaw_tool_id = resolved_sandbox_tool_ids.get("openclaw", "")
     hermes_tool_id = resolved_sandbox_tool_ids.get("hermes", "")
+    dev_tool_id = resolved_sandbox_tool_ids.get("dev", "")
 
     # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
     # (i.e. the deployer's whole .env) as function env vars. The frontend must
@@ -7604,6 +7628,8 @@ def frontend_deploy(
     veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
     veadk_environments["SANDBOX_CHAT_OPENCLAW"] = openclaw_tool_id
     veadk_environments["SANDBOX_CHAT_HERMES"] = hermes_tool_id
+    if provider_id == "volcengine":
+        veadk_environments["SANDBOX_DEV"] = dev_tool_id
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
     veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
     veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] = studio_update_prefix
@@ -7824,6 +7850,12 @@ def frontend_deploy(
     help="Replace the deployed Studio title, at most 6 characters.",
 )
 @click.option(
+    "--sandbox-dev-tool-id",
+    "sandbox_dev_tool_id",
+    default=None,
+    help="Replace the Volcengine Studio DevEnv Tool ID.",
+)
+@click.option(
     "--sandbox-chat-codex-tool-id",
     "sandbox_chat_codex_tool_id",
     default=None,
@@ -7862,6 +7894,7 @@ def frontend_update(
     path: Path,
     site_logo: str | None,
     site_title: str | None,
+    sandbox_dev_tool_id: str | None,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
@@ -7889,6 +7922,10 @@ def frontend_update(
 
     provider_id = normalize_cloud_provider(provider)
     if provider_id == "byteplus":
+        if sandbox_dev_tool_id is not None:
+            raise click.ClickException(
+                "--sandbox-dev-tool-id is supported only for Volcengine Studio updates."
+            )
         if region is not None and region != DEFAULT_BYTEPLUS_REGION:
             raise click.ClickException(
                 "BytePlus Studio update currently supports only "
@@ -7996,6 +8033,8 @@ def frontend_update(
             environment_overrides["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_REGION
         if branding_title is not None:
             environment_overrides["VEADK_SITE_TITLE"] = branding_title
+        if sandbox_dev_tool_id is not None:
+            environment_overrides["SANDBOX_DEV"] = sandbox_dev_tool_id
         if sandbox_chat_codex_tool_id is not None:
             environment_overrides["SANDBOX_CHAT_CODEX"] = sandbox_chat_codex_tool_id
         if sandbox_chat_openclaw_tool_id is not None:

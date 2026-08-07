@@ -212,6 +212,10 @@ def test_studio_deploy_checks_serverless_role_with_custom_function_role(
         lambda **kwargs: f"auto-{kwargs['name']}",
     )
     monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_dev_env_tool",
+        lambda **kwargs: f"auto-{kwargs['name']}",
+    )
+    monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_model_credential",
         lambda **_: None,
     )
