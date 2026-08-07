@@ -17,6 +17,7 @@
 import json
 
 import pytest
+from agentkit.platform.context import default_cloud_provider
 from agentkit.sdk.tools.client import AgentkitToolsClient
 
 from veadk.cli.studio_cloud_credentials import (
@@ -92,9 +93,8 @@ def test_byteplus_agentkit_options_select_byteplus_sdk_endpoint(
         str(credential_path),
     )
 
-    client = AgentkitToolsClient(
-        **agentkit_client_options("ap-southeast-1")
-    )
+    with default_cloud_provider("byteplus"):
+        client = AgentkitToolsClient(**agentkit_client_options("ap-southeast-1"))
 
     assert client.host == "agentkit.ap-southeast-1.byteplusapi.com"
     assert client.region == "ap-southeast-1"

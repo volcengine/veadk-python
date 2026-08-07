@@ -79,15 +79,20 @@ def test_upload_skill_archive_uses_the_provider_endpoint(
             self.closed = True
 
     monkeypatch.setattr("tos.TosClientV2", TosClient)
-    if provider == "volcengine":
-        monkeypatch.setattr(
-            "agentkit.platform.VolcConfiguration.get_service_credentials",
-            lambda self, service: SimpleNamespace(
-                access_key="iam-ak",
-                secret_key="iam-sk",
-                session_token="iam-token",
-            ),
+
+    def get_service_credentials(self, service):
+        if provider == "byteplus":
+            raise ValueError("BytePlus service credentials unavailable")
+        return SimpleNamespace(
+            access_key="iam-ak",
+            secret_key="iam-sk",
+            session_token="iam-token",
         )
+
+    monkeypatch.setattr(
+        "agentkit.platform.VolcConfiguration.get_service_credentials",
+        get_service_credentials,
+    )
     monkeypatch.setattr(
         "veadk.cli.studio_skill_storage.resolve_studio_cloud_credentials",
         lambda actual_provider: StudioCloudCredentials(
