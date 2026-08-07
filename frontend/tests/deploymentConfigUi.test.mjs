@@ -415,11 +415,19 @@ test("creates feedback evaluation sets by default and sends the deployment choic
   );
   assert.match(
     projectPreviewSource,
+    /const supportsEvaluationSets = cloudProvider !== "byteplus"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /const effectiveCreateEvaluationSets =[\s\S]*supportsEvaluationSets && createEvaluationSets/,
+  );
+  assert.match(
+    projectPreviewSource,
     /type="checkbox"[\s\S]*?checked=\{createEvaluationSets\}[\s\S]*?setCreateEvaluationSets/,
   );
   assert.match(
     projectPreviewSource,
-    /createEvaluationSets,\s*[\s\S]*?envs,/,
+    /createEvaluationSets: effectiveCreateEvaluationSets,\s*[\s\S]*?envs,/,
   );
   assert.match(
     adkClientSource,
@@ -431,10 +439,10 @@ test("creates feedback evaluation sets by default and sends the deployment choic
   );
   assert.match(
     projectPreviewSource,
-    /createEvaluationSets[\s\S]*?\[\.\.\.deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP\][\s\S]*?: deploymentStepsWithInstanceUpdate/,
+    /effectiveCreateEvaluationSets[\s\S]*?\[\.\.\.deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP\][\s\S]*?: deploymentStepsWithInstanceUpdate/,
   );
   assert.match(
     projectPreviewSource,
-    /const initialTask: DeploymentTaskUpdate =[\s\S]*?createEvaluationSets,\s*\n\s*};/,
+    /const initialTask: DeploymentTaskUpdate =[\s\S]*?createEvaluationSets: effectiveCreateEvaluationSets,\s*\n\s*};/,
   );
 });

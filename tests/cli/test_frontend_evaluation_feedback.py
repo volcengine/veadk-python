@@ -31,6 +31,7 @@ def _create_frontend_app(
     tmp_path: Path,
     *,
     studio: bool = False,
+    provider: str = "volcengine",
 ) -> FastAPI:
     captured: dict[str, Any] = {}
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
@@ -40,6 +41,8 @@ def _create_frontend_app(
     )
     monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "ak")
     monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "sk")
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "bp-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "bp-sk")
     _run_frontend_server(
         agents_dir=str(tmp_path),
         frontend_dir=None,
@@ -59,6 +62,7 @@ def _create_frontend_app(
         auth_mode="frontend",
         generated_agent_test_run_ttl=60,
         open_browser=False,
+        provider=provider,  # type: ignore[arg-type]
         studio=studio,
     )
     return captured["app"]
@@ -73,6 +77,47 @@ class _FakeResponse:
 
     def json(self) -> dict[str, Any]:
         return self._payload
+
+
+def test_studio_findskill_route_uses_session_skillhub_search(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(
+        monkeypatch,
+        tmp_path,
+        studio=True,
+        provider="byteplus",
+    )
+
+    async def search_findskill(**kwargs: Any) -> dict[str, object]:
+        assert kwargs == {"query": "pdf", "page_number": 1, "page_size": 20}
+        return {
+            "items": [
+                {
+                    "slug": "clawhub/pdf-reader",
+                    "name": "pdf-reader",
+                    "description": "Read PDF files",
+                    "sourceType": "clawhub",
+                    "sourceRepo": "clawhub/pdf-reader",
+                    "downloadCount": 42,
+                    "evaluationScore": 0,
+                    "version": "1.0.0",
+                    "updatedAt": "2026-07-26T00:00:00+08:00",
+                }
+            ],
+            "totalCount": 1,
+        }
+
+    monkeypatch.setattr(
+        "veadk.integrations.agentkit.session_capabilities._search_findskill",
+        search_findskill,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/harness/skills/findskill?query=pdf")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["slug"] == "clawhub/pdf-reader"
 
 
 def test_message_feedback_writes_dataset_and_session_state(
@@ -218,6 +263,76 @@ def test_message_feedback_writes_dataset_and_session_state(
     state = session_patches[0]["state_delta"]["veadk_feedback:assistant-event"]
     assert state["rating"] == "good"
     assert state["evaluationItemId"] == "item-1"
+
+
+def test_message_feedback_byteplus_is_noop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(
+        monkeypatch,
+        tmp_path,
+        studio=True,
+        provider="byteplus",
+    )
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                project_name="support",
+                tags=[],
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example",
+                        network_type="public",
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-key"),
+                    custom_jwt_authorizer=None,
+                ),
+            )
+
+    class _UnexpectedAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+            raise AssertionError("BytePlus feedback should not call remote APIs")
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+    monkeypatch.setattr("httpx.AsyncClient", _UnexpectedAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/evaluation/feedback",
+            headers={"X-VeADK-Local-User": "user-1"},
+            json={
+                "runtimeId": "runtime-1",
+                "region": "ap-southeast-1",
+                "appName": "agent",
+                "userId": "user-1",
+                "sessionId": "session-1",
+                "eventId": "assistant-event",
+                "rating": "good",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "rating": None,
+        "evaluationSetId": None,
+        "evaluationSetName": None,
+        "workspaceId": None,
+        "evaluationItemId": None,
+        "syncStatus": "synced",
+        "statePersistence": "browser",
+        "updatedAt": response.json()["updatedAt"],
+    }
 
 
 def test_message_feedback_uncheck_deletes_case_by_stable_item_key(
@@ -624,6 +739,91 @@ def test_feedback_cases_list_agentkit_dataset_items(
         if call["action"] == "ListEvaluationSetItems"
     }
     assert listed_set_ids == {"good-set", "bad-set", "auto-good-set"}
+
+
+def test_feedback_cases_byteplus_404_reports_unsupported(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(
+        monkeypatch,
+        tmp_path,
+        studio=True,
+        provider="byteplus",
+    )
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                project_name="support",
+                tags=[],
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example",
+                        network_type="public",
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-key"),
+                    custom_jwt_authorizer=None,
+                ),
+            )
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        async def __aenter__(self) -> "_FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            del args
+
+        async def request(self, method: str, url: str, **kwargs: Any) -> _FakeResponse:
+            del kwargs
+            if method == "GET" and "/web/agent-info/agent" in url:
+                return _FakeResponse({"name": "agent"})
+            raise AssertionError((method, url))
+
+        async def post(self, url: str, **kwargs: Any) -> _FakeResponse:
+            del url, kwargs
+            return _FakeResponse(
+                {
+                    "ResponseMetadata": {
+                        "RequestId": (
+                            "02178602503621000000000000000000000ffffac101ef9ae9c3d"
+                        )
+                    }
+                },
+                status_code=404,
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/evaluation/feedback-cases",
+            headers={"X-VeADK-Local-User": "user-1"},
+            params={
+                "runtimeId": "runtime-1",
+                "region": "ap-southeast-1",
+                "appName": "agent",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["unsupported"] is True
+    assert payload["unsupportedMessage"] == "BytePlus 暂不支持 AgentKit 评测集。"
+    assert payload["sets"] == []
+    assert payload["items"] == []
 
 
 def test_feedback_cases_delete_removes_dataset_items_and_clears_rating(

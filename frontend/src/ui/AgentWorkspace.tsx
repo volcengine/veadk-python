@@ -985,6 +985,7 @@ export function AgentWorkspace({
   const [feedbackSets, setFeedbackSets] = useState<AgentFeedbackSetSummary[]>([]);
   const [feedbackCasesLoading, setFeedbackCasesLoading] = useState(false);
   const [feedbackCasesError, setFeedbackCasesError] = useState("");
+  const [feedbackCasesUnsupported, setFeedbackCasesUnsupported] = useState("");
   const [feedbackReloadToken, setFeedbackReloadToken] = useState(0);
   const [optimizationGroups, setOptimizationGroups] = useState<OptimizationGroup[]>([]);
   const [optimizationsLoading, setOptimizationsLoading] = useState(false);
@@ -1623,6 +1624,7 @@ export function AgentWorkspace({
     setFeedbackCases(cached ? feedbackCasesFromResponse(cached) : []);
     setFeedbackSets(cached?.sets ?? []);
     setFeedbackCasesError("");
+    setFeedbackCasesUnsupported(cached?.unsupportedMessage ?? "");
     if (section !== "evaluations" || !runtimeId) {
       setFeedbackCasesLoading(false);
       return;
@@ -1642,10 +1644,12 @@ export function AgentWorkspace({
         if (cancelled) return;
         setFeedbackSets(response.sets);
         setFeedbackCases(feedbackCasesFromResponse(response));
+        setFeedbackCasesUnsupported(response.unsupportedMessage ?? "");
       })
       .catch((cause) => {
         if (!cancelled) {
           setFeedbackCasesError(cause instanceof Error ? cause.message : String(cause));
+          setFeedbackCasesUnsupported("");
         }
       })
       .finally(() => {
@@ -2927,6 +2931,7 @@ export function AgentWorkspace({
                       cases={visibleCases}
                       loading={feedbackCasesLoading && visibleCases.length === 0}
                       error={feedbackCasesError}
+                      notice={feedbackCasesUnsupported}
                       runtimeBacked={Boolean(selectedAgent?.runtimeId)}
                       selectionMode={caseSelectionMode}
                       selectedCaseIds={selectedCaseIds}
@@ -3132,6 +3137,7 @@ function CaseTable({
   cases,
   loading = false,
   error = "",
+  notice = "",
   runtimeBacked = false,
   selectionMode = false,
   selectedCaseIds,
@@ -3148,6 +3154,7 @@ function CaseTable({
   cases: AgentCase[];
   loading?: boolean;
   error?: string;
+  notice?: string;
   runtimeBacked?: boolean;
   selectionMode?: boolean;
   selectedCaseIds?: Set<string>;
@@ -3177,6 +3184,8 @@ function CaseTable({
           <span>{error}</span>
           {onRetry && <button type="button" onClick={onRetry}>重试</button>}
         </div>
+      ) : notice ? (
+        <div className="aw-case-empty">{notice}</div>
       ) : cases.length === 0 ? (
         <div className="aw-case-empty">
           {runtimeBacked ? "暂无用户反馈案例" : "没有匹配的案例"}

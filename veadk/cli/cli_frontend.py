@@ -1850,11 +1850,6 @@ def _run_frontend_server(
     )
     async def _skillhub_proxy(request: Request, path: str):
         """Proxy requests to Volcengine Skill Hub API to avoid CORS issues."""
-        if provider == "byteplus":
-            raise HTTPException(
-                status_code=404,
-                detail="Volcengine Skill Hub proxy is disabled in BytePlus mode.",
-            )
         target_url = f"{SKILLHUB_TARGET}/{path}"
         if request.url.query:
             target_url += f"?{request.url.query}"
@@ -1879,6 +1874,29 @@ def _run_frontend_server(
         except Exception as e:
             logger.error(f"Skillhub proxy error: {e}")
             raise HTTPException(status_code=502, detail=f"Proxy error: {str(e)}")
+
+    @app.get("/harness/skills/findskill")
+    async def _studio_search_findskill(
+        query: str = "",
+        page_number: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=50),
+    ) -> dict[str, Any]:
+        """Expose the same public Skill Hub search contract used by chat skills."""
+        try:
+            from veadk.integrations.agentkit.session_capabilities import (
+                _search_findskill,
+            )
+
+            return await _search_findskill(
+                query=query,
+                page_number=page_number,
+                page_size=page_size,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="暂时无法搜索 Skill Hub，请稍后重试。",
+            ) from exc
 
     # ---- AgentKit proxy: proxy /agentkit-proxy/* to remote AgentKit ----
     @app.api_route(
@@ -3139,6 +3157,8 @@ def _run_frontend_server(
                 status_code=400,
                 detail="createEvaluationSets must be a boolean",
             )
+        if provider == "byteplus":
+            create_evaluation_sets = False
 
         min_instance = data.get("minInstance", 1)
         max_instance = data.get("maxInstance", 5)
@@ -5748,6 +5768,17 @@ def _run_frontend_server(
             feedback.region,
             coded_access_error=True,
         )
+        if provider == "byteplus":
+            return {
+                "rating": None,
+                "evaluationSetId": None,
+                "evaluationSetName": None,
+                "workspaceId": None,
+                "evaluationItemId": None,
+                "syncStatus": "synced",
+                "statePersistence": "browser",
+                "updatedAt": time.time(),
+            }
         session_path = (
             f"apps/{quote(feedback.app_name, safe='')}/users/"
             f"{quote(feedback.user_id, safe='')}/sessions/"
@@ -6072,6 +6103,19 @@ def _run_frontend_server(
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except RuntimeError as error:
+            if provider == "byteplus" and "AgentKit OpenAPI returned HTTP 404" in str(
+                error
+            ):
+                return {
+                    "agentName": appName,
+                    "runtimeId": runtimeId,
+                    "region": region,
+                    "projectName": getattr(runtime, "project_name", "") or "default",
+                    "sets": [],
+                    "items": [],
+                    "unsupported": True,
+                    "unsupportedMessage": "BytePlus 暂不支持 AgentKit 评测集。",
+                }
             raise HTTPException(
                 status_code=502,
                 detail="读取 AgentKit 评测集失败：" + _safe_exception_detail(error),
@@ -8031,6 +8075,191 @@ def frontend_update(
             environment_overrides["AGENTKIT_CLOUD_PROVIDER"] = provider_id
             environment_overrides["BYTEPLUS_REGION"] = target.region
             environment_overrides["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_REGION
+            service_client = getattr(service, "client", None)
+            has_explicit_sandbox_tool = any(
+                tool_id is not None
+                for tool_id in (
+                    sandbox_chat_codex_tool_id,
+                    sandbox_skill_creator_tool_id,
+                    sandbox_chat_openclaw_tool_id,
+                    sandbox_chat_hermes_tool_id,
+                )
+            )
+            if service_client is None and not has_explicit_sandbox_tool:
+                current_env: dict[str, str] = {}
+                repair_sandbox_tools = False
+            else:
+                import volcenginesdkvefaas
+
+                function = service_client.get_function(
+                    volcenginesdkvefaas.GetFunctionRequest(id=target.function_id)
+                )
+                current_env = {
+                    item.key: item.value
+                    for item in (getattr(function, "envs", None) or [])
+                }
+                repair_sandbox_tools = True
+            byteplus_sandbox_tool_ids = {
+                "codex": sandbox_chat_codex_tool_id
+                if sandbox_chat_codex_tool_id is not None
+                else current_env.get("SANDBOX_CHAT_CODEX", ""),
+                "skill_creator": sandbox_skill_creator_tool_id
+                if sandbox_skill_creator_tool_id is not None
+                else current_env.get("SANDBOX_SKILL_CREATOR", ""),
+                "openclaw": sandbox_chat_openclaw_tool_id
+                if sandbox_chat_openclaw_tool_id is not None
+                else current_env.get("SANDBOX_CHAT_OPENCLAW", ""),
+                "hermes": sandbox_chat_hermes_tool_id
+                if sandbox_chat_hermes_tool_id is not None
+                else current_env.get("SANDBOX_CHAT_HERMES", ""),
+            }
+            byteplus_sandbox_labels = {
+                "codex": "Codex",
+                "skill_creator": "Skill Creator",
+                "openclaw": "OpenClaw",
+                "hermes": "Hermes",
+            }
+            byteplus_sandbox_purposes = {
+                "codex": "chat",
+                "skill_creator": "skill",
+                "openclaw": "openclaw",
+                "hermes": "hermes",
+            }
+            if repair_sandbox_tools:
+                from veadk.cli.frontend_skill_creator import (
+                    ensure_skill_creator_model_credential,
+                )
+                from veadk.cli.studio_sandbox_tools import (
+                    ensure_studio_agent_model_credential,
+                    ensure_studio_agent_tool,
+                    ensure_studio_code_env_tool,
+                    studio_sandbox_agent_model_name,
+                    studio_sandbox_model_base_url,
+                    studio_sandbox_tool_name,
+                )
+
+                sandbox_agent_model_name = studio_sandbox_agent_model_name(provider_id)
+                sandbox_model_base_url = studio_sandbox_model_base_url(provider_id)
+                missing_sandbox_tools: dict[str, str] = {}
+                for kind, tool_id in byteplus_sandbox_tool_ids.items():
+                    label = byteplus_sandbox_labels[kind]
+                    if str(tool_id or "").strip():
+                        click.echo(f"Using AgentKit {label} Tool '{tool_id}'.")
+                        continue
+                    tool_name = studio_sandbox_tool_name(
+                        vefaas_app_name,
+                        byteplus_sandbox_purposes[kind],
+                    )
+                    click.echo(f"Creating AgentKit {label} Tool '{tool_name}'…")
+                    missing_sandbox_tools[kind] = tool_name
+
+                if missing_sandbox_tools:
+                    with ThreadPoolExecutor(
+                        max_workers=len(missing_sandbox_tools)
+                    ) as ex:
+                        tool_futures = {}
+                        for kind, tool_name in missing_sandbox_tools.items():
+                            if kind in {"codex", "skill_creator"}:
+                                future = ex.submit(
+                                    ensure_studio_code_env_tool,
+                                    name=tool_name,
+                                    region=target.region,
+                                    access_key=ak,
+                                    secret_key=sk,
+                                    session_token=session_token or "",
+                                )
+                            else:
+                                future = ex.submit(
+                                    ensure_studio_agent_tool,
+                                    name=tool_name,
+                                    kind=kind,
+                                    model_name=sandbox_agent_model_name,
+                                    region=target.region,
+                                    access_key=ak,
+                                    secret_key=sk,
+                                    session_token=session_token or "",
+                                )
+                            tool_futures[kind] = future
+                        for kind, future in tool_futures.items():
+                            label = byteplus_sandbox_labels[kind]
+                            try:
+                                byteplus_sandbox_tool_ids[kind] = future.result()
+                            except Exception as error:
+                                detail = _safe_exception_detail(
+                                    error,
+                                    secrets=(ak, sk, session_token),
+                                )
+                                raise click.ClickException(
+                                    f"Failed to provision the AgentKit {label} Tool. "
+                                    f"Underlying error:\n{detail}"
+                                ) from error
+                            click.echo(f"AgentKit {label} Tool is ready.")
+
+                credential_futures = {}
+                with ThreadPoolExecutor(
+                    max_workers=len(byteplus_sandbox_tool_ids)
+                ) as ex:
+                    for kind, tool_id in byteplus_sandbox_tool_ids.items():
+                        tool_id = str(tool_id or "").strip()
+                        if not tool_id:
+                            continue
+                        label = byteplus_sandbox_labels[kind]
+                        click.echo(f"Creating AgentKit {label} model credential…")
+                        if kind in {"codex", "skill_creator"}:
+                            code_model_name = (
+                                sandbox_agent_model_name if kind == "codex" else None
+                            )
+                            future = ex.submit(
+                                ensure_skill_creator_model_credential,
+                                tool_id=tool_id,
+                                region=target.region,
+                                access_key=ak,
+                                secret_key=sk,
+                                session_token=session_token,
+                                provider=provider_id,
+                                model_name=code_model_name,
+                            )
+                        else:
+                            future = ex.submit(
+                                ensure_studio_agent_model_credential,
+                                tool_id=tool_id,
+                                kind=kind,
+                                model_name=sandbox_agent_model_name,
+                                model_base_url=sandbox_model_base_url,
+                                region=target.region,
+                                access_key=ak,
+                                secret_key=sk,
+                                session_token=session_token,
+                                provider=provider_id,
+                            )
+                        credential_futures[kind] = future
+                    for kind, future in credential_futures.items():
+                        label = byteplus_sandbox_labels[kind]
+                        try:
+                            future.result()
+                        except Exception as error:
+                            detail = _safe_exception_detail(
+                                error,
+                                secrets=(ak, sk, session_token),
+                            )
+                            raise click.ClickException(
+                                f"Failed to provision the AgentKit {label} model "
+                                f"credential. Underlying error:\n{detail}"
+                            ) from error
+                        click.echo(f"AgentKit {label} model credential is ready.")
+
+                environment_overrides["SANDBOX_CHAT_CODEX"] = str(
+                    byteplus_sandbox_tool_ids["codex"] or ""
+                )
+                environment_overrides["SANDBOX_SKILL_CREATOR"] = str(
+                    byteplus_sandbox_tool_ids["skill_creator"] or ""
+                )
+                environment_overrides["SANDBOX_CHAT_OPENCLAW"] = str(
+                    byteplus_sandbox_tool_ids["openclaw"] or ""
+                )
+                environment_overrides["SANDBOX_CHAT_HERMES"] = str(
+                    byteplus_sandbox_tool_ids["hermes"] or ""
+                )
         if branding_title is not None:
             environment_overrides["VEADK_SITE_TITLE"] = branding_title
         if sandbox_dev_tool_id is not None:
