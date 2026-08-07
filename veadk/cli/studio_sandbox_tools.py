@@ -26,9 +26,14 @@ from typing import Any
 _PROJECT_NAME = "default"
 _TOOL_TYPE = "CodeEnv"
 _DEV_TOOL_TYPE = "DevEnv"
-_DEVENV_IMAGE_URL = (
-    "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/devenv:0.0.1"
-)
+_DEVENV_IMAGE_URLS = {
+    "volcengine": (
+        "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/devenv:0.0.1"
+    ),
+    "byteplus": (
+        "enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/devenv:0.0.1"
+    ),
+}
 STUDIO_SANDBOX_AGENT_MODEL_NAME = "doubao-seed-2-1-pro-260628"
 STUDIO_SANDBOX_BYTEPLUS_AGENT_MODEL_NAME = "seed-2-0-lite-260228"
 STUDIO_SANDBOX_MODEL_BASE_URLS = {
@@ -52,6 +57,13 @@ def studio_sandbox_agent_model_name(provider: str) -> str:
 def studio_sandbox_model_base_url(provider: str) -> str:
     try:
         return STUDIO_SANDBOX_MODEL_BASE_URLS[provider]
+    except KeyError as error:
+        raise ValueError(f"Unsupported Studio cloud provider: {provider}") from error
+
+
+def studio_sandbox_devenv_image_url(provider: str) -> str:
+    try:
+        return _DEVENV_IMAGE_URLS[provider]
     except KeyError as error:
         raise ValueError(f"Unsupported Studio cloud provider: {provider}") from error
 
@@ -212,6 +224,7 @@ def ensure_studio_dev_env_tool(**kwargs: Any) -> str:
 def ensure_studio_devenv_tool(
     *,
     name: str,
+    provider: str = "volcengine",
     access_key: str = "",
     secret_key: str = "",
     region: str = "cn-beijing",
@@ -247,7 +260,7 @@ def ensure_studio_devenv_tool(
                 Name=name,
                 ToolType=_DEV_TOOL_TYPE,
                 ProjectName=_PROJECT_NAME,
-                ImageUrl=_DEVENV_IMAGE_URL,
+                ImageUrl=studio_sandbox_devenv_image_url(provider),
                 Command="/opt/gem/run.sh",
                 Port=8080,
                 CpuMilli=4000,

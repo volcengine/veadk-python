@@ -332,6 +332,9 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert update["function_id"] == "function-app-id"
     assert update["environment_overrides"] == {
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
+        "VEADK_SKILL_DEVENV_IMAGE": (
+            "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/devenv:0.0.1"
+        ),
     }
 
 
@@ -448,6 +451,9 @@ def test_studio_update_supports_byteplus_provider(
     }
     assert update["environment_overrides"] == {
         "AGENTKIT_SANDBOX_REGION": "ap-southeast-1",
+        "VEADK_SKILL_DEVENV_IMAGE": (
+            "enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/devenv:0.0.1"
+        ),
         "CLOUD_PROVIDER": "byteplus",
         "AGENTKIT_CLOUD_PROVIDER": "byteplus",
         "BYTEPLUS_REGION": "ap-southeast-1",
@@ -605,6 +611,9 @@ def test_studio_update_explicit_branding_overrides_cloud_values(
     assert isinstance(update, dict)
     assert update["environment_overrides"] == {
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
+        "VEADK_SKILL_DEVENV_IMAGE": (
+            "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/devenv:0.0.1"
+        ),
         "VEADK_SITE_TITLE": "新标题",
     }
 
@@ -664,6 +673,9 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
     assert result.exit_code == 0, result.output
     assert captured["environment_overrides"] == {
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
+        "VEADK_SKILL_DEVENV_IMAGE": (
+            "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/devenv:0.0.1"
+        ),
         "SANDBOX_CHAT_CODEX": "chat-tool-new",
         "SANDBOX_DEV": "dev-tool-new",
     }

@@ -112,7 +112,26 @@ def test_ensure_studio_dev_env_tool_creates_ready_dev_env() -> None:
     assert getattr(requests[0], "tool_type") == "DevEnv"
 
 
-def test_ensure_studio_devenv_tool_creates_verified_dev_environment() -> None:
+@pytest.mark.parametrize(
+    ("provider", "region", "expected_image"),
+    [
+        (
+            "volcengine",
+            "cn-beijing",
+            "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/devenv:0.0.1",
+        ),
+        (
+            "byteplus",
+            "ap-southeast-1",
+            "enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/devenv:0.0.1",
+        ),
+    ],
+)
+def test_ensure_studio_devenv_tool_creates_verified_dev_environment(
+    provider: str,
+    region: str,
+    expected_image: str,
+) -> None:
     requests: list[object] = []
     client = SimpleNamespace(
         list_tools=lambda _: SimpleNamespace(tools=[], next_token=None),
@@ -125,6 +144,8 @@ def test_ensure_studio_devenv_tool_creates_verified_dev_environment() -> None:
     assert (
         ensure_studio_devenv_tool(
             name="veadk-studio-demo-skill-workbench-12345678",
+            provider=provider,
+            region=region,
             client=client,
             timeout_seconds=0,
         )
@@ -132,7 +153,7 @@ def test_ensure_studio_devenv_tool_creates_verified_dev_environment() -> None:
     )
     request = requests[0]
     assert request.tool_type == "DevEnv"
-    assert request.image_url.endswith("/devenv:0.0.1")
+    assert request.image_url == expected_image
     assert request.command == "/opt/gem/run.sh"
     assert request.port == 8080
     assert request.cpu_milli == 4000

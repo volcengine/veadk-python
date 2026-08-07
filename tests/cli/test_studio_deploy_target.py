@@ -432,7 +432,9 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert veadk_environments["SANDBOX_DEV"] == "dev-env-id"
     skill_workbench_tool_id = veadk_environments["SANDBOX_SKILL_WORKBENCH"]
     assert skill_workbench_tool_id.endswith("-skill-workbench-981c5306")
-    assert veadk_environments["VEADK_SKILL_DEVENV_IMAGE"].endswith("/devenv:0.0.1")
+    assert veadk_environments["VEADK_SKILL_DEVENV_IMAGE"] == (
+        "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/devenv:0.0.1"
+    )
     assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == expected_region
     assert veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] == expected_update_bucket
     assert veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] == "veadk/studio/main"
@@ -741,7 +743,9 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
     assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == "ap-southeast-1"
     skill_workbench_tool_id = veadk_environments["SANDBOX_SKILL_WORKBENCH"]
     assert skill_workbench_tool_id.endswith("-skill-workbench-981c5306")
-    assert veadk_environments["VEADK_SKILL_DEVENV_IMAGE"].endswith("/devenv:0.0.1")
+    assert veadk_environments["VEADK_SKILL_DEVENV_IMAGE"] == (
+        "enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/devenv:0.0.1"
+    )
     assert sorted(credential_tool_ids) == sorted(
         [
             "chat-code-env-id",

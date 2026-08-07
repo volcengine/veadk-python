@@ -7474,6 +7474,7 @@ def frontend_deploy(
         ensure_studio_dev_env_tool,
         ensure_studio_devenv_tool,
         studio_sandbox_agent_model_name,
+        studio_sandbox_devenv_image_url,
         studio_sandbox_model_base_url,
         studio_sandbox_tool_name,
     )
@@ -7502,6 +7503,7 @@ def frontend_deploy(
                     future = executor.submit(
                         ensure_studio_devenv_tool,
                         name=tool_name,
+                        provider=provider_id,
                         region=region,
                         access_key=ak,
                         secret_key=sk,
@@ -7697,8 +7699,8 @@ def frontend_deploy(
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
     veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
     veadk_environments["SANDBOX_SKILL_WORKBENCH"] = skill_workbench_tool_id
-    veadk_environments["VEADK_SKILL_DEVENV_IMAGE"] = (
-        "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/devenv:0.0.1"
+    veadk_environments["VEADK_SKILL_DEVENV_IMAGE"] = studio_sandbox_devenv_image_url(
+        provider_id
     )
     veadk_environments["SANDBOX_CHAT_OPENCLAW"] = openclaw_tool_id
     veadk_environments["SANDBOX_CHAT_HERMES"] = hermes_tool_id
@@ -8023,6 +8025,7 @@ def frontend_update(
         build_local_studio_requirements,
         write_studio_package,
     )
+    from veadk.cli.studio_sandbox_tools import studio_sandbox_devenv_image_url
     from veadk.cli.studio_update import (
         find_studio_deployments,
         load_deployed_site_logo,
@@ -8134,7 +8137,10 @@ def frontend_update(
             project_name=target.project,
             provider=provider_id,
         )
-        environment_overrides = {"AGENTKIT_SANDBOX_REGION": target.region}
+        environment_overrides = {
+            "AGENTKIT_SANDBOX_REGION": target.region,
+            "VEADK_SKILL_DEVENV_IMAGE": studio_sandbox_devenv_image_url(provider_id),
+        }
         if provider_id == "byteplus":
             environment_overrides["CLOUD_PROVIDER"] = provider_id
             environment_overrides["AGENTKIT_CLOUD_PROVIDER"] = provider_id
