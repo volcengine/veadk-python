@@ -117,6 +117,8 @@ function AgentSelect({
   | "onBrowseAgents"
 >) {
   const [open, setOpen] = useState(false);
+  const [changing, setChanging] = useState(false);
+  const [changeError, setChangeError] = useState("");
   const label = (id: string) => (agentLabel ? agentLabel(id) : id);
 
   if (agentsSource === "cloud") {
@@ -146,7 +148,7 @@ function AgentSelect({
 
   return (
     <div className="agent-dd">
-      <button className="agent-dd-trigger" onClick={() => setOpen((o) => !o)}>
+      <button className="agent-dd-trigger" aria-busy={changing} onClick={() => setOpen((o) => !o)}>
         <span className="agent-dd-current">{appName ? label(appName) : "选择 Agent"}</span>
         <ChevronDown className={`agent-dd-chev ${open ? "open" : ""}`} />
       </button>
@@ -162,13 +164,22 @@ function AgentSelect({
             currentRuntime={currentRuntime}
             runtimeScope={runtimeScope}
             onSelect={async (id) => {
-              await onAppChange(id);
-              close();
+              setChangeError("");
+              setChanging(true);
+              try {
+                await onAppChange(id);
+                close();
+              } catch (cause) {
+                setChangeError(cause instanceof Error ? cause.message : '切换智能体失败');
+              } finally {
+                setChanging(false);
+              }
             }}
             onClose={close}
           />
         </>
       )}
+      {changeError && <p className="navbar-agent-error" role="alert">{changeError}</p>}
     </div>
   );
 }

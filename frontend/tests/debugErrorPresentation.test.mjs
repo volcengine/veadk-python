@@ -47,7 +47,7 @@ test("creation and deployment keep friendly context and the original error", () 
   );
   assert.match(
     source,
-    /setBuildErr\(error instanceof Error \? error\.message : String\(error\)\)/,
+    /setBuildErr\(\s*\(error instanceof Error && error\.message\) \? error\.message : String\(error\) \|\| '未知错误'\s*\)/,
   );
   assert.match(
     source,

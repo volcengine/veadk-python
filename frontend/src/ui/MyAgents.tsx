@@ -209,6 +209,7 @@ function AgentCard({
   onViewDeploymentTask,
   onEditDraft,
   onDeleteDraft,
+  useError,
 }: {
   agent: MyAgentCardData;
   cloudProvider: CloudProvider;
@@ -221,6 +222,7 @@ function AgentCard({
   onViewDeploymentTask?: (task: DeploymentTaskUpdate) => void;
   onEditDraft?: (draft: WorkspaceAgentDraft) => void;
   onDeleteDraft?: (draft: WorkspaceAgentDraft) => void;
+  useError?: string;
 }) {
   const actionable = Boolean(agent.runtime || agent.sandbox);
   return (
@@ -328,6 +330,9 @@ function AgentCard({
                 </>
               ) : connected ? "已连接" : "使用"}
             </button>
+            {useError && (
+              <p className="my-agents-use-error" role="alert">{useError}</p>
+            )}
           </>
         )}
       </footer>
@@ -391,6 +396,8 @@ export function MyAgents({
   const [loadingSandboxAgents, setLoadingSandboxAgents] = useState(false);
   const [sandboxError, setSandboxError] = useState("");
   const [connectingAgentId, setConnectingAgentId] = useState("");
+  const [useError, setUseError] = useState("");
+  const [useErrorAgentId, setUseErrorAgentId] = useState("");
   const [draftToDelete, setDraftToDelete] = useState<WorkspaceAgentDraft | null>(null);
   const draftAgents = useMemo(() => drafts.map(draftToAgent), [drafts]);
   const activeDeploymentTasks = useMemo(() => {
@@ -481,6 +488,8 @@ export function MyAgents({
 
   function selectAgentType(type: AgentType) {
     if (type === activeType) return;
+    setUseError("");
+    setUseErrorAgentId("");
     if (type === "general") {
       runtimeRequestRef.current += 1;
       setRuntimeAgents([]);
@@ -531,6 +540,8 @@ export function MyAgents({
 
   const useAgent = useCallback(async (agent: MyAgentCardData) => {
     if (connectingAgentId) return;
+    setUseError("");
+    setUseErrorAgentId("");
     setConnectingAgentId(agent.id);
     try {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -539,6 +550,9 @@ export function MyAgents({
       } else {
         await onUseAgent(agent);
       }
+    } catch (cause) {
+      setUseError(cause instanceof Error ? cause.message : String(cause) || '连接智能体失败');
+      setUseErrorAgentId(agent.id);
     } finally {
       setConnectingAgentId("");
     }
@@ -759,6 +773,7 @@ export function MyAgents({
                   showOwnership={runtimeScope === "all"}
                   onEditDraft={onEditDraft}
                   onDeleteDraft={setDraftToDelete}
+                  useError={agent.id === useErrorAgentId ? useError : ""}
                 />
               ))}
             </div>

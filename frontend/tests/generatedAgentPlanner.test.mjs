@@ -88,7 +88,7 @@ test("names the planner model and preserves generation errors verbatim", () => {
   );
   assert.match(
     createSource,
-    /setAiErrorDialog\(\s*error instanceof Error \? error\.message : String\(error\),?\s*\)/,
+    /setAiErrorDialog\(\s*\(error instanceof Error && error\.message\) \? error\.message : String\(error\) \|\| '未知错误',?\s*\)/,
   );
   assert.doesNotMatch(
     createSource,
