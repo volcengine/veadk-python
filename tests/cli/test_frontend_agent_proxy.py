@@ -45,6 +45,26 @@ def test_agent_surface_rewrite_only_changes_the_agent_base_path() -> None:
     assert f'src="{prefix}/hermes/assets/app.js"' in rewritten
 
 
+def test_hermes_surface_rewrite_removes_private_gateway_query() -> None:
+    prefix = "/web/hermes/sessions/session-1/surface/token-1"
+    body = (
+        b'<script src="/hermes/assets/app.js?faasInstanceName=hermes-instance'
+        b'&amp;Authorization=hermes-secret&amp;theme=dark"></script>'
+        b'<link href="./assets/app.css?Authorization=hermes-secret" rel="stylesheet">'
+        b'<link href="./favicon.ico?faasInstanceName=hermes-instance" rel="icon">'
+    )
+
+    rewritten = _rewrite_body(body, "text/html", prefix, "hermes").decode()
+
+    assert f'src="{prefix}/hermes/assets/app.js?theme=dark"' in rewritten
+    assert 'href="./assets/app.css"' in rewritten
+    assert 'href="./favicon.ico"' in rewritten
+    assert "faasInstanceName" not in rewritten
+    assert "Authorization" not in rewritten
+    assert "hermes-instance" not in rewritten
+    assert "hermes-secret" not in rewritten
+
+
 def test_agent_surface_proxy_keeps_endpoint_auth_server_side(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
