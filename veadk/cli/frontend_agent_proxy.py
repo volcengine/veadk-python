@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
+import re
 from collections.abc import Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -33,6 +35,11 @@ logger = get_logger(__name__)
 
 _MAX_BODY_BYTES = 16 * 1024 * 1024
 _TEXT_CONTENT_TYPES = ("text/", "javascript", "json", "manifest", "xml")
+_GATEWAY_QUERY_KEYS = frozenset({"authorization", "faasinstancename"})
+_HERMES_QUERY_URL_PATTERN = re.compile(
+    rb"[^\s\"'`<>()]+\?[^\s\"'`<>()]+",
+    re.IGNORECASE,
+)
 _OPENCLAW_RESET_TAG = (
     b"<script>try{for(const key of Object.keys(localStorage)){"
     b"if(key.startsWith('openclaw.control.settings.v1'))localStorage.removeItem(key)"
@@ -77,6 +84,8 @@ def _rewrite_body(
 ) -> bytes:
     if not any(marker in content_type for marker in _TEXT_CONTENT_TYPES):
         return body
+    if kind == "hermes":
+        body = _strip_hermes_gateway_query(body)
     source = f"/{kind}".encode()
     replacement = f"{prefix}/{kind}".encode()
     for quote in (b'"', b"'", b"`"):
@@ -85,6 +94,38 @@ def _rewrite_body(
     if kind == "openclaw" and "text/html" in content_type:
         body = body.replace(b"<head>", b"<head>" + _OPENCLAW_RESET_TAG, 1)
     return body
+
+
+def _strip_hermes_gateway_query(body: bytes) -> bytes:
+    """Keep private Hermes endpoint routing parameters out of browser URLs."""
+
+    def _rewrite_url(match: re.Match[bytes]) -> bytes:
+        try:
+            raw_url = html.unescape(match.group(0).decode("utf-8"))
+        except UnicodeDecodeError:
+            return match.group(0)
+        parsed = urlsplit(raw_url)
+        if not parsed.query:
+            return match.group(0)
+        query = parse_qsl(parsed.query, keep_blank_values=True)
+        public_query = [
+            (key, value)
+            for key, value in query
+            if key.lower() not in _GATEWAY_QUERY_KEYS
+        ]
+        if len(public_query) == len(query):
+            return match.group(0)
+        return urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                urlencode(public_query),
+                parsed.fragment,
+            )
+        ).encode("utf-8")
+
+    return _HERMES_QUERY_URL_PATTERN.sub(_rewrite_url, body)
 
 
 def _rewrite_location(location: str, prefix: str) -> str:
@@ -97,15 +138,13 @@ def _rewrite_location(location: str, prefix: str) -> str:
         [
             (key, value)
             for key, value in parse_qsl(parsed.query, keep_blank_values=True)
-            if key.lower() not in {"authorization", "faasinstancename"}
+            if key.lower() not in _GATEWAY_QUERY_KEYS
         ]
     )
     return urlunsplit(("", "", f"{prefix}{parsed.path}", safe_query, parsed.fragment))
 
 
 def _rewrite_cookie(cookie: str, prefix: str) -> str:
-    import re
-
     if re.search(r"(?i);\s*path=", cookie):
         return re.sub(
             r"(?i)(;\s*path=)(/[^;]*)",
