@@ -39,7 +39,7 @@ _DEVENV_IMAGE_URLS = {
     ),
 }
 STUDIO_SANDBOX_AGENT_MODEL_NAME = "doubao-seed-2-1-pro-260628"
-STUDIO_SANDBOX_BYTEPLUS_AGENT_MODEL_NAME = "seed-2-0-lite-260228"
+STUDIO_SANDBOX_BYTEPLUS_AGENT_MODEL_NAME = "dola-seed-2-1-turbo-260628"
 STUDIO_SANDBOX_MODEL_BASE_URLS = {
     "volcengine": "https://ark.cn-beijing.volces.com/api/v3",
     "byteplus": "https://ark.ap-southeast.bytepluses.com/api/v3",

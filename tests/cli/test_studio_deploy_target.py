@@ -854,15 +854,17 @@ def test_studio_deploy_byteplus_auto_provisions_five_sandbox_tools(
     assert len(devenv_tools) == 1
     assert "-dev-" in devenv_tools[0]
     assert {str(call["kind"]) for call in agent_tools} == {"openclaw", "hermes"}
-    assert {str(call["model_name"]) for call in agent_tools} == {"seed-2-0-lite-260228"}
+    assert {str(call["model_name"]) for call in agent_tools} == {
+        "dola-seed-2-1-turbo-260628"
+    }
     assert {str(call["provider"]) for call in code_credentials} == {"byteplus"}
     code_credentials_by_tool = {str(call["tool_id"]): call for call in code_credentials}
     assert code_credentials_by_tool["chat-tool"]["model_name"] == (
-        "seed-2-0-lite-260228"
+        "dola-seed-2-1-turbo-260628"
     )
     assert code_credentials_by_tool["skill-tool"]["model_name"] is None
     assert code_credentials_by_tool["dev-tool"]["model_name"] == (
-        "seed-2-0-lite-260228"
+        "dola-seed-2-1-turbo-260628"
     )
     assert {str(call["provider"]) for call in agent_credentials} == {"byteplus"}
     assert {str(call["model_base_url"]) for call in agent_credentials} == {
