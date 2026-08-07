@@ -22,12 +22,13 @@ from volcengine.base.Service import Service
 from volcengine.Credentials import Credentials
 from volcengine.ServiceInfo import ServiceInfo
 
-from veadk.utils.misc import getenv
 from veadk.utils.cloud_provider import (
-    DEFAULT_BYTEPLUS_REGION,
+    DEFAULT_BYTEPLUS_VIKING_MEMORY_HOST,
+    DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION,
     DEFAULT_VOLCENGINE_REGION,
     cloud_provider_from_env,
 )
+from veadk.utils.misc import getenv
 
 
 class VikingDBMemoryException(Exception):
@@ -64,16 +65,13 @@ class VikingDBMemoryClient(Service):
         socket_timeout=30,
     ):
         provider = cloud_provider_from_env()
-        if not region:
-            region = (
-                DEFAULT_BYTEPLUS_REGION
-                if provider == "byteplus"
-                else DEFAULT_VOLCENGINE_REGION
-            )
-        if not host:
-            if provider == "byteplus":
-                host = f"api-knowledgebase.mlp.{region}.bytepluses.com"
-            else:
+        if provider == "byteplus":
+            region = DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
+            host = host or DEFAULT_BYTEPLUS_VIKING_MEMORY_HOST
+        else:
+            if not region:
+                region = DEFAULT_VOLCENGINE_REGION
+            if not host:
                 host = f"api-knowledgebase.mlp.{region}.volces.com"
         env_host = getenv(
             "DATABASE_VIKINGMEM_BASE_URL",

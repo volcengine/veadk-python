@@ -451,7 +451,7 @@ def test_studio_update_supports_byteplus_provider(
         "CLOUD_PROVIDER": "byteplus",
         "AGENTKIT_CLOUD_PROVIDER": "byteplus",
         "BYTEPLUS_REGION": "ap-southeast-1",
-        "DATABASE_VIKING_REGION": "ap-southeast-1",
+        "DATABASE_VIKING_REGION": "cn-hongkong",
     }
 
 

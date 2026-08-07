@@ -52,6 +52,7 @@ from veadk.cli.studio_telemetry import (
 from veadk.consts import STUDIO_APMPLUS_ENV
 from veadk.utils.cloud_provider import (
     DEFAULT_BYTEPLUS_REGION,
+    DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION,
     DEFAULT_CLOUD_PROVIDER,
     CloudProvider,
     agentkit_openapi_base,
@@ -1556,7 +1557,7 @@ def _run_frontend_server(
         if provider == "byteplus":
             out["CLOUD_PROVIDER"] = "byteplus"
             out["AGENTKIT_CLOUD_PROVIDER"] = "byteplus"
-            out["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_REGION
+            out["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
         return out
 
     def _model_name(model: object) -> str:
@@ -3359,7 +3360,9 @@ def _run_frontend_server(
         if provider == "byteplus":
             runtime_envs["CLOUD_PROVIDER"] = "byteplus"
             runtime_envs["AGENTKIT_CLOUD_PROVIDER"] = "byteplus"
-            runtime_envs["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_REGION
+            runtime_envs["DATABASE_VIKING_REGION"] = (
+                DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
+            )
 
         # TOS build-artifact buckets are region-scoped. The SDK default template
         # ("agentkit-platform-<account_id>") produces a single global name, which
@@ -7646,7 +7649,9 @@ def frontend_deploy(
     veadk_environments["AGENTKIT_CLOUD_PROVIDER"] = provider_id
     if provider_id == "byteplus":
         veadk_environments["BYTEPLUS_REGION"] = region
-        veadk_environments["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_REGION
+        veadk_environments["DATABASE_VIKING_REGION"] = (
+            DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
+        )
         byteplus_web_search_api_key = os.getenv(
             "BYTEPLUS_WEB_SEARCH_API_KEY",
             "",
@@ -8074,7 +8079,9 @@ def frontend_update(
             environment_overrides["CLOUD_PROVIDER"] = provider_id
             environment_overrides["AGENTKIT_CLOUD_PROVIDER"] = provider_id
             environment_overrides["BYTEPLUS_REGION"] = target.region
-            environment_overrides["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_REGION
+            environment_overrides["DATABASE_VIKING_REGION"] = (
+                DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
+            )
             service_client = getattr(service, "client", None)
             has_explicit_sandbox_tool = any(
                 tool_id is not None
