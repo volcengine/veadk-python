@@ -2879,7 +2879,7 @@ export function CustomCreate({
       setUsedAiGeneration(true);
     } catch (error) {
       setAiErrorDialog(
-        error instanceof Error ? error.message : String(error),
+        (error instanceof Error && error.message) ? error.message : String(error) || '未知错误',
       );
     } finally {
       setAiGenerating(false);
@@ -3125,7 +3125,7 @@ export function CustomCreate({
       setProject(generated);
       setWorkspaceMode("publish");
     } catch (error) {
-      setBuildErr(error instanceof Error ? error.message : String(error));
+      setBuildErr((error instanceof Error && error.message) ? error.message : String(error) || '未知错误');
     } finally {
       setBuilding(false);
     }
@@ -3227,7 +3227,7 @@ export function CustomCreate({
                 ...item,
                 phase: "error",
                 runtimeSnapshot: "",
-                error: err instanceof Error ? err.message : String(err),
+                error: (err instanceof Error && err.message) ? err.message : String(err) || '未知错误',
               }
             : item,
         ),
@@ -3283,7 +3283,7 @@ export function CustomCreate({
             text,
           })) {
             const eventError =
-              event.error || event.errorMessage || event.error_message;
+              event.error ?? event.errorMessage ?? event.error_message;
             if (!eventError) acc = applyEvent(acc, event);
             setDebugVariants((current) =>
               current.map((item) => {
@@ -3664,6 +3664,7 @@ export function CustomCreate({
                         className={`cw-input ${invalidClass(nameInvalid)}`}
                         value={node.name}
                         placeholder="assistant"
+                        maxLength={64}
                         onChange={(e) => patch({ name: e.target.value })}
                       />
                       {showErrors && nameProblem ? (

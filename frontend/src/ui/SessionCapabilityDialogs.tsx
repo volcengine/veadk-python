@@ -264,7 +264,9 @@ export function SkillCapabilityDialog({
   const [skillQuery, setSkillQuery] = useState("");
   const [spacesLoading, setSpacesLoading] = useState(true);
   const [skillsLoading, setSkillsLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [spacesError, setSpacesError] = useState("");
+  const [skillsError, setSkillsError] = useState("");
+  const [spacesReloadKey, setSpacesReloadKey] = useState(0);
   const [pending, setPending] = useState("");
   const selected = useMemo(() => new Set(selectedNames), [selectedNames]);
 
@@ -300,7 +302,7 @@ export function SkillCapabilityDialog({
     if (sourceTab !== "agentkit") return;
     let active = true;
     setSpacesLoading(true);
-    setError("");
+    setSpacesError("");
     void listSkillSpaces()
       .then((items) => {
         if (!active) return;
@@ -308,13 +310,13 @@ export function SkillCapabilityDialog({
         setSelectedSpace(items[0] ?? null);
       })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : "读取 Skill Space 失败");
+        if (active) setSpacesError(reason instanceof Error ? reason.message : "读取 Skill Space 失败");
       })
       .finally(() => {
         if (active) setSpacesLoading(false);
       });
     return () => { active = false; };
-  }, [sourceTab]);
+  }, [sourceTab, spacesReloadKey]);
 
   useEffect(() => {
     if (sourceTab !== "agentkit") return;
@@ -324,13 +326,13 @@ export function SkillCapabilityDialog({
     }
     let active = true;
     setSkillsLoading(true);
-    setError("");
+    setSkillsError("");
     void listSkillsInSpace(selectedSpace.id, selectedSpace.region)
       .then((items) => {
         if (active) setSkills(items);
       })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : "读取技能失败");
+        if (active) setSkillsError(reason instanceof Error ? reason.message : "读取技能失败");
       })
       .finally(() => {
         if (active) setSkillsLoading(false);
@@ -425,7 +427,7 @@ export function SkillCapabilityDialog({
             </div>
             <div className="session-public-skill-list">
               {publicError ? (
-                <div className="session-capability-error">{publicError}</div>
+                <div className="session-capability-error" role="alert">{publicError}</div>
               ) : publicLoading ? (
                 <div className="session-capability-loading">正在搜索 Skill Hub…</div>
               ) : publicSkills.length === 0 ? (
@@ -480,6 +482,11 @@ export function SkillCapabilityDialog({
               <div className="session-skill-pane-list">
                 {spacesLoading ? (
                   <div className="session-capability-loading">正在读取 Skill Space…</div>
+                ) : spacesError ? (
+                  <div className="session-capability-error" role="alert">
+                    <span>{spacesError}</span>
+                    <button type="button" onClick={() => setSpacesReloadKey(k => k + 1)}>重试</button>
+                  </div>
                 ) : filteredSpaces.length === 0 ? (
                   <div className="session-capability-empty">没有匹配的 Skill Space</div>
                 ) : (
@@ -518,8 +525,8 @@ export function SkillCapabilityDialog({
                 />
               </div>
               <div className="session-skill-pane-list">
-                {error ? (
-                  <div className="session-capability-error">{error}</div>
+                {skillsError ? (
+                  <div className="session-capability-error" role="alert">{skillsError}</div>
                 ) : !selectedSpace ? (
                   <div className="session-capability-empty">选择一个 Skill Space 查看技能</div>
                 ) : skillsLoading ? (

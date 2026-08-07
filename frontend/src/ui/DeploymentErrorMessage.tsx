@@ -45,7 +45,7 @@ export function DeploymentErrorMessage({
       }`}
       role="alert"
     >
-      <p className="deploy-error-message-text">{message}</p>
+      <p className="deploy-error-message-text" style={{ whiteSpace: "pre-wrap" }}>{message}</p>
       <div className="deploy-error-message-actions">
         {onRetry && (
           <button

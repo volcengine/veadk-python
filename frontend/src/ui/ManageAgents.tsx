@@ -22,6 +22,7 @@ import {
   formatCloudRegion,
   type CloudProvider,
 } from "../adk/cloudProvider";
+import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import "./ManageAgents.css";
 
 export interface ManageAgentsViewProps {
@@ -60,6 +61,7 @@ export function ManageAgentsView({
     defaultCloudRegion(cloudProvider),
   );
   const [regionMenuOpen, setRegionMenuOpen] = useState(false);
+  const [deleteConfirmTarget, setDeleteConfirmTarget] = useState<ManagedRuntime | null>(null);
 
   useEffect(() => {
     if (regionOptions.some((region) => region.value === regionFilter)) return;
@@ -118,16 +120,20 @@ export function ManageAgentsView({
     if (!open && !details[rt.runtimeId]) void loadDetail(rt);
   }
 
-  async function handleDelete(rt: ManagedRuntime) {
+  function handleDelete(rt: ManagedRuntime) {
     if (deleting) return;
-    if (!window.confirm(`确定删除 Agent "${rt.name}"？该 Runtime 将被永久删除。`)) {
-      return;
-    }
+    setDeleteConfirmTarget(rt);
+  }
+
+  async function confirmDelete() {
+    if (!deleteConfirmTarget || deleting) return;
+    const rt = deleteConfirmTarget;
     setDeleting(rt.runtimeId);
     setError("");
     try {
       await deleteRuntime(rt.runtimeId, rt.region);
       setRuntimes((prev) => prev.filter((r) => r.runtimeId !== rt.runtimeId));
+      setDeleteConfirmTarget(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -326,6 +332,18 @@ export function ManageAgentsView({
             );
           })}
         </ul>
+      )}
+      {deleteConfirmTarget && (
+        <StudioConfirmDialog
+          variant="danger"
+          title="删除 Agent？"
+          description={`"${deleteConfirmTarget.name}" 对应的云端 Runtime 将被永久删除，此操作不可撤销。`}
+          confirmLabel={deleting ? "删除中..." : "删除 Agent"}
+          closeLabel="关闭删除确认"
+          busy={deleting !== null}
+          onCancel={() => setDeleteConfirmTarget(null)}
+          onConfirm={() => void confirmDelete()}
+        />
       )}
     </div>
   );

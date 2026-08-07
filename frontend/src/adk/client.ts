@@ -45,6 +45,9 @@ export interface AdkEvent {
   error?: string;
   errorMessage?: string;
   error_message?: string;
+  // Error code accompanying the error message (snake_case and camelCase variants).
+  errorCode?: string;
+  error_code?: string;
   content?: {
     role?: string;
     parts?: AdkPart[];
@@ -433,11 +436,11 @@ function formatErrorDetail(detail: unknown): string {
   if (Array.isArray(detail)) {
     return detail
       .map((item) => {
-        if (item && typeof item === "object" && "msg" in item) {
+        if (item && typeof item === "object" && ("msg" in item || "message" in item)) {
           const loc = Array.isArray((item as { loc?: unknown }).loc)
             ? (item as { loc?: unknown[] }).loc?.join(".")
             : "";
-          const msg = String((item as { msg?: unknown }).msg ?? "");
+          const msg = String((item as { msg?: unknown; message?: unknown }).msg ?? (item as { msg?: unknown; message?: unknown }).message ?? "");
           return loc ? `${loc}: ${msg}` : msg;
         }
         return String(item);
@@ -445,7 +448,11 @@ function formatErrorDetail(detail: unknown): string {
       .filter(Boolean)
       .join("\n");
   }
-  if (detail && typeof detail === "object") return JSON.stringify(detail);
+  if (detail && typeof detail === "object") {
+    const msg = (detail as Record<string, unknown>).message;
+    if (typeof msg === "string" && msg) return msg;
+    return JSON.stringify(detail);
+  }
   return "";
 }
 
@@ -453,9 +460,26 @@ async function httpErrorMessage(res: Response, fallback: string): Promise<string
   const text = await res.text().catch(() => "");
   if (!text) return `${fallback} (${res.status})`;
   try {
-    const data = JSON.parse(text) as { detail?: unknown; error?: unknown };
+    const data = JSON.parse(text) as {
+      detail?: unknown;
+      error?: unknown;
+      errorCode?: unknown;
+      error_code?: unknown;
+      code?: unknown;
+    };
+    // Extract a machine-readable error code when the server provides one.
+    const errorCode =
+      typeof data.errorCode === "string" && data.errorCode
+        ? data.errorCode
+        : typeof data.error_code === "string" && data.error_code
+          ? data.error_code
+          : typeof data.code === "string" && data.code
+            ? data.code
+            : "";
     const detail = formatErrorDetail(data.detail ?? data.error);
-    return detail || text || `${fallback} (${res.status})`;
+    if (!detail && !errorCode) return text || `${fallback} (${res.status})`;
+    const body = detail || `${fallback} (${res.status})`;
+    return errorCode ? `[${errorCode}] ${body}` : body;
   } catch {
     return text || `${fallback} (${res.status})`;
   }
@@ -463,7 +487,7 @@ async function httpErrorMessage(res: Response, fallback: string): Promise<string
 
 export async function listApps(): Promise<string[]> {
   const res = await apiFetch(`/list-apps`);
-  if (!res.ok) throw new Error(`list-apps failed: ${res.status}`);
+  if (!res.ok) throw new Error(await httpErrorMessage(res, '读取 Agent 列表失败'));
   return res.json();
 }
 
@@ -643,7 +667,7 @@ export async function listSessions(
 ): Promise<AdkSession[]> {
   const { app, ep } = resolve(appName);
   const res = await apiFetch(`/apps/${app}/users/${encodeURIComponent(userId)}/sessions`, {}, ep);
-  if (!res.ok) throw new Error(`list sessions failed: ${res.status}`);
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "读取会话列表失败"));
   return res.json();
 }
 
@@ -659,8 +683,7 @@ export async function getSession(
     ep,
   );
   if (!res.ok) {
-    const detail = await httpErrorMessage(res, "读取会话失败");
-    throw new Error(`get session failed: ${res.status}：${detail}`);
+    throw new Error(await httpErrorMessage(res, "读取会话失败"));
   }
   const session = (await res.json()) as AdkSession;
   if (ep.runtimeId) {
@@ -993,7 +1016,7 @@ export async function deleteSession(
     { method: "DELETE" },
     ep,
   );
-  if (!res.ok && res.status !== 404) throw new Error(`delete session failed: ${res.status}`);
+  if (!res.ok && res.status !== 404) throw new Error(await httpErrorMessage(res, '删除会话失败'));
 }
 
 function decodeArtifactData(value: string): Uint8Array {
@@ -1501,7 +1524,7 @@ async function fetchAgentInfo(
   loadDraft = true,
 ): Promise<AgentInfo> {
   const res = await apiFetch(`/web/agent-info/${app}`, {}, ep);
-  if (!res.ok) throw new Error(`agent-info failed: ${res.status}`);
+  if (!res.ok) throw new Error(await httpErrorMessage(res, '读取 Agent 信息失败'));
   const info = (await res.json()) as Partial<AgentInfo>;
   if (loadDraft && !info.draft) {
     try {
@@ -1691,7 +1714,7 @@ export async function webSearch(
   const res = await apiFetch(
     `/web/search?source=web&app_name=${encodeURIComponent(app)}&q=${encodeURIComponent(query)}`,
   );
-  if (!res.ok) throw new Error(`web search failed: ${res.status}`);
+  if (!res.ok) throw new Error(await httpErrorMessage(res, 'Agent 网络搜索失败'));
   return res.json();
 }
 
@@ -1794,12 +1817,25 @@ export async function* runSSE({
   }
   for await (const evt of parseSSE(res)) {
     const event = evt as AdkEvent;
-    if (typeof event.error === "string") event.error = formatRunSseError(event.error);
+    // Normalise the error-code field (camelCase or snake_case) and prepend it
+    // as a bracketed token so callers always see "[CODE] message" when a code
+    // is present — rather than having the code silently dropped.
+    const errorCode =
+      typeof event.errorCode === "string" && event.errorCode
+        ? event.errorCode
+        : typeof event.error_code === "string" && event.error_code
+          ? event.error_code
+          : "";
+    const prefixCode = (msg: string) =>
+      errorCode && !msg.startsWith(`[${errorCode}]`) ? `[${errorCode}] ${msg}` : msg;
+    if (typeof event.error === "string") {
+      event.error = formatRunSseError(prefixCode(event.error));
+    }
     if (typeof event.errorMessage === "string") {
-      event.errorMessage = formatRunSseError(event.errorMessage);
+      event.errorMessage = formatRunSseError(prefixCode(event.errorMessage));
     }
     if (typeof event.error_message === "string") {
-      event.error_message = formatRunSseError(event.error_message);
+      event.error_message = formatRunSseError(prefixCode(event.error_message));
     }
     yield event;
   }
@@ -2039,8 +2075,7 @@ export async function cancelAgentkitDeployment(taskId: string): Promise<void> {
     body: JSON.stringify({ taskId }),
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `取消部署失败 (${res.status})`);
+    throw new Error(await httpErrorMessage(res, "取消部署失败"));
   }
   deploymentControllers.get(taskId)?.abort();
   deploymentControllers.delete(taskId);
@@ -2062,7 +2097,7 @@ export async function getMyRuntimes(
   region = VOLCENGINE_DEFAULT_REGION,
 ): Promise<ManagedRuntime[]> {
   const res = await apiFetch(`/web/my-runtimes?region=${encodeURIComponent(region)}`);
-  if (!res.ok) throw new Error(`加载失败 (${res.status})`);
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "加载失败"));
   const d = (await res.json()) as { runtimes?: ManagedRuntime[] };
   return d.runtimes ?? [];
 }
@@ -2260,7 +2295,7 @@ export const DEFAULT_STUDIO_ACCESS: StudioAccess = {
 /** Resolve the signed-in user's Studio role and capabilities. */
 export async function getStudioAccess(): Promise<StudioAccess> {
   const res = await apiFetch("/web/access");
-  if (!res.ok) throw new Error(`加载权限失败 (${res.status})`);
+  if (!res.ok) throw new Error(await httpErrorMessage(res, '加载权限失败'));
   const access = (await res.json()) as StudioAccess;
   if (
     !["admin", "developer", "user"].includes(access.role) ||
@@ -2319,7 +2354,7 @@ export async function getStudioUpdateStatus(
   if (startedAt) params.set("startedAt", String(startedAt));
   const query = params.size ? `?${params.toString()}` : "";
   const res = await apiFetch(`/web/studio-update${query}`);
-  if (!res.ok) throw new Error(`检查 Studio 更新失败 (${res.status})`);
+  if (!res.ok) throw new Error(await httpErrorMessage(res, '检查 Studio 更新失败'));
   return (await res.json()) as StudioUpdateStatus;
 }
 
@@ -2506,8 +2541,7 @@ export async function deleteRuntime(
     body: JSON.stringify({ runtimeId, region }),
   });
   if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(t || `删除失败 (${res.status})`);
+    throw new Error(await httpErrorMessage(res, "删除失败"));
   }
 }
 

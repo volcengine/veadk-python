@@ -964,6 +964,7 @@ export function AgentWorkspace({
   } | null>(null);
   const [updateCapabilityLoading, setUpdateCapabilityLoading] = useState(false);
   const [updateCapabilityError, setUpdateCapabilityError] = useState("");
+  const [runtimeDetailError, setRuntimeDetailError] = useState("");
   const [detailAgentInfo, setDetailAgentInfo] = useState<AgentInfo | null>(null);
   const [detailAgentInfoResolved, setDetailAgentInfoResolved] = useState(false);
   const [query, setQuery] = useState("");
@@ -995,6 +996,7 @@ export function AgentWorkspace({
   const [selectedCaseIds, setSelectedCaseIds] = useState<Set<string>>(() => new Set());
   const [deletingCases, setDeletingCases] = useState(false);
   const [caseDeleteError, setCaseDeleteError] = useState("");
+  const [caseDeleteConfirmItems, setCaseDeleteConfirmItems] = useState<AgentCase[]>([]);
   const [focusedCaseId, setFocusedCaseId] = useState("");
   const [expandedCaseIds, setExpandedCaseIds] = useState<Set<string>>(() => new Set());
   const suppressAgentClickRef = useRef(false);
@@ -1541,6 +1543,7 @@ export function AgentWorkspace({
       ? getCachedRuntimeDetail(runtimeId, region)
       : null;
     setRuntimeDetail(cached);
+    setRuntimeDetailError("");
     if (!runtimeId) return;
     void getRuntimeDetail(
       runtimeId,
@@ -1550,8 +1553,11 @@ export function AgentWorkspace({
       .then((detail) => {
         if (!cancelled) setRuntimeDetail(detail);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!cancelled && !cached) setRuntimeDetail(null);
+        if (!cancelled && !cached) {
+          setRuntimeDetailError(error instanceof Error ? error.message : "加载 Runtime 详情失败");
+        }
       });
     return () => {
       cancelled = true;
@@ -1809,17 +1815,23 @@ export function AgentWorkspace({
     void onOpenFeedbackCase?.(item);
   };
 
-  const deleteCases = async (items: AgentCase[]) => {
+  const deleteCases = (items: AgentCase[]) => {
     if (
       !selectedAgent?.runtimeId ||
       !selectedAgentAppName ||
       deletingCases ||
       items.length === 0
     ) return;
-    const confirmText = items.length === 1
-      ? "确定删除这条反馈案例？原始聊天记录不会被删除。"
-      : `确定删除选中的 ${items.length} 条反馈案例？原始聊天记录不会被删除。`;
-    if (!window.confirm(confirmText)) return;
+    setCaseDeleteConfirmItems(items);
+  };
+
+  const confirmDeleteCases = async (items: AgentCase[]) => {
+    if (
+      !selectedAgent?.runtimeId ||
+      !selectedAgentAppName ||
+      deletingCases ||
+      items.length === 0
+    ) return;
     const ids = items.map((item) => item.id);
     const idSet = new Set(ids);
     setDeletingCases(true);
@@ -1850,6 +1862,7 @@ export function AgentWorkspace({
       );
       if (focusedCaseId && idSet.has(focusedCaseId)) setFocusedCaseId("");
       if (items.length > 1) setCaseSelectionMode(false);
+      setCaseDeleteConfirmItems([]);
       onFeedbackCasesDeleted?.(items);
     } catch (cause) {
       setCaseDeleteError(cause instanceof Error ? cause.message : String(cause));
@@ -2196,7 +2209,7 @@ export function AgentWorkspace({
             ) : loadingAgents && listedAgents.length === 0 && filteredDrafts.length === 0 ? (
               <div className="aw-list-empty">正在读取云端智能体…</div>
             ) : agentsError && listedAgents.length === 0 && filteredDrafts.length === 0 ? (
-              <div className="aw-list-empty aw-list-error">
+              <div className="aw-list-empty aw-list-error" role="alert">
                 <span>{agentsError}</span>
                 {onRetryAgents && (
                   <button type="button" onClick={onRetryAgents}>重试</button>
@@ -2549,6 +2562,9 @@ export function AgentWorkspace({
                     <div className="aw-section-head">
                       <div><h3>部署配置</h3><p>配置目标环境与网络访问方式。</p></div>
                     </div>
+                    {runtimeDetailError && (
+                      <p className="aw-detail-error" role="alert">{runtimeDetailError}</p>
+                    )}
                     <dl className="aw-readonly-config">
                       <div>
                         <dt>运行状态</dt>
@@ -3042,6 +3058,9 @@ export function AgentWorkspace({
                     </span>
                   )}
                 </span>
+                {updateCapabilityError && (
+                  <p className="aw-update-error" role="alert">{updateCapabilityError}</p>
+                )}
               </div>
             )}
           </main>
@@ -3064,6 +3083,18 @@ export function AgentWorkspace({
         busy={deletingAgents}
         onCancel={() => setDeleteConfirmTarget(null)}
         onConfirm={() => void confirmDeleteTarget()}
+      />
+    )}
+    {caseDeleteConfirmItems.length > 0 && (
+      <StudioConfirmDialog
+        variant="danger"
+        title={caseDeleteConfirmItems.length === 1 ? "删除反馈案例？" : `删除 ${caseDeleteConfirmItems.length} 条反馈案例？`}
+        description={caseDeleteConfirmItems.length === 1 ? "确定删除这条反馈案例？原始聊天记录不会被删除。" : `确定删除选中的 ${caseDeleteConfirmItems.length} 条反馈案例？原始聊天记录不会被删除。`}
+        confirmLabel={deletingCases ? "删除中..." : "删除"}
+        closeLabel="关闭删除确认"
+        busy={deletingCases}
+        onCancel={() => setCaseDeleteConfirmItems([])}
+        onConfirm={() => void confirmDeleteCases(caseDeleteConfirmItems)}
       />
     )}
   </>
@@ -3180,7 +3211,7 @@ function CaseTable({
       {loading ? (
         <div className="aw-case-empty">正在读取 AgentKit 评测集…</div>
       ) : error ? (
-        <div className="aw-case-empty aw-case-error">
+        <div className="aw-case-empty aw-case-error" role="alert">
           <span>{error}</span>
           {onRetry && <button type="button" onClick={onRetry}>重试</button>}
         </div>
@@ -3358,13 +3389,13 @@ function EvaluationWorkspace({
           <div className="aw-agent-title-row"><h2>{group.name}</h2><span>评测组</span></div>
           <p>{selectedAgents.length} 个参评智能体 · {group.caseSet} · {group.history.length} 次运行</p>
         </div>
-        <button type="button" className="aw-run" onClick={() => onRun(group)} disabled>
+        <button type="button" className="aw-run" onClick={() => onRun(group)} disabled title="评测功能敬请期待">
           <FlaskConical aria-hidden />开始评测
         </button>
       </div>
       <nav className="aw-agent-tabs" aria-label="评测组详情">
-        <button type="button" className={section === "config" ? "is-active" : ""} aria-pressed={section === "config"} onClick={() => setSection("config")} disabled>评测配置</button>
-        <button type="button" className={section === "history" ? "is-active" : ""} aria-pressed={section === "history"} onClick={() => setSection("history")} disabled>历史结果</button>
+        <button type="button" className={section === "config" ? "is-active" : ""} aria-pressed={section === "config"} onClick={() => setSection("config")} disabled title="评测功能敬请期待">评测配置</button>
+        <button type="button" className={section === "history" ? "is-active" : ""} aria-pressed={section === "history"} onClick={() => setSection("history")} disabled title="评测功能敬请期待">历史结果</button>
       </nav>
       <div className="aw-content">
         {section === "config" ? (
