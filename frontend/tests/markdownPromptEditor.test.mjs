@@ -26,6 +26,10 @@ const skillHubPickerSource = readFileSync(
   new URL("../src/create/SkillHubPicker.tsx", import.meta.url),
   "utf8",
 );
+const skillHubSource = readFileSync(
+  new URL("../src/create/skills/skillhub.ts", import.meta.url),
+  "utf8",
+);
 const skillSpacePickerSource = readFileSync(
   new URL("../src/create/SkillSpacePicker.tsx", import.meta.url),
   "utf8",
@@ -669,6 +673,8 @@ test("skill sources open in a fixed-height dialog above a six-row selected list"
   assert.match(createSource, /label: "AgentKit Skills 中心"/);
   assert.doesNotMatch(createSource, /label: "SkillSpace"/);
   assert.match(createSource, /label: "火山 Find Skill 技能广场"/);
+  assert.match(skillHubSource, /const SEARCH_BASE = "\/harness\/skills\/findskill"/);
+  assert.match(skillHubSource, /const DOWNLOAD_BASE = "\/skillhub\/v1\/skills"/);
   assert.match(createSource, /function AgentKitSkillsIcon/);
   assert.match(
     createSource,

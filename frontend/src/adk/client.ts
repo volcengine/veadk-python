@@ -135,6 +135,8 @@ export interface AgentFeedbackCasesResponse {
   projectName: string;
   sets: AgentFeedbackSetSummary[];
   items: AgentFeedbackCase[];
+  unsupported?: boolean;
+  unsupportedMessage?: string;
 }
 
 export type AutomaticEvaluationState = "pending" | "running";

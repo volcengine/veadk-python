@@ -22,7 +22,7 @@ const VOLCENGINE_REGIONS: CloudRegionOption[] = [
 ];
 
 const BYTEPLUS_REGIONS: CloudRegionOption[] = [
-  { value: BYTEPLUS_DEFAULT_REGION, label: "ap-southeast-1 (Singapore)" },
+  { value: BYTEPLUS_DEFAULT_REGION, label: BYTEPLUS_DEFAULT_REGION },
 ];
 
 export function cloudRegionOptions(provider: CloudProvider): CloudRegionOption[] {

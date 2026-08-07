@@ -94,7 +94,9 @@
   grid-template-columns: 30px minmax(0, 1fr);
   column-gap: 10px;
   width: min(500px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
   min-width: 0;
+  overflow: hidden;
 }
 
 .studio-update-dialog > .studio-update-dialog-mark {
@@ -111,6 +113,8 @@
 
 .studio-update-dialog > :not(.studio-update-dialog-mark, .confirm-title) {
   grid-column: 1 / -1;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
 }
 
@@ -121,7 +125,10 @@
 .studio-update-dialog .studio-update-progress small,
 .studio-update-dialog .studio-update-progress-note,
 .studio-update-dialog .studio-update-console-link {
+  max-width: 100%;
+  white-space: normal;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .studio-update-field {

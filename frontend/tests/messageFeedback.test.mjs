@@ -79,6 +79,23 @@ test("feedback selection updates immediately and uses a neutral solid icon", () 
   assert.doesNotMatch(stylesSource, /\.feedback-btn--bad[\s\S]{0,120}destructive/);
 });
 
+test("BytePlus feedback buttons are visible but do not submit evaluation feedback", () => {
+  const handler = appSource.slice(
+    appSource.indexOf("const rateAssistantTurn"),
+    appSource.indexOf("const send = async"),
+  );
+  assert.ok(
+    handler.indexOf('if (cloudProvider === "byteplus") return;') <
+      handler.indexOf('syncStatus: "syncing"'),
+  );
+  assert.ok(
+    handler.indexOf('if (cloudProvider === "byteplus") return;') <
+      handler.indexOf("await submitMessageFeedback"),
+  );
+  assert.match(appSource, /aria-label="赞"/);
+  assert.match(appSource, /aria-label="踩"/);
+});
+
 test("chat feedback row has no evaluation case shortcut", () => {
   assert.doesNotMatch(appSource, /const openCurrentAgentCases/);
   assert.match(appSource, /feedbackCasePreview=\{feedbackCasePreview\}/);

@@ -3852,6 +3852,7 @@ export default function App() {
     const eventId = turn.meta?.eventId;
     const sid = sessionId;
     if (!eventId || !sid || !currentRuntime) return;
+    if (cloudProvider === "byteplus") return;
     const output = turnText(turn);
     const previousFeedback = turn.meta?.feedback;
     const optimisticFeedback = {

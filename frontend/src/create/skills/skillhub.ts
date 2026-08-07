@@ -1,8 +1,9 @@
 // Volcengine Skill Hub client (the backend behind findskill.com /
-// skills.volces.com). Endpoints are proxied via vite `/skillhub` to dodge the
-// missing CORS headers:
-//   GET /v1/skills?query=<q>&namespace=public      -> { Skills: [...] }
-//   GET /v1/skills/download/<slug>?namespace=<ns>   -> application/zip
+// skills.volces.com). Search uses the same normalized Studio harness endpoint
+// as the in-chat skill picker. Downloads still use `/skillhub` because the
+// selected zip is unpacked client-side into the generated project:
+//   GET /harness/skills/findskill?query=<q>         -> { items: [...] }
+//   GET /skillhub/v1/skills/download/<slug>?namespace=<ns> -> application/zip
 //
 // Skills are downloaded as a zip and unpacked client-side into project files.
 
@@ -15,17 +16,16 @@ import {
 import type { SkillHit, SelectedSkill } from "./types";
 import { unzip } from "./zip";
 
-const BASE = "/skillhub/v1/skills";
+const DOWNLOAD_BASE = "/skillhub/v1/skills";
+const SEARCH_BASE = "/harness/skills/findskill";
 
 interface RawSkill {
-  Id?: string;
-  Slug?: string;
-  Name?: string;
-  Description?: string;
-  Namespace?: string;
-  SourceRepo?: string;
-  DownloadCount?: number;
-  Metadata?: { DisplayDescription?: string };
+  slug?: string;
+  name?: string;
+  description?: string;
+  sourceRepo?: string;
+  downloadCount?: number;
+  version?: string;
 }
 
 /** Search the public Skill Hub. */
@@ -34,22 +34,28 @@ export async function searchSkills(
   namespace = "public",
 ): Promise<SkillHit[]> {
   const q = query.trim();
-  const url = `${BASE}?query=${encodeURIComponent(q)}&namespace=${encodeURIComponent(namespace)}`;
+  const params = new URLSearchParams({
+    query: q,
+    page_number: "1",
+    page_size: "20",
+  });
+  const url = `${SEARCH_BASE}?${params.toString()}`;
   const res = await fetch(url, {
     headers: { accept: "application/json" },
     signal: requestSignal(undefined, DEFAULT_REQUEST_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`搜索失败 (${res.status})`);
-  const data = (await res.json()) as { Skills?: RawSkill[] };
-  return (data.Skills ?? []).map((s) => ({
+  const data = (await res.json()) as { items?: RawSkill[] };
+  return (data.items ?? []).map((s) => ({
     source: "skillhub" as const,
-    id: s.Id ?? s.Slug ?? "",
-    slug: s.Slug ?? "",
-    name: s.Name ?? s.Slug ?? "",
-    description: s.Metadata?.DisplayDescription || s.Description || "",
-    namespace: s.Namespace ?? namespace,
-    sourceRepo: s.SourceRepo,
-    downloadCount: s.DownloadCount,
+    id: s.slug ?? s.name ?? "",
+    slug: s.slug ?? "",
+    name: s.name ?? s.slug ?? "",
+    description: s.description ?? "",
+    namespace,
+    sourceRepo: s.sourceRepo,
+    downloadCount: s.downloadCount,
+    version: s.version,
   }));
 }
 
@@ -60,7 +66,7 @@ export async function downloadSkillHubSkill(
 ): Promise<ProjectFile[]> {
   const slug = s.slug || "";
   const namespace = s.namespace || "public";
-  const url = `${BASE}/download/${slug}?namespace=${encodeURIComponent(namespace)}`;
+  const url = `${DOWNLOAD_BASE}/download/${slug}?namespace=${encodeURIComponent(namespace)}`;
   const res = await fetch(url, {
     signal: requestSignal(undefined, TRANSFER_REQUEST_TIMEOUT_MS),
   });

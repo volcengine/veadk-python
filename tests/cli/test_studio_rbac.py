@@ -389,7 +389,14 @@ def test_byteplus_deploy_agentkit_uses_iam_file_for_sdk_templates(
             ),
         )
 
+    async def initialize_evaluation_sets(**_kwargs: Any) -> list[str]:
+        raise AssertionError("BytePlus deploy should not create evaluation sets")
+
     monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    monkeypatch.setattr(
+        "frontend.server.evaluation_automation.datasets.ensure_feedback_sets",
+        initialize_evaluation_sets,
+    )
     app = _create_studio_app(
         monkeypatch,
         tmp_path,
@@ -404,7 +411,6 @@ def test_byteplus_deploy_agentkit_uses_iam_file_for_sdk_templates(
             headers={"X-VeADK-Local-User": "developer"},
             json={
                 "name": "byteplus-agent",
-                "createEvaluationSets": False,
                 "files": [{"path": "app.py", "content": "app = object()\n"}],
                 "config": {"region": "ap-southeast-1", "projectName": "default"},
             },
@@ -417,6 +423,7 @@ def test_byteplus_deploy_agentkit_uses_iam_file_for_sdk_templates(
 
     assert response.status_code == 200
     assert frames[-1]["success"] is True
+    assert not [frame for frame in frames if frame.get("phase") == "evaluation"]
     assert captured_env == {
         "BYTEPLUS_ACCESS_KEY": "iam-ak",
         "BYTEPLUS_SECRET_KEY": "iam-sk",
