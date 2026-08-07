@@ -1825,6 +1825,119 @@ export type DeployAuthentication =
   | { type: "api_key" }
   | { type: "user_pool"; userPoolUid: string };
 
+export type DeploymentResourceMode = "auto" | "create" | "existing";
+
+export interface DeployResources {
+  tos: {
+    mode: DeploymentResourceMode;
+    bucket?: string;
+  };
+  cr: {
+    mode: DeploymentResourceMode;
+    instance?: string;
+    namespace?: string;
+    repository?: string;
+  };
+  codePipeline: {
+    mode: DeploymentResourceMode;
+    workspaceId?: string;
+    workspaceName?: string;
+    pipelineId?: string;
+    pipelineName?: string;
+  };
+}
+
+export type DeploymentResourceKind =
+  | "tos-bucket"
+  | "cr-registry"
+  | "cr-namespace"
+  | "cr-repository"
+  | "cp-workspace"
+  | "cp-pipeline";
+
+export interface DeploymentResource {
+  id: string;
+  name: string;
+  region: string;
+  status: string;
+  compatible?: boolean;
+}
+
+export interface DeploymentResourceQuery {
+  kind: DeploymentResourceKind;
+  region: string;
+  registry?: string;
+  namespace?: string;
+  workspaceId?: string;
+  pageNumber?: number;
+  pageSize?: number;
+}
+
+export async function listDeploymentResources(
+  query: DeploymentResourceQuery,
+  signal?: AbortSignal,
+): Promise<{
+  serviceRegion: string;
+  items: DeploymentResource[];
+  pageNumber: number;
+  pageSize: number;
+  totalCount: number;
+  hasMore: boolean;
+}> {
+  const params = new URLSearchParams({ kind: query.kind, region: query.region });
+  if (query.registry) params.set("registry", query.registry);
+  if (query.namespace) params.set("namespace", query.namespace);
+  if (query.workspaceId) params.set("workspaceId", query.workspaceId);
+  if (query.pageNumber) params.set("pageNumber", String(query.pageNumber));
+  if (query.pageSize) params.set("pageSize", String(query.pageSize));
+  const response = await apiFetch(
+    `/web/deployment-resources?${params.toString()}`,
+    { signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "加载云资源失败"));
+  }
+  const payload = (await response.json()) as {
+    serviceRegion?: unknown;
+    items?: unknown;
+    pageNumber?: unknown;
+    pageSize?: unknown;
+    totalCount?: unknown;
+    hasMore?: unknown;
+  };
+  if (
+    typeof payload.serviceRegion !== "string" ||
+    !Array.isArray(payload.items) ||
+    typeof payload.pageNumber !== "number" ||
+    typeof payload.pageSize !== "number" ||
+    typeof payload.totalCount !== "number" ||
+    typeof payload.hasMore !== "boolean"
+  ) {
+    throw new Error("云资源列表响应格式无效");
+  }
+  const items = payload.items.map((item) => {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      typeof (item as DeploymentResource).id !== "string" ||
+      typeof (item as DeploymentResource).name !== "string" ||
+      typeof (item as DeploymentResource).region !== "string" ||
+      typeof (item as DeploymentResource).status !== "string"
+    ) {
+      throw new Error("云资源列表响应格式无效");
+    }
+    return item as DeploymentResource;
+  });
+  return {
+    serviceRegion: payload.serviceRegion,
+    items,
+    pageNumber: payload.pageNumber,
+    pageSize: payload.pageSize,
+    totalCount: payload.totalCount,
+    hasMore: payload.hasMore,
+  };
+}
+
 export interface IdentityUserPool {
   uid: string;
   name: string;
@@ -1930,6 +2043,7 @@ export async function deployAgentkitProject(
       };
     };
     envs?: { key: string; value: string }[];
+    resources?: DeployResources;
   },
 ): Promise<DeployAgentkitResult> {
   const taskId = opts?.taskId;
@@ -1970,6 +2084,7 @@ export async function deployAgentkitProject(
           authentication: opts?.authentication,
           im: opts?.im,
           envs: opts?.envs,
+          resources: opts?.resources,
         }),
       },
       {},

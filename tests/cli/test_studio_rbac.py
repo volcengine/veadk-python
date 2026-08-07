@@ -15,6 +15,7 @@
 """Tests for Studio role and Runtime ownership policy."""
 
 import base64
+import itertools
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -441,6 +442,174 @@ def test_byteplus_deploy_agentkit_uses_iam_file_for_sdk_templates(
     assert "BYTEPLUS_SECRET_KEY" not in runtime_envs
     assert "BYTEPLUS_SESSION_TOKEN" not in runtime_envs
     assert os.environ.get("BYTEPLUS_ACCESS_KEY") is None
+
+
+@pytest.mark.parametrize(
+    ("provider", "region"),
+    [
+        ("volcengine", "cn-beijing"),
+        ("byteplus", "ap-southeast-1"),
+    ],
+)
+def test_deployment_resource_mode_matrix_reaches_agentkit_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: str,
+    region: str,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    from frontend.server.deployment_resources import DeploymentResourceService
+
+    captured_configs: list[dict[str, Any]] = []
+
+    def existing_resource(
+        _self: DeploymentResourceService,
+        kind: str,
+        **parents: str,
+    ) -> dict[str, str]:
+        resource_id = parents["resource_id"]
+        return {
+            "id": resource_id,
+            "name": ("pipeline-existing" if kind == "cp-pipeline" else resource_id),
+        }
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        captured_configs.append(yaml.safe_load(Path(config_file).read_text()))
+        runtime_id = f"runtime-{len(captured_configs)}"
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": runtime_id,
+                    "runtime_name": "matrix-agent",
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        )
+
+    monkeypatch.setattr(
+        DeploymentResourceService,
+        "_require_existing_resource",
+        existing_resource,
+    )
+    monkeypatch.setattr(
+        "agentkit.utils.template_utils.render_template",
+        lambda _template: "agentkit-platform-test-account",
+    )
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: SimpleNamespace(current_version_number=1),
+    )
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    if provider == "byteplus":
+        monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-ak")
+        monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-sk")
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+        provider=provider,
+    )
+
+    modes = ("auto", "create", "existing")
+    with TestClient(app) as client:
+        for tos_mode, cr_mode, cp_mode in itertools.product(modes, repeat=3):
+            tos = {"mode": tos_mode}
+            cr = {"mode": cr_mode}
+            code_pipeline = {"mode": cp_mode}
+            if tos_mode != "auto":
+                tos["bucket"] = f"tos-{tos_mode}"
+            if cr_mode != "auto":
+                cr.update(
+                    {
+                        "instance": f"cr-{cr_mode}",
+                        "namespace": f"namespace-{cr_mode}",
+                        "repository": f"repository-{cr_mode}",
+                    }
+                )
+            if cp_mode != "auto":
+                code_pipeline.update(
+                    {
+                        "workspaceName": f"workspace-{cp_mode}",
+                        "pipelineName": f"pipeline-{cp_mode}",
+                    }
+                )
+            if cp_mode == "existing":
+                code_pipeline.update(
+                    {
+                        "workspaceId": "workspace-existing",
+                        "pipelineId": "pipeline-existing-id",
+                    }
+                )
+
+            with client.stream(
+                "POST",
+                "/web/deploy-agentkit",
+                headers={"X-VeADK-Local-User": "developer"},
+                json={
+                    "name": "matrix-agent",
+                    "files": [{"path": "app.py", "content": "app = object()\n"}],
+                    "config": {"region": region, "projectName": "default"},
+                    "createEvaluationSets": False,
+                    "resources": {
+                        "tos": tos,
+                        "cr": cr,
+                        "codePipeline": code_pipeline,
+                    },
+                },
+            ) as response:
+                frames = [
+                    json.loads(line.removeprefix("data: "))
+                    for line in response.iter_lines()
+                    if line.startswith("data: ")
+                ]
+
+            assert response.status_code == 200
+            assert frames[-1]["success"] is True
+            cloud = captured_configs[-1]["launch_types"]["cloud"]
+
+            if tos_mode == "auto":
+                if provider == "byteplus":
+                    assert cloud["tos_bucket"] == (
+                        "agentkit-platform-test-account-ap-southeast-1"
+                    )
+                else:
+                    assert "tos_bucket" not in cloud
+            else:
+                assert cloud["tos_bucket"] == f"tos-{tos_mode}"
+
+            if cr_mode == "auto":
+                if provider == "byteplus":
+                    assert cloud["cr_instance_name"] == (
+                        "agentkit-platform-test-account"
+                    )
+                else:
+                    assert "cr_instance_name" not in cloud
+                assert "cr_namespace_name" not in cloud
+                assert "cr_repo_name" not in cloud
+            else:
+                assert cloud["cr_instance_name"] == f"cr-{cr_mode}"
+                assert cloud["cr_namespace_name"] == f"namespace-{cr_mode}"
+                assert cloud["cr_repo_name"] == f"repository-{cr_mode}"
+
+            if cp_mode == "auto":
+                assert "cp_workspace_name" not in cloud
+                assert "cp_pipeline_name" not in cloud
+                assert "cp_pipeline_id" not in cloud
+            else:
+                assert cloud["cp_workspace_name"] == f"workspace-{cp_mode}"
+                assert cloud["cp_pipeline_name"] == f"pipeline-{cp_mode}"
+                if cp_mode == "existing":
+                    assert cloud["cp_pipeline_id"] == "pipeline-existing-id"
+                else:
+                    assert "cp_pipeline_id" not in cloud
+
+    assert len(captured_configs) == 27
 
 
 def _unsigned_jwt(claims: dict[str, str]) -> str:

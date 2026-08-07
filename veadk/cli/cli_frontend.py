@@ -1354,6 +1354,17 @@ def _run_frontend_server(
     def _coerce_cloud_region(region: str | None) -> str:
         return (region or "").strip() or _default_cloud_region()
 
+    from frontend.server.deployment_resources import (
+        mount_deployment_resource_routes,
+    )
+
+    mount_deployment_resource_routes(
+        app,
+        authorize=_require_agent_management,
+        provider=provider,
+        resolve_credentials=_resolve_ve_credentials,
+    )
+
     def _require_studio_admin(request: Request) -> None:
         if _request_role(request) != StudioRole.ADMIN:
             raise HTTPException(
@@ -3186,6 +3197,22 @@ def _run_frontend_server(
 
         region = config.get("region") or _default_cloud_region()
         project_name = config.get("projectName", "default")
+        try:
+            from frontend.server.deployment_resources import (
+                DeploymentResourceService,
+            )
+
+            deployment_resource_config = await asyncio.to_thread(
+                DeploymentResourceService(
+                    provider, region, _resolve_ve_credentials()
+                ).resolve_deployment_config,
+                data.get("resources"),
+            )
+        except (TypeError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            logger.exception("resolve deployment resources failed: %s", e)
+            raise HTTPException(status_code=502, detail=str(e)) from e
         existing_runtime = None
         if runtime_id:
             try:
@@ -3413,6 +3440,7 @@ def _run_frontend_server(
             cloud_config["tos_bucket"] = f"{bucket_base}-{region_suffix}"
             if provider == "byteplus":
                 cloud_config["cr_instance_name"] = bucket_base
+        cloud_config.update(deployment_resource_config)
 
         agentkit_config = {
             "common": {

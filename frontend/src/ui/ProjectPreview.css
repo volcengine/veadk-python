@@ -863,7 +863,7 @@
   margin: 0 -18px 12px;
   padding: 13px 18px;
   border-bottom: 1px solid hsl(var(--border) / 0.68);
-  background: hsl(var(--muted) / 0.34);
+  background: transparent;
   color: hsl(var(--foreground));
   font-size: 14px;
   font-weight: 620;
@@ -874,7 +874,7 @@
   margin: 0 -18px 12px;
   padding: 13px 18px;
   border-bottom: 1px solid hsl(var(--border) / 0.68);
-  background: hsl(var(--muted) / 0.34);
+  background: transparent;
 }
 
 .pp-env-head .pp-config-label {
