@@ -330,6 +330,36 @@ KB_BACKENDS = (
             EnvVar("DATABASE_CONTEXT_SEARCH_ENGINE_APIKEY", True),
         ),
     ),
+    BackendOption(
+        "openviking",
+        env=(
+            EnvVar(
+                "DATABASE_OPENVIKING_URL",
+                True,
+                "https://api.vikingdb.cn-beijing.volces.com/openviking",
+                "OpenViking 服务地址",
+            ),
+            EnvVar(
+                "DATABASE_OPENVIKING_API_KEY",
+                True,
+                "",
+                "OpenViking API Key",
+            ),
+            EnvVar(
+                "DATABASE_OPENVIKING_USER_ID",
+                False,
+                "default",
+                "知识库归属 ID；未配置资源目录时用于默认路径 "
+                "viking://user/<此值>/resources/<知识库索引>/，默认 default",
+            ),
+            EnvVar(
+                "DATABASE_OPENVIKING_TARGET_URI",
+                False,
+                "",
+                "知识库资源目录；留空时由 DATABASE_OPENVIKING_USER_ID、 index 自动生成",
+            ),
+        ),
+    ),
 )
 
 TRACING_EXPORTERS = (

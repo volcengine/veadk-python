@@ -64,6 +64,13 @@ test("feeds provider-supported generated tool ids into the checklist selection",
   assert.match(createSource, /selected=\{builtinTools\}/);
 });
 
+test("keeps OpenViking knowledge when normalizing imported drafts", () => {
+  assert.match(
+    normalizeSource,
+    /const KB_IDS = new Set\(\["opensearch", "viking", "context_search", "openviking"\]\)/,
+  );
+});
+
 test("allows Agent generation to outlive the default request timeout", () => {
   assert.match(clientSource, /GENERATED_AGENT_DRAFT_TIMEOUT_MS = 190_000/);
   assert.match(

@@ -83,6 +83,7 @@ EXPECTED_KB_EXTRAS = {
     "opensearch": {"extensions"},
     "viking": set(),
     "context_search": set(),
+    "openviking": set(),
 }
 
 
@@ -434,6 +435,28 @@ def test_viking_knowledgebase_uses_selected_index() -> None:
     agent_py = _files(project)["agents/kb_viking/agent.py"]
 
     assert 'KnowledgeBase(backend="viking", index="existing_kb"' in agent_py
+    _assert_python_files_compile(project)
+
+
+def test_openviking_knowledgebase_generates_required_runtime_env() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="kb-openviking",
+            knowledgebase=True,
+            knowledgebaseBackend="openviking",
+            knowledgebaseIndex="company_faq",
+        )
+    )
+    files = _files(project)
+    agent_py = files["agents/kb_openviking/agent.py"]
+
+    assert 'KnowledgeBase(backend="openviking", index="company_faq"' in agent_py
+    assert _env_keys(files[".env.example"]) == _catalog_env_keys(
+        MODEL_ENV,
+        next(item.env for item in KB_BACKENDS if item.id == "openviking"),
+    )
+    assert "DATABASE_OPENVIKING_TARGET_URI=\n" in files[".env.example"]
+    assert files["requirements.txt"].splitlines()[0] == _veadk_requirement(set())
     _assert_python_files_compile(project)
 
 
