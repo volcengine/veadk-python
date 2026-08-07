@@ -16,7 +16,14 @@ import time
 
 import volcenginesdkcore
 from volcenginesdkapig import APIGApi
-from volcenginesdkapig20221112 import APIG20221112Api, UpstreamListForCreateRouteInput
+from volcenginesdkapig20221112 import (
+    APIG20221112Api,
+    AdvancedSettingForUpdateRouteInput,
+    CorsPolicySettingForUpdateRouteInput,
+    GetRouteRequest,
+    UpdateRouteRequest,
+    UpstreamListForCreateRouteInput,
+)
 
 from veadk.utils.cloud_provider import (
     DEFAULT_CLOUD_PROVIDER,
@@ -151,6 +158,38 @@ class APIGateway:
         thread = self.apig_client.create_gateway_service(request, async_req=True)
         result = thread.get()
         return result.to_dict()["id"]
+
+    def disable_route_cors(self, route_id: str) -> None:
+        """Disable APIG-managed CORS so same-origin Studio remains authoritative."""
+        route = (
+            self.apig_20221112_client.get_route(
+                GetRouteRequest(id=route_id), async_req=True
+            )
+            .get()
+            .route
+        )
+        advanced_setting = route.advanced_setting
+        request = UpdateRouteRequest(
+            id=route_id,
+            name=route.name,
+            enable=route.enable,
+            fallback_setting=route.fallback_setting,
+            match_rule=route.match_rule,
+            priority=route.priority,
+            upstream_list=route.upstream_list,
+            advanced_setting=AdvancedSettingForUpdateRouteInput(
+                cors_policy_setting=CorsPolicySettingForUpdateRouteInput(
+                    enable=False,
+                    allow_credentials=False,
+                ),
+                header_operations=advanced_setting.header_operations,
+                mirror_policies=advanced_setting.mirror_policies,
+                retry_policy_setting=advanced_setting.retry_policy_setting,
+                timeout_setting=advanced_setting.timeout_setting,
+                url_rewrite_setting=advanced_setting.url_rewrite_setting,
+            ),
+        )
+        self.apig_20221112_client.update_route(request, async_req=True).get()
 
     def create_vefaas_upstream(
         self, function_id: str, gateway_id: str, upstream_name: str

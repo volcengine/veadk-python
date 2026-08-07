@@ -1324,15 +1324,21 @@ def _resolve_redirect_after_auth(request: Request, redirect: Optional[str]) -> s
         return "/"
 
     redirect = redirect.strip()
-    if redirect.startswith("/"):
-        return redirect
-
+    if not redirect or "\\" in redirect or any(ord(char) < 32 for char in redirect):
+        logger.warning("Unsafe redirect ignored: %s", redirect)
+        return "/"
     parsed = urllib.parse.urlparse(redirect)
     if not parsed.scheme and not parsed.netloc:
+        if redirect.startswith("/") and not redirect.startswith("//"):
+            return redirect
         return f"/{redirect.lstrip('/')}"
 
     current = urllib.parse.urlparse(str(request.url))
-    if parsed.scheme == current.scheme and parsed.netloc == current.netloc:
+    if (
+        parsed.scheme in {"http", "https"}
+        and parsed.scheme == current.scheme
+        and parsed.netloc == current.netloc
+    ):
         return redirect
 
     logger.warning("Unsafe redirect ignored: %s", redirect)

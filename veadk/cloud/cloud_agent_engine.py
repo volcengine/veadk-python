@@ -246,6 +246,7 @@ class CloudAgentEngine(BaseModel):
         local_test: bool = False,
         enable_mcp_session: bool = True,
         keep_failed_deploy: bool = False,
+        disable_cors: bool = False,
     ) -> CloudApp:
         """Deploys a local agent project to Volcengine FaaS, creating necessary resources.
 
@@ -262,6 +263,7 @@ class CloudAgentEngine(BaseModel):
             identity_user_pool_name (str, optional): Custom user pool name. Defaults to timestamped.
             identity_client_name (str, optional): Custom client name. Defaults to timestamped.
             local_test (bool): Perform FastAPI server test before deploy. Defaults to False.
+            disable_cors (bool): Disable APIG-managed CORS on the application route.
 
         Returns:
             CloudApp: Deployed application with endpoint, name, and ID.
@@ -330,6 +332,8 @@ class CloudAgentEngine(BaseModel):
             veapig_gateway_id, _, veapig_route_id = (
                 self._vefaas_service.get_application_route(app_id=app_id)
             )
+            if disable_cors:
+                self._veapig_service.disable_route_cors(veapig_route_id)
 
             if auth_method == "oauth2":
                 # Resolve the Identity user pool: reuse an existing one by UID

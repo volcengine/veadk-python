@@ -36,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import monotonic
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
 import click
@@ -111,6 +111,9 @@ _CP_PIPELINE_RUN_RE = re.compile(
     r"Pipeline triggered successfully,\s*run ID:\s*(?P<id>\S+)"
 )
 _RUNTIME_DESCRIPTION_MAX_BYTES = 255
+_LOCAL_ADK_USER_PATH_RE = re.compile(
+    r"^/(?:harness/)?apps/[^/]+/users/(?P<user_id>[^/]+)/sessions(?:/|$)"
+)
 
 
 def _byteplus_vefaas_application_name_suggestion(name: str) -> str:
@@ -1072,7 +1075,7 @@ def _run_frontend_server(
     # Agent introspection for the UI's agent picker (name, model, tools). Reuses
     # ADK's AgentLoader, which caches each loaded `root_agent`.
     from fastapi import HTTPException, Query, Request
-    from fastapi.responses import Response
+    from fastapi.responses import JSONResponse, Response
     from google.adk.cli.utils.agent_loader import AgentLoader
     import httpx
 
@@ -1107,13 +1110,6 @@ def _run_frontend_server(
 
     _agent_loader = AgentLoader(agents_dir)
     media_service = MediaService(create_media_storage())
-    mount_media_routes(app, media_service)
-
-    # Generated-agent debug is intentionally feature-complete in both local and
-    # remote Studio deployments: the backend receives AgentDraft JSON, generates
-    # the same project content as "Generate project", writes it to a temp dir,
-    # and starts a runner for the debug session.
-    generated_agent_test_run_allows_local_resources = True
 
     generated_agent_test_run_ttl = max(60, generated_agent_test_run_ttl)
     access_policy = StudioAccessPolicy.from_csv(
@@ -1266,6 +1262,43 @@ def _run_frontend_server(
                 status_code=403, detail="Agent management is not allowed"
             )
         return principal
+
+    def _require_local_user_scope(request: Request, user_id: str) -> None:
+        principal = _current_principal(request)
+        if access_policy.enabled and principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        if principal is None or access_policy.role_for(principal) == StudioRole.ADMIN:
+            return
+        if user_id.strip().casefold() not in principal.identifiers:
+            raise HTTPException(
+                status_code=403,
+                detail="Access to another Studio user's local data is not allowed",
+            )
+
+    mount_media_routes(app, media_service, authorize=_require_local_user_scope)
+
+    @app.middleware("http")
+    async def _enforce_local_adk_user_scope(request: Request, call_next):
+        user_id = ""
+        match = _LOCAL_ADK_USER_PATH_RE.match(request.url.path)
+        if match:
+            user_id = unquote(match.group("user_id"))
+        elif request.url.path in {"/run", "/run_sse"}:
+            try:
+                payload = await request.json()
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                payload = {}
+            if isinstance(payload, dict):
+                user_id = str(payload.get("user_id") or payload.get("userId") or "")
+        if user_id:
+            try:
+                _require_local_user_scope(request, user_id)
+            except HTTPException as error:
+                return JSONResponse(
+                    status_code=error.status_code,
+                    content={"detail": error.detail},
+                )
+        return await call_next(request)
 
     def _skill_creator_owner(request: Request) -> str:
         principal = _require_agent_management(request)
@@ -2438,9 +2471,6 @@ def _run_frontend_server(
                 draft = _draft_for_debug_run(draft)
                 validate_debug_policy(
                     draft,
-                    allow_local_runtime_resources=(
-                        generated_agent_test_run_allows_local_resources
-                    ),
                 )
                 draft = await resolve_debug_mcp_endpoints(draft)
             else:
@@ -6286,11 +6316,13 @@ def _run_frontend_server(
 
     @app.get("/web/a2a-spaces")
     async def _web_list_a2a_spaces(
+        http_request: Request,
         region: str = "",
         page_size: int = Query(default=100, ge=1, le=100),
         project: str | None = None,
     ):
         """List all AgentKit A2A Spaces visible to server credentials."""
+        _require_agent_management(http_request)
         region = _coerce_cloud_region(region)
         try:
             _resolve_ve_credentials()
@@ -6567,10 +6599,12 @@ def _run_frontend_server(
 
     @app.get("/web/viking-knowledgebases")
     async def _web_list_viking_knowledgebases(
+        http_request: Request,
         region: str = "",
         project: str = "",
     ):
         """List VikingDB KnowledgeBase collections visible to server creds."""
+        _require_agent_management(http_request)
         from volcengine.viking_knowledgebase import VikingKnowledgeBaseService
 
         region = _coerce_cloud_region(region)
@@ -6724,6 +6758,7 @@ def _run_frontend_server(
 
     @app.get("/web/skill-spaces")
     async def _web_list_skill_spaces(
+        http_request: Request,
         region: str = "all",
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=50, ge=1, le=100),
@@ -6735,6 +6770,7 @@ def _run_frontend_server(
         mode it resolves to the BytePlus Studio region configured for this
         server (currently ap-southeast-1).
         """
+        _require_agent_management(http_request)
         from agentkit.sdk.skills.types import ListSkillSpacesRequest
 
         aggregate_regions = region in {"all", "", "*"}
@@ -6793,6 +6829,7 @@ def _run_frontend_server(
 
     @app.get("/web/skill-spaces/{space_id}/skills")
     async def _web_list_skills_in_space(
+        http_request: Request,
         space_id: str,
         region: str = "",
         page: int = Query(default=1, ge=1),
@@ -6801,6 +6838,7 @@ def _run_frontend_server(
     ):
         """List skills in one SkillSpace (relation view: id/name/description/
         version/status per skill)."""
+        _require_agent_management(http_request)
         from agentkit.sdk.skills.types import ListSkillsBySkillSpaceRequest
 
         del project  # SkillSpace ID is already globally scoped by AgentKit.
@@ -6848,12 +6886,14 @@ def _run_frontend_server(
 
     @app.get("/web/skill-spaces/{space_id}/skills/{skill_id}")
     async def _web_get_skill_detail(
+        http_request: Request,
         space_id: str,
         skill_id: str,
         version: str | None = None,
         region: str = "",
     ):
         """Fetch a specific skill version's SKILL.md content plus package files."""
+        _require_agent_management(http_request)
         from agentkit.sdk.skills.types import GetSkillVersionRequest
 
         region = _coerce_cloud_region(region)
@@ -7787,6 +7827,7 @@ def frontend_deploy(
             auth_method="none",
             enable_mcp_session=False,
             keep_failed_deploy=keep_failed_deploy,
+            disable_cors=True,
         )
         url = (app.vefaas_endpoint or "").rstrip("/")
         redirect_uri = f"{url}/oauth2/callback"

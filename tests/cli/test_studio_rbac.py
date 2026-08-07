@@ -728,6 +728,104 @@ def test_gateway_role_uses_jwt_and_ignores_local_identity_header(
     assert response.json()["role"] == "admin"
 
 
+def test_user_cannot_enumerate_server_credential_resources(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+        admins="admin",
+        developers="developer",
+    )
+    headers = {"Authorization": f"Bearer {_unsigned_jwt({'sub': 'reader'})}"}
+
+    with TestClient(app) as client:
+        responses = [
+            client.get("/web/a2a-spaces", headers=headers),
+            client.get("/web/viking-knowledgebases", headers=headers),
+            client.get("/web/skill-spaces", headers=headers),
+            client.get("/web/skill-spaces/space-1/skills", headers=headers),
+            client.get("/web/skill-spaces/space-1/skills/skill-1", headers=headers),
+        ]
+
+    assert [response.status_code for response in responses] == [403] * 5
+
+
+def test_user_cannot_access_another_users_local_sessions_or_media(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+        admins="admin",
+        developers="developer",
+    )
+    headers = {"Authorization": f"Bearer {_unsigned_jwt({'sub': 'reader'})}"}
+
+    async def _echo_run_body(request: Request) -> dict[str, Any]:
+        return await request.json()
+
+    app.add_api_route("/run_sse", _echo_run_body, methods=["POST"])
+    app.router.routes.insert(0, app.router.routes.pop())
+
+    with TestClient(app) as client:
+        own_upload = client.post(
+            "/web/media",
+            headers=headers,
+            data={
+                "app_name": "demo",
+                "user_id": "reader",
+                "session_id": "session",
+            },
+            files={"file": ("canary.txt", b"owner canary", "text/plain")},
+        )
+        cross_upload = client.post(
+            "/web/media",
+            headers=headers,
+            data={
+                "app_name": "demo",
+                "user_id": "owner",
+                "session_id": "session",
+            },
+            files={"file": ("canary.txt", b"cross user", "text/plain")},
+        )
+        cross_session = client.get(
+            "/apps/site-packages/users/owner/sessions/session",
+            headers=headers,
+        )
+        cross_delete = client.delete(
+            "/apps/site-packages/users/owner/sessions/session",
+            headers=headers,
+        )
+        own_run_payload = {
+            "appName": "site-packages",
+            "userId": "reader",
+            "sessionId": "session",
+        }
+        own_run = client.post(
+            "/run_sse",
+            headers=headers,
+            json=own_run_payload,
+        )
+        cross_run = client.post(
+            "/run_sse",
+            headers=headers,
+            json={"appName": "site-packages", "userId": "owner"},
+        )
+
+    assert own_upload.status_code == 200
+    assert cross_upload.status_code == 403
+    assert cross_session.status_code == 403
+    assert cross_delete.status_code == 403
+    assert own_run.status_code == 200
+    assert own_run.json() == own_run_payload
+    assert cross_run.status_code == 403
+
+
 def test_non_admin_runtime_list_uses_one_owner_filtered_request(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

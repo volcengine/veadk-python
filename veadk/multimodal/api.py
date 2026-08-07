@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 import tempfile
 
@@ -23,6 +24,7 @@ from fastapi import FastAPI
 from fastapi import File
 from fastapi import Form
 from fastapi import HTTPException
+from fastapi import Request
 from fastapi import UploadFile
 from fastapi.responses import FileResponse
 from fastapi.responses import RedirectResponse
@@ -33,8 +35,16 @@ from .service import MediaService
 from .service import SUPPORTED_MIME_TYPES
 
 
-def mount_media_routes(app: FastAPI, service: MediaService) -> None:
+def mount_media_routes(
+    app: FastAPI,
+    service: MediaService,
+    authorize: Callable[[Request, str], None] | None = None,
+) -> None:
     """Mount the multimodal upload, delivery, and cleanup endpoints."""
+
+    def _authorize(request: Request, user_id: str) -> None:
+        if authorize is not None:
+            authorize(request, user_id)
 
     @app.get("/web/media/capabilities")
     async def media_capabilities() -> dict[str, object]:
@@ -46,11 +56,13 @@ def mount_media_routes(app: FastAPI, service: MediaService) -> None:
 
     @app.post("/web/media")
     async def upload_media(
+        request: Request,
         app_name: str = Form(...),
         user_id: str = Form(...),
         session_id: str = Form(...),
         file: UploadFile = File(...),
     ) -> dict[str, object]:
+        _authorize(request, user_id)
         suffix = Path(file.filename or "attachment").suffix
         temp_path: Path | None = None
         try:
@@ -84,8 +96,9 @@ def mount_media_routes(app: FastAPI, service: MediaService) -> None:
 
     @app.get("/web/media/{app_name}/{user_id}/{session_id}/{media_id}")
     async def get_media_metadata(
-        app_name: str, user_id: str, session_id: str, media_id: str
+        request: Request, app_name: str, user_id: str, session_id: str, media_id: str
     ) -> dict[str, object]:
+        _authorize(request, user_id)
         try:
             record = await service.get_record(
                 _media_ref(app_name, user_id, session_id, media_id)
@@ -96,8 +109,9 @@ def mount_media_routes(app: FastAPI, service: MediaService) -> None:
 
     @app.get("/web/media/{app_name}/{user_id}/{session_id}/{media_id}/content")
     async def get_media_content(
-        app_name: str, user_id: str, session_id: str, media_id: str
+        request: Request, app_name: str, user_id: str, session_id: str, media_id: str
     ) -> Response:
+        _authorize(request, user_id)
         ref = _media_ref(app_name, user_id, session_id, media_id)
         try:
             record = await service.get_record(ref)
@@ -120,8 +134,9 @@ def mount_media_routes(app: FastAPI, service: MediaService) -> None:
     @app.delete("/web/media/{app_name}/{user_id}/{session_id}/{media_id}")
     @app.post("/web/media/{app_name}/{user_id}/{session_id}/{media_id}/delete")
     async def delete_media(
-        app_name: str, user_id: str, session_id: str, media_id: str
+        request: Request, app_name: str, user_id: str, session_id: str, media_id: str
     ) -> None:
+        _authorize(request, user_id)
         await service.storage.delete(
             _media_ref(app_name, user_id, session_id, media_id)
         )
@@ -129,8 +144,9 @@ def mount_media_routes(app: FastAPI, service: MediaService) -> None:
     @app.delete("/web/media/{app_name}/{user_id}/{session_id}")
     @app.post("/web/media/{app_name}/{user_id}/{session_id}/delete")
     async def delete_session_media(
-        app_name: str, user_id: str, session_id: str
+        request: Request, app_name: str, user_id: str, session_id: str
     ) -> None:
+        _authorize(request, user_id)
         await service.storage.delete_session(app_name, user_id, session_id)
 
 
