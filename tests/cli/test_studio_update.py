@@ -652,6 +652,8 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
             str(tmp_path),
             "--sandbox-chat-codex-tool-id",
             "chat-tool-new",
+            "--sandbox-dev-tool-id",
+            "dev-tool-new",
             "--volcengine-access-key",
             "ak",
             "--volcengine-secret-key",
@@ -663,6 +665,7 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
     assert captured["environment_overrides"] == {
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "SANDBOX_CHAT_CODEX": "chat-tool-new",
+        "SANDBOX_DEV": "dev-tool-new",
     }
 
 

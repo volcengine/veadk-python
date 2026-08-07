@@ -14,13 +14,35 @@
 
 """Shared AgentKit Sandbox region selection."""
 
+import os
+
 _SANDBOX_REGIONS = ("cn-beijing", "cn-shanghai")
+_BYTEPLUS_SANDBOX_REGIONS = ("ap-southeast-1",)
 _RESOURCE_NOT_FOUND_CODE = "InvalidResource.NotFound"
 
 
-def sandbox_region_candidates(preferred: str | None = None) -> tuple[str, ...]:
-    first = (preferred or _SANDBOX_REGIONS[0]).strip() or _SANDBOX_REGIONS[0]
-    return (first, *tuple(region for region in _SANDBOX_REGIONS if region != first))
+def sandbox_region_candidates(
+    preferred: str | None = None,
+    *,
+    provider: str | None = None,
+) -> tuple[str, ...]:
+    provider_id = (
+        (
+            provider
+            or os.getenv("AGENTKIT_CLOUD_PROVIDER")
+            or os.getenv("CLOUD_PROVIDER")
+            or "volcengine"
+        )
+        .strip()
+        .lower()
+    )
+    regions = (
+        _BYTEPLUS_SANDBOX_REGIONS if provider_id == "byteplus" else _SANDBOX_REGIONS
+    )
+    first = (preferred or regions[0]).strip() or regions[0]
+    if provider_id == "byteplus" and first not in regions:
+        first = regions[0]
+    return (first, *tuple(region for region in regions if region != first))
 
 
 def is_agentkit_resource_not_found(error: object) -> bool:

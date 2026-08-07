@@ -25,13 +25,32 @@ from typing import Any
 
 _PROJECT_NAME = "default"
 _TOOL_TYPE = "CodeEnv"
-STUDIO_SANDBOX_AGENT_MODEL_NAME = "doubao-seed-evolving"
+_DEV_TOOL_TYPE = "DevEnv"
+STUDIO_SANDBOX_AGENT_MODEL_NAME = "doubao-seed-2-1-pro-260628"
+STUDIO_SANDBOX_BYTEPLUS_AGENT_MODEL_NAME = "seed-2-0-lite-260228"
+STUDIO_SANDBOX_MODEL_BASE_URLS = {
+    "volcengine": "https://ark.cn-beijing.volces.com/api/v3",
+    "byteplus": "https://ark.ap-southeast.bytepluses.com/api/v3",
+}
 _AGENT_TOOL_TYPES = {
     "openclaw": "ArkClawEnv",
     "hermes": "HermesEnv",
 }
 _READY_STATUS = "Ready"
 _FAILED_STATUSES = frozenset({"Error", "Failed", "CreateFailed", "Deleting", "Deleted"})
+
+
+def studio_sandbox_agent_model_name(provider: str) -> str:
+    if provider == "byteplus":
+        return STUDIO_SANDBOX_BYTEPLUS_AGENT_MODEL_NAME
+    return STUDIO_SANDBOX_AGENT_MODEL_NAME
+
+
+def studio_sandbox_model_base_url(provider: str) -> str:
+    try:
+        return STUDIO_SANDBOX_MODEL_BASE_URLS[provider]
+    except KeyError as error:
+        raise ValueError(f"Unsupported Studio cloud provider: {provider}") from error
 
 
 def studio_sandbox_tool_name(application_name: str, purpose: str) -> str:
@@ -107,9 +126,10 @@ def _find_exact_tool(
     return matches[0] if matches else None
 
 
-def ensure_studio_code_env_tool(
+def _ensure_studio_environment_tool(
     *,
     name: str,
+    tool_type: str,
     access_key: str = "",
     secret_key: str = "",
     region: str = "cn-beijing",
@@ -119,7 +139,7 @@ def ensure_studio_code_env_tool(
     poll_interval: float = 5.0,
     sleep: Callable[[float], None] = time.sleep,
 ) -> str:
-    """Reuse or create one Ready CodeEnv Tool and return its Tool ID."""
+    """Reuse or create one ready managed environment Tool."""
     from agentkit.sdk.tools import types as tools_types
     from agentkit.sdk.tools.client import AgentkitToolsClient
 
@@ -129,46 +149,21 @@ def ensure_studio_code_env_tool(
         region=region,
         session_token=session_token,
     )
-    matches = []
-    next_token: str | None = None
-    while True:
-        response = tools_client.list_tools(
-            tools_types.ListToolsRequest(
-                ProjectName=_PROJECT_NAME,
-                MaxResults=100,
-                NextToken=next_token,
-                Filters=[
-                    tools_types.FiltersItemForListTools(
-                        Name="Name",
-                        Values=[name],
-                    )
-                ],
-            )
-        )
-        matches.extend(
-            tool
-            for tool in (response.tools or [])
-            if tool.name == name
-            and tool.project_name == _PROJECT_NAME
-            and tool.tool_type == _TOOL_TYPE
-        )
-        next_token = response.next_token or None
-        if not next_token:
-            break
-
-    if len(matches) > 1:
-        raise RuntimeError(
-            f"Multiple AgentKit CodeEnv Tools named '{name}' were found."
-        )
-    if matches:
-        tool_id = (matches[0].tool_id or "").strip()
+    match = _find_exact_tool(
+        tools_client,
+        tools_types,
+        name=name,
+        tool_type=tool_type,
+    )
+    if match is not None:
+        tool_id = (match.tool_id or "").strip()
         if not tool_id:
             raise RuntimeError(f"AgentKit Tool '{name}' did not return a Tool ID.")
     else:
         response = tools_client.create_tool(
             tools_types.CreateToolRequest(
                 Name=name,
-                ToolType=_TOOL_TYPE,
+                ToolType=tool_type,
                 ProjectName=_PROJECT_NAME,
                 CpuMilli=4000,
                 MemoryMb=8192,
@@ -190,19 +185,25 @@ def ensure_studio_code_env_tool(
                 f"Creating AgentKit Tool '{name}' did not return a Tool ID."
             )
 
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        tool = tools_client.get_tool(tools_types.GetToolRequest(ToolId=tool_id))
-        status = (tool.status or "").strip()
-        if status == _READY_STATUS:
-            return tool_id
-        if status in _FAILED_STATUSES:
-            raise RuntimeError(
-                f"AgentKit Tool '{name}' failed to become ready: {status}."
-            )
-        if time.monotonic() >= deadline:
-            raise RuntimeError(f"Timed out waiting for AgentKit Tool '{name}'.")
-        sleep(poll_interval)
+    return _wait_for_ready_tool(
+        tools_client,
+        tools_types,
+        tool_id=tool_id,
+        name=name,
+        timeout_seconds=timeout_seconds,
+        poll_interval=poll_interval,
+        sleep=sleep,
+    )
+
+
+def ensure_studio_code_env_tool(**kwargs: Any) -> str:
+    """Reuse or create one Ready CodeEnv Tool and return its Tool ID."""
+    return _ensure_studio_environment_tool(tool_type=_TOOL_TYPE, **kwargs)
+
+
+def ensure_studio_dev_env_tool(**kwargs: Any) -> str:
+    """Reuse or create one Ready DevEnv Tool and return its Tool ID."""
+    return _ensure_studio_environment_tool(tool_type=_DEV_TOOL_TYPE, **kwargs)
 
 
 def ensure_studio_agent_tool(
@@ -293,7 +294,9 @@ def ensure_studio_agent_model_credential(
     secret_key: str,
     session_token: str | None = None,
     region: str = "cn-beijing",
-    model_base_url: str = "https://ark.cn-beijing.volces.com/api/v3",
+    model_base_url: str = STUDIO_SANDBOX_MODEL_BASE_URLS["volcengine"],
+    provider: str = "volcengine",
+    client: Any | None = None,
 ) -> None:
     """Bind the complete model environment required by Hermes/OpenClaw."""
     if kind not in _AGENT_TOOL_TYPES:
@@ -302,25 +305,19 @@ def ensure_studio_agent_model_credential(
     if not normalized_model_name:
         raise ValueError("model_name must not be empty")
 
-    from agentkit.auth._openapi import OpenApiClient
-
     from veadk.auth.veauth.ark_veauth import get_ark_token
 
-    api = OpenApiClient(
+    from agentkit.sdk.tools import types as tools_types
+    from agentkit.sdk.tools.client import AgentkitToolsClient
+
+    tools_client = client or AgentkitToolsClient(
         access_key=access_key,
         secret_key=secret_key,
-        session_token=session_token,
+        session_token=session_token or "",
         region=region,
     )
-    response = api.call("agentkit", "GetTool", "2025-10-30", {"ToolId": tool_id})
-    tool = response.get("Tool") if isinstance(response.get("Tool"), dict) else response
-    if not isinstance(tool, dict):
-        raise TypeError("AgentKit Tool response is invalid.")
-    envs = {
-        item.get("Key"): item.get("Value")
-        for item in tool.get("Envs", [])
-        if isinstance(item, dict) and item.get("Key")
-    }
+    tool = tools_client.get_tool(tools_types.GetToolRequest(ToolId=tool_id))
+    envs = {item.key: item.value for item in tool.envs or [] if item.key}
     model_api_key = get_ark_token(
         region=region,
         access_key=access_key,
@@ -336,15 +333,17 @@ def ensure_studio_agent_model_credential(
         "MODEL_AGENT_BASE_URL": normalized_base_url,
         "ARK_BASE_URL": normalized_base_url,
     }
-    if all(envs.get(key) == value for key, value in updates.items()):
+    current_model_name = str(getattr(tool, "model_agent_name", "") or "").strip()
+    if current_model_name == normalized_model_name and all(
+        envs.get(key) == value for key, value in updates.items()
+    ):
         return
     envs.update(updates)
-    api.call(
-        "agentkit",
-        "UpdateTool",
-        "2025-10-30",
-        {
-            "ToolId": tool_id,
-            "Envs": [{"Key": key, "Value": value} for key, value in envs.items()],
-        },
+    updated_envs = [{"Key": key, "Value": value} for key, value in envs.items()]
+    tools_client.update_tool(
+        tools_types.UpdateToolRequest(
+            ToolId=tool_id,
+            ModelAgentName=normalized_model_name,
+            Envs=updated_envs,
+        )
     )

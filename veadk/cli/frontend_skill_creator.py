@@ -64,6 +64,8 @@ _MODELS = (
 )
 _MODEL_PROVIDER = "model_square"
 _MODEL_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+_BYTEPLUS_MODEL_PROVIDER = "byteplus_model_square"
+_BYTEPLUS_MODEL_BASE_URL = "https://ark.ap-southeast.bytepluses.com/api/v3"
 _REGION = "cn-beijing"
 _SESSION_TTL_SECONDS = 1800
 _SESSION_DISCOVERY_ATTEMPTS = 6
@@ -689,10 +691,29 @@ def _safe_json_response(
     return payload
 
 
+def _sandbox_provider() -> str:
+    return (
+        (
+            os.getenv("AGENTKIT_CLOUD_PROVIDER")
+            or os.getenv("CLOUD_PROVIDER")
+            or "volcengine"
+        )
+        .strip()
+        .lower()
+    )
+
+
+def _sandbox_model_config(provider: str | None = None) -> tuple[str, str]:
+    if (provider or _sandbox_provider()) == "byteplus":
+        return _BYTEPLUS_MODEL_PROVIDER, _BYTEPLUS_MODEL_BASE_URL
+    return _MODEL_PROVIDER, _MODEL_BASE_URL
+
+
 def _validate_model_base_url(value: str) -> str:
     """Require the Ark model endpoint configured by Studio deployment."""
     normalized = value.rstrip("/")
-    if normalized != _MODEL_BASE_URL:
+    _, expected_base_url = _sandbox_model_config()
+    if normalized != expected_base_url:
         raise SkillCreatorError("Sandbox 模型服务地址无效")
     return normalized
 
@@ -704,37 +725,33 @@ def ensure_skill_creator_model_credential(
     secret_key: str,
     session_token: str | None = None,
     region: str = _REGION,
+    provider: str = "volcengine",
+    model_name: str | None = None,
+    client: Any | None = None,
 ) -> None:
     """Resolve an Ark API key and bind it directly to the CodeEnv Tool."""
-    from agentkit.auth._openapi import OpenApiClient
     from veadk.auth.veauth.ark_veauth import get_ark_token
 
-    api = OpenApiClient(
+    tools_client = client or AgentkitToolsClient(
         access_key=access_key,
         secret_key=secret_key,
-        session_token=session_token,
+        session_token=session_token or "",
         region=region,
     )
-    response = api.call("agentkit", "GetTool", "2025-10-30", {"ToolId": tool_id})
-    tool = response.get("Tool") if isinstance(response.get("Tool"), dict) else response
-    if not isinstance(tool, dict):
-        raise SkillCreatorError("AgentKit Tool 响应格式错误")
-    envs = {
-        item.get("Key"): item.get("Value")
-        for item in tool.get("Envs", [])
-        if item.get("Key")
-    }
+    tool = tools_client.get_tool(tools_types.GetToolRequest(ToolId=tool_id))
+    envs = {item.key: item.value for item in tool.envs or [] if item.key}
     model_api_key = get_ark_token(
         region=region,
         access_key=access_key,
         secret_key=secret_key,
         session_token=session_token,
     )
+    model_provider, model_base_url = _sandbox_model_config(provider)
     session_envs = build_exec_session_envs(
-        model_name=_MODELS[0][1],
+        model_name=model_name or _MODELS[0][1],
         model_api_key=model_api_key,
-        model_provider=_MODEL_PROVIDER,
-        model_base_url=_MODEL_BASE_URL,
+        model_provider=model_provider,
+        model_base_url=model_base_url,
         model_provider_was_provided=True,
         model_base_url_was_provided=True,
         include_codex_config=True,
@@ -746,14 +763,9 @@ def ensure_skill_creator_model_credential(
     if all(envs.get(key) == value for key, value in updates.items()):
         return
     envs.update(updates)
-    api.call(
-        "agentkit",
-        "UpdateTool",
-        "2025-10-30",
-        {
-            "ToolId": tool_id,
-            "Envs": [{"Key": key, "Value": value} for key, value in envs.items()],
-        },
+    updated_envs = [{"Key": key, "Value": value} for key, value in envs.items()]
+    tools_client.update_tool(
+        tools_types.UpdateToolRequest(ToolId=tool_id, Envs=updated_envs)
     )
 
 
@@ -763,7 +775,8 @@ class SkillCreatorService:
     def __init__(self, tool_id: str | None = None, region: str | None = None) -> None:
         self._configured_tool_id = (tool_id or "").strip()
         self._region = sandbox_region_candidates(
-            region or os.getenv("AGENTKIT_SANDBOX_REGION")
+            region or os.getenv("AGENTKIT_SANDBOX_REGION"),
+            provider=_sandbox_provider(),
         )[0]
 
     def capabilities(self) -> dict[str, Any]:
@@ -1083,9 +1096,10 @@ class SkillCreatorService:
         del label
         client = AgentkitToolsClient(region=self._region)
         session_id = self._session_id(job_id, candidate_id)
+        model_provider, _ = _sandbox_model_config()
         session_envs = build_exec_session_envs(
             model_name=model,
-            model_provider=_MODEL_PROVIDER,
+            model_provider=model_provider,
             model_base_url=model_base_url,
             model_provider_was_provided=True,
             model_base_url_was_provided=True,
@@ -1213,7 +1227,7 @@ class SkillCreatorService:
             ],
         )
         response = None
-        regions = sandbox_region_candidates(self._region)
+        regions = sandbox_region_candidates(self._region, provider=_sandbox_provider())
         for index, region in enumerate(regions):
             try:
                 response = AgentkitToolsClient(region=region).list_sessions(request)
@@ -1267,7 +1281,7 @@ class SkillCreatorService:
 
     def _get_tool(self, tool_id: str) -> Any:
         request = tools_types.GetToolRequest(ToolId=tool_id)
-        regions = sandbox_region_candidates(self._region)
+        regions = sandbox_region_candidates(self._region, provider=_sandbox_provider())
         for index, region in enumerate(regions):
             try:
                 tool = AgentkitToolsClient(region=region).get_tool(request)
