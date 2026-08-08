@@ -17,12 +17,35 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from typing import Any
+import json
+from collections.abc import Callable, Mapping
+from contextlib import contextmanager
+from typing import Any, cast
 
 from fastapi import FastAPI, HTTPException, Request
 
 CloudCredentials = tuple[str, str, str | None]
+
+
+def _safe_exception_detail(
+    error: BaseException,
+    credentials: CloudCredentials | None = None,
+) -> str:
+    """Keep the exception chain intact while removing credential values."""
+    parts: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).strip() or type(current).__name__
+        for secret in credentials or ():
+            if secret:
+                message = message.replace(secret, "***")
+        if message not in parts:
+            parts.append(message)
+        current = current.__cause__ or current.__context__
+    return "\nCaused by:\n".join(parts)
+
 
 RESOURCE_KINDS = {
     "tos-bucket",
@@ -33,6 +56,90 @@ RESOURCE_KINDS = {
     "cp-pipeline",
 }
 RESOURCE_MODES = {"auto", "create", "existing"}
+RESOURCE_TAG_PREFIX = "veadk:build-resource:"
+_RESOURCE_TAG_FIELDS = {
+    "tos": {
+        "bucket": "tos-bucket",
+    },
+    "cr": {
+        "instance": "cr-instance",
+        "namespace": "cr-namespace",
+        "repository": "cr-repository",
+    },
+    "codePipeline": {
+        "workspaceId": "cp-workspace-id",
+        "workspaceName": "cp-workspace-name",
+        "pipelineId": "cp-pipeline-id",
+        "pipelineName": "cp-pipeline-name",
+    },
+}
+_RESOURCE_MODE_TAGS = {
+    "tos": "tos-mode",
+    "cr": "cr-mode",
+    "codePipeline": "cp-mode",
+}
+_AGENTKIT_PIPELINE_PARAMETERS = {
+    "CR_DOMAIN",
+    "CR_INSTANCE",
+    "CR_NAMESPACE",
+    "CR_OCI",
+    "CR_REGION",
+    "CR_TAG",
+    "DOCKERFILE_PATH",
+    "TOS_BUCKET_NAME",
+    "TOS_PROJECT_FILE_NAME",
+    "TOS_PROJECT_FILE_PATH",
+    "TOS_REGION",
+}
+
+
+def deployment_resource_tags(resources: object) -> dict[str, str]:
+    """Encode Studio build-resource selections as individual Runtime tags."""
+    if resources is None:
+        resources = {}
+    if not isinstance(resources, dict):
+        raise TypeError("resources must be an object")
+
+    tags: dict[str, str] = {}
+    for group, mode_tag in _RESOURCE_MODE_TAGS.items():
+        values = resources.get(group) or {}
+        if not isinstance(values, dict):
+            raise TypeError("Each deployment resource configuration must be an object")
+        mode = str(values.get("mode") or "auto")
+        if mode not in RESOURCE_MODES:
+            raise ValueError(f"Unsupported resource mode: {mode}")
+        tags[f"{RESOURCE_TAG_PREFIX}{mode_tag}"] = mode
+        for field, tag_suffix in _RESOURCE_TAG_FIELDS[group].items():
+            value = str(values.get(field) or "").strip()
+            if value:
+                tags[f"{RESOURCE_TAG_PREFIX}{tag_suffix}"] = value
+    return tags
+
+
+def deployment_resources_from_tags(
+    tags: Mapping[str, str],
+) -> dict[str, dict[str, str]] | None:
+    """Decode Runtime tags, returning None for legacy Runtimes without them."""
+    resource_tags = {
+        key: str(value or "").strip()
+        for key, value in tags.items()
+        if key.startswith(RESOURCE_TAG_PREFIX)
+    }
+    if not resource_tags:
+        return None
+
+    resources: dict[str, dict[str, str]] = {}
+    for group, mode_tag in _RESOURCE_MODE_TAGS.items():
+        mode = resource_tags.get(f"{RESOURCE_TAG_PREFIX}{mode_tag}", "auto")
+        if mode not in RESOURCE_MODES:
+            return None
+        values = {"mode": mode}
+        for field, tag_suffix in _RESOURCE_TAG_FIELDS[group].items():
+            value = resource_tags.get(f"{RESOURCE_TAG_PREFIX}{tag_suffix}", "")
+            if value:
+                values[field] = value
+        resources[group] = values
+    return resources
 
 
 def _required_text(data: dict[str, Any], key: str, label: str) -> str:
@@ -94,6 +201,221 @@ def _find_in_pages(
         page_number += 1
 
 
+def _search_in_pages(
+    fetch_page: Callable[[int, int], dict[str, Any]],
+    search: str,
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    normalized_search = search.casefold()
+    page_number = 1
+    page_size = 100
+    while True:
+        result = fetch_page(page_number, page_size)
+        items = _page_items(result)
+        matches.extend(
+            item for item in items if normalized_search in _item_name(item).casefold()
+        )
+        total = int(result.get("TotalCount", len(items)) or 0)
+        if not items or page_number * page_size >= total:
+            return matches
+        page_number += 1
+
+
+def _tos_buckets(client: Any) -> list[dict[str, Any]]:
+    list_buckets = getattr(client, "list_buckets", None)
+    if callable(list_buckets):
+        return cast(list[dict[str, Any]], list_buckets())
+
+    result = client.client.list_buckets()
+    return [
+        {
+            "Name": str(getattr(bucket, "name", "") or ""),
+            "Location": str(getattr(bucket, "location", "") or ""),
+        }
+        for bucket in (getattr(result, "buckets", None) or [])
+    ]
+
+
+def _cr_page(
+    client: Any,
+    action: str,
+    page_number: int,
+    page_size: int,
+    *,
+    registry: str = "",
+    namespace: str = "",
+) -> dict[str, Any]:
+    method_name = {
+        "ListRegistries": "list_registries",
+        "ListNamespaces": "list_namespaces",
+        "ListRepositories": "list_repositories",
+    }[action]
+    method = getattr(client, method_name, None)
+    if callable(method):
+        if action == "ListRegistries":
+            return cast(dict[str, Any], method(page_number, page_size))
+        if action == "ListNamespaces":
+            return cast(dict[str, Any], method(registry, page_number, page_size))
+        return cast(
+            dict[str, Any],
+            method(registry, namespace, page_number, page_size),
+        )
+
+    request_body: dict[str, Any] = {
+        "PageNumber": page_number,
+        "PageSize": page_size,
+    }
+    if registry:
+        request_body["Registry"] = registry
+    if namespace:
+        request_body["Namespace"] = namespace
+    response = client._ve_request(request_body=request_body, action=action)
+    metadata = response.get("ResponseMetadata") or {}
+    if metadata.get("Error"):
+        raise ValueError(
+            f"{action} failed.\nOriginal response:\n"
+            f"{json.dumps(response, ensure_ascii=False, default=str)}"
+        )
+    result = response.get("Result") or {}
+    if not isinstance(result, dict):
+        raise ValueError(f"{action} returned an invalid result")
+    return result
+
+
+def _is_agentkit_build_pipeline(client: Any, pipeline: dict[str, Any]) -> bool:
+    check = getattr(client, "is_agentkit_build_pipeline", None)
+    if callable(check):
+        return bool(check(pipeline))
+
+    parameter_keys = {
+        str(parameter.get("Key") or "")
+        for parameter in (pipeline.get("Parameters") or [])
+        if isinstance(parameter, dict)
+    }
+    spec = str(pipeline.get("Spec") or "")
+    return (
+        _AGENTKIT_PIPELINE_PARAMETERS <= parameter_keys
+        and "tos-download" in spec
+        and "buildkit-cr" in spec
+    )
+
+
+@contextmanager
+def agentkit_code_pipeline_resources(config: Mapping[str, str]):
+    """Make AgentKit 0.8.x honor Studio's selected CodePipeline resources."""
+    workspace_name = str(config.get("cp_workspace_name") or "").strip()
+    selected_pipeline_name = str(config.get("cp_pipeline_name") or "").strip()
+    pipeline_id = str(config.get("cp_pipeline_id") or "").strip()
+    if not workspace_name or not selected_pipeline_name:
+        yield
+        return
+
+    from agentkit.toolkit.volcengine.code_pipeline import VeCodePipeline
+
+    required_methods = (
+        "workspace_exists_by_name",
+        "get_workspaces_by_name",
+        "create_workspace",
+        "list_pipelines",
+        "_create_pipeline",
+    )
+    if not all(hasattr(VeCodePipeline, name) for name in required_methods):
+        yield
+        return
+
+    original_workspace_exists = VeCodePipeline.workspace_exists_by_name
+    original_get_workspaces = VeCodePipeline.get_workspaces_by_name
+    original_create_workspace = VeCodePipeline.create_workspace
+    original_list_pipelines = VeCodePipeline.list_pipelines
+    original_create_pipeline = VeCodePipeline._create_pipeline
+
+    def workspace_exists(self, name: str) -> bool:
+        del name
+        return original_workspace_exists(self, workspace_name)
+
+    def get_workspaces(
+        self,
+        name: str,
+        page_number: int = 1,
+        page_size: int = 10,
+    ) -> dict[str, Any]:
+        del name
+        return original_get_workspaces(
+            self,
+            workspace_name,
+            page_number=page_number,
+            page_size=page_size,
+        )
+
+    def create_workspace(
+        self,
+        name: str,
+        visibility: str,
+        description: str = "",
+        visible_users: list[dict[str, int]] | None = None,
+    ) -> str:
+        del name
+        return original_create_workspace(
+            self,
+            workspace_name,
+            visibility,
+            description=description,
+            visible_users=visible_users,
+        )
+
+    def list_pipelines(
+        self,
+        workspace_id: str,
+        page_number: int = 1,
+        page_size: int = 10,
+        name_filter: str = "",
+        pipeline_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        if pipeline_id:
+            pipeline_ids = [pipeline_id]
+            name_filter = ""
+        elif name_filter:
+            name_filter = selected_pipeline_name
+        return original_list_pipelines(
+            self,
+            workspace_id,
+            page_number=page_number,
+            page_size=page_size,
+            name_filter=name_filter,
+            pipeline_ids=pipeline_ids,
+        )
+
+    def create_pipeline(
+        self,
+        workspace_id: str,
+        pipeline_name: str,
+        spec: str,
+        parameters: list[dict[str, str]] | None = None,
+    ) -> str:
+        del pipeline_name
+        return original_create_pipeline(
+            self,
+            workspace_id,
+            selected_pipeline_name,
+            spec,
+            parameters=parameters,
+        )
+
+    VeCodePipeline.workspace_exists_by_name = workspace_exists
+    VeCodePipeline.get_workspaces_by_name = get_workspaces
+    VeCodePipeline.create_workspace = create_workspace
+    VeCodePipeline.list_pipelines = list_pipelines
+    VeCodePipeline._create_pipeline = create_pipeline
+    try:
+        yield
+    finally:
+        VeCodePipeline.workspace_exists_by_name = original_workspace_exists
+        VeCodePipeline.get_workspaces_by_name = original_get_workspaces
+        VeCodePipeline.create_workspace = original_create_workspace
+        VeCodePipeline.list_pipelines = original_list_pipelines
+        VeCodePipeline._create_pipeline = original_create_pipeline
+
+
 class DeploymentResourceService:
     """Adapter around AgentKit's TOS, CR, and CodePipeline clients."""
 
@@ -112,26 +434,14 @@ class DeploymentResourceService:
 
     def _tos_client(self):
         if self._tos is None:
-            from agentkit.platform import Credentials
             from agentkit.toolkit.volcengine.services.tos_service import (
                 TOSService,
                 TOSServiceConfig,
             )
 
-            credentials = (
-                Credentials(
-                    access_key=self.credentials[0],
-                    secret_key=self.credentials[1],
-                    session_token=self.credentials[2],
-                )
-                if self.credentials
-                else None
-            )
-
             self._tos = TOSService(
                 TOSServiceConfig(bucket="", region=self.region),
                 provider=self.provider,
-                credentials=credentials,
             )
         return self._tos
 
@@ -180,6 +490,7 @@ class DeploymentResourceService:
         registry: str = "",
         namespace: str = "",
         workspace_id: str = "",
+        search: str = "",
         page_number: int = 1,
         page_size: int = 100,
     ) -> dict[str, Any]:
@@ -189,15 +500,23 @@ class DeploymentResourceService:
             raise ValueError("pageNumber must be at least 1")
         if page_size < 1 or page_size > 100:
             raise ValueError("pageSize must be between 1 and 100")
+        search = search.strip()
 
         if kind == "tos-bucket":
             client = self._tos_client()
             service_region = str(getattr(client, "actual_region", self.region))
             all_items = [
                 _resource_item(item, region=str(item.get("Location") or service_region))
-                for item in client.list_buckets()
+                for item in _tos_buckets(client)
                 if not item.get("Location") or item.get("Location") == service_region
             ]
+            if search:
+                normalized_search = search.casefold()
+                all_items = [
+                    item
+                    for item in all_items
+                    if normalized_search in item["name"].casefold()
+                ]
             all_items.sort(key=lambda item: (item["name"].casefold(), item["id"]))
             total_count = len(all_items)
             start = (page_number - 1) * page_size
@@ -206,27 +525,64 @@ class DeploymentResourceService:
             client = self._cr_client()
             service_region = str(getattr(client, "region", self.region))
             if kind == "cr-registry":
-                page = client.list_registries(page_number, page_size)
+
+                def fetch_page(number: int, size: int) -> dict[str, Any]:
+                    return _cr_page(client, "ListRegistries", number, size)
+
             elif kind == "cr-namespace":
                 if not registry:
                     raise ValueError("registry is required for CR namespaces")
-                page = client.list_namespaces(registry, page_number, page_size)
+
+                def fetch_page(number: int, size: int) -> dict[str, Any]:
+                    return _cr_page(
+                        client,
+                        "ListNamespaces",
+                        number,
+                        size,
+                        registry=registry,
+                    )
+
             else:
                 if not registry or not namespace:
                     raise ValueError(
                         "registry and namespace are required for CR repositories"
                     )
-                page = client.list_repositories(
-                    registry, namespace, page_number, page_size
-                )
-            raw_items = _page_items(page)
-            total_count = int(page.get("TotalCount", len(raw_items)) or 0)
-            items = [_resource_item(item, region=service_region) for item in raw_items]
+
+                def fetch_page(number: int, size: int) -> dict[str, Any]:
+                    return _cr_page(
+                        client,
+                        "ListRepositories",
+                        number,
+                        size,
+                        registry=registry,
+                        namespace=namespace,
+                    )
+
+            if search:
+                raw_items = _search_in_pages(fetch_page, search)
+                items = [
+                    _resource_item(item, region=service_region) for item in raw_items
+                ]
+                items.sort(key=lambda item: (item["name"].casefold(), item["id"]))
+                total_count = len(items)
+                start = (page_number - 1) * page_size
+                items = items[start : start + page_size]
+            else:
+                page = fetch_page(page_number, page_size)
+                raw_items = _page_items(page)
+                total_count = int(page.get("TotalCount", len(raw_items)) or 0)
+                items = [
+                    _resource_item(item, region=service_region) for item in raw_items
+                ]
         else:
             client = self._cp_client()
             service_region = str(getattr(client, "region", self.region))
             if kind == "cp-workspace":
-                page = client.list_workspaces(page_number, page_size)
+                page = (
+                    client.list_workspaces(page_number, page_size, name_filter=search)
+                    if search
+                    else client.list_workspaces(page_number, page_size)
+                )
                 raw_items = _page_items(page)
                 total_count = int(page.get("TotalCount", len(raw_items)) or 0)
                 items = [
@@ -237,12 +593,21 @@ class DeploymentResourceService:
                     raise ValueError(
                         "workspaceId is required for CodePipeline pipelines"
                     )
-                page = client.list_pipelines(workspace_id, page_number, page_size)
+                page = (
+                    client.list_pipelines(
+                        workspace_id,
+                        page_number,
+                        page_size,
+                        name_filter=search,
+                    )
+                    if search
+                    else client.list_pipelines(workspace_id, page_number, page_size)
+                )
                 raw_items = _page_items(page)
                 total_count = int(page.get("TotalCount", len(raw_items)) or 0)
                 items = []
                 for item in raw_items:
-                    if client.is_agentkit_build_pipeline(item):
+                    if _is_agentkit_build_pipeline(client, item):
                         items.append(
                             _resource_item(item, region=service_region, compatible=True)
                         )
@@ -275,7 +640,7 @@ class DeploymentResourceService:
             raw_item = next(
                 (
                     item
-                    for item in client.list_buckets()
+                    for item in _tos_buckets(client)
                     if _item_id(item) == resource_id or _item_name(item) == resource_id
                 ),
                 None,
@@ -284,16 +649,30 @@ class DeploymentResourceService:
             client = self._cr_client()
             service_region = str(getattr(client, "region", self.region))
             if kind == "cr-registry":
-                raw_item = _find_in_pages(client.list_registries, resource_id)
+                raw_item = _find_in_pages(
+                    lambda page, size: _cr_page(client, "ListRegistries", page, size),
+                    resource_id,
+                )
             elif kind == "cr-namespace":
                 raw_item = _find_in_pages(
-                    lambda page, size: client.list_namespaces(registry, page, size),
+                    lambda page, size: _cr_page(
+                        client,
+                        "ListNamespaces",
+                        page,
+                        size,
+                        registry=registry,
+                    ),
                     resource_id,
                 )
             else:
                 raw_item = _find_in_pages(
-                    lambda page, size: client.list_repositories(
-                        registry, namespace, page, size
+                    lambda page, size: _cr_page(
+                        client,
+                        "ListRepositories",
+                        page,
+                        size,
+                        registry=registry,
+                        namespace=namespace,
                     ),
                     resource_id,
                 )
@@ -325,7 +704,7 @@ class DeploymentResourceService:
                     None,
                 )
                 compatible = bool(
-                    raw_item and client.is_agentkit_build_pipeline(raw_item)
+                    raw_item and _is_agentkit_build_pipeline(client, raw_item)
                 )
                 if raw_item and not compatible:
                     raise ValueError(
@@ -472,10 +851,17 @@ def mount_deployment_resource_routes(
                 registry=str(request.query_params.get("registry") or "").strip(),
                 namespace=str(request.query_params.get("namespace") or "").strip(),
                 workspace_id=str(request.query_params.get("workspaceId") or "").strip(),
+                search=str(request.query_params.get("search") or "").strip(),
                 page_number=page_number,
                 page_size=page_size,
             )
         except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+            raise HTTPException(
+                status_code=400,
+                detail=_safe_exception_detail(error, credentials),
+            ) from error
         except Exception as error:
-            raise HTTPException(status_code=502, detail=str(error)) from error
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(error, credentials),
+            ) from error

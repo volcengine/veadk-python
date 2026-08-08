@@ -153,29 +153,6 @@
   line-height: 1.45;
 }
 
-.pp-resource-more {
-  align-self: flex-start;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: hsl(var(--foreground));
-  cursor: pointer;
-  font: inherit;
-  font-size: 11.5px;
-  font-weight: 600;
-  line-height: 1.45;
-}
-
-.pp-resource-more:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.pp-resource-more:focus-visible {
-  outline: 2px solid hsl(var(--ring) / 0.45);
-  outline-offset: 2px;
-}
-
 .pp-resource-error {
   min-height: 17px;
   display: flex;
@@ -185,6 +162,12 @@
   color: hsl(var(--destructive));
   font-size: 11.5px;
   line-height: 1.45;
+}
+
+.pp-resource-error span {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .pp-resource-error button {

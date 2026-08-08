@@ -50,27 +50,52 @@ export interface DeploymentSelectOption {
 interface DeploymentSelectProps {
   ariaLabel: string;
   value: string;
+  valueLabel?: string;
   placeholder: string;
   options: DeploymentSelectOption[];
   disabled?: boolean;
+  searchValue?: string;
+  searchPlaceholder?: string;
+  loading?: boolean;
+  hasMore?: boolean;
+  emptyMessage?: string;
+  onSearchChange?: (value: string) => void;
+  onLoadMore?: () => void;
   onChange: (value: string) => void;
 }
 
 export function DeploymentSelect({
   ariaLabel,
   value,
+  valueLabel,
   placeholder,
   options,
   disabled = false,
+  searchValue,
+  searchPlaceholder = "搜索资源名称",
+  loading = false,
+  hasMore = false,
+  emptyMessage = "暂无可用选项",
+  onSearchChange,
+  onLoadMore,
   onChange,
 }: DeploymentSelectProps) {
   const listboxId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const optionsRef = useRef<HTMLDivElement>(null);
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const selectedOption = options.find((option) => option.value === value);
+  const selectedLabel = selectedOption?.label ?? (value ? valueLabel : undefined);
+  const searchable = searchValue !== undefined && Boolean(onSearchChange);
+
+  const closeMenu = () => {
+    setOpen(false);
+    if (searchable && searchValue) onSearchChange?.("");
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -80,17 +105,44 @@ export function DeploymentSelect({
         rootRef.current &&
         !rootRef.current.contains(event.target)
       ) {
-        setOpen(false);
+        closeMenu();
       }
     };
     window.addEventListener("pointerdown", handlePointerDown);
     return () => window.removeEventListener("pointerdown", handlePointerDown);
-  }, [open]);
+  }, [open, onSearchChange, searchValue, searchable]);
 
   useEffect(() => {
     if (!open) return;
+    if (searchable) {
+      searchInputRef.current?.focus();
+      return;
+    }
     optionRefs.current[activeIndex]?.focus();
-  }, [activeIndex, open]);
+  }, [open, searchable]);
+
+  useEffect(() => {
+    if (
+      !open ||
+      searchable && document.activeElement === searchInputRef.current
+    ) {
+      return;
+    }
+    optionRefs.current[activeIndex]?.focus();
+  }, [activeIndex, open, searchable]);
+
+  useEffect(() => {
+    setActiveIndex((current) => Math.min(current, Math.max(0, options.length - 1)));
+  }, [options.length]);
+
+  useEffect(() => {
+    if (!open || !hasMore || loading || !onLoadMore) return;
+    const frame = window.requestAnimationFrame(() => {
+      const node = optionsRef.current;
+      if (node && node.scrollHeight <= node.clientHeight + 1) onLoadMore();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [hasMore, loading, onLoadMore, open, options.length]);
 
   const openMenu = (direction: 1 | -1 = 1) => {
     const selectedIndex = options.findIndex((option) => option.value === value);
@@ -111,7 +163,7 @@ export function DeploymentSelect({
 
   const selectOption = (option: DeploymentSelectOption) => {
     onChange(option.value);
-    setOpen(false);
+    closeMenu();
     triggerRef.current?.focus();
   };
 
@@ -120,14 +172,23 @@ export function DeploymentSelect({
       className="pp-deployment-select"
       ref={rootRef}
       onKeyDown={(event) => {
+        const inSearch = event.target === searchInputRef.current;
         if (event.key === "Escape" && open) {
           event.preventDefault();
-          setOpen(false);
+          closeMenu();
           triggerRef.current?.focus();
           return;
         }
         if (event.key === "Tab") {
-          setOpen(false);
+          closeMenu();
+          return;
+        }
+        if (inSearch) {
+          if (event.key === "ArrowDown" && options.length > 0) {
+            event.preventDefault();
+            setActiveIndex(0);
+            optionRefs.current[0]?.focus();
+          }
           return;
         }
         if (event.key === "ArrowDown") {
@@ -155,14 +216,14 @@ export function DeploymentSelect({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
-        disabled={disabled || options.length === 0}
+        disabled={disabled}
         onClick={() => {
-          if (open) setOpen(false);
+          if (open) closeMenu();
           else openMenu();
         }}
       >
-        <span className={!selectedOption ? "is-placeholder" : undefined}>
-          {selectedOption?.label ?? placeholder}
+        <span className={!selectedLabel ? "is-placeholder" : undefined}>
+          {selectedLabel ?? placeholder}
         </span>
         <SelectChevronIcon
           className={`pp-deployment-select-chevron${open ? " is-open" : ""}`}
@@ -170,43 +231,76 @@ export function DeploymentSelect({
       </button>
       {open && (
         <div
-          id={listboxId}
           className="pp-deployment-select-menu"
-          role="listbox"
-          aria-label={ariaLabel}
         >
-          {options.map((option, index) => {
-            const selected = option.value === value;
-            return (
-              <button
-                key={option.value}
-                ref={(node) => {
-                  optionRefs.current[index] = node;
-                }}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                tabIndex={index === activeIndex ? 0 : -1}
-                className={`pp-deployment-select-option${selected ? " is-selected" : ""}`}
-                title={option.description}
-                onFocus={() => setActiveIndex(index)}
-                onClick={() => selectOption(option)}
-              >
-                <span className="pp-deployment-select-copy">
-                  <span className="pp-deployment-select-name">
-                    {option.label}
-                    {option.badge && (
-                      <span className="pp-deployment-select-badge">
-                        {option.badge}
-                      </span>
-                    )}
+          {searchable && (
+            <div className="pp-deployment-select-search">
+              <input
+                ref={searchInputRef}
+                type="search"
+                value={searchValue}
+                aria-label={`搜索${ariaLabel}`}
+                placeholder={searchPlaceholder}
+                autoComplete="off"
+                onChange={(event) => onSearchChange?.(event.currentTarget.value)}
+              />
+            </div>
+          )}
+          <div
+            id={listboxId}
+            ref={optionsRef}
+            className="pp-deployment-select-options"
+            role="listbox"
+            aria-label={ariaLabel}
+            aria-busy={loading || undefined}
+            onScroll={(event) => {
+              if (!hasMore || loading || !onLoadMore) return;
+              const node = event.currentTarget;
+              const remaining = node.scrollHeight - node.scrollTop - node.clientHeight;
+              if (remaining <= 24) onLoadMore();
+            }}
+          >
+            {options.map((option, index) => {
+              const selected = option.value === value;
+              return (
+                <button
+                  key={option.value}
+                  ref={(node) => {
+                    optionRefs.current[index] = node;
+                  }}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  tabIndex={index === activeIndex ? 0 : -1}
+                  className={`pp-deployment-select-option${selected ? " is-selected" : ""}`}
+                  title={option.description}
+                  onFocus={() => setActiveIndex(index)}
+                  onClick={() => selectOption(option)}
+                >
+                  <span className="pp-deployment-select-copy">
+                    <span className="pp-deployment-select-name">
+                      {option.label}
+                      {option.badge && (
+                        <span className="pp-deployment-select-badge">
+                          {option.badge}
+                        </span>
+                      )}
+                    </span>
+                    {option.description && <small>{option.description}</small>}
                   </span>
-                  {option.description && <small>{option.description}</small>}
-                </span>
-                {selected && <SelectCheckIcon />}
-              </button>
-            );
-          })}
+                  {selected && <SelectCheckIcon />}
+                </button>
+              );
+            })}
+          </div>
+          {loading && (
+            <div className="pp-deployment-select-state" aria-live="polite">
+              正在加载更多资源…
+            </div>
+          )}
+          {!loading && options.length === 0 && (
+            <div className="pp-deployment-select-state">{emptyMessage}</div>
+          )}
         </div>
       )}
     </div>

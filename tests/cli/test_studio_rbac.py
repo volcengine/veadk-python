@@ -460,6 +460,7 @@ def test_deployment_resource_mode_matrix_reaches_agentkit_config(
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
     from frontend.server.deployment_resources import DeploymentResourceService
+    from veadk.config import veadk_environments
 
     captured_configs: list[dict[str, Any]] = []
 
@@ -506,6 +507,11 @@ def test_deployment_resource_mode_matrix_reaches_agentkit_config(
         lambda _self, _request: SimpleNamespace(current_version_number=1),
     )
     monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    monkeypatch.setitem(
+        veadk_environments,
+        "MODEL_AGENT_API_KEY",
+        "test-model-key",
+    )
     if provider == "byteplus":
         monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-ak")
         monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-sk")
@@ -610,6 +616,159 @@ def test_deployment_resource_mode_matrix_reaches_agentkit_config(
                     assert "cp_pipeline_id" not in cloud
 
     assert len(captured_configs) == 27
+
+
+@pytest.mark.parametrize(
+    ("cp_mode", "workspace_id", "pipeline_id"),
+    [
+        ("create", "workspace-created-id", "pipeline-created-id"),
+        ("existing", "workspace-existing", "pipeline-existing-id"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("provider", "region"),
+    [
+        ("volcengine", "cn-beijing"),
+        ("byteplus", "ap-southeast-1"),
+    ],
+)
+def test_code_pipeline_build_logs_use_configured_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    cp_mode: str,
+    workspace_id: str,
+    pipeline_id: str,
+    provider: str,
+    region: str,
+) -> None:
+    import threading
+
+    import agentkit.toolkit.volcengine.code_pipeline as code_pipeline_mod
+
+    from frontend.server.deployment_resources import DeploymentResourceService
+
+    log_requested = threading.Event()
+    stage_calls: list[tuple[str, str, str]] = []
+    client_configs: list[dict[str, Any]] = []
+
+    def existing_resource(
+        _self: DeploymentResourceService,
+        kind: str,
+        **parents: str,
+    ) -> dict[str, str]:
+        resource_id = parents["resource_id"]
+        return {
+            "id": resource_id,
+            "name": f"pipeline-{cp_mode}" if kind == "cp-pipeline" else resource_id,
+        }
+
+    class FakeCodePipeline:
+        def __init__(self, **kwargs: Any) -> None:
+            client_configs.append(kwargs)
+
+        def get_workspaces_by_name(
+            self, name: str, page_size: int
+        ) -> dict[str, list[dict[str, str]]]:
+            assert name == f"workspace-{cp_mode}"
+            assert page_size == 5
+            return {"Items": [{"Id": workspace_id, "Name": name}]}
+
+        def list_pipeline_run_stages_inner(
+            self,
+            workspace_id: str,
+            pipeline_id: str,
+            pipeline_run_id: str,
+        ) -> dict[str, list[Any]]:
+            stage_calls.append((workspace_id, pipeline_id, pipeline_run_id))
+            log_requested.set()
+            return {"Items": []}
+
+    def launch(*, reporter: Any, **_kwargs: Any) -> SimpleNamespace:
+        if cp_mode == "existing":
+            reporter.info("Reusing pipeline by name: pipeline-existing")
+        else:
+            reporter.info(
+                "Pipeline created successfully: pipeline-create "
+                "(ID: pipeline-created-id)"
+            )
+        reporter.info("Pipeline triggered successfully, run ID: run-existing")
+        assert log_requested.wait(timeout=2)
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": "runtime-existing",
+                    "runtime_name": "matrix-agent",
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        )
+
+    monkeypatch.setattr(
+        DeploymentResourceService,
+        "_require_existing_resource",
+        existing_resource,
+    )
+    monkeypatch.setattr(code_pipeline_mod, "VeCodePipeline", FakeCodePipeline)
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    if provider == "byteplus":
+        monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-ak")
+        monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-sk")
+    else:
+        monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
+        monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+        provider=provider,
+    )
+    code_pipeline = {
+        "mode": cp_mode,
+        "workspaceName": f"workspace-{cp_mode}",
+        "pipelineName": f"pipeline-{cp_mode}",
+    }
+    if cp_mode == "existing":
+        code_pipeline.update(
+            {
+                "workspaceId": workspace_id,
+                "pipelineId": pipeline_id,
+            }
+        )
+
+    with (
+        TestClient(app) as client,
+        client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "matrix-agent",
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": region, "projectName": "default"},
+                "createEvaluationSets": False,
+                "resources": {
+                    "tos": {"mode": "auto"},
+                    "cr": {"mode": "auto"},
+                    "codePipeline": code_pipeline,
+                },
+            },
+        ) as response,
+    ):
+        frames = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.iter_lines()
+            if line.startswith("data: ")
+        ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert client_configs[-1]["provider"] == provider
+    assert client_configs[-1]["region"] == region
+    assert stage_calls == [(workspace_id, pipeline_id, "run-existing")]
 
 
 def _unsigned_jwt(claims: dict[str, str]) -> str:
@@ -1450,12 +1609,22 @@ def test_runtime_update_capability_distinguishes_incompatible_and_network_errors
     "evaluation_error",
     [None, "evaluation workspace unavailable"],
 )
+@pytest.mark.parametrize("has_resource_tags", [False, True])
+@pytest.mark.parametrize(
+    ("provider", "region"),
+    [("volcengine", "cn-beijing"), ("byteplus", "ap-southeast-1")],
+)
 def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     evaluation_error: str | None,
+    has_resource_tags: bool,
+    provider: str,
+    region: str,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    from frontend.server.deployment_resources import deployment_resource_tags
 
     runtime = _runtime_with_public_endpoint(
         _runtime("runtime-developer", "developer", managed=False)
@@ -1471,6 +1640,25 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     )
     runtime.role_name = "runtime-role"
     runtime.current_version_number = 3
+    tagged_resources = {
+        "tos": {"mode": "create", "bucket": "tagged-bucket"},
+        "cr": {
+            "mode": "create",
+            "instance": "tagged-registry",
+            "namespace": "tagged-namespace",
+            "repository": "tagged-repository",
+        },
+        "codePipeline": {
+            "mode": "create",
+            "workspaceName": "tagged-workspace",
+            "pipelineName": "tagged-pipeline",
+        },
+    }
+    if has_resource_tags:
+        runtime.tags.extend(
+            SimpleNamespace(key=key, value=value)
+            for key, value in deployment_resource_tags(tagged_resources).items()
+        )
     runtime.envs = [
         SimpleNamespace(
             key="MCP_UPDATED_AGENT_ORDERS_AUTH_TOKEN",
@@ -1540,11 +1728,20 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         "frontend.server.evaluation_automation.datasets.ensure_feedback_sets",
         initialize_evaluation_sets,
     )
+    if provider == "byteplus":
+        monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-ak")
+        monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-sk")
+        monkeypatch.setenv("MODEL_AGENT_API_KEY", "test-model-key")
+        monkeypatch.setattr(
+            "agentkit.utils.template_utils.render_template",
+            lambda _template: "agentkit-platform-account",
+        )
     app = _create_studio_app(
         monkeypatch,
         tmp_path,
         admins="admin",
         developers="developer",
+        provider=provider,
     )
 
     @app.middleware("http")
@@ -1564,9 +1761,23 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
                 "runtimeId": runtime.runtime_id,
                 "appName": "updated-agent",
                 "files": [{"path": "app.py", "content": "app = object()\n"}],
-                "config": {"region": "cn-beijing", "projectName": "default"},
+                "config": {"region": region, "projectName": "default"},
                 "authentication": {"type": "api_key"},
                 "envs": [{"key": "REPLACED_ENV", "value": "new-value"}],
+                "resources": {
+                    "tos": {"mode": "create", "bucket": "request-bucket"},
+                    "cr": {
+                        "mode": "create",
+                        "instance": "request-registry",
+                        "namespace": "request-namespace",
+                        "repository": "request-repository",
+                    },
+                    "codePipeline": {
+                        "mode": "create",
+                        "workspaceName": "request-workspace",
+                        "pipelineName": "request-pipeline",
+                    },
+                },
             },
         ) as response:
             frames = [
@@ -1582,29 +1793,36 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     evaluation_frames = [
         frame for frame in frames if frame.get("phase") == "evaluation"
     ]
-    assert evaluation_frames[0]["message"] == ("正在创建 Good Case 和 Bad Case 评测集")
-    if evaluation_error:
-        assert evaluation_frames[-1]["level"] == "warning"
-        assert evaluation_frames[-1]["message"] == (
-            "Good Case 和 Bad Case 评测集创建失败"
-        )
-        assert frames[-1]["warnings"] == [
-            "Runtime 已部署，但评测集创建失败：evaluation workspace unavailable"
-        ]
-    else:
-        assert evaluation_frames[-1]["level"] == "success"
-        assert evaluation_frames[-1]["message"] == (
-            "Good Case 和 Bad Case 评测集已创建"
-        )
+    if provider == "byteplus":
+        assert evaluation_frames == []
         assert "warnings" not in frames[-1]
-    assert len(evaluation_set_calls) == 1
-    assert callable(evaluation_set_calls[0]["openapi_post"])
-    assert evaluation_set_calls[0] | {"openapi_post": None} == {
-        "openapi_post": None,
-        "region": "cn-beijing",
-        "project_name": "default",
-        "agent_name": "updated-agent",
-    }
+        assert evaluation_set_calls == []
+    else:
+        assert evaluation_frames[0]["message"] == (
+            "正在创建 Good Case 和 Bad Case 评测集"
+        )
+        if evaluation_error:
+            assert evaluation_frames[-1]["level"] == "warning"
+            assert evaluation_frames[-1]["message"] == (
+                "Good Case 和 Bad Case 评测集创建失败"
+            )
+            assert frames[-1]["warnings"] == [
+                "Runtime 已部署，但评测集创建失败：evaluation workspace unavailable"
+            ]
+        else:
+            assert evaluation_frames[-1]["level"] == "success"
+            assert evaluation_frames[-1]["message"] == (
+                "Good Case 和 Bad Case 评测集已创建"
+            )
+            assert "warnings" not in frames[-1]
+        assert len(evaluation_set_calls) == 1
+        assert callable(evaluation_set_calls[0]["openapi_post"])
+        assert evaluation_set_calls[0] | {"openapi_post": None} == {
+            "openapi_post": None,
+            "region": region,
+            "project_name": "default",
+            "agent_name": "updated-agent",
+        }
     cloud = captured_config["launch_types"]["cloud"]
     assert cloud["runtime_id"] == runtime.runtime_id
     assert cloud["runtime_name"] == runtime.name
@@ -1620,6 +1838,24 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     )
     assert cloud["runtime_envs"]["REPLACED_ENV"] == "new-value"
     assert "runtime_network" not in cloud
+    if has_resource_tags:
+        assert cloud["tos_bucket"] == "tagged-bucket"
+        assert cloud["cr_instance_name"] == "tagged-registry"
+        assert cloud["cr_namespace_name"] == "tagged-namespace"
+        assert cloud["cr_repo_name"] == "tagged-repository"
+        assert cloud["cp_workspace_name"] == "tagged-workspace"
+        assert cloud["cp_pipeline_name"] == "tagged-pipeline"
+    else:
+        if provider == "byteplus":
+            assert cloud["tos_bucket"] == ("agentkit-platform-account-ap-southeast-1")
+            assert cloud["cr_instance_name"] == "agentkit-platform-account"
+        else:
+            assert "tos_bucket" not in cloud
+            assert "cr_instance_name" not in cloud
+        assert "cr_namespace_name" not in cloud
+        assert "cr_repo_name" not in cloud
+        assert "cp_workspace_name" not in cloud
+        assert "cp_pipeline_name" not in cloud
     assert captured_config["common"]["description"] == "Updated description"
 
 
@@ -1705,6 +1941,15 @@ def test_new_deployment_only_updates_non_default_instance_range(
     assert response.status_code == 200
     assert frames[-1]["success"] is True
     assert create_requests[0].apmplus_enable is True
+    assert {
+        item.key: item.value
+        for item in create_requests[0].tags
+        if item.key.startswith("veadk:build-resource:")
+    } == {
+        "veadk:build-resource:tos-mode": "auto",
+        "veadk:build-resource:cr-mode": "auto",
+        "veadk:build-resource:cp-mode": "auto",
+    }
     assert captured_config["launch_types"]["cloud"]["runtime_auth_type"] == ("key_auth")
     runtime_envs = captured_config["launch_types"]["cloud"]["runtime_envs"]
     assert "OTEL_SDK_DISABLED" not in runtime_envs

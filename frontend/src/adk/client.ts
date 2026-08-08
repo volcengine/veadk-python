@@ -450,14 +450,17 @@ function formatErrorDetail(detail: unknown): string {
 }
 
 async function httpErrorMessage(res: Response, fallback: string): Promise<string> {
+  const context = `${fallback}（HTTP ${res.status}）`;
   const text = await res.text().catch(() => "");
-  if (!text) return `${fallback} (${res.status})`;
+  if (!text) return context;
   try {
     const data = JSON.parse(text) as { detail?: unknown; error?: unknown };
     const detail = formatErrorDetail(data.detail ?? data.error);
-    return detail || text || `${fallback} (${res.status})`;
+    return detail
+      ? `${context}\n${detail}\n原始响应：\n${text}`
+      : `${context}\n原始响应：\n${text}`;
   } catch {
-    return text || `${fallback} (${res.status})`;
+    return `${context}\n原始响应：\n${text}`;
   }
 }
 
@@ -1869,6 +1872,7 @@ export interface DeploymentResourceQuery {
   registry?: string;
   namespace?: string;
   workspaceId?: string;
+  search?: string;
   pageNumber?: number;
   pageSize?: number;
 }
@@ -1888,6 +1892,7 @@ export async function listDeploymentResources(
   if (query.registry) params.set("registry", query.registry);
   if (query.namespace) params.set("namespace", query.namespace);
   if (query.workspaceId) params.set("workspaceId", query.workspaceId);
+  if (query.search) params.set("search", query.search);
   if (query.pageNumber) params.set("pageNumber", String(query.pageNumber));
   if (query.pageSize) params.set("pageSize", String(query.pageSize));
   const response = await apiFetch(
@@ -2506,8 +2511,7 @@ export async function getRuntimes(
   const res = await apiFetch(`/web/runtimes?${p.toString()}`);
   if (!res.ok) {
     const detail = await httpErrorMessage(res, "加载 Runtime 失败");
-    const summary = `加载 Runtime 失败（HTTP ${res.status}）`;
-    throw new Error(detail === `加载 Runtime 失败 (${res.status})` ? summary : `${summary}：${detail}`);
+    throw new Error(detail);
   }
   const d = (await res.json()) as Partial<RuntimePage>;
   return { runtimes: d.runtimes ?? [], nextToken: d.nextToken ?? "" };

@@ -34,7 +34,25 @@ test("places resource configuration immediately before environment variables", (
   assert.notEqual(resourceIndex, -1);
   assert.notEqual(environmentIndex, -1);
   assert.ok(resourceIndex < environmentIndex);
-  assert.match(projectPreviewSource, /resources: deployResources,/);
+  assert.match(
+    projectPreviewSource,
+    /\.\.\.\(!isRuntimeUpdate \? \{ resources: deployResources \} : \{\}\)/,
+  );
+});
+
+test("hides and omits resource configuration when updating a Runtime", () => {
+  assert.match(
+    projectPreviewSource,
+    /\{!isRuntimeUpdate && \([\s\S]*?>资源配置<[\s\S]*?<DeploymentResources/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /if \(!isRuntimeUpdate\) \{[\s\S]*?deploymentResourcesError\(deployResources\)/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /\.\.\.\(!isRuntimeUpdate \? \{ resources: deployResources \} : \{\}\)/,
+  );
 });
 
 test("supports automatic, named, and existing TOS CR and CodePipeline resources", () => {
@@ -115,7 +133,30 @@ test("loads large resource collections one page at a time", () => {
   assert.match(clientSource, /params\.set\("pageNumber"/);
   assert.match(resourceSource, /loadMore: \(\) => void/);
   assert.match(resourceSource, /state\.hasMore/);
-  assert.match(resourceSource, /"加载更多"/);
+  assert.match(deploymentSelectSource, /onScroll=/);
+  assert.match(deploymentSelectSource, /remaining <= 24/);
+  assert.match(resourceSource, /state\.loadMore/);
+  assert.doesNotMatch(resourceSource, /className="pp-resource-more"/);
+});
+
+test("searches the complete cloud resource collection with request cancellation", () => {
+  assert.match(clientSource, /search\?: string/);
+  assert.match(clientSource, /params\.set\("search", query\.search\)/);
+  assert.match(resourceSource, /setTimeout\([\s\S]*?250/);
+  assert.match(resourceSource, /search: debouncedSearch/);
+  assert.match(resourceSource, /requestRef\.current\?\.abort\(\)/);
+  assert.match(resourceSource, /searchValue=\{state\.search\}/);
+  assert.match(resourceSource, /onSearchChange=\{state\.setSearch\}/);
+  assert.match(deploymentSelectSource, /type="search"/);
+  assert.match(deploymentSelectSource, /aria-label=\{`搜索\$\{ariaLabel\}`\}/);
+  assert.match(deploymentSelectSource, /selectedOption\?\.label \?\? \(value \? valueLabel/);
+  assert.match(resourceSource, /valueLabel=\{value\.codePipeline\.pipelineName\}/);
+});
+
+test("does not paginate with stale state while a new resource search is loading", () => {
+  assert.match(resourceSource, /loadedQueryKey === queryKey/);
+  assert.match(resourceSource, /queryReady \? hasMore : false/);
+  assert.match(resourceSource, /if \(!queryReady \|\| loadingRef\.current \|\| !hasMore\) return/);
 });
 
 test("uses repository-owned SVGs for deployment select icons", () => {

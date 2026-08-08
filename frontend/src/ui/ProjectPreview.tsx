@@ -1012,11 +1012,13 @@ export function ProjectPreview({
 
   async function requestDeploymentConfirmation() {
     if (!onDeploy || deploying || deployDisabled) return;
-    const resourceError = deploymentResourcesError(deployResources);
-    if (resourceError) {
-      setDeployResourcesValidationError(resourceError);
-      setDeployError(resourceError);
-      return;
+    if (!isRuntimeUpdate) {
+      const resourceError = deploymentResourcesError(deployResources);
+      if (resourceError) {
+        setDeployResourcesValidationError(resourceError);
+        setDeployError(resourceError);
+        return;
+      }
     }
     setDeployResourcesValidationError(null);
     if (!instanceRange.valid) {
@@ -1203,7 +1205,7 @@ export function ProjectPreview({
               }
             : {}),
           envs,
-          resources: deployResources,
+          ...(!isRuntimeUpdate ? { resources: deployResources } : {}),
         },
       );
       if (mountedRef.current) {
@@ -1265,7 +1267,6 @@ export function ProjectPreview({
       }
       if (mountedRef.current) setDeployError(message);
       const buildLog = mergeBuildFailureLog(message);
-      const failedInBuild = Boolean(buildLog);
       trackAgentDeployFailed({
         ...deploymentTelemetryBase(),
         phase: latestPhase,
@@ -1280,7 +1281,7 @@ export function ProjectPreview({
         status: "error",
         phase: latestPhase,
         label: "部署失败",
-        message: failedInBuild ? "构建镜像失败，详见构建日志。" : message,
+        message,
         ...(buildLog ? { buildLog } : terminalBuildLogUpdate("complete")),
         retry: requestDeploymentConfirmation,
       });
@@ -1964,20 +1965,22 @@ export function ProjectPreview({
                 </section>
               )}
 
-              <section className="pp-config-section pp-resource-section">
-                <div className="pp-config-label">资源配置</div>
-                <DeploymentResources
-                  value={deployResources}
-                  agentName={agentName || project.name || "agentkit-app"}
-                  region={deployRegion}
-                  disabled={deploying}
-                  validationError={deployResourcesValidationError}
-                  onChange={(resources) => {
-                    setDeployResources(resources);
-                    setDeployResourcesValidationError(null);
-                  }}
-                />
-              </section>
+              {!isRuntimeUpdate && (
+                <section className="pp-config-section pp-resource-section">
+                  <div className="pp-config-label">资源配置</div>
+                  <DeploymentResources
+                    value={deployResources}
+                    agentName={agentName || project.name || "agentkit-app"}
+                    region={deployRegion}
+                    disabled={deploying}
+                    validationError={deployResourcesValidationError}
+                    onChange={(resources) => {
+                      setDeployResources(resources);
+                      setDeployResourcesValidationError(null);
+                    }}
+                  />
+                </section>
+              )}
 
               <section className="pp-config-section pp-env-section">
                 <div className="pp-env-head">

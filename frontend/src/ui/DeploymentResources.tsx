@@ -44,6 +44,8 @@ interface ResourceListState {
   hasMore: boolean;
   loading: boolean;
   error: string | null;
+  search: string;
+  setSearch: (value: string) => void;
   reload: () => void;
   loadMore: () => void;
 }
@@ -58,9 +60,28 @@ function useDeploymentResourceList(
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [loadedQueryKey, setLoadedQueryKey] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
+  const loadingRef = useRef(false);
   const requestRef = useRef<AbortController | null>(null);
-  const queryKey = query ? JSON.stringify(query) : "";
+  const baseQueryKey = query ? JSON.stringify(query) : "";
+  const queryKey = query
+    ? JSON.stringify({ ...query, search: debouncedSearch })
+    : "";
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    setSearch("");
+    setDebouncedSearch("");
+  }, [baseQueryKey]);
 
   const loadPage = useCallback((nextPage: number, replace: boolean) => {
     if (!queryKey) return;
@@ -69,6 +90,7 @@ function useDeploymentResourceList(
     requestRef.current = controller;
     const request = JSON.parse(queryKey) as DeploymentResourceQuery;
     if (replace) setItems([]);
+    loadingRef.current = true;
     setLoading(true);
     setError(null);
     listDeploymentResources(
@@ -90,14 +112,17 @@ function useDeploymentResourceList(
         setPageNumber(result.pageNumber);
         setTotalCount(result.totalCount);
         setHasMore(result.hasMore);
+        setLoadedQueryKey(queryKey);
       })
       .catch((cause) => {
         if (cause instanceof DOMException && cause.name === "AbortError") return;
+        setLoadedQueryKey(queryKey);
         setError(cause instanceof Error ? cause.message : String(cause));
       })
       .finally(() => {
         if (requestRef.current === controller) {
           requestRef.current = null;
+          loadingRef.current = false;
           setLoading(false);
         }
       });
@@ -107,11 +132,13 @@ function useDeploymentResourceList(
     if (!queryKey) {
       requestRef.current?.abort();
       requestRef.current = null;
+      loadingRef.current = false;
       setItems([]);
       setServiceRegion("");
       setPageNumber(1);
       setTotalCount(0);
       setHasMore(false);
+      setLoadedQueryKey("");
       setLoading(false);
       setError(null);
       return;
@@ -120,17 +147,29 @@ function useDeploymentResourceList(
     return () => requestRef.current?.abort();
   }, [loadPage, queryKey, reloadKey]);
 
+  const queryReady = Boolean(queryKey)
+    && loadedQueryKey === queryKey
+    && search.trim() === debouncedSearch;
+  const reload = useCallback(() => {
+    setLoadedQueryKey("");
+    setReloadKey((key) => key + 1);
+  }, []);
+  const loadMore = useCallback(() => {
+    if (!queryReady || loadingRef.current || !hasMore) return;
+    loadPage(pageNumber + 1, false);
+  }, [hasMore, loadPage, pageNumber, queryReady]);
+
   return {
     items,
     serviceRegion,
     totalCount,
-    hasMore,
-    loading,
+    hasMore: queryReady ? hasMore : false,
+    loading: Boolean(queryKey) && (!queryReady || loading),
     error,
-    reload: () => setReloadKey((key) => key + 1),
-    loadMore: () => {
-      if (!loading && hasMore) loadPage(pageNumber + 1, false);
-    },
+    search,
+    setSearch,
+    reload,
+    loadMore,
   };
 }
 
@@ -150,6 +189,7 @@ function resourceOptions(
 function ResourcePicker({
   ariaLabel,
   value,
+  valueLabel,
   state,
   disabled,
   valueField = "id",
@@ -157,6 +197,7 @@ function ResourcePicker({
 }: {
   ariaLabel: string;
   value: string;
+  valueLabel?: string;
   state: ResourceListState;
   disabled: boolean;
   valueField?: "id" | "name";
@@ -171,13 +212,17 @@ function ResourcePicker({
       <DeploymentSelect
         ariaLabel={ariaLabel}
         value={value}
+        valueLabel={valueLabel}
         placeholder={state.loading ? "正在加载…" : "请选择已有资源"}
         options={options}
-        disabled={
-          disabled ||
-          (state.loading && state.items.length === 0) ||
-          Boolean(state.error)
-        }
+        disabled={disabled || Boolean(state.error)}
+        searchValue={state.search}
+        searchPlaceholder="搜索资源名称"
+        loading={state.loading}
+        hasMore={state.hasMore}
+        emptyMessage={state.search.trim() ? "未找到匹配资源" : "暂无可用资源"}
+        onSearchChange={state.setSearch}
+        onLoadMore={state.loadMore}
         onChange={(selectedValue) => {
           const resource = state.items.find(
             (item) => item[valueField] === selectedValue,
@@ -190,28 +235,20 @@ function ResourcePicker({
           <span>{state.error}</span>
           <button type="button" onClick={state.reload}>重试</button>
         </div>
-      ) : state.loading ? (
+      ) : state.loading && state.items.length === 0 ? (
         <span className="pp-resource-status" aria-live="polite">
-          正在加载云资源…
+          {state.search.trim() ? "正在搜索云资源…" : "正在加载云资源…"}
         </span>
       ) : state.items.length === 0 ? (
-        <span className="pp-resource-status">暂无可用资源。</span>
+        <span className="pp-resource-status">
+          {state.search.trim() ? "未找到匹配资源。" : "暂无可用资源。"}
+        </span>
       ) : state.serviceRegion ? (
         <span className="pp-resource-status">
           实际服务区域：{state.serviceRegion} · 已加载 {state.items.length}
           {state.totalCount > 0 ? `/${state.totalCount}` : ""}
         </span>
       ) : null}
-      {state.hasMore && !state.error && (
-        <button
-          type="button"
-          className="pp-resource-more"
-          disabled={disabled || state.loading}
-          onClick={state.loadMore}
-        >
-          {state.loading ? "加载中…" : "加载更多"}
-        </button>
-      )}
     </div>
   );
 }
@@ -406,6 +443,7 @@ export function DeploymentResources({
               <ResourcePicker
                 ariaLabel="已有 TOS 存储桶"
                 value={value.tos.bucket ?? ""}
+                valueLabel={value.tos.bucket}
                 state={tosList}
                 disabled={disabled}
                 onChange={(resource) =>
@@ -466,6 +504,7 @@ export function DeploymentResources({
                 <ResourcePicker
                   ariaLabel="已有 CR 实例"
                   value={value.cr.instance ?? ""}
+                  valueLabel={value.cr.instance}
                   state={registryList}
                   disabled={disabled}
                   valueField="name"
@@ -481,6 +520,7 @@ export function DeploymentResources({
                 <ResourcePicker
                   ariaLabel="已有 CR 命名空间"
                   value={value.cr.namespace ?? ""}
+                  valueLabel={value.cr.namespace}
                   state={namespaceList}
                   disabled={disabled || !value.cr.instance}
                   valueField="name"
@@ -500,6 +540,7 @@ export function DeploymentResources({
                 <ResourcePicker
                   ariaLabel="已有 CR 镜像仓库"
                   value={value.cr.repository ?? ""}
+                  valueLabel={value.cr.repository}
                   state={repositoryList}
                   disabled={disabled || !value.cr.namespace}
                   valueField="name"
@@ -566,6 +607,7 @@ export function DeploymentResources({
                 <ResourcePicker
                   ariaLabel="已有 CodePipeline Workspace"
                   value={value.codePipeline.workspaceId ?? ""}
+                  valueLabel={value.codePipeline.workspaceName}
                   state={workspaceList}
                   disabled={disabled}
                   onChange={(resource) =>
@@ -584,6 +626,7 @@ export function DeploymentResources({
                 <ResourcePicker
                   ariaLabel="已有 AgentKit CodePipeline"
                   value={value.codePipeline.pipelineId ?? ""}
+                  valueLabel={value.codePipeline.pipelineName}
                   state={pipelineList}
                   disabled={disabled || !value.codePipeline.workspaceId}
                   onChange={(resource) =>
