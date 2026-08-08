@@ -4241,211 +4241,10 @@ body {
 }
 
 /* ---------- skill center ---------- */
-.skillcenter {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-}
-.skillcenter-regions {
-  display: grid;
-  padding: 2px;
-  border: 1px solid hsl(var(--border));
-  background: hsl(var(--canvas) / 0.62);
-}
-.skillcenter-regions button {
-  border: 0;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  font: inherit;
-  cursor: pointer;
-}
-.skillcenter-regions button.active {
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.07);
-}
-.skillcenter-regions button:focus-visible,
 .skillcenter-pager button:focus-visible,
 .skill-detail-close:focus-visible {
   outline: 2px solid hsl(var(--ring) / 0.28);
   outline-offset: 1px;
-}
-.skillcenter-space-item:focus-visible,
-.skillcenter-skill-item:focus-visible {
-  outline: none;
-  border-color: transparent;
-  background: hsl(var(--muted) / 0.62);
-}
-.skillcenter-regions {
-  grid-template-columns: repeat(2, 58px);
-  border-radius: 7px;
-}
-.skillcenter-regions button {
-  height: 27px;
-  border-radius: 5px;
-  font-size: 11.5px;
-}
-.skillcenter-browser {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(270px, 0.9fr) minmax(360px, 1.35fr);
-  gap: 0;
-}
-.skillcenter-panel {
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.skillcenter-panel + .skillcenter-panel {
-  border-left: 1px solid hsl(var(--border));
-}
-.skillcenter-panel-head {
-  height: 48px;
-  flex: 0 0 48px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 14px;
-  border-bottom: 1px solid hsl(var(--border));
-}
-.skillcenter-panel-head > div {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.skillcenter-panel-head .icon {
-  width: 17px;
-  height: 17px;
-  color: hsl(var(--muted-foreground));
-}
-.skillcenter-panel-head h2 {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: hsl(var(--foreground));
-  font-size: 13.5px;
-  font-weight: 620;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.skillcenter-panel-head > span {
-  flex-shrink: 0;
-  color: hsl(var(--muted-foreground));
-  font-size: 11.5px;
-}
-.skillcenter-count-badge {
-  min-width: 25px;
-  height: 21px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 7px;
-  border-radius: 999px;
-  background: hsl(var(--muted));
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-}
-.skillcenter-listwrap {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-.skillcenter-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px;
-}
-.skillcenter-space-item,
-.skillcenter-skill-item {
-  width: 100%;
-  min-width: 0;
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: hsl(var(--foreground));
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background-color 120ms ease, border-color 120ms ease;
-}
-.skillcenter-space-item:hover,
-.skillcenter-skill-item:hover {
-  border-color: transparent;
-  background: hsl(var(--muted) / 0.62);
-}
-.skillcenter-space-item.active {
-  border-color: transparent;
-  background: hsl(var(--muted) / 0.62);
-}
-.skillcenter-symbol {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
-  display: grid;
-  place-items: center;
-  border: 1px solid hsl(var(--border));
-  border-radius: 7px;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground) / 0.78);
-}
-.skillcenter-symbol .icon { width: 18px; height: 18px; }
-.skillcenter-symbol--skill {
-  color: hsl(214 64% 43%);
-  background: hsl(214 75% 97%);
-  border-color: hsl(214 54% 87%);
-}
-.skillcenter-item-body {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.skillcenter-item-title {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.skillcenter-item-description {
-  display: -webkit-box;
-  min-width: 0;
-  overflow: hidden;
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-  line-height: 17px;
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-.skillcenter-item-meta {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 5px 8px;
-  margin-top: 2px;
 }
 .skillcenter-status {
   flex-shrink: 0;
@@ -4459,16 +4258,6 @@ body {
 .skillcenter-status.is-positive { color: hsl(145 61% 29%); background: hsl(145 55% 94%); }
 .skillcenter-status.is-progress { color: hsl(35 78% 31%); background: hsl(42 86% 94%); }
 .skillcenter-status.is-danger { color: hsl(var(--destructive)); background: hsl(var(--destructive) / 0.09); }
-.skillcenter-meta-text {
-  min-width: 0;
-  max-width: 170px;
-  overflow: hidden;
-  color: hsl(var(--muted-foreground));
-  font-size: 10.5px;
-  line-height: 16px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .skillcenter-pager {
   height: 44px;
   flex: 0 0 44px;
@@ -4629,21 +4418,9 @@ body {
 }
 
 @media (max-width: 760px) {
-  .skillcenter-browser {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: repeat(2, minmax(0, 1fr));
-  }
-  .skillcenter-panel + .skillcenter-panel {
-    border-top: 1px solid hsl(var(--border));
-    border-left: 0;
-  }
   .skill-detail-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 560px) {
-  .skillcenter-regions { grid-template-columns: repeat(2, 46px); }
-  .skillcenter-browser { gap: 8px; }
-  .skillcenter-item-meta { gap: 4px 6px; }
-  .skillcenter-meta-text { max-width: 132px; }
   .skill-detail-backdrop { padding: 8px; }
   .skill-detail-dialog { border-radius: 10px; }
   .skill-detail-meta { grid-template-columns: minmax(0, 1fr); gap: 8px; max-height: 180px; overflow-y: auto; }
