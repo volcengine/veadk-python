@@ -72,6 +72,7 @@ import {
   RuntimeProbeError,
   type DeployAuthentication,
   type DeployBuildLogSnapshot,
+  type DeployResources,
   type DeployStage,
   type IdentityUserPool,
 } from "../adk/client";
@@ -92,6 +93,15 @@ import feishuLogo from "../assets/feishu-logo.svg";
 import { buildZip } from "./zip";
 import { ProjectCodeBrowser } from "./CodeBrowserDialog";
 import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
+import {
+  DEFAULT_DEPLOY_RESOURCES,
+  DeploymentResources,
+  deploymentResourcesError,
+} from "./DeploymentResources";
+import {
+  DeploymentSelect,
+  type DeploymentSelectOption,
+} from "./DeploymentSelect";
 import { mergeDeployBuildLog } from "./deployBuildLog";
 import "./ProjectPreview.css";
 
@@ -178,180 +188,6 @@ function DeploymentConfirmDialog({
       </section>
     </div>,
     document.body,
-  );
-}
-
-interface DeploymentSelectOption {
-  value: string;
-  label: string;
-  description?: string;
-  badge?: string;
-}
-
-interface DeploymentSelectProps {
-  ariaLabel: string;
-  value: string;
-  placeholder: string;
-  options: DeploymentSelectOption[];
-  disabled?: boolean;
-  onChange: (value: string) => void;
-}
-
-function DeploymentSelect({
-  ariaLabel,
-  value,
-  placeholder,
-  options,
-  disabled = false,
-  onChange,
-}: DeploymentSelectProps) {
-  const listboxId = useId();
-  const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const [open, setOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const selectedOption = options.find((option) => option.value === value);
-
-  useEffect(() => {
-    if (!open) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      if (
-        event.target instanceof Node &&
-        rootRef.current &&
-        !rootRef.current.contains(event.target)
-      ) {
-        setOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", handlePointerDown);
-    return () => window.removeEventListener("pointerdown", handlePointerDown);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    optionRefs.current[activeIndex]?.focus();
-  }, [activeIndex, open]);
-
-  const openMenu = (direction: 1 | -1 = 1) => {
-    const selectedIndex = options.findIndex((option) => option.value === value);
-    const nextIndex =
-      selectedIndex >= 0
-        ? selectedIndex
-        : direction === 1
-          ? 0
-          : Math.max(0, options.length - 1);
-    setActiveIndex(nextIndex);
-    setOpen(true);
-  };
-
-  const moveActiveOption = (nextIndex: number) => {
-    if (options.length === 0) return;
-    setActiveIndex((nextIndex + options.length) % options.length);
-  };
-
-  const selectOption = (option: DeploymentSelectOption) => {
-    onChange(option.value);
-    setOpen(false);
-    triggerRef.current?.focus();
-  };
-
-  return (
-    <div
-      className="pp-deployment-select"
-      ref={rootRef}
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && open) {
-          event.preventDefault();
-          setOpen(false);
-          triggerRef.current?.focus();
-          return;
-        }
-        if (event.key === "Tab") {
-          setOpen(false);
-          return;
-        }
-        if (event.key === "ArrowDown") {
-          event.preventDefault();
-          if (!open) openMenu(1);
-          else moveActiveOption(activeIndex + 1);
-        } else if (event.key === "ArrowUp") {
-          event.preventDefault();
-          if (!open) openMenu(-1);
-          else moveActiveOption(activeIndex - 1);
-        } else if (open && event.key === "Home") {
-          event.preventDefault();
-          setActiveIndex(0);
-        } else if (open && event.key === "End") {
-          event.preventDefault();
-          setActiveIndex(Math.max(0, options.length - 1));
-        }
-      }}
-    >
-      <button
-        ref={triggerRef}
-        type="button"
-        className="pp-deployment-select-trigger"
-        aria-label={ariaLabel}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={open ? listboxId : undefined}
-        disabled={disabled || options.length === 0}
-        onClick={() => {
-          if (open) setOpen(false);
-          else openMenu();
-        }}
-      >
-        <span className={!selectedOption ? "is-placeholder" : undefined}>
-          {selectedOption?.label ?? placeholder}
-        </span>
-        <ChevronDown
-          aria-hidden="true"
-          className={`pp-deployment-select-chevron${open ? " is-open" : ""}`}
-        />
-      </button>
-      {open && (
-        <div
-          id={listboxId}
-          className="pp-deployment-select-menu"
-          role="listbox"
-          aria-label={ariaLabel}
-        >
-          {options.map((option, index) => {
-            const selected = option.value === value;
-            return (
-              <button
-                key={option.value}
-                ref={(node) => {
-                  optionRefs.current[index] = node;
-                }}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                tabIndex={index === activeIndex ? 0 : -1}
-                className={`pp-deployment-select-option${selected ? " is-selected" : ""}`}
-                title={option.description}
-                onFocus={() => setActiveIndex(index)}
-                onClick={() => selectOption(option)}
-              >
-                <span className="pp-deployment-select-copy">
-                  <span className="pp-deployment-select-name">
-                    {option.label}
-                    {option.badge && (
-                      <span className="pp-deployment-select-badge">
-                        {option.badge}
-                      </span>
-                    )}
-                  </span>
-                  {option.description && <small>{option.description}</small>}
-                </span>
-                {selected && <Check aria-hidden="true" />}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -624,6 +460,7 @@ export interface DeployOptions {
     };
   };
   envs?: DeployEnvVar[];
+  resources?: DeployResources;
 }
 
 export interface DeployEnvVar {
@@ -875,6 +712,11 @@ export function ProjectPreview({
   const [activePhase, setActivePhase] = useState<string | null>(null);
   const [addingAgent, setAddingAgent] = useState(false);
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
+  const [deployResources, setDeployResources] = useState<DeployResources>(
+    DEFAULT_DEPLOY_RESOURCES,
+  );
+  const [deployResourcesValidationError, setDeployResourcesValidationError] =
+    useState<string | null>(null);
   const [regionMenuOpen, setRegionMenuOpen] = useState(false);
   const deploymentRegionHelpId = useId();
   const [authenticationType, setAuthenticationType] =
@@ -893,6 +735,7 @@ export function ProjectPreview({
   const [deploymentActionTarget, setDeploymentActionTarget] =
     useState<HTMLElement | null>(null);
   const mountedRef = useRef(true);
+  const previousDeployRegionRef = useRef(deployRegion);
   const instanceRange = validateRuntimeInstanceRange(minInstance, maxInstance);
   const needsInstanceUpdate =
     !isRuntimeUpdate &&
@@ -996,6 +839,20 @@ export function ProjectPreview({
     setMinInstance("1");
     setMaxInstance(inMemorySession ? "1" : "5");
   }, [inMemorySession]);
+
+  useEffect(() => {
+    if (previousDeployRegionRef.current === deployRegion) return;
+    previousDeployRegionRef.current = deployRegion;
+    setDeployResources((resources) => ({
+      tos: resources.tos.mode === "existing" ? { mode: "existing" } : resources.tos,
+      cr: resources.cr.mode === "existing" ? { mode: "existing" } : resources.cr,
+      codePipeline:
+        resources.codePipeline.mode === "existing"
+          ? { mode: "existing" }
+          : resources.codePipeline,
+    }));
+    setDeployResourcesValidationError(null);
+  }, [deployRegion]);
 
   useEffect(() => {
     if (!flowPreviewOpen) return;
@@ -1155,6 +1012,15 @@ export function ProjectPreview({
 
   async function requestDeploymentConfirmation() {
     if (!onDeploy || deploying || deployDisabled) return;
+    if (!isRuntimeUpdate) {
+      const resourceError = deploymentResourcesError(deployResources);
+      if (resourceError) {
+        setDeployResourcesValidationError(resourceError);
+        setDeployError(resourceError);
+        return;
+      }
+    }
+    setDeployResourcesValidationError(null);
     if (!instanceRange.valid) {
       setDeployError(instanceRange.error);
       return;
@@ -1339,6 +1205,7 @@ export function ProjectPreview({
               }
             : {}),
           envs,
+          ...(!isRuntimeUpdate ? { resources: deployResources } : {}),
         },
       );
       if (mountedRef.current) {
@@ -1400,7 +1267,6 @@ export function ProjectPreview({
       }
       if (mountedRef.current) setDeployError(message);
       const buildLog = mergeBuildFailureLog(message);
-      const failedInBuild = Boolean(buildLog);
       trackAgentDeployFailed({
         ...deploymentTelemetryBase(),
         phase: latestPhase,
@@ -1415,7 +1281,7 @@ export function ProjectPreview({
         status: "error",
         phase: latestPhase,
         label: "部署失败",
-        message: failedInBuild ? "构建镜像失败，详见构建日志。" : message,
+        message,
         ...(buildLog ? { buildLog } : terminalBuildLogUpdate("complete")),
         retry: requestDeploymentConfirmation,
       });
@@ -2096,6 +1962,23 @@ export function ProjectPreview({
                       </small>
                     </span>
                   </label>
+                </section>
+              )}
+
+              {!isRuntimeUpdate && (
+                <section className="pp-config-section pp-resource-section">
+                  <div className="pp-config-label">资源配置</div>
+                  <DeploymentResources
+                    value={deployResources}
+                    agentName={agentName || project.name || "agentkit-app"}
+                    region={deployRegion}
+                    disabled={deploying}
+                    validationError={deployResourcesValidationError}
+                    onChange={(resources) => {
+                      setDeployResources(resources);
+                      setDeployResourcesValidationError(null);
+                    }}
+                  />
                 </section>
               )}
 

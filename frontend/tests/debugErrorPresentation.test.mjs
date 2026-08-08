@@ -58,8 +58,25 @@ test("creation and deployment keep friendly context and the original error", () 
     /if \(!res\.ok\) \{[\s\S]*?httpErrorMessage\(res, "部署失败"\)[\s\S]*?throw new Error\(detail\)/,
   );
   assert.match(
+    clientSource,
+    /if \(!final\.success\) throw new Error\(final\.error \|\| "部署失败"\)/,
+  );
+  assert.match(
     projectPreviewSource,
     /<DeploymentErrorMessage[\s\S]*?className="pp-error"[\s\S]*?\$\{deployError\}/,
+  );
+  assert.match(
+    clientSource,
+    /const context = `\$\{fallback\}（HTTP \$\{res\.status\}）`/,
+  );
+  assert.match(clientSource, /原始响应：\\n\$\{text\}/);
+  assert.match(
+    projectPreviewSource,
+    /label: "部署失败",\s*message,\s*\.\.\.\(buildLog/,
+  );
+  assert.doesNotMatch(
+    projectPreviewSource,
+    /message: failedInBuild \? "构建镜像失败，详见构建日志。" : message/,
   );
 });
 

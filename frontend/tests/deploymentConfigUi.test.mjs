@@ -107,7 +107,7 @@ test("reuses the build canvas as a read-only expandable deployment preview", () 
   );
 });
 
-test("lets the whole publish page scroll with builder-style deployment cards", () => {
+test("lets the whole publish page scroll with white deployment cards", () => {
   assert.match(
     projectPreviewStyles,
     /\.pp-root\.is-deploy\s*\{[\s\S]*?overflow-y:\s*auto;/,
@@ -122,7 +122,7 @@ test("lets the whole publish page scroll with builder-style deployment cards", (
   );
   assert.match(
     projectPreviewStyles,
-    /\.pp-config-section\s*\{[\s\S]*?border:\s*1px solid[\s\S]*?border-radius:\s*18px;[\s\S]*?\.pp-config-label\s*\{[\s\S]*?background:\s*hsl\(var\(--muted\) \/ 0\.34\)/,
+    /\.pp-config-section\s*\{[\s\S]*?border:\s*1px solid[\s\S]*?border-radius:\s*18px;[\s\S]*?\.pp-config-label\s*\{[\s\S]*?background:\s*transparent/,
   );
   assert.match(
     projectPreviewStyles,
