@@ -1943,6 +1943,48 @@ export async function listDeploymentResources(
   };
 }
 
+export type SandboxToolKind =
+  | "codex"
+  | "openclaw"
+  | "hermes"
+  | "dev";
+
+export interface SandboxToolInfo {
+  kind: SandboxToolKind;
+  label: string;
+  toolId: string;
+}
+
+export interface SystemInfoResponse {
+  sandboxTools: SandboxToolInfo[];
+}
+
+export async function getSystemInfo(
+  signal?: AbortSignal,
+): Promise<SystemInfoResponse> {
+  const response = await apiFetch("/web/system-info", { signal });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "加载系统信息失败"));
+  }
+  const payload = (await response.json()) as { sandboxTools?: unknown };
+  if (!Array.isArray(payload.sandboxTools)) {
+    throw new Error("系统信息响应格式无效");
+  }
+  const sandboxTools = payload.sandboxTools.map((item) => {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      typeof (item as SandboxToolInfo).kind !== "string" ||
+      typeof (item as SandboxToolInfo).label !== "string" ||
+      typeof (item as SandboxToolInfo).toolId !== "string"
+    ) {
+      throw new Error("系统信息响应格式无效");
+    }
+    return item as SandboxToolInfo;
+  });
+  return { sandboxTools };
+}
+
 export interface IdentityUserPool {
   uid: string;
   name: string;

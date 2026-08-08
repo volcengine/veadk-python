@@ -1,0 +1,46 @@
+.skill-conversation {
+  min-height: 220px;
+  margin: 0 0 16px;
+  padding: 8px 0 18px;
+}
+
+.skill-conversation .bubble {
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.skill-conversation .think-head,
+.skill-conversation .tool-head,
+.skill-conversation .builtin-tool-head {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 13px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 4px 0;
+  text-align: left;
+}
+
+.skill-conversation .think-label,
+.skill-conversation .tool-name,
+.skill-conversation .builtin-tool-label {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.skill-conversation .think-icon,
+.skill-conversation .tool-icon,
+.skill-conversation .builtin-tool-icon {
+  width: 20px;
+  height: 26px;
+}
+
+.skill-conversation .chev,
+.skill-conversation .tool-chevron,
+.skill-conversation .builtin-tool-chevron {
+  justify-self: end;
+}

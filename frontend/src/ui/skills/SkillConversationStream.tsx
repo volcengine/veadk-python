@@ -1,10 +1,11 @@
 import { useMemo } from "react";
 import type { Block } from "../../blocks";
 import { Blocks } from "../Blocks";
-import type { SkillActivity } from "./types";
+import type { SkillWorkbenchActivity } from "../skill-workbench/types";
+import "./SkillConversationStream.css";
 
 const ignoreAction = () => undefined;
-type ConversationActivity = Exclude<SkillActivity, { kind: "status" }>;
+type ConversationActivity = Exclude<SkillWorkbenchActivity, { kind: "status" }>;
 
 function toConversationBlock(activity: ConversationActivity): Block {
   if (activity.kind === "message") {
@@ -29,7 +30,7 @@ function toConversationBlock(activity: ConversationActivity): Block {
   throw new Error("不支持的 Skill 对话活动");
 }
 
-export function SkillConversationStream({ activities }: { activities: SkillActivity[] }) {
+export function SkillConversationStream({ activities }: { activities: SkillWorkbenchActivity[] }) {
   const blocks = useMemo(
     () => activities.filter((activity) => activity.kind !== "status").map(toConversationBlock),
     [activities],

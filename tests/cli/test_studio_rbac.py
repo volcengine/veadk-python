@@ -156,6 +156,55 @@ def test_identity_user_pools_marks_the_current_studio_pool(
     assert regions == ["cn-shanghai"]
 
 
+def test_system_info_lists_configured_sandbox_tool_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("SANDBOX_CHAT_CODEX", "tool-codex")
+    monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW", "tool-openclaw")
+    monkeypatch.setenv("SANDBOX_CHAT_HERMES", "tool-hermes")
+    monkeypatch.setenv("SANDBOX_DEV", "tool-dev")
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+        developers="developer",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/system-info",
+            headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'developer'})}"},
+        )
+        denied = client.get(
+            "/web/system-info",
+            headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'viewer'})}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "sandboxTools": [
+            {
+                "kind": "codex",
+                "label": "Codex Sandbox",
+                "toolId": "tool-codex",
+            },
+            {
+                "kind": "openclaw",
+                "label": "OpenClaw Sandbox",
+                "toolId": "tool-openclaw",
+            },
+            {
+                "kind": "hermes",
+                "label": "Hermes Sandbox",
+                "toolId": "tool-hermes",
+            },
+            {"kind": "dev", "label": "Dev Sandbox", "toolId": "tool-dev"},
+        ]
+    }
+    assert denied.status_code == 403
+
+
 def test_current_user_pool_deployment_forwards_studio_jwt_to_run_sse(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -990,7 +1039,7 @@ def test_studio_deploy_exposes_role_options() -> None:
     assert "Omit both role options to grant every user admin access" in " ".join(
         result.output.split()
     )
-    assert "--skill-creator-tool-id" in result.output
+    assert "--skill-creator-tool-id" not in result.output
 
 
 def test_access_endpoint_resolves_local_roles_and_blocks_user_management(
@@ -1015,7 +1064,7 @@ def test_access_endpoint_resolves_local_roles_and_blocks_user_management(
             headers={"X-VeADK-Local-User": "reader"},
             json={},
         )
-        skill_creator_forbidden = client.post(
+        legacy_skill_creator = client.post(
             "/web/skill-creator/jobs",
             headers={"X-VeADK-Local-User": "reader"},
             json={"prompt": "Create a release notes Skill"},
@@ -1027,7 +1076,7 @@ def test_access_endpoint_resolves_local_roles_and_blocks_user_management(
     assert user.json()["role"] == "user"
     assert user.json()["telemetry"]["userId"] == "reader"
     assert forbidden.status_code == 403
-    assert skill_creator_forbidden.status_code == 403
+    assert legacy_skill_creator.status_code == 404
 
 
 def test_gateway_role_uses_jwt_and_ignores_local_identity_header(
