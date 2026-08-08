@@ -215,7 +215,8 @@ class StudioReleaseBuilder:
         completed = subprocess.run(
             [
                 sys.executable,
-                str(script),
+                "-m",
+                "veadk.cli.studio_dependencies",
                 "--manifest-only",
                 "--manifest",
                 str(destination),

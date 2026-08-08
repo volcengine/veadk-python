@@ -698,6 +698,7 @@ def test_builder_restores_manifest_dependencies_from_cache(tmp_path: Path) -> No
 
 def test_builder_generates_dependency_manifest_from_release_source(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_root = Path(__file__).parents[1]
     prepared_root = tmp_path / ".studio-release"
@@ -709,6 +710,14 @@ def test_builder_generates_dependency_manifest_from_release_source(
         _settings(),
         dependency_store=dependency_store,
     )
+    commands: list[list[str]] = []
+    original_run = subprocess.run
+
+    def capture_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        commands.append(command)
+        return original_run(command, **kwargs)
+
+    monkeypatch.setattr(release_builder.subprocess, "run", capture_run)
 
     wheels = builder._prepare_dependency_wheels(
         source_root,
@@ -718,6 +727,11 @@ def test_builder_generates_dependency_manifest_from_release_source(
     )
 
     assert wheels == workspace / "dependency-wheels"
+    assert commands[0][:3] == [
+        sys.executable,
+        "-m",
+        "veadk.cli.studio_dependencies",
+    ]
     assert dependency_store.manifest == workspace / "dependencies.json"
     assert json.loads(dependency_store.manifest.read_text(encoding="utf-8"))["wheels"]
 
@@ -834,6 +848,33 @@ def test_stage_deployment_uses_frontend_service_package(
     assert "frontend.service.studio_release_server.app:app" in (
         destination / "run.sh"
     ).read_text(encoding="utf-8")
+
+
+def test_function_lookup_paginates() -> None:
+    requested_pages: list[int] = []
+
+    class _Client:
+        def list_functions(self, request: Any) -> Any:
+            requested_pages.append(request.page_number)
+            if request.page_number == 1:
+                return SimpleNamespace(
+                    total=101,
+                    items=[SimpleNamespace(name="another-function", id="other-id")],
+                )
+            return SimpleNamespace(
+                total=101,
+                items=[
+                    SimpleNamespace(
+                        name="veadk-studio-release-server-fn",
+                        id="release-function-id",
+                    )
+                ],
+            )
+
+    service = SimpleNamespace(client=_Client())
+
+    assert release_deploy._find_function_id(service) == "release-function-id"
+    assert requested_pages == [1, 2]
 
 
 def test_set_github_secret_reads_value_from_stdin(
