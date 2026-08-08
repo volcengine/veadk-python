@@ -177,7 +177,7 @@ class VeFaaS:
                 url=upload_url,
                 data=code_zip_data,
                 headers=headers,
-                timeout=(30, 300),
+                timeout=(300, 300),
             )
         except requests.RequestException:
             raise ValueError("Function code upload request failed.") from None
