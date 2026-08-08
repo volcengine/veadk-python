@@ -1275,6 +1275,56 @@ def _run_frontend_server(
 
     mount_skill_creator_routes(app, _skill_creator_owner)
 
+    from frontend.server.skills.devenv import mount_skill_workbench_routes
+    from frontend.server.skills.models import SkillIdentity
+
+    def _skill_identity(request: Request) -> SkillIdentity:
+        principal = _current_principal(request)
+        if access_policy.enabled and principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        author = (
+            (principal.display_name or principal.owner_id).strip()
+            if principal is not None
+            else "local"
+        )
+        return SkillIdentity(
+            author=author,
+            is_admin=access_policy.role_for(principal) == StudioRole.ADMIN,
+        )
+
+    def _skill_workbench_tools_client(region: str):
+        from agentkit.sdk.tools.client import AgentkitToolsClient
+
+        access_key, secret_key, session_token = _resolve_ve_credentials()
+        client = AgentkitToolsClient(
+            access_key=access_key,
+            secret_key=secret_key,
+            region=region,
+            session_token=session_token or "",
+        )
+        if provider != "byteplus":
+            client.set_host("open.volcengineapi.com")
+        return client
+
+    def _skill_workbench_skills_client(region: str):
+        from agentkit.sdk.skills.client import AgentkitSkillsClient
+
+        access_key, secret_key, session_token = _resolve_ve_credentials()
+        return AgentkitSkillsClient(
+            access_key=access_key,
+            secret_key=secret_key,
+            region=region,
+            session_token=session_token or "",
+        )
+
+    mount_skill_workbench_routes(
+        app,
+        lambda request: _skill_identity(request).author,
+        lambda request: _skill_identity(request).author,
+        tools_client_factory=_skill_workbench_tools_client,
+        skills_client_factory=_skill_workbench_skills_client,
+    )
+
     from veadk.cli.frontend_coding_agents import mount_coding_agent_routes
 
     mount_coding_agent_routes(
@@ -6797,6 +6847,16 @@ def _run_frontend_server(
             session_token=token or "",
         )
 
+    from frontend.server.skills.repository import AgentKitSkillRepository
+    from frontend.server.skills.routes import _convert_error, mount_skill_routes
+    from frontend.server.skills.service import SkillService
+
+    mount_skill_routes(
+        app,
+        SkillService(AgentKitSkillRepository(_skills_client)),
+        _skill_identity,
+    )
+
     @app.get("/web/skill-spaces")
     async def _web_list_skill_spaces(
         region: str = "all",
@@ -6854,10 +6914,7 @@ def _run_frontend_server(
                 raise
             except Exception as e:
                 logger.error(f"ListSkillSpaces error for {reg}: {e}", exc_info=True)
-                raise HTTPException(
-                    status_code=502,
-                    detail="暂时无法加载 AgentKit Skill Space，请稍后重试。",
-                )
+                raise _convert_error(e) from e
 
         return {
             "items": all_items,
@@ -6897,10 +6954,7 @@ def _run_frontend_server(
                 f"ListSkillsBySkillSpace({space_id}) error for {region}: {e}",
                 exc_info=True,
             )
-            raise HTTPException(
-                status_code=502,
-                detail="暂时无法加载该 Skill Space 的技能，请稍后重试。",
-            )
+            raise _convert_error(e) from e
 
         items = list(resp.items or [])
         return {
@@ -6944,10 +6998,7 @@ def _run_frontend_server(
             logger.error(
                 f"GetSkillVersion({skill_id}@{version}) error: {e}", exc_info=True
             )
-            raise HTTPException(
-                status_code=502,
-                detail="暂时无法加载该技能详情，请稍后重试。",
-            )
+            raise _convert_error(e) from e
 
         resolved = await asyncio.to_thread(
             _skill_files_from_version_response,

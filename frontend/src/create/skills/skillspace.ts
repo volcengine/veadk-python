@@ -3,6 +3,7 @@
 // (the browser never sees credentials) and are gated by SSO when enabled.
 
 import type { ProjectFile } from "../project";
+import { skillApiErrorFromResponse } from "../../adk/skills";
 import { DEFAULT_REQUEST_TIMEOUT_MS, requestSignal } from "../../adk/timeout";
 import type { SkillHit } from "./types";
 
@@ -54,24 +55,8 @@ async function jfetch<T>(url: string): Promise<T> {
     headers: { accept: "application/json" },
     signal: requestSignal(undefined, DEFAULT_REQUEST_TIMEOUT_MS),
   });
-  if (res.status === 409) {
-    throw new Error("服务端未配置云厂商 AK/SK，无法访问 AgentKit Skills 中心");
-  }
-  if (res.status === 401) {
-    throw new Error("请先登录以访问 AgentKit Skills 中心");
-  }
-  if (res.status === 404) {
-    throw new Error("技能不存在或无 SKILL.md 内容");
-  }
   if (!res.ok) {
-    let detail = "";
-    try {
-      const j = (await res.json()) as { detail?: string };
-      detail = j.detail || "";
-    } catch {
-      /* ignore */
-    }
-    throw new Error(`请求失败 (${res.status})${detail ? ": " + detail : ""}`);
+    throw await skillApiErrorFromResponse(res, "AgentKit Skills 请求失败");
   }
   return res.json() as Promise<T>;
 }

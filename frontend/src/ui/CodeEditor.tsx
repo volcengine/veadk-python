@@ -11,6 +11,7 @@ interface CodeEditorProps {
   value: string;
   path: string;
   onChange: (value: string) => void;
+  readOnly?: boolean;
 }
 
 function languageFor(path: string): Extension[] {
@@ -31,7 +32,7 @@ function languageFor(path: string): Extension[] {
   return [];
 }
 
-export default function CodeEditor({ value, path, onChange }: CodeEditorProps) {
+export default function CodeEditor({ value, path, onChange, readOnly = false }: CodeEditorProps) {
   const extensions = useMemo(() => languageFor(path), [path]);
 
   return (
@@ -40,6 +41,7 @@ export default function CodeEditor({ value, path, onChange }: CodeEditorProps) {
       height="100%"
       theme="light"
       extensions={extensions}
+      editable={!readOnly}
       onChange={onChange}
       basicSetup={{
         lineNumbers: true,
