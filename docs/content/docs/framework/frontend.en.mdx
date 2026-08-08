@@ -255,10 +255,12 @@ identify the missing permission or account resource.
 
 ```bash
 veadk studio deploy \
-  --user-pool-id <pool-id> \
-  --allowed-client-id <client-id> \
   --vefaas-app-name <app-name>
 ```
+
+When `--user-pool-id` and `--allowed-client-id` are omitted, the deploy command
+creates or reuses a named user pool and Client in the selected `--region`, then
+prints their IDs. Pass both options to keep using existing resources.
 
 Deployment credentials can be supplied explicitly with
 `--volcengine-access-key` / `--volcengine-secret-key`, through the current

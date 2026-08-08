@@ -208,10 +208,12 @@ CodeEnv Tool。也可以分别使用 `--sandbox-chat-codex-tool-id` 和
 
 ```bash
 veadk studio deploy \
-  --user-pool-id <pool-id> \
-  --allowed-client-id <client-id> \
   --vefaas-app-name <app-name>
 ```
+
+未指定 `--user-pool-id` 和 `--allowed-client-id` 时，部署命令会在用户选择的
+`--region` 中自动创建或复用同名用户池和 Client，并在完成后回显它们的 ID。
+也可以继续通过这两个参数使用已有资源。
 
 部署凭据支持通过 `--volcengine-access-key` / `--volcengine-secret-key`
 显式传入，也支持当前进程的 `VOLCENGINE_ACCESS_KEY` /

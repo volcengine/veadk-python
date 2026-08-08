@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import uuid4
 
+import click
 import pytest
 from click.testing import CliRunner
 from typing_extensions import Self
@@ -27,6 +28,7 @@ from volcenginesdkcore.interceptor.interceptors.build_request_interceptor import
 from volcenginesdkcore.rest import ApiException
 
 from veadk.cli.cli_frontend import (
+    _resolve_or_create_studio_identity_resources,
     _resolve_studio_cloud_credentials,
     _resolve_studio_identity_region,
     studio,
@@ -101,6 +103,301 @@ def test_studio_credentials_prefer_inline_environment(
     )
 
     assert credentials == ("env-ak", "env-sk", "env-token")
+
+
+@pytest.mark.parametrize(
+    ("provider", "region"),
+    [
+        ("volcengine", "cn-beijing"),
+        ("volcengine", "cn-shanghai"),
+        ("byteplus", "ap-southeast-1"),
+    ],
+)
+def test_studio_identity_resources_are_created_in_deployment_region(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    provider: str,
+    region: str,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeIdentityClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured["client_options"] = kwargs
+
+        def get_user_pool(self, **kwargs: object) -> None:
+            captured["get_pool"] = kwargs
+            return None
+
+        def create_user_pool(self, name: str) -> tuple[str, str]:
+            captured["create_pool"] = name
+            return "pool-created", "identity.example.com"
+
+        def get_user_pool_client(self, **kwargs: object) -> None:
+            captured["get_client"] = kwargs
+            return None
+
+        def create_user_pool_client(self, **kwargs: object) -> tuple[str, str]:
+            captured["create_client"] = kwargs
+            return "client-created", "secret-not-printed"
+
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        _FakeIdentityClient,
+    )
+
+    resolved = _resolve_or_create_studio_identity_resources(
+        access_key="ak",
+        secret_key="sk",
+        session_token="token",
+        user_pool_id=None,
+        client_id=None,
+        application_name="my-studio",
+        region=region,
+        provider=provider,  # type: ignore[arg-type]
+    )
+
+    assert resolved == (
+        "pool-created",
+        "identity.example.com",
+        "client-created",
+    )
+    assert captured["client_options"] == {
+        "access_key": "ak",
+        "secret_key": "sk",
+        "session_token": "token",
+        "region": region,
+        "provider": provider,
+    }
+    assert captured["get_pool"] == {"name": "veadk-studio-my-studio"}
+    assert captured["create_pool"] == "veadk-studio-my-studio"
+    assert captured["get_client"] == {
+        "user_pool_uid": "pool-created",
+        "name": "veadk-studio-my-studio-web",
+    }
+    assert captured["create_client"] == {
+        "user_pool_uid": "pool-created",
+        "name": "veadk-studio-my-studio-web",
+        "client_type": "WEB_APPLICATION",
+    }
+    output = capsys.readouterr().out
+    assert f"in {region}" in output
+    assert "secret-not-printed" not in output
+
+
+def test_studio_identity_resources_reuse_existing_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeIdentityClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def get_user_pool(self, **kwargs: object) -> tuple[str, str]:
+            assert kwargs == {"name": "veadk-studio-my-studio"}
+            return "pool-existing", "existing.example.com"
+
+        def create_user_pool(self, name: str) -> tuple[str, str]:
+            raise AssertionError(f"unexpected pool creation: {name}")
+
+        def get_user_pool_client(self, **kwargs: object) -> tuple[str, str]:
+            assert kwargs == {
+                "user_pool_uid": "pool-existing",
+                "name": "veadk-studio-my-studio-web",
+            }
+            return "client-existing", "secret"
+
+        def create_user_pool_client(self, **kwargs: object) -> tuple[str, str]:
+            raise AssertionError(f"unexpected client creation: {kwargs}")
+
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        _FakeIdentityClient,
+    )
+
+    assert _resolve_or_create_studio_identity_resources(
+        access_key="ak",
+        secret_key="sk",
+        user_pool_id=None,
+        client_id=None,
+        application_name="my-studio",
+        region="cn-beijing",
+    ) == ("pool-existing", "existing.example.com", "client-existing")
+
+
+def test_studio_identity_resources_create_client_for_provided_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeIdentityClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def get_user_pool(self, **kwargs: object) -> tuple[str, str]:
+            assert kwargs == {"uid": "pool-provided"}
+            return "pool-provided", "provided.example.com"
+
+        def get_user_pool_client(self, **_: object) -> None:
+            return None
+
+        def create_user_pool_client(self, **kwargs: object) -> tuple[str, str]:
+            assert kwargs["user_pool_uid"] == "pool-provided"
+            return "client-created", "secret"
+
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        _FakeIdentityClient,
+    )
+
+    assert _resolve_or_create_studio_identity_resources(
+        access_key="ak",
+        secret_key="sk",
+        user_pool_id="pool-provided",
+        client_id=None,
+        application_name="my-studio",
+        region="cn-beijing",
+    ) == ("pool-provided", "provided.example.com", "client-created")
+
+
+def test_studio_identity_resources_reject_client_without_pool() -> None:
+    with pytest.raises(
+        click.ClickException,
+        match="--allowed-client-id requires --user-pool-id",
+    ):
+        _resolve_or_create_studio_identity_resources(
+            access_key="ak",
+            secret_key="sk",
+            user_pool_id=None,
+            client_id="client-only",
+            application_name="my-studio",
+            region="cn-beijing",
+        )
+
+
+@pytest.mark.parametrize(
+    ("provider_args", "expected_region", "expected_provider", "dev_args"),
+    [
+        (
+            [
+                "--region",
+                "cn-beijing",
+                "--volcengine-access-key",
+                "ak",
+                "--volcengine-secret-key",
+                "sk",
+            ],
+            "cn-beijing",
+            "volcengine",
+            ["--sandbox-dev-tool-id", "dev-tool"],
+        ),
+        (
+            [
+                "--region",
+                "cn-shanghai",
+                "--volcengine-access-key",
+                "ak",
+                "--volcengine-secret-key",
+                "sk",
+            ],
+            "cn-shanghai",
+            "volcengine",
+            ["--sandbox-dev-tool-id", "dev-tool"],
+        ),
+        (
+            [
+                "--provider",
+                "byteplus",
+                "--byteplus-access-key",
+                "ak",
+                "--byteplus-secret-key",
+                "sk",
+            ],
+            "ap-southeast-1",
+            "byteplus",
+            [],
+        ),
+    ],
+)
+def test_studio_deploy_auto_identity_is_injected_and_printed(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_args: list[str],
+    expected_region: str,
+    expected_provider: str,
+    dev_args: list[str],
+) -> None:
+    captured: dict[str, object] = {}
+    environments: dict[str, str] = {}
+
+    def _resolve_identity(**kwargs: object) -> tuple[str, str, str]:
+        captured["identity"] = kwargs
+        return "pool-created", "identity.example.com", "client-created"
+
+    class _FakeCloudAgentEngine:
+        def __init__(self, **_: object) -> None:
+            self._vefaas_service = SimpleNamespace()
+
+        def deploy(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                vefaas_endpoint="https://studio.example.com",
+                vefaas_application_id="app-id",
+                vefaas_function_id="",
+            )
+
+    class _FakeIdentityClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured["callback_client"] = kwargs
+
+        def register_callback_for_user_pool_client(self, **kwargs: object) -> None:
+            captured["callback"] = kwargs
+
+    monkeypatch.setattr("veadk.config.veadk_environments", environments)
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_or_create_studio_identity_resources",
+        _resolve_identity,
+    )
+    monkeypatch.setattr(
+        "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        _FakeIdentityClient,
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--vefaas-app-name",
+            "studio-app",
+            "--iam-role",
+            "trn:iam::role/test",
+            "--gateway-name",
+            "gateway",
+            "--sandbox-chat-codex-tool-id",
+            "codex-tool",
+            "--sandbox-chat-openclaw-tool-id",
+            "openclaw-tool",
+            "--sandbox-chat-hermes-tool-id",
+            "hermes-tool",
+            "--sandbox-skill-creator-tool-id",
+            "skill-tool",
+            *provider_args,
+            *dev_args,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    identity = captured["identity"]
+    assert isinstance(identity, dict)
+    assert identity["region"] == expected_region
+    assert identity["provider"] == expected_provider
+    assert identity["user_pool_id"] is None
+    assert identity["client_id"] is None
+    assert environments["OAUTH2_USER_POOL_ID"] == "pool-created"
+    assert environments["OAUTH2_USER_POOL_CLIENT_ID"] == "client-created"
+    assert environments["VEIDENTITY_REGION"] == expected_region
+    assert f"identity region: {expected_region}" in result.output
+    assert "user pool id: pool-created" in result.output
+    assert "user pool domain: identity.example.com" in result.output
+    assert "client id: client-created" in result.output
 
 
 def test_studio_credentials_fall_back_to_volc_default_profile(
