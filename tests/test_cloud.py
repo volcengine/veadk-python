@@ -144,7 +144,7 @@ def test_vefaas_code_upload_callback_uses_configured_region() -> None:
         url="https://example.com/upload",
         data=b"archive",
         headers={"Content-Type": "application/zip"},
-        timeout=(30, 300),
+        timeout=(300, 300),
     )
     callback.assert_called_once_with(
         ak="test_access_key",

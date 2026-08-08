@@ -274,10 +274,19 @@ def _find_named(items: list[Any], name: str) -> Any | None:
 def _find_function_id(service: Any) -> str:
     from volcenginesdkvefaas import ListFunctionsRequest
 
-    response = service.client.list_functions(
-        ListFunctionsRequest(page_number=1, page_size=100)
-    )
-    function = _find_named(list(getattr(response, "items", []) or []), _FUNCTION_NAME)
+    page_number = 1
+    page_size = 100
+    functions: list[Any] = []
+    while True:
+        response = service.client.list_functions(
+            ListFunctionsRequest(page_number=page_number, page_size=page_size)
+        )
+        functions.extend(list(getattr(response, "items", []) or []))
+        total = int(getattr(response, "total", 0) or 0)
+        if page_number * page_size >= total:
+            break
+        page_number += 1
+    function = _find_named(functions, _FUNCTION_NAME)
     return str(getattr(function, "id", "") or "")
 
 
