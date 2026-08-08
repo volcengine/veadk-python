@@ -7167,6 +7167,75 @@ def _resolve_studio_identity_region(
     )
 
 
+def _resolve_or_create_studio_identity_resources(
+    *,
+    access_key: str,
+    secret_key: str,
+    user_pool_id: str | None,
+    client_id: str | None,
+    application_name: str,
+    region: str,
+    session_token: str = "",
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+) -> tuple[str, str, str]:
+    """Resolve or create the Studio user pool and web client in one region."""
+    from veadk.integrations.ve_identity.identity_client import IdentityClient
+
+    resolved_pool_id = (user_pool_id or "").strip()
+    resolved_client_id = (client_id or "").strip()
+    if resolved_client_id and not resolved_pool_id:
+        raise click.ClickException(
+            "--allowed-client-id requires --user-pool-id so the client can be "
+            "resolved within its user pool."
+        )
+
+    identity_client = IdentityClient(
+        access_key=access_key,
+        secret_key=secret_key,
+        session_token=session_token,
+        region=region,
+        provider=provider,
+    )
+
+    if resolved_pool_id:
+        user_pool = identity_client.get_user_pool(uid=resolved_pool_id)
+        if user_pool is None:
+            raise click.ClickException(
+                f"Identity user pool '{resolved_pool_id}' was not found in {region}."
+            )
+        resolved_pool_id, user_pool_domain = user_pool
+        click.echo(f"Using Identity user pool '{resolved_pool_id}' in {region}.")
+    else:
+        user_pool_name = f"veadk-studio-{application_name}"
+        user_pool = identity_client.get_user_pool(name=user_pool_name)
+        if user_pool is None:
+            click.echo(f"Creating Identity user pool '{user_pool_name}' in {region}…")
+            user_pool = identity_client.create_user_pool(name=user_pool_name)
+        else:
+            click.echo(f"Reusing Identity user pool '{user_pool_name}' in {region}.")
+        resolved_pool_id, user_pool_domain = user_pool
+
+    if resolved_client_id:
+        return resolved_pool_id, user_pool_domain, resolved_client_id
+
+    client_name = f"veadk-studio-{application_name}-web"
+    user_pool_client = identity_client.get_user_pool_client(
+        user_pool_uid=resolved_pool_id,
+        name=client_name,
+    )
+    if user_pool_client is None:
+        click.echo(f"Creating Identity client '{client_name}' in {region}…")
+        user_pool_client = identity_client.create_user_pool_client(
+            user_pool_uid=resolved_pool_id,
+            name=client_name,
+            client_type="WEB_APPLICATION",
+        )
+    else:
+        click.echo(f"Reusing Identity client '{client_name}' in {region}.")
+    resolved_client_id, _client_secret = user_pool_client
+    return resolved_pool_id, user_pool_domain, resolved_client_id
+
+
 def _resolve_studio_cloud_credentials(
     access_key: str | None,
     secret_key: str | None,
@@ -7249,13 +7318,15 @@ def _resolve_studio_cloud_credentials(
 @studio.command("deploy")
 @click.option(
     "--user-pool-id",
-    required=True,
-    help="Identity User Pool UID that gates access (the gateway does SSO against it).",
+    default=None,
+    help="Existing Identity User Pool UID. When omitted, Studio creates or "
+    "reuses a pool in the deployment region.",
 )
 @click.option(
     "--allowed-client-id",
-    required=True,
-    help="Identity client UID used for the SSO login at the gateway.",
+    default=None,
+    help="Existing Identity client UID used for SSO. When omitted, Studio "
+    "creates or reuses a web client in the deployment region.",
 )
 @click.option(
     "--client-secret",
@@ -7440,8 +7511,8 @@ def _resolve_studio_cloud_credentials(
     help=f"APMPlus environment name. Default: {STUDIO_APMPLUS_ENV}.",
 )
 def frontend_deploy(
-    user_pool_id: str,
-    allowed_client_id: str,
+    user_pool_id: str | None,
+    allowed_client_id: str | None,
     client_secret: str,
     vefaas_app_name: str,
     provider: str,
@@ -7480,7 +7551,7 @@ def frontend_deploy(
     """Deploy the SSO web frontend to VeFaaS.
 
     Builds a minimal function that runs `veadk studio --auth-mode frontend`,
-    with in-app SSO bound to the given Identity user pool + client, and prints
+    with in-app SSO bound to a resolved Identity user pool + client, and prints
     the public URL. Inside the function the frontend uses the bound IAM role's
     STS credentials to manage AgentKit runtimes.
     """
@@ -7538,15 +7609,31 @@ def frontend_deploy(
         if session_token:
             os.environ["BYTEPLUS_SESSION_TOKEN"] = session_token
 
-    identity_region = _resolve_studio_identity_region(
-        access_key=ak,
-        secret_key=sk,
-        user_pool_id=user_pool_id,
-        client_id=allowed_client_id,
-        deployment_region=region,
-        session_token=session_token,
-        provider=provider_id,
-    )
+    user_pool_domain = ""
+    if user_pool_id and allowed_client_id:
+        identity_region = _resolve_studio_identity_region(
+            access_key=ak,
+            secret_key=sk,
+            user_pool_id=user_pool_id,
+            client_id=allowed_client_id,
+            deployment_region=region,
+            session_token=session_token,
+            provider=provider_id,
+        )
+    else:
+        identity_region = region
+        user_pool_id, user_pool_domain, allowed_client_id = (
+            _resolve_or_create_studio_identity_resources(
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token,
+                user_pool_id=user_pool_id,
+                client_id=allowed_client_id,
+                application_name=vefaas_app_name,
+                region=identity_region,
+                provider=provider_id,
+            )
+        )
     if identity_region != region:
         click.secho(
             f"Warning: Studio deploys to {region}, but the Identity user "
@@ -7978,6 +8065,11 @@ def frontend_deploy(
         click.echo("")
         click.echo(f"✅ Frontend deployed: {url}")
         click.echo(f"   application id: {app.vefaas_application_id}")
+        click.echo(f"   identity region: {identity_region}")
+        click.echo(f"   user pool id: {user_pool_id}")
+        if user_pool_domain:
+            click.echo(f"   user pool domain: {user_pool_domain}")
+        click.echo(f"   client id: {allowed_client_id}")
         click.echo("   (open the URL — you'll be redirected through SSO login)")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

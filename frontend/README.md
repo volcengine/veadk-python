@@ -222,10 +222,12 @@ the navbar without extra options:
 
 ```bash
 veadk studio deploy \
-  --user-pool-id <pool-id> \
-  --allowed-client-id <client-id> \
   --vefaas-app-name <app-name>
 ```
+
+When `--user-pool-id` and `--allowed-client-id` are omitted, deployment creates
+or reuses them in the selected `--region` and prints the resolved IDs. Pass both
+options to keep using existing Identity resources.
 
 Studio checks `latest.json` every three minutes and lists newer releases with
 their changelog and Git SHA. An accepted update verifies the selected complete
