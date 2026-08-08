@@ -129,6 +129,12 @@ description: {indicator}
             "link",
         ),
     ],
+    ids=[
+        "skill-md-not-at-root",
+        "frontmatter-missing",
+        "unsafe-path",
+        "symlink",
+    ],
 )
 def test_skill_archive_returns_stable_detailed_errors(
     content: bytes,
