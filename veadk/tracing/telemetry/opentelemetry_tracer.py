@@ -20,7 +20,6 @@ from typing import Any
 
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk import trace as trace_sdk
-from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import override
@@ -29,26 +28,12 @@ from veadk.tracing.base_tracer import BaseTracer
 from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.tracing.telemetry.exporters.inmemory_exporter import InMemoryExporter
+from veadk.tracing.telemetry.portal_metrics import portal_metric_recorder
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import get_agent_dir
 from veadk.utils.patches import patch_google_adk_telemetry
 
 logger = get_logger(__name__)
-
-
-def _update_resource_attributions(
-    provider: TracerProvider, resource_attributes: dict
-) -> None:
-    """Update the resource attributes of a TracerProvider instance.
-
-    This function merges new resource attributes with the existing ones in the
-    provider, allowing dynamic configuration of telemetry metadata.
-
-    Args:
-        provider: The TracerProvider instance to update
-        resource_attributes: Dictionary of attributes to merge with existing resources
-    """
-    provider._resource = provider._resource.merge(Resource.create(resource_attributes))
 
 
 class OpentelemetryTracer(BaseModel, BaseTracer):
@@ -172,39 +157,11 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
             global_tracer_provider = trace_api.get_tracer_provider()
 
         global_tracer_provider: TracerProvider
+        self._global_tracer_provider = global_tracer_provider
         self._apmplus_managed_externally = have_global_tracer_provider
 
-        if self._apmplus_managed_externally:
-            exporter_count = len(self.exporters)
-            self.exporters = [
-                e for e in self.exporters if not isinstance(e, APMPlusExporter)
-            ]
-            if len(self.exporters) != exporter_count:
-                logger.info(
-                    "Reuse existing global TracerProvider and skip registering "
-                    "APMPlusExporter."
-                )
-
         for exporter in self.exporters:
-            processor = exporter.processor
-            resource_attributes = exporter.resource_attributes
-
-            if resource_attributes:
-                _update_resource_attributions(
-                    global_tracer_provider, resource_attributes
-                )
-
-            if processor:
-                global_tracer_provider.add_span_processor(processor)
-                self._processors.append(processor)
-
-                logger.debug(
-                    f"Add span processor for exporter `{exporter.__class__.__name__}` to OpentelemetryTracer."
-                )
-            else:
-                logger.error(
-                    f"Add span processor for exporter `{exporter.__class__.__name__}` to OpentelemetryTracer failed."
-                )
+            self._activate_exporter(exporter)
 
         self._inmemory_exporter = InMemoryExporter()
         if self._inmemory_exporter.processor:
@@ -225,17 +182,41 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
             f"Init OpentelemetryTracer with {len(self._processors)} exporter(s)."
         )
 
-        # Initialize global meter_uploader from exporters
-        from veadk.tracing.telemetry.telemetry import (
-            init_global_meter_uploader_from_exporters,
-        )
+    def _activate_exporter(self, exporter: BaseExporter) -> bool:
+        return self._register_exporter(exporter)
 
-        init_global_meter_uploader_from_exporters(self.exporters)
+    def _register_exporter(self, exporter: BaseExporter) -> bool:
+        if isinstance(exporter, APMPlusExporter) and self.apmplus_managed_externally:
+            logger.info(
+                "Reuse existing global TracerProvider and skip registering "
+                "APMPlusExporter span processor."
+            )
+            return False
+
+        if exporter.register(self._global_tracer_provider):
+            self._processors.append(exporter.processor)
+            logger.debug(
+                f"Add span processor for exporter `{exporter.__class__.__name__}` to OpentelemetryTracer."
+            )
+            return True
+
+        if exporter.processor is None:
+            logger.error(
+                f"Add span processor for exporter `{exporter.__class__.__name__}` to OpentelemetryTracer failed."
+            )
+        return False
 
     @property
     def apmplus_managed_externally(self) -> bool:
         """Whether a global provider existed before this tracer was initialized."""
         return self._apmplus_managed_externally
+
+    def add_exporter(self, exporter: BaseExporter) -> bool:
+        """Add an exporter and immediately register it with the global provider."""
+        if not any(existing is exporter for existing in self.exporters):
+            self.exporters.append(exporter)
+
+        return self._activate_exporter(exporter)
 
     @property
     def trace_file_path(self) -> str:
@@ -275,6 +256,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         for processor in self._processors:
             time.sleep(0.05)
             processor.force_flush()
+        portal_metric_recorder.force_flush()
 
     @override
     def dump(
