@@ -27,6 +27,7 @@ import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
 import { AgentFaceIcon } from "./AgentFaceIcon";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
+import { SkillIcon } from "./icons/SkillIcon";
 import defaultSiteLogo from "../assets/logo.svg";
 import byteplusLogo from "../assets/byteplus.svg";
 
@@ -35,6 +36,7 @@ const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 export type SidebarPage =
   | "new-chat"
   | "agents"
+  | "skills"
   | "applications"
   | "search"
   | "feedback"
@@ -303,9 +305,8 @@ export function Sidebar({
   version,
   onLogout,
 }: SidebarProps) {
-  // Creation and Skill Center live outside the #748-style sidebar.
+  // Agent creation still lives outside the main navigation.
   void onQuickCreate;
-  void onSkillCenter;
   void onAddAgent;
   // Per-module feature gates; a missing flag defaults to shown.
   const show = (k: keyof NonNullable<typeof features>) => features?.[k] !== false;
@@ -403,6 +404,20 @@ export function Sidebar({
           <AgentFaceIcon />
           <span className="sidebar-nav-label">智能体</span>
         </button>
+        {show("skillCenter") ? (
+          <button
+            className={`new-chat new-chat--skills${
+              activePage === "skills" ? " is-active" : ""
+            }`}
+            onClick={onSkillCenter}
+            aria-label="技能"
+            aria-current={activePage === "skills" ? "page" : undefined}
+            title="技能"
+          >
+            <SkillIcon className="icon" />
+            <span className="sidebar-nav-label">技能</span>
+          </button>
+        ) : null}
         {show("search") && (
           <SearchButton active={activePage === "search"} onClick={onSearch} />
         )}
