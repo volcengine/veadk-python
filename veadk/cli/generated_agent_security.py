@@ -21,11 +21,13 @@ import socket
 from urllib.parse import urlparse
 
 from veadk.cli.generated_agent_catalog import (
+    BYTEPLUS_MODELARK_BASE_URL,
     EXPORTER_BY_ID,
     KB_BY_ID,
     LTM_BY_ID,
     STM_BY_ID,
     TOOL_BY_ID,
+    VOLCENGINE_MODELARK_BASE_URL,
 )
 from veadk.cli.generated_agent_codegen import AgentDraft
 
@@ -57,6 +59,11 @@ _METADATA_IPS = {
     ipaddress.ip_address("169.254.169.254"),
 }
 
+_TRUSTED_MODEL_API_BASES = {
+    BYTEPLUS_MODELARK_BASE_URL.rstrip("/"),
+    VOLCENGINE_MODELARK_BASE_URL.rstrip("/"),
+}
+
 
 def validate_project_policy(draft: AgentDraft) -> None:
     total = _validate_node(
@@ -64,6 +71,7 @@ def validate_project_policy(draft: AgentDraft) -> None:
         depth=0,
         allow_local_runtime_resources=True,
         allow_stdio_mcp=True,
+        managed_debug_credentials=False,
     )
     if total > MAX_SUBAGENTS + 1:
         raise DebugPolicyError(f"Too many agents: {total}")
@@ -79,6 +87,7 @@ def validate_debug_policy(
         depth=0,
         allow_local_runtime_resources=allow_local_runtime_resources,
         allow_stdio_mcp=False,
+        managed_debug_credentials=True,
     )
     if total > MAX_SUBAGENTS + 1:
         raise DebugPolicyError(f"Too many agents: {total}")
@@ -90,6 +99,7 @@ def _validate_node(
     depth: int,
     allow_local_runtime_resources: bool,
     allow_stdio_mcp: bool,
+    managed_debug_credentials: bool,
 ) -> int:
     if depth > MAX_DEPTH:
         raise DebugPolicyError(f"Agent tree is too deep (>{MAX_DEPTH})")
@@ -100,13 +110,20 @@ def _validate_node(
     _check_len("description", draft.description, MAX_DESCRIPTION_LEN)
     _check_len("instruction", draft.instruction, MAX_INSTRUCTION_LEN)
 
+    if managed_debug_credentials and draft.modelApiBase.strip():
+        validate_debug_model_api_base(draft.modelApiBase)
+
     if draft.agentType == "loop" and not (1 <= draft.maxIterations <= MAX_ITERATIONS):
         raise DebugPolicyError(f"maxIterations must be between 1 and {MAX_ITERATIONS}")
     if draft.agentType == "a2a":
         if not registry_backed_remote and not draft.a2aUrl.strip():
             raise DebugPolicyError("A2A URL is required")
         if not registry_backed_remote and not allow_local_runtime_resources:
-            validate_url_not_private(draft.a2aUrl, field_name="a2aUrl")
+            validate_url_not_private(
+                draft.a2aUrl,
+                field_name="a2aUrl",
+                require_https=True,
+            )
     if draft.a2aRegistry.enabled and not draft.a2aRegistry.registrySpaceId.strip():
         raise DebugPolicyError("A2A registry space id is required")
 
@@ -144,7 +161,11 @@ def _validate_node(
         if tool.transport == "stdio" and not allow_stdio_mcp:
             raise DebugPolicyError("MCP stdio transport is disabled for debug runs")
         if tool.transport == "http" and not allow_local_runtime_resources:
-            validate_url_not_private(tool.url, field_name="mcpTools.url")
+            validate_url_not_private(
+                tool.url,
+                field_name="mcpTools.url",
+                require_https=True,
+            )
         for arg in tool.args:
             _check_len("MCP arg", arg, MAX_MCP_ARG_LEN)
 
@@ -155,6 +176,7 @@ def _validate_node(
             depth=depth + 1,
             allow_local_runtime_resources=allow_local_runtime_resources,
             allow_stdio_mcp=allow_stdio_mcp,
+            managed_debug_credentials=managed_debug_credentials,
         )
     return total
 
@@ -164,6 +186,7 @@ def validate_url_not_private(
     *,
     field_name: str,
     resolve_dns: bool = True,
+    require_https: bool = False,
 ) -> None:
     raw = (raw_url or "").strip()
     if not raw:
@@ -171,6 +194,10 @@ def validate_url_not_private(
     parsed = urlparse(raw)
     if parsed.scheme not in {"http", "https"}:
         raise DebugPolicyError(f"{field_name} must use http or https")
+    if require_https and parsed.scheme != "https":
+        raise DebugPolicyError(f"{field_name} must use https")
+    if parsed.username or parsed.password:
+        raise DebugPolicyError(f"{field_name} must not include user info")
     host = (parsed.hostname or "").strip().lower()
     if not host:
         raise DebugPolicyError(f"{field_name} must include a hostname")
@@ -203,6 +230,25 @@ def validate_url_not_private(
             _reject_private_ip(ipaddress.ip_address(ip_raw), field_name=field_name)
         except ValueError as exc:
             raise DebugPolicyError(f"{field_name} resolved to an invalid IP") from exc
+
+
+def validate_debug_model_api_base(raw_url: str) -> None:
+    """Allow managed debug credentials only on built-in ModelArk endpoints."""
+    raw = raw_url.strip()
+    parsed = urlparse(raw)
+    if (
+        parsed.scheme != "https"
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise DebugPolicyError("modelApiBase must use a trusted ModelArk endpoint")
+    normalized = f"https://{parsed.netloc}{parsed.path}".rstrip("/")
+    if normalized not in _TRUSTED_MODEL_API_BASES:
+        raise DebugPolicyError(
+            "Custom modelApiBase is disabled for managed debug credentials"
+        )
 
 
 def _default_port(scheme: str) -> int:

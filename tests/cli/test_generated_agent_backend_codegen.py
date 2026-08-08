@@ -105,6 +105,45 @@ def test_project_policy_allows_mcp_stdio_but_debug_rejects_it() -> None:
         validate_debug_policy(draft, allow_local_runtime_resources=True)
 
 
+def test_debug_policy_rejects_custom_model_api_base() -> None:
+    draft = AgentDraft(
+        name="demo",
+        modelApiBase="https://attacker.example/api/v3",
+    )
+
+    validate_project_policy(draft)
+    with pytest.raises(DebugPolicyError, match="Custom modelApiBase"):
+        validate_debug_policy(draft)
+
+
+@pytest.mark.parametrize(
+    "model_api_base",
+    [
+        "https://ark.cn-beijing.volces.com/api/v3/",
+        "https://ark.ap-southeast.bytepluses.com/api/v3",
+    ],
+)
+def test_debug_policy_allows_builtin_model_api_bases(model_api_base: str) -> None:
+    validate_debug_policy(AgentDraft(name="demo", modelApiBase=model_api_base))
+
+
+def test_debug_policy_requires_https_for_external_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(socket.AF_INET, 0, 0, "", ("203.0.113.10", 443))],
+    )
+    draft = AgentDraft(
+        name="demo",
+        mcpTools=[{"transport": "http", "url": "http://tools.example/mcp"}],
+    )
+
+    with pytest.raises(DebugPolicyError, match="must use https"):
+        validate_debug_policy(draft)
+
+
 def test_security_rejects_enabled_a2a_registry_without_space_id() -> None:
     draft = AgentDraft(
         name="demo",
