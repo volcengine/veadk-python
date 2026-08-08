@@ -1354,6 +1354,17 @@ def _run_frontend_server(
     def _coerce_cloud_region(region: str | None) -> str:
         return (region or "").strip() or _default_cloud_region()
 
+    from frontend.server.deployment_resources import (
+        mount_deployment_resource_routes,
+    )
+
+    mount_deployment_resource_routes(
+        app,
+        authorize=_require_agent_management,
+        provider=provider,
+        resolve_credentials=_resolve_ve_credentials,
+    )
+
     def _require_studio_admin(request: Request) -> None:
         if _request_role(request) != StudioRole.ADMIN:
             raise HTTPException(
@@ -3186,6 +3197,32 @@ def _run_frontend_server(
 
         region = config.get("region") or _default_cloud_region()
         project_name = config.get("projectName", "default")
+        try:
+            from frontend.server.deployment_resources import (
+                DeploymentResourceService,
+                agentkit_code_pipeline_resources,
+                deployment_resource_tags,
+                deployment_resources_from_tags,
+            )
+
+            deployment_resource_service = DeploymentResourceService(
+                provider, region, _resolve_ve_credentials()
+            )
+            deployment_resource_config = {}
+            deployment_resource_tag_values: dict[str, str] = {}
+            if not runtime_id:
+                deployment_resource_config = await asyncio.to_thread(
+                    deployment_resource_service.resolve_deployment_config,
+                    data.get("resources"),
+                )
+                deployment_resource_tag_values = deployment_resource_tags(
+                    data.get("resources")
+                )
+        except (TypeError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            logger.exception("resolve deployment resources failed: %s", e)
+            raise HTTPException(status_code=502, detail=str(e)) from e
         existing_runtime = None
         if runtime_id:
             try:
@@ -3202,6 +3239,14 @@ def _run_frontend_server(
                     raise HTTPException(
                         status_code=409,
                         detail=update_capability["reason"],
+                    )
+                tagged_resources = deployment_resources_from_tags(
+                    _runtime_tags(existing_runtime)
+                )
+                if tagged_resources is not None:
+                    deployment_resource_config = await asyncio.to_thread(
+                        deployment_resource_service.resolve_deployment_config,
+                        tagged_resources,
                     )
             except HTTPException:
                 raise
@@ -3413,6 +3458,7 @@ def _run_frontend_server(
             cloud_config["tos_bucket"] = f"{bucket_base}-{region_suffix}"
             if provider == "byteplus":
                 cloud_config["cr_instance_name"] = bucket_base
+        cloud_config.update(deployment_resource_config)
 
         agentkit_config = {
             "common": {
@@ -3439,6 +3485,20 @@ def _run_frontend_server(
             "destroying": False,
             "destroy_on_cancel": not bool(runtime_id),
             "owner_id": owner_id,
+            "cp_workspace_id": str(
+                (
+                    ((data.get("resources") or {}).get("codePipeline") or {}).get(
+                        "workspaceId"
+                    )
+                )
+                or ""
+            ),
+            "cp_pipeline_id": str(
+                deployment_resource_config.get("cp_pipeline_id") or ""
+            ),
+            "cp_pipeline_name": str(
+                deployment_resource_config.get("cp_pipeline_name") or ""
+            ),
         }
         events: _queue.Queue = _queue.Queue()
         state = {"phase": "build", "build_error_excerpt": ""}
@@ -3446,7 +3506,10 @@ def _run_frontend_server(
         task_state["cp_log_stop_event"] = cp_log_stop_event
 
         _PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2, "update": 3}
-        _CP_WORKSPACE_NAME = "agentkit-cli-workspace"
+        _CP_WORKSPACE_NAME = str(
+            deployment_resource_config.get("cp_workspace_name")
+            or "agentkit-cli-workspace"
+        )
         _CP_LOG_POLL_INTERVAL = 5.0
 
         def _result_error_text(result) -> str:
@@ -3474,7 +3537,8 @@ def _run_frontend_server(
             if _is_tos_request_expired(error_text):
                 return (
                     "云构建拉取源码包时 TOS 临时下载签名已过期。"
-                    "已自动重试一次仍失败，请稍后重新点击部署。"
+                    "已自动重试一次仍失败，请稍后重新点击部署。\n"
+                    f"原始错误：\n{error_text}"
                 )
             return error_text
 
@@ -3853,6 +3917,12 @@ def _run_frontend_server(
                                 {"Key": "veadk:owner", "Value": owner_id}
                             )
                         )
+                    extra.extend(
+                        _rt.TagsItemForCreateRuntime.model_validate(
+                            {"Key": key, "Value": value}
+                        )
+                        for key, value in deployment_resource_tag_values.items()
+                    )
 
                     def _tagged_create(self, req, _orig=orig_create, _extra=extra):
                         if task_state["cancel_event"].is_set():
@@ -3886,7 +3956,7 @@ def _run_frontend_server(
                     rt_client.update_runtime = _apmplus_update
                 except Exception as e:
                     logger.error("Could not prepare Runtime ownership tags: %s", e)
-                    result_box["error"] = str(e)
+                    result_box["error"] = _safe_exception_detail(e)
                     return
 
                 try:
@@ -3902,7 +3972,12 @@ def _run_frontend_server(
                                     f"({attempt}/2)..."
                                 ),
                             )
-                        with _agentkit_sdk_credential_env():
+                        with (
+                            _agentkit_sdk_credential_env(),
+                            agentkit_code_pipeline_resources(
+                                deployment_resource_config
+                            ),
+                        ):
                             result = sdk.launch(
                                 config_file=str(base / "agentkit.yaml"),
                                 preflight_mode=PreflightMode.WARN,
@@ -3945,7 +4020,7 @@ def _run_frontend_server(
                     result_box["result"] = result
                 except Exception as e:
                     logger.error(f"AgentKit launch error: {e}", exc_info=True)
-                    result_box["error"] = str(e)
+                    result_box["error"] = _safe_exception_detail(e)
                 finally:
                     if rt_client is not None and orig_create is not None:
                         rt_client.create_runtime = orig_create

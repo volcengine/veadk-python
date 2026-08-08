@@ -283,7 +283,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /const mergeBuildFailureLog = \(message: string\): DeployBuildLogSnapshot \| undefined =>/);
   assert.match(projectPreviewSource, /"----- 构建失败 -----"[\s\S]*?latestBuildLog = mergeDeployBuildLog\(latestBuildLog/);
   assert.match(projectPreviewSource, /latestPhase = s\.phase/);
-  assert.match(projectPreviewSource, /message: failedInBuild \? "构建镜像失败，详见构建日志。" : message/);
+  assert.match(projectPreviewSource, /label: "部署失败",\s*message,\s*\.\.\.\(buildLog/);
   assert.match(
     projectPreviewSource,
     /await onDeploymentComplete\?\.\(result\)[\s\S]*?catch \(error\)[\s\S]*?error instanceof RuntimeProbeError[\s\S]*?status: "success"[\s\S]*?label: "部署完成，暂未连接"[\s\S]*?message: error\.message/,
