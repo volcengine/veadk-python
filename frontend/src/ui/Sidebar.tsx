@@ -13,9 +13,7 @@ import {
   PanelLeftOpen,
   Plus,
   Trash2,
-  X,
 } from "lucide-react";
-import { createPortal } from "react-dom";
 import type {
   AdkSession,
   SiteBranding,
@@ -81,11 +79,11 @@ export interface SidebarProps {
   onAddAgent: () => void;
   onMyAgents: () => void;
   onApplications: () => void;
+  onSystemInfo: () => void;
   onIssueFeedback: () => void;
   onPickSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   userInfo?: Record<string, unknown>;
-  version: string;
   onLogout: () => void;
 }
 
@@ -121,64 +119,15 @@ function StudioRoleBadge({ role }: { role: StudioAccess["role"] }) {
   );
 }
 
-function SystemInfoDialog({
-  version,
-  onClose,
-}: {
-  version: string;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
-
-  return createPortal(
-    <div className="confirm-scrim" onMouseDown={onClose}>
-      <section
-        className="confirm-box system-info-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="system-info-title"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <header className="system-info-head">
-          <h2 id="system-info-title">系统信息</h2>
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={onClose}
-            aria-label="关闭系统信息"
-            autoFocus
-          >
-            <X className="icon" aria-hidden="true" />
-          </button>
-        </header>
-        <dl className="system-info-meta">
-          <div>
-            <dt>当前版本</dt>
-            <dd>{version || "—"}</dd>
-          </div>
-        </dl>
-      </section>
-    </div>,
-    document.body,
-  );
-}
-
 /** Account block pinned at the bottom of the sidebar: avatar + name, with a
  *  popover (opening upward) holding the full identity and account actions. */
 function SidebarUser({
   access,
   userInfo,
-  version,
+  onSystemInfo,
   onLogout,
-}: Pick<SidebarProps, "access" | "userInfo" | "version" | "onLogout">) {
+}: Pick<SidebarProps, "access" | "userInfo" | "onSystemInfo" | "onLogout">) {
   const [open, setOpen] = useState(false);
-  const [systemInfoOpen, setSystemInfoOpen] = useState(false);
   const [failedAvatarUrl, setFailedAvatarUrl] = useState("");
   if (!userInfo) return null;
   const name = displayName(userInfo);
@@ -256,7 +205,7 @@ function SidebarUser({
               className="account-action"
               onClick={() => {
                 setOpen(false);
-                setSystemInfoOpen(true);
+                onSystemInfo();
               }}
             >
               <Info className="icon" /> 系统信息
@@ -274,9 +223,6 @@ function SidebarUser({
           </div>
         </>
       )}
-      {systemInfoOpen ? (
-        <SystemInfoDialog version={version} onClose={() => setSystemInfoOpen(false)} />
-      ) : null}
     </div>
   );
 }
@@ -298,11 +244,11 @@ export function Sidebar({
   onAddAgent,
   onMyAgents,
   onApplications,
+  onSystemInfo,
   onIssueFeedback,
   onPickSession,
   onDeleteSession,
   userInfo,
-  version,
   onLogout,
 }: SidebarProps) {
   // Agent creation still lives outside the main navigation.
@@ -529,7 +475,7 @@ export function Sidebar({
         <SidebarUser
           access={access}
           userInfo={userInfo}
-          version={version}
+          onSystemInfo={onSystemInfo}
           onLogout={onLogout}
         />
       </div>

@@ -772,14 +772,6 @@ def _serve_options(f):
             "(env: SANDBOX_CHAT_HERMES).",
         ),
         click.option(
-            "--sandbox-skill-creator-tool-id",
-            "--skill-creator-tool-id",
-            default=None,
-            envvar="SANDBOX_SKILL_CREATOR",
-            help="AgentKit CodeEnv Tool ID used by Skill creation mode "
-            "(env: SANDBOX_SKILL_CREATOR).",
-        ),
-        click.option(
             "--admin",
             "studio_admins",
             default=None,
@@ -837,7 +829,6 @@ def frontend(
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
-    sandbox_skill_creator_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
     open_browser: bool,
@@ -867,7 +858,6 @@ def frontend(
         sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
         sandbox_chat_openclaw_tool_id=sandbox_chat_openclaw_tool_id,
         sandbox_chat_hermes_tool_id=sandbox_chat_hermes_tool_id,
-        sandbox_skill_creator_tool_id=sandbox_skill_creator_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
         open_browser=open_browser,
@@ -901,7 +891,6 @@ def studio(
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
-    sandbox_skill_creator_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
     open_browser: bool,
@@ -936,7 +925,6 @@ def studio(
         sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
         sandbox_chat_openclaw_tool_id=sandbox_chat_openclaw_tool_id,
         sandbox_chat_hermes_tool_id=sandbox_chat_hermes_tool_id,
-        sandbox_skill_creator_tool_id=sandbox_skill_creator_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
         open_browser=open_browser,
@@ -966,7 +954,6 @@ def _run_frontend_server(
     sandbox_chat_codex_tool_id: str | None = None,
     sandbox_chat_openclaw_tool_id: str | None = None,
     sandbox_chat_hermes_tool_id: str | None = None,
-    sandbox_skill_creator_tool_id: str | None = None,
     studio_admins: str | None = None,
     studio_developers: str | None = None,
     open_browser: bool,
@@ -1007,8 +994,6 @@ def _run_frontend_server(
         os.environ["SANDBOX_CHAT_OPENCLAW"] = sandbox_chat_openclaw_tool_id
     if sandbox_chat_hermes_tool_id:
         os.environ["SANDBOX_CHAT_HERMES"] = sandbox_chat_hermes_tool_id
-    if sandbox_skill_creator_tool_id:
-        os.environ["SANDBOX_SKILL_CREATOR"] = sandbox_skill_creator_tool_id
 
     from google.adk.cli.fast_api import get_fast_api_app
 
@@ -1266,14 +1251,6 @@ def _run_frontend_server(
                 status_code=403, detail="Agent management is not allowed"
             )
         return principal
-
-    def _skill_creator_owner(request: Request) -> str:
-        principal = _require_agent_management(request)
-        return principal.owner_id if principal else "local"
-
-    from veadk.cli.frontend_skill_creator import mount_skill_creator_routes
-
-    mount_skill_creator_routes(app, _skill_creator_owner)
 
     from frontend.server.skills.devenv import mount_skill_workbench_routes
     from frontend.server.skills.models import SkillIdentity
@@ -1731,6 +1708,27 @@ def _run_frontend_server(
             },
             "defaultView": "chat",
             "telemetry": studio_telemetry_config(version),
+        }
+
+    @app.get("/web/system-info")
+    async def _web_system_info(request: Request):
+        """Return non-secret Studio resource identifiers for system diagnostics."""
+        _require_agent_management(request)
+        sandbox_tools = (
+            ("codex", "Codex Sandbox", "SANDBOX_CHAT_CODEX"),
+            ("openclaw", "OpenClaw Sandbox", "SANDBOX_CHAT_OPENCLAW"),
+            ("hermes", "Hermes Sandbox", "SANDBOX_CHAT_HERMES"),
+            ("dev", "Dev Sandbox", "SANDBOX_DEV"),
+        )
+        return {
+            "sandboxTools": [
+                {
+                    "kind": kind,
+                    "label": label,
+                    "toolId": (os.getenv(environment_key) or "").strip(),
+                }
+                for kind, label, environment_key in sandbox_tools
+            ]
         }
 
     @app.get("/web/agent-info/{app_name}")
@@ -7393,15 +7391,6 @@ def _resolve_studio_cloud_credentials(
     "Default: create one during deployment.",
 )
 @click.option(
-    "--sandbox-skill-creator-tool-id",
-    "--skill-creator-tool-id",
-    "sandbox_skill_creator_tool_id",
-    default=None,
-    envvar="SANDBOX_SKILL_CREATOR",
-    help="Dedicated ready AgentKit CodeEnv Tool ID used by Skill creation mode. "
-    "Default: create one during deployment.",
-)
-@click.option(
     "--studio-update-bucket",
     default="veadk-studio",
     show_default=True,
@@ -7469,7 +7458,6 @@ def frontend_deploy(
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
-    sandbox_skill_creator_tool_id: str | None,
     studio_update_bucket: str,
     studio_update_prefix: str,
     apmplus_aid: str,
@@ -7590,7 +7578,6 @@ def frontend_deploy(
 
     sandbox_tool_ids = {
         "codex": sandbox_chat_codex_tool_id,
-        "skill_creator": sandbox_skill_creator_tool_id,
         "openclaw": sandbox_chat_openclaw_tool_id,
         "hermes": sandbox_chat_hermes_tool_id,
     }
@@ -7602,14 +7589,12 @@ def frontend_deploy(
         )
     sandbox_tool_labels = {
         "codex": "Codex",
-        "skill_creator": "Skill Creator",
         "openclaw": "OpenClaw",
         "hermes": "Hermes",
         "dev": "Dev Sandbox",
     }
     sandbox_tool_purposes = {
         "codex": "chat",
-        "skill_creator": "skill",
         "openclaw": "openclaw",
         "hermes": "hermes",
         "dev": "dev",
@@ -7644,7 +7629,7 @@ def frontend_deploy(
         with ThreadPoolExecutor(max_workers=len(missing_sandbox_tools)) as executor:
             tool_futures = {}
             for kind, tool_name in missing_sandbox_tools.items():
-                if kind in {"codex", "skill_creator"}:
+                if kind == "codex":
                     future = executor.submit(
                         ensure_studio_code_env_tool,
                         name=tool_name,
@@ -7710,7 +7695,7 @@ def frontend_deploy(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         credential_futures = {}
         for kind, tool_id in resolved_sandbox_tool_ids.items():
-            if kind in {"codex", "skill_creator", "dev"}:
+            if kind in {"codex", "dev"}:
                 code_model_name = sandbox_agent_model_name if kind == "codex" else None
                 future = executor.submit(
                     ensure_skill_creator_model_credential,
@@ -7753,7 +7738,6 @@ def frontend_deploy(
             click.echo(f"AgentKit {label} model credential is ready.")
 
     chat_codex_tool_id = resolved_sandbox_tool_ids.get("codex", "")
-    skill_creator_tool_id = resolved_sandbox_tool_ids.get("skill_creator", "")
     openclaw_tool_id = resolved_sandbox_tool_ids.get("openclaw", "")
     hermes_tool_id = resolved_sandbox_tool_ids.get("hermes", "")
     dev_tool_id = resolved_sandbox_tool_ids.get("dev", "")
@@ -7800,7 +7784,6 @@ def frontend_deploy(
     if studio_developers:
         veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
-    veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
     veadk_environments["SANDBOX_CHAT_OPENCLAW"] = openclaw_tool_id
     veadk_environments["SANDBOX_CHAT_HERMES"] = hermes_tool_id
     if provider_id == "volcengine":
@@ -8048,13 +8031,6 @@ def frontend_deploy(
     default=None,
     help="Replace the Hermes AgentKit Tool ID.",
 )
-@click.option(
-    "--sandbox-skill-creator-tool-id",
-    "--skill-creator-tool-id",
-    "sandbox_skill_creator_tool_id",
-    default=None,
-    help="Replace the Skill Creator AgentKit CodeEnv Tool ID.",
-)
 @click.option("--volcengine-access-key", default=None)
 @click.option("--volcengine-secret-key", default=None)
 @click.option("--volcengine-session-token", default=None)
@@ -8073,7 +8049,6 @@ def frontend_update(
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
-    sandbox_skill_creator_tool_id: str | None,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
     volcengine_session_token: str | None,
@@ -8213,7 +8188,6 @@ def frontend_update(
                 tool_id is not None
                 for tool_id in (
                     sandbox_chat_codex_tool_id,
-                    sandbox_skill_creator_tool_id,
                     sandbox_chat_openclaw_tool_id,
                     sandbox_chat_hermes_tool_id,
                 )
@@ -8236,9 +8210,6 @@ def frontend_update(
                 "codex": sandbox_chat_codex_tool_id
                 if sandbox_chat_codex_tool_id is not None
                 else current_env.get("SANDBOX_CHAT_CODEX", ""),
-                "skill_creator": sandbox_skill_creator_tool_id
-                if sandbox_skill_creator_tool_id is not None
-                else current_env.get("SANDBOX_SKILL_CREATOR", ""),
                 "openclaw": sandbox_chat_openclaw_tool_id
                 if sandbox_chat_openclaw_tool_id is not None
                 else current_env.get("SANDBOX_CHAT_OPENCLAW", ""),
@@ -8248,13 +8219,11 @@ def frontend_update(
             }
             byteplus_sandbox_labels = {
                 "codex": "Codex",
-                "skill_creator": "Skill Creator",
                 "openclaw": "OpenClaw",
                 "hermes": "Hermes",
             }
             byteplus_sandbox_purposes = {
                 "codex": "chat",
-                "skill_creator": "skill",
                 "openclaw": "openclaw",
                 "hermes": "hermes",
             }
@@ -8292,7 +8261,7 @@ def frontend_update(
                     ) as ex:
                         tool_futures = {}
                         for kind, tool_name in missing_sandbox_tools.items():
-                            if kind in {"codex", "skill_creator"}:
+                            if kind == "codex":
                                 future = ex.submit(
                                     ensure_studio_code_env_tool,
                                     name=tool_name,
@@ -8338,10 +8307,7 @@ def frontend_update(
                             continue
                         label = byteplus_sandbox_labels[kind]
                         click.echo(f"Creating AgentKit {label} model credential…")
-                        if kind in {"codex", "skill_creator"}:
-                            code_model_name = (
-                                sandbox_agent_model_name if kind == "codex" else None
-                            )
+                        if kind == "codex":
                             future = ex.submit(
                                 ensure_skill_creator_model_credential,
                                 tool_id=tool_id,
@@ -8350,7 +8316,7 @@ def frontend_update(
                                 secret_key=sk,
                                 session_token=session_token,
                                 provider=provider_id,
-                                model_name=code_model_name,
+                                model_name=sandbox_agent_model_name,
                             )
                         else:
                             future = ex.submit(
@@ -8384,9 +8350,6 @@ def frontend_update(
                 environment_overrides["SANDBOX_CHAT_CODEX"] = str(
                     byteplus_sandbox_tool_ids["codex"] or ""
                 )
-                environment_overrides["SANDBOX_SKILL_CREATOR"] = str(
-                    byteplus_sandbox_tool_ids["skill_creator"] or ""
-                )
                 environment_overrides["SANDBOX_CHAT_OPENCLAW"] = str(
                     byteplus_sandbox_tool_ids["openclaw"] or ""
                 )
@@ -8405,10 +8368,6 @@ def frontend_update(
             )
         if sandbox_chat_hermes_tool_id is not None:
             environment_overrides["SANDBOX_CHAT_HERMES"] = sandbox_chat_hermes_tool_id
-        if sandbox_skill_creator_tool_id is not None:
-            environment_overrides["SANDBOX_SKILL_CREATOR"] = (
-                sandbox_skill_creator_tool_id
-            )
         url = service.update_application_code_bundle(
             application_id=target.application_id,
             function_id=target.function_id,

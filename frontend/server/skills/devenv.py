@@ -14,9 +14,9 @@
 
 """DevEnv-backed Skill creation and optimization workbench for Studio.
 
-This is intentionally additive to the legacy A/B Skill creator. A Skill task
-creates its own Session on Studio's shared Dev Sandbox Tool, backed by the
-provider-specific development image and kept type-isolated from CodeEnv Tools.
+A Skill task creates its own Session on Studio's shared Dev Sandbox Tool,
+backed by the provider-specific development image and kept type-isolated from
+CodeEnv Tools.
 """
 
 from __future__ import annotations

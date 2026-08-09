@@ -3,7 +3,7 @@ import type { CloudProvider, CloudRegion } from "../../adk/cloudProvider";
 import { isSupportedCloudRegion } from "../../adk/cloudProvider";
 import type { SkillSpaceRef } from "../../create/skills/skillspace";
 import { TextShimmer } from "../text-shimmer/TextShimmer";
-import { SkillConversationStream } from "../skill-create/SkillConversationStream";
+import { SkillConversationStream } from "./SkillConversationStream";
 import {
   createSkillWorkbenchTask,
   deleteSkillWorkbenchTask,

@@ -24,11 +24,6 @@ const MODES: ModeOption[] = [
     label: "内置智能体",
     description: "使用平台提供的智能体",
   },
-  {
-    value: "skill-create",
-    label: "创建 Skill",
-    description: "使用两个模型生成并对比 Skill",
-  },
 ];
 
 const UNAVAILABLE_BUILTIN_AGENTS = [
@@ -44,18 +39,9 @@ export interface NewChatModeSelectorProps {
   onChange: (value: NewChatMode) => void;
   disabled?: boolean;
   temporaryEnabled?: boolean;
-  skillCreateEnabled?: boolean;
 }
 
 function ModeIcon({ mode }: { mode: NewChatMode }) {
-  if (mode === "skill-create") {
-    return (
-      <svg className="new-chat-mode__skill-icon" viewBox="0 0 20 20" aria-hidden="true">
-        <path d="M10 2.2l1.35 4.1 4.15 1.35-4.15 1.35L10 13.1 8.65 9 4.5 7.65 8.65 6.3 10 2.2Z" />
-        <path d="M15.6 12.2l.6 1.8 1.8.6-1.8.6-.6 1.8-.6-1.8-1.8-.6 1.8-.6.6-1.8Z" />
-      </svg>
-    );
-  }
   if (mode === "temporary") {
     return (
       <svg className="new-chat-mode__temporary-icon" viewBox="0 0 20 20" aria-hidden="true">
@@ -80,7 +66,6 @@ export function NewChatModeSelector({
   onChange,
   disabled = false,
   temporaryEnabled,
-  skillCreateEnabled,
 }: NewChatModeSelectorProps) {
   const [open, setOpen] = useState(false);
   const [builtinOpen, setBuiltinOpen] = useState(false);
@@ -94,7 +79,6 @@ export function NewChatModeSelector({
 
   function modeEnabled(mode: ModeOption): boolean | undefined {
     if (mode.value === "temporary") return temporaryEnabled;
-    if (mode.value === "skill-create") return skillCreateEnabled;
     return true;
   }
 
@@ -232,9 +216,6 @@ export function NewChatModeSelector({
                   <span className="new-chat-mode__copy">
                     <span className="new-chat-mode__label">
                       {mode.label}
-                      {mode.value === "skill-create" ? (
-                        <span className="new-chat-mode__beta">Beta</span>
-                      ) : null}
                     </span>
                     <span>{modeDescription(mode)}</span>
                   </span>

@@ -87,6 +87,7 @@ import {
   type MyAgentCardData,
 } from "./ui/MyAgents";
 import { Applications, type ApplicationId } from "./ui/Applications";
+import { SystemInfo } from "./ui/SystemInfo";
 import { GitHubIntegration } from "./ui/GitHubIntegration";
 import { FeishuBotIntegration } from "./automations/feishu/FeishuBotIntegration";
 import { CodingAgentsIntegration } from "./automations/coding-agents/CodingAgentsIntegration";
@@ -121,9 +122,6 @@ import {
   type WorkspaceAgentDraft,
 } from "./create/agentDraftStorage";
 import type { DeployResult, DeploymentTaskUpdate } from "./ui/ProjectPreview";
-import { createSkillJob, deleteSkillJob } from "./ui/skill-create/api";
-import { SkillCreateWorkspace } from "./ui/skill-create/SkillCreateWorkspace";
-import { SKILL_MODELS, type SkillCreationJob } from "./ui/skill-create/types";
 import type { NewChatMode, NewChatTask } from "./ui/new-chat-modes/types";
 import { NewChatFeatureCarousel } from "./ui/new-chat-modes/NewChatFeatureCarousel";
 import { NewChatFeatureNotice } from "./ui/new-chat-modes/NewChatFeatureNotice";
@@ -142,10 +140,7 @@ import {
   type SandboxSkill,
   type SandboxToolLaunch,
 } from "./adk/sandbox";
-import {
-  getSandboxCapability,
-  getSkillCreatorCapability,
-} from "./adk/newChatCapabilities";
+import { getSandboxCapability } from "./adk/newChatCapabilities";
 import {
   SandboxLaunchDialog,
   type SandboxLaunchState,
@@ -196,15 +191,13 @@ interface NewChatCapabilitiesState {
   harnessEnabled?: boolean;
   builtinTools?: string[];
   temporaryEnabled?: boolean;
-  skillCreateEnabled?: boolean;
 }
 
 async function probeNewChatCapabilities(
   agentId: string,
 ): Promise<NewChatCapabilitiesState> {
-  const [sandboxResult, skillResult, harnessResult] = await Promise.allSettled([
+  const [sandboxResult, harnessResult] = await Promise.allSettled([
     getSandboxCapability(),
-    getSkillCreatorCapability(),
     listSessionBuiltinTools(agentId),
   ]);
   return {
@@ -214,8 +207,6 @@ async function probeNewChatCapabilities(
     builtinTools: harnessResult.status === "fulfilled" ? harnessResult.value : [],
     temporaryEnabled:
       sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
-    skillCreateEnabled:
-      skillResult.status === "fulfilled" && skillResult.value.enabled,
   };
 }
 
@@ -839,9 +830,6 @@ export default function App() {
   const newChatCapabilitiesReady =
     !appName ||
     (newChatCapabilities.ready === true && newChatCapabilities.agentId === appName);
-  const [skillJob, setSkillJob] = useState<SkillCreationJob | null>(null);
-  const [skillCreating, setSkillCreating] = useState(false);
-  const skillCreationRunRef = useRef(0);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [invocation, setInvocation] = useState<FrontendInvocation>(emptyInvocation);
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
@@ -1042,18 +1030,6 @@ export default function App() {
     }
   }
 
-  function discardSkillCreation() {
-    skillCreationRunRef.current += 1;
-    const job = skillJob;
-    setSkillJob(null);
-    setSkillCreating(false);
-    if (job && !job.id.startsWith("pending-")) {
-      void deleteSkillJob(job.id).catch((cause) => {
-        setError(cause instanceof Error ? cause.message : String(cause));
-      });
-    }
-  }
-
   async function abandonDraftSession(sid: string) {
     try {
       await deleteSessionMedia(appName, userId, sid);
@@ -1173,6 +1149,7 @@ export default function App() {
   const [feedbackCasePreview, setFeedbackCasePreview] =
     useState<AgentFeedbackCase | null>(null);
   const [myAgents, setMyAgents] = useState(false);
+  const [systemInfo, setSystemInfo] = useState(false);
   const [applicationsView, setApplicationsView] =
     useState<"catalog" | ApplicationId | null>(null);
   // A search result may belong to a different agent; remember it so the
@@ -2341,8 +2318,6 @@ export default function App() {
       setInput("");
       setInvocation(emptyInvocation());
       setNewChatMode("temporary");
-      discardSkillCreation();
-      setSkillCreating(false);
       discardDraftAttachments(attachments);
       setAttachments([]);
       releaseAllSandboxPreviews();
@@ -2983,8 +2958,6 @@ export default function App() {
     setGreeting(pickGreeting());
     setNewChatMode("agent");
     setNewChatTask(null);
-    discardSkillCreation();
-    setSkillCreating(false);
     const abandonedSession = sessionId && persistentTurns.length === 0 && attachments.length > 0
       ? sessionId
       : "";
@@ -3023,6 +2996,7 @@ export default function App() {
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
+    setSystemInfo(false);
     setApplicationsView(null);
     startNewChat();
   }
@@ -3063,7 +3037,6 @@ export default function App() {
     setPendingTurns([]);
     setNewChatMode("agent");
     setNewChatTask(null);
-    discardSkillCreation();
     setInvocation(emptyInvocation());
     setSessionCapabilities(null);
     setSessionBuiltinTools([]);
@@ -4108,6 +4081,7 @@ export default function App() {
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId("");
     setMyAgents(true);
+    setSystemInfo(false);
     setApplicationsView(null);
     setError("");
   };
@@ -4127,6 +4101,7 @@ export default function App() {
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
+    setSystemInfo(false);
     setApplicationsView("catalog");
     setError("");
   };
@@ -4188,15 +4163,17 @@ export default function App() {
     ? "feedback"
     : skillCenter
       ? "skills"
-      : applicationsView
-      ? "applications"
-      : searchView
-        ? "search"
-        : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
-          ? "agents"
-          : sessionId || createView || skillCenter || addAgent || addMenu
-            ? null
-            : "new-chat";
+      : systemInfo
+        ? null
+        : applicationsView
+          ? "applications"
+          : searchView
+            ? "search"
+            : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
+              ? "agents"
+              : sessionId || createView || skillCenter || addAgent || addMenu
+                ? null
+                : "new-chat";
 
   return (
     <div className="layout">
@@ -4223,6 +4200,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setSystemInfo(false);
           setApplicationsView(null);
           setSearchView(true);
           setError("");
@@ -4244,6 +4222,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setSystemInfo(false);
           setApplicationsView(null);
           setCreateView(null);
           setImportedDraft(null);
@@ -4262,6 +4241,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setSystemInfo(false);
           setApplicationsView(null);
           setSkillCenter(true);
           setError("");
@@ -4281,6 +4261,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setSystemInfo(false);
           setApplicationsView(null);
           setSessionId("");
           setAddMenu(false);
@@ -4289,8 +4270,28 @@ export default function App() {
         }}
         onMyAgents={openMyAgentsPage}
         onApplications={openApplicationsPage}
+        onSystemInfo={() => {
+          setPlatformFeedbackOrigin(null);
+          if (sandboxSession) exitSandboxSession();
+          viewSidRef.current = "";
+          setSessionId("");
+          setCreateView(null);
+          setSkillCenter(false);
+          setAddAgent(false);
+          setAddMenu(false);
+          setSearchView(false);
+          setManageAgents(false);
+          setAgentDetailTarget(null);
+          setSandboxAgentDetailTarget(null);
+          setSandboxAgentWorkspace(null);
+          setMyAgents(false);
+          setApplicationsView(null);
+          setSystemInfo(true);
+          setError("");
+        }}
         onIssueFeedback={() => {
           if (platformFeedbackOrigin !== null) return;
+          setSystemInfo(false);
           setPlatformFeedbackOrigin(
             sidebarActivePage ??
               (sandboxSession
@@ -4313,13 +4314,13 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setSystemInfo(false);
           setApplicationsView(null);
           setError("");
           pickSession(id);
         }}
         onDeleteSession={removeSession}
         userInfo={userInfo}
-        version={version}
         onLogout={onLogout}
       />
 
@@ -4387,57 +4388,6 @@ export default function App() {
               value={input}
               onChange={setInput}
               onSubmit={() => {
-                if (!sandboxSession && newChatMode === "skill-create") {
-                  const prompt = input.trim();
-                  if (!prompt || skillCreating) return;
-                  const provisionalJob: SkillCreationJob = {
-                    id: `pending-${Date.now()}`,
-                    prompt,
-                    status: "provisioning",
-                    candidates: SKILL_MODELS.map((model, index) => ({
-                      id: `pending-${index}`,
-                      model,
-                      modelLabel: model,
-                      status: "queued",
-                      stage: "provisioning",
-                      files: [],
-                      activities: [{
-                        id: "provisioning",
-                        kind: "status",
-                        text: "正在拉起 Sandbox",
-                        status: "running",
-                      }],
-                    })),
-                  };
-                  setSkillCreating(true);
-                  const creationRun = ++skillCreationRunRef.current;
-                  setError("");
-                  setSkillJob(provisionalJob);
-                  setInput("");
-                  void createSkillJob(prompt, (job) => {
-                    if (skillCreationRunRef.current === creationRun) {
-                      setSkillJob(job);
-                    }
-                  })
-                    .then((job) => {
-                      if (skillCreationRunRef.current === creationRun) {
-                        setSkillJob(job);
-                      }
-                    })
-                    .catch((cause) => {
-                      if (skillCreationRunRef.current === creationRun) {
-                        setSkillJob(null);
-                        setInput(prompt);
-                        setError(cause instanceof Error ? cause.message : String(cause));
-                      }
-                    })
-                    .finally(() => {
-                      if (skillCreationRunRef.current === creationRun) {
-                        setSkillCreating(false);
-                      }
-                    });
-                  return;
-                }
                 const text = input;
                 setInput("");
                 if (sandboxSession) {
@@ -4461,9 +4411,7 @@ export default function App() {
               busy={
                 sandboxSession
                   ? sandboxBusy
-                  : newChatMode === "skill-create"
-                    ? skillCreating
-                    : conversationBusy
+                  : conversationBusy
               }
               showMeta={turns.length > 0 && !sandboxSession}
               attachments={sandboxSession ? [] : attachments}
@@ -4477,11 +4425,10 @@ export default function App() {
               onRemoveAttachment={removeDraftAttachment}
               newChatMode={sandboxSession ? "agent" : newChatMode}
               newChatTask={sandboxSession ? null : newChatTask}
-              newChatLayout={!sandboxSession && turns.length === 0 && skillJob === null}
+              newChatLayout={!sandboxSession && turns.length === 0}
               showAgentPicker={
                 !sandboxSession &&
                 turns.length === 0 &&
-                skillJob === null &&
                 newChatMode === "agent"
               }
               agentPickerDisabled={!userId || conversationBusy}
@@ -4515,16 +4462,12 @@ export default function App() {
               }
               showModeSelector={false}
               temporaryEnabled={newChatCapabilitiesReady && newChatCapabilities.temporaryEnabled}
-              skillCreateEnabled={newChatCapabilitiesReady && newChatCapabilities.skillCreateEnabled}
               harnessEnabled={newChatCapabilitiesReady && newChatCapabilities.harnessEnabled}
               builtinTools={
                 newChatCapabilitiesReady ? newChatCapabilities.builtinTools : []
               }
               onModeChange={(mode) => {
-                if (
-                  (mode === "temporary" && !newChatCapabilities.temporaryEnabled) ||
-                  (mode === "skill-create" && !newChatCapabilities.skillCreateEnabled)
-                ) return;
+                if (mode === "temporary" && !newChatCapabilities.temporaryEnabled) return;
                 if (mode === "temporary") {
                   setNewChatTask(null);
                   setNewChatMode(mode);
@@ -4534,20 +4477,6 @@ export default function App() {
                 setNewChatMode(mode);
                 if (mode !== "agent") setNewChatTask(null);
                 setError("");
-                if (mode === "skill-create") {
-                  setInvocation(emptyInvocation());
-                  const abandonedSession =
-                    sessionId && persistentTurns.length === 0 && attachments.length > 0
-                      ? sessionId
-                      : "";
-                  discardDraftAttachments(attachments);
-                  setAttachments([]);
-                  if (abandonedSession) {
-                    viewSidRef.current = "";
-                    setSessionId("");
-                    void abandonDraftSession(abandonedSession);
-                  }
-                }
               }}
               onTaskChange={setNewChatTask}
               />
@@ -4588,6 +4517,8 @@ export default function App() {
                 initialModule={issueFeedbackModuleForPage(platformFeedbackOrigin)}
                 onSubmit={submitPlatformIssueFeedback}
               />
+            ) : systemInfo ? (
+              <SystemInfo version={version} localMode={agentsSource === "local"} />
             ) : applicationsView === "coding-agents" ? (
               <CodingAgentsIntegration
                 onBack={() => setApplicationsView("catalog")}
@@ -4959,8 +4890,6 @@ export default function App() {
                 onDeploymentComplete={finishDeployment}
                 initialDeployRegion={newRuntimeRegion}
               />
-            ) : turns.length === 0 && skillJob ? (
-              <SkillCreateWorkspace initialJob={skillJob} />
             ) : turns.length === 0 && !newChatCapabilitiesReady ? (
               <div className="session-loading">
                 <Loader2 className="icon spin" /> 正在检查 Agent 能力…
@@ -4976,9 +4905,7 @@ export default function App() {
                     <h1 className="welcome-title">
                       {sandboxSession
                         ? "让灵感自由生长"
-                        : newChatMode === "skill-create"
-                          ? "想创建一个什么 Skill？"
-                          : greeting}
+                        : greeting}
                     </h1>
                   </div>
                   {composer}

@@ -749,8 +749,7 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     )
 
     assert result.exit_code == 0, result.output
-    assert len(code_tools) == 1
-    assert "skill" in str(code_tools[0]["name"])
+    assert code_tools == []
     assert {str(call["kind"]) for call in agent_tools} == {"openclaw", "hermes"}
     assert {str(call["provider"]) for call in code_credentials} == {"byteplus"}
     assert {str(call["provider"]) for call in agent_credentials} == {"byteplus"}
@@ -760,7 +759,7 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     overrides = captured["environment_overrides"]
     assert isinstance(overrides, dict)
     assert overrides["SANDBOX_CHAT_CODEX"] == "existing-codex-tool"
-    assert str(overrides["SANDBOX_SKILL_CREATOR"]).endswith("-tool")
+    assert "SANDBOX_SKILL_CREATOR" not in overrides
     assert overrides["SANDBOX_CHAT_OPENCLAW"] == "openclaw-tool"
     assert overrides["SANDBOX_CHAT_HERMES"] == "hermes-tool"
     assert overrides["CLOUD_PROVIDER"] == "byteplus"
@@ -940,7 +939,7 @@ def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(
         get_function=lambda _: SimpleNamespace(
             envs=[
                 SimpleNamespace(key="SANDBOX_CHAT_CODEX", value="chat-old"),
-                SimpleNamespace(key="SANDBOX_SKILL_CREATOR", value="skill-old"),
+                SimpleNamespace(key="SANDBOX_CHAT_HERMES", value="hermes-old"),
             ]
         ),
         update_function=updated_requests.append,
@@ -958,7 +957,7 @@ def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(
     request = updated_requests[0]
     assert {item.key: item.value for item in request.envs} == {
         "SANDBOX_CHAT_CODEX": "chat-new",
-        "SANDBOX_SKILL_CREATOR": "skill-old",
+        "SANDBOX_CHAT_HERMES": "hermes-old",
     }
 
 

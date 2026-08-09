@@ -42,6 +42,10 @@ server that `veadk frontend` launches — no separate backend.
   the normal conversation renderer; leaving the conversation only disconnects
   it, so the Agent remains available until the user deletes it. OpenClaw and
   Hermes expose their main interface and Terminal through Studio.
+- **System information**: open a full page from the account menu to inspect the
+  Studio version, configured Sandbox Tool IDs, and available Identity user
+  pools. Resource identifiers remain read-only and require Agent-management
+  access.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
 - **Automation directory**: browse development and message-channel integrations
@@ -381,50 +385,28 @@ tool or transfer one tree edge at a time until it reaches the selected agent.
 The same metadata is attached to the first Google GenAI `Part`, so session
 history restores the `/skill` and `@agent` chips after a reload.
 
-### Skill creation mode
+### Skill Center
 
-Skill creation uses `doubao-seed-2-0-pro-260215` and
-`deepseek-v4-flash-260425` through Ark Responses. The real Ark API key is kept
-by AgentKit credential hosting; Studio and the two isolated Sandbox sessions
-receive only its revocable gateway ticket. Credentials are never returned to
-the browser or copied into per-job Session variables. Studio also rejects
-non-HTTPS or non-Volcengine credential relay URLs. Skill creation is limited
-to Studio developers and admins.
+Studio developers and admins create and optimize Skills from the Skill Center.
+Each candidate runs in an isolated session on the shared AgentKit Dev Sandbox,
+streams its public activity, validates the generated files, and can then be
+previewed, downloaded, or published to AgentKit. Model credentials remain on
+the Tool and are never returned to the browser.
 
-After submission, Studio opens both candidate conversations immediately. Each
-conversation independently renders public reasoning summaries, tool calls, and
-assistant messages returned by the generator. Private chain-of-thought and
-credentials never enter the UI. Completed candidates still support preview,
-ZIP download, and AgentKit publish.
-
-Configure separate ready AgentKit Tools for Codex, OpenClaw, Hermes, and Skill
-creation before starting the server. The Tool IDs are intentionally server-only
-and cannot be supplied by the browser:
+Local Studio reads the DevEnv Tool ID from `SANDBOX_DEV`. A Volcengine cloud
+deployment creates the Dev Sandbox automatically when the ID is omitted, or
+uses the Tool supplied through `--sandbox-dev-tool-id`:
 
 ```bash
-export SANDBOX_CHAT_CODEX=<chat-code-env-tool-id>
-export SANDBOX_CHAT_OPENCLAW=<openclaw-env-tool-id>
-export SANDBOX_CHAT_HERMES=<hermes-env-tool-id>
-export SANDBOX_SKILL_CREATOR=<skill-code-env-tool-id>
-veadk frontend --agents-dir examples
+export SANDBOX_DEV=<dev-env-tool-id>
+veadk studio --agents-dir examples
 ```
 
-Publishing a generated Skill uses TOS and the AgentKit Skills API. Set
-`VEADK_SKILL_CREATOR_TOS_BUCKET`, `VEADK_SKILL_CREATOR_TOS_PREFIX`, and
-`VEADK_SKILL_CREATOR_PROJECT_NAME` only when their defaults are unsuitable.
-Each candidate session expires after 30 minutes and is deleted immediately when
-a job is discarded. Job state lives in Sandbox rather than frontend-process
-memory, so polling and downloads continue to work when FaaS requests reach a
-different instance.
+Each task has its own one-hour DevEnv session. Leaving a running task stops and
+releases its session; task state remains in Sandbox so polling can continue
+across frontend instances.
 
-For local Studio, run the AgentKit `credential-hosting` command and bind its
-result to both CodeEnv Tools. A cloud deployment creates both Tools in parallel
-when their IDs are omitted. Alternatively, select existing Tools with
-`--sandbox-chat-codex-tool-id`, `--sandbox-chat-openclaw-tool-id`,
-`--sandbox-chat-hermes-tool-id`, and `--sandbox-skill-creator-tool-id`. The
-deploy command obtains the Ark key with the deployer's Volcengine credentials,
-stores it through AgentKit credential hosting, and binds only the returned
-ticket and relay URL to the Tools:
+Deploy Studio with:
 
 ```bash
 veadk studio deploy \

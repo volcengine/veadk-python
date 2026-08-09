@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { ComponentType, SVGProps } from "react";
 import {
   ArrowUp,
@@ -32,27 +32,7 @@ import { NewChatModeSelector } from "./new-chat-modes/NewChatModeSelector";
 import { NewChatAgentPicker } from "./new-chat-modes/NewChatAgentPicker";
 import type { NewChatMode, NewChatTask } from "./new-chat-modes/types";
 import { NEW_CHAT_TASK_TOOLS } from "./new-chat-modes/taskTools";
-import { SKILL_MODELS } from "./skill-create/types";
 import { VideoGenerateIcon } from "./builtin-tools/icons";
-
-function SkillCreateIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      {...props}
-    >
-      <rect x="4.25" y="6.25" width="13.5" height="13.5" rx="2.5" />
-      <path d="M11 10v6M8 13h6" />
-      <path d="m19.25 2.75.53 1.47 1.47.53-1.47.53-.53 1.47-.53-1.47-1.47-.53 1.47-.53.53-1.47Z" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
 
 interface CompletionTrigger {
   kind: "skill" | "agent";
@@ -133,7 +113,6 @@ export interface ComposerProps {
   onModeChange?: (value: NewChatMode) => void;
   onTaskChange?: (value: NewChatTask | null) => void;
   temporaryEnabled?: boolean;
-  skillCreateEnabled?: boolean;
   harnessEnabled?: boolean;
   builtinTools?: readonly string[];
   showAgentPicker?: boolean;
@@ -171,7 +150,6 @@ export function Composer({
   onModeChange,
   onTaskChange,
   temporaryEnabled,
-  skillCreateEnabled,
   harnessEnabled = false,
   builtinTools = [],
   showAgentPicker = false,
@@ -209,18 +187,10 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [value]);
 
-  const skillMode = newChatMode === "skill-create";
-  useEffect(() => {
-    if (!skillMode) return;
-    setMenuOpen(false);
-    setTrigger(null);
-  }, [skillMode]);
-  const uploadPending = !skillMode && attachments.some((attachment) => attachment.status !== "ready");
+  const uploadPending = attachments.some((attachment) => attachment.status !== "ready");
   const canSend = !disabled && !busy && !uploadPending &&
-    (value.trim().length > 0 || (!skillMode && attachments.length > 0));
-  const placeholderText = skillMode
-    ? `描述你想创建的 Skill，将使用 ${SKILL_MODELS.join(" 和 ")} 并行创建…`
-    : disabled ? "请先选择智能体" : `向 ${agentName} 发消息…`;
+    (value.trim().length > 0 || attachments.length > 0);
+  const placeholderText = disabled ? "请先选择智能体" : `向 ${agentName} 发消息…`;
 
   const query = trigger?.query.toLocaleLowerCase() ?? "";
   const suggestions: CompletionItem[] = trigger?.kind === "skill"
@@ -343,18 +313,16 @@ export function Composer({
   }
 
   return (
-    <div className={`composer${newChatLayout ? " composer--new-chat" : ""}${skillMode ? " composer--skill-mode" : ""}${selectedTask ? ` composer--has-task composer--task-${selectedTask.value}` : ""}`}>
-      {!skillMode ? (
-        <InvocationChips
-          value={invocation}
-          onRemoveSkill={(name) => onInvocationChange({
-            ...invocation,
-            skills: invocation.skills.filter((skill) => skill.name !== name),
-          })}
-          onRemoveAgent={() => onInvocationChange({ skills: [] })}
-        />
-      ) : null}
-      {!skillMode && attachments.length > 0 && (
+    <div className={`composer${newChatLayout ? " composer--new-chat" : ""}${selectedTask ? ` composer--has-task composer--task-${selectedTask.value}` : ""}`}>
+      <InvocationChips
+        value={invocation}
+        onRemoveSkill={(name) => onInvocationChange({
+          ...invocation,
+          skills: invocation.skills.filter((skill) => skill.name !== name),
+        })}
+        onRemoveAgent={() => onInvocationChange({ skills: [] })}
+      />
+      {attachments.length > 0 && (
         <MediaGroup
           appName={appName}
           compact
@@ -406,7 +374,7 @@ export function Composer({
             )}
           </div>
         ) : null}
-        {!skillMode ? <div className="composer-menu-wrap">
+        <div className="composer-menu-wrap">
           <button
             type="button"
             className="comp-icon"
@@ -451,7 +419,7 @@ export function Composer({
               </div>
             </>
           )}
-        </div> : null}
+        </div>
 
         {showAgentPicker && onSelectRuntime && onSelectSandboxSession ? (
           <NewChatAgentPicker
@@ -470,7 +438,6 @@ export function Composer({
             onChange={onModeChange}
             disabled={busy}
             temporaryEnabled={temporaryEnabled}
-            skillCreateEnabled={skillCreateEnabled}
           />
         ) : null}
 
@@ -490,22 +457,6 @@ export function Composer({
           </button>
         ) : null}
 
-        {newChatLayout && skillMode && onModeChange ? (
-          <button
-            type="button"
-            className="new-chat-task-chip new-chat-task-chip--skill"
-            aria-label="退出创建 Skill"
-            disabled={busy}
-            onClick={() => onModeChange("agent")}
-          >
-            <span className="new-chat-task-chip__icon" aria-hidden="true">
-              <SkillCreateIcon className="new-chat-task-chip__task-icon" />
-              <X className="new-chat-task-chip__remove-icon" />
-            </span>
-            <span>Skill</span>
-          </button>
-        ) : null}
-
         <div className="composer-input-stack">
           <textarea
             ref={ref}
@@ -517,10 +468,10 @@ export function Composer({
             aria-expanded={Boolean(trigger)}
             onChange={(e) => {
               onChange(e.target.value);
-              if (!skillMode) updateCompletion(e.target.value, e.target.selectionStart);
+              updateCompletion(e.target.value, e.target.selectionStart);
             }}
             onSelect={(e) => {
-              if (!skillMode) updateCompletion(e.currentTarget.value, e.currentTarget.selectionStart);
+              updateCompletion(e.currentTarget.value, e.currentTarget.selectionStart);
             }}
             onBlur={() => setTimeout(() => setTrigger(null), 0)}
             onKeyDown={(e) => {
@@ -602,17 +553,6 @@ export function Composer({
               </button>
             );
           })}
-          {skillCreateEnabled === true ? (
-            <button
-              type="button"
-              className="task-shortcut"
-              disabled={busy}
-              onClick={() => onModeChange?.("skill-create")}
-            >
-              <SkillCreateIcon />
-              <span>创建 Skill</span>
-            </button>
-          ) : null}
         </div>
       ) : null}
 

@@ -57,14 +57,11 @@ const newChatAgentPickerStylesSource = readFileSync(
 );
 
 test("expands only the new-chat composer into a multiline input", () => {
-  assert.match(
-    composerSource,
-    /className=\{`composer\$\{newChatLayout \? " composer--new-chat" : ""\}\$\{skillMode \? " composer--skill-mode" : ""\}\$\{selectedTask \? ` composer--has-task composer--task-\$\{selectedTask\.value\}` : ""\}`\}/,
-  );
+  assert.match(composerSource, /composer--has-task composer--task-/);
   assert.match(composerSource, /rows=\{newChatLayout \? 4 : 1\}/);
   assert.match(
     appSource,
-    /newChatLayout=\{!sandboxSession && turns\.length === 0 && skillJob === null\}/,
+    /newChatLayout=\{!sandboxSession && turns\.length === 0\}/,
   );
   assert.match(stylesSource, /\.composer--new-chat \.composer-box[\s\S]*?min-height:/);
   assert.match(stylesSource, /\.composer--new-chat \.composer-box[\s\S]*?border-color:/);
@@ -80,7 +77,7 @@ test("keeps alternate chat modes hidden from the new-chat composer", () => {
   assert.match(composerSource, /<NewChatModeSelector[\s\S]*?value=\{newChatMode\}/);
   assert.match(selectorSource, /value: "agent"[\s\S]*?label: "Agent"/);
   assert.match(selectorSource, /value: "temporary"[\s\S]*?label: "内置智能体"/);
-  assert.match(selectorSource, /value: "skill-create"[\s\S]*?label: "创建 Skill"/);
+  assert.doesNotMatch(selectorSource, /value: "skill-create"|创建 Skill/);
   assert.match(
     stylesSource,
     /\.composer--new-chat \.new-chat-mode[\s\S]*?left: 52px[\s\S]*?bottom: 10px/,
@@ -287,9 +284,7 @@ test("shows task capsules for Harness agents without generic starter prompts", (
   assert.match(composerSource, /value: "ppt"[\s\S]*?label: "PPT"[\s\S]*?经营表现[\s\S]*?项目名称】进展[\s\S]*?输出解决方案[\s\S]*?行业主题】趋势/);
   assert.match(composerSource, /value: "image"[\s\S]*?label: "图片生成"[\s\S]*?发布会主视觉[\s\S]*?电商海报[\s\S]*?概念效果图[\s\S]*?企业社媒配图/);
   assert.match(composerSource, /value: "video"[\s\S]*?label: "视频生成"[\s\S]*?30 秒宣传片[\s\S]*?45 秒发布视频[\s\S]*?企业培训视频[\s\S]*?20 秒预热视频/);
-  assert.match(composerSource, /skillCreateEnabled === true \? \([\s\S]*?onClick=\{\(\) => onModeChange\?\.\("skill-create"\)\}/);
-  assert.doesNotMatch(composerSource, /disabled=\{busy \|\| skillCreateEnabled !== true\}/);
-  assert.match(composerSource, /<SkillCreateIcon \/>[\s\S]*?<span>创建 Skill<\/span>/);
+  assert.doesNotMatch(composerSource, /skillCreateEnabled|SkillCreateIcon|创建 Skill/);
   assert.match(composerSource, /className="task-shortcuts"/);
   assert.match(composerSource, /harnessEnabled && !selectedTask/);
   assert.match(composerSource, /className="prompt-suggestions"/);
@@ -330,14 +325,4 @@ test("shows the selected task between add and Agent and reveals cancel on hover"
   assert.match(appSource, /newChatTask=\{sandboxSession \? null : newChatTask\}/);
   assert.match(appSource, /onTaskChange=\{setNewChatTask\}/);
   assert.match(appSource, /function startNewChat\(\)[\s\S]*?setNewChatTask\(null\)/);
-});
-
-test("shows a removable Skill label inside the composer", () => {
-  assert.match(composerSource, /newChatLayout && skillMode && onModeChange/);
-  assert.match(composerSource, /className="new-chat-task-chip new-chat-task-chip--skill"/);
-  assert.match(composerSource, /aria-label="退出创建 Skill"/);
-  assert.match(composerSource, /onClick=\{\(\) => onModeChange\("agent"\)\}/);
-  assert.match(composerSource, /<SkillCreateIcon className="new-chat-task-chip__task-icon"/);
-  assert.match(composerSource, /<span>Skill<\/span>/);
-  assert.match(stylesSource, /\.new-chat-task-chip--skill\s*\{[\s\S]*?left:\s*10px;[\s\S]*?width:\s*86px;/);
 });
