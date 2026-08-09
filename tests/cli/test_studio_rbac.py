@@ -53,6 +53,7 @@ def _create_studio_app(
     developers: str | None = None,
     oauth2_user_pool_uid: str | None = None,
     oauth2_user_pool_client_uid: str | None = None,
+    oauth2_provider_label: str | None = None,
     provider: str = "volcengine",
 ) -> FastAPI:
     captured: dict[str, Any] = {}
@@ -78,7 +79,7 @@ def _create_studio_app(
         oauth2_user_pool_client_uid=oauth2_user_pool_client_uid,
         oauth2_redirect_uri=None,
         oauth2_provider=None,
-        oauth2_provider_label=None,
+        oauth2_provider_label=oauth2_provider_label,
         auth_mode=auth_mode,
         generated_agent_test_run_ttl=60,
         studio_admins=admins,
@@ -88,6 +89,58 @@ def _create_studio_app(
         studio=True,
     )
     return captured["app"]
+
+
+@pytest.mark.parametrize(
+    ("provider", "provider_label", "expected_label"),
+    [
+        ("volcengine", None, "火山引擎 Identity"),
+        ("byteplus", None, "BytePlus Identity"),
+        ("byteplus", "Enterprise SSO", "Enterprise SSO"),
+    ],
+)
+def test_auth_config_uses_cloud_specific_identity_label(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: str,
+    provider_label: str | None,
+    expected_label: str,
+) -> None:
+    from veadk.auth.middleware.oauth2_auth import OAuth2Config
+
+    monkeypatch.setattr(
+        OAuth2Config,
+        "from_veidentity",
+        lambda **_: SimpleNamespace(
+            cookie_secure=True,
+            logout_redirect_url="/",
+            end_session_url="https://identity.example.com/logout",
+        ),
+    )
+    monkeypatch.setattr(
+        "veadk.auth.middleware.oauth2_auth.setup_oauth2",
+        lambda *_, **__: None,
+    )
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        oauth2_user_pool_uid="pool-current",
+        oauth2_user_pool_client_uid="studio-client",
+        oauth2_provider_label=provider_label,
+        provider=provider,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/web/auth-config")
+
+    assert response.status_code == 200
+    assert response.json()["providers"] == [
+        {
+            "id": "veidentity",
+            "label": expected_label,
+            "loginUrl": "/oauth2/login",
+        }
+    ]
 
 
 def test_identity_user_pools_marks_the_current_studio_pool(
