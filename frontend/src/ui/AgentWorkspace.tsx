@@ -1318,6 +1318,7 @@ export function AgentWorkspace({
       || focusedDeploymentTaskActive
     ),
   );
+  const deploymentInProgress = deploymentTask?.status === "running";
   const draftFlowKey = useMemo(() => canvasDraftKey(draft), [draft]);
   const displayCurrentVersion =
     selectedAgent?.currentVersion ?? runtimeDetail?.currentVersion ?? null;
@@ -2422,7 +2423,7 @@ export function AgentWorkspace({
             <p>未选择智能体</p>
           </main>
         ) : (
-          <main className="aw-main">
+          <main className={`aw-main${deploymentInProgress ? " is-deploying" : ""}`}>
             {selectedAgent && !selectedAgentInfo && loadingAgentInfo && (
               <div className="aw-detail-loading" role="status" aria-live="polite">
                 <div className="aw-detail-loading-card">
@@ -2495,7 +2496,9 @@ export function AgentWorkspace({
               )}
             </div>
             {deploymentTask && shouldShowDeploymentTask && (
-              <div className="aw-detail-deployment">
+              <div
+                className={`aw-detail-deployment${deploymentInProgress ? " is-running" : ""}`}
+              >
                 <DeploymentProgressCard task={deploymentTask} />
               </div>
             )}

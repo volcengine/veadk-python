@@ -1186,6 +1186,19 @@
   padding: 0 24px 16px;
 }
 
+.aw-detail-deployment.is-running {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.aw-main.is-deploying .aw-agent-tabs,
+.aw-main.is-deploying .aw-content,
+.aw-main.is-deploying .aw-basic-actions {
+  display: none;
+}
+
 .aw-deploy-progress-head,
 .aw-deploy-progress-head > div,
 .aw-deploy-progress-icon {

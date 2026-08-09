@@ -1599,6 +1599,7 @@ export default function App() {
       editingDraftBaselineRef.current = null;
       setFocusedWorkspaceAgentId(agentId);
       setFocusedWorkspaceAgentSection("basic");
+      setFocusedDeploymentTaskId("");
       setCreateView(null);
       setManageAgents(true);
       setAppName(agentId);
