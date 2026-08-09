@@ -5292,7 +5292,11 @@ def _run_frontend_server(
             # Expose the configured provider to the login page (unauthenticated).
             label = (
                 oauth2_provider_label
-                or _PROVIDER_LABELS.get(provider_id)
+                or (
+                    "BytePlus Identity"
+                    if provider == "byteplus" and provider_id == "veidentity"
+                    else _PROVIDER_LABELS.get(provider_id)
+                )
                 or provider_id.replace("_", " ").title()
             )
             providers = [
