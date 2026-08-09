@@ -8,29 +8,63 @@ const read = (path) =>
 const appSource = read("App.tsx");
 const clientSource = read("adk/client.ts");
 const sidebarSource = read("ui/Sidebar.tsx");
-const stylesSource = read("styles.css");
+const systemInfoSource = read("ui/SystemInfo.tsx");
+const systemInfoStylesSource = read("ui/SystemInfo.css");
 
-test("account menu opens system information with the current version", () => {
+test("account menu navigates to the system information page", () => {
   assert.match(clientSource, /version: string;/);
   assert.match(appSource, /setVersion\(cfg\.version\)/);
-  assert.match(appSource, /version=\{version\}/);
+  assert.match(
+    appSource,
+    /<SystemInfo version=\{version\} localMode=\{agentsSource === "local"\} \/>/,
+  );
+  assert.match(appSource, /const \[systemInfo, setSystemInfo\] = useState\(false\)/);
   assert.match(
     sidebarSource,
     /系统信息[\s\S]*?退出登录/,
     "system information should appear above logout",
   );
-  assert.match(sidebarSource, /role="dialog"/);
-  assert.match(sidebarSource, /aria-modal="true"/);
-  assert.match(sidebarSource, /<dt>当前版本<\/dt>[\s\S]*?\{version \|\| "—"\}/);
-  assert.match(
-    stylesSource,
-    /\.system-info-meta div\s*\{[^}]*flex-direction:\s*column;[^}]*align-items:\s*flex-start;/,
+  assert.match(sidebarSource, /onSystemInfo\(\)/);
+  assert.doesNotMatch(sidebarSource, /role="dialog"/);
+  assert.doesNotMatch(sidebarSource, /createPortal/);
+});
+
+test("system information page lists sandbox tools and the current identity user pool", () => {
+  assert.match(clientSource, /\/web\/system-info/);
+  assert.match(systemInfoSource, /当前版本/);
+  assert.match(systemInfoSource, />通用</);
+  assert.match(systemInfoSource, />沙箱信息</);
+  assert.match(systemInfoSource, /用户池/);
+  assert.match(systemInfoSource, /listIdentityUserPools/);
+  assert.match(systemInfoSource, /pools\.filter\(\(pool\) => pool\.isCurrent\)/);
+  assert.match(systemInfoSource, /重新加载/);
+  assert.match(systemInfoSource, /setSandboxReloadKey/);
+  assert.match(systemInfoSource, /setUserPoolsReloadKey/);
+  assert.match(systemInfoSource, /role="alert"/);
+  assert.match(systemInfoSource, /未配置/);
+  assert.match(systemInfoSource, /本地模式未配置用户池/);
+  assert.match(systemInfoSource, /当前 Studio 未配置用户池/);
+  assert.match(systemInfoSource, /Volcengine credentials not found/);
+  assert.match(systemInfoStylesSource, /\.system-info-page\s*\{[^}]*padding:\s*32px 32px 0;/);
+  assert.match(systemInfoStylesSource, /font-family:\s*inherit/);
+  assert.doesNotMatch(
+    systemInfoStylesSource,
+    /\.system-info-tool,\s*\.system-info-pool\s*\{/,
   );
-  assert.match(stylesSource, /\.system-info-meta dd\s*\{[^}]*overflow-wrap:\s*anywhere;/);
-  assert.match(stylesSource, /\.system-info-meta dd\s*\{[^}]*font-weight:\s*400;/);
-  assert.match(stylesSource, /\.system-info-meta dd\s*\{[^}]*font-family:\s*inherit;/);
   assert.match(
-    stylesSource,
-    /\.system-info-head\s*\{[^}]*margin:\s*0 20px;[^}]*padding:\s*20px 0 16px;/,
+    systemInfoStylesSource,
+    /\.system-info-pool\s*\{[^}]*padding:\s*4px 0;[^}]*\}/,
+  );
+  assert.doesNotMatch(
+    systemInfoStylesSource,
+    /\.system-info-pool\s*\{[^}]*(?:background|border):/,
+  );
+  assert.doesNotMatch(
+    systemInfoStylesSource,
+    /\.system-info-empty\s*\{[^}]*background:/,
+  );
+  assert.doesNotMatch(
+    systemInfoStylesSource,
+    /\.system-info-loading\s*\{[^}]*(?:background|border|border-radius):/,
   );
 });

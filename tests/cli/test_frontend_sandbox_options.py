@@ -51,7 +51,6 @@ def test_sandbox_tool_options_are_shared_by_local_serve_commands(
     monkeypatch.setenv("SANDBOX_CHAT_CODEX", "chat-from-env")
     monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW", "openclaw-from-env")
     monkeypatch.setenv("SANDBOX_CHAT_HERMES", "hermes-from-env")
-    monkeypatch.setenv("SANDBOX_SKILL_CREATOR", "skill-from-env")
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._run_frontend_server",
         lambda **kwargs: captured.update(kwargs),
@@ -66,8 +65,6 @@ def test_sandbox_tool_options_are_shared_by_local_serve_commands(
             "openclaw-from-cli",
             "--sandbox-chat-hermes-tool-id",
             "hermes-from-cli",
-            "--sandbox-skill-creator-tool-id",
-            "skill-from-cli",
         ],
     )
 
@@ -75,7 +72,7 @@ def test_sandbox_tool_options_are_shared_by_local_serve_commands(
     assert captured["sandbox_chat_codex_tool_id"] == "chat-from-cli"
     assert captured["sandbox_chat_openclaw_tool_id"] == "openclaw-from-cli"
     assert captured["sandbox_chat_hermes_tool_id"] == "hermes-from-cli"
-    assert captured["sandbox_skill_creator_tool_id"] == "skill-from-cli"
+    assert "sandbox_skill_creator_tool_id" not in captured
 
 
 def test_local_sandbox_tool_options_fall_back_to_environment(
@@ -85,7 +82,6 @@ def test_local_sandbox_tool_options_fall_back_to_environment(
     monkeypatch.setenv("SANDBOX_CHAT_CODEX", "chat-from-env")
     monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW", "openclaw-from-env")
     monkeypatch.setenv("SANDBOX_CHAT_HERMES", "hermes-from-env")
-    monkeypatch.setenv("SANDBOX_SKILL_CREATOR", "skill-from-env")
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._run_frontend_server",
         lambda **kwargs: captured.update(kwargs),
@@ -97,7 +93,7 @@ def test_local_sandbox_tool_options_fall_back_to_environment(
     assert captured["sandbox_chat_codex_tool_id"] == "chat-from-env"
     assert captured["sandbox_chat_openclaw_tool_id"] == "openclaw-from-env"
     assert captured["sandbox_chat_hermes_tool_id"] == "hermes-from-env"
-    assert captured["sandbox_skill_creator_tool_id"] == "skill-from-env"
+    assert "sandbox_skill_creator_tool_id" not in captured
 
 
 @pytest.mark.parametrize("command", [frontend, studio])

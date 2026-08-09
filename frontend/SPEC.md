@@ -343,7 +343,7 @@ export function ExampleIcon(props: SVGProps<SVGSVGElement>) {
 | Agent 选择 | `AgentSelector`、`AgentIdentityIcon` | Sidebar 与输入框可以有独立作用域样式 |
 | 会话输入 | `Composer`、`NewChatModeSelector` | 保留 IME、键盘、附件和发送状态行为 |
 | 临时会话 | `SandboxLaunchDialog`、`SandboxSession` | 不得复用普通 ADK Session 流程 |
-| Skill A/B 创建 | `SkillCreateWorkspace`、`SkillCandidatePane` | 保持双流输出、模型名和预览切换 |
+| Skill 创建与优化 | `SkillCenter`、`SkillGenerationWorkspace` | 保持 Dev Sandbox 任务状态、候选切换和发布流程 |
 | 工具调用 | `BuiltinToolHeader` 和 `ui/builtin-tools/` | 新内置工具通过 Registry 扩展 |
 | 加载文字 | `TextShimmer` | 不得新增独立 Shimmer 实现 |
 | Markdown | `Markdown`、`MarkdownPromptEditor` | 外部 Markdown 禁止启用原始 HTML |

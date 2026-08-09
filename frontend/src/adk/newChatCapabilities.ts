@@ -30,7 +30,3 @@ async function getCapability(path: string): Promise<NewChatModeCapability> {
 export async function getSandboxCapability(): Promise<NewChatModeCapability> {
   return getCapability("/web/sandbox/capabilities");
 }
-
-export async function getSkillCreatorCapability(): Promise<NewChatModeCapability> {
-  return getCapability("/web/skill-creator/capabilities");
-}
