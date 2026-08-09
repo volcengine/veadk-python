@@ -376,8 +376,6 @@ def test_studio_deploy_auto_identity_is_injected_and_printed(
             "openclaw-tool",
             "--sandbox-chat-hermes-tool-id",
             "hermes-tool",
-            "--sandbox-skill-creator-tool-id",
-            "skill-tool",
             *provider_args,
             *dev_args,
         ],
