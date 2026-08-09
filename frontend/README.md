@@ -91,8 +91,11 @@ server that `veadk frontend` launches — no separate backend.
   probes and lists confirmed API Server and A2A integration endpoints; protocols
   that the Runtime does not expose are shown as unavailable. The integration
   panel switches between the detected protocols and provides a Python request
-  example for each one. Runtime API Keys stay masked as `****` and are fetched
-  only after the user explicitly reveals them; examples always use placeholders
+  example for each one. While a deployment is running, the detail page keeps the
+  Agent heading and a scrollable deployment panel visible, then reloads the
+  normal detail tabs after the Runtime connects. Runtime API Keys stay masked as
+  `****` and are fetched only after the user explicitly reveals them; examples
+  always use placeholders
   instead of credentials. Long descriptions, names, component summaries, IDs,
   and environment values stay inside the scrollable panel.
 - **Custom-agent workbench**: configure an agent with a rich Markdown
