@@ -248,7 +248,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   );
   assert.match(
     appSource,
-    /const finishDeployment = useCallback[\s\S]*?removeWorkspaceDraft\(editingDraftId\)[\s\S]*?setFocusedWorkspaceAgentId\(agentId\)[\s\S]*?setManageAgents\(true\)/,
+    /const finishDeployment = useCallback[\s\S]*?removeWorkspaceDraft\(editingDraftId\)[\s\S]*?setFocusedWorkspaceAgentId\(agentId\)[\s\S]*?setFocusedDeploymentTaskId\(""\)[\s\S]*?setManageAgents\(true\)/,
   );
   assert.match(appSource, /onDeploymentStarted=\{startDeployment\}/);
   assert.match(appSource, /onDeploymentComplete=\{finishDeployment\}/);
@@ -301,11 +301,15 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
     workspaceSource,
     /const shouldShowDeploymentTask = Boolean\([\s\S]*?deploymentTask\.status !== "success"[\s\S]*?focusedDeploymentTaskActive/,
   );
+  assert.match(
+    workspaceSource,
+    /const deploymentInProgress = deploymentTask\?\.status === "running"/,
+  );
   assert.match(workspaceSource, /if \(!focusedDeploymentTaskId\) return;/);
   assert.doesNotMatch(workspaceSource, /activeDeploymentTaskId/);
   assert.match(
     workspaceSource,
-    /className="aw-agent-head"[\s\S]*?\{deploymentTask && shouldShowDeploymentTask && \([\s\S]*?className="aw-detail-deployment"[\s\S]*?<DeploymentProgressCard task=\{deploymentTask\} \/>[\s\S]*?<nav className="aw-agent-tabs"/,
+    /className=\{`aw-main\$\{deploymentInProgress \? " is-deploying" : ""\}`\}[\s\S]*?className="aw-agent-head"[\s\S]*?\{deploymentTask && shouldShowDeploymentTask && \([\s\S]*?className=\{`aw-detail-deployment\$\{deploymentInProgress \? " is-running" : ""\}`\}[\s\S]*?<DeploymentProgressCard task=\{deploymentTask\} \/>[\s\S]*?<nav[\s\S]*?className="aw-agent-tabs"/,
   );
   assert.match(workspaceSource, /const BUILD_STEP_INDEX = DEPLOYMENT_STEPS\.findIndex/);
   assert.match(workspaceSource, /const shouldAutoExpand = Boolean\([\s\S]*?deploymentStepIndex\(task\) === BUILD_STEP_INDEX/);
@@ -327,6 +331,14 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
     /className="aw-basic-stack">\s*\{deploymentTask && <DeploymentProgressCard/,
   );
   assert.match(workspaceStyles, /\.aw-detail-deployment\s*\{[\s\S]*?padding:\s*0 24px 16px;/);
+  assert.match(
+    workspaceStyles,
+    /\.aw-detail-deployment\.is-running\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?min-height:\s*0;[\s\S]*?overflow-y:\s*auto;[\s\S]*?overscroll-behavior:\s*contain;/,
+  );
+  assert.match(
+    workspaceStyles,
+    /\.aw-main\.is-deploying \.aw-agent-tabs,[\s\S]*?\.aw-main\.is-deploying \.aw-content,[\s\S]*?\.aw-main\.is-deploying \.aw-basic-actions\s*\{[\s\S]*?display:\s*none;/,
+  );
   assert.match(projectPreviewSource, /await onDeploymentComplete\?\.\(result\)/);
   assert.match(projectPreviewSource, /runtimeId: result\.runtimeId \|\| deploymentRuntimeId/);
 });
