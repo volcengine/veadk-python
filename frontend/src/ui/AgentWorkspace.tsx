@@ -790,7 +790,13 @@ function DeploymentBuildLog({ task }: { task: DeploymentTaskUpdate }) {
   );
 }
 
-function DeploymentProgressCard({ task }: { task: DeploymentTaskUpdate }) {
+function DeploymentProgressCard({
+  task,
+  onReturnToEdit,
+}: {
+  task: DeploymentTaskUpdate;
+  onReturnToEdit?: () => void;
+}) {
   const steps = deploymentSteps(task);
   const currentIndex = deploymentStepIndex(task);
   const progress = task.status === "success"
@@ -875,6 +881,15 @@ function DeploymentProgressCard({ task }: { task: DeploymentTaskUpdate }) {
           );
         })}
       </ol>
+      {(task.status === "error" || task.status === "cancelled") && onReturnToEdit && (
+        <div className="aw-deploy-progress-actions">
+          <button
+            type="button"
+            className="studio-update-action"
+            onClick={onReturnToEdit}
+          >返回编辑</button>
+        </div>
+      )}
     </section>
   );
 }
@@ -1319,6 +1334,16 @@ export function AgentWorkspace({
     ),
   );
   const deploymentInProgress = deploymentTask?.status === "running";
+  const deploymentDraft = deploymentTask?.draftId
+    ? drafts.find((item) => item.id === deploymentTask.draftId) ??
+      (deploymentTask.agentDraft
+        ? {
+            id: deploymentTask.draftId,
+            draft: deploymentTask.agentDraft,
+            updatedAt: deploymentTask.startedAt,
+          }
+        : undefined)
+    : undefined;
   const draftFlowKey = useMemo(() => canvasDraftKey(draft), [draft]);
   const displayCurrentVersion =
     selectedAgent?.currentVersion ?? runtimeDetail?.currentVersion ?? null;
@@ -2499,7 +2524,12 @@ export function AgentWorkspace({
               <div
                 className={`aw-detail-deployment${deploymentInProgress ? " is-running" : ""}`}
               >
-                <DeploymentProgressCard task={deploymentTask} />
+                <DeploymentProgressCard
+                  task={deploymentTask}
+                  onReturnToEdit={deploymentDraft && onEditDraft
+                    ? () => onEditDraft(deploymentDraft)
+                    : undefined}
+                />
               </div>
             )}
             <nav

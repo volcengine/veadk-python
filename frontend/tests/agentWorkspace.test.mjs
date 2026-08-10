@@ -248,7 +248,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   );
   assert.match(
     appSource,
-    /const finishDeployment = useCallback[\s\S]*?removeWorkspaceDraft\(editingDraftId\)[\s\S]*?setFocusedWorkspaceAgentId\(agentId\)[\s\S]*?setFocusedDeploymentTaskId\(""\)[\s\S]*?setManageAgents\(true\)/,
+    /const finishDeployment = useCallback[\s\S]*?removeWorkspaceDraft\(completedDraftId\)[\s\S]*?setFocusedWorkspaceAgentId\(agentId\)[\s\S]*?setFocusedDeploymentTaskId\(""\)[\s\S]*?setManageAgents\(true\)/,
   );
   assert.match(appSource, /onDeploymentStarted=\{startDeployment\}/);
   assert.match(appSource, /onDeploymentComplete=\{finishDeployment\}/);
@@ -264,6 +264,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /deploymentRuntimeId\?: string/);
   assert.match(projectPreviewSource, /onDeploymentStarted\?: \(task: DeploymentTaskUpdate\)/);
   assert.match(projectPreviewSource, /onDeploymentComplete\?: \(result: DeployResult\)/);
+  assert.match(projectPreviewSource, /draftId\?: string/);
   assert.match(projectPreviewSource, /const isRuntimeUpdate = deploymentActionLabel\.includes\("更新"\)/);
   assert.match(
     projectPreviewSource,
@@ -288,6 +289,10 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
     projectPreviewSource,
     /await onDeploymentComplete\?\.\(result\)[\s\S]*?catch \(error\)[\s\S]*?error instanceof RuntimeProbeError[\s\S]*?status: "success"[\s\S]*?label: "部署完成，暂未连接"[\s\S]*?message: error\.message/,
   );
+  assert.match(
+    appSource,
+    /const startDeployment = useCallback[\s\S]*?flushPendingWorkspaceDraft\(\)[\s\S]*?draftId: editingDraftId[\s\S]*?updateDeploymentTask\(linkedTask\)[\s\S]*?openDeploymentDetail\(linkedTask\)/,
+  );
   assert.doesNotMatch(workspaceSource, /aw-deployment-focus/);
   assert.match(
     workspaceSource,
@@ -309,8 +314,21 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.doesNotMatch(workspaceSource, /activeDeploymentTaskId/);
   assert.match(
     workspaceSource,
-    /className=\{`aw-main\$\{deploymentInProgress \? " is-deploying" : ""\}`\}[\s\S]*?className="aw-agent-head"[\s\S]*?\{deploymentTask && shouldShowDeploymentTask && \([\s\S]*?className=\{`aw-detail-deployment\$\{deploymentInProgress \? " is-running" : ""\}`\}[\s\S]*?<DeploymentProgressCard task=\{deploymentTask\} \/>[\s\S]*?<nav[\s\S]*?className="aw-agent-tabs"/,
+    /className=\{`aw-main\$\{deploymentInProgress \? " is-deploying" : ""\}`\}[\s\S]*?className="aw-agent-head"[\s\S]*?\{deploymentTask && shouldShowDeploymentTask && \([\s\S]*?className=\{`aw-detail-deployment\$\{deploymentInProgress \? " is-running" : ""\}`\}[\s\S]*?<DeploymentProgressCard[\s\S]*?task=\{deploymentTask\}[\s\S]*?<nav[\s\S]*?className="aw-agent-tabs"/,
   );
+  assert.match(
+    workspaceSource,
+    /const deploymentDraft = deploymentTask\?\.draftId[\s\S]*?drafts\.find\(\(item\) => item\.id === deploymentTask\.draftId\)[\s\S]*?deploymentTask\.agentDraft/,
+  );
+  assert.match(
+    workspaceSource,
+    /task\.status === "error" \|\| task\.status === "cancelled"[\s\S]*?onReturnToEdit[\s\S]*?>返回编辑<\/button>/,
+  );
+  assert.match(
+    workspaceSource,
+    /<DeploymentProgressCard[\s\S]*?task=\{deploymentTask\}[\s\S]*?onReturnToEdit=\{deploymentDraft[\s\S]*?onEditDraft\(deploymentDraft\)/,
+  );
+  assert.match(workspaceStyles, /\.aw-deploy-progress-actions\s*\{/);
   assert.match(workspaceSource, /const BUILD_STEP_INDEX = DEPLOYMENT_STEPS\.findIndex/);
   assert.match(workspaceSource, /const shouldAutoExpand = Boolean\([\s\S]*?deploymentStepIndex\(task\) === BUILD_STEP_INDEX/);
   assert.match(workspaceSource, /useState\(shouldAutoExpand\)/);
@@ -341,6 +359,10 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   );
   assert.match(projectPreviewSource, /await onDeploymentComplete\?\.\(result\)/);
   assert.match(projectPreviewSource, /runtimeId: result\.runtimeId \|\| deploymentRuntimeId/);
+  assert.match(
+    appSource,
+    /const finishDeployment = useCallback[\s\S]*?removeWorkspaceDraft\(completedDraftId\)[\s\S]*?setEditingDraftId\(""\)[\s\S]*?await connectRuntime\([\s\S]*?waitForReady: true/,
+  );
 });
 
 test("runtime update deployments stay on the existing agent row", () => {

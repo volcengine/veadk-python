@@ -470,6 +470,8 @@ export interface DeployEnvVar {
 
 export interface DeploymentTaskUpdate {
   id: string;
+  /** Workspace draft that can be reopened when deployment does not complete. */
+  draftId?: string;
   runtimeName: string;
   runtimeId?: string;
   region: string;
