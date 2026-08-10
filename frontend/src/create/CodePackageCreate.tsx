@@ -16,6 +16,11 @@ import {
   type DeploymentTaskUpdate,
 } from "../ui/ProjectPreview";
 import { CodeBrowserDialog } from "../ui/CodeBrowserDialog";
+import { DeploymentSelect } from "../ui/DeploymentSelect";
+import {
+  listPackageEntryPoints,
+  resolvePackageEntryPoint,
+} from "./packageEntryPoint";
 import type { AgentProject, ProjectFile } from "./project";
 import type { NetworkConfig } from "./types";
 import { unzip, type ZipEntry } from "./skills/zip";
@@ -81,9 +86,7 @@ export function normalizePackageEntries(entries: ZipEntry[]): ProjectFile[] {
     if (paths.has(file.path)) throw new Error(`代码包包含重复文件：${file.path}`);
     paths.add(file.path);
   }
-  if (!paths.has("app.py")) {
-    throw new Error("代码包根目录必须包含 app.py，作为 AgentKit 启动入口。");
-  }
+  resolvePackageEntryPoint(files);
   return files;
 }
 
@@ -104,8 +107,21 @@ export function CodePackageCreate({
   const [reading, setReading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
+  const [entryPoint, setEntryPoint] = useState("");
   const [deployRegion, setDeployRegion] = useState(initialDeployRegion);
   const [network, setNetwork] = useState<NetworkConfig | undefined>();
+  const entryPointOptions = project
+    ? listPackageEntryPoints(project.files).map((path) => ({
+        value: path,
+        label: path,
+        description:
+          path === "app.py" ||
+          path === "agentkit_app.py" ||
+          path === "main.py"
+            ? "Studio 兼容入口"
+            : "代码包中的 Python 文件",
+      }))
+    : [];
 
   useEffect(
     () => () => {
@@ -133,13 +149,16 @@ export function CodePackageCreate({
         maxUncompressedBytes: MAX_PACKAGE_BYTES,
       });
       const files = normalizePackageEntries(entries);
+      const resolution = resolvePackageEntryPoint(files);
       if (run !== loadRunRef.current) return;
       setUploadedFileName(file.name);
       setProject({ name: packageProjectName(file.name), files });
+      setEntryPoint(resolution.entryPoint ?? "");
     } catch (cause) {
       if (run !== loadRunRef.current) return;
       setUploadedFileName("");
       setProject(null);
+      setEntryPoint("");
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       if (run === loadRunRef.current) setReading(false);
@@ -159,11 +178,33 @@ export function CodePackageCreate({
     if (file) void loadPackage(file);
   }
 
+  function handleProjectChange(nextProject: AgentProject) {
+    setProject(nextProject);
+    try {
+      const candidates = listPackageEntryPoints(nextProject.files);
+      const resolution = resolvePackageEntryPoint(nextProject.files);
+      setEntryPoint((current) =>
+        candidates.includes(current) ? current : resolution.entryPoint ?? "",
+      );
+      setError("");
+    } catch (cause) {
+      setEntryPoint("");
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
   async function handleDeploy(
     nextProject: AgentProject,
     onStage?: (stage: DeployStage) => void,
     options?: Parameters<typeof deployAgentkitProject>[3],
   ) {
+    resolvePackageEntryPoint(nextProject.files);
+    if (
+      !entryPoint ||
+      !listPackageEntryPoints(nextProject.files).includes(entryPoint)
+    ) {
+      throw new Error("请先选择有效的启动入口。");
+    }
     const runtimeNetwork =
       network && network.mode !== "public"
         ? {
@@ -177,7 +218,7 @@ export function CodePackageCreate({
       nextProject.name,
       nextProject.files,
       { region: deployRegion, projectName: "default", network: runtimeNetwork },
-      { ...options, onStage },
+      { ...options, entryPoint, onStage },
     );
   }
 
@@ -187,7 +228,7 @@ export function CodePackageCreate({
         cloudProvider={cloudProvider}
         project={project ?? EMPTY_PACKAGE_PROJECT}
         agentName={project?.name || "代码包"}
-        onChange={project ? setProject : undefined}
+        onChange={project ? handleProjectChange : undefined}
         onDeploy={handleDeploy}
         onAgentAdded={onAgentAdded}
         onDeploymentTaskChange={onDeploymentTaskChange}
@@ -204,8 +245,14 @@ export function CodePackageCreate({
         }}
         onBack={onBack}
         backLabel="返回创建方式"
-        deployDisabled={!project || reading}
-        deployDisabledReason={reading ? "正在读取代码包" : !project ? "请先上传代码包" : undefined}
+        deployDisabled={!project || reading || !entryPoint || Boolean(error)}
+        deployDisabledReason={
+          reading
+            ? "正在读取代码包"
+            : !project
+              ? "请先上传代码包"
+              : error || (!entryPoint ? "请先选择启动入口" : undefined)
+        }
         deploymentPrimaryPane={
           <section className="package-source-pane" aria-label="代码包上传">
             <div className="package-source-label">代码包</div>
@@ -246,7 +293,7 @@ export function CodePackageCreate({
               <span>
                 {project
                   ? `已识别 ${project.files.length} 个文件，点击区域可重新上传`
-                  : "点击或拖拽上传，支持 .zip 格式，最大 50 MB，根目录需包含 app.py"}
+                  : "点击或拖拽上传，支持 .zip 格式，最大 50 MB，至少包含一个 Python 启动文件"}
               </span>
               <div className="package-upload-actions">
                 {project && (
@@ -271,6 +318,33 @@ export function CodePackageCreate({
                 onChange={handleFileChange}
               />
             </div>
+            {project && (
+              <div className="package-entry-field">
+                <div className="package-entry-label">启动入口</div>
+                <DeploymentSelect
+                  ariaLabel="启动入口"
+                  value={entryPoint}
+                  placeholder="请选择启动入口"
+                  options={entryPointOptions}
+                  onChange={(value) => {
+                    setEntryPoint(value);
+                    try {
+                      resolvePackageEntryPoint(project.files);
+                      setError("");
+                    } catch (cause) {
+                      setError(
+                        cause instanceof Error ? cause.message : String(cause),
+                      );
+                    }
+                  }}
+                />
+                <p aria-live="polite">
+                  {entryPoint
+                    ? `将以 ${entryPoint} 作为 AgentKit 启动入口。`
+                    : "检测到多个 Python 文件，请选择实际启动入口。"}
+                </p>
+              </div>
+            )}
             {error && <div className="package-create-error" role="alert">{error}</div>}
           </section>
         }
@@ -280,7 +354,7 @@ export function CodePackageCreate({
           project={project}
           open={browserOpen}
           onClose={() => setBrowserOpen(false)}
-          onChange={setProject}
+          onChange={handleProjectChange}
         />
       )}
     </div>

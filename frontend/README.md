@@ -135,9 +135,12 @@ server that `veadk frontend` launches — no separate backend.
 - **Code-package deployment**: upload a ZIP project from the add-Agent menu,
   inspect or edit its files in the existing code browser, then choose the
   region and public/VPC network before deploying it to AgentKit. The package
-  must contain a root `app.py`; Studio removes a single wrapping directory,
-  rejects unsafe paths, and shows upload, image build, Runtime creation, and
-  service publishing as separate deployment stages.
+  must contain a Python entry point. Studio honors a validated
+  `migration-result.json` `entrypoint`, otherwise prefers `app.py`,
+  `agentkit_app.py`, then `main.py`, and asks the user when multiple other
+  Python files remain. It removes a single wrapping directory, rejects unsafe
+  paths, and shows upload, image build, Runtime creation, and service
+  publishing as separate deployment stages.
 - **Built-in code execution**: selecting `代码执行` adds VeADK's `run_code`
   tool to generated Python and reveals the required `AGENTKIT_TOOL_ID` sandbox
   field and optional `AGENTKIT_TOOL_REGION` field below the built-in tool list.

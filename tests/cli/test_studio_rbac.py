@@ -1962,6 +1962,241 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
 
 
 @pytest.mark.parametrize(
+    ("files", "entry_point", "expected_entry_point", "wrapper_target"),
+    [
+        (
+            [
+                {"path": "main.py", "content": "app = object()\n"},
+                {"path": "agentkit_app.py", "content": "app = object()\n"},
+                {"path": "app.py", "content": "app = object()\n"},
+            ],
+            None,
+            "app.py",
+            None,
+        ),
+        (
+            [{"path": "agentkit_app.py", "content": "app = object()\n"}],
+            None,
+            "agentkit_app.py",
+            None,
+        ),
+        (
+            [{"path": "main.py", "content": "app = object()\n"}],
+            None,
+            "main.py",
+            None,
+        ),
+        (
+            [{"path": "serve.py", "content": "app = object()\n"}],
+            None,
+            "serve.py",
+            None,
+        ),
+        (
+            [{"path": "src/serve.py", "content": "app = object()\n"}],
+            "src/serve.py",
+            "_veadk_studio_entrypoint.py",
+            "src.serve",
+        ),
+        (
+            [
+                {"path": "app.py", "content": "app = object()\n"},
+                {"path": "agentkit_app.py", "content": "app = object()\n"},
+                {
+                    "path": "migration-result.json",
+                    "content": '{"entrypoint":"agentkit_app.py"}\n',
+                },
+            ],
+            None,
+            "agentkit_app.py",
+            None,
+        ),
+        (
+            [
+                {"path": "app.py", "content": "app = object()\n"},
+                {"path": "main.py", "content": "app = object()\n"},
+                {
+                    "path": "migration-result.json",
+                    "content": '{"entrypoint":"app.py"}\n',
+                },
+            ],
+            "main.py",
+            "main.py",
+            None,
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("provider", "region"),
+    [("volcengine", "cn-beijing"), ("byteplus", "ap-southeast-1")],
+)
+def test_deployment_resolves_compatible_python_entry_point(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    files: list[dict[str, str]],
+    entry_point: str | None,
+    expected_entry_point: str,
+    wrapper_target: str | None,
+    provider: str,
+    region: str,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    captured_config: dict[str, Any] = {}
+    captured_wrapper = ""
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        nonlocal captured_wrapper
+        captured_config.update(yaml.safe_load(Path(config_file).read_text()))
+        configured_entry_point = captured_config["common"]["entry_point"]
+        if configured_entry_point == "_veadk_studio_entrypoint.py":
+            captured_wrapper = (
+                Path(config_file).parent / configured_entry_point
+            ).read_text()
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": "runtime-entry-point",
+                    "runtime_name": "demo-agent",
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        )
+
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: SimpleNamespace(current_version_number=1),
+    )
+    monkeypatch.setattr(
+        "agentkit.utils.template_utils.render_template",
+        lambda _template: "agentkit-platform-account",
+    )
+    monkeypatch.setenv("MODEL_AGENT_API_KEY", "test-model-key")
+    if provider == "byteplus":
+        monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-ak")
+        monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-sk")
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+        provider=provider,
+    )
+    payload: dict[str, Any] = {
+        "name": "demo-agent",
+        "createEvaluationSets": False,
+        "files": files,
+        "config": {"region": region, "projectName": "default"},
+    }
+    if entry_point is not None:
+        payload["entryPoint"] = entry_point
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json=payload,
+        ) as response:
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert captured_config["common"]["entry_point"] == expected_entry_point
+    if wrapper_target is None:
+        assert captured_wrapper == ""
+    else:
+        assert f"run_module({wrapper_target!r}" in captured_wrapper
+
+
+@pytest.mark.parametrize(
+    ("files", "entry_point", "detail"),
+    [
+        (
+            [{"path": "README.md", "content": "demo\n"}],
+            None,
+            "No supported Python entry point found",
+        ),
+        (
+            [{"path": "app.py", "content": "app = object()\n"}],
+            "../app.py",
+            "entryPoint must be a safe relative Python file path",
+        ),
+        (
+            [{"path": "app.py", "content": "app = object()\n"}],
+            "missing.py",
+            "entryPoint does not exist in files: missing.py",
+        ),
+        (
+            [
+                {"path": "app.py", "content": "app = object()\n"},
+                {
+                    "path": "migration-result.json",
+                    "content": '{"entrypoint":"../app.py"}\n',
+                },
+            ],
+            None,
+            "migration-result.json entrypoint must be a safe relative Python file path",
+        ),
+        (
+            [
+                {"path": "app.py", "content": "app = object()\n"},
+                {
+                    "path": "migration-result.json",
+                    "content": '{"entrypoint":"missing.py"}\n',
+                },
+            ],
+            None,
+            "migration-result.json entrypoint does not exist in files: missing.py",
+        ),
+    ],
+)
+def test_deployment_rejects_invalid_or_missing_python_entry_point(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    files: list[dict[str, str]],
+    entry_point: str | None,
+    detail: str,
+) -> None:
+    launched = False
+
+    def launch(**_kwargs: Any) -> None:
+        nonlocal launched
+        launched = True
+
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    payload: dict[str, Any] = {
+        "name": "demo-agent",
+        "createEvaluationSets": False,
+        "files": files,
+        "config": {"region": "cn-beijing", "projectName": "default"},
+    }
+    if entry_point is not None:
+        payload["entryPoint"] = entry_point
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json=payload,
+        )
+
+    assert response.status_code == 400
+    assert detail in response.json()["detail"]
+    assert launched is False
+
+
+@pytest.mark.parametrize(
     ("session_storage", "min_instance", "max_instance", "expects_update"),
     [
         ("in-memory", 1, 1, True),

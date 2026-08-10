@@ -3182,7 +3182,8 @@ def _run_frontend_server(
     async def _deploy_to_agentkit(request: Request):
         """Deploy to AgentKit, streaming per-stage progress as Server-Sent Events.
 
-        Body: {name, files:[{path,content}], config:{region,projectName}}.
+        Body: {name, files:[{path,content}], entryPoint?,
+        config:{region,projectName}}.
         While building/deploying, streams `data: {level, phase, message, pct?}`
         frames (phase = build|deploy|publish|evaluation); ends with a terminal
         `data: {done:true, success, agentName?, url?, apikey?, runtimeId?,
@@ -3426,9 +3427,19 @@ def _run_frontend_server(
                 raise HTTPException(status_code=400, detail=f"Illegal file path: {fp}")
             full.parent.mkdir(parents=True, exist_ok=True)
             full.write_text(fi.get("content", ""), encoding="utf-8")
-        if not (base / "app.py").exists():
+        try:
+            from frontend.server.code_package_entrypoint import (
+                prepare_code_package_launch_entry_point,
+                resolve_code_package_entry_point,
+            )
+
+            entry_point = resolve_code_package_entry_point(base, data.get("entryPoint"))
+            launch_entry_point = prepare_code_package_launch_entry_point(
+                base, entry_point
+            )
+        except ValueError as exc:
             shutil.rmtree(temp_dir, ignore_errors=True)
-            raise HTTPException(status_code=400, detail="No app.py found in files")
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         # Collect env vars from the deployer's environment to forward into the
         # created runtime. The AgentKit platform only injects what we pass here,
@@ -3511,7 +3522,7 @@ def _run_frontend_server(
         agentkit_config = {
             "common": {
                 "agent_name": agent_name,
-                "entry_point": "app.py",
+                "entry_point": launch_entry_point,
                 "description": _normalize_runtime_description(data.get("description")),
                 "python_version": "3.12",
                 "launch_type": "cloud",

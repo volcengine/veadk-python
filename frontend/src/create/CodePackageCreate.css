@@ -122,6 +122,27 @@
   display: none;
 }
 
+.package-entry-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 16px;
+}
+
+.package-entry-label {
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.package-entry-field > p {
+  min-height: 18px;
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
 .package-create-error {
   flex: 0 0 auto;
   margin-top: 12px;

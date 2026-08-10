@@ -2084,6 +2084,7 @@ export async function deployAgentkitProject(
     maxInstance?: number;
     createEvaluationSets?: boolean;
     description?: string;
+    entryPoint?: string;
     authentication?: DeployAuthentication;
     onStage?: (s: DeployStage) => void;
     im?: {
@@ -2130,6 +2131,7 @@ export async function deployAgentkitProject(
           maxInstance: opts?.maxInstance,
           createEvaluationSets: opts?.createEvaluationSets,
           description: normalizeRuntimeDescription(opts?.description ?? ""),
+          entryPoint: opts?.entryPoint,
           authentication: opts?.authentication,
           im: opts?.im,
           envs: opts?.envs,

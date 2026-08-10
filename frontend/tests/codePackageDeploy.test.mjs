@@ -87,9 +87,10 @@ test("shows existing-project migration as a disabled coming-soon option", () => 
 
 test("validates and previews uploaded zip projects before deployment", () => {
   assert.match(packageCreateSource, /from "\.\/skills\/zip"/);
+  assert.match(packageCreateSource, /from "\.\/packageEntryPoint"/);
   assert.match(packageCreateSource, /accept="\.zip,application\/zip"/);
   assert.match(packageCreateSource, /normalizePackageEntries/);
-  assert.match(packageCreateSource, /必须包含 app\.py/);
+  assert.match(packageCreateSource, /至少包含一个 Python 启动文件/);
   assert.match(packageCreateSource, /maxUncompressedBytes: MAX_PACKAGE_BYTES/);
   assert.match(zipSource, /options\.maxUncompressedBytes/);
   assert.match(packageCreateSource, /deploymentPrimaryPane=/);
@@ -99,7 +100,19 @@ test("validates and previews uploaded zip projects before deployment", () => {
   assert.match(packageCreateSource, /role="button"/);
   assert.match(packageCreateSource, /aria-label=\{project \? "重新上传代码包" : "上传代码包"\}/);
   assert.doesNotMatch(packageCreateSource, />选择压缩包</);
-  assert.match(packageCreateSource, /onChange=\{setProject\}/);
+  assert.match(packageCreateSource, /onChange=\{handleProjectChange\}/);
+});
+
+test("shows and validates a reusable entry point selector", () => {
+  assert.match(packageCreateSource, /<DeploymentSelect/);
+  assert.match(packageCreateSource, /ariaLabel="启动入口"/);
+  assert.match(packageCreateSource, /placeholder="请选择启动入口"/);
+  assert.match(packageCreateSource, /listPackageEntryPoints\(project\.files\)/);
+  assert.match(packageCreateSource, /请先选择启动入口/);
+  assert.match(
+    packageCreateSource,
+    /error \|\| \(!entryPoint \? "请先选择启动入口" : undefined\)/,
+  );
 });
 
 test("shows upload, image build, runtime creation, and publish progress", () => {
@@ -129,6 +142,12 @@ test("passes the selected region and network to AgentKit deployment", () => {
   assert.match(packageCreateSource, /region: deployRegion/);
   assert.match(packageCreateSource, /vpc_id: network\.vpcId/);
   assert.match(packageCreateSource, /subnet_ids: network\.subnetIds/);
+  assert.match(
+    packageCreateSource,
+    /resolvePackageEntryPoint\(nextProject\.files\);/,
+  );
+  assert.match(packageCreateSource, /\{ \.\.\.options, entryPoint, onStage \}/);
+  assert.match(clientSource, /entryPoint: opts\?\.entryPoint/);
   assert.match(packageCreateSource, /deployAgentkitProject\(/);
 });
 
