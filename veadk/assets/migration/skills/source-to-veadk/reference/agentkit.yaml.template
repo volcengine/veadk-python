@@ -1,0 +1,53 @@
+# AgentKit YAML
+
+Write `.agentkit/agentkit.yaml` with this shape. Values are resolved by `agentkit release`; never write plaintext secrets.
+
+```yaml
+name: agentkit-migrated
+cloud_provider: volcengine
+region: cn-beijing
+project: default
+apmplus: true
+
+runtime:
+  cpu_milli: 2000
+  memory_mb: 4096
+  min_instance: 1
+  max_instance: 5
+  max_concurrency: 20
+
+envs:
+  MODEL_AGENT_API_KEY: ${MODEL_AGENT_API_KEY:?set MODEL_AGENT_API_KEY before deploy}
+  MODEL_NAME: ${MODEL_NAME:-doubao-seed-2-1-pro-260628}
+  APP_HOST: "0.0.0.0"
+  APP_PORT: "8000"
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  ENABLE_APMPLUS: ${ENABLE_APMPLUS:-true}
+  ENABLE_LLM_SHIELD: ${ENABLE_LLM_SHIELD:-false}
+
+infrastructure:
+  container_registry:
+    instance_name: Auto
+    namespace_name: agentkit
+    repo_name: agentkit-migrated
+  tos:
+    bucket_name: Auto
+    object_prefix: agentkit-builds
+```
+
+Rules:
+
+- `envs` is a YAML mapping, not a `name/value` list.
+- Keep top-level `apmplus: true` for migrated AgentKit runtimes. `ENABLE_APMPLUS` defaults to `true` and may be overridden at deploy/runtime.
+- The top-level `project` comes from `AGENTKIT_TARGET_PROJECT`; if unset, use `default`. Do not infer it from source identity or app name.
+- The top-level `cloud_provider` comes from `AGENTKIT_TARGET_CLOUD_PROVIDER`; if unset, use `volcengine`. Preserve `byteplus` when the CLI runner provides it.
+- The top-level `region` comes from `AGENTKIT_TARGET_REGION`; if unset, use `cn-beijing` for Volcengine or `ap-southeast-1` for BytePlus. Do not hard-code `cn-beijing` for BytePlus migrations.
+- The model key env name comes from `AGENTKIT_TARGET_MODEL_API_KEY_ENV`; if unset, use `MODEL_AGENT_API_KEY`.
+- The model name default comes from `AGENTKIT_TARGET_MODEL_ID`; if unset, use `doubao-seed-2-1-pro-260628`.
+- If `AGENTKIT_TARGET_MODEL_BASE_URL` is set, write it as `MODEL_AGENT_API_BASE: ${MODEL_AGENT_API_BASE:-<base-url>}` under `envs` and in `.env.example`; do not use legacy `MODEL_BASE_URL` in generated release config.
+- Use `${VAR:?message}` or `${VAR:-default}` references. Do not write real key values.
+- Keep `APP_HOST` as `0.0.0.0` and `APP_PORT` as `8000`.
+- Include `ENABLE_APMPLUS` and default it to `true`. Source OTEL/APM signals should be recorded as evidence, but they do not decide whether migrated runtimes get AgentKit APMPlus by default.
+- Do not generate `OTEL_SERVICE_NAME` or `OTEL_RESOURCE_ATTRIBUTES`. They are not part of the migrated runtime contract.
+- Do not write empty `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY`, `OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT`, or `OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME` env entries. They are optional overrides; add them only when intentionally configured.
+- Include `ENABLE_LLM_SHIELD`. If `TOOL_LLM_SHIELD_APP_ID` and `TOOL_LLM_SHIELD_API_KEY` are not configured, default `ENABLE_LLM_SHIELD` to `false` and do not write empty `TOOL_LLM_SHIELD_APP_ID` or `TOOL_LLM_SHIELD_API_KEY` env entries. If both credentials are intentionally configured, write them as required deploy-time env references and then `ENABLE_LLM_SHIELD` may default to `true` when source detection justifies it.

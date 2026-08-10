@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "agentkit_cli_version": "0.51.1",
+  "source_commit": "a1fc1a61b204c2c98b779e4f81fcfd63fe103609",
+  "runner_sha256": "c305dce258b4dafa72bd50f40c5128231e15aae2bf5ec53aaa8e862d51376d91",
+  "skills_sha256": "681ed2355b4d66f372307e95d45239051ba924c696d7d525a682d1a5ffceb56b",
+  "required_skill_files": [
+    "source-to-veadk/SKILL.md",
+    "source-to-veadk/prompts/migrate.md",
+    "source-to-veadk/scripts/bootstrap_runtime.sh",
+    "source-to-veadk/scripts/detect_source_capabilities.py",
+    "source-to-veadk/scripts/validate_runtime.sh",
+    "agentkit-cli/SKILL.md",
+    "veadk-agent-development/SKILL.md"
+  ],
+  "capabilities": {
+    "schema_version": 1,
+    "runner_version": "0.51.1",
+    "strategies": [
+      "structured",
+      "agentic"
+    ],
+    "frameworks": [
+      "langchain",
+      "langgraph",
+      "adk",
+      "strands",
+      "agentcore",
+      "dify",
+      "any"
+    ],
+    "structured_frameworks": [
+      "langchain",
+      "langgraph",
+      "adk",
+      "strands",
+      "agentcore"
+    ],
+    "agentic_frameworks": [
+      "dify",
+      "any"
+    ],
+    "phases": [
+      "detecting",
+      "planning",
+      "migrating",
+      "validating",
+      "packaging"
+    ],
+    "event_protocol": "ndjson",
+    "manifest": "migration-result.json"
+  }
+}
