@@ -311,7 +311,7 @@ def test_studio_identity_resources_reject_client_without_pool() -> None:
             ],
             "ap-southeast-1",
             "byteplus",
-            [],
+            ["--sandbox-dev-tool-id", "dev-tool"],
         ),
     ],
 )
@@ -978,6 +978,8 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
             "openclaw-tool-id",
             "--sandbox-chat-hermes-tool-id",
             "hermes-tool-id",
+            "--sandbox-dev-tool-id",
+            "dev-env-id",
             "--iam-role",
             "trn:iam::role/test",
             "--gateway-name",
@@ -1023,14 +1025,17 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
     assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == "ap-southeast-1"
     assert sorted(credential_tool_ids) == [
         "chat-code-env-id",
+        "dev-env-id",
     ]
+    assert veadk_environments["SANDBOX_DEV"] == "dev-env-id"
 
 
-def test_studio_deploy_byteplus_auto_provisions_three_sandbox_tools(
+def test_studio_deploy_byteplus_auto_provisions_four_sandbox_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
     code_tools: list[str] = []
+    dev_tools: list[str] = []
     agent_tools: list[dict[str, object]] = []
     code_credentials: list[dict[str, object]] = []
     agent_credentials: list[dict[str, object]] = []
@@ -1065,6 +1070,10 @@ def test_studio_deploy_byteplus_auto_provisions_three_sandbox_tools(
         agent_tools.append(kwargs)
         return f"{kwargs['kind']}-tool"
 
+    def _ensure_dev_tool(**kwargs: object) -> str:
+        dev_tools.append(str(kwargs["name"]))
+        return "dev-tool"
+
     monkeypatch.setattr(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
     )
@@ -1083,6 +1092,10 @@ def test_studio_deploy_byteplus_auto_provisions_three_sandbox_tools(
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_tool",
         _ensure_agent_tool,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_dev_env_tool",
+        _ensure_dev_tool,
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
@@ -1120,6 +1133,7 @@ def test_studio_deploy_byteplus_auto_provisions_three_sandbox_tools(
 
     assert result.exit_code == 0, result.output
     assert len(code_tools) == 1
+    assert len(dev_tools) == 1
     assert {str(call["kind"]) for call in agent_tools} == {"openclaw", "hermes"}
     assert {str(call["model_name"]) for call in agent_tools} == {"seed-2-0-lite-260228"}
     assert {str(call["provider"]) for call in code_credentials} == {"byteplus"}
@@ -1127,6 +1141,7 @@ def test_studio_deploy_byteplus_auto_provisions_three_sandbox_tools(
     assert code_credentials_by_tool["chat-tool"]["model_name"] == (
         "seed-2-0-lite-260228"
     )
+    assert code_credentials_by_tool["dev-tool"]["model_name"] is None
     assert {str(call["provider"]) for call in agent_credentials} == {"byteplus"}
     assert {str(call["model_base_url"]) for call in agent_credentials} == {
         "https://ark.ap-southeast.bytepluses.com/api/v3"
@@ -1135,7 +1150,7 @@ def test_studio_deploy_byteplus_auto_provisions_three_sandbox_tools(
     assert "SANDBOX_SKILL_CREATOR" not in veadk_environments
     assert veadk_environments["SANDBOX_CHAT_OPENCLAW"] == "openclaw-tool"
     assert veadk_environments["SANDBOX_CHAT_HERMES"] == "hermes-tool"
-    assert "SANDBOX_DEV" not in veadk_environments
+    assert veadk_environments["SANDBOX_DEV"] == "dev-tool"
 
 
 def test_studio_deploy_byteplus_rejects_invalid_application_name() -> None:

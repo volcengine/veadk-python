@@ -669,13 +669,16 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
     }
 
 
+@pytest.mark.parametrize("dev_tool_id", [None, "replacement-dev-tool"])
 def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    dev_tool_id: str | None,
 ) -> None:
     target = _target(region="ap-southeast-1")
     captured: dict[str, object] = {}
     code_tools: list[dict[str, object]] = []
+    dev_tools: list[dict[str, object]] = []
     agent_tools: list[dict[str, object]] = []
     code_credentials: list[dict[str, object]] = []
     agent_credentials: list[dict[str, object]] = []
@@ -702,6 +705,10 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_tool",
         lambda **kwargs: agent_tools.append(kwargs) or f"{kwargs['kind']}-tool",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_dev_env_tool",
+        lambda **kwargs: dev_tools.append(kwargs) or f"{kwargs['name']}-tool",
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
@@ -731,25 +738,31 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
 
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _FakeVeFaaS)
 
-    result = CliRunner().invoke(
-        studio,
-        [
-            "update",
-            "--provider",
-            "byteplus",
-            "--vefaas-app-name",
-            "studio-app",
-            "--path",
-            str(tmp_path),
-            "--byteplus-access-key",
-            "ak",
-            "--byteplus-secret-key",
-            "sk",
-        ],
-    )
+    args = [
+        "update",
+        "--provider",
+        "byteplus",
+        "--vefaas-app-name",
+        "studio-app",
+        "--path",
+        str(tmp_path),
+        "--byteplus-access-key",
+        "ak",
+        "--byteplus-secret-key",
+        "sk",
+    ]
+    if dev_tool_id is not None:
+        args.extend(["--sandbox-dev-tool-id", dev_tool_id])
+    result = CliRunner().invoke(studio, args)
 
     assert result.exit_code == 0, result.output
     assert code_tools == []
+    if dev_tool_id is None:
+        assert len(dev_tools) == 1
+        expected_dev_tool_id = f"{dev_tools[0]['name']}-tool"
+    else:
+        assert dev_tools == []
+        expected_dev_tool_id = dev_tool_id
     assert {str(call["kind"]) for call in agent_tools} == {"openclaw", "hermes"}
     assert {str(call["provider"]) for call in code_credentials} == {"byteplus"}
     assert {str(call["provider"]) for call in agent_credentials} == {"byteplus"}
@@ -762,6 +775,7 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     assert "SANDBOX_SKILL_CREATOR" not in overrides
     assert overrides["SANDBOX_CHAT_OPENCLAW"] == "openclaw-tool"
     assert overrides["SANDBOX_CHAT_HERMES"] == "hermes-tool"
+    assert overrides["SANDBOX_DEV"] == expected_dev_tool_id
     assert overrides["CLOUD_PROVIDER"] == "byteplus"
 
 
