@@ -792,6 +792,23 @@ class IdentityClient:
         return response.uid, response.domain
 
     @refresh_credentials
+    def configure_user_pool_for_idp_only(self, user_pool_uid: str) -> None:
+        """Disable local sign-up, recovery, and sign-in for a user pool."""
+        from volcenginesdkid import UpdateUserPoolRequest
+
+        request = UpdateUserPoolRequest(
+            email_passwordless_sign_in_enabled=False,
+            password_sign_in_enabled=False,
+            self_account_recovery_enabled=False,
+            self_sign_up_enabled=False,
+            sign_up_auto_verification_enabled=False,
+            sms_passwordless_sign_in_enabled=False,
+            unconfirmed_user_sign_in_enabled=False,
+            user_pool_uid=user_pool_uid,
+        )
+        self._api_client.update_user_pool(request)
+
+    @refresh_credentials
     def list_user_pools(self, *, page_size: int = 100) -> list[dict[str, str]]:
         """List all user pools available to the current account."""
         from volcenginesdkid import ListUserPoolsRequest, ListUserPoolsResponse

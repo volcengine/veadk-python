@@ -204,6 +204,10 @@ def test_studio_deploy_checks_serverless_role_with_custom_function_role(
         lambda **kwargs: kwargs["deployment_region"],
     )
     monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.configure_user_pool_for_idp_only",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
         lambda **kwargs: f"auto-{kwargs['name']}",
     )

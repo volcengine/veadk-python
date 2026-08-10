@@ -144,6 +144,10 @@ def test_studio_deploy_bundles_logo_and_optional_title(
         lambda **kwargs: kwargs["deployment_region"],
     )
     monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.configure_user_pool_for_idp_only",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
         "veadk.cli.studio_deploy_serverless_iam.ensure_serverless_application_role",
         lambda *_, **__: False,
     )
