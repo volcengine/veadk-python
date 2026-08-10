@@ -35,7 +35,7 @@ test("Studio entry telemetry uses anonymous UI config metadata", () => {
 });
 
 test("Agent workspace creation and update actions obey Studio access", () => {
-  assert.doesNotMatch(sidebarSource, /access\.capabilities\.createAgents && show\("addAgent"\)/);
+  assert.match(sidebarSource, /access\.capabilities\.createAgents && show\("addAgent"\)/);
   assert.doesNotMatch(sidebarSource, /access\.capabilities\.manageAgents && show\("manageAgents"\)/);
   assert.doesNotMatch(sidebarSource, /onManageAgents/);
   assert.match(appSource, /const visibleCreateView = canCreateAgents \? createView : null/);

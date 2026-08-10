@@ -198,6 +198,92 @@ def test_resolve_deployment_resources_maps_custom_names() -> None:
     }
 
 
+def _managed_sidecar_resource_service() -> (
+    deployment_resources.DeploymentResourceService
+):
+    service = object.__new__(deployment_resources.DeploymentResourceService)
+    service.provider = "volcengine"
+    service.region = "cn-shanghai"
+    service.credentials = None
+    service._tos = None
+    service._cr = cast(
+        Any,
+        SimpleNamespace(
+            region="cn-shanghai",
+            list_registries=lambda _page, _size: {
+                "Items": [
+                    {"Name": "unrelated", "Status": {"Phase": "Running"}},
+                    {"Name": "managed", "Status": {"Phase": "Running"}},
+                ],
+                "TotalCount": 2,
+            },
+            _list_domains=lambda registry: [
+                {
+                    "Domain": (
+                        "managed.example.internal"
+                        if registry == "managed"
+                        else "unrelated.example.internal"
+                    ),
+                    "Default": True,
+                }
+            ],
+            list_namespaces=lambda registry, _page, _size: {
+                "Items": ([{"Name": "sidecar"}] if registry == "managed" else []),
+                "TotalCount": 1 if registry == "managed" else 0,
+            },
+        ),
+    )
+    service._cp = None
+    return service
+
+
+def test_managed_sidecar_auto_cr_anchors_to_base_image_registry() -> None:
+    service = _managed_sidecar_resource_service()
+
+    assert service.anchor_managed_sidecar_registry(
+        "managed.example.internal/sidecar/runtime@sha256:test-only",
+        {},
+    ) == {
+        "cr_instance_name": "managed",
+        "cr_namespace_name": "sidecar",
+    }
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"cr_instance_name": "unrelated"},
+        {
+            "cr_instance_name": "managed",
+            "cr_namespace_name": "application",
+        },
+    ],
+)
+def test_managed_sidecar_rejects_explicit_cr_conflict(
+    config: dict[str, str],
+) -> None:
+    service = _managed_sidecar_resource_service()
+
+    with pytest.raises(
+        deployment_resources.ManagedSidecarRegistryError,
+        match="所选 CR 与受控 Harness Sidecar 基础镜像不在同一实例和命名空间",
+    ):
+        service.anchor_managed_sidecar_registry(
+            "managed.example.internal/sidecar/runtime:test-only",
+            config,
+        )
+
+
+def test_managed_sidecar_registry_errors_do_not_echo_private_image() -> None:
+    service = _managed_sidecar_resource_service()
+    private_reference = "not-a-registry-reference"
+
+    with pytest.raises(deployment_resources.ManagedSidecarRegistryError) as exc_info:
+        service.anchor_managed_sidecar_registry(private_reference, {})
+
+    assert private_reference not in str(exc_info.value)
+
+
 def test_tos_list_only_returns_buckets_in_the_service_region() -> None:
     service = object.__new__(deployment_resources.DeploymentResourceService)
     service.provider = "volcengine"

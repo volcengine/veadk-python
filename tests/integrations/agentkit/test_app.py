@@ -20,7 +20,9 @@ from typing import Any, cast
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from google.adk.agents import Agent as AdkAgent
 from google.adk.agents.base_agent import BaseAgent
+from google.adk.plugins.base_plugin import BasePlugin
 
 import veadk
 import veadk.integrations.agentkit.app as agentkit_app
@@ -32,12 +34,15 @@ class _FakeAgentServer:
 
     def __init__(
         self,
-        agent: BaseAgent,
-        short_term_memory: object,
+        agent: BaseAgent | None = None,
+        short_term_memory: object | None = None,
+        *,
+        app: object | None = None,
         identity: object | None = None,
         identity_health_routes: tuple[str, ...] = (),
     ) -> None:
-        self.agent = agent
+        self.agent = agent or getattr(app, "root_agent", None)
+        self.adk_app = app
         self.short_term_memory = short_term_memory
         self.identity = identity
         self.identity_health_routes = identity_health_routes
@@ -137,6 +142,40 @@ def test_create_agentkit_app_preserves_platform_route_contract() -> None:
     }
     assert client.get("/web/agent-info/unknown").status_code == 404
     assert client.get("/web/agent-graph").json()["graph"] == info.json()["graph"]
+
+
+def test_create_agentkit_app_preserves_adk_plugins_and_closes_harness() -> None:
+    events: list[str] = []
+    harness = SimpleNamespace(
+        sidecar_status_payload=lambda: {
+            "enabled": True,
+            "status": "ok",
+            "planHash": "sha256:test",
+            "effectiveComponents": ["context_engine"],
+        },
+        close=lambda: events.append("close"),
+    )
+    plugin = BasePlugin(name="harness-plugin")
+    adk_app = agentkit_app.App(
+        name="agent",
+        root_agent=AdkAgent(name="agent"),
+        plugins=[plugin],
+    )
+
+    app = agentkit_app.create_agentkit_app(
+        app=adk_app,
+        harness_extension=harness,
+    )
+    assert _FakeAgentServer.instances[-1].adk_app is adk_app
+    with TestClient(app) as client:
+        assert client.get("/web/harness-sidecar/status").json() == {
+            "enabled": True,
+            "status": "ok",
+            "planHash": "sha256:test",
+            "effectiveComponents": ["context_engine"],
+        }
+        assert events == []
+    assert events == ["close"]
 
 
 def test_create_agentkit_app_passes_runtime_identity_to_agentkit() -> None:

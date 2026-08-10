@@ -114,6 +114,23 @@ test("agent details show capability badges and deployment state before the flow"
   assert.ok(
     workspaceSource.indexOf("<h3>部署配置</h3>") < workspaceSource.indexOf("<strong>执行流程</strong>"),
   );
+  assert.ok(
+    workspaceSource.indexOf("<strong>执行流程</strong>") < workspaceSource.indexOf("<strong>详细信息</strong>"),
+  );
+  assert.ok(
+    workspaceSource.indexOf("<strong>详细信息</strong>") < workspaceSource.indexOf("<h3>已选择的优化项</h3>"),
+  );
+  assert.match(
+    workspaceSource,
+    /const publishedHarnessSidecar =[\s\S]*?selectedAgentInfo\?\.draft\?\.harnessSidecar \?\?[\s\S]*?harnessIntentFromRuntimeEnvs\(runtimeDetail\?\.envs\)/,
+  );
+  assert.match(workspaceSource, /aria-label="已选择的优化项"/);
+  assert.doesNotMatch(workspaceSource, /<h3>Harness Sidecar<\/h3>/);
+  assert.match(workspaceSource, /<dt>配置状态<\/dt>[\s\S]*?已启用[\s\S]*?未启用[\s\S]*?未记录/);
+  assert.match(workspaceSource, /<dt>优化场景<\/dt>[\s\S]*?harnessSidecarProfileLabel/);
+  assert.match(workspaceSource, /<dt>已选优化项<\/dt>[\s\S]*?publishedHarnessOptimizations\.map/);
+  assert.match(workspaceSource, /发布时选择的智能体优化项。/);
+  assert.doesNotMatch(workspaceSource, /发布时选择的智能体优化项，只读展示。/);
   assert.match(workspaceSource, /status\.toLowerCase\(\) === "ready"[\s\S]*?className="aw-status-dot"/);
   assert.match(workspaceStyles, /\.aw-readonly-config dd\.is-ready\s*\{[\s\S]*?color:\s*hsl\(142 62% 30%\)/);
   assert.match(workspaceSource, /const executionFlowKey = selectedAgentInfo/);
@@ -269,7 +286,7 @@ test("runtime-backed Agent details load and paginate usage without stale respons
   assert.match(workspaceStyles, /\.aw-usage-pagination button:disabled/);
 });
 
-test("workspace uses cached runtime data and prefetches likely next views", () => {
+test("workspace caches Runtime metadata and loads optional evaluation data on demand", () => {
   assert.match(clientSource, /const RUNTIME_METADATA_CACHE_TTL_MS = 5 \* 60 \* 1000/);
   assert.match(clientSource, /const FEEDBACK_CASES_CACHE_TTL_MS = 60 \* 1000/);
   assert.match(clientSource, /export function getCachedRuntimeAgentInfo/);
@@ -294,7 +311,7 @@ test("workspace uses cached runtime data and prefetches likely next views", () =
   assert.match(workspaceSource, /for \(const agent of listedAgents\.slice\(0, 8\)\)/);
   assert.match(workspaceSource, /prefetchRuntimeDetail\(agent\.runtimeId, region\)/);
   assert.match(workspaceSource, /prefetchRuntimeAgentInfo\(agent\.runtimeId, region, agent\.runtimeApp \?\? ""\)/);
-  assert.match(workspaceSource, /prefetchAgentFeedbackCases\(\{/);
+  assert.doesNotMatch(workspaceSource, /prefetchAgentFeedbackCases\(\{/);
 });
 
 test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => {
@@ -768,6 +785,22 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(clientSource, /export function clearMessageFeedbackCache/);
   assert.match(clientSource, /\/web\/evaluation\/feedback-cases\?\$\{query\.toString\(\)\}/);
   assert.match(clientSource, /\/web\/evaluation\/feedback-cases\/delete/);
+  assert.match(
+    clientSource,
+    /function selectedRuntimeRegionCandidates\(region\?: string\)[\s\S]*?return explicit \? \[explicit\] : runtimeRegionCandidates\(\)/,
+  );
+  assert.match(
+    clientSource,
+    /getAgentFeedbackCases[\s\S]*?for \(const region of selectedRuntimeRegionCandidates\(args\.region\)\)/,
+  );
+  assert.match(
+    clientSource,
+    /getAutomaticEvaluationStatuses[\s\S]*?for \(const region of selectedRuntimeRegionCandidates\(args\.region\)\)/,
+  );
+  assert.match(
+    clientSource,
+    /getAgentOptimizations[\s\S]*?for \(const region of selectedRuntimeRegionCandidates\(args\.region\)\)/,
+  );
   assert.match(workspaceSource, /getAgentFeedbackCases\(\{/);
   assert.match(workspaceSource, /deleteAgentFeedbackCases\(\{/);
   assert.match(

@@ -42,10 +42,25 @@ import {
   type AgentDraft,
   type CloudEnvironmentConfig,
   MAX_CLOUD_DOCKERFILE_LENGTH,
+  type HarnessSidecarOptionId,
+  type HarnessSidecarProfileId,
   type McpTool,
   type SelectedSkill,
   emptyDraft,
 } from "./types";
+import {
+  HARNESS_SIDECAR_OPTIONS,
+  HARNESS_SIDECAR_OPTION_GROUPS,
+  HARNESS_SIDECAR_PROFILES,
+  harnessIntentFromOptimizations,
+  harnessProfileDefaultOptimizations,
+  harnessSidecarOptionLabel,
+  harnessSidecarProfileLabel,
+  releaseDraftFromDebugVariant,
+  selectedHarnessModelProxyOptimizations,
+  selectedHarnessProfile,
+  selectedHarnessOptimizations,
+} from "./harnessSidecarOptions";
 import {
   A2A_REGISTRY_DEFAULTS,
   A2A_REGISTRY_ENV,
@@ -2455,7 +2470,12 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
   const selections: RuntimeEnvSelection[] = [];
   const fixedValues: Record<string, string> = { ...prepared.envValues };
   const cloudProvider = prepared.draft.cloudProvider ?? "volcengine";
+  const modelProxyHarnessOptimizationLabels =
+    selectedHarnessModelProxyOptimizations(prepared.draft).map(
+      harnessSidecarOptionLabel,
+    );
   let usesArkModel = false;
+  let arkModelName = "";
   for (const binding of customModelEnvironmentBindings(
     prepared.draft,
     defaultModelApiBase(cloudProvider),
@@ -2483,6 +2503,9 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
       resolvedModelSource(node, cloudProvider) === "ark"
     ) {
       usesArkModel = true;
+      if (!arkModelName) {
+        arkModelName = (node.modelName ?? "").trim();
+      }
     }
     for (const toolId of node.builtinTools ?? []) {
       const tool = BUILTIN_TOOLS.find((item) => item.id === toolId);
@@ -2569,11 +2592,37 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
           secret: true,
           readOnly: true,
           serverManaged: true,
+          requiredBy: modelProxyHarnessOptimizationLabels,
         },
       ],
     });
     fixedValues.MODEL_AGENT_PROVIDER = "openai";
     fixedValues.MODEL_AGENT_API_BASE = defaultModelApiBase(cloudProvider);
+    const selectedModelName = arkModelName || defaultModelName(cloudProvider);
+    fixedValues.MODEL_AGENT_NAME = selectedModelName;
+    fixedValues.MODEL_NAME = selectedModelName;
+  }
+  if (
+    selectedHarnessOptimizations(prepared.draft).includes("mcp_resilience")
+  ) {
+    selections.push({
+      env: [
+        {
+          key: "MCP_URLS",
+          required: true,
+          comment: "MCP 统一网关地址",
+          placeholder: "https://example.com/mcp",
+          requiredBy: [harnessSidecarOptionLabel("mcp_resilience")],
+        },
+        {
+          key: "MCP_API_KEY",
+          required: true,
+          comment: "MCP 统一网关 API Key",
+          secret: true,
+          requiredBy: [harnessSidecarOptionLabel("mcp_resilience")],
+        },
+      ],
+    });
   }
   const config = runtimeEnvConfiguration(selections);
   return {
@@ -2768,7 +2817,12 @@ export function TreeNode({
 
 type DebugPhase = "idle" | "starting" | "ready" | "sending" | "error";
 
-type WorkspaceMode = "build" | "validate" | "environment" | "publish";
+type WorkspaceMode =
+  | "build"
+  | "optimize"
+  | "validate"
+  | "environment"
+  | "publish";
 interface DebugMessage {
   role: "user" | "assistant";
   content: string;
@@ -2782,7 +2836,6 @@ interface DebugVariant {
   modelName: string;
   description: string;
   instruction: string;
-  optimizations: string[];
   configOpen: boolean;
   phase: DebugPhase;
   runtimeSnapshot: string;
@@ -2953,31 +3006,23 @@ function debugSnapshotKey(
 
 function debugVariantSnapshot(
   draftSnapshot: string,
-  variant: Pick<
-    DebugVariant,
-    "modelName" | "description" | "instruction" | "optimizations"
-  >,
+  variant: Pick<DebugVariant, "modelName" | "description" | "instruction">,
 ): string {
   return JSON.stringify({
     draftSnapshot,
     modelName: variant.modelName,
     description: variant.description,
     instruction: variant.instruction,
-    optimizations: variant.optimizations,
   });
 }
 
 function debugVariantConfigurationKey(
-  variant: Pick<
-    DebugVariant,
-    "modelName" | "description" | "instruction" | "optimizations"
-  >,
+  variant: Pick<DebugVariant, "modelName" | "description" | "instruction">,
 ): string {
   return JSON.stringify({
     modelName: variant.modelName.trim(),
     description: variant.description.trim(),
     instruction: variant.instruction.trim(),
-    optimizations: variant.optimizations,
   });
 }
 
@@ -2990,7 +3035,7 @@ function DebugComparisonWorkspace({
   onInput,
   onSend,
   onStartVariant,
-  onDeployVariant,
+  onUseVariant,
   onAddVariant,
   onRemoveVariant,
   onToggleConfig,
@@ -3006,7 +3051,7 @@ function DebugComparisonWorkspace({
   onInput: (v: string) => void;
   onSend: () => void;
   onStartVariant: (id: string) => void;
-  onDeployVariant: (id: string) => void;
+  onUseVariant: (id: string) => void;
   onAddVariant: () => void;
   onRemoveVariant: (id: string) => void;
   onToggleConfig: (id: string) => void;
@@ -3075,7 +3120,9 @@ function DebugComparisonWorkspace({
                   (message) => message.role === "assistant",
                 );
               const startDisabled =
-                busy || variant.configOpen || configurationUnavailable;
+                busy ||
+                variant.configOpen ||
+                configurationUnavailable;
               const disabledReason = !modelName
                 ? "请先选择模型"
                 : !description
@@ -3229,9 +3276,9 @@ function DebugComparisonWorkspace({
                           type="button"
                           className="cw-ab-deploy"
                           disabled={busy || !modelName}
-                          onClick={() => onDeployVariant(variant.id)}
+                          onClick={() => onUseVariant(variant.id)}
                         >
-                          部署该配置
+                          使用该配置
                         </button>
                       </footer>
                     </section>
@@ -3331,25 +3378,6 @@ function DebugComparisonWorkspace({
                             }
                           />
                         </label>
-                        <fieldset className="cw-ab-optimizations-disabled">
-                          <legend>
-                            <span>优化选项</span>
-                            <em>待开放</em>
-                          </legend>
-                          <div className="cw-ab-optimization-list">
-                            {DEBUG_OPTIMIZATIONS.map((item) => (
-                              <Checkbox
-                                key={item.id}
-                                checked={variant.optimizations.includes(
-                                  item.id,
-                                )}
-                                disabled
-                                label={item.label}
-                                className="cw-ab-optimization-checkbox"
-                              />
-                            ))}
-                          </div>
-                        </fieldset>
                         <p>设置完成后返回正面，再启动当前测试环境。</p>
                       </div>
                     </section>
@@ -3411,11 +3439,111 @@ function DebugComparisonWorkspace({
   );
 }
 
+function HarnessOptimizationWorkspace({
+  profile,
+  optimizations,
+  onProfileChange,
+  onOptimizationChange,
+}: {
+  profile: HarnessSidecarProfileId;
+  optimizations: HarnessSidecarOptionId[];
+  onProfileChange: (profile: HarnessSidecarProfileId) => void;
+  onOptimizationChange: (
+    optionId: HarnessSidecarOptionId,
+    selected: boolean,
+  ) => void;
+}) {
+  return (
+    <section className="cw-optimize-workspace" aria-label="智能体优化选项">
+      <div className="cw-optimize-panel">
+        <fieldset className="cw-optimize-section">
+          <legend>优化场景</legend>
+          <RadioGroup<HarnessSidecarProfileId>
+            className="cw-optimize-profile-options"
+            aria-label="优化场景"
+            value={profile}
+            onChange={onProfileChange}
+          >
+            {HARNESS_SIDECAR_PROFILES.map((item) => (
+              <div
+                key={item.id}
+                className={`cw-optimize-profile-option${
+                  profile === item.id ? " is-on" : ""
+                }`}
+              >
+                <RadioGroup.Item
+                  value={item.id}
+                  block
+                  className="cw-optimize-profile-control"
+                >
+                  <span className="cw-optimize-profile-copy">
+                    <strong>{item.displayName}</strong>
+                    <small>{item.description}</small>
+                  </span>
+                </RadioGroup.Item>
+              </div>
+            ))}
+          </RadioGroup>
+        </fieldset>
+
+        <fieldset className="cw-optimize-section">
+          <legend>优化组件</legend>
+          <div className="cw-optimize-option-list">
+            {HARNESS_SIDECAR_OPTION_GROUPS.map((group) => (
+              <section
+                key={group.id}
+                className="cw-optimize-option-group"
+                aria-labelledby={`cw-optimize-group-${group.id}`}
+              >
+                <h3
+                  id={`cw-optimize-group-${group.id}`}
+                  className="cw-optimize-option-group-title"
+                >
+                  {group.displayName}
+                </h3>
+                <div className="cw-optimize-option-group-items">
+                  {group.componentIds.map((optionId) => {
+                    const item = HARNESS_SIDECAR_OPTIONS.find(
+                      (option) => option.id === optionId,
+                    );
+                    if (!item) return null;
+                    const checked = optimizations.includes(item.id);
+                    return (
+                      <Checkbox
+                        key={item.id}
+                        checked={checked}
+                        onCheckedChange={(next) => {
+                          const selected = Boolean(next);
+                          if (selected !== checked) {
+                            onOptimizationChange(item.id, selected);
+                          }
+                        }}
+                        label={
+                          <span className="cw-optimize-option-copy">
+                            <strong>{item.displayName}</strong>
+                            <small>{item.description}</small>
+                          </span>
+                        }
+                        className="cw-optimize-option"
+                      />
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
+          </div>
+        </fieldset>
+      </div>
+    </section>
+  );
+}
+
 const WORKSPACE_MODES: Array<{
   id: WorkspaceMode;
   label: string;
 }> = [
   { id: "build", label: "架构" },
+  { id: "optimize", label: "优化" },
   { id: "validate", label: "调试" },
   { id: "environment", label: "环境" },
   { id: "publish", label: "发布" },
@@ -3423,33 +3551,11 @@ const WORKSPACE_MODES: Array<{
 
 const WORKSPACE_TITLES: Record<WorkspaceMode, string> = {
   build: "个性化您的智能体架构",
+  optimize: "为您的智能体选择优化项",
   validate: "调试您的智能体",
   environment: "配置云上环境",
   publish: "准备好部署您的智能体",
 };
-
-const DEBUG_OPTIMIZATIONS = [
-  {
-    id: "context",
-    label: "上下文优化",
-    description: "压缩历史对话，保留与当前任务相关的信息",
-  },
-  {
-    id: "grounding",
-    label: "幻觉抑制",
-    description: "对不确定内容要求依据，并明确表达未知",
-  },
-  {
-    id: "tools",
-    label: "工具调用优化",
-    description: "减少重复调用，优先复用可信的工具结果",
-  },
-  {
-    id: "latency",
-    label: "响应加速",
-    description: "缓存稳定上下文，降低重复推理开销",
-  },
-] as const;
 
 function WorkspaceHeader({ mode }: { mode: WorkspaceMode }) {
   return (
@@ -3661,7 +3767,6 @@ export function CustomCreate({
         modelName: defaultDebugModelName(initialProviderDraft),
         description: initialProviderDraft.description,
         instruction: initialProviderDraft.instruction,
-        optimizations: [],
         configOpen: false,
         phase: "idle",
         runtimeSnapshot: "",
@@ -3981,6 +4086,8 @@ export function CustomCreate({
     () => draftForCloudProvider(draft, cloudProvider),
     [cloudProvider, draft],
   );
+  const harnessOptimizationProfile = selectedHarnessProfile(draft);
+  const harnessOptimizations = selectedHarnessOptimizations(draft);
   const currentDebugSnapshot = useMemo(
     () => debugSnapshotKey(providerDraft, transientModelSecretValues),
     [providerDraft, transientModelSecretValues],
@@ -4005,13 +4112,39 @@ export function CustomCreate({
       requirement.label === `${node.name.trim() || "自定义模型"} 模型 API Key`,
   );
 
-  // Smooth-scroll to the first invalid section during validation.
-  const scrollToSection = (id: StepId) => {
-    sectionRefs.current[id]?.scrollIntoView({
+  function focusValidationProblem(problem: TreeProblem) {
+    const sectionId = problem.problem === "缺少子 Agent" ? "type" : "basic";
+    const section = sectionRefs.current[sectionId];
+    section?.scrollIntoView({
       behavior: "smooth",
       block: "start",
     });
-  };
+
+    const field =
+      problem.problem === "缺少描述"
+        ? "description"
+        : problem.problem === "缺少系统提示词"
+          ? "instruction"
+          : problem.problem === "缺少 AgentKit 智能体中心"
+            ? "a2a-registry"
+            : problem.problem === "缺少子 Agent" ||
+                problem.problem === "远程 Agent 只能作为子 Agent"
+              ? null
+              : "name";
+    const fieldRoot = field
+      ? section?.querySelector<HTMLElement>(
+          `[data-validation-field="${field}"]`,
+        )
+      : section;
+    const focusTarget = fieldRoot?.matches(
+      'input, textarea, button:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
+    )
+      ? fieldRoot
+      : fieldRoot?.querySelector<HTMLElement>(
+          'input, textarea, button:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
+        );
+    focusTarget?.focus({ preventScroll: true });
+  }
 
   const requireCompleteDraft = () => {
     if (canFinish) return true;
@@ -4019,11 +4152,11 @@ export function CustomCreate({
     setValidationPulse((pulse) => pulse + 1);
     if (problems[0]) {
       setSelectedPath(problems[0].path);
-      window.requestAnimationFrame(() =>
-        scrollToSection(
-          problems[0].problem === "缺少子 Agent" ? "type" : "basic",
-        ),
-      );
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() =>
+          focusValidationProblem(problems[0]),
+        );
+      });
     }
     return false;
   };
@@ -4121,8 +4254,7 @@ export function CustomCreate({
     setWorkspaceMode("environment");
   };
 
-  const openPublishPreview = async (variantId?: string) => {
-    if (!(await confirmLeaveDebug())) return;
+  const materializePublishRelease = async (variantId?: string) => {
     setBuildErr("");
     if (!requireCompleteDraft()) {
       setWorkspaceMode("build");
@@ -4162,15 +4294,10 @@ export function CustomCreate({
         : selectedDebugVariant;
       if (releaseVariant) setSelectedVariantId(releaseVariant.id);
       const releaseDraft = releaseVariant
-        ? {
-            ...providerDraft,
-            modelName: releaseVariant.modelName || providerDraft.modelName,
-            description: releaseVariant.description,
-            instruction: releaseVariant.instruction,
-          }
+        ? releaseDraftFromDebugVariant(providerDraft, releaseVariant)
         : providerDraft;
       const generated = await generateAgentProject(codegenDraft(releaseDraft));
-      if (releaseDraft !== draft) setDraft(releaseDraft);
+      setDraft(releaseDraft);
       setProject(generated);
       setWorkspaceMode("publish");
     } catch (error) {
@@ -4178,6 +4305,15 @@ export function CustomCreate({
     } finally {
       setBuilding(false);
     }
+  };
+
+  const openOptimization = async () => {
+    if (!(await confirmLeaveDebug())) return;
+    if (!requireCompleteDraft()) {
+      setWorkspaceMode("build");
+      return;
+    }
+    setWorkspaceMode("optimize");
   };
 
   const startDebugVariant = async (id: string) => {
@@ -4392,7 +4528,6 @@ export function CustomCreate({
           modelName: draft.modelName ?? "",
           description: draft.description,
           instruction: draft.instruction,
-          optimizations: [],
           configOpen: true,
           phase: "idle",
           runtimeSnapshot: "",
@@ -4417,6 +4552,34 @@ export function CustomCreate({
         variant.id === id ? { ...variant, ...patch } : variant,
       ),
     );
+
+  const updateHarnessOptimization = (
+    optionId: HarnessSidecarOptionId,
+    selected: boolean,
+  ) => {
+    const optimizations = selected
+      ? [...new Set([...harnessOptimizations, optionId])]
+      : harnessOptimizations.filter((item) => item !== optionId);
+    setDraft((current) => ({
+      ...current,
+      harnessSidecar: harnessIntentFromOptimizations(
+        optimizations,
+        harnessOptimizationProfile,
+      ),
+    }));
+    setProject(null);
+  };
+
+  const updateHarnessOptimizationProfile = (
+    profile: HarnessSidecarProfileId,
+  ) => {
+    const optimizations = harnessProfileDefaultOptimizations(profile);
+    setDraft((current) => ({
+      ...current,
+      harnessSidecar: harnessIntentFromOptimizations(optimizations, profile),
+    }));
+    setProject(null);
+  };
 
   const updateDebugVariantConfig = (
     id: string,
@@ -4486,6 +4649,7 @@ export function CustomCreate({
         runtimeName: deploymentRuntimeName,
         appName: deploymentTarget?.appName,
         description: draft.description,
+        harnessSidecar: draft.harnessSidecar,
       },
     );
   };
@@ -4511,9 +4675,12 @@ export function CustomCreate({
 
   const handleWorkspaceChange = async (nextMode: WorkspaceMode) => {
     if (nextMode === "publish") {
-      if (!requireCompleteDraft()) return;
-      if (project) setWorkspaceMode("publish");
-      else openPublishPreview();
+      if (!(await confirmLeaveDebug())) return;
+      await materializePublishRelease();
+      return;
+    }
+    if (nextMode === "optimize") {
+      await openOptimization();
       return;
     }
     if (nextMode === "validate") {
@@ -4737,14 +4904,25 @@ export function CustomCreate({
                                   </label>
                                   <input
                                     className={`cw-input ${invalidClass(nameInvalid)}`}
+                                    data-validation-field="name"
                                     value={node.name}
                                     placeholder="assistant"
+                                    aria-invalid={showErrors && nameInvalid}
+                                    aria-describedby={
+                                      showErrors && nameProblem
+                                        ? "cw-agent-name-error"
+                                        : undefined
+                                    }
                                     onChange={(e) =>
                                       patch({ name: e.target.value })
                                     }
                                   />
                                   {showErrors && nameProblem ? (
-                                    <span className="cw-error-text">
+                                    <span
+                                      id="cw-agent-name-error"
+                                      role="alert"
+                                      className="cw-error-text"
+                                    >
                                       {nameProblem}
                                     </span>
                                   ) : (
@@ -4763,14 +4941,27 @@ export function CustomCreate({
                                     className={`cw-textarea cw-textarea-sm ${invalidClass(
                                       descriptionMissing,
                                     )}`}
+                                    data-validation-field="description"
                                     value={node.description}
                                     placeholder="简要描述这个 Agent 的用途，便于团队识别…"
+                                    aria-invalid={
+                                      showErrors && descriptionMissing
+                                    }
+                                    aria-describedby={
+                                      showErrors && descriptionMissing
+                                        ? "cw-agent-description-error"
+                                        : undefined
+                                    }
                                     onChange={(e) =>
                                       patch({ description: e.target.value })
                                     }
                                   />
                                   {showErrors && descriptionMissing ? (
-                                    <span className="cw-error-text">
+                                    <span
+                                      id="cw-agent-description-error"
+                                      role="alert"
+                                      className="cw-error-text"
+                                    >
                                       描述为必填项
                                     </span>
                                   ) : (
@@ -4814,7 +5005,10 @@ export function CustomCreate({
                                 )}
                               </>
                             ) : a2a ? (
-                              <div className="cw-field cw-remote-center-fields">
+                              <div
+                                className="cw-field cw-remote-center-fields"
+                                data-validation-field="a2a-registry"
+                              >
                                 <div className="cw-remote-center-head">
                                   <div className="cw-label">
                                     AgentKit 智能体中心
@@ -4887,13 +5081,16 @@ export function CustomCreate({
                                   )}
                                 </AnimatePresence>
                                 {showErrors && a2aRegistrySpaceMissing && (
-                                  <span className="cw-error-text">
+                                  <span className="cw-error-text" role="alert">
                                     请选择 AgentKit 智能体中心
                                   </span>
                                 )}
                               </div>
                             ) : (
-                              <div className="cw-field">
+                              <div
+                                className="cw-field"
+                                data-validation-field="instruction"
+                              >
                                 <label className="cw-label">
                                   系统提示词<span className="cw-req">*</span>
                                 </label>
@@ -4916,7 +5113,7 @@ export function CustomCreate({
                                   />
                                 </Suspense>
                                 {showErrors && instructionMissing ? (
-                                  <span className="cw-error-text">
+                                  <span className="cw-error-text" role="alert">
                                     系统提示词为必填项
                                   </span>
                                 ) : (
@@ -5443,6 +5640,15 @@ export function CustomCreate({
           </div>
         )}
 
+        {workspaceMode === "optimize" && (
+          <HarnessOptimizationWorkspace
+            profile={harnessOptimizationProfile}
+            optimizations={harnessOptimizations}
+            onProfileChange={updateHarnessOptimizationProfile}
+            onOptimizationChange={updateHarnessOptimization}
+          />
+        )}
+
         {workspaceMode === "validate" && (
           <div className="cw-validation-workspace">
             <div className="cw-validation-content">
@@ -5455,7 +5661,7 @@ export function CustomCreate({
                 onInput={setDebugInput}
                 onSend={sendDebugMessage}
                 onStartVariant={startDebugVariant}
-                onDeployVariant={(id) => void openEnvironment(id)}
+                onUseVariant={(id) => void openEnvironment(id)}
                 onAddVariant={addDebugVariant}
                 onRemoveVariant={removeDebugVariant}
                 onToggleConfig={(id) => {
@@ -5503,13 +5709,10 @@ export function CustomCreate({
                           "默认模型",
                         description: selectedDebugVariant.description,
                         instruction: selectedDebugVariant.instruction,
-                        optimizations:
-                          selectedDebugVariant.optimizations.flatMap((id) => {
-                            const option = DEBUG_OPTIMIZATIONS.find(
-                              (item) => item.id === id,
-                            );
-                            return option ? [option.label] : [];
-                          }),
+                        optimizations: [
+                          `优化场景：${harnessSidecarProfileLabel(harnessOptimizationProfile)}`,
+                          ...harnessOptimizations.map(harnessSidecarOptionLabel),
+                        ],
                       }
                     : undefined
                 }

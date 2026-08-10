@@ -93,6 +93,19 @@ def _import_dynamic_a2a_helper(app_name: str) -> ModuleType | None:
     return None
 
 
+def _import_generated_agent_module(app_name: str) -> ModuleType:
+    """Import the generated agent module from either supported package layout."""
+
+    module_names = (f"{app_name}.agent", f"agents.{app_name}.agent")
+    for module_name in module_names:
+        try:
+            return import_module(module_name)
+        except ModuleNotFoundError as exc:
+            if exc.name != module_name:
+                raise
+    raise ModuleNotFoundError(f"Generated agent module not found: {app_name}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a temporary generated agent")
     parser.add_argument("--agents-dir", required=True)
@@ -126,6 +139,7 @@ def main() -> None:
 
     loader = AgentLoader(args.agents_dir)
     apps = loader.list_agents()
+    harness_extension: Any | None = None
     if len(apps) == 1:
         agent_or_app = loader.load_agent(apps[0])
         root_agent = (
@@ -134,7 +148,17 @@ def main() -> None:
         helper = _import_dynamic_a2a_helper(apps[0])
         if helper is not None:
             helper.enable_dynamic_a2a_tools(app, root_agent)
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+        harness_extension = getattr(
+            _import_generated_agent_module(apps[0]),
+            "harness_extension",
+            None,
+        )
+    try:
+        uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    finally:
+        close = getattr(harness_extension, "close", None)
+        if callable(close):
+            close()
 
 
 if __name__ == "__main__":

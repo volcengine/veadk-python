@@ -35,10 +35,14 @@ test("deployment sends the selected Runtime instance range", () => {
   assert.match(clientSource, /maxInstance: opts\?\.maxInstance/);
 });
 
-test("renders editable Runtime instance inputs with memory-aware defaults", () => {
+test("renders Runtime instance inputs with memory-aware and Sidecar-safe defaults", () => {
   assert.match(
     projectPreviewSource,
-    /useState\([\s\S]*?inMemorySession \? "1" : "5"[\s\S]*?\)/,
+    /const \[minInstance, setMinInstance\] = useState\("1"\)/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /const \[maxInstance, setMaxInstance\] = useState\([\s\S]*?inMemorySession \|\| sidecarEnabled \? "1" : "5"/,
   );
   assert.match(
     projectPreviewSource,
@@ -50,7 +54,11 @@ test("renders editable Runtime instance inputs with memory-aware defaults", () =
   );
   assert.match(
     projectPreviewSource,
-    /inMemorySession && \([\s\S]*?className="pp-instance-note"[\s\S]*?为避免多实例间会话丢失，推荐将 Runtime 固定为 1～1/,
+    /disabled=\{deploying \|\| sidecarEnabled\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /inMemorySession \|\| sidecarEnabled[\s\S]*?className="pp-instance-note"[\s\S]*?Harness Sidecar 首期仅支持单实例，Runtime 固定为 1～1[\s\S]*?为避免多实例间会话丢失，推荐将 Runtime 固定为 1～1/,
   );
   assert.match(
     projectPreviewStyles,

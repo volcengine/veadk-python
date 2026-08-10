@@ -5,7 +5,11 @@ on:
   workflow_dispatch:
 
 jobs:
+  harness-sidecar-release-gate:
+    uses: ./.github/workflows/harness-sidecar-release-gate.yaml
+
   build:
+    needs: harness-sidecar-release-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

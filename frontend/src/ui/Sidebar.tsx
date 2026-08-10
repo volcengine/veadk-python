@@ -312,8 +312,7 @@ export function Sidebar({
   userInfo,
   onLogout,
 }: SidebarProps) {
-  // Agent creation still lives outside the main navigation.
-  void onQuickCreate;
+  // The legacy full-page creator remains outside the main navigation.
   void onAddAgent;
   // Per-module feature gates; a missing flag defaults to shown.
   const show = (k: keyof NonNullable<typeof features>) => features?.[k] !== false;
@@ -424,6 +423,17 @@ export function Sidebar({
           <AgentFaceIcon />
           <span className="sidebar-nav-label">智能体</span>
         </button>
+        {access.capabilities.createAgents && show("addAgent") ? (
+          <button
+            className="new-chat new-chat--add-agent"
+            onClick={onQuickCreate}
+            aria-label="添加智能体"
+            title="添加智能体"
+          >
+            <Plus className="icon" />
+            <span className="sidebar-nav-label">添加智能体</span>
+          </button>
+        ) : null}
         <button
           className={`new-chat new-chat--library${
             activePage === "library" ? " is-active" : ""

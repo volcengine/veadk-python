@@ -15,6 +15,16 @@
 from veadk.extensions.harness import HarnessExtension
 
 
+def test_harness_extension_keeps_enabled_constructor_default() -> None:
+    plugins = HarnessExtension().plugins()
+
+    assert [plugin.name for plugin in plugins] == [
+        "harness_invocation_context_plugin",
+        "harness_compress_plugin",
+        "harness_response_verification_plugin",
+    ]
+
+
 def test_harness_extension_builds_runner_plugins() -> None:
     plugins = HarnessExtension(
         components=["invocation_context", "compactor", "response_verification"],

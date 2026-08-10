@@ -9,7 +9,7 @@ import { prepareMcpAuth } from "./mcpAuth";
 import type { AgentDraft } from "./types";
 
 /** Build a clean, minimal config object (omit empty/false fields). */
-function toConfig(draft: AgentDraft): Record<string, unknown> {
+function toConfig(draft: AgentDraft, root = true): Record<string, unknown> {
   const o: Record<string, unknown> = {
     agentType: draft.agentType ?? "llm",
   };
@@ -82,6 +82,13 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
     o.tracing = true;
     o.tracingExporters = [...draft.tracingExporters];
   }
+  if (root && draft.harnessSidecar?.enabled) {
+    o.harnessSidecar = {
+      enabled: true,
+      profile: draft.harnessSidecar.profile,
+      componentOverrides: { ...draft.harnessSidecar.componentOverrides },
+    };
+  }
   if (
     draft.cloudEnvironment?.cliTools.length ||
     draft.cloudEnvironment?.dockerfile !== undefined
@@ -142,7 +149,9 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
       }
       return base;
     });
-  if (draft.subAgents?.length) o.subAgents = draft.subAgents.map(toConfig);
+  if (draft.subAgents?.length) {
+    o.subAgents = draft.subAgents.map((child) => toConfig(child, false));
+  }
   return o;
 }
 

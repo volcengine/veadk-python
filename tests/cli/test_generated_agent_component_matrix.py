@@ -89,8 +89,9 @@ EXPECTED_KB_EXTRAS = {
 DEFAULT_ARK_DEBUG_ENV = {
     item.key: item.placeholder
     for item in MODEL_ENV
-    if item.key in {"MODEL_AGENT_PROVIDER", "MODEL_AGENT_API_BASE"}
+    if item.key in {"MODEL_AGENT_PROVIDER", "MODEL_AGENT_API_BASE", "MODEL_AGENT_NAME"}
 }
+DEFAULT_ARK_DEBUG_ENV["MODEL_NAME"] = DEFAULT_ARK_DEBUG_ENV["MODEL_AGENT_NAME"]
 
 
 def test_component_catalog_does_not_request_auto_resolved_credentials() -> None:

@@ -127,11 +127,13 @@ test("configuration form omits the redundant right-side step rail", () => {
   assert.doesNotMatch(createStyles, /\.cw-rail\s*\{/);
 });
 
-test("workspace uses one architecture title and a bottom four-stage lifecycle", () => {
+test("workspace uses one title and a bottom five-stage lifecycle", () => {
   const headerRule = createStyles.match(/\.cw-workspace-header\s*\{[^}]*\}/)?.[0] ?? "";
-  assert.match(createSource, /validate:\s*"调试您的智能体"/);
-  assert.match(createSource, /publish:\s*"准备好部署您的智能体"/);
   assert.match(createSource, /build:\s*"个性化您的智能体架构"/);
+  assert.match(createSource, /optimize:\s*"为您的智能体选择优化项"/);
+  assert.match(createSource, /validate:\s*"调试您的智能体"/);
+  assert.match(createSource, /environment:\s*"配置云上环境"/);
+  assert.match(createSource, /publish:\s*"准备好部署您的智能体"/);
   assert.match(createSource, /<h1>\{WORKSPACE_TITLES\[mode\]\}<\/h1>/);
   assert.doesNotMatch(createSource, /agentName=\{workspaceAgentName\(draft\)\}/);
   assert.match(headerRule, /display:\s*flex/);
@@ -140,6 +142,7 @@ test("workspace uses one architecture title and a bottom four-stage lifecycle", 
   assert.match(headerRule, /background:\s*transparent/);
   assert.doesNotMatch(createSource, />放弃编辑</);
   assert.match(createSource, /\{ id: "build", label: "架构" \}/);
+  assert.match(createSource, /\{ id: "optimize", label: "优化" \}/);
   assert.match(createSource, /\{ id: "validate", label: "调试" \}/);
   assert.match(createSource, /\{ id: "environment", label: "环境" \}/);
   assert.match(createSource, /\{ id: "publish", label: "发布" \}/);
@@ -154,7 +157,7 @@ test("workspace uses one architecture title and a bottom four-stage lifecycle", 
     /\.cw-workspace-footer\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?padding:/,
   );
   assert.match(createStyles, /\.cw-workspace-nav-button\.is-placeholder\s*\{[\s\S]*?visibility:\s*hidden/);
-  assert.match(createStyles, /\.cw-workspace-progress\s*\{[\s\S]*?grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/);
+  assert.match(createStyles, /\.cw-workspace-progress\s*\{[\s\S]*?grid-template-columns:\s*repeat\(5, minmax\(0, 1fr\)\)/);
 });
 
 test("build workspace uses a narrow 60-percent canvas and grouped configuration cards", () => {
@@ -273,7 +276,7 @@ test("debug variants configure and deploy their own model, description, and prom
   );
   assert.match(
     createSource,
-    /const releaseDraft = releaseVariant[\s\S]*?\.\.\.providerDraft[\s\S]*?modelName: releaseVariant\.modelName \|\| providerDraft\.modelName,[\s\S]*?description: releaseVariant\.description,[\s\S]*?instruction: releaseVariant\.instruction/,
+    /const releaseDraft = releaseVariant[\s\S]*?releaseDraftFromDebugVariant\(providerDraft, releaseVariant\)/,
   );
   assert.match(
     createSource,
@@ -339,13 +342,13 @@ test("debug comparison keeps equal spacing above cards and composer", () => {
 
 test("leaving debug mode uses the shared Studio confirm dialog", () => {
   const confirmStart = createSource.indexOf("const confirmLeaveDebug = async () =>");
-  const publishStart = createSource.indexOf("const openPublishPreview = async", confirmStart);
-  assert.ok(confirmStart >= 0 && publishStart > confirmStart);
+  const environmentStart = createSource.indexOf("const openEnvironment = async", confirmStart);
+  assert.ok(confirmStart >= 0 && environmentStart > confirmStart);
   assert.match(createSource, /import \{ StudioConfirmDialog \} from "\.\.\/ui\/StudioConfirmDialog"/);
   assert.match(createSource, /const \[debugLeaveConfirmOpen, setDebugLeaveConfirmOpen\] = useState\(false\)/);
   assert.match(createSource, /debugLeaveConfirmResolverRef/);
   assert.doesNotMatch(
-    createSource.slice(confirmStart, publishStart),
+    createSource.slice(confirmStart, environmentStart),
     /window\.confirm/,
   );
   assert.match(
@@ -388,15 +391,15 @@ test("configuration checkboxes use Apps SDK UI controls", () => {
   );
   assert.match(
     createSource,
-    /className="cw-ab-optimization-checkbox"/,
+    /className="cw-optimize-option"/,
   );
   assert.doesNotMatch(createSource, /type="checkbox"/);
 });
 
-test("build workspace has a validated primary path into debugging", () => {
+test("build workspace has a validated primary path into optimization", () => {
   assert.match(
     createSource,
-    /const openValidation = \(\) => \{[\s\S]*?if \(!requireCompleteDraft\(\)\) return;[\s\S]*?setWorkspaceMode\("validate"\);/,
+    /const openOptimization = async \(\) => \{[\s\S]*?if \(!requireCompleteDraft\(\)\)[\s\S]*?setWorkspaceMode\("optimize"\);/,
   );
   assert.match(
     createSource,
@@ -413,6 +416,25 @@ test("build workspace has a validated primary path into debugging", () => {
   assert.doesNotMatch(createSource, /className="cw-build-next/);
 });
 
+test("invalid drafts reveal and focus the first failing field", () => {
+  assert.match(
+    createSource,
+    /function focusValidationProblem[\s\S]*?scrollIntoView\([\s\S]*?focus\(\{ preventScroll: true \}\)/,
+  );
+  assert.match(
+    createSource,
+    /const requireCompleteDraft = \(\) => \{[\s\S]*?setSelectedPath\(problems\[0\]\.path\)[\s\S]*?focusValidationProblem\(problems\[0\]\)/,
+  );
+  assert.match(
+    createSource,
+    /data-validation-field="name"[\s\S]*?aria-invalid=\{showErrors && nameInvalid\}[\s\S]*?aria-describedby=/,
+  );
+  assert.match(
+    createSource,
+    /id="cw-agent-name-error"[\s\S]*?role="alert"/,
+  );
+});
+
 test("container agents require child agents before debug or publish", () => {
   assert.match(
     createSource,
@@ -425,7 +447,7 @@ test("container agents require child agents before debug or publish", () => {
   );
   assert.match(
     createSource,
-    /scrollToSection\(\s*problems\[0\]\.problem === "缺少子 Agent" \? "type" : "basic",?\s*\)/,
+    /const sectionId =\s*problem\.problem === "缺少子 Agent" \? "type" : "basic"/,
   );
   assert.match(
     createSource,
@@ -441,13 +463,19 @@ test("container agents require child agents before debug or publish", () => {
   );
   assert.match(
     createSource,
-    /if \(nextMode === "publish"\) \{[\s\S]*?if \(!requireCompleteDraft\(\)\) return;[\s\S]*?if \(project\) setWorkspaceMode\("publish"\);/,
+    /const materializePublishRelease = async[\s\S]*?if \(!requireCompleteDraft\(\)\) \{[\s\S]*?setWorkspaceMode\("build"\);[\s\S]*?return;/,
+  );
+  assert.match(
+    createSource,
+    /if \(nextMode === "publish"\) \{[\s\S]*?await materializePublishRelease\(\);/,
   );
 });
 
 test("debug workspace compares multiple configurations behind one shared input", () => {
-  assert.match(createSource, /label: "上下文优化"/);
-  assert.match(createSource, /label: "幻觉抑制"/);
+  assert.match(
+    createSource,
+    /function HarnessOptimizationWorkspace[\s\S]*?const checked = optimizations\.includes\(item\.id\)/,
+  );
   assert.doesNotMatch(createSource, /className="cw-optimization-panel"/);
   assert.match(
     createSource,
@@ -460,11 +488,9 @@ test("debug workspace compares multiple configurations behind one shared input",
   assert.doesNotMatch(createSource, /快速调试|同一条输入将同时发送到全部对照组/);
   assert.match(createSource, /className="cw-ab-config-trigger"[\s\S]*?测试配置/);
   assert.match(createSource, /cw-ab-card-inner\$\{variant\.configOpen \? " is-flipped" : ""\}/);
-  assert.match(
-    createSource,
-    /checked=\{variant\.optimizations\.includes\(\s*item\.id,?\s*\)\}/,
-  );
-  assert.match(createSource, /className="cw-ab-optimizations-disabled"[\s\S]*?<em>待开放<\/em>/);
+  assert.doesNotMatch(createSource, /variant\.optimizations/);
+  assert.doesNotMatch(createSource, /className="cw-ab-optimizations"/);
+  assert.doesNotMatch(createSource, /className="cw-ab-optimizations-disabled"/);
   assert.match(createSource, /const startDebugVariant = async \(id: string\)/);
   assert.match(
     createSource,
@@ -488,7 +514,7 @@ test("debug workspace compares multiple configurations behind one shared input",
   assert.doesNotMatch(createSource, /name="debug-release-variant"|发布候选/);
   assert.match(
     createSource,
-    /className="cw-ab-deploy"[\s\S]*?onClick=\{\(\) => onDeployVariant\(variant\.id\)\}[\s\S]*?部署该配置/,
+    /className="cw-ab-deploy"[\s\S]*?onClick=\{\(\) => onUseVariant\(variant\.id\)\}[\s\S]*?使用该配置/,
   );
   assert.match(createSource, /className="cw-ab-ready-title"[\s\S]*?已就绪/);
   assert.match(
