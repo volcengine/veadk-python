@@ -483,6 +483,7 @@ export class RuntimeProbeError extends Error {
   constructor(
     message: string,
     readonly unsupported = false,
+    readonly retryable = false,
   ) {
     super(message);
     this.name = "RuntimeProbeError";
@@ -595,11 +596,12 @@ export async function fetchRemoteApps(
       "runtime_json_timeout",
     ].includes(runtimeErrorCode)
   ) {
-    throw new RuntimeProbeError(RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE);
+    throw new RuntimeProbeError(RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE, false, true);
   }
   if (ep?.runtimeId && res.status === 404) {
     throw new RuntimeProbeError(
       "该 Runtime 的 Agent Server 未提供连接接口，请确认 Runtime 已就绪且版本兼容。",
+      true,
       true,
     );
   }

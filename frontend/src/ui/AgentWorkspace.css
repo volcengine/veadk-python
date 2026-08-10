@@ -1311,6 +1311,12 @@
   padding-bottom: 0;
 }
 
+.aw-deploy-progress-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
 .aw-deploy-steps li:not(:last-child)::after {
   content: "";
   position: absolute;

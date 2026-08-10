@@ -47,6 +47,20 @@ test("runtime connection probing is shared with the Agent selector", () => {
   assert.match(connectionsSource, /return remoteAppId\(connection\.id, apps\[0\]\)/);
 });
 
+test("fresh deployments wait for the Runtime network to become reachable", () => {
+  assert.match(connectionsSource, /DEPLOYED_RUNTIME_CONNECT_INTERVAL_MS = 3_000/);
+  assert.match(connectionsSource, /DEPLOYED_RUNTIME_CONNECT_TIMEOUT_MS = 60_000/);
+  assert.match(connectionsSource, /waitForReady\?: boolean/);
+  assert.match(
+    connectionsSource,
+    /while \(true\)[\s\S]*?connectRuntimeOnce\([\s\S]*?error instanceof RuntimeProbeError[\s\S]*?error\.retryable[\s\S]*?waitForRuntimeProbe\(delayMs\)/,
+  );
+  assert.match(
+    appSource,
+    /const finishDeployment = useCallback[\s\S]*?connectRuntime\([\s\S]*?\{ waitForReady: true \}/,
+  );
+});
+
 test("management defaults to the active provider region without trailing list whitespace", () => {
   assert.match(manageSource, /defaultCloudRegion\(cloudProvider\)/);
   assert.match(manageSource, /cloudRegionOptions\(cloudProvider\)/);

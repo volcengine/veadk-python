@@ -450,7 +450,7 @@ function AddSkillDialog({
               disabled={!canUseSandbox}
               onClick={onSandbox}
             >
-              <strong>Dev Sandbox 创建</strong>
+              <strong>自动创建</strong>
               <span>选择模型和风格，通过对话生成技能</span>
             </button>
           </SandboxDisabledAction>
@@ -943,7 +943,7 @@ export function SkillCenterView({
               <PageState
                 kind="empty"
                 title={skillQuery.trim() ? "没有匹配的技能" : "暂无技能"}
-                description={skillQuery.trim() ? "请尝试搜索其他名称" : "本地上传 Skill，或使用 Dev Sandbox 创建"}
+                description={skillQuery.trim() ? "请尝试搜索其他名称" : "本地上传 Skill，或自动创建"}
                 action={!skillQuery.trim() ? { label: "本地上传", onClick: () => setUploadSpace(selectedSpace) } : undefined}
               />
             ) : (

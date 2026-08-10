@@ -12,6 +12,7 @@ interface SkillConfigSelectProps {
   onChange: (value: string) => void;
   disabled?: boolean;
   allowCustom?: boolean;
+  required?: boolean;
   placeholder?: string;
   error?: string;
 }
@@ -37,6 +38,7 @@ export function SkillConfigSelect({
   onChange,
   disabled = false,
   allowCustom = false,
+  required = false,
   placeholder = "请选择",
   error,
 }: SkillConfigSelectProps) {
@@ -132,7 +134,10 @@ export function SkillConfigSelect({
         if (!event.relatedTarget || !rootRef.current?.contains(event.relatedTarget)) close();
       }}
     >
-      <span id={labelId} className="skill-config-select__label">{label}</span>
+      <span id={labelId} className="skill-config-select__label">
+        {label}
+        {required ? <span className="skill-required-mark" aria-hidden="true">*</span> : null}
+      </span>
       {allowCustom ? (
         <div className={`skill-config-select__trigger is-editable${disabled ? " is-disabled" : ""}`} aria-expanded={open}>
           <input
@@ -144,6 +149,7 @@ export function SkillConfigSelect({
             aria-expanded={open}
             aria-controls={open ? listboxId : undefined}
             aria-labelledby={labelId}
+            aria-required={required}
             aria-invalid={Boolean(error)}
             aria-describedby={error ? errorId : undefined}
             placeholder={placeholder}
@@ -199,6 +205,7 @@ export function SkillConfigSelect({
           aria-expanded={open}
           aria-controls={open ? listboxId : undefined}
           aria-labelledby={labelId}
+          aria-required={required}
           onClick={() => {
             if (open) close();
             else openAt(selectedIndex >= 0 ? selectedIndex : 0);
