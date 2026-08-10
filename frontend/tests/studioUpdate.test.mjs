@@ -60,6 +60,11 @@ test("available updates replace the feature hover and the dialog contains long t
     controlStyleSource,
     /\.studio-update-dialog \.confirm-text[\s\S]*?overflow-wrap:\s*anywhere;/,
   );
+  assert.match(controlSource, /import \{ createPortal \} from "react-dom"/);
+  assert.match(
+    controlSource,
+    /dialogOpen && phase !== "idle" &&[\s\S]*?createPortal\([\s\S]*?document\.body/,
+  );
 });
 
 test("Studio checks the immutable release channel every three minutes", () => {

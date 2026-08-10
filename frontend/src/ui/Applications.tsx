@@ -5,6 +5,7 @@ import {
   AUTOMATIONS,
   type AutomationId,
 } from "../automations/registry";
+import { isCodingAgentsAutomationAvailable } from "../automations/codingAgents";
 import feishuLogo from "../assets/feishu-logo.svg";
 import { GitHubLogo } from "./GitHubLogo";
 import "./Applications.css";
@@ -52,6 +53,7 @@ export function Applications({ onOpen }: ApplicationsProps) {
   const activeCategoryLabel = AUTOMATION_CATEGORIES.find(
     (category) => category.id === activeCategory,
   )?.label;
+  const codingAgentsAvailable = isCodingAgentsAutomationAvailable(window.location.hostname);
 
   return (
     <div className="applications-page">
@@ -89,37 +91,54 @@ export function Applications({ onOpen }: ApplicationsProps) {
       <section className="applications-results" aria-label={`${activeCategoryLabel}自动化列表`}>
         {visibleApplications.length ? (
           <div className="applications-grid">
-            {visibleApplications.map((application) => (
-              <button
-                type="button"
-                className="application-card"
-                key={application.id}
-                onClick={() => onOpen(application.id)}
-                aria-label={`打开${application.name}`}
-              >
-                {application.icon === "feishu" ? (
-                  <img
-                    className="application-card-icon application-card-brand-icon"
-                    src={feishuLogo}
-                    alt=""
-                    aria-hidden="true"
-                  />
-                ) : application.icon === "coding-agents" ? (
-                  <CodingAgentsIcon className="application-card-icon" />
-                ) : (
-                  <GitHubLogo className="application-card-icon" />
-                )}
-                <div className="application-card-copy">
-                  <div className="application-card-title">
-                    <h2>{application.name}</h2>
-                    {application.badge ? (
-                      <span className={`application-card-badge is-${application.badgeTone || "default"}`}>{application.badge}</span>
-                    ) : null}
-                  </div>
-                  <p>{application.description}</p>
+            {visibleApplications.map((application) => {
+              const disabled = application.id === "coding-agents" && !codingAgentsAvailable;
+              const tooltipId = disabled ? "coding-agents-local-only-tooltip" : undefined;
+
+              return (
+                <div
+                  className={`application-card-wrap${disabled ? " is-disabled" : ""}`}
+                  key={application.id}
+                  tabIndex={disabled ? 0 : undefined}
+                  aria-describedby={tooltipId}
+                >
+                  <button
+                    type="button"
+                    className="application-card"
+                    onClick={() => onOpen(application.id)}
+                    aria-label={`打开${application.name}`}
+                    disabled={disabled}
+                  >
+                    {application.icon === "feishu" ? (
+                      <img
+                        className="application-card-icon application-card-brand-icon"
+                        src={feishuLogo}
+                        alt=""
+                        aria-hidden="true"
+                      />
+                    ) : application.icon === "coding-agents" ? (
+                      <CodingAgentsIcon className="application-card-icon" />
+                    ) : (
+                      <GitHubLogo className="application-card-icon" />
+                    )}
+                    <div className="application-card-copy">
+                      <div className="application-card-title">
+                        <h2>{application.name}</h2>
+                        {application.badge ? (
+                          <span className={`application-card-badge is-${application.badgeTone || "default"}`}>{application.badge}</span>
+                        ) : null}
+                      </div>
+                      <p>{application.description}</p>
+                    </div>
+                  </button>
+                  {disabled ? (
+                    <span id={tooltipId} className="application-card-tooltip" role="tooltip">
+                      仅本地部署可用
+                    </span>
+                  ) : null}
                 </div>
-              </button>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="applications-empty" role="status">

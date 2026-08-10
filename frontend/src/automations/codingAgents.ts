@@ -1,5 +1,9 @@
 import type { CodingAgentAutomationDefinition } from "./types";
 
+export function isCodingAgentsAutomationAvailable(hostname: string): boolean {
+  return hostname === "127.0.0.1";
+}
+
 export const codingAgentsAutomation: CodingAgentAutomationDefinition = {
   id: "coding-agents",
   kind: "coding-agent",

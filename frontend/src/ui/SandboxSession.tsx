@@ -42,7 +42,7 @@ export function SandboxSessionWarning({
         当前您在使用 {agentName} 智能体
       </span>
       <button type="button" onClick={onExit}>
-        退出内置智能体
+        退出当前智能体
       </button>
     </div>
   );

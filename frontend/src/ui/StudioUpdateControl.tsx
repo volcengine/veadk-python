@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   getStudioUpdateStatus,
   startStudioUpdate,
@@ -396,7 +397,8 @@ export function StudioUpdateControl({
         )}
       </button>
 
-      {dialogOpen && phase !== "idle" && (
+      {dialogOpen && phase !== "idle" &&
+        createPortal(
         <div className="confirm-scrim" role="presentation">
           <section
             className="confirm-box studio-update-dialog"
@@ -619,8 +621,9 @@ export function StudioUpdateControl({
               )}
             </div>
           </section>
-        </div>
-      )}
+        </div>,
+          document.body,
+        )}
     </>
   );
 }
