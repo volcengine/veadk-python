@@ -496,11 +496,11 @@ export function SkillGenerationWorkspace({
             <div><strong>基本信息</strong></div>
           </div>
           <label>
-            <span>目标</span>
-            <textarea value={intent} onChange={(event) => setIntent(event.target.value)} placeholder={operation === "create" ? "描述希望这个 Skill 完成什么任务" : "描述希望如何优化当前 Skill"} />
+            <span>目标<span className="skill-required-mark" aria-hidden="true">*</span></span>
+            <textarea required value={intent} onChange={(event) => setIntent(event.target.value)} placeholder={operation === "create" ? "描述希望这个 Skill 完成什么任务" : "描述希望如何优化当前 Skill"} />
           </label>
           <label>
-            <span>Skill 名称（可选）</span>
+            <span>Skill 名称</span>
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
@@ -516,7 +516,10 @@ export function SkillGenerationWorkspace({
           </label>
 
           <div className="skill-generation__section-head">
-            <div><strong>生成方案</strong><span>按不同方案并行生成多个技能，您可以选择最佳结果</span></div>
+            <div>
+              <strong>{operation === "create" ? "生成方案" : "优化方案"}</strong>
+              <span>{operation === "create" ? "按不同方案并行生成多个技能，您可以选择最佳结果" : "按不同方案并行优化当前技能，您可以选择最佳结果"}</span>
+            </div>
           </div>
           <div className="skill-generation__groups">
             {groups.map((group, index) => (
@@ -524,6 +527,7 @@ export function SkillGenerationWorkspace({
                 <header><strong>方案 {index + 1}</strong>{groups.length > 1 ? <button type="button" onClick={() => setGroups((current) => current.filter((item) => item.id !== group.id))}>移除</button> : null}</header>
                 <SkillConfigSelect
                   label="模型"
+                  required
                   value={group.model}
                   options={capability?.models.map((model) => ({ value: model.id, label: model.label })) || []}
                   onChange={(model) => updateGroup(group.id, { model })}
@@ -533,6 +537,7 @@ export function SkillGenerationWorkspace({
                 />
                 <SkillConfigSelect
                   label="风格"
+                  required
                   value={group.style}
                   options={STYLE_OPTIONS}
                   onChange={(style) => updateGroup(group.id, { style })}

@@ -432,7 +432,7 @@
   gap: 6px;
   margin-bottom: 16px;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .skill-generation textarea,
@@ -503,7 +503,8 @@
   margin-bottom: 10px;
 }
 .skill-config-select.is-open { z-index: 100; }
-.skill-config-select__label { color: hsl(var(--foreground)); font-size: 12px; font-weight: 550; line-height: 1.45; }
+.skill-config-select__label { color: hsl(var(--foreground)); font-size: 12px; font-weight: 400; line-height: 1.45; }
+.skill-required-mark { margin-left: 3px; color: hsl(var(--destructive)); }
 .skill-config-select__trigger {
   width: 100%;
   height: 36px;

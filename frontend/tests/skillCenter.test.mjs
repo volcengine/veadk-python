@@ -167,8 +167,14 @@ test("Skill generation setup follows Studio form and select conventions", () => 
   assert.match(generationSource, /aria-label="返回技能空间"/);
   assert.match(generationSource, /<BackIcon \/>/);
   assert.match(generationSource, /<strong>基本信息<\/strong>/);
-  assert.match(generationSource, /<strong>生成方案<\/strong>/);
+  assert.match(generationSource, /operation === "create" \? "生成方案" : "优化方案"/);
   assert.match(generationSource, /按不同方案并行生成多个技能，您可以选择最佳结果/);
+  assert.match(generationSource, /按不同方案并行优化当前技能，您可以选择最佳结果/);
+  assert.match(generationSource, /目标<span className="skill-required-mark" aria-hidden="true">\*<\/span>/);
+  assert.match(generationSource, /<span>Skill 名称<\/span>/);
+  assert.doesNotMatch(generationSource, /Skill 名称（可选）/);
+  assert.match(generationSource, /label="模型"\s+required/);
+  assert.match(generationSource, /label="风格"\s+required/);
   assert.doesNotMatch(generationSource, /火山引擎|BytePlus/);
   assert.match(skillStylesSource, /\.skill-generation__add-group\s*\{[^}]*border:\s*1px dashed/);
   assert.match(skillStylesSource, /\.skill-generation__header\s*\{[^}]*padding:\s*32px 32px 0;/);
@@ -178,6 +184,9 @@ test("Skill generation setup follows Studio form and select conventions", () => 
   assert.match(skillStylesSource, /\.skill-generation textarea,\s*\.skill-generation input\s*\{[^}]*font-weight:\s*400;/);
   assert.match(skillStylesSource, /\.skill-config-select__trigger\s*\{[^}]*font-weight:\s*400;/);
   assert.match(skillStylesSource, /\.skill-config-select__option\s*\{[^}]*font-weight:\s*400;/);
+  assert.match(skillStylesSource, /\.skill-generation__group label\s*\{[^}]*font-weight:\s*400;/);
+  assert.match(skillStylesSource, /\.skill-config-select__label\s*\{[^}]*font-weight:\s*400;/);
+  assert.match(skillStylesSource, /\.skill-required-mark\s*\{[^}]*color:\s*hsl\(var\(--destructive\)\)/);
 
   assert.match(configSelectSource, /aria-haspopup="listbox"/);
   assert.match(configSelectSource, /role="combobox"/);
@@ -315,6 +324,7 @@ test("disabled Dev Sandbox actions explain the missing configuration on hover an
   assert.doesNotMatch(skillCenterSource, /Dev Sandbox：管理员未配置/);
   assert.match(skillCenterSource, /<strong>自动创建<\/strong>/);
   assert.doesNotMatch(skillCenterSource, /<strong>Dev Sandbox 创建<\/strong>/);
+  assert.match(skillCenterSource, /本地上传 Skill，或自动创建/);
   assert.match(skillCenterSource, /<span>选择模型和风格，通过对话生成技能<\/span>/);
   assert.match(skillStylesSource, /\.skillcenter-disabled-action\.is-disabled:hover \.skillcenter-disabled-tooltip/);
   assert.match(skillStylesSource, /\.skillcenter-disabled-action\.is-disabled:focus-visible \.skillcenter-disabled-tooltip/);
