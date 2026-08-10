@@ -110,6 +110,8 @@ test("renders category-filtered automations from independent capability modules"
   assert.match(feishuSource, /直接接入 AgentKit Runtime/);
   assert.match(applicationsSource, /application\.category === activeCategory/);
   assert.match(applicationsSource, /className="application-card"[\s\S]*?onClick=\{\(\) => onOpen\(application\.id\)\}/);
+  assert.match(applicationsSource, /isCodingAgentsAutomationAvailable\(window\.location\.hostname\)/);
+  assert.match(applicationsSource, /application\.id === "coding-agents" && !codingAgentsAvailable/);
   assert.match(applicationsSource, /<GitHubLogo className="application-card-icon"/);
   assert.match(applicationsSource, /feishu-logo\.svg/);
   assert.match(applicationsSource, /application-card-badge is-\$\{application\.badgeTone \|\| "default"\}/);

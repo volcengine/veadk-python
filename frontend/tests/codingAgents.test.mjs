@@ -62,6 +62,22 @@ test("registers Coding Agents as a local configuration automation", () => {
   assert.match(appSource, /<CodingAgentsIntegration/);
 });
 
+test("only enables Coding Agents configuration on 127.0.0.1", async () => {
+  const { isCodingAgentsAutomationAvailable } = await loadTypeScriptModule(
+    "../src/automations/codingAgents.ts",
+  );
+
+  assert.equal(isCodingAgentsAutomationAvailable("127.0.0.1"), true);
+  assert.equal(isCodingAgentsAutomationAvailable("localhost"), false);
+  assert.equal(isCodingAgentsAutomationAvailable("studio.example.com"), false);
+  assert.match(applicationsSource, /disabled=\{disabled\}/);
+  assert.match(applicationsSource, /aria-describedby=\{tooltipId\}/);
+  assert.match(applicationsSource, /role="tooltip"/);
+  assert.match(applicationsSource, /仅本地部署可用/);
+  assert.match(applicationsStyles, /\.application-card-wrap\.is-disabled:hover \.application-card-tooltip/);
+  assert.match(applicationsStyles, /\.application-card-wrap\.is-disabled:focus-visible \.application-card-tooltip/);
+});
+
 test("renders client and bundled skill selection with one global configure action", () => {
   assert.match(integrationSource, /getCodingAgentCapabilities/);
   assert.match(integrationSource, /trae-logo\.svg/);
