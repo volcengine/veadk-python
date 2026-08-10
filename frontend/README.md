@@ -400,7 +400,7 @@ streams its public activity, validates the generated files, and can then be
 previewed, downloaded, or published to AgentKit. Model credentials remain on
 the Tool and are never returned to the browser.
 
-Local Studio reads the DevEnv Tool ID from `SANDBOX_DEV`. A Volcengine cloud
+Local Studio reads the DevEnv Tool ID from `SANDBOX_DEV`. A cloud
 deployment creates the Dev Sandbox automatically when the ID is omitted, or
 uses the Tool supplied through `--sandbox-dev-tool-id`:
 

@@ -7439,7 +7439,7 @@ def _resolve_studio_cloud_credentials(
     default=None,
     envvar="SANDBOX_DEV",
     help="Dedicated ready AgentKit DevEnv Tool ID for Studio development. "
-    "Volcengine default: create one during deployment.",
+    "Default: create one during deployment.",
 )
 @click.option(
     "--sandbox-chat-codex-tool-id",
@@ -7671,13 +7671,8 @@ def frontend_deploy(
         "codex": sandbox_chat_codex_tool_id,
         "openclaw": sandbox_chat_openclaw_tool_id,
         "hermes": sandbox_chat_hermes_tool_id,
+        "dev": sandbox_dev_tool_id,
     }
-    if provider_id == "volcengine":
-        sandbox_tool_ids["dev"] = sandbox_dev_tool_id
-    elif sandbox_dev_tool_id:
-        raise click.ClickException(
-            "--sandbox-dev-tool-id is supported only for Volcengine Studio deployments."
-        )
     sandbox_tool_labels = {
         "codex": "Codex",
         "openclaw": "OpenClaw",
@@ -7877,8 +7872,7 @@ def frontend_deploy(
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
     veadk_environments["SANDBOX_CHAT_OPENCLAW"] = openclaw_tool_id
     veadk_environments["SANDBOX_CHAT_HERMES"] = hermes_tool_id
-    if provider_id == "volcengine":
-        veadk_environments["SANDBOX_DEV"] = dev_tool_id
+    veadk_environments["SANDBOX_DEV"] = dev_tool_id
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
     veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
     veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] = studio_update_prefix
@@ -8112,7 +8106,7 @@ def frontend_deploy(
     "--sandbox-dev-tool-id",
     "sandbox_dev_tool_id",
     default=None,
-    help="Replace the Volcengine Studio DevEnv Tool ID.",
+    help="Replace the Studio DevEnv Tool ID.",
 )
 @click.option(
     "--sandbox-chat-codex-tool-id",
@@ -8173,10 +8167,6 @@ def frontend_update(
 
     provider_id = normalize_cloud_provider(provider)
     if provider_id == "byteplus":
-        if sandbox_dev_tool_id is not None:
-            raise click.ClickException(
-                "--sandbox-dev-tool-id is supported only for Volcengine Studio updates."
-            )
         if region is not None and region != DEFAULT_BYTEPLUS_REGION:
             raise click.ClickException(
                 "BytePlus Studio update currently supports only "
@@ -8288,6 +8278,7 @@ def frontend_update(
             has_explicit_sandbox_tool = any(
                 tool_id is not None
                 for tool_id in (
+                    sandbox_dev_tool_id,
                     sandbox_chat_codex_tool_id,
                     sandbox_chat_openclaw_tool_id,
                     sandbox_chat_hermes_tool_id,
@@ -8308,6 +8299,9 @@ def frontend_update(
                 }
                 repair_sandbox_tools = True
             byteplus_sandbox_tool_ids = {
+                "dev": sandbox_dev_tool_id
+                if sandbox_dev_tool_id is not None
+                else current_env.get("SANDBOX_DEV", ""),
                 "codex": sandbox_chat_codex_tool_id
                 if sandbox_chat_codex_tool_id is not None
                 else current_env.get("SANDBOX_CHAT_CODEX", ""),
@@ -8319,11 +8313,13 @@ def frontend_update(
                 else current_env.get("SANDBOX_CHAT_HERMES", ""),
             }
             byteplus_sandbox_labels = {
+                "dev": "Dev Sandbox",
                 "codex": "Codex",
                 "openclaw": "OpenClaw",
                 "hermes": "Hermes",
             }
             byteplus_sandbox_purposes = {
+                "dev": "dev",
                 "codex": "chat",
                 "openclaw": "openclaw",
                 "hermes": "hermes",
@@ -8336,6 +8332,7 @@ def frontend_update(
                     ensure_studio_agent_model_credential,
                     ensure_studio_agent_tool,
                     ensure_studio_code_env_tool,
+                    ensure_studio_dev_env_tool,
                     studio_sandbox_agent_model_name,
                     studio_sandbox_model_base_url,
                     studio_sandbox_tool_name,
@@ -8365,6 +8362,15 @@ def frontend_update(
                             if kind == "codex":
                                 future = ex.submit(
                                     ensure_studio_code_env_tool,
+                                    name=tool_name,
+                                    region=target.region,
+                                    access_key=ak,
+                                    secret_key=sk,
+                                    session_token=session_token or "",
+                                )
+                            elif kind == "dev":
+                                future = ex.submit(
+                                    ensure_studio_dev_env_tool,
                                     name=tool_name,
                                     region=target.region,
                                     access_key=ak,
@@ -8408,7 +8414,10 @@ def frontend_update(
                             continue
                         label = byteplus_sandbox_labels[kind]
                         click.echo(f"Creating AgentKit {label} model credential…")
-                        if kind == "codex":
+                        if kind in {"codex", "dev"}:
+                            code_model_name = (
+                                sandbox_agent_model_name if kind == "codex" else None
+                            )
                             future = ex.submit(
                                 ensure_skill_creator_model_credential,
                                 tool_id=tool_id,
@@ -8417,7 +8426,7 @@ def frontend_update(
                                 secret_key=sk,
                                 session_token=session_token,
                                 provider=provider_id,
-                                model_name=sandbox_agent_model_name,
+                                model_name=code_model_name,
                             )
                         else:
                             future = ex.submit(
@@ -8456,6 +8465,9 @@ def frontend_update(
                 )
                 environment_overrides["SANDBOX_CHAT_HERMES"] = str(
                     byteplus_sandbox_tool_ids["hermes"] or ""
+                )
+                environment_overrides["SANDBOX_DEV"] = str(
+                    byteplus_sandbox_tool_ids["dev"] or ""
                 )
         if branding_title is not None:
             environment_overrides["VEADK_SITE_TITLE"] = branding_title
