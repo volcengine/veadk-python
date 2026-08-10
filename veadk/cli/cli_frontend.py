@@ -7991,23 +7991,23 @@ def frontend_deploy(
         url = (app.vefaas_endpoint or "").rstrip("/")
         redirect_uri = f"{url}/oauth2/callback"
 
+        from veadk.integrations.ve_identity.identity_client import IdentityClient
+
+        identity_client = IdentityClient(
+            access_key=ak,
+            secret_key=sk,
+            session_token=session_token,
+            region=identity_region,
+            provider=provider_id,
+        )
+
         # 4) Register the SSO callback on the user-pool client HERE, with the
         #    deployer's full credentials — the function's IAM role is granted
         #    only read access to Identity (id:GetUserPoolClient), not
         #    id:UpdateUserPoolClient, so it can't register the callback itself.
         if url:
             try:
-                from veadk.integrations.ve_identity.identity_client import (
-                    IdentityClient,
-                )
-
-                IdentityClient(
-                    access_key=ak,
-                    secret_key=sk,
-                    session_token=session_token,
-                    region=identity_region,
-                    provider=provider_id,
-                ).register_callback_for_user_pool_client(
+                identity_client.register_callback_for_user_pool_client(
                     user_pool_uid=user_pool_id,
                     client_uid=allowed_client_id,
                     callback_url=redirect_uri,
@@ -8048,6 +8048,11 @@ def frontend_deploy(
                 function_id,
                 release_environment,
             )
+
+        # 6) Disable local account flows so Studio can only be entered through
+        #    the configured identity provider.
+        identity_client.configure_user_pool_for_idp_only(user_pool_id)
+        click.echo("Configured the user pool for IdP-only sign-in.")
 
         click.echo("")
         click.echo(f"✅ Frontend deployed: {url}")

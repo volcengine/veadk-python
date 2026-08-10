@@ -347,6 +347,9 @@ def test_studio_deploy_auto_identity_is_injected_and_printed(
         def register_callback_for_user_pool_client(self, **kwargs: object) -> None:
             captured["callback"] = kwargs
 
+        def configure_user_pool_for_idp_only(self, user_pool_uid: str) -> None:
+            captured["configured_user_pool"] = user_pool_uid
+
     monkeypatch.setattr("veadk.config.veadk_environments", environments)
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._resolve_or_create_studio_identity_resources",
@@ -395,6 +398,8 @@ def test_studio_deploy_auto_identity_is_injected_and_printed(
     assert "user pool id: pool-created" in result.output
     assert "user pool domain: identity.example.com" in result.output
     assert "client id: client-created" in result.output
+    assert captured["configured_user_pool"] == "pool-created"
+    assert "Configured the user pool for IdP-only sign-in." in result.output
 
 
 def test_studio_credentials_fall_back_to_volc_default_profile(
@@ -638,6 +643,9 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
         def register_callback_for_user_pool_client(self, **kwargs: object) -> None:
             captured["callback"] = kwargs
 
+        def configure_user_pool_for_idp_only(self, user_pool_uid: str) -> None:
+            captured["configured_user_pool"] = user_pool_uid
+
     monkeypatch.setattr(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
     )
@@ -762,6 +770,10 @@ def test_studio_deploy_persists_telemetry_environment(
     )
     monkeypatch.setattr(
         "veadk.integrations.ve_identity.identity_client.IdentityClient.register_callback_for_user_pool_client",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.configure_user_pool_for_idp_only",
         lambda *_args, **_kwargs: None,
     )
     result = CliRunner().invoke(
@@ -914,6 +926,9 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
         def register_callback_for_user_pool_client(self, **kwargs: object) -> None:
             captured["callback"] = kwargs
 
+        def configure_user_pool_for_idp_only(self, user_pool_uid: str) -> None:
+            captured["configured_user_pool"] = user_pool_uid
+
     def _resolve_identity_region(**kwargs: object) -> str:
         captured["identity_probe"] = kwargs
         return "ap-southeast-1"
@@ -1037,6 +1052,9 @@ def test_studio_deploy_byteplus_auto_provisions_three_sandbox_tools(
 
         def register_callback_for_user_pool_client(self, **kwargs: object) -> None:
             captured["callback"] = kwargs
+
+        def configure_user_pool_for_idp_only(self, user_pool_uid: str) -> None:
+            captured["configured_user_pool"] = user_pool_uid
 
     def _ensure_code_tool(**kwargs: object) -> str:
         name = str(kwargs["name"])
@@ -1163,6 +1181,9 @@ def test_studio_deploy_byteplus_auto_creates_function_role(
 
         def register_callback_for_user_pool_client(self, **kwargs: object) -> None:
             captured["callback"] = kwargs
+
+        def configure_user_pool_for_idp_only(self, user_pool_uid: str) -> None:
+            captured["configured_user_pool"] = user_pool_uid
 
     def _ensure_frontend_role(
         access_key: str,
@@ -1304,6 +1325,10 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
         lambda **_: "cn-beijing",
     )
     monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.configure_user_pool_for_idp_only",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool", _ensure_tool
     )
     monkeypatch.setattr(
@@ -1404,6 +1429,10 @@ def test_studio_deploy_enables_rbac_when_either_role_is_configured(
     )
     monkeypatch.setattr(
         "veadk.integrations.ve_identity.identity_client.IdentityClient.register_callback_for_user_pool_client",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.configure_user_pool_for_idp_only",
         lambda *_args, **_kwargs: None,
     )
 
@@ -1635,6 +1664,28 @@ def test_register_callback_only_sends_requested_login_switches(
     } == expected_switches
 
 
+def test_configure_user_pool_for_idp_only_disables_local_account_flows() -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    identity_client._api_client = Mock()
+
+    identity_client.configure_user_pool_for_idp_only("pool-id")
+
+    update_request = identity_client._api_client.update_user_pool.call_args.args[0]
+    assert sanitize_for_serialization(update_request) == {
+        "EmailPasswordlessSignInEnabled": False,
+        "PasswordSignInEnabled": False,
+        "SelfAccountRecoveryEnabled": False,
+        "SelfSignUpEnabled": False,
+        "SignUpAutoVerificationEnabled": False,
+        "SmsPasswordlessSignInEnabled": False,
+        "UnconfirmedUserSignInEnabled": False,
+        "UserPoolUid": "pool-id",
+    }
+
+
 def test_studio_deploy_rejects_unsupported_region() -> None:
     result = CliRunner().invoke(
         studio,
@@ -1719,6 +1770,10 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._resolve_studio_identity_region",
         lambda **kwargs: kwargs["deployment_region"],
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.configure_user_pool_for_idp_only",
+        lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/uv")
     monkeypatch.setattr("subprocess.run", _fake_build)
