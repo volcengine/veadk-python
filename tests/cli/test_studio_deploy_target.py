@@ -996,6 +996,7 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
     assert str(captured["requirements"]).startswith(
         "./pydantic-2.12.5-py3-none-any.whl\n"
     )
+    assert "veadk-python[database]\n" in str(captured["requirements"])
     assert captured["serverless_role"] == {
         "args": ("byteplus-ak", "byteplus-sk"),
         "kwargs": {"session_token": "", "provider": "byteplus"},
@@ -1769,5 +1770,5 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
     )
     assert captured["requirements"] == (
         (expected_prefix or expected_common_requirements)
-        + "./veadk_python-test-py3-none-any.whl\n"
+        + "./veadk_python-test-py3-none-any.whl[database]\n"
     )

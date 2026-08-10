@@ -29,11 +29,16 @@ logger = get_logger(__name__)
 try:
     from mem0 import MemoryClient
 
-except ImportError:
+except ImportError as e:
     logger.error(
-        "Failed to import mem0 or dotenv. Please install them with 'pip install mem0 '"
+        "Failed to import mem0. Install mem0 support with "
+        '`pip install "veadk-python[database]"` or '
+        '`pip install "mem0ai>=1.0.0,<2"`.'
     )
-    raise ImportError("Required packages not installed: mem0")
+    raise ImportError(
+        "LongTermMemory backend 'mem0' requires veadk-python[database] "
+        "(mem0ai>=1.0.0,<2)."
+    ) from e
 
 
 class Mem0LTMBackend(BaseLongTermMemoryBackend):

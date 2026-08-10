@@ -191,10 +191,9 @@ def build_local_studio_requirements(
     )
 
     shutil.rmtree(package_dir / "wheel-source", ignore_errors=True)
-    requirements = "".join(
-        f"./{name}\n"
-        for name in (*(path.name for path in dependencies), wheels[0].name)
-    )
+    requirement_lines = [f"./{path.name}" for path in dependencies]
+    requirement_lines.append(f"./{wheels[0].name}[database]")
+    requirements = "".join(f"{line}\n" for line in requirement_lines)
     return requirements
 
 
