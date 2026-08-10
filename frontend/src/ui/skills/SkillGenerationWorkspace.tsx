@@ -492,6 +492,9 @@ export function SkillGenerationWorkspace({
 
       {!started ? (
         <div className="skill-generation__setup">
+          <div className="skill-generation__section-head is-basic">
+            <div><strong>基本信息</strong></div>
+          </div>
           <label>
             <span>目标</span>
             <textarea value={intent} onChange={(event) => setIntent(event.target.value)} placeholder={operation === "create" ? "描述希望这个 Skill 完成什么任务" : "描述希望如何优化当前 Skill"} />
@@ -512,8 +515,8 @@ export function SkillGenerationWorkspace({
             )}
           </label>
 
-          <div className="skill-generation__groups-head">
-            <div><strong>生成配置</strong><span>每组会启动独立 Session</span></div>
+          <div className="skill-generation__section-head">
+            <div><strong>生成方案</strong><span>按不同方案并行生成多个技能，您可以选择最佳结果</span></div>
           </div>
           <div className="skill-generation__groups">
             {groups.map((group, index) => (

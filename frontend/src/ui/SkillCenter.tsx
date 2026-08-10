@@ -450,7 +450,7 @@ function AddSkillDialog({
               disabled={!canUseSandbox}
               onClick={onSandbox}
             >
-              <strong>Dev Sandbox 创建</strong>
+              <strong>自动创建</strong>
               <span>选择模型和风格，通过对话生成技能</span>
             </button>
           </SandboxDisabledAction>

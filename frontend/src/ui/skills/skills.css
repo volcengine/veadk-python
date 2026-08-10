@@ -445,6 +445,7 @@
   color: hsl(var(--foreground));
   font: inherit;
   font-size: 13px;
+  font-weight: 400;
 }
 
 .skill-generation input,
@@ -458,16 +459,17 @@
 .skill-generation__field-help { color: hsl(var(--muted-foreground)); }
 .skill-generation__field-error { color: hsl(var(--destructive)); }
 
-.skill-generation__groups-head {
+.skill-generation__section-head {
   display: flex;
   align-items: center;
   gap: 12px;
   margin: 24px 0 12px;
 }
 
-.skill-generation__groups-head div { display: grid; gap: 2px; }
-.skill-generation__groups-head strong { font-size: 17px; font-weight: 620; }
-.skill-generation__groups-head span { color: hsl(var(--muted-foreground)); font-size: 12px; }
+.skill-generation__section-head.is-basic { margin-top: 0; }
+.skill-generation__section-head div { display: grid; gap: 2px; }
+.skill-generation__section-head strong { font-size: 17px; font-weight: 620; }
+.skill-generation__section-head span { color: hsl(var(--muted-foreground)); font-size: 12px; }
 .skill-generation__groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 12px; isolation: isolate; }
 .skill-generation__group { position: relative; min-width: 0; padding: 12px; border: 1px solid hsl(var(--border)); border-radius: 9px; background: hsl(var(--panel)); }
 .skill-generation__group header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; font-size: 13px; }
@@ -517,7 +519,7 @@
   color: hsl(var(--foreground));
   font: inherit;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 400;
   line-height: 1.35;
   cursor: pointer;
   transition: border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
@@ -590,7 +592,7 @@
   color: hsl(var(--foreground));
   font: inherit;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 400;
   line-height: 1.35;
   text-align: left;
   text-overflow: ellipsis;

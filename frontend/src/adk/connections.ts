@@ -44,6 +44,12 @@ export interface AgentEntry {
 
 const STORAGE_KEY = "veadk_agentkit_connections";
 const RUNTIME_REGION_FALLBACKS = ["cn-beijing", "cn-shanghai"] as const;
+const DEPLOYED_RUNTIME_CONNECT_INTERVAL_MS = 3_000;
+const DEPLOYED_RUNTIME_CONNECT_TIMEOUT_MS = 60_000;
+
+interface ConnectRuntimeOptions {
+  waitForReady?: boolean;
+}
 
 function runtimeRegionCandidates(region: string): string[] {
   const primary = region || "cn-beijing";
@@ -133,8 +139,7 @@ export function addRuntimeConnection(
   return conn;
 }
 
-/** Probe, persist, and register one AgentKit runtime, returning its first app id. */
-export async function connectRuntime(
+async function connectRuntimeOnce(
   runtimeId: string,
   name: string,
   region: string,
@@ -168,7 +173,11 @@ export async function connectRuntime(
   if (!apps || apps.length === 0) {
     removeRuntimeConnection(runtimeId);
     if (unsupportedError) throw unsupportedError;
-    throw new Error("该 Runtime 暂不支持连接，请确认服务已正常运行。");
+    throw new RuntimeProbeError(
+      "该 Runtime 暂不支持连接，请确认服务已正常运行。",
+      true,
+      true,
+    );
   }
   const labels = Object.fromEntries(apps.map((app) => [app, name]));
   const connection = addRuntimeConnection(
@@ -180,6 +189,41 @@ export async function connectRuntime(
     currentVersion,
   );
   return remoteAppId(connection.id, apps[0]);
+}
+
+function waitForRuntimeProbe(delayMs: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, delayMs));
+}
+
+/** Probe, persist, and register one AgentKit runtime, returning its first app id. */
+export async function connectRuntime(
+  runtimeId: string,
+  name: string,
+  region: string,
+  currentVersion?: number | null,
+  options: ConnectRuntimeOptions = {},
+): Promise<string> {
+  const startedAt = Date.now();
+  while (true) {
+    try {
+      return await connectRuntimeOnce(runtimeId, name, region, currentVersion);
+    } catch (error) {
+      const elapsedMs = Date.now() - startedAt;
+      if (
+        !options.waitForReady ||
+        !(error instanceof RuntimeProbeError) ||
+        !error.retryable ||
+        elapsedMs >= DEPLOYED_RUNTIME_CONNECT_TIMEOUT_MS
+      ) {
+        throw error;
+      }
+      const delayMs = Math.min(
+        DEPLOYED_RUNTIME_CONNECT_INTERVAL_MS,
+        DEPLOYED_RUNTIME_CONNECT_TIMEOUT_MS - elapsedMs,
+      );
+      await waitForRuntimeProbe(delayMs);
+    }
+  }
 }
 
 /** Validate a remote AgentKit endpoint and persist it. Throws on bad URL/key. */

@@ -1222,14 +1222,15 @@ export default function App() {
     }
   }, []);
 
-  const flushPendingWorkspaceDraft = useCallback(() => {
+  const flushPendingWorkspaceDraft = useCallback((): boolean => {
     const pending = pendingWorkspaceDraftRef.current;
-    if (!pending) return;
-    cancelPendingWorkspaceDraft();
-    commitWorkspaceDrafts([
+    if (!pending) return true;
+    const committed = commitWorkspaceDrafts([
       pending,
       ...savedAgentDraftsRef.current.filter((item) => item.id !== pending.id),
     ]);
+    if (committed) cancelPendingWorkspaceDraft();
+    return committed;
   }, [cancelPendingWorkspaceDraft, commitWorkspaceDrafts]);
 
   const saveWorkspaceDraft = useCallback(
@@ -1557,24 +1558,43 @@ export default function App() {
   }, []);
 
   const startDeployment = useCallback((task: DeploymentTaskUpdate) => {
+    flushPendingWorkspaceDraft();
+    const linkedTask = editingDraftId
+      ? { ...task, draftId: editingDraftId }
+      : task;
     if (editingDraftId) {
       setDraftDeploymentTaskIds((current) => ({
         ...current,
         [editingDraftId]: task.id,
       }));
     }
-    openDeploymentDetail(task);
-  }, [editingDraftId, openDeploymentDetail]);
+    updateDeploymentTask(linkedTask);
+    openDeploymentDetail(linkedTask);
+  }, [editingDraftId, flushPendingWorkspaceDraft, openDeploymentDetail, updateDeploymentTask]);
 
   const finishDeployment = useCallback(
     async (result: DeployResult) => {
       if (!result.runtimeId) throw new Error("部署完成，但未返回 Runtime ID。");
+      const completedDraftId = editingDraftId;
+      if (completedDraftId) {
+        removeWorkspaceDraft(completedDraftId);
+        setDraftDeploymentTaskIds((current) => {
+          if (!current[completedDraftId]) return current;
+          const next = { ...current };
+          delete next[completedDraftId];
+          return next;
+        });
+      }
+      setEditingDraftId("");
+      editingDraftBaselineRef.current = null;
+      setRuntimeUpdateTarget(null);
       const fallbackRegion = runtimeUpdateTarget?.region ?? newRuntimeRegion;
       const agentId = await connectRuntime(
         result.runtimeId,
         result.agentName,
         result.region ?? fallbackRegion,
         result.version,
+        { waitForReady: true },
       );
       setConnections(loadConnections());
       setAgentInfoRefreshKey((key) => key + 1);
@@ -1587,16 +1607,6 @@ export default function App() {
         return next;
       });
       invalidateRuntimeAgentCache();
-      setRuntimeUpdateTarget(null);
-      removeWorkspaceDraft(editingDraftId);
-      setDraftDeploymentTaskIds((current) => {
-        if (!editingDraftId || !current[editingDraftId]) return current;
-        const next = { ...current };
-        delete next[editingDraftId];
-        return next;
-      });
-      setEditingDraftId("");
-      editingDraftBaselineRef.current = null;
       setFocusedWorkspaceAgentId(agentId);
       setFocusedWorkspaceAgentSection("basic");
       setFocusedDeploymentTaskId("");

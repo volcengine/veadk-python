@@ -166,12 +166,18 @@ test("Skill generation setup follows Studio form and select conventions", () => 
   assert.match(generationSource, /className="skill-generation__add-group"/);
   assert.match(generationSource, /aria-label="返回技能空间"/);
   assert.match(generationSource, /<BackIcon \/>/);
+  assert.match(generationSource, /<strong>基本信息<\/strong>/);
+  assert.match(generationSource, /<strong>生成方案<\/strong>/);
+  assert.match(generationSource, /按不同方案并行生成多个技能，您可以选择最佳结果/);
   assert.doesNotMatch(generationSource, /火山引擎|BytePlus/);
   assert.match(skillStylesSource, /\.skill-generation__add-group\s*\{[^}]*border:\s*1px dashed/);
   assert.match(skillStylesSource, /\.skill-generation__header\s*\{[^}]*padding:\s*32px 32px 0;/);
   assert.doesNotMatch(skillStylesSource, /\.skill-generation__header\s*\{[^}]*border-bottom:/);
   assert.match(skillStylesSource, /\.skill-generation__setup\s*\{[^}]*margin:\s*21px 29px 0;[^}]*padding:\s*3px 3px 48px;/);
   assert.doesNotMatch(skillStylesSource, /\.skill-generation__setup\s*\{[^}]*(?:border|background):/);
+  assert.match(skillStylesSource, /\.skill-generation textarea,\s*\.skill-generation input\s*\{[^}]*font-weight:\s*400;/);
+  assert.match(skillStylesSource, /\.skill-config-select__trigger\s*\{[^}]*font-weight:\s*400;/);
+  assert.match(skillStylesSource, /\.skill-config-select__option\s*\{[^}]*font-weight:\s*400;/);
 
   assert.match(configSelectSource, /aria-haspopup="listbox"/);
   assert.match(configSelectSource, /role="combobox"/);
@@ -307,6 +313,8 @@ test("disabled Dev Sandbox actions explain the missing configuration on hover an
   assert.match(skillCenterSource, /管理员未配置 Dev Sandbox/);
   assert.doesNotMatch(skillCenterSource, /skillcenter-capability-note/);
   assert.doesNotMatch(skillCenterSource, /Dev Sandbox：管理员未配置/);
+  assert.match(skillCenterSource, /<strong>自动创建<\/strong>/);
+  assert.doesNotMatch(skillCenterSource, /<strong>Dev Sandbox 创建<\/strong>/);
   assert.match(skillCenterSource, /<span>选择模型和风格，通过对话生成技能<\/span>/);
   assert.match(skillStylesSource, /\.skillcenter-disabled-action\.is-disabled:hover \.skillcenter-disabled-tooltip/);
   assert.match(skillStylesSource, /\.skillcenter-disabled-action\.is-disabled:focus-visible \.skillcenter-disabled-tooltip/);
