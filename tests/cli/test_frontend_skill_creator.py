@@ -86,7 +86,11 @@ def test_archive_metadata_requires_safe_single_matching_root() -> None:
         service._archive_metadata(unsafe.getvalue())
 
 
-def test_create_job_runs_fixed_models_in_independent_candidates() -> None:
+def test_create_job_runs_fixed_models_in_independent_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "volcengine")
+    monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
     service = SkillCreatorService(tool_id="tool-id")
     calls: list[tuple[str, str]] = []
     progress: list[dict[str, Any]] = []
