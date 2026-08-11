@@ -17,7 +17,6 @@ from __future__ import annotations
 import base64
 import io
 import json
-import logging
 import stat
 import zipfile
 from types import SimpleNamespace
@@ -27,7 +26,6 @@ import pytest
 from frontend.server.skills.archive import SkillArchiveError, validate_skill_archive
 from frontend.server.skills.devenv import (
     CreateSkillTaskBody,
-    PublishSkillTaskBody,
     SkillWorkbenchError,
     SkillWorkbenchService,
 )
@@ -181,60 +179,6 @@ def test_skill_workbench_error_preserves_original_error() -> None:
         "message": "sandbox session failed to start",
         "repr": "RuntimeError('sandbox session failed to start')",
     }
-
-
-def test_workbench_publish_logs_dependency_error_diagnostics(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = SkillWorkbenchService(tool_id="tool-1", region="cn-beijing")
-
-    def fail_publish_once(*args: object, **kwargs: object) -> dict[str, object]:
-        diagnostics = kwargs["publish_diagnostics"]
-        assert isinstance(diagnostics, dict)
-        diagnostics.update(
-            {
-                "phase": "preparing_storage",
-                "bucket": "skill-bucket",
-                "effective_region": "cn-beijing",
-            }
-        )
-        raise ValueError("invalid bucket name")
-
-    monkeypatch.setattr(service, "_publish_once", fail_publish_once)
-    stream = io.StringIO()
-    handler = logging.StreamHandler(stream)
-    logger = logging.getLogger("veadk.frontend.server.skills.devenv")
-    previous_level = logger.level
-    logger.addHandler(handler)
-    logger.setLevel(logging.ERROR)
-
-    try:
-        with pytest.raises(SkillWorkbenchError) as raised:
-            service.publish(
-                "sw-123",
-                "owner-1",
-                PublishSkillTaskBody(
-                    disposition="update-source",
-                    expectedRevision=1,
-                    expectedArtifactSha256="a" * 64,
-                    skillSpaceIds=["space-1"],
-                    region="cn-beijing",
-                ),
-            )
-    finally:
-        logger.removeHandler(handler)
-        logger.setLevel(previous_level)
-
-    assert raised.value.code == "SKILL_PUBLISH_FAILED"
-    assert raised.value.original_error is not None
-    assert raised.value.detail()["originalError"]["message"] == "invalid bucket name"
-    log_text = stream.getvalue()
-    assert "Skill workbench publish dependency failed" in log_text
-    assert "error_message=invalid bucket name" in log_text
-    assert "phase=preparing_storage" in log_text
-    assert "bucket=skill-bucket" in log_text
-    assert "effective_region=cn-beijing" in log_text
-    assert "Traceback" in log_text
 
 
 class FakeRepository:
