@@ -22,7 +22,7 @@ def _tool_context():
 @pytest.mark.parametrize(
     ("function", "maximum", "range_text"),
     [
-        (execute_skills, 900, "between 1 and 900 seconds"),
+        (execute_skills, 1800, "between 1 and 1800 seconds"),
         (run_code_module.run_code, 300, "between 1 and 300 seconds"),
     ],
 )

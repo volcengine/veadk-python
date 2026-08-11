@@ -33,7 +33,7 @@ from veadk.tools.builtin_tools.run_sandbox_agent import run_sandbox_agent
 
 _SKILL_API_UPGRADE_STATUS_CODES = frozenset({404, 405})
 _SKILL_API_TRANSIENT_STATUS_CODES = frozenset({502, 503, 504})
-_SKILL_API_TIMEOUT = 900
+_SKILL_API_TIMEOUT = 1800
 _SKILL_API_HEALTH_TIMEOUT = 30.0
 _SKILL_API_HEALTH_POLL_INTERVAL = 1.0
 _SKILL_API_HEALTH_REQUEST_TIMEOUT = 5.0
@@ -459,8 +459,8 @@ def execute_skills(
             Supported values are "execute" (default), "run_sse", "a2a", and
             "python_agent". It can also be set with AGENTKIT_SKILL_INVOCATION_MODE.
         timeout (int, optional): Maximum execution time in seconds. Defaults to
-            900. The value can be adjusted for each call but must be between 1
-            and 900 seconds.
+            1800. The value can be adjusted for each call but must be between 1
+            and 1800 seconds.
 
     Returns:
         str: The output of the code execution.

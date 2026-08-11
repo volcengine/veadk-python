@@ -250,7 +250,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         self.assertEqual(1, len(captured_requests))
         request_obj, timeout = captured_requests[0]
         self.assertEqual("https://sandbox.test/v1/skills/execute", request_obj.full_url)
-        self.assertEqual(900, timeout)
+        self.assertEqual(1800, timeout)
         self.assertEqual("POST", request_obj.get_method())
         self.assertEqual("tip-from-state", request_obj.headers["X-tip-token-key"])
         self.assertIn(b'"prompt": "do work"', request_obj.data)
@@ -313,11 +313,11 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
     def test_execute_skills_rejects_invalid_timeout(self):
         module = _load_execute_skills_module()
 
-        for timeout in (0, -1, 901, 1.5, True):
+        for timeout in (0, -1, 1801, 1.5, True):
             with self.subTest(timeout=timeout):
                 with self.assertRaisesRegex(
                     ValueError,
-                    r"timeout must be an integer between 1 and 900 seconds",
+                    r"timeout must be an integer between 1 and 1800 seconds",
                 ):
                     module.execute_skills(
                         "do work",
@@ -501,7 +501,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         self.assertEqual(result, "hello world")
         request_obj, timeout = captured_requests[0]
         self.assertEqual("https://sandbox.test/run_sse", request_obj.full_url)
-        self.assertEqual(900, timeout)
+        self.assertEqual(1800, timeout)
         self.assertIn(b'"app_name": "agent"', request_obj.data)
         self.assertIn(b'"session_id": "session-1"', request_obj.data)
         self.assertIn(b'"text": "do work"', request_obj.data)
@@ -548,7 +548,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         request_obj, timeout = captured_requests[0]
         payload = json.loads(request_obj.data.decode())
         self.assertEqual("https://sandbox.test/a2a", request_obj.full_url)
-        self.assertEqual(900, timeout)
+        self.assertEqual(1800, timeout)
         self.assertEqual("message/send", payload["method"])
         self.assertEqual("do work", payload["params"]["message"]["parts"][0]["text"])
         self.assertTrue(payload["params"]["configuration"]["blocking"])
