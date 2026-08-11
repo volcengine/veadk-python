@@ -377,9 +377,28 @@ class StudioSelfUpdater:
                     project_name=self._settings.project,
                     provider=self._settings.provider,
                 )
+                from frontend.server.studio_update_resources import (
+                    reconcile_studio_update_resources,
+                )
+
+                self._set_progress(
+                    "provisioning",
+                    "正在检查并补齐 Studio 云资源",
+                )
+                resource_environment = reconcile_studio_update_resources(
+                    provider=self._settings.provider,
+                    region=self._settings.deployment_region,
+                    application_id=self._settings.application_id,
+                    function_id=self._settings.function_id,
+                    function_client=service.client,
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    session_token=session_token or "",
+                )
                 environment_overrides = {
                     "VEADK_STUDIO_RELEASE_VERSION": manifest.version,
                     **release_environment,
+                    **resource_environment,
                 }
                 if self._settings.provider == "byteplus":
                     environment_overrides.update(

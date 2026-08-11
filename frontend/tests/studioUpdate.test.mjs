@@ -110,6 +110,7 @@ test("Studio explains the update restart window", () => {
 test("Studio exposes detailed update stages that can be reopened", () => {
   assert.match(controlSource, /下载并校验完整更新包/);
   assert.match(controlSource, /准备 VeFaaS Function 代码/);
+  assert.match(controlSource, /检查并补齐 Studio 云资源/);
   assert.match(controlSource, /发布新 Revision 并重启服务/);
   assert.match(controlSource, /setDialogOpen\(true\)/);
   assert.match(controlSource, /关闭此窗口不会停止更新/);

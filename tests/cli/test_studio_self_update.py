@@ -217,6 +217,7 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     class _VeFaaS:
         def __init__(self, **kwargs: str) -> None:
             captured["credentials"] = kwargs
+            self.client = object()
 
         def submit_application_code_bundle_update(self, **kwargs: Any) -> None:
             package = Path(str(kwargs["path"]))
@@ -226,6 +227,16 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
             assert (package / "requirements.txt").is_file()
             assert not (package / STUDIO_RELEASE_ENVIRONMENT_FILENAME).exists()
             captured["update"] = kwargs
+
+    def _resources(**kwargs: Any) -> dict[str, str]:
+        captured["resource_request"] = kwargs
+        return {
+            "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
+            "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
+            "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
+            "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
+            "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",
+        }
 
     updater = StudioSelfUpdater(
         settings=_settings(
@@ -237,6 +248,10 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     )
     monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.reconcile_studio_update_resources",
+        _resources,
+    )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
 
     assert updater.submit_latest() == manifest
@@ -259,7 +274,18 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
         "BYTEPLUS_REGION": "ap-southeast-1",
         "VEADK_STUDIO_APMPLUS_AID": "12345",
         "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
+        "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
+        "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
+        "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
+        "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
+        "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",
     }
+    resource_request = captured["resource_request"]
+    assert resource_request["provider"] == "byteplus"
+    assert resource_request["region"] == "ap-southeast-1"
+    assert resource_request["application_id"] == "application-id"
+    assert resource_request["function_id"] == "function-id"
+    assert resource_request["function_client"] is not None
     status = updater.status()
     assert status["state"] == "updating"
     assert status["progressStage"] == "publishing"
@@ -298,7 +324,7 @@ def test_submit_latest_reports_missing_vefaas_permissions(
 
     class _VeFaaS:
         def __init__(self, **_kwargs: str) -> None:
-            pass
+            self.client = object()
 
         def submit_application_code_bundle_update(self, **_kwargs: Any) -> None:
             raise RuntimeError(
@@ -313,6 +339,10 @@ def test_submit_latest_reports_missing_vefaas_permissions(
     )
     monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.reconcile_studio_update_resources",
+        lambda **_kwargs: {},
+    )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
 
     with pytest.raises(StudioReleaseError, match="Studio 更新权限不足"):
@@ -333,6 +363,65 @@ def test_submit_latest_reports_missing_vefaas_permissions(
         "https://console.volcengine.com/vefaas/"
         "region:vefaas+cn-beijing/function/detail/function-id"
     )
+
+
+def test_submit_latest_stops_before_upload_when_resource_migration_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "source.zip"
+    _bundle(archive)
+    content = archive.read_bytes()
+    manifest = StudioReleaseManifest(
+        version="20260724153045",
+        git_sha="a" * 40,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size=len(content),
+        created_at="2026-07-24T15:30:45+08:00",
+    )
+    submitted = False
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def download_bundle(
+            self, release: StudioReleaseManifest, destination: Path
+        ) -> None:
+            assert release == manifest
+            destination.write_bytes(content)
+
+    class _VeFaaS:
+        def __init__(self, **_kwargs: str) -> None:
+            self.client = object()
+
+        def submit_application_code_bundle_update(self, **_kwargs: Any) -> None:
+            nonlocal submitted
+            submitted = True
+
+    def _fail_resource_migration(**_kwargs: Any) -> dict[str, str]:
+        raise RuntimeError("snapshot tool provisioning failed")
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.reconcile_studio_update_resources",
+        _fail_resource_migration,
+    )
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+
+    with pytest.raises(StudioReleaseError, match="Studio 更新提交失败"):
+        updater.submit_latest()
+
+    status = updater.status()
+    assert submitted is False
+    assert status["errorStage"] == "provisioning"
+    assert "snapshot tool provisioning failed" in status["errorLog"]
 
 
 def test_byteplus_console_url_uses_byteplus_domain() -> None:
@@ -855,7 +944,7 @@ def test_retry_clears_previous_failure_diagnostics(
 
     class _VeFaaS:
         def __init__(self, **_kwargs: str) -> None:
-            pass
+            self.client = object()
 
         def submit_application_code_bundle_update(self, **_kwargs: Any) -> None:
             nonlocal attempts
@@ -870,6 +959,10 @@ def test_retry_clears_previous_failure_diagnostics(
     )
     monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.reconcile_studio_update_resources",
+        lambda **_kwargs: {},
+    )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
 
     with pytest.raises(StudioReleaseError, match="Studio 更新提交失败"):

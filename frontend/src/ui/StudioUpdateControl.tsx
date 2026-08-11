@@ -21,6 +21,7 @@ const UPDATE_STEPS = [
   { id: "resolving", label: "读取目标版本信息" },
   { id: "downloading", label: "下载并校验完整更新包" },
   { id: "preparing", label: "准备 VeFaaS Function 代码" },
+  { id: "provisioning", label: "检查并补齐 Studio 云资源" },
   { id: "submitting", label: "提交 Function 更新" },
   { id: "publishing", label: "发布新 Revision 并重启服务" },
 ] as const;
@@ -29,6 +30,7 @@ const UPDATE_STAGE_LABELS: Record<string, string> = {
   resolving: "读取版本信息",
   downloading: "下载更新包",
   preparing: "准备 Function 代码",
+  provisioning: "补齐 Studio 云资源",
   submitting: "提交 Function 更新",
   publishing: "发布 Revision",
   checking: "检查更新",
