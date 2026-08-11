@@ -20,6 +20,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from google.adk.agents import LlmAgent
+from google.adk.code_executors import UnsafeLocalCodeExecutor
 from google.adk.sessions import InMemorySessionService
 
 import veadk.integrations.agentkit.app as agentkit_app
@@ -247,6 +248,7 @@ async def test_build_agent_loads_skill_without_mutating_base(
     assert loaded == [("skill-space-1", "pdf-reader", "")]
     assert len(run_agent.tools) == 1
     assert type(run_agent.tools[0]).__name__ == "SkillToolset"
+    assert isinstance(run_agent.tools[0]._code_executor, UnsafeLocalCodeExecutor)
     assert "`pdf-reader`" in run_agent.instruction
     assert "call list_skills" in run_agent.instruction
     assert root_agent.tools == []

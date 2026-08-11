@@ -614,6 +614,10 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
     ]
     if skill_folders:
         _add_import(acc, "from pathlib import Path as _Path")
+        _add_import(
+            acc,
+            "from google.adk.code_executors import UnsafeLocalCodeExecutor",
+        )
         _add_import(acc, "from google.adk.skills import load_skill_from_dir")
         _add_import(acc, "from google.adk.tools.skill_toolset import SkillToolset")
         v = _unique_ident(acc, f"skills_{var_name}", "skill_toolset")
@@ -623,7 +627,12 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
             for folder in skill_folders
         ]
         joined_loaders = ",\n".join(loaders)
-        acc.pre_lines.append(f"{v} = SkillToolset(skills=[\n{joined_loaders},\n    ])")
+        acc.pre_lines.append(
+            f"{v} = SkillToolset(\n"
+            f"    skills=[\n{joined_loaders},\n    ],\n"
+            "    code_executor=UnsafeLocalCodeExecutor(),\n"
+            ")"
+        )
         tool_exprs.append(v)
 
     kwargs = [
