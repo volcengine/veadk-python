@@ -1696,6 +1696,36 @@ def _run_frontend_server(
     def _sandbox_is_admin(request: Request) -> bool:
         return _request_role(request) == StudioRole.ADMIN
 
+    from frontend.server.migration.gateway import MigrationSandboxGateway
+    from frontend.server.migration.routes import mount_migration_routes
+    from frontend.server.migration.service import MigrationError, MigrationService
+
+    def _migration_owner(request: Request) -> str:
+        principal = _require_agent_management(request)
+        return principal.owner_id if principal is not None else "local"
+
+    def _migration_creator(request: Request) -> str:
+        principal = _require_agent_management(request)
+        return (
+            (principal.display_name or principal.owner_id)
+            if principal is not None
+            else "local"
+        )
+
+    migration_service = MigrationService(
+        MigrationSandboxGateway(
+            tools_client_factory=_sandbox_client,
+            region=os.getenv("AGENTKIT_SANDBOX_REGION"),
+        )
+    )
+    # Register exact migration routes before the dynamic sandbox-agent routes.
+    mount_migration_routes(
+        app,
+        migration_service,
+        owner_resolver=_migration_owner,
+        creator_resolver=_migration_creator,
+    )
+
     sandbox_gateway = AgentkitSandboxGateway(
         _sandbox_client,
         region_candidates=sandbox_region_candidates(
@@ -3535,6 +3565,7 @@ def _run_frontend_server(
         runtime_id = (data.get("runtimeId") or "").strip()
         requested_runtime_name = (data.get("runtimeName") or agent_name).strip()
         files = data.get("files", [])
+        migration_task_id = str(data.get("migrationTaskId") or "").strip()
         config = data.get("config", {})
         task_id = str(data.get("taskId") or f"deploy-{id(request)}").strip()
         create_evaluation_sets = data.get("createEvaluationSets", True)
@@ -3542,7 +3573,7 @@ def _run_frontend_server(
         owner_id = principal.owner_id if principal else ""
         if not agent_name:
             raise HTTPException(status_code=400, detail="Agent name is required")
-        if not files:
+        if not files and not migration_task_id:
             raise HTTPException(status_code=400, detail="No files provided")
         if not isinstance(create_evaluation_sets, bool):
             raise HTTPException(
@@ -3743,24 +3774,45 @@ def _run_frontend_server(
                     else:
                         os.environ[key] = value
 
-        # Write the generated project (+ agentkit.yaml) into a temp dir. Passing
-        # config_file makes the SDK resolve THIS dir as the project dir, so the
-        # live server process is never chdir'd.
+        # Materialize one validated source tree. Migration source is resolved
+        # server-side from the caller-owned Session; browser files are ignored.
         temp_dir = tempfile.mkdtemp(prefix=f"agentkit_deploy_{agent_name}_")
         base = PathlibPath(temp_dir).resolve()
-        for fi in files:
-            fp = fi.get("path", "")
-            if not fp or fp == "__init__.py":
-                continue
-            full = (base / fp).resolve()
-            if not full.is_relative_to(base):
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                raise HTTPException(status_code=400, detail=f"Illegal file path: {fp}")
-            full.parent.mkdir(parents=True, exist_ok=True)
-            full.write_text(fi.get("content", ""), encoding="utf-8")
-        if not (base / "app.py").exists():
+        try:
+            if migration_task_id:
+                entry_point = await asyncio.to_thread(
+                    migration_service.materialize_deployment,
+                    migration_task_id,
+                    owner_id or "local",
+                    base,
+                )
+            else:
+                from frontend.server.deployment_source import (
+                    DeploymentSourceError,
+                    write_inline_source,
+                )
+
+                try:
+                    entry_point = write_inline_source(base, files)
+                except DeploymentSourceError as error:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=str(error),
+                    ) from error
+        except MigrationError as error:
             shutil.rmtree(temp_dir, ignore_errors=True)
-            raise HTTPException(status_code=400, detail="No app.py found in files")
+            logger.warning(
+                "migration deployment source rejected task_id=%s code=%s",
+                migration_task_id,
+                error.code,
+            )
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            ) from error
+        except Exception:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
 
         # Collect env vars from the deployer's environment to forward into the
         # created runtime. The AgentKit platform only injects what we pass here,
@@ -3877,7 +3929,7 @@ def _run_frontend_server(
         agentkit_config = {
             "common": {
                 "agent_name": agent_name,
-                "entry_point": "app.py",
+                "entry_point": entry_point,
                 "description": _normalize_runtime_description(data.get("description")),
                 "python_version": "3.12",
                 "launch_type": "cloud",

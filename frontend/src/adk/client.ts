@@ -2203,6 +2203,7 @@ export async function deployAgentkitProject(
   },
   opts?: {
     taskId?: string;
+    migrationTaskId?: string;
     runtimeId?: string;
     runtimeName?: string;
     appName?: string;
@@ -2233,10 +2234,11 @@ export async function deployAgentkitProject(
 
   let res: Response;
   try {
+    const migrationSource = Boolean(opts?.migrationTaskId);
     opts?.onStage?.({
       level: "info",
       phase: "upload",
-      message: "正在上传代码包",
+      message: migrationSource ? "正在校验迁移产物" : "正在上传代码包",
       pct: 0,
     });
     res = await apiFetch(
@@ -2247,9 +2249,10 @@ export async function deployAgentkitProject(
         signal: controller?.signal,
         body: JSON.stringify({
           name,
-          files,
+          files: migrationSource ? [] : files,
           config,
           taskId,
+          migrationTaskId: opts?.migrationTaskId,
           runtimeId: opts?.runtimeId,
           runtimeName: opts?.runtimeName,
           appName: opts?.appName,
@@ -2270,7 +2273,7 @@ export async function deployAgentkitProject(
     opts?.onStage?.({
       level: "success",
       phase: "upload",
-      message: "代码包上传完成",
+      message: migrationSource ? "迁移产物校验完成" : "代码包上传完成",
       pct: 100,
     });
   } catch (error) {

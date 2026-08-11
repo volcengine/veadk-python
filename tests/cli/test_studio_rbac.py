@@ -647,6 +647,207 @@ def test_byteplus_deploy_agentkit_uses_iam_file_for_sdk_templates(
     assert os.environ.get("BYTEPLUS_ACCESS_KEY") is None
 
 
+def test_migration_routes_require_agent_management_role(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("SANDBOX_DEV", raising=False)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        viewer = client.get(
+            "/web/migrations/capabilities",
+            headers={"X-VeADK-Local-User": "viewer"},
+        )
+        developer = client.get(
+            "/web/migrations/capabilities",
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert viewer.status_code == 403
+    assert developer.status_code == 200
+
+
+def test_invalid_code_package_deploy_removes_temporary_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    temporary_source = tmp_path / "invalid-code-package"
+
+    def make_temporary_source(*, prefix: str) -> str:
+        assert prefix.startswith("agentkit_deploy_")
+        temporary_source.mkdir()
+        return str(temporary_source)
+
+    monkeypatch.setattr("tempfile.mkdtemp", make_temporary_source)
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "invalid-package",
+                "files": [
+                    {
+                        "path": "agentkit.yaml",
+                        "content": "common:\n  entry_point: missing.py\n",
+                    }
+                ],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+                "createEvaluationSets": False,
+            },
+        )
+
+    assert response.status_code == 400
+    assert not temporary_source.exists()
+
+
+def test_code_package_manifest_entry_point_reaches_agentkit_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured_config: dict[str, Any] = {}
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        config_path = Path(config_file)
+        captured_config.update(yaml.safe_load(config_path.read_text()))
+        assert (config_path.parent / "runtime" / "main.py").read_text() == (
+            "app = object()\n"
+        )
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": "runtime-manifest-entry",
+                    "runtime_name": "manifest-agent",
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        )
+
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with (
+        TestClient(app) as client,
+        client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "manifest-agent",
+                "files": [
+                    {
+                        "path": "agentkit.yaml",
+                        "content": (
+                            "common:\n"
+                            "  agent_name: ignored\n"
+                            "  entry_point: runtime/main.py\n"
+                        ),
+                    },
+                    {
+                        "path": "runtime/main.py",
+                        "content": "app = object()\n",
+                    },
+                ],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+                "createEvaluationSets": False,
+            },
+        ) as response,
+    ):
+        frames = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.iter_lines()
+            if line.startswith("data: ")
+        ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert captured_config["common"]["entry_point"] == "runtime/main.py"
+
+
+def test_migration_deployment_materializes_owned_session_source_server_side(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from frontend.server.migration.service import MigrationService
+
+    captured_config: dict[str, Any] = {}
+    materialized: dict[str, str] = {}
+
+    def materialize(
+        _self: MigrationService,
+        task_id: str,
+        owner_id: str,
+        target: Path,
+    ) -> str:
+        materialized.update(task_id=task_id, owner_id=owner_id)
+        entry = target / "runtime" / "migrated.py"
+        entry.parent.mkdir(parents=True)
+        entry.write_text("app = object()\n", encoding="utf-8")
+        return "runtime/migrated.py"
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        config_path = Path(config_file)
+        captured_config.update(yaml.safe_load(config_path.read_text()))
+        assert (config_path.parent / "runtime" / "migrated.py").is_file()
+        assert not (config_path.parent / "browser.py").exists()
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": "runtime-migrated",
+                    "runtime_name": "migrated-agent",
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        )
+
+    monkeypatch.setattr(MigrationService, "materialize_deployment", materialize)
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with (
+        TestClient(app) as client,
+        client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "migrated-agent",
+                "migrationTaskId": "migration-v1-" + "1" * 32,
+                "files": [
+                    {
+                        "path": "browser.py",
+                        "content": "raise RuntimeError('untrusted')\n",
+                    }
+                ],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+                "createEvaluationSets": False,
+            },
+        ) as response,
+    ):
+        frames = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.iter_lines()
+            if line.startswith("data: ")
+        ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert materialized == {
+        "task_id": "migration-v1-" + "1" * 32,
+        "owner_id": "developer",
+    }
+    assert captured_config["common"]["entry_point"] == "runtime/migrated.py"
+
+
 @pytest.mark.parametrize(
     ("provider", "region"),
     [

@@ -122,6 +122,7 @@ import { MediaGroup } from "./ui/Media";
 import { StackCards } from "./ui/AddAgentMenu";
 import { CustomCreate } from "./create/CustomCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
+import { MigrationWorkspace } from "./migrations/MigrationWorkspace";
 import type { AgentDraft } from "./create/types";
 import {
   hydrateRuntimeModelSelection,
@@ -286,7 +287,7 @@ async function probeNewChatCapabilities(
   };
 }
 
-type CreateView = "custom" | "package" | null;
+type CreateView = "custom" | "package" | "migration" | null;
 type CustomCreateMode = "custom" | "yaml_import";
 
 // Persist the last view so a page refresh restores where the user was.
@@ -351,7 +352,7 @@ function loadView(): CreateView {
   if (["menu", "intelligent", "custom", "template", "workflow"].includes(v ?? "")) {
     return "custom";
   }
-  return v === "package" ? v : null;
+  return v === "package" || v === "migration" ? v : null;
 }
 import { TraceDrawer } from "./ui/TraceDrawer";
 import { LoginPage } from "./ui/LoginPage";
@@ -5553,9 +5554,11 @@ export default function App() {
                     icon: MigrationIcon,
                     title: "从存量迁移",
                     desc: "从您的 LangChain / Dify 等存量项目迁移至 AgentKit Runtime",
-                    status: "敬请期待",
-                    disabled: true,
-                    onClick: () => undefined,
+                    onClick: () => {
+                      setAddMenu(false);
+                      setImportedDraft(null);
+                      setCreateView("migration");
+                    },
                   },
                 ]}
               />
@@ -5664,6 +5667,19 @@ export default function App() {
               />
             ) : visibleCreateView === "package" ? (
               <CodePackageCreate
+                cloudProvider={cloudProvider}
+                onBack={() => {
+                  setCreateView(null);
+                  setAddMenu(true);
+                }}
+                onAgentAdded={onAgentAdded}
+                onDeploymentTaskChange={updateDeploymentTask}
+                onDeploymentStarted={startDeployment}
+                onDeploymentComplete={finishDeployment}
+                initialDeployRegion={newRuntimeRegion}
+              />
+            ) : visibleCreateView === "migration" ? (
+              <MigrationWorkspace
                 cloudProvider={cloudProvider}
                 onBack={() => {
                   setCreateView(null);
