@@ -14,6 +14,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import { ToolsSkills } from "@openai/apps-sdk-ui/components/Icon";
 import type {
   AdkSession,
   SiteBranding,
@@ -25,7 +26,6 @@ import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
 import { AgentFaceIcon } from "./AgentFaceIcon";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
-import { SkillIcon } from "./icons/SkillIcon";
 import defaultSiteLogo from "../assets/logo.svg";
 import byteplusLogo from "../assets/byteplus.svg";
 
@@ -360,7 +360,7 @@ export function Sidebar({
             aria-current={activePage === "skills" ? "page" : undefined}
             title="技能"
           >
-            <SkillIcon className="icon" />
+            <ToolsSkills className="icon" aria-hidden="true" />
             <span className="sidebar-nav-label">技能</span>
           </button>
         ) : null}

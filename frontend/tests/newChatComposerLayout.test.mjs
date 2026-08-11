@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 const composerSource = readFileSync(
@@ -55,10 +55,6 @@ const newChatAgentPickerStylesSource = readFileSync(
 );
 const workspaceTabsSource = readFileSync(
   new URL("../src/ui/new-chat-modes/NewChatWorkspaceTabs.tsx", import.meta.url),
-  "utf8",
-);
-const skillIconSource = readFileSync(
-  new URL("../src/ui/icons/SkillIcon.tsx", import.meta.url),
   "utf8",
 );
 const builtinToolIconsSource = readFileSync(
@@ -183,7 +179,14 @@ test("keeps alternate chat modes hidden from the new-chat composer", () => {
   );
   assert.match(
     selectorSource,
-    /<AgentIdentityIcon className="new-chat-mode__agent-icon"/,
+    /<AgentFaceIcon className="new-chat-mode__agent-icon"/,
+  );
+  assert.doesNotMatch(selectorSource, /AgentIdentityIcon/);
+  assert.match(agentSelectorSource, /import \{ AgentFaceIcon \}/);
+  assert.doesNotMatch(agentSelectorSource, /AgentIdentityIcon/);
+  assert.equal(
+    existsSync(new URL("../src/ui/AgentIdentityIcon.tsx", import.meta.url)),
+    false,
   );
   assert.match(
     selectorSource,
@@ -244,10 +247,16 @@ test("layers pill-shaped workspace tabs behind the new-chat input", () => {
     /label: "智能体"[\s\S]*?label: "技能定制"[\s\S]*?label: "视频创作"/,
   );
   assert.match(workspaceTabsSource, /AgentFaceIcon/);
-  assert.match(workspaceTabsSource, /SkillIcon/);
+  assert.match(
+    workspaceTabsSource,
+    /import \{ ToolsSkills \} from "@openai\/apps-sdk-ui\/components\/Icon"/,
+  );
+  assert.match(workspaceTabsSource, /function AnimatedSkillIcon/);
+  assert.match(workspaceTabsSource, /new-chat-workspace-tabs__skill-shape is-triangle/);
+  assert.match(workspaceTabsSource, /new-chat-workspace-tabs__skill-shape is-circle/);
+  assert.match(workspaceTabsSource, /new-chat-workspace-tabs__skill-shape is-square/);
   assert.match(workspaceTabsSource, /VideoGenerateIcon/);
-  assert.match(skillIconSource, /skill-icon__rear-document/);
-  assert.match(skillIconSource, /skill-icon__front-document/);
+  assert.doesNotMatch(workspaceTabsSource, /\bSkillIcon\b/);
   assert.match(builtinToolIconsSource, /video-generate-icon__clapper/);
   assert.match(workspaceTabsSource, /import \{ motion \} from "motion\/react"/);
   assert.match(
@@ -292,7 +301,15 @@ test("layers pill-shaped workspace tabs behind the new-chat input", () => {
   );
   assert.match(
     workspaceStylesSource,
-    /skill-icon__rear-document[\s\S]*?rotate\(-8deg\)/,
+    /skill-shape\.is-triangle[\s\S]*?translateY\(-1px\)/,
+  );
+  assert.match(
+    workspaceStylesSource,
+    /skill-shape\.is-circle[\s\S]*?rotate\(-6deg\)/,
+  );
+  assert.match(
+    workspaceStylesSource,
+    /skill-shape\.is-square[\s\S]*?rotate\(6deg\)/,
   );
   assert.match(
     workspaceStylesSource,

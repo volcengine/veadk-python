@@ -85,8 +85,34 @@
   flex: 0 0 auto;
 }
 
-.new-chat-workspace-tabs__tab .skill-icon__rear-document,
-.new-chat-workspace-tabs__tab .skill-icon__front-document,
+.new-chat-workspace-tabs__skill-icon {
+  display: inline-grid;
+  place-items: center;
+}
+
+.new-chat-workspace-tabs__skill-shape {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.new-chat-workspace-tabs__skill-shape.is-triangle {
+  clip-path: inset(0 18% 50% 18%);
+  transform-origin: 50% 30%;
+}
+
+.new-chat-workspace-tabs__skill-shape.is-circle {
+  clip-path: inset(47% 50% 0 0);
+  transform-origin: 28% 72%;
+}
+
+.new-chat-workspace-tabs__skill-shape.is-square {
+  clip-path: inset(47% 0 0 50%);
+  transform-origin: 72% 72%;
+}
+
 .new-chat-workspace-tabs__tab .video-generate-icon__clapper {
   transform-box: view-box;
   transform-origin: 12px 18.5px;
@@ -95,17 +121,19 @@
     opacity 150ms ease-out;
 }
 
-.new-chat-workspace-tabs__tab .skill-icon__rear-document {
-  opacity: 0;
+.new-chat-workspace-tabs__tab:hover:not(:disabled)
+  .new-chat-workspace-tabs__skill-shape.is-triangle {
+  transform: translateY(-1px) scale(1.04);
 }
 
-.new-chat-workspace-tabs__tab:hover:not(:disabled) .skill-icon__rear-document {
-  opacity: 0.82;
-  transform: translate(-0.8px, -0.3px) rotate(-8deg);
+.new-chat-workspace-tabs__tab:hover:not(:disabled)
+  .new-chat-workspace-tabs__skill-shape.is-circle {
+  transform: translate(-0.6px, 0.6px) rotate(-6deg);
 }
 
-.new-chat-workspace-tabs__tab:hover:not(:disabled) .skill-icon__front-document {
-  transform: translate(0.8px, 0) rotate(8deg);
+.new-chat-workspace-tabs__tab:hover:not(:disabled)
+  .new-chat-workspace-tabs__skill-shape.is-square {
+  transform: translate(0.7px, 0.5px) rotate(6deg);
 }
 
 .new-chat-workspace-tabs__tab .video-generate-icon__clapper {
@@ -531,8 +559,7 @@
     animation: none;
   }
 
-  .new-chat-workspace-tabs__tab .skill-icon__rear-document,
-  .new-chat-workspace-tabs__tab .skill-icon__front-document,
+  .new-chat-workspace-tabs__skill-shape,
   .new-chat-workspace-tabs__tab .video-generate-icon__clapper {
     transition: none;
   }

@@ -42,10 +42,6 @@ const sidebarSource = readFileSync(
   new URL("../src/ui/Sidebar.tsx", import.meta.url),
   "utf8",
 );
-const skillIconSource = readFileSync(
-  new URL("../src/ui/icons/SkillIcon.tsx", import.meta.url),
-  "utf8",
-);
 const managementClientSource = readFileSync(
   new URL("../src/adk/skills.ts", import.meta.url),
   "utf8",
@@ -134,11 +130,15 @@ test("skills navigation sits immediately below agents", () => {
 
   assert.ok(agents >= 0 && skills > agents);
   assert.ok(search > skills);
-  assert.match(sidebarSource, /import \{ SkillIcon \} from "\.\/icons\/SkillIcon"/);
-  assert.match(sidebarSource.slice(agents, search), /<SkillIcon className="icon" \/>/);
+  assert.match(
+    sidebarSource,
+    /import \{ ToolsSkills \} from "@openai\/apps-sdk-ui\/components\/Icon"/,
+  );
+  assert.match(
+    sidebarSource.slice(agents, search),
+    /<ToolsSkills className="icon" aria-hidden="true" \/>/,
+  );
   assert.doesNotMatch(sidebarSource.slice(agents, search), /sidebar-nav-slot/);
-  assert.match(skillIconSource, /viewBox="0 0 24 24"/);
-  assert.match(skillIconSource, /aria-hidden="true"/);
   assert.match(sidebarSource.slice(agents, search), />技能<\/span>/);
 });
 

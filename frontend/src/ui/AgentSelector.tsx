@@ -34,7 +34,7 @@ import {
   trackAgentConnectFailed,
   trackAgentConnectSucceeded,
 } from "../adk/telemetryEvents";
-import { AgentIdentityIcon } from "./AgentIdentityIcon";
+import { AgentFaceIcon } from "./AgentFaceIcon";
 import { SkillCapabilityIcon, ToolCapabilityIcon } from "./CapabilityIcons";
 import { RuntimeIdentityIcon } from "./RuntimeIdentityIcon";
 
@@ -365,7 +365,7 @@ export function AgentSelector({
         <div className="agentsel-main">
           <div className="agentsel-head">
             <span className="agentsel-title">
-              <AgentIdentityIcon /> 选择 Agent
+              <AgentFaceIcon /> 选择 Agent
             </span>
             <div className="agentsel-head-actions">
               {agentsSource === "cloud" && (
@@ -400,7 +400,7 @@ export function AgentSelector({
                         className={`agentsel-item ${app === currentId ? "active" : ""}`}
                         onClick={() => void selectLocalApp(app)}
                       >
-                        <AgentIdentityIcon />
+                        <AgentFaceIcon />
                         <span className="agentsel-item-name">{app}</span>
                       </button>
                     </li>
@@ -682,7 +682,7 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
       ) : info ? (
         <>
           <div className="agentsel-identity">
-            <AgentIdentityIcon className="agentsel-identity-icon" />
+            <AgentFaceIcon className="agentsel-identity-icon" />
             <div className="agentsel-identity-copy">
               <strong title={info.name}>{info.name || "未命名 Agent"}</strong>
               {info.model && <span title={info.model}>{info.model}</span>}
