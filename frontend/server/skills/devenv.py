@@ -78,8 +78,8 @@ from veadk.cli.frontend_skill_creator import (
     _sandbox_model_config,
     _validated_activities,
 )
-from veadk.cli.studio_sandbox_tools import studio_sandbox_agent_model_name
 from veadk.cli.studio_model_catalog import provider_allows_model
+from veadk.cli.studio_sandbox_tools import studio_sandbox_agent_model_name
 from veadk.skills.skill import Skill
 from veadk.utils.cloud_provider import cloud_provider_from_env
 from veadk.utils.logger import get_logger
@@ -147,6 +147,11 @@ SkillRegion = Literal["cn-beijing", "cn-shanghai", "ap-southeast-1"]
 _SKILL_REGIONS: frozenset[str] = frozenset(
     {"cn-beijing", "cn-shanghai", "ap-southeast-1"}
 )
+_LOG_SECRET_RE = re.compile(
+    r"(?i)((?:authorization|access[_-]?key|secret[_-]?key|"
+    r"session[_-]?token|api[_-]?key|token)\s*[:=]\s*)[^\s,;]+"
+    r"|((?:bearer)\s+)[A-Za-z0-9._~+/=-]+"
+)
 _SESSION_CREDENTIAL_ENV_KEYS = {
     "ANTHROPIC_AUTH_TOKEN",
     "CODEX_API_KEY",
@@ -172,6 +177,33 @@ def _json_object(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         return {}
     return {str(key): item for key, item in value.items()}
+
+
+def _safe_log_message(value: object, *, limit: int = 1000) -> str:
+    message = str(value).strip() or repr(value)
+    message = _LOG_SECRET_RE.sub(
+        lambda match: f"{match.group(1) or match.group(2)}***",
+        message,
+    )
+    if len(message) > limit:
+        return f"{message[:limit]}…"
+    return message
+
+
+def _format_log_fields(fields: dict[str, object]) -> str:
+    pairs: list[str] = []
+    for key in sorted(fields):
+        value = fields[key]
+        if value is None:
+            rendered = "none"
+        elif isinstance(value, (list, tuple, set)):
+            rendered = json.dumps(list(value), ensure_ascii=False, sort_keys=True)
+        elif isinstance(value, dict):
+            rendered = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        else:
+            rendered = str(value)
+        pairs.append(f"{key}={_safe_log_message(rendered)}")
+    return " ".join(pairs)
 
 
 def _session_time(value: object) -> int | None:
@@ -2630,6 +2662,16 @@ class SkillWorkbenchService:
         report_progress: Callable[[dict[str, str]], None] | None = None,
     ) -> dict[str, object]:
         """Serialize one revision's publish decision within this Studio process."""
+        publish_diagnostics: dict[str, object] = {
+            "phase": "queued",
+            "disposition": body.disposition,
+            "expected_revision": body.expected_revision,
+            "expected_artifact_sha256": body.expected_artifact_sha256 or "",
+            "requested_region": body.region or "",
+            "skill_space_ids": body.skill_space_ids,
+            "skill_space_count": len(body.skill_space_ids),
+            "project_name": body.project_name or "",
+        }
         try:
             with self._task_lock(job_id):
                 return self._publish_once(
@@ -2637,6 +2679,7 @@ class SkillWorkbenchService:
                     owner_id,
                     body,
                     report_progress,
+                    publish_diagnostics=publish_diagnostics,
                 )
         except SkillWorkbenchError as error:
             if not error.retryable:
@@ -2650,28 +2693,38 @@ class SkillWorkbenchService:
                 raise
             logger.warning(
                 "Skill workbench publish returned a retryable dependency error "
-                "but publish outcome is unknown job_id=%s revision=%s error_code=%s",
+                "but publish outcome is unknown job_id=%s revision=%s "
+                "error_code=%s error_message=%s diagnostics=%s",
                 job_id,
                 body.expected_revision,
                 error.code,
+                _safe_log_message(error),
+                _format_log_fields(publish_diagnostics),
+                exc_info=True,
             )
             raise SkillWorkbenchError(
                 "SKILL_PUBLISH_FAILED",
                 "发布 Skill 失败，无法确认本次发布结果，请刷新 Skill 中心确认。",
                 status_code=502,
+                original_error=error,
             ) from error
         except Exception as error:
-            logger.error(
+            error_message = _safe_log_message(error)
+            logger.exception(
                 "Skill workbench publish dependency failed "
-                "job_id=%s revision=%s error_type=%s",
+                "job_id=%s revision=%s error_type=%s error_message=%s "
+                "diagnostics=%s",
                 job_id,
                 body.expected_revision,
                 type(error).__name__,
+                error_message,
+                _format_log_fields(publish_diagnostics),
             )
             raise SkillWorkbenchError(
                 "SKILL_PUBLISH_FAILED",
                 "发布 Skill 失败，无法确认本次发布结果，请刷新 Skill 中心确认。",
                 status_code=502,
+                original_error=error,
             ) from error
 
     def _publish_once(
@@ -2680,6 +2733,8 @@ class SkillWorkbenchService:
         owner_id: str,
         body: PublishSkillTaskBody,
         report_progress: Callable[[dict[str, str]], None] | None = None,
+        *,
+        publish_diagnostics: dict[str, object] | None = None,
     ) -> dict[str, object]:
         """Publish a validated output explicitly as new or to its trusted source."""
 
@@ -2687,9 +2742,25 @@ class SkillWorkbenchService:
             if report_progress is not None:
                 report_progress({"phase": phase, "message": message})
 
+        diagnostics = publish_diagnostics if publish_diagnostics is not None else {}
+
+        def note(**fields: object) -> None:
+            diagnostics.update(fields)
+
+        note(phase="validating")
         report("preparing", "正在校验 Skill 产物")
+        logger.info(
+            "Skill workbench publish started job_id=%s diagnostics=%s",
+            job_id,
+            _format_log_fields(diagnostics),
+        )
         task, session = self._get_task_with_session(job_id, owner_id)
         revision = _json_int(task.get("revision"), 1)
+        note(
+            revision=revision,
+            task_state=str(task.get("state") or ""),
+            session_id=str(session.get("id") or session.get("sessionId") or ""),
+        )
         if body.expected_revision != revision:
             raise SkillWorkbenchError(
                 "SKILL_TASK_REVISION_CONFLICT",
@@ -2713,6 +2784,11 @@ class SkillWorkbenchService:
             )
         source = _json_object(task.get("source"))
         source_skill_id = str(source.get("skillId") or "")
+        note(
+            source_skill_id=source_skill_id,
+            source_region=str(source.get("region") or ""),
+            source_project_name=str(source.get("projectName") or ""),
+        )
         if body.disposition == "update-source" and not source_skill_id:
             raise SkillWorkbenchError(
                 "SKILL_UPDATE_NOT_ALLOWED",
@@ -2743,6 +2819,10 @@ class SkillWorkbenchService:
             if _json_int(descriptor.get("revision"), 0) == revision
             else ""
         )
+        note(
+            descriptor_revision=_json_int(descriptor.get("revision"), 0),
+            descriptor_sha256=descriptor_sha256,
+        )
         if (
             body.expected_artifact_sha256
             and descriptor_sha256
@@ -2761,14 +2841,31 @@ class SkillWorkbenchService:
                 body.expected_artifact_sha256 or descriptor_sha256 or None
             ),
         )
+        note(
+            phase="artifact_validated",
+            archive_name=archive.name,
+            archive_sha256=archive.sha256,
+            archive_size_bytes=len(archive.content),
+            archive_file_count=len(archive.files),
+        )
+        logger.info(
+            "Skill workbench publish artifact validated job_id=%s diagnostics=%s",
+            job_id,
+            _format_log_fields(diagnostics),
+        )
+        note(phase="loading_publish_dependencies")
         from agentkit.toolkit.cli.cli_skills_workflow import (
-            _ensure_bucket_ready,
             _make_content_hashed_zip_copy,
-            _tos_upload,
             _wait_for_running_version,
         )
         from agentkit.toolkit.config import GlobalConfigManager
-        from agentkit.toolkit.volcengine.services.tos_service import TOSService
+
+        from .storage import (
+            ensure_skill_publish_bucket,
+            resolve_skill_publish_credentials,
+            resolve_skill_publish_storage,
+            upload_skill_archive,
+        )
 
         config = GlobalConfigManager().load()
         effective_region = (
@@ -2777,33 +2874,49 @@ class SkillWorkbenchService:
             and source_region in supported_regions
             else body.region or self._region
         )
-        configured_bucket = (
-            os.getenv("VEADK_SKILL_CREATOR_TOS_BUCKET") or config.tos.bucket or ""
-        ).strip()
-        bucket = configured_bucket or TOSService.generate_bucket_name()
-        prefix = (
-            os.getenv("VEADK_SKILL_CREATOR_TOS_PREFIX")
-            or config.tos.prefix
-            or "agentkit/skills"
-        ).strip()
-        _ensure_bucket_ready(
-            bucket_name=bucket,
-            prefix=prefix,
-            region=effective_region,
-            auto_bucket=not bool(configured_bucket),
-            assume_yes=True,
-            assume_no=False,
+        note(
+            effective_region=effective_region,
+            supported_regions=tuple(sorted(supported_regions)),
         )
+        storage = resolve_skill_publish_storage(
+            region=effective_region,
+            config_bucket=config.tos.bucket or "",
+            config_prefix=config.tos.prefix or "",
+        )
+        credentials = resolve_skill_publish_credentials(provider=storage.provider)
+        bucket = storage.bucket
+        note(
+            phase="preparing_storage",
+            bucket=storage.bucket,
+            prefix=storage.prefix,
+            bucket_mode=storage.bucket_mode,
+            provider=storage.provider,
+            endpoint=storage.endpoint,
+            credential_source=credentials.source,
+        )
+        report("preparing", "正在准备发布存储")
+        logger.info(
+            "Skill workbench publish storage preflight job_id=%s diagnostics=%s",
+            job_id,
+            _format_log_fields(diagnostics),
+        )
+        ensure_skill_publish_bucket(storage, credentials)
+        note(phase="uploading")
         report("uploading", "正在上传 Skill 包")
+        logger.info(
+            "Skill workbench publish uploading archive job_id=%s diagnostics=%s",
+            job_id,
+            _format_log_fields(diagnostics),
+        )
         with tempfile.TemporaryDirectory(prefix="veadk-skill-publish-") as directory:
             archive_path = Path(directory) / f"{archive.name}.zip"
             archive_path.write_bytes(archive.content)
             hashed_path = _make_content_hashed_zip_copy(
                 str(archive_path), archive.name, directory
             )
-            tos_url = _tos_upload(
-                hashed_path, bucket, prefix, effective_region, verify_bucket=False
-            )
+            note(hashed_archive_name=Path(hashed_path).name)
+            tos_url = upload_skill_archive(hashed_path, storage, credentials)
+        note(phase="registering", tos_url_present=bool(tos_url))
         report("registering", "正在写入 AgentKit Skill")
         client = self._skills_client_factory(effective_region)
         effective_project = (
@@ -2814,6 +2927,17 @@ class SkillWorkbenchService:
         )
         effective_skill_id = (
             source_skill_id if body.disposition == "update-source" else ""
+        )
+        note(
+            effective_project=effective_project or "default",
+            effective_skill_id=effective_skill_id,
+            registration_mode="update" if effective_skill_id else "create",
+        )
+        logger.info(
+            "Skill workbench publish registering AgentKit Skill "
+            "job_id=%s diagnostics=%s",
+            job_id,
+            _format_log_fields(diagnostics),
         )
         if effective_skill_id:
             client.update_skill(
@@ -2838,11 +2962,19 @@ class SkillWorkbenchService:
                 )
             )
             effective_skill_id = str(created.id or "")
+            note(effective_skill_id=effective_skill_id)
         if not effective_skill_id:
             raise SkillWorkbenchError(
                 "SKILL_PUBLISH_FAILED", "AgentKit 未返回 Skill ID", status_code=502
             )
+        note(phase="activating")
         report("activating", "正在等待 Skill 版本生效")
+        logger.info(
+            "Skill workbench publish waiting for running version "
+            "job_id=%s diagnostics=%s",
+            job_id,
+            _format_log_fields(diagnostics),
+        )
         latest = _wait_for_running_version(
             client=client,
             skill_id=effective_skill_id,
@@ -2850,8 +2982,16 @@ class SkillWorkbenchService:
             poll_interval_seconds=5,
         )
         version = str(latest.version or "")
+        note(version=version)
         if body.skill_space_ids:
+            note(phase="publishing")
             report("publishing", "正在发布到技能空间")
+            logger.info(
+                "Skill workbench publish pushing to Skill Space "
+                "job_id=%s diagnostics=%s",
+                job_id,
+                _format_log_fields(diagnostics),
+            )
             client.publish_skill_to_skill_space(
                 skills_types.PublishSkillToSkillSpaceRequest(
                     SkillSpaces=body.skill_space_ids,
@@ -2862,12 +3002,15 @@ class SkillWorkbenchService:
                     ],
                 )
             )
+        note(phase="persisting")
         logger.info(
-            "Published Skill workbench artifact job_id=%s disposition=%s skill_id=%s version=%s",
+            "Published Skill workbench artifact job_id=%s disposition=%s "
+            "skill_id=%s version=%s diagnostics=%s",
             job_id,
             body.disposition,
             effective_skill_id,
             version,
+            _format_log_fields(diagnostics),
         )
         result: dict[str, object] = {
             "skillId": effective_skill_id,
@@ -4340,11 +4483,12 @@ def mount_skill_workbench_routes(
         code: str,
         status_code: int,
         retryable: bool,
+        include_stack: bool = False,
     ) -> None:
         logger.error(
             "Skill workbench request failed "
             "operation=%s request_id=%s job_id=%s code=%s status=%s "
-            "retryable=%s error_type=%s",
+            "retryable=%s error_type=%s error_message=%s",
             operation,
             request_id(request),
             job_id or "none",
@@ -4352,6 +4496,8 @@ def mount_skill_workbench_routes(
             status_code,
             str(retryable).lower(),
             type(error).__name__,
+            _safe_log_message(error),
+            exc_info=include_stack,
         )
 
     async def invoke(
@@ -4651,9 +4797,11 @@ def mount_skill_workbench_routes(
                     code=error.code,
                     status_code=error.status_code,
                     retryable=error.retryable,
+                    include_stack=True,
                 )
                 await progress_queue.put({"type": "error", "error": error.detail()})
             except Exception as error:
+                error_message = _safe_log_message(error)
                 log_boundary_error(
                     "publish_task_stream",
                     request,
@@ -4662,13 +4810,15 @@ def mount_skill_workbench_routes(
                     code="SKILL_PUBLISH_FAILED",
                     status_code=500,
                     retryable=False,
+                    include_stack=True,
                 )
-                logger.error(
+                logger.exception(
                     "Skill publish stream failed job_id=%s disposition=%s "
-                    "error_type=%s",
+                    "error_type=%s error_message=%s",
                     job_id,
                     body.disposition,
                     type(error).__name__,
+                    error_message,
                 )
                 await progress_queue.put(
                     {

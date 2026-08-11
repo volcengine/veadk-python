@@ -29,13 +29,12 @@ import textwrap
 import time
 import uuid
 import zipfile
-
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
 from typing import Any
-import requests
 
+import requests
 from agentkit.sdk.skills import types as skills_types
 from agentkit.sdk.skills.client import AgentkitSkillsClient
 from agentkit.sdk.tools import types as tools_types
@@ -60,7 +59,6 @@ from veadk.cli.studio_model_catalog import (
     BYTEPLUS_SKILL_CREATOR_MODELS,
     BYTEPLUS_STUDIO_AGENT_MODEL_NAME,
 )
-
 
 _MODELS = (
     ("a", "doubao-seed-2-0-pro-260215", "豆包 Seed 2.0 Pro"),
@@ -981,32 +979,26 @@ class SkillCreatorService:
         archive, _ = self.download(job_id, candidate_id, owner_id)
         name, description = self._archive_metadata(archive)
         from agentkit.toolkit.cli.cli_skills_workflow import (
-            _ensure_bucket_ready,
             _make_content_hashed_zip_copy,
-            _tos_upload,
             _wait_for_running_version,
         )
         from agentkit.toolkit.config import GlobalConfigManager
-        from agentkit.toolkit.volcengine.services.tos_service import TOSService
+
+        from frontend.server.skills.storage import (
+            ensure_skill_publish_bucket,
+            resolve_skill_publish_credentials,
+            resolve_skill_publish_storage,
+            upload_skill_archive,
+        )
 
         config = GlobalConfigManager().load()
-        configured_bucket = (
-            os.getenv("VEADK_SKILL_CREATOR_TOS_BUCKET") or config.tos.bucket or ""
-        ).strip()
-        bucket = configured_bucket or TOSService.generate_bucket_name()
-        prefix = (
-            os.getenv("VEADK_SKILL_CREATOR_TOS_PREFIX")
-            or config.tos.prefix
-            or "agentkit/skills"
-        ).strip()
-        _ensure_bucket_ready(
-            bucket_name=bucket,
-            prefix=prefix,
+        storage = resolve_skill_publish_storage(
             region=self._region,
-            auto_bucket=not bool(configured_bucket),
-            assume_yes=True,
-            assume_no=False,
+            config_bucket=config.tos.bucket or "",
+            config_prefix=config.tos.prefix or "",
         )
+        credentials = resolve_skill_publish_credentials(provider=storage.provider)
+        ensure_skill_publish_bucket(storage, credentials)
 
         with tempfile.TemporaryDirectory(prefix="veadk-skill-publish-") as temp_dir:
             archive_path = Path(temp_dir) / f"{name}.zip"
@@ -1014,9 +1006,7 @@ class SkillCreatorService:
             hashed_path = _make_content_hashed_zip_copy(
                 str(archive_path), name, temp_dir
             )
-            tos_url = _tos_upload(
-                hashed_path, bucket, prefix, self._region, verify_bucket=False
-            )
+            tos_url = upload_skill_archive(hashed_path, storage, credentials)
 
         client = AgentkitSkillsClient(region=self._region)
         effective_project = (
@@ -1046,7 +1036,7 @@ class SkillCreatorService:
                     Description=description,
                     TosUrl=tos_url,
                     SkillSpaces=skill_space_ids or None,
-                    BucketName=bucket,
+                    BucketName=storage.bucket,
                 )
             )
         else:
@@ -1056,7 +1046,7 @@ class SkillCreatorService:
                     Description=description,
                     TosUrl=tos_url,
                     SkillSpaces=skill_space_ids or None,
-                    BucketName=bucket,
+                    BucketName=storage.bucket,
                     ProjectName=effective_project,
                 )
             )
