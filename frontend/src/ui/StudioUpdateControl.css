@@ -99,6 +99,10 @@
   overflow: hidden;
 }
 
+.studio-update-dialog.is-progress {
+  width: min(760px, calc(100vw - 32px));
+}
+
 .studio-update-dialog > .studio-update-dialog-mark {
   grid-column: 1;
   grid-row: 1;
@@ -326,17 +330,28 @@
 }
 
 .studio-update-changelog ul {
-  display: grid;
-  gap: 5px;
+  display: block;
   max-height: min(180px, 25vh);
   margin: 0;
   padding: 0 6px 0 18px;
   overflow-y: auto;
+  list-style: disc outside;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
 
-.studio-update-changelog li,
+.studio-update-changelog li {
+  display: list-item;
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.studio-update-changelog li + li {
+  margin-top: 5px;
+}
+
 .studio-update-changelog p {
   margin: 0;
   color: hsl(var(--muted-foreground));
