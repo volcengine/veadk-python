@@ -271,11 +271,11 @@ test("debug variants configure and deploy their own model, description, and prom
   );
   assert.match(
     createSource,
-    /const releaseDraft = releaseVariant[\s\S]*?modelName: releaseVariant\.modelName \|\| draft\.modelName,[\s\S]*?description: releaseVariant\.description,[\s\S]*?instruction: releaseVariant\.instruction/,
+    /const releaseDraft = releaseVariant[\s\S]*?\.\.\.providerDraft[\s\S]*?modelName: releaseVariant\.modelName \|\| providerDraft\.modelName,[\s\S]*?description: releaseVariant\.description,[\s\S]*?instruction: releaseVariant\.instruction/,
   );
   assert.match(
     createSource,
-    /const variantDraft: AgentDraft = \{[\s\S]*?description: variant\.description,[\s\S]*?instruction: variant\.instruction/,
+    /const variantDraft: AgentDraft = \{[\s\S]*?\.\.\.providerDraft[\s\S]*?description: variant\.description,[\s\S]*?instruction: variant\.instruction/,
   );
   assert.match(
     createSource,
@@ -290,7 +290,7 @@ test("baseline debug config defaults to the first configured Agent model", () =>
   );
   assert.match(
     createSource,
-    /id: "baseline",[\s\S]*?modelName: defaultDebugModelName\(initialDraft \?\? emptyDraft\(cloudProvider\)\)/,
+    /const initialProviderDraft = draftForCloudProvider\([\s\S]*?initialDraft \?\? emptyDraft\(cloudProvider\),[\s\S]*?cloudProvider,[\s\S]*?\);[\s\S]*?id: "baseline",[\s\S]*?modelName: defaultDebugModelName\(initialProviderDraft\)/,
   );
   assert.match(
     createSource,
@@ -298,7 +298,7 @@ test("baseline debug config defaults to the first configured Agent model", () =>
   );
   assert.match(
     createSource,
-    /variant\.id === "baseline"[\s\S]*?modelName: baselineModelEditedRef\.current[\s\S]*?variant\.modelName[\s\S]*?defaultDebugModelName\(draft\)/,
+    /variant\.id === "baseline"[\s\S]*?modelName: baselineModelEditedRef\.current[\s\S]*?variant\.modelName[\s\S]*?defaultDebugModelName\(providerDraft\)/,
   );
 });
 
@@ -475,7 +475,10 @@ test("debug workspace compares multiple configurations behind one shared input",
     /const removeDebugVariant = async \(id: string\) => \{[\s\S]*?await cleanupDebugVariantRun\(id\);[\s\S]*?current\.filter\(\(variant\) => variant\.id !== id\)[\s\S]*?setSelectedVariantId\("baseline"\)/,
   );
   assert.match(createSource, /targets\.map\(async \(variant\)/);
-  assert.match(createSource, /modelName: variant\.modelName \|\| draft\.modelName/);
+  assert.match(
+    createSource,
+    /modelName: variant\.modelName \|\| providerDraft\.modelName/,
+  );
   assert.match(createSource, /variants\.length < 3/);
   assert.doesNotMatch(createSource, /name="debug-release-variant"|发布候选/);
   assert.match(

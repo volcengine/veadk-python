@@ -448,14 +448,14 @@ def test_workbench_byteplus_uses_default_and_catalog_models(
     catalog = {
         "models": [
             {
-                "slug": "default-model",
-                "display_name": "Default model",
+                "slug": "deepseek-v4-flash-260425",
+                "display_name": "DeepSeek V4 Flash",
                 "visibility": "list",
                 "supported_in_api": True,
             },
             {
-                "slug": "optional-model",
-                "display_name": "Optional model",
+                "slug": "custom-admin-model",
+                "display_name": "Admin custom model",
                 "visibility": "list",
                 "supported_in_api": True,
             },
@@ -482,7 +482,7 @@ def test_workbench_byteplus_uses_default_and_catalog_models(
         status="Ready",
         image_url="",
         envs=[
-            SimpleNamespace(key="CODEX_MODEL", value="default-model"),
+            SimpleNamespace(key="CODEX_MODEL", value="doubao-seed-2-0-pro-260215"),
             SimpleNamespace(key="CODEX_API_KEY", value="secret"),
             SimpleNamespace(key="CODEX_BASE_URL", value=base_url),
             SimpleNamespace(
@@ -502,7 +502,7 @@ def test_workbench_byteplus_uses_default_and_catalog_models(
     monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
     monkeypatch.setenv(
         "VEADK_SKILL_MODELS",
-        "optional-model,admin-model,admin-model",
+        "seed-2-0-mini-260215,doubao-seed-2-0-pro-260215,custom-admin-model",
     )
     monkeypatch.setattr(
         "frontend.server.skills.devenv.requests.post",
@@ -520,21 +520,31 @@ def test_workbench_byteplus_uses_default_and_catalog_models(
     assert capability["enabled"] is True
     assert capability["models"] == [
         {"id": "seed-2-0-lite-260228", "label": "seed-2-0-lite-260228"},
-        {"id": "default-model", "label": "default-model"},
-        {"id": "optional-model", "label": "Optional model"},
-        {"id": "admin-model", "label": "admin-model"},
+        {"id": "deepseek-v4-flash-260425", "label": "DeepSeek V4 Flash"},
+        {"id": "seed-2-0-mini-260215", "label": "seed-2-0-mini-260215"},
     ]
+
+    with pytest.raises(SkillWorkbenchError, match="不支持该模型"):
+        service.create_task(
+            CreateSkillTaskBody(
+                operation="create",
+                intent="Build a BytePlus Skill",
+                model="doubao-seed-2-0-pro-260215",
+            ),
+            "owner-1",
+            "Owner",
+        )
 
     result = service.create_task(
         CreateSkillTaskBody(
             operation="create",
             intent="Build a BytePlus Skill",
-            model="optional-model",
+            model="deepseek-v4-flash-260425",
         ),
         "owner-1",
         "Owner",
     )
 
-    assert result["model"] == "optional-model"
+    assert result["model"] == "deepseek-v4-flash-260425"
     session_envs = {item.key: item.value for item in client.created[0].envs}
-    assert session_envs["CODEX_MODEL"] == "optional-model"
+    assert session_envs["CODEX_MODEL"] == "deepseek-v4-flash-260425"

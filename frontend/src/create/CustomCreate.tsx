@@ -127,15 +127,14 @@ import type {
   UiFeatures,
 } from "../adk/client";
 import {
-  BYTEPLUS_DEFAULT_MODEL_NAME,
-  BYTEPLUS_MODELARK_BASE_URL,
   defaultCloudRegion,
   defaultEmbeddingModelName,
+  defaultImageEditModelName,
+  defaultImageModelName,
   defaultModelApiBase,
   defaultModelName,
+  defaultVideoModelName,
   plannerModelName,
-  VOLCENGINE_DEFAULT_MODEL_NAME,
-  VOLCENGINE_MODELARK_BASE_URL,
   type CloudProvider,
 } from "../adk/cloudProvider";
 import { applyEvent, emptyAcc, type Block } from "../blocks";
@@ -404,6 +403,22 @@ function providerRuntimeEnv(
       return { ...item, placeholder: defaultEmbeddingModelName(cloudProvider) };
     }
     if (item.key === "MODEL_EMBEDDING_API_BASE") {
+      return { ...item, placeholder: defaultModelApiBase(cloudProvider) };
+    }
+    if (item.key === "MODEL_IMAGE_NAME") {
+      return { ...item, placeholder: defaultImageModelName(cloudProvider) };
+    }
+    if (item.key === "MODEL_EDIT_NAME") {
+      return { ...item, placeholder: defaultImageEditModelName(cloudProvider) };
+    }
+    if (item.key === "MODEL_VIDEO_NAME") {
+      return { ...item, placeholder: defaultVideoModelName(cloudProvider) };
+    }
+    if (
+      item.key === "MODEL_IMAGE_API_BASE" ||
+      item.key === "MODEL_EDIT_API_BASE" ||
+      item.key === "MODEL_VIDEO_API_BASE"
+    ) {
       return { ...item, placeholder: defaultModelApiBase(cloudProvider) };
     }
     return item;
@@ -1988,6 +2003,61 @@ interface DebugTraceTarget {
   variantName: string;
 }
 
+function sameBaseUrl(a: string | undefined, b: string): boolean {
+  const normalize = (value: string | undefined) =>
+    (value ?? "").trim().replace(/\/+$/, "");
+  return normalize(a) === normalize(b);
+}
+
+function shouldUseProviderDefaultModel(
+  modelName: string | undefined,
+  previousProvider: CloudProvider,
+  nextProvider: CloudProvider,
+): boolean {
+  const trimmed = (modelName ?? "").trim();
+  if (!trimmed) return true;
+  if (trimmed === defaultModelName(previousProvider)) return true;
+  if (trimmed === defaultModelName(nextProvider)) return false;
+  return nextProvider === "byteplus" && trimmed.includes("doubao-");
+}
+
+function draftForCloudProvider(
+  draft: AgentDraft,
+  cloudProvider: CloudProvider,
+): AgentDraft {
+  const previousProvider = draft.cloudProvider ?? "volcengine";
+  const nextSubAgents = draft.subAgents.map((child) =>
+    draftForCloudProvider(child, cloudProvider),
+  );
+  const nextModelName = shouldUseProviderDefaultModel(
+    draft.modelName,
+    previousProvider,
+    cloudProvider,
+  )
+    ? defaultModelName(cloudProvider)
+    : draft.modelName;
+  const shouldUseProviderDefaultBase =
+    sameBaseUrl(draft.modelApiBase, defaultModelApiBase(previousProvider)) ||
+    (cloudProvider === "byteplus" &&
+      (draft.modelApiBase ?? "").includes("volces.com"));
+  const nextModelApiBase = shouldUseProviderDefaultBase
+    ? defaultModelApiBase(cloudProvider)
+    : draft.modelApiBase;
+  const changed =
+    draft.cloudProvider !== cloudProvider ||
+    nextModelName !== draft.modelName ||
+    nextModelApiBase !== draft.modelApiBase ||
+    nextSubAgents.some((child, index) => child !== draft.subAgents[index]);
+  if (!changed) return draft;
+  return {
+    ...draft,
+    cloudProvider,
+    modelName: nextModelName,
+    modelApiBase: nextModelApiBase,
+    subAgents: nextSubAgents,
+  };
+}
+
 function codegenDraft(draft: AgentDraft): AgentDraft {
   const prepared = prepareMcpAuth(draft).draft;
   return {
@@ -2648,36 +2718,14 @@ export function CustomCreate({
   void onBack; // no footer nav in the single-scroll layout; back lives in app chrome
   void onDiscard; // the discard action is intentionally hidden in this flow
   const [draft, setDraft] = useState<AgentDraft>(
-    () => initialDraft ?? emptyDraft(cloudProvider),
+    () =>
+      draftForCloudProvider(
+        initialDraft ?? emptyDraft(cloudProvider),
+        cloudProvider,
+      ),
   );
   useEffect(() => {
-    const otherProviderModel = cloudProvider === "byteplus"
-      ? VOLCENGINE_DEFAULT_MODEL_NAME
-      : BYTEPLUS_DEFAULT_MODEL_NAME;
-    const otherProviderBase = cloudProvider === "byteplus"
-      ? VOLCENGINE_MODELARK_BASE_URL
-      : BYTEPLUS_MODELARK_BASE_URL;
-    setDraft((current) => {
-      const nextModelName =
-        current.modelName?.trim() === otherProviderModel
-          ? defaultModelName(cloudProvider)
-          : current.modelName;
-      const nextModelApiBase =
-        current.modelApiBase?.trim() === otherProviderBase
-          ? defaultModelApiBase(cloudProvider)
-          : current.modelApiBase;
-      if (
-        nextModelName === current.modelName &&
-        nextModelApiBase === current.modelApiBase
-      ) {
-        return current;
-      }
-      return {
-        ...current,
-        modelName: nextModelName,
-        modelApiBase: nextModelApiBase,
-      };
-    });
+    setDraft((current) => draftForCloudProvider(current, cloudProvider));
   }, [cloudProvider]);
   const [aiRequirement, setAiRequirement] = useState("");
   const [aiGenerating, setAiGenerating] = useState(false);
@@ -2701,8 +2749,11 @@ export function CustomCreate({
   useEffect(() => {
     if (draftSnapshot === lastNotifiedDraftSnapshotRef.current) return;
     lastNotifiedDraftSnapshotRef.current = draftSnapshot;
-    onDraftChangeRef.current?.(draft, draftDirty);
-  }, [draft, draftDirty, draftSnapshot]);
+    onDraftChangeRef.current?.(
+      draftForCloudProvider(draft, cloudProvider),
+      draftDirty,
+    );
+  }, [cloudProvider, draft, draftDirty, draftSnapshot]);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("build");
   const [showErrors, setShowErrors] = useState(false);
   const [validationPulse, setValidationPulse] = useState(0);
@@ -2715,21 +2766,27 @@ export function CustomCreate({
   const debugDisabledReason =
     features?.generatedAgentTestRunDisabledReason ||
     "当前后端暂不支持生成 Agent 调试运行。";
-  const [debugVariants, setDebugVariants] = useState<DebugVariant[]>(() => [
-    {
-      id: "baseline",
-      name: "基准组",
-      modelName: defaultDebugModelName(initialDraft ?? emptyDraft(cloudProvider)),
-      description: (initialDraft ?? emptyDraft(cloudProvider)).description,
-      instruction: (initialDraft ?? emptyDraft(cloudProvider)).instruction,
-      optimizations: [],
-      configOpen: false,
-      phase: "idle",
-      runtimeSnapshot: "",
-      messages: [],
-      error: null,
-    },
-  ]);
+  const [debugVariants, setDebugVariants] = useState<DebugVariant[]>(() => {
+    const initialProviderDraft = draftForCloudProvider(
+      initialDraft ?? emptyDraft(cloudProvider),
+      cloudProvider,
+    );
+    return [
+      {
+        id: "baseline",
+        name: "基准组",
+        modelName: defaultDebugModelName(initialProviderDraft),
+        description: initialProviderDraft.description,
+        instruction: initialProviderDraft.instruction,
+        optimizations: [],
+        configOpen: false,
+        phase: "idle",
+        runtimeSnapshot: "",
+        messages: [],
+        error: null,
+      },
+    ];
+  });
   const [selectedVariantId, setSelectedVariantId] = useState("baseline");
   const debugVariantSequenceRef = useRef(1);
   const baselineModelEditedRef = useRef(false);
@@ -2918,7 +2975,15 @@ export function CustomCreate({
     setBuildErr("");
     try {
       const result = await generateAgentDraftFromRequirement(requirement);
-      setDraft(sanitizeGeneratedDraftCapabilities(normalizeDraft(result.draft)));
+      setDraft(
+        draftForCloudProvider(
+          sanitizeGeneratedDraftCapabilities(
+            normalizeDraft(result.draft),
+            cloudProvider,
+          ),
+          cloudProvider,
+        ),
+      );
       setSelectedPath([]);
       setProject(null);
       setShowErrors(false);
@@ -3023,14 +3088,21 @@ export function CustomCreate({
     [draft, duplicateNames],
   );
   const canFinish = problems.length === 0;
+  const providerDraft = useMemo(
+    () => draftForCloudProvider(draft, cloudProvider),
+    [cloudProvider, draft],
+  );
   const currentDebugSnapshot = useMemo(
-    () => debugSnapshotKey(draft),
-    [draft],
+    () => debugSnapshotKey(providerDraft),
+    [providerDraft],
   );
   const selectedDebugVariant =
     debugVariants.find((variant) => variant.id === selectedVariantId) ??
     debugVariants[0];
-  const deploymentEnv = useMemo(() => collectDeploymentEnv(draft), [draft]);
+  const deploymentEnv = useMemo(
+    () => collectDeploymentEnv(providerDraft),
+    [providerDraft],
+  );
 
   // Smooth-scroll to the first invalid section during validation.
   const scrollToSection = (id: StepId) => {
@@ -3145,7 +3217,7 @@ export function CustomCreate({
     }
     const invalidEnv = firstInvalidRuntimeEnv(
       deploymentEnv.specs,
-      draft.deployment?.envValues ?? {},
+      providerDraft.deployment?.envValues ?? {},
     );
     if (invalidEnv) {
       setBuildErr(
@@ -3162,12 +3234,12 @@ export function CustomCreate({
       if (releaseVariant) setSelectedVariantId(releaseVariant.id);
       const releaseDraft = releaseVariant
         ? {
-            ...draft,
-            modelName: releaseVariant.modelName || draft.modelName,
+            ...providerDraft,
+            modelName: releaseVariant.modelName || providerDraft.modelName,
             description: releaseVariant.description,
             instruction: releaseVariant.instruction,
           }
-        : draft;
+        : providerDraft;
       const generated = await generateAgentProject(codegenDraft(releaseDraft));
       if (releaseDraft !== draft) setDraft(releaseDraft);
       setProject(generated);
@@ -3225,8 +3297,8 @@ export function CustomCreate({
       await cleanupDebugVariantRun(id);
       await cleanupStoredDebugRuns();
       const variantDraft: AgentDraft = {
-        ...draft,
-        modelName: variant.modelName || draft.modelName,
+        ...providerDraft,
+        modelName: variant.modelName || providerDraft.modelName,
         description: variant.description,
         instruction: variant.instruction,
       };
@@ -3491,9 +3563,9 @@ export function CustomCreate({
               ...variant,
               modelName: baselineModelEditedRef.current
                 ? variant.modelName
-                : defaultDebugModelName(draft),
-              description: draft.description,
-              instruction: draft.instruction,
+                : defaultDebugModelName(providerDraft),
+              description: providerDraft.description,
+              instruction: providerDraft.instruction,
             }
           : variant,
       ),
@@ -4321,7 +4393,7 @@ export function CustomCreate({
               }}
               deploymentEnv={deploymentEnv.specs}
               deploymentEnvValues={{
-                ...draft.deployment?.envValues,
+                ...providerDraft.deployment?.envValues,
                 ...deploymentEnv.fixedValues,
               }}
               onDeploymentEnvChange={patchDeploymentEnv}
@@ -4344,8 +4416,8 @@ export function CustomCreate({
               }}
               onExportYaml={() =>
                 downloadText(
-                  `${draft.name || "agent"}.yaml`,
-                  draftToYaml(draft),
+                  `${providerDraft.name || "agent"}.yaml`,
+                  draftToYaml(providerDraft),
                   "text/yaml",
                 )
               }

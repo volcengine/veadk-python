@@ -20,7 +20,11 @@ import {
 import type { AgentProject } from "../create/project";
 import type { AgentDraft, NetworkConfig } from "../create/types";
 import type { IssueFeedbackReport } from "./issueFeedback";
-import { VOLCENGINE_DEFAULT_REGION } from "./cloudProvider";
+import {
+  BYTEPLUS_DEFAULT_REGION,
+  VOLCENGINE_DEFAULT_REGION,
+  type CloudProvider,
+} from "./cloudProvider";
 
 /** An ADK event as serialised over `/run_sse` (camelCase, by_alias=True). */
 export interface AdkUsage {
@@ -494,10 +498,11 @@ const PRIVATE_RUNTIME_UNREACHABLE_MESSAGE =
   "Runtime 已部署成功，但当前 Studio 无法访问私网 Runtime。请使用已绑定相同 VPC 的 Studio 访问，或改用公网 / 公网+VPC 部署。";
 const RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE =
   "Runtime 已部署成功，但 Studio 暂时无法连接服务。网关域名可能仍在生效，或当前网络/DNS 无法访问该 Runtime，请稍后在智能体管理页重试连接。";
-const RUNTIME_REGION_FALLBACKS = ["cn-beijing", "cn-shanghai"] as const;
+const VOLCENGINE_RUNTIME_REGION_FALLBACKS = ["cn-beijing", "cn-shanghai"] as const;
 const RUNTIME_APPS_CACHE_TTL_MS = 30_000;
 const RUNTIME_METADATA_CACHE_TTL_MS = 5 * 60 * 1000;
 const FEEDBACK_CASES_CACHE_TTL_MS = 60 * 1000;
+let activeCloudProvider: CloudProvider = "volcengine";
 
 interface ClientCacheEntry<T> {
   value?: T;
@@ -522,14 +527,29 @@ function runtimeAppsCacheKey(runtimeId: string, region: string): string {
   return `${region}:${runtimeId}`;
 }
 
-function runtimeRegionCandidates(region?: string): string[] {
-  const primary = region || VOLCENGINE_DEFAULT_REGION;
-  if (!RUNTIME_REGION_FALLBACKS.includes(primary as (typeof RUNTIME_REGION_FALLBACKS)[number])) {
+export function setClientCloudProvider(provider: CloudProvider): void {
+  activeCloudProvider = provider;
+}
+
+export function runtimeRegionCandidates(region?: string): string[] {
+  const raw = (region || "").trim();
+  if (activeCloudProvider === "byteplus") {
+    return [raw && !raw.startsWith("cn-") ? raw : BYTEPLUS_DEFAULT_REGION];
+  }
+  const primary =
+    raw && !raw.startsWith("ap-") ? raw : VOLCENGINE_DEFAULT_REGION;
+  if (
+    !VOLCENGINE_RUNTIME_REGION_FALLBACKS.includes(
+      primary as (typeof VOLCENGINE_RUNTIME_REGION_FALLBACKS)[number],
+    )
+  ) {
     return [primary];
   }
   return [
     primary,
-    ...RUNTIME_REGION_FALLBACKS.filter((candidate) => candidate !== primary),
+    ...VOLCENGINE_RUNTIME_REGION_FALLBACKS.filter(
+      (candidate) => candidate !== primary,
+    ),
   ];
 }
 
@@ -2390,10 +2410,12 @@ export async function getUiConfig(): Promise<UiConfig> {
     const logoUrl = typeof d.branding?.logoUrl === "string"
       ? d.branding.logoUrl
       : DEFAULT_SITE_BRANDING.logoUrl;
+    const provider = d.provider === "byteplus" ? "byteplus" : "volcengine";
+    setClientCloudProvider(provider);
     return {
       studio: d.studio ?? false,
       version: typeof d.version === "string" ? d.version : "",
-      provider: d.provider === "byteplus" ? "byteplus" : "volcengine",
+      provider,
       branding: {
         title: typeof d.branding?.title === "string"
           ? d.branding.title
