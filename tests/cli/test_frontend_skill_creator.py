@@ -412,6 +412,33 @@ def test_code_env_credential_accepts_a_provider_specific_default_model() -> None
     assert envs["ANTHROPIC_MODEL"] == "seed-2-0-lite-260228"
 
 
+def test_code_env_credential_defaults_to_byteplus_model() -> None:
+    updates: list[object] = []
+    client = SimpleNamespace(
+        get_tool=lambda _: SimpleNamespace(envs=[]),
+        update_tool=updates.append,
+    )
+
+    with patch(
+        "veadk.auth.veauth.ark_veauth.get_ark_token",
+        return_value=os.urandom(24).hex(),
+    ):
+        ensure_skill_creator_model_credential(
+            tool_id="dev-tool-id",
+            access_key=os.urandom(16).hex(),
+            secret_key=os.urandom(24).hex(),
+            provider="byteplus",
+            client=client,
+        )
+
+    envs = {
+        item.key: item.value for item in cast(list[Any], getattr(updates[0], "envs"))
+    }
+    assert envs["CODEX_MODEL"] == "seed-2-0-lite-260228"
+    assert envs["OPENCODE_MODEL"] == "seed-2-0-lite-260228"
+    assert envs["ANTHROPIC_MODEL"] == "seed-2-0-lite-260228"
+
+
 def test_candidate_session_never_overrides_tool_model_credential(monkeypatch) -> None:
     service = SkillCreatorService(tool_id="tool-id")
     captured: dict[str, object] = {}
@@ -485,6 +512,32 @@ def test_routes_mount_and_report_disabled_without_sandbox(monkeypatch) -> None:
     assert response.json()["enabled"] is False
     assert response.json()["reason"] == "管理员未配置"
     assert len(response.json()["models"]) == 2
+
+
+def test_routes_report_byteplus_skill_creator_models(monkeypatch) -> None:
+    monkeypatch.delenv("SANDBOX_SKILL_CREATOR", raising=False)
+    monkeypatch.delenv("VEADK_SKILL_CREATOR_TOOL_ID", raising=False)
+    monkeypatch.delenv("AGENTKIT_SANDBOX_TOOL_ID", raising=False)
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    app = FastAPI()
+    mount_skill_creator_routes(app, lambda request: "test-user")
+
+    response = TestClient(app).get("/web/skill-creator/capabilities")
+
+    assert response.status_code == 200
+    assert response.json()["models"] == [
+        {
+            "candidateId": "a",
+            "id": "seed-2-0-lite-260228",
+            "label": "Seed 2.0 Lite",
+        },
+        {
+            "candidateId": "b",
+            "id": "deepseek-v4-flash-260425",
+            "label": "DeepSeek V4 Flash",
+        },
+    ]
 
 
 def test_skill_creator_reads_only_dedicated_sandbox_tool_env(monkeypatch) -> None:

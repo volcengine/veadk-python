@@ -468,10 +468,30 @@ test("keeps the generated project stable when only deployment channel settings c
   assert.doesNotMatch(customCreateSource, /buildPreviewProject/);
   assert.match(
     customCreateSource,
-    /generateAgentProject\(codegenDraft\(releaseDraft\)\)/,
+    /const releaseDraft = releaseVariant[\s\S]*?\.\.\.providerDraft[\s\S]*?generateAgentProject\(codegenDraft\(releaseDraft\)\)/,
   );
   assert.match(projectPreviewSource, /await onFeishuEnabledChange\(!feishuEnabled\)/);
   assert.match(projectPreviewSource, /deploying \|\| feishuUpdating/);
+});
+
+test("normalizes generated project drafts to the selected cloud provider", () => {
+  assert.match(customCreateSource, /function draftForCloudProvider/);
+  assert.match(
+    customCreateSource,
+    /setDraft\(\(current\) => draftForCloudProvider\(current, cloudProvider\)\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /const providerDraft = useMemo\([\s\S]*?draftForCloudProvider\(draft, cloudProvider\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /return nextProvider === "byteplus" && trimmed\.includes\("doubao-"\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /const variantDraft: AgentDraft = \{[\s\S]*?\.\.\.providerDraft[\s\S]*?debugRuntimeDraft\(variantDraft\)/,
+  );
 });
 
 test("uses concise placeholders for agent names and custom environment variables", () => {
@@ -530,7 +550,7 @@ test("materializes A2A registry defaults for deployment env", () => {
   );
   assert.match(
     customCreateSource,
-    /deploymentEnvValues=\{\{[\s\S]*?\.\.\.draft\.deployment\?\.envValues,[\s\S]*?\.\.\.deploymentEnv\.fixedValues,/,
+    /deploymentEnvValues=\{\{[\s\S]*?\.\.\.providerDraft\.deployment\?\.envValues,[\s\S]*?\.\.\.deploymentEnv\.fixedValues,/,
   );
 });
 

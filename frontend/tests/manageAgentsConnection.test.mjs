@@ -18,6 +18,10 @@ const connectionsSource = readFileSync(
   new URL("../src/adk/connections.ts", import.meta.url),
   "utf8",
 );
+const clientSource = readFileSync(
+  new URL("../src/adk/client.ts", import.meta.url),
+  "utf8",
+);
 const manageStyles = readFileSync(
   new URL("../src/ui/ManageAgents.css", import.meta.url),
   "utf8",
@@ -38,7 +42,10 @@ test("managed runtimes connect through the Agent page", () => {
 
 test("runtime connection probing is shared with the Agent selector", () => {
   assert.match(connectionsSource, /export async function connectRuntime/);
-  assert.match(connectionsSource, /RUNTIME_REGION_FALLBACKS = \["cn-beijing", "cn-shanghai"\]/);
+  assert.match(clientSource, /VOLCENGINE_RUNTIME_REGION_FALLBACKS = \["cn-beijing", "cn-shanghai"\]/);
+  assert.match(clientSource, /activeCloudProvider === "byteplus"[\s\S]*?BYTEPLUS_DEFAULT_REGION/);
+  assert.match(clientSource, /setClientCloudProvider\(provider\)/);
+  assert.match(connectionsSource, /runtimeRegionCandidates,/);
   assert.match(connectionsSource, /for \(const candidate of runtimeRegionCandidates\(region\)\)/);
   assert.match(connectionsSource, /probeRuntimeApps\(runtimeId, candidate,[\s\S]*?retryProbe: true/);
   assert.match(connectionsSource, /resolvedRegion = candidate/);

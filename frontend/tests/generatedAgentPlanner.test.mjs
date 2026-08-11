@@ -45,7 +45,7 @@ test("removes hidden capabilities from every generated Agent", () => {
   );
   assert.match(
     createSource,
-    /setDraft\(sanitizeGeneratedDraftCapabilities\(normalizeDraft\(result\.draft\)\)\)/,
+    /setDraft\([\s\S]*?draftForCloudProvider\([\s\S]*?sanitizeGeneratedDraftCapabilities\([\s\S]*?normalizeDraft\(result\.draft\),[\s\S]*?cloudProvider,[\s\S]*?\),[\s\S]*?cloudProvider,[\s\S]*?\)/,
   );
 });
 

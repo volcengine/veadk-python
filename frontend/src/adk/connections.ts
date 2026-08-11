@@ -9,6 +9,7 @@ import {
   registerRemoteApp,
   RuntimeAccessDeniedError,
   RuntimeProbeError,
+  runtimeRegionCandidates,
 } from "./client";
 
 export interface RemoteConnection {
@@ -43,23 +44,11 @@ export interface AgentEntry {
 }
 
 const STORAGE_KEY = "veadk_agentkit_connections";
-const RUNTIME_REGION_FALLBACKS = ["cn-beijing", "cn-shanghai"] as const;
 const DEPLOYED_RUNTIME_CONNECT_INTERVAL_MS = 3_000;
 const DEPLOYED_RUNTIME_CONNECT_TIMEOUT_MS = 60_000;
 
 interface ConnectRuntimeOptions {
   waitForReady?: boolean;
-}
-
-function runtimeRegionCandidates(region: string): string[] {
-  const primary = region || "cn-beijing";
-  if (!RUNTIME_REGION_FALLBACKS.includes(primary as (typeof RUNTIME_REGION_FALLBACKS)[number])) {
-    return [primary];
-  }
-  return [
-    primary,
-    ...RUNTIME_REGION_FALLBACKS.filter((candidate) => candidate !== primary),
-  ];
 }
 
 export function loadConnections(): RemoteConnection[] {

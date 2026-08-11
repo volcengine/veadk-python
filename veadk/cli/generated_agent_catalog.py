@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from veadk.cli.studio_model_catalog import provider_env_placeholders
+
 
 @dataclass(frozen=True)
 class EnvVar:
@@ -111,6 +113,23 @@ def embedding_env_for_provider(provider: str) -> tuple[EnvVar, ...]:
             EnvVar("MODEL_EMBEDDING_API_BASE", False, BYTEPLUS_MODELARK_BASE_URL),
         )
     return EMBEDDING_ENV
+
+
+def env_for_provider(provider: str, env: tuple[EnvVar, ...]) -> tuple[EnvVar, ...]:
+    """Return provider-native placeholders for active runtime env specs."""
+    provider_id = provider.strip().lower()
+    if provider_id != "byteplus":
+        return env
+    placeholders = provider_env_placeholders(provider_id)
+    return tuple(
+        EnvVar(
+            item.key,
+            item.required,
+            placeholders.get(item.key, item.placeholder),
+            item.comment,
+        )
+        for item in env
+    )
 
 
 # Studio owns the Volcengine credential chain and forwards it to debug runs and

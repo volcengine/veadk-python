@@ -23,14 +23,21 @@ import zlib
 from collections.abc import Callable
 from typing import Any
 
+from veadk.cli.studio_model_catalog import (
+    BYTEPLUS_MODELARK_BASE_URL,
+    BYTEPLUS_STUDIO_AGENT_MODEL_NAME,
+    VOLCENGINE_MODELARK_BASE_URL,
+    VOLCENGINE_STUDIO_AGENT_MODEL_NAME,
+)
+
 _PROJECT_NAME = "default"
 _TOOL_TYPE = "CodeEnv"
 _DEV_TOOL_TYPE = "DevEnv"
-STUDIO_SANDBOX_AGENT_MODEL_NAME = "doubao-seed-2-1-pro-260628"
-STUDIO_SANDBOX_BYTEPLUS_AGENT_MODEL_NAME = "seed-2-0-lite-260228"
+STUDIO_SANDBOX_AGENT_MODEL_NAME = VOLCENGINE_STUDIO_AGENT_MODEL_NAME
+STUDIO_SANDBOX_BYTEPLUS_AGENT_MODEL_NAME = BYTEPLUS_STUDIO_AGENT_MODEL_NAME
 STUDIO_SANDBOX_MODEL_BASE_URLS = {
-    "volcengine": "https://ark.cn-beijing.volces.com/api/v3",
-    "byteplus": "https://ark.ap-southeast.bytepluses.com/api/v3",
+    "volcengine": VOLCENGINE_MODELARK_BASE_URL,
+    "byteplus": BYTEPLUS_MODELARK_BASE_URL,
 }
 _AGENT_TOOL_TYPES = {
     "openclaw": "ArkClawEnv",
