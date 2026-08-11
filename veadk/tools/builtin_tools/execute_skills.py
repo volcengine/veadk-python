@@ -39,7 +39,20 @@ _SKILL_API_HEALTH_POLL_INTERVAL = 1.0
 _SKILL_API_HEALTH_REQUEST_TIMEOUT = 5.0
 _SKILL_INVOCATION_MODE_ENV = "AGENTKIT_SKILL_INVOCATION_MODE"
 _SKILL_INVOCATION_MODES = frozenset(
-    {"execute", "skill_api", "run_sse", "a2a", "python_agent"}
+    {"execute", "skill_api", "run_sse", "a2a", "a2a_blocking", "python_agent"}
+)
+_A2A_POLL_INTERVAL = 2.0
+_A2A_REQUEST_TIMEOUT = 60
+_A2A_HISTORY_LENGTH = 20
+_A2A_TERMINAL_STATES = frozenset(
+    {
+        "completed",
+        "failed",
+        "canceled",
+        "rejected",
+        "input-required",
+        "auth-required",
+    }
 )
 
 
@@ -89,16 +102,15 @@ def _skill_api_url(endpoint: str, path: str) -> str:
 
 
 def _resolve_skill_invocation_mode(mode: str | None = None) -> str:
-    # 默认保持 /v1/skills/execute；新沙箱可通过参数或环境变量显式切换后端。
-    resolved = (mode or os.getenv(_SKILL_INVOCATION_MODE_ENV) or "execute").strip()
+    resolved = (mode or os.getenv(_SKILL_INVOCATION_MODE_ENV) or "a2a").strip()
     if not resolved:
-        return "execute"
+        return "a2a"
     normalized = resolved.lower().replace("-", "_")
     if normalized not in _SKILL_INVOCATION_MODES:
         raise ValueError(
             "Unsupported AgentKit Skill invocation mode "
             f"{resolved!r}. Expected one of: "
-            "execute, run_sse, a2a, python_agent."
+            "execute, run_sse, a2a, a2a_blocking, python_agent."
         )
     return "execute" if normalized == "skill_api" else normalized
 
@@ -249,6 +261,8 @@ def _extract_text_from_parts(parts: object) -> str:
     for part in parts:
         if not isinstance(part, dict):
             continue
+        if _is_adk_thought_part(part):
+            continue
         text = part.get("text")
         if isinstance(text, str):
             chunks.append(text)
@@ -257,6 +271,11 @@ def _extract_text_from_parts(parts: object) -> str:
         if isinstance(text_part, dict) and isinstance(text_part.get("text"), str):
             chunks.append(text_part["text"])
     return "".join(chunks)
+
+
+def _is_adk_thought_part(part: dict) -> bool:
+    metadata = part.get("metadata")
+    return isinstance(metadata, dict) and metadata.get("adk_thought") is True
 
 
 def _extract_text_from_a2a_result(result: object) -> str:
@@ -285,6 +304,90 @@ def _extract_text_from_a2a_result(result: object) -> str:
                 if text:
                     return text
     return ""
+
+
+def _a2a_result_task(operation: str, response: object) -> dict:
+    if not isinstance(response, dict):
+        raise RuntimeError(f"{operation} response JSON is not an object")
+    if response.get("error") is not None:
+        raise RuntimeError(json.dumps(response["error"], ensure_ascii=False))
+    result = response.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError(f"{operation} response does not contain result task")
+    if result.get("kind") != "task" and "status" not in result:
+        raise RuntimeError(f"{operation} response result is not an A2A task")
+    return result
+
+
+def _a2a_task_id(task: dict) -> str:
+    value = task.get("id")
+    if not isinstance(value, str) or not value:
+        raise RuntimeError("A2A message/send response task does not contain id")
+    return value
+
+
+def _a2a_task_state(task: dict) -> str | None:
+    status = task.get("status")
+    if not isinstance(status, dict):
+        return None
+    state = status.get("state")
+    return state if isinstance(state, str) else None
+
+
+def _a2a_task_result_text(task: dict) -> str:
+    artifacts = task.get("artifacts")
+    if isinstance(artifacts, list):
+        chunks = [
+            _extract_text_from_parts(artifact.get("parts"))
+            for artifact in artifacts
+            if isinstance(artifact, dict)
+        ]
+        text = "\n".join(chunk for chunk in chunks if chunk)
+        if text:
+            return text
+
+    status = task.get("status")
+    if isinstance(status, dict):
+        message = status.get("message")
+        if isinstance(message, dict):
+            text = _extract_text_from_parts(message.get("parts"))
+            if text:
+                return text
+
+    history = task.get("history")
+    if isinstance(history, list):
+        for message in reversed(history):
+            if isinstance(message, dict) and message.get("role") in {
+                "agent",
+                "assistant",
+            }:
+                text = _extract_text_from_parts(message.get("parts"))
+                if text:
+                    return text
+    return ""
+
+
+def _post_a2a_jsonrpc(
+    *,
+    endpoint: str,
+    payload: dict[str, object],
+    timeout: int,
+) -> dict:
+    raw = _post_json(endpoint=endpoint, path="/a2a", payload=payload, timeout=timeout)
+    try:
+        response = json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("A2A JSON-RPC response is not valid JSON") from exc
+    if not isinstance(response, dict):
+        raise RuntimeError("A2A JSON-RPC response JSON is not an object")
+    return response
+
+
+def _a2a_request_timeout(deadline: float) -> int:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return 0
+    return max(1, int(min(_A2A_REQUEST_TIMEOUT, remaining)))
 
 
 def _parse_run_sse_response(raw: bytes) -> str:
@@ -338,7 +441,82 @@ def _execute_skills_via_a2a(
     timeout: int,
 ) -> str:
     invocation_context = tool_context._invocation_context
-    # A2A 沙箱使用 JSON-RPC message/send，同步等待最终结果。
+    deadline = time.monotonic() + timeout
+    message = {
+        "kind": "message",
+        "messageId": uuid.uuid4().hex,
+        "role": "user",
+        "parts": [{"kind": "text", "text": workflow_prompt}],
+    }
+    metadata = {
+        "user_id": invocation_context.user_id,
+        "session_id": invocation_context.session.id,
+    }
+    task = _a2a_result_task(
+        "A2ASendMessage",
+        _post_a2a_jsonrpc(
+            endpoint=endpoint,
+            payload={
+                "jsonrpc": "2.0",
+                "id": uuid.uuid4().hex,
+                "method": "message/send",
+                "params": {
+                    "message": message,
+                    "metadata": metadata,
+                    "configuration": {
+                        "blocking": False,
+                        "historyLength": _A2A_HISTORY_LENGTH,
+                    },
+                },
+            },
+            timeout=_a2a_request_timeout(deadline),
+        ),
+    )
+    task_id = _a2a_task_id(task)
+
+    while _a2a_task_state(task) not in _A2A_TERMINAL_STATES:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"Timed out while waiting for A2A task {task_id}")
+        time.sleep(min(_A2A_POLL_INTERVAL, remaining))
+        task = _a2a_result_task(
+            "A2AGetTask",
+            _post_a2a_jsonrpc(
+                endpoint=endpoint,
+                payload={
+                    "jsonrpc": "2.0",
+                    "id": uuid.uuid4().hex,
+                    "method": "tasks/get",
+                    "params": {
+                        "id": task_id,
+                        "historyLength": _A2A_HISTORY_LENGTH,
+                    },
+                },
+                timeout=_a2a_request_timeout(deadline),
+            ),
+        )
+
+    state = _a2a_task_state(task)
+    if state != "completed":
+        raise RuntimeError(
+            f"A2A task {task_id} ended with state {state}: "
+            f"{json.dumps(task, ensure_ascii=False)}"
+        )
+
+    text = _a2a_task_result_text(task)
+    if text:
+        return text
+    return json.dumps(task, ensure_ascii=False)
+
+
+def _execute_skills_via_a2a_blocking(
+    *,
+    workflow_prompt: str,
+    endpoint: str,
+    tool_context: ToolContext,
+    timeout: int,
+) -> str:
+    invocation_context = tool_context._invocation_context
     payload = {
         "jsonrpc": "2.0",
         "id": uuid.uuid4().hex,
@@ -357,9 +535,8 @@ def _execute_skills_via_a2a(
             "configuration": {"blocking": True},
         },
     }
-    raw = _post_json(endpoint=endpoint, path="/a2a", payload=payload, timeout=timeout)
-    response = json.loads(raw.decode("utf-8"))
-    if isinstance(response, dict) and response.get("error"):
+    response = _post_a2a_jsonrpc(endpoint=endpoint, payload=payload, timeout=timeout)
+    if response.get("error"):
         raise RuntimeError(json.dumps(response["error"], ensure_ascii=False))
     result = response.get("result") if isinstance(response, dict) else None
     text = _extract_text_from_a2a_result(result)
@@ -428,6 +605,13 @@ def _execute_skills_via_skill_api(
             tool_context=tool_context,
             timeout=timeout,
         )
+    if invocation_mode == "a2a_blocking":
+        return _execute_skills_via_a2a_blocking(
+            workflow_prompt=workflow_prompt,
+            endpoint=endpoint,
+            tool_context=tool_context,
+            timeout=timeout,
+        )
 
     _wait_for_skill_api_health(endpoint=endpoint)
     return _post_skill_api_json(
@@ -456,8 +640,9 @@ def execute_skills(
             skill agent process for this execution only. Requests with custom
             environment variables use the legacy RunCode execution path.
         invocation_mode (Optional[str]): AgentKit Skill sandbox invocation backend.
-            Supported values are "execute" (default), "run_sse", "a2a", and
-            "python_agent". It can also be set with AGENTKIT_SKILL_INVOCATION_MODE.
+            Supported values are "a2a" (default), "execute", "run_sse",
+            "a2a_blocking", and "python_agent". It can also be set with
+            AGENTKIT_SKILL_INVOCATION_MODE.
         timeout (int, optional): Maximum execution time in seconds. Defaults to
             1800. The value can be adjusted for each call but must be between 1
             and 1800 seconds.

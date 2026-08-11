@@ -213,7 +213,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
             _invocation_context=invocation_context,
         )
 
-    def test_prefers_new_skill_execute_api_when_endpoint_is_available(self):
+    def test_execute_mode_posts_skill_execute_api_when_endpoint_is_available(self):
         captured_requests = []
         health_endpoints = []
         session_kwargs = []
@@ -242,7 +242,11 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         )
 
         with patch.object(module.request, "urlopen", fake_urlopen):
-            result = module.execute_skills("do work", tool_context=self._tool_context())
+            result = module.execute_skills(
+                "do work",
+                tool_context=self._tool_context(),
+                invocation_mode="execute",
+            )
 
         self.assertEqual(result, "api result")
         self.assertTrue(session_kwargs[0]["wait_until_ready"])
@@ -255,7 +259,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         self.assertEqual("tip-from-state", request_obj.headers["X-tip-token-key"])
         self.assertIn(b'"prompt": "do work"', request_obj.data)
 
-    def test_execute_skills_forwards_custom_timeout(self):
+    def test_execute_mode_forwards_custom_timeout(self):
         session_kwargs = []
         request_timeouts = []
 
@@ -285,6 +289,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
             result = module.execute_skills(
                 "do work",
                 tool_context=self._tool_context(),
+                invocation_mode="execute",
                 timeout=120,
             )
 
@@ -506,7 +511,96 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         self.assertIn(b'"session_id": "session-1"', request_obj.data)
         self.assertIn(b'"text": "do work"', request_obj.data)
 
-    def test_a2a_mode_posts_message_send_and_returns_text(self):
+    def test_default_a2a_mode_sends_nonblocking_message_and_polls_task(self):
+        captured_requests = []
+        responses = [
+            {
+                "jsonrpc": "2.0",
+                "id": "send",
+                "result": {
+                    "kind": "task",
+                    "id": "task-1",
+                    "status": {"state": "working"},
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": "get",
+                "result": {
+                    "kind": "task",
+                    "id": "task-1",
+                    "status": {"state": "completed"},
+                    "artifacts": [
+                        {
+                            "parts": [
+                                {"kind": "text", "text": "a2a "},
+                                {
+                                    "kind": "text",
+                                    "text": "thought",
+                                    "metadata": {"adk_thought": True},
+                                },
+                            ]
+                        },
+                        {"parts": [{"kind": "text", "text": "result"}]},
+                    ],
+                },
+            },
+        ]
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return json.dumps(self.payload).encode()
+
+        def fake_urlopen(request, timeout=None):
+            captured_requests.append((request, timeout))
+            return FakeResponse(responses.pop(0))
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
+
+        with (
+            patch.object(module.request, "urlopen", fake_urlopen),
+            patch.object(module.time, "sleep") as sleep,
+        ):
+            result = module.execute_skills(
+                "do work",
+                tool_context=self._tool_context(),
+            )
+
+        self.assertEqual(result, "a2a \nresult")
+        self.assertEqual(2, len(captured_requests))
+        send_request, send_timeout = captured_requests[0]
+        send_payload = json.loads(send_request.data.decode())
+        self.assertEqual("https://sandbox.test/a2a", send_request.full_url)
+        self.assertEqual(60, send_timeout)
+        self.assertEqual("message/send", send_payload["method"])
+        self.assertEqual(
+            "do work", send_payload["params"]["message"]["parts"][0]["text"]
+        )
+        self.assertFalse(send_payload["params"]["configuration"]["blocking"])
+        self.assertEqual(20, send_payload["params"]["configuration"]["historyLength"])
+        self.assertEqual("user", send_payload["params"]["metadata"]["user_id"])
+        self.assertEqual("session-1", send_payload["params"]["metadata"]["session_id"])
+
+        get_request, get_timeout = captured_requests[1]
+        get_payload = json.loads(get_request.data.decode())
+        self.assertEqual("https://sandbox.test/a2a", get_request.full_url)
+        self.assertEqual(60, get_timeout)
+        self.assertEqual("tasks/get", get_payload["method"])
+        self.assertEqual("task-1", get_payload["params"]["id"])
+        sleep.assert_called_once()
+
+    def test_a2a_blocking_mode_posts_blocking_message_send(self):
         captured_requests = []
 
         class FakeResponse:
@@ -541,7 +635,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
             result = module.execute_skills(
                 "do work",
                 tool_context=self._tool_context(),
-                invocation_mode="a2a",
+                invocation_mode="a2a_blocking",
             )
 
         self.assertEqual(result, "a2a result")
@@ -552,6 +646,54 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         self.assertEqual("message/send", payload["method"])
         self.assertEqual("do work", payload["params"]["message"]["parts"][0]["text"])
         self.assertTrue(payload["params"]["configuration"]["blocking"])
+
+    def test_a2a_mode_raises_when_task_fails(self):
+        responses = [
+            {
+                "jsonrpc": "2.0",
+                "id": "send",
+                "result": {
+                    "kind": "task",
+                    "id": "task-1",
+                    "status": {"state": "working"},
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": "get",
+                "result": {
+                    "kind": "task",
+                    "id": "task-1",
+                    "status": {"state": "failed"},
+                },
+            },
+        ]
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return json.dumps(responses.pop(0)).encode()
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
+
+        with (
+            patch.object(
+                module.request, "urlopen", lambda *_args, **_kwargs: FakeResponse()
+            ),
+            patch.object(module.time, "sleep"),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"A2A task task-1 ended with state failed",
+            ):
+                module.execute_skills("do work", tool_context=self._tool_context())
 
     def test_unsupported_invocation_mode_raises_value_error(self):
         module = _load_execute_skills_module(
@@ -606,7 +748,11 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
                 RuntimeError,
                 r"HTTP 404.*(?:升级|upgrade).*Skill",
             ):
-                module.execute_skills("do work", tool_context=self._tool_context())
+                module.execute_skills(
+                    "do work",
+                    tool_context=self._tool_context(),
+                    invocation_mode="execute",
+                )
 
     def test_requires_sandbox_upgrade_when_skill_api_returns_405(self):
         class MethodNotAllowedResponse:
@@ -634,7 +780,11 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
                 RuntimeError,
                 r"HTTP 405.*(?:升级|upgrade).*Skill",
             ):
-                module.execute_skills("do work", tool_context=self._tool_context())
+                module.execute_skills(
+                    "do work",
+                    tool_context=self._tool_context(),
+                    invocation_mode="execute",
+                )
 
     def test_raises_runtime_error_when_session_endpoint_is_unavailable(self):
         def raise_endpoint_error(**_kwargs):
@@ -682,7 +832,11 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
 
         with patch.object(module.request, "urlopen", fake_urlopen):
             with self.assertRaisesRegex(RuntimeError, "HTTP 500: internal error"):
-                module.execute_skills("do work", tool_context=self._tool_context())
+                module.execute_skills(
+                    "do work",
+                    tool_context=self._tool_context(),
+                    invocation_mode="execute",
+                )
 
 
 if __name__ == "__main__":
