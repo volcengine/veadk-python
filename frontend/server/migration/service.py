@@ -29,7 +29,7 @@ import uuid
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 from frontend.server.deployment_source import (
@@ -242,12 +242,16 @@ def _timestamp(value: object) -> float | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
+        parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.timestamp()
 
 
 def _iso_timestamp(value: float) -> str:
-    return datetime.fromtimestamp(value, tz=UTC).isoformat().replace("+00:00", "Z")
+    return (
+        datetime.fromtimestamp(value, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _json_bytes(value: object) -> bytes:

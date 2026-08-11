@@ -21,7 +21,7 @@ import stat
 import subprocess
 import zipfile
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1752,7 +1752,14 @@ def test_ready_session_is_expired_at_its_ttl_deadline() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(
         gateway,
-        clock=lambda: datetime(2026, 8, 11, 9, 0, tzinfo=UTC).timestamp(),
+        clock=lambda: datetime(
+            2026,
+            8,
+            11,
+            9,
+            0,
+            tzinfo=timezone.utc,
+        ).timestamp(),
     )
     created = service.create_task(
         CreateMigrationTaskBody(sourceFileName="support-agent.zip"),
@@ -1780,7 +1787,14 @@ def test_product_ttl_does_not_follow_a_later_platform_expiry() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(
         gateway,
-        clock=lambda: datetime(2026, 8, 11, 9, 0, tzinfo=UTC).timestamp(),
+        clock=lambda: datetime(
+            2026,
+            8,
+            11,
+            9,
+            0,
+            tzinfo=timezone.utc,
+        ).timestamp(),
     )
     created = service.create_task(
         CreateMigrationTaskBody(sourceFileName="support-agent.zip"),
