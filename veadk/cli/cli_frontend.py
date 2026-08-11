@@ -159,6 +159,23 @@ def _validate_byteplus_vefaas_application_name(name: str) -> None:
     )
 
 
+def _validate_distinct_sandbox_tool_ids(tool_ids: dict[str, object]) -> None:
+    """Reject one Tool id serving both transient and snapshot sessions."""
+    labels = {
+        "codex": "Codex",
+        "openclaw": "OpenClaw",
+        "hermes": "Hermes",
+    }
+    for kind, label in labels.items():
+        transient = str(tool_ids.get(kind) or "").strip()
+        snapshot = str(tool_ids.get(f"{kind}_snapshot") or "").strip()
+        if transient and transient == snapshot:
+            raise click.ClickException(
+                f"AgentKit {label} Tool and {label} Snapshot Tool must use "
+                "different Tool IDs."
+            )
+
+
 def _runtime_regions(provider: str, requested_region: str) -> list[str]:
     """Resolve the Runtime control-plane regions for a list request."""
     if requested_region not in {"all", "", "*"}:
@@ -796,6 +813,27 @@ def _serve_options(f):
             "(env: SANDBOX_CHAT_HERMES).",
         ),
         click.option(
+            "--sandbox-chat-codex-snapshot-tool-id",
+            default=None,
+            envvar="SANDBOX_CHAT_CODEX_SNAPSHOT",
+            help="Snapshot-enabled AgentKit CodeEnv Tool ID used by persistent chats "
+            "(env: SANDBOX_CHAT_CODEX_SNAPSHOT).",
+        ),
+        click.option(
+            "--sandbox-chat-openclaw-snapshot-tool-id",
+            default=None,
+            envvar="SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+            help="Snapshot-enabled AgentKit ArkClawEnv Tool ID used by persistent "
+            "OpenClaw agents (env: SANDBOX_CHAT_OPENCLAW_SNAPSHOT).",
+        ),
+        click.option(
+            "--sandbox-chat-hermes-snapshot-tool-id",
+            default=None,
+            envvar="SANDBOX_CHAT_HERMES_SNAPSHOT",
+            help="Snapshot-enabled AgentKit HermesEnv Tool ID used by persistent "
+            "Hermes agents (env: SANDBOX_CHAT_HERMES_SNAPSHOT).",
+        ),
+        click.option(
             "--admin",
             "studio_admins",
             default=None,
@@ -853,6 +891,9 @@ def frontend(
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
+    sandbox_chat_codex_snapshot_tool_id: str | None,
+    sandbox_chat_openclaw_snapshot_tool_id: str | None,
+    sandbox_chat_hermes_snapshot_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
     open_browser: bool,
@@ -882,6 +923,9 @@ def frontend(
         sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
         sandbox_chat_openclaw_tool_id=sandbox_chat_openclaw_tool_id,
         sandbox_chat_hermes_tool_id=sandbox_chat_hermes_tool_id,
+        sandbox_chat_codex_snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,
+        sandbox_chat_openclaw_snapshot_tool_id=(sandbox_chat_openclaw_snapshot_tool_id),
+        sandbox_chat_hermes_snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
         open_browser=open_browser,
@@ -915,6 +959,9 @@ def studio(
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
+    sandbox_chat_codex_snapshot_tool_id: str | None,
+    sandbox_chat_openclaw_snapshot_tool_id: str | None,
+    sandbox_chat_hermes_snapshot_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
     open_browser: bool,
@@ -949,6 +996,9 @@ def studio(
         sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
         sandbox_chat_openclaw_tool_id=sandbox_chat_openclaw_tool_id,
         sandbox_chat_hermes_tool_id=sandbox_chat_hermes_tool_id,
+        sandbox_chat_codex_snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,
+        sandbox_chat_openclaw_snapshot_tool_id=(sandbox_chat_openclaw_snapshot_tool_id),
+        sandbox_chat_hermes_snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
         open_browser=open_browser,
@@ -978,6 +1028,9 @@ def _run_frontend_server(
     sandbox_chat_codex_tool_id: str | None = None,
     sandbox_chat_openclaw_tool_id: str | None = None,
     sandbox_chat_hermes_tool_id: str | None = None,
+    sandbox_chat_codex_snapshot_tool_id: str | None = None,
+    sandbox_chat_openclaw_snapshot_tool_id: str | None = None,
+    sandbox_chat_hermes_snapshot_tool_id: str | None = None,
     studio_admins: str | None = None,
     studio_developers: str | None = None,
     open_browser: bool,
@@ -1018,6 +1071,16 @@ def _run_frontend_server(
         os.environ["SANDBOX_CHAT_OPENCLAW"] = sandbox_chat_openclaw_tool_id
     if sandbox_chat_hermes_tool_id:
         os.environ["SANDBOX_CHAT_HERMES"] = sandbox_chat_hermes_tool_id
+    if sandbox_chat_codex_snapshot_tool_id:
+        os.environ["SANDBOX_CHAT_CODEX_SNAPSHOT"] = sandbox_chat_codex_snapshot_tool_id
+    if sandbox_chat_openclaw_snapshot_tool_id:
+        os.environ["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] = (
+            sandbox_chat_openclaw_snapshot_tool_id
+        )
+    if sandbox_chat_hermes_snapshot_tool_id:
+        os.environ["SANDBOX_CHAT_HERMES_SNAPSHOT"] = (
+            sandbox_chat_hermes_snapshot_tool_id
+        )
 
     from google.adk.cli.fast_api import get_fast_api_app
 
@@ -1763,10 +1826,28 @@ def _run_frontend_server(
 
         storage_config = StudioStorageConfig.from_env(provider)
         sandbox_tools = (
-            ("codex", "Codex Sandbox", "SANDBOX_CHAT_CODEX"),
-            ("openclaw", "OpenClaw Sandbox", "SANDBOX_CHAT_OPENCLAW"),
-            ("hermes", "Hermes Sandbox", "SANDBOX_CHAT_HERMES"),
-            ("dev", "Dev Sandbox", "SANDBOX_DEV"),
+            ("codex", "Codex Sandbox", "SANDBOX_CHAT_CODEX", False),
+            (
+                "codex_snapshot",
+                "Codex Sandbox",
+                "SANDBOX_CHAT_CODEX_SNAPSHOT",
+                True,
+            ),
+            ("openclaw", "OpenClaw Sandbox", "SANDBOX_CHAT_OPENCLAW", False),
+            (
+                "openclaw_snapshot",
+                "OpenClaw Sandbox",
+                "SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+                True,
+            ),
+            ("hermes", "Hermes Sandbox", "SANDBOX_CHAT_HERMES", False),
+            (
+                "hermes_snapshot",
+                "Hermes Sandbox",
+                "SANDBOX_CHAT_HERMES_SNAPSHOT",
+                True,
+            ),
+            ("dev", "Dev Sandbox", "SANDBOX_DEV", False),
         )
         return {
             "storage": {
@@ -1777,8 +1858,9 @@ def _run_frontend_server(
                     "kind": kind,
                     "label": label,
                     "toolId": (os.getenv(environment_key) or "").strip(),
+                    "snapshot": snapshot,
                 }
-                for kind, label, environment_key in sandbox_tools
+                for kind, label, environment_key, snapshot in sandbox_tools
             ],
         }
 
@@ -7518,6 +7600,30 @@ def _resolve_studio_cloud_credentials(
     "Default: create one during deployment.",
 )
 @click.option(
+    "--sandbox-chat-codex-snapshot-tool-id",
+    "sandbox_chat_codex_snapshot_tool_id",
+    default=None,
+    envvar="SANDBOX_CHAT_CODEX_SNAPSHOT",
+    help="Dedicated snapshot-enabled AgentKit CodeEnv Tool ID. "
+    "Default: create one during deployment.",
+)
+@click.option(
+    "--sandbox-chat-openclaw-snapshot-tool-id",
+    "sandbox_chat_openclaw_snapshot_tool_id",
+    default=None,
+    envvar="SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+    help="Dedicated snapshot-enabled AgentKit ArkClawEnv Tool ID. "
+    "Default: create one during deployment.",
+)
+@click.option(
+    "--sandbox-chat-hermes-snapshot-tool-id",
+    "sandbox_chat_hermes_snapshot_tool_id",
+    default=None,
+    envvar="SANDBOX_CHAT_HERMES_SNAPSHOT",
+    help="Dedicated snapshot-enabled AgentKit HermesEnv Tool ID. "
+    "Default: create one during deployment.",
+)
+@click.option(
     "--studio-update-bucket",
     default="veadk-studio",
     show_default=True,
@@ -7585,6 +7691,9 @@ def frontend_deploy(
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
+    sandbox_chat_codex_snapshot_tool_id: str | None,
+    sandbox_chat_openclaw_snapshot_tool_id: str | None,
+    sandbox_chat_hermes_snapshot_tool_id: str | None,
     studio_update_bucket: str,
     studio_update_prefix: str,
     apmplus_aid: str,
@@ -7753,20 +7862,29 @@ def frontend_deploy(
 
     sandbox_tool_ids = {
         "codex": sandbox_chat_codex_tool_id,
+        "codex_snapshot": sandbox_chat_codex_snapshot_tool_id,
         "openclaw": sandbox_chat_openclaw_tool_id,
+        "openclaw_snapshot": sandbox_chat_openclaw_snapshot_tool_id,
         "hermes": sandbox_chat_hermes_tool_id,
+        "hermes_snapshot": sandbox_chat_hermes_snapshot_tool_id,
         "dev": sandbox_dev_tool_id,
     }
     sandbox_tool_labels = {
         "codex": "Codex",
+        "codex_snapshot": "Codex Snapshot",
         "openclaw": "OpenClaw",
+        "openclaw_snapshot": "OpenClaw Snapshot",
         "hermes": "Hermes",
+        "hermes_snapshot": "Hermes Snapshot",
         "dev": "Dev Sandbox",
     }
     sandbox_tool_purposes = {
         "codex": "chat",
+        "codex_snapshot": "chat",
         "openclaw": "openclaw",
+        "openclaw_snapshot": "openclaw",
         "hermes": "hermes",
+        "hermes_snapshot": "hermes",
         "dev": "dev",
     }
     from veadk.cli.studio_sandbox_tools import (
@@ -7791,6 +7909,7 @@ def frontend_deploy(
         tool_name = studio_sandbox_tool_name(
             vefaas_app_name,
             sandbox_tool_purposes[kind],
+            snapshot=kind.endswith("_snapshot"),
         )
         click.echo(f"Creating AgentKit {label} Tool '{tool_name}'…")
         missing_sandbox_tools[kind] = tool_name
@@ -7799,16 +7918,19 @@ def frontend_deploy(
         with ThreadPoolExecutor(max_workers=len(missing_sandbox_tools)) as executor:
             tool_futures = {}
             for kind, tool_name in missing_sandbox_tools.items():
-                if kind == "codex":
+                base_kind = kind.removesuffix("_snapshot")
+                enable_snapshot = kind.endswith("_snapshot")
+                if base_kind == "codex":
                     future = executor.submit(
                         ensure_studio_code_env_tool,
                         name=tool_name,
+                        enable_snapshot=enable_snapshot,
                         region=region,
                         access_key=ak,
                         secret_key=sk,
                         session_token=session_token or "",
                     )
-                elif kind == "dev":
+                elif base_kind == "dev":
                     future = executor.submit(
                         ensure_studio_dev_env_tool,
                         name=tool_name,
@@ -7821,7 +7943,8 @@ def frontend_deploy(
                     future = executor.submit(
                         ensure_studio_agent_tool,
                         name=tool_name,
-                        kind=kind,
+                        kind=base_kind,
+                        enable_snapshot=enable_snapshot,
                         model_name=sandbox_agent_model_name,
                         region=region,
                         access_key=ak,
@@ -7858,6 +7981,8 @@ def frontend_deploy(
         resolved_sandbox_tool_ids[kind] = tool_id
         click.echo(f"Creating AgentKit {sandbox_tool_labels[kind]} model credential…")
 
+    _validate_distinct_sandbox_tool_ids(resolved_sandbox_tool_ids)
+
     if resolved_sandbox_tool_ids:
         max_workers = len(resolved_sandbox_tool_ids)
     else:
@@ -7865,8 +7990,11 @@ def frontend_deploy(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         credential_futures = {}
         for kind, tool_id in resolved_sandbox_tool_ids.items():
-            if kind in {"codex", "dev"}:
-                code_model_name = sandbox_agent_model_name if kind == "codex" else None
+            base_kind = kind.removesuffix("_snapshot")
+            if base_kind in {"codex", "dev"}:
+                code_model_name = (
+                    sandbox_agent_model_name if base_kind == "codex" else None
+                )
                 future = executor.submit(
                     ensure_skill_creator_model_credential,
                     tool_id=tool_id,
@@ -7881,7 +8009,7 @@ def frontend_deploy(
                 future = executor.submit(
                     ensure_studio_agent_model_credential,
                     tool_id=tool_id,
-                    kind=kind,
+                    kind=base_kind,
                     model_name=sandbox_agent_model_name,
                     model_base_url=sandbox_model_base_url,
                     region=region,
@@ -7908,8 +8036,11 @@ def frontend_deploy(
             click.echo(f"AgentKit {label} model credential is ready.")
 
     chat_codex_tool_id = resolved_sandbox_tool_ids.get("codex", "")
+    chat_codex_snapshot_tool_id = resolved_sandbox_tool_ids.get("codex_snapshot", "")
     openclaw_tool_id = resolved_sandbox_tool_ids.get("openclaw", "")
+    openclaw_snapshot_tool_id = resolved_sandbox_tool_ids.get("openclaw_snapshot", "")
     hermes_tool_id = resolved_sandbox_tool_ids.get("hermes", "")
+    hermes_snapshot_tool_id = resolved_sandbox_tool_ids.get("hermes_snapshot", "")
     dev_tool_id = resolved_sandbox_tool_ids.get("dev", "")
 
     # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
@@ -7954,8 +8085,11 @@ def frontend_deploy(
     if studio_developers:
         veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
+    veadk_environments["SANDBOX_CHAT_CODEX_SNAPSHOT"] = chat_codex_snapshot_tool_id
     veadk_environments["SANDBOX_CHAT_OPENCLAW"] = openclaw_tool_id
+    veadk_environments["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] = openclaw_snapshot_tool_id
     veadk_environments["SANDBOX_CHAT_HERMES"] = hermes_tool_id
+    veadk_environments["SANDBOX_CHAT_HERMES_SNAPSHOT"] = hermes_snapshot_tool_id
     veadk_environments["SANDBOX_DEV"] = dev_tool_id
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
     veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
@@ -8211,6 +8345,24 @@ def frontend_deploy(
     default=None,
     help="Replace the Hermes AgentKit Tool ID.",
 )
+@click.option(
+    "--sandbox-chat-codex-snapshot-tool-id",
+    "sandbox_chat_codex_snapshot_tool_id",
+    default=None,
+    help="Replace the snapshot-enabled temporary-chat AgentKit CodeEnv Tool ID.",
+)
+@click.option(
+    "--sandbox-chat-openclaw-snapshot-tool-id",
+    "sandbox_chat_openclaw_snapshot_tool_id",
+    default=None,
+    help="Replace the snapshot-enabled OpenClaw AgentKit Tool ID.",
+)
+@click.option(
+    "--sandbox-chat-hermes-snapshot-tool-id",
+    "sandbox_chat_hermes_snapshot_tool_id",
+    default=None,
+    help="Replace the snapshot-enabled Hermes AgentKit Tool ID.",
+)
 @click.option("--volcengine-access-key", default=None)
 @click.option("--volcengine-secret-key", default=None)
 @click.option("--volcengine-session-token", default=None)
@@ -8229,6 +8381,9 @@ def frontend_update(
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
+    sandbox_chat_codex_snapshot_tool_id: str | None,
+    sandbox_chat_openclaw_snapshot_tool_id: str | None,
+    sandbox_chat_hermes_snapshot_tool_id: str | None,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
     volcengine_session_token: str | None,
@@ -8352,6 +8507,168 @@ def frontend_update(
             provider=provider_id,
         )
         environment_overrides = {"AGENTKIT_SANDBOX_REGION": target.region}
+        service_client = getattr(service, "client", None)
+        current_env: dict[str, str] = {}
+        if service_client is not None:
+            import volcenginesdkvefaas
+
+            function = service_client.get_function(
+                volcenginesdkvefaas.GetFunctionRequest(id=target.function_id)
+            )
+            current_env = {
+                item.key: item.value for item in (getattr(function, "envs", None) or [])
+            }
+
+        snapshot_tool_ids = {
+            "codex_snapshot": sandbox_chat_codex_snapshot_tool_id
+            if sandbox_chat_codex_snapshot_tool_id is not None
+            else current_env.get("SANDBOX_CHAT_CODEX_SNAPSHOT", ""),
+            "openclaw_snapshot": sandbox_chat_openclaw_snapshot_tool_id
+            if sandbox_chat_openclaw_snapshot_tool_id is not None
+            else current_env.get("SANDBOX_CHAT_OPENCLAW_SNAPSHOT", ""),
+            "hermes_snapshot": sandbox_chat_hermes_snapshot_tool_id
+            if sandbox_chat_hermes_snapshot_tool_id is not None
+            else current_env.get("SANDBOX_CHAT_HERMES_SNAPSHOT", ""),
+        }
+        if service_client is not None:
+            from veadk.cli.frontend_skill_creator import (
+                ensure_skill_creator_model_credential,
+            )
+            from veadk.cli.studio_sandbox_tools import (
+                ensure_studio_agent_model_credential,
+                ensure_studio_agent_tool,
+                ensure_studio_code_env_tool,
+                studio_sandbox_agent_model_name,
+                studio_sandbox_model_base_url,
+                studio_sandbox_tool_name,
+            )
+
+            snapshot_labels = {
+                "codex_snapshot": "Codex Snapshot",
+                "openclaw_snapshot": "OpenClaw Snapshot",
+                "hermes_snapshot": "Hermes Snapshot",
+            }
+            snapshot_purposes = {
+                "codex_snapshot": "chat",
+                "openclaw_snapshot": "openclaw",
+                "hermes_snapshot": "hermes",
+            }
+            sandbox_agent_model_name = studio_sandbox_agent_model_name(provider_id)
+            sandbox_model_base_url = studio_sandbox_model_base_url(provider_id)
+            missing_snapshot_tools = {
+                kind: studio_sandbox_tool_name(
+                    vefaas_app_name,
+                    snapshot_purposes[kind],
+                    snapshot=True,
+                )
+                for kind, tool_id in snapshot_tool_ids.items()
+                if not str(tool_id or "").strip()
+            }
+            if missing_snapshot_tools:
+                with ThreadPoolExecutor(
+                    max_workers=len(missing_snapshot_tools)
+                ) as executor:
+                    tool_futures = {}
+                    for kind, tool_name in missing_snapshot_tools.items():
+                        label = snapshot_labels[kind]
+                        click.echo(f"Creating AgentKit {label} Tool '{tool_name}'…")
+                        base_kind = kind.removesuffix("_snapshot")
+                        if base_kind == "codex":
+                            future = executor.submit(
+                                ensure_studio_code_env_tool,
+                                name=tool_name,
+                                enable_snapshot=True,
+                                region=target.region,
+                                access_key=ak,
+                                secret_key=sk,
+                                session_token=session_token or "",
+                            )
+                        else:
+                            future = executor.submit(
+                                ensure_studio_agent_tool,
+                                name=tool_name,
+                                kind=base_kind,
+                                enable_snapshot=True,
+                                model_name=sandbox_agent_model_name,
+                                region=target.region,
+                                access_key=ak,
+                                secret_key=sk,
+                                session_token=session_token or "",
+                            )
+                        tool_futures[kind] = future
+                    for kind, future in tool_futures.items():
+                        label = snapshot_labels[kind]
+                        try:
+                            snapshot_tool_ids[kind] = future.result()
+                        except Exception as error:
+                            detail = _safe_exception_detail(
+                                error,
+                                secrets=(ak, sk, session_token),
+                            )
+                            raise click.ClickException(
+                                f"Failed to provision the AgentKit {label} Tool. "
+                                f"Underlying error:\n{detail}"
+                            ) from error
+                        click.echo(f"AgentKit {label} Tool is ready.")
+
+                with ThreadPoolExecutor(
+                    max_workers=len(missing_snapshot_tools)
+                ) as executor:
+                    credential_futures = {}
+                    for kind in missing_snapshot_tools:
+                        tool_id = snapshot_tool_ids[kind]
+                        base_kind = kind.removesuffix("_snapshot")
+                        label = snapshot_labels[kind]
+                        click.echo(f"Creating AgentKit {label} model credential…")
+                        if base_kind == "codex":
+                            future = executor.submit(
+                                ensure_skill_creator_model_credential,
+                                tool_id=tool_id,
+                                region=target.region,
+                                access_key=ak,
+                                secret_key=sk,
+                                session_token=session_token,
+                                provider=provider_id,
+                                model_name=sandbox_agent_model_name,
+                            )
+                        else:
+                            future = executor.submit(
+                                ensure_studio_agent_model_credential,
+                                tool_id=tool_id,
+                                kind=base_kind,
+                                model_name=sandbox_agent_model_name,
+                                model_base_url=sandbox_model_base_url,
+                                region=target.region,
+                                access_key=ak,
+                                secret_key=sk,
+                                session_token=session_token,
+                                provider=provider_id,
+                            )
+                        credential_futures[kind] = future
+                    for kind, future in credential_futures.items():
+                        label = snapshot_labels[kind]
+                        try:
+                            future.result()
+                        except Exception as error:
+                            detail = _safe_exception_detail(
+                                error,
+                                secrets=(ak, sk, session_token),
+                            )
+                            raise click.ClickException(
+                                f"Failed to provision the AgentKit {label} model "
+                                f"credential. Underlying error:\n{detail}"
+                            ) from error
+                        click.echo(f"AgentKit {label} model credential is ready.")
+
+            environment_overrides["SANDBOX_CHAT_CODEX_SNAPSHOT"] = str(
+                snapshot_tool_ids["codex_snapshot"] or ""
+            )
+            environment_overrides["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] = str(
+                snapshot_tool_ids["openclaw_snapshot"] or ""
+            )
+            environment_overrides["SANDBOX_CHAT_HERMES_SNAPSHOT"] = str(
+                snapshot_tool_ids["hermes_snapshot"] or ""
+            )
         if provider_id == "byteplus":
             environment_overrides["CLOUD_PROVIDER"] = provider_id
             environment_overrides["AGENTKIT_CLOUD_PROVIDER"] = provider_id
@@ -8359,7 +8676,6 @@ def frontend_update(
             environment_overrides["DATABASE_VIKING_REGION"] = (
                 DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
             )
-            service_client = getattr(service, "client", None)
             has_explicit_sandbox_tool = any(
                 tool_id is not None
                 for tool_id in (
@@ -8369,20 +8685,9 @@ def frontend_update(
                     sandbox_chat_hermes_tool_id,
                 )
             )
-            if service_client is None and not has_explicit_sandbox_tool:
-                current_env: dict[str, str] = {}
-                repair_sandbox_tools = False
-            else:
-                import volcenginesdkvefaas
-
-                function = service_client.get_function(
-                    volcenginesdkvefaas.GetFunctionRequest(id=target.function_id)
-                )
-                current_env = {
-                    item.key: item.value
-                    for item in (getattr(function, "envs", None) or [])
-                }
-                repair_sandbox_tools = True
+            repair_sandbox_tools = (
+                service_client is not None or has_explicit_sandbox_tool
+            )
             byteplus_sandbox_tool_ids = {
                 "dev": sandbox_dev_tool_id
                 if sandbox_dev_tool_id is not None
@@ -8434,6 +8739,7 @@ def frontend_update(
                     tool_name = studio_sandbox_tool_name(
                         vefaas_app_name,
                         byteplus_sandbox_purposes[kind],
+                        snapshot=kind.endswith("_snapshot"),
                     )
                     click.echo(f"Creating AgentKit {label} Tool '{tool_name}'…")
                     missing_sandbox_tools[kind] = tool_name
@@ -8444,16 +8750,19 @@ def frontend_update(
                     ) as ex:
                         tool_futures = {}
                         for kind, tool_name in missing_sandbox_tools.items():
-                            if kind == "codex":
+                            base_kind = kind.removesuffix("_snapshot")
+                            enable_snapshot = kind.endswith("_snapshot")
+                            if base_kind == "codex":
                                 future = ex.submit(
                                     ensure_studio_code_env_tool,
                                     name=tool_name,
+                                    enable_snapshot=enable_snapshot,
                                     region=target.region,
                                     access_key=ak,
                                     secret_key=sk,
                                     session_token=session_token or "",
                                 )
-                            elif kind == "dev":
+                            elif base_kind == "dev":
                                 future = ex.submit(
                                     ensure_studio_dev_env_tool,
                                     name=tool_name,
@@ -8466,7 +8775,8 @@ def frontend_update(
                                 future = ex.submit(
                                     ensure_studio_agent_tool,
                                     name=tool_name,
-                                    kind=kind,
+                                    kind=base_kind,
+                                    enable_snapshot=enable_snapshot,
                                     model_name=sandbox_agent_model_name,
                                     region=target.region,
                                     access_key=ak,
@@ -8499,9 +8809,12 @@ def frontend_update(
                             continue
                         label = byteplus_sandbox_labels[kind]
                         click.echo(f"Creating AgentKit {label} model credential…")
-                        if kind in {"codex", "dev"}:
+                        base_kind = kind.removesuffix("_snapshot")
+                        if base_kind in {"codex", "dev"}:
                             code_model_name = (
-                                sandbox_agent_model_name if kind == "codex" else None
+                                sandbox_agent_model_name
+                                if base_kind == "codex"
+                                else None
                             )
                             future = ex.submit(
                                 ensure_skill_creator_model_credential,
@@ -8517,7 +8830,7 @@ def frontend_update(
                             future = ex.submit(
                                 ensure_studio_agent_model_credential,
                                 tool_id=tool_id,
-                                kind=kind,
+                                kind=base_kind,
                                 model_name=sandbox_agent_model_name,
                                 model_base_url=sandbox_model_base_url,
                                 region=target.region,
@@ -8566,6 +8879,45 @@ def frontend_update(
             )
         if sandbox_chat_hermes_tool_id is not None:
             environment_overrides["SANDBOX_CHAT_HERMES"] = sandbox_chat_hermes_tool_id
+        if sandbox_chat_codex_snapshot_tool_id is not None:
+            environment_overrides["SANDBOX_CHAT_CODEX_SNAPSHOT"] = (
+                sandbox_chat_codex_snapshot_tool_id
+            )
+        if sandbox_chat_openclaw_snapshot_tool_id is not None:
+            environment_overrides["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] = (
+                sandbox_chat_openclaw_snapshot_tool_id
+            )
+        if sandbox_chat_hermes_snapshot_tool_id is not None:
+            environment_overrides["SANDBOX_CHAT_HERMES_SNAPSHOT"] = (
+                sandbox_chat_hermes_snapshot_tool_id
+            )
+        _validate_distinct_sandbox_tool_ids(
+            {
+                "codex": environment_overrides.get(
+                    "SANDBOX_CHAT_CODEX", current_env.get("SANDBOX_CHAT_CODEX", "")
+                ),
+                "codex_snapshot": environment_overrides.get(
+                    "SANDBOX_CHAT_CODEX_SNAPSHOT",
+                    current_env.get("SANDBOX_CHAT_CODEX_SNAPSHOT", ""),
+                ),
+                "openclaw": environment_overrides.get(
+                    "SANDBOX_CHAT_OPENCLAW",
+                    current_env.get("SANDBOX_CHAT_OPENCLAW", ""),
+                ),
+                "openclaw_snapshot": environment_overrides.get(
+                    "SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+                    current_env.get("SANDBOX_CHAT_OPENCLAW_SNAPSHOT", ""),
+                ),
+                "hermes": environment_overrides.get(
+                    "SANDBOX_CHAT_HERMES",
+                    current_env.get("SANDBOX_CHAT_HERMES", ""),
+                ),
+                "hermes_snapshot": environment_overrides.get(
+                    "SANDBOX_CHAT_HERMES_SNAPSHOT",
+                    current_env.get("SANDBOX_CHAT_HERMES_SNAPSHOT", ""),
+                ),
+            }
+        )
         url = service.update_application_code_bundle(
             application_id=target.application_id,
             function_id=target.function_id,

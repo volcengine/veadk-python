@@ -178,6 +178,7 @@ export interface SandboxRequestOptions {
 
 export interface SandboxStartOptions extends SandboxRequestOptions {
   displayName?: string;
+  persistent?: boolean;
 }
 
 export interface SandboxSession {
@@ -188,6 +189,7 @@ export interface SandboxSession {
   status: string;
   createdAt: string;
   expireAt: string;
+  persistent: boolean;
   toolType: string;
   createdBy: string;
   threadId: string;
@@ -291,6 +293,11 @@ export interface AgentKitSandboxClient {
     threadId: string,
     options?: SandboxRequestOptions,
   ): Promise<{ archived: true; snapshot?: SandboxThreadSnapshot }>;
+  deleteThread(
+    sessionId: string,
+    threadId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<{ deleted: true; snapshot?: SandboxThreadSnapshot }>;
   compactThread(
     sessionId: string,
     options?: SandboxRequestOptions,
@@ -359,6 +366,7 @@ interface SessionResponse {
   status: string;
   createdAt?: string;
   expireAt?: string;
+  persistent?: boolean;
   toolType?: string;
   createdBy?: string;
   threadId?: string;
@@ -447,6 +455,7 @@ function parseSession(
     status: data.status,
     createdAt: data.createdAt ?? "",
     expireAt: data.expireAt ?? "",
+    persistent: data.persistent !== false,
     toolType: data.toolType ?? "",
     createdBy: data.createdBy ?? "",
     threadId: data.threadId ?? "",
@@ -854,7 +863,10 @@ export const sandboxClient: AgentKitSandboxClient = {
     const response = await fetch(withAuth(SANDBOX_API), {
       method: "POST",
       headers: sandboxHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ displayName: options.displayName?.trim() ?? "" }),
+      body: JSON.stringify({
+        displayName: options.displayName?.trim() ?? "",
+        persistent: options.persistent ?? true,
+      }),
       signal: requestSignal(options.signal, START_TIMEOUT_MS),
     });
     if (!response.ok) {
@@ -883,7 +895,10 @@ export const sandboxClient: AgentKitSandboxClient = {
     const response = await fetch(withAuth(`/web/${kind}/sessions`), {
       method: "POST",
       headers: sandboxHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ displayName: options.displayName?.trim() ?? "" }),
+      body: JSON.stringify({
+        displayName: options.displayName?.trim() ?? "",
+        persistent: options.persistent ?? true,
+      }),
       signal: requestSignal(options.signal, START_TIMEOUT_MS),
     });
     if (!response.ok) {
@@ -1131,6 +1146,24 @@ export const sandboxClient: AgentKitSandboxClient = {
     }
     return {
       archived: true,
+      ...(value.thread ? { snapshot: parseThreadSnapshot(value) } : {}),
+    };
+  },
+
+  async deleteThread(sessionId, threadId, options = {}) {
+    const value = recordOf(
+      await sandboxJson(sessionId, "threads/delete", {
+        method: "POST",
+        body: { threadId },
+        options,
+        fallback: "无法删除 Codex Thread。",
+      }),
+    );
+    if (value?.deleted !== true) {
+      throw new Error("Sandbox 返回了无效删除结果。");
+    }
+    return {
+      deleted: true,
       ...(value.thread ? { snapshot: parseThreadSnapshot(value) } : {}),
     };
   },

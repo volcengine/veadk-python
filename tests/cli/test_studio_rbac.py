@@ -216,6 +216,9 @@ def test_system_info_lists_configured_sandbox_tool_ids(
     monkeypatch.setenv("SANDBOX_CHAT_CODEX", "tool-codex")
     monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW", "tool-openclaw")
     monkeypatch.setenv("SANDBOX_CHAT_HERMES", "tool-hermes")
+    monkeypatch.setenv("SANDBOX_CHAT_CODEX_SNAPSHOT", "tool-codex-snapshot")
+    monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW_SNAPSHOT", "tool-openclaw-snapshot")
+    monkeypatch.setenv("SANDBOX_CHAT_HERMES_SNAPSHOT", "tool-hermes-snapshot")
     monkeypatch.setenv("SANDBOX_DEV", "tool-dev")
     monkeypatch.setenv("VEADK_STUDIO_TOS_BUCKET", "teststudio")
     monkeypatch.setenv("VEADK_STUDIO_TOS_REGION", "cn-beijing")
@@ -251,18 +254,44 @@ def test_system_info_lists_configured_sandbox_tool_ids(
                 "kind": "codex",
                 "label": "Codex Sandbox",
                 "toolId": "tool-codex",
+                "snapshot": False,
+            },
+            {
+                "kind": "codex_snapshot",
+                "label": "Codex Sandbox",
+                "toolId": "tool-codex-snapshot",
+                "snapshot": True,
             },
             {
                 "kind": "openclaw",
                 "label": "OpenClaw Sandbox",
                 "toolId": "tool-openclaw",
+                "snapshot": False,
+            },
+            {
+                "kind": "openclaw_snapshot",
+                "label": "OpenClaw Sandbox",
+                "toolId": "tool-openclaw-snapshot",
+                "snapshot": True,
             },
             {
                 "kind": "hermes",
                 "label": "Hermes Sandbox",
                 "toolId": "tool-hermes",
+                "snapshot": False,
             },
-            {"kind": "dev", "label": "Dev Sandbox", "toolId": "tool-dev"},
+            {
+                "kind": "hermes_snapshot",
+                "label": "Hermes Sandbox",
+                "toolId": "tool-hermes-snapshot",
+                "snapshot": True,
+            },
+            {
+                "kind": "dev",
+                "label": "Dev Sandbox",
+                "toolId": "tool-dev",
+                "snapshot": False,
+            },
         ],
     }
     assert developer_denied.status_code == 403

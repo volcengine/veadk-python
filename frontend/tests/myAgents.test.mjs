@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import ts from "typescript";
 
 const pageSource = readFileSync(
   new URL("../src/ui/MyAgents.tsx", import.meta.url),
@@ -162,6 +163,10 @@ test("uses a responsive two-layer card layout without an empty fixed-height gap"
     /\.my-agent-card\s*\{[\s\S]*?height: auto;[\s\S]*?background: hsl\(var\(--secondary\) \/ 0\.82\)/,
   );
   assert.match(pageStyles, /\.my-agent-card-content\s*\{[\s\S]*?background: hsl\(var\(--panel\)\);/);
+  assert.doesNotMatch(
+    pageStyles,
+    /\.my-agent-card-content\s*\{[^}]*box-shadow:/,
+  );
   assert.doesNotMatch(pageStyles, /\.my-agent-card:hover \.my-agent-card-content/);
   assert.match(pageStyles, /\.my-agent-description\s*\{[\s\S]*?-webkit-line-clamp: 2/);
   assert.match(pageStyles, /\.my-agent-actions\s*\{[\s\S]*?gap: 8px;[\s\S]*?padding: 6px 8px 7px;[\s\S]*?background: hsl\(var\(--secondary\) \/ 0\.82\)/);
@@ -175,10 +180,49 @@ test("aligns sandbox names with status and formats creation time to seconds", ()
   assert.match(pageSource, /agent\.sandbox \? \([\s\S]*?\{agent\.sandbox\.id\}/);
 });
 
+test("shows aligned lifetime metadata for persistent and non-persistent Sandbox agents", async () => {
+  const formatterSource = pageSource.match(
+    /export function formatSandboxRemainingTime\([\s\S]*?\n\}/,
+  )?.[0];
+  assert.ok(formatterSource);
+  const { outputText } = ts.transpileModule(formatterSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.ES2022,
+      target: ts.ScriptTarget.ES2022,
+    },
+  });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
+  const { formatSandboxRemainingTime } = await import(moduleUrl);
+  const now = Date.parse("2026-08-11T00:00:00.000Z");
+
+  assert.equal(
+    formatSandboxRemainingTime("2026-08-11T02:30:00.000Z", now),
+    "2 小时 30 分钟",
+  );
+  assert.equal(
+    formatSandboxRemainingTime("2026-08-11T00:00:30.000Z", now),
+    "即将清空",
+  );
+  assert.equal(formatSandboxRemainingTime("2026-08-10T23:59:59.000Z", now), "即将清空");
+  assert.equal(formatSandboxRemainingTime("invalid", now), "即将清空");
+
+  assert.match(
+    pageSource,
+    /className=\{`my-agent-expiry\$\{[\s\S]*?agent\.sandbox\.persistent[\s\S]*?`\}[\s\S]*?<dt>剩余时间<\/dt>[\s\S]*?agent\.sandbox\.persistent[\s\S]*?"永不过期"[\s\S]*?agent\.sandbox\.expireAt/,
+  );
+  assert.doesNotMatch(
+    pageSource,
+    /<span className="my-agent-expiry"/,
+  );
+  assert.match(pageSource, /window\.setInterval\([\s\S]*?60_000/);
+  assert.match(pageSource, /return \(\) => window\.clearInterval\(timer\)/);
+  assert.match(pageStyles, /\.my-agent-expiry\.is-expiring dd\s*\{[\s\S]*?color: hsl\(38 78% 36%\)/);
+});
+
 test("metadata remains compact without adding data-plane requests", () => {
   assert.doesNotMatch(pageStyles, /\.my-agent-label/);
-  assert.match(pageStyles, /\.my-agent-created-at dt,[\s\S]*?\.my-agent-region dt\s*\{[\s\S]*?font-weight: 600/);
-  assert.match(pageStyles, /\.my-agent-created-at dd,[\s\S]*?\.my-agent-region dd\s*\{[\s\S]*?color: hsl\(var\(--muted-foreground\)\)/);
+  assert.match(pageStyles, /\.my-agent-created-at dt,[\s\S]*?\.my-agent-region dt,[\s\S]*?\.my-agent-expiry dt\s*\{[\s\S]*?font-weight: 600/);
+  assert.match(pageStyles, /\.my-agent-created-at dd,[\s\S]*?\.my-agent-region dd,[\s\S]*?\.my-agent-expiry dd\s*\{[\s\S]*?color: hsl\(var\(--muted-foreground\)\)/);
   assert.doesNotMatch(pageSource, /getRuntimeAgentInfo/);
   assert.doesNotMatch(pageSource, /Promise\.all\([\s\S]*?page\.runtimes\.map/);
   assert.doesNotMatch(pageSource, /appName: info\.appName/);
@@ -362,7 +406,8 @@ test("keeps all requested type filters without nested category sections", () => 
   assert.match(pageSource, /label: "OpenClaw 智能体"/);
   assert.match(pageSource, /label: "Hermes 智能体"/);
   assert.doesNotMatch(pageSource, /AgentSection|my-agents-section|comingSoon/);
-  assert.match(pageSource, /<EmptyMessage\.Title>暂无 \{activeLabel\}<\/EmptyMessage\.Title>/);
+  assert.match(pageSource, /<EmptyMessage\.Title className="my-agent-sandbox-empty-title">[\s\S]*?暂无 \{activeLabel\}[\s\S]*?<\/EmptyMessage\.Title>/);
+  assert.match(pageStyles, /\.my-agent-sandbox-empty-title\s*\{[\s\S]*?max-width: none;[\s\S]*?white-space: nowrap;[\s\S]*?text-wrap: nowrap;/);
   assert.match(pageSource, /activeType === "general"[\s\S]*?没有匹配的智能体/);
   assert.doesNotMatch(pageStyles, /\.my-agent-empty\s*\{[^}]*border:/);
   assert.doesNotMatch(pageStyles, /\.my-agent-empty\s*\{[^}]*background:/);

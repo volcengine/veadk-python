@@ -654,6 +654,12 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
             "chat-tool-new",
             "--sandbox-dev-tool-id",
             "dev-tool-new",
+            "--sandbox-chat-codex-snapshot-tool-id",
+            "chat-snapshot-tool-new",
+            "--sandbox-chat-openclaw-snapshot-tool-id",
+            "openclaw-snapshot-tool-new",
+            "--sandbox-chat-hermes-snapshot-tool-id",
+            "hermes-snapshot-tool-new",
             "--volcengine-access-key",
             "ak",
             "--volcengine-secret-key",
@@ -665,7 +671,98 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
     assert captured["environment_overrides"] == {
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "SANDBOX_CHAT_CODEX": "chat-tool-new",
+        "SANDBOX_CHAT_CODEX_SNAPSHOT": "chat-snapshot-tool-new",
+        "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool-new",
+        "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool-new",
         "SANDBOX_DEV": "dev-tool-new",
+    }
+
+
+def test_volcengine_studio_update_repairs_missing_snapshot_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    target = _target()
+    captured: dict[str, object] = {}
+    code_tools: list[dict[str, object]] = []
+    agent_tools: list[dict[str, object]] = []
+    code_credentials: list[dict[str, object]] = []
+    agent_credentials: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.find_studio_deployments", lambda **_: [target]
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.load_deployed_site_logo", lambda _: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_frontend_assets", lambda *_: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_local_studio_requirements",
+        lambda *_a, **_k: "./veadk.whl\n",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.write_studio_package", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
+        lambda **kwargs: code_tools.append(kwargs) or "codex-snapshot-tool",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_agent_tool",
+        lambda **kwargs: agent_tools.append(kwargs)
+        or f"{kwargs['kind']}-snapshot-tool",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
+        lambda **kwargs: code_credentials.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_agent_model_credential",
+        lambda **kwargs: agent_credentials.append(kwargs),
+    )
+
+    class _FakeVeFaaS:
+        def __init__(self, **_: str) -> None:
+            self.client = SimpleNamespace(
+                get_function=lambda _request: SimpleNamespace(envs=[])
+            )
+
+        def update_application_code_bundle(self, **kwargs: object) -> str:
+            captured.update(kwargs)
+            return target.url
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _FakeVeFaaS)
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "update",
+            "--vefaas-app-name",
+            "studio-app",
+            "--path",
+            str(tmp_path),
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(code_tools) == 1
+    assert code_tools[0]["enable_snapshot"] is True
+    assert str(code_tools[0]["name"]).endswith("_snapshot")
+    assert {str(call["kind"]) for call in agent_tools} == {"openclaw", "hermes"}
+    assert {bool(call["enable_snapshot"]) for call in agent_tools} == {True}
+    assert {str(call["provider"]) for call in code_credentials} == {"volcengine"}
+    assert {str(call["provider"]) for call in agent_credentials} == {"volcengine"}
+    overrides = captured["environment_overrides"]
+    assert overrides == {
+        "AGENTKIT_SANDBOX_REGION": "cn-beijing",
+        "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
+        "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
+        "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",
     }
 
 
@@ -704,7 +801,12 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     )
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_tool",
-        lambda **kwargs: agent_tools.append(kwargs) or f"{kwargs['kind']}-tool",
+        lambda **kwargs: agent_tools.append(kwargs)
+        or (
+            f"{kwargs['kind']}-snapshot-tool"
+            if kwargs["enable_snapshot"]
+            else f"{kwargs['kind']}-tool"
+        ),
     )
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_dev_env_tool",
@@ -756,7 +858,9 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     result = CliRunner().invoke(studio, args)
 
     assert result.exit_code == 0, result.output
-    assert code_tools == []
+    assert len(code_tools) == 1
+    assert code_tools[0]["enable_snapshot"] is True
+    assert str(code_tools[0]["name"]).endswith("_snapshot")
     if dev_tool_id is None:
         assert len(dev_tools) == 1
         expected_dev_tool_id = f"{dev_tools[0]['name']}-tool"
@@ -764,6 +868,7 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
         assert dev_tools == []
         expected_dev_tool_id = dev_tool_id
     assert {str(call["kind"]) for call in agent_tools} == {"openclaw", "hermes"}
+    assert {bool(call["enable_snapshot"]) for call in agent_tools} == {False, True}
     assert {str(call["provider"]) for call in code_credentials} == {"byteplus"}
     assert {str(call["provider"]) for call in agent_credentials} == {"byteplus"}
     assert {str(call["model_base_url"]) for call in agent_credentials} == {
@@ -772,9 +877,12 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     overrides = captured["environment_overrides"]
     assert isinstance(overrides, dict)
     assert overrides["SANDBOX_CHAT_CODEX"] == "existing-codex-tool"
+    assert overrides["SANDBOX_CHAT_CODEX_SNAPSHOT"] == (f"{code_tools[0]['name']}-tool")
     assert "SANDBOX_SKILL_CREATOR" not in overrides
     assert overrides["SANDBOX_CHAT_OPENCLAW"] == "openclaw-tool"
     assert overrides["SANDBOX_CHAT_HERMES"] == "hermes-tool"
+    assert overrides["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] == "openclaw-snapshot-tool"
+    assert overrides["SANDBOX_CHAT_HERMES_SNAPSHOT"] == "hermes-snapshot-tool"
     assert overrides["SANDBOX_DEV"] == expected_dev_tool_id
     assert overrides["CLOUD_PROVIDER"] == "byteplus"
 

@@ -31,6 +31,7 @@ from veadk.cli.cli_frontend import (
     _resolve_or_create_studio_identity_resources,
     _resolve_studio_cloud_credentials,
     _resolve_studio_identity_region,
+    _validate_distinct_sandbox_tool_ids,
     studio,
 )
 from veadk.cli.studio_telemetry import (
@@ -51,6 +52,9 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SANDBOX_CHAT_CODEX", raising=False)
     monkeypatch.delenv("SANDBOX_CHAT_OPENCLAW", raising=False)
     monkeypatch.delenv("SANDBOX_CHAT_HERMES", raising=False)
+    monkeypatch.delenv("SANDBOX_CHAT_CODEX_SNAPSHOT", raising=False)
+    monkeypatch.delenv("SANDBOX_CHAT_OPENCLAW_SNAPSHOT", raising=False)
+    monkeypatch.delenv("SANDBOX_CHAT_HERMES_SNAPSHOT", raising=False)
     monkeypatch.delenv("SANDBOX_DEV", raising=False)
     monkeypatch.setattr(
         "veadk.cli.studio_deploy_serverless_iam.ensure_serverless_application_role",
@@ -95,6 +99,16 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
             ),
         ),
     )
+
+
+@pytest.mark.parametrize("kind", ["codex", "openclaw", "hermes"])
+def test_sandbox_snapshot_tool_id_must_differ_from_standard_tool_id(
+    kind: str,
+) -> None:
+    with pytest.raises(click.ClickException, match="must use different Tool IDs"):
+        _validate_distinct_sandbox_tool_ids(
+            {kind: "same-tool", f"{kind}_snapshot": "same-tool"}
+        )
 
 
 def test_studio_credentials_prefer_inline_environment(
@@ -695,6 +709,12 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
             "openclaw-tool-id",
             "--sandbox-chat-hermes-tool-id",
             "hermes-tool-id",
+            "--sandbox-chat-codex-snapshot-tool-id",
+            "chat-code-env-snapshot-id",
+            "--sandbox-chat-openclaw-snapshot-tool-id",
+            "openclaw-snapshot-tool-id",
+            "--sandbox-chat-hermes-snapshot-tool-id",
+            "hermes-snapshot-tool-id",
             "--iam-role",
             "trn:iam::role/test",
             "--gateway-name",
@@ -727,8 +747,17 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert "VEADK_STUDIO_ADMINS" not in veadk_environments
     assert "VEADK_STUDIO_DEVELOPERS" not in veadk_environments
     assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-code-env-id"
+    assert veadk_environments["SANDBOX_CHAT_CODEX_SNAPSHOT"] == (
+        "chat-code-env-snapshot-id"
+    )
     assert veadk_environments["SANDBOX_CHAT_OPENCLAW"] == "openclaw-tool-id"
+    assert veadk_environments["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] == (
+        "openclaw-snapshot-tool-id"
+    )
     assert veadk_environments["SANDBOX_CHAT_HERMES"] == "hermes-tool-id"
+    assert veadk_environments["SANDBOX_CHAT_HERMES_SNAPSHOT"] == (
+        "hermes-snapshot-tool-id"
+    )
     assert "SANDBOX_SKILL_CREATOR" not in veadk_environments
     assert veadk_environments["SANDBOX_DEV"] == "dev-env-id"
     assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == expected_region
@@ -741,6 +770,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert "VEADK_STUDIO_UPDATE_REGION" not in veadk_environments
     assert sorted(credential_tool_ids) == [
         "chat-code-env-id",
+        "chat-code-env-snapshot-id",
         "dev-env-id",
     ]
     assert f"{expected_region}/{expected_project}" in result.output
@@ -995,6 +1025,12 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
             "openclaw-tool-id",
             "--sandbox-chat-hermes-tool-id",
             "hermes-tool-id",
+            "--sandbox-chat-codex-snapshot-tool-id",
+            "chat-code-env-snapshot-id",
+            "--sandbox-chat-openclaw-snapshot-tool-id",
+            "openclaw-snapshot-tool-id",
+            "--sandbox-chat-hermes-snapshot-tool-id",
+            "hermes-snapshot-tool-id",
             "--sandbox-dev-tool-id",
             "dev-env-id",
             "--iam-role",
@@ -1042,8 +1078,18 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
     assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == "ap-southeast-1"
     assert sorted(credential_tool_ids) == [
         "chat-code-env-id",
+        "chat-code-env-snapshot-id",
         "dev-env-id",
     ]
+    assert veadk_environments["SANDBOX_CHAT_CODEX_SNAPSHOT"] == (
+        "chat-code-env-snapshot-id"
+    )
+    assert veadk_environments["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] == (
+        "openclaw-snapshot-tool-id"
+    )
+    assert veadk_environments["SANDBOX_CHAT_HERMES_SNAPSHOT"] == (
+        "hermes-snapshot-tool-id"
+    )
     assert veadk_environments["SANDBOX_DEV"] == "dev-env-id"
 
 
@@ -1051,7 +1097,7 @@ def test_studio_deploy_byteplus_auto_provisions_four_sandbox_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
-    code_tools: list[str] = []
+    code_tools: list[dict[str, object]] = []
     dev_tools: list[str] = []
     agent_tools: list[dict[str, object]] = []
     code_credentials: list[dict[str, object]] = []
@@ -1079,13 +1125,13 @@ def test_studio_deploy_byteplus_auto_provisions_four_sandbox_tools(
             captured["configured_user_pool"] = user_pool_uid
 
     def _ensure_code_tool(**kwargs: object) -> str:
-        name = str(kwargs["name"])
-        code_tools.append(name)
-        return "chat-tool"
+        code_tools.append(kwargs)
+        return "chat-snapshot-tool" if kwargs["enable_snapshot"] else "chat-tool"
 
     def _ensure_agent_tool(**kwargs: object) -> str:
         agent_tools.append(kwargs)
-        return f"{kwargs['kind']}-tool"
+        suffix = "-snapshot" if kwargs["enable_snapshot"] else ""
+        return f"{kwargs['kind']}{suffix}-tool"
 
     def _ensure_dev_tool(**kwargs: object) -> str:
         dev_tools.append(str(kwargs["name"]))
@@ -1149,13 +1195,21 @@ def test_studio_deploy_byteplus_auto_provisions_four_sandbox_tools(
     )
 
     assert result.exit_code == 0, result.output
-    assert len(code_tools) == 1
+    assert len(code_tools) == 2
+    assert {bool(call["enable_snapshot"]) for call in code_tools} == {False, True}
+    assert str(
+        next(call for call in code_tools if call["enable_snapshot"])["name"]
+    ).endswith("_snapshot")
     assert len(dev_tools) == 1
     assert {str(call["kind"]) for call in agent_tools} == {"openclaw", "hermes"}
+    assert {bool(call["enable_snapshot"]) for call in agent_tools} == {False, True}
     assert {str(call["model_name"]) for call in agent_tools} == {"seed-2-0-lite-260228"}
     assert {str(call["provider"]) for call in code_credentials} == {"byteplus"}
     code_credentials_by_tool = {str(call["tool_id"]): call for call in code_credentials}
     assert code_credentials_by_tool["chat-tool"]["model_name"] == (
+        "seed-2-0-lite-260228"
+    )
+    assert code_credentials_by_tool["chat-snapshot-tool"]["model_name"] == (
         "seed-2-0-lite-260228"
     )
     assert code_credentials_by_tool["dev-tool"]["model_name"] is None
@@ -1164,9 +1218,16 @@ def test_studio_deploy_byteplus_auto_provisions_four_sandbox_tools(
         "https://ark.ap-southeast.bytepluses.com/api/v3"
     }
     assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-tool"
+    assert veadk_environments["SANDBOX_CHAT_CODEX_SNAPSHOT"] == ("chat-snapshot-tool")
     assert "SANDBOX_SKILL_CREATOR" not in veadk_environments
     assert veadk_environments["SANDBOX_CHAT_OPENCLAW"] == "openclaw-tool"
     assert veadk_environments["SANDBOX_CHAT_HERMES"] == "hermes-tool"
+    assert veadk_environments["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] == (
+        "openclaw-snapshot-tool"
+    )
+    assert veadk_environments["SANDBOX_CHAT_HERMES_SNAPSHOT"] == (
+        "hermes-snapshot-tool"
+    )
     assert veadk_environments["SANDBOX_DEV"] == "dev-tool"
 
 
@@ -1307,7 +1368,7 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     credential_tool_ids: list[str] = []
     agent_tool_kinds: list[str] = []
     agent_credential_kinds: list[str] = []
-    creation_barrier = threading.Barrier(4)
+    creation_barrier = threading.Barrier(7)
     created_kinds_lock = threading.Lock()
 
     class _FakeCloudAgentEngine:
@@ -1323,17 +1384,24 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
 
     def _ensure_tool(**kwargs: object) -> str:
         creation_barrier.wait(timeout=5)
+        snapshot = bool(kwargs["enable_snapshot"])
         with created_kinds_lock:
-            created_kinds.append("codex")
-        return "chat-tool"
+            created_kinds.append("codex_snapshot" if snapshot else "codex")
+        if snapshot:
+            assert str(kwargs["name"]).endswith("_snapshot")
+        return "chat-snapshot-tool" if snapshot else "chat-tool"
 
     def _ensure_agent_tool(**kwargs: object) -> str:
         kind = str(kwargs["kind"])
+        snapshot = bool(kwargs["enable_snapshot"])
         creation_barrier.wait(timeout=5)
         with created_kinds_lock:
-            created_kinds.append(kind)
-        agent_tool_kinds.append(kind)
-        return f"{kind}-tool"
+            created_kinds.append(f"{kind}_snapshot" if snapshot else kind)
+        agent_tool_kinds.append(f"{kind}_snapshot" if snapshot else kind)
+        if snapshot:
+            assert str(kwargs["name"]).endswith("_snapshot")
+        suffix = "-snapshot" if snapshot else ""
+        return f"{kind}{suffix}-tool"
 
     def _ensure_dev_tool(**_: object) -> str:
         creation_barrier.wait(timeout=5)
@@ -1342,12 +1410,12 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
         return "dev-tool"
 
     def _ensure_code_credential(**kwargs: object) -> None:
-        assert len(created_kinds) == 4
+        assert len(created_kinds) == 7
         credential_tool_ids.append(str(kwargs["tool_id"]))
 
     def _ensure_agent_credential(**kwargs: object) -> None:
-        assert len(created_kinds) == 4
-        agent_credential_kinds.append(str(kwargs["kind"]))
+        assert len(created_kinds) == 7
+        agent_credential_kinds.append(str(kwargs["tool_id"]))
 
     monkeypatch.setattr(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
@@ -1404,19 +1472,51 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     assert result.exit_code == 0, result.output
     assert sorted(created_kinds) == [
         "codex",
+        "codex_snapshot",
         "dev",
         "hermes",
+        "hermes_snapshot",
         "openclaw",
+        "openclaw_snapshot",
     ]
     assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-tool"
+    assert veadk_environments["SANDBOX_CHAT_CODEX_SNAPSHOT"] == ("chat-snapshot-tool")
     assert "SANDBOX_SKILL_CREATOR" not in veadk_environments
-    assert sorted(credential_tool_ids) == ["chat-tool", "dev-tool"]
-    assert sorted(agent_tool_kinds) == ["hermes", "openclaw"]
-    assert sorted(agent_credential_kinds) == ["hermes", "openclaw"]
+    assert sorted(credential_tool_ids) == [
+        "chat-snapshot-tool",
+        "chat-tool",
+        "dev-tool",
+    ]
+    assert sorted(agent_tool_kinds) == [
+        "hermes",
+        "hermes_snapshot",
+        "openclaw",
+        "openclaw_snapshot",
+    ]
+    assert sorted(agent_credential_kinds) == [
+        "hermes-snapshot-tool",
+        "hermes-tool",
+        "openclaw-snapshot-tool",
+        "openclaw-tool",
+    ]
     assert veadk_environments["SANDBOX_CHAT_OPENCLAW"] == "openclaw-tool"
     assert veadk_environments["SANDBOX_CHAT_HERMES"] == "hermes-tool"
+    assert veadk_environments["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] == (
+        "openclaw-snapshot-tool"
+    )
+    assert veadk_environments["SANDBOX_CHAT_HERMES_SNAPSHOT"] == (
+        "hermes-snapshot-tool"
+    )
     assert veadk_environments["SANDBOX_DEV"] == "dev-tool"
-    for label in ("Codex", "OpenClaw", "Hermes", "Dev Sandbox"):
+    for label in (
+        "Codex",
+        "Codex Snapshot",
+        "OpenClaw",
+        "OpenClaw Snapshot",
+        "Hermes",
+        "Hermes Snapshot",
+        "Dev Sandbox",
+    ):
         assert f"Creating AgentKit {label} Tool" in result.output
         assert f"AgentKit {label} Tool is ready." in result.output
         assert f"Creating AgentKit {label} model credential" in result.output
