@@ -332,15 +332,12 @@ class AgentKitSkillRepository:
         )
 
         client = self._client_factory(region)
-        existing = client.list_skills(
-            skills_types.ListSkillsRequest(
-                PageNumber=1,
-                PageSize=50,
-                Filter=skills_types.SkillFilter(Name=archive.name),
-                ProjectName=project_name,
-            )
-        )
-        if existing.items:
+        if self._space_has_skill_named(
+            client,
+            skills_types,
+            space_id=space_id,
+            name=archive.name,
+        ):
             raise SkillRepositoryError(
                 "SKILL_NAME_CONFLICT",
                 f"已存在同名 Skill“{archive.name}”，请重命名后上传，或使用优化功能覆盖。",
@@ -400,6 +397,53 @@ class AgentKitSkillRepository:
             "version": version,
             "skillSpaceId": space_id,
         }
+
+    @staticmethod
+    def _space_has_skill_named(
+        client: Any,
+        skills_types: Any,
+        *,
+        space_id: str,
+        name: str,
+    ) -> bool:
+        page = 1
+        page_size = 100
+        expected = name.casefold()
+        while True:
+            response = client.list_skills_by_skill_space(
+                skills_types.ListSkillsBySkillSpaceRequest(
+                    SkillSpaceId=space_id,
+                    PageNumber=page,
+                    PageSize=page_size,
+                )
+            )
+            items = list(getattr(response, "items", None) or [])
+            if any(
+                AgentKitSkillRepository._skill_relation_name(item).casefold()
+                == expected
+                for item in items
+            ):
+                return True
+            total_count = getattr(response, "total_count", None)
+            if total_count is not None:
+                try:
+                    if page * page_size >= int(total_count):
+                        return False
+                except (TypeError, ValueError):
+                    pass
+            if len(items) < page_size:
+                return False
+            page += 1
+
+    @staticmethod
+    def _skill_relation_name(value: Any) -> str:
+        return str(
+            getattr(value, "skill_name", None)
+            or getattr(value, "skillName", None)
+            or getattr(value, "name", None)
+            or getattr(value, "Name", None)
+            or ""
+        )
 
     @staticmethod
     def _space_item(value: Any, region: str) -> dict[str, object]:
