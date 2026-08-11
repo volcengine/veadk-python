@@ -119,25 +119,34 @@ function StudioUpdateLog({
   lines: string[];
   phase: "active" | "complete" | "error";
   copyState: LogCopyState;
-  onCopy: () => void;
+  onCopy: (lines: string[]) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
+  const [visibleLines, setVisibleLines] = useState(lines);
+
+  useEffect(() => {
+    if (lines.length) setVisibleLines(lines);
+  }, [lines]);
 
   useEffect(() => {
     const root = scrollRef.current;
     if (root && followRef.current) root.scrollTop = root.scrollHeight;
-  }, [lines]);
+  }, [visibleLines]);
 
   return (
-    <section className="studio-update-live-log" aria-label="VeFaaS 更新日志">
+    <section className="studio-update-live-log" aria-label="VeFaaS 实时部署日志">
       <div className="studio-update-log-header">
         <span>
           <i className={`is-${phase}`} aria-hidden />
-          VeFaaS 更新日志
+          VeFaaS 实时部署日志
           <small>{phase === "active" ? "实时" : phase === "complete" ? "已完成" : "已停止"}</small>
         </span>
-        <button type="button" onClick={onCopy} disabled={!lines.length}>
+        <button
+          type="button"
+          onClick={() => onCopy(visibleLines)}
+          disabled={!visibleLines.length}
+        >
           {copyState === "copied"
             ? "已复制"
             : copyState === "error"
@@ -150,6 +159,7 @@ function StudioUpdateLog({
         className="studio-update-log-lines"
         role="log"
         aria-live="off"
+        aria-busy={phase === "active"}
         tabIndex={0}
         onScroll={(event) => {
           const root = event.currentTarget;
@@ -157,8 +167,8 @@ function StudioUpdateLog({
             root.scrollHeight - root.scrollTop - root.clientHeight < 24;
         }}
       >
-        {lines.length ? (
-          lines.map((line, index) => <div key={`${index}-${line}`}>{line}</div>)
+        {visibleLines.length ? (
+          visibleLines.map((line, index) => <div key={`${index}-${line}`}>{line}</div>)
         ) : (
           <p>{phase === "active" ? "等待 VeFaaS 返回更新日志…" : "本次更新未返回发布日志"}</p>
         )}
@@ -338,9 +348,9 @@ export function StudioUpdateControl({
         .split("\n")
         .filter(Boolean);
 
-  const copyUpdateLog = async () => {
+  const copyUpdateLog = async (lines: string[]) => {
     try {
-      await navigator.clipboard.writeText(updateLogs.join("\n"));
+      await navigator.clipboard.writeText(lines.join("\n"));
       setLogCopyState("copied");
     } catch {
       setLogCopyState("error");
@@ -403,7 +413,9 @@ export function StudioUpdateControl({
         createPortal(
         <div className="confirm-scrim" role="presentation">
           <section
-            className="confirm-box studio-update-dialog"
+            className={`confirm-box studio-update-dialog${
+              phase === "confirm" ? "" : " is-progress"
+            }`}
             role="dialog"
             aria-modal="true"
             aria-labelledby="studio-update-title"
@@ -441,7 +453,7 @@ export function StudioUpdateControl({
                   lines={updateLogs}
                   phase="error"
                   copyState={logCopyState}
-                  onCopy={() => void copyUpdateLog()}
+                  onCopy={(lines) => void copyUpdateLog(lines)}
                 />
                 {status.consoleUrl && (
                   <a
@@ -499,7 +511,7 @@ export function StudioUpdateControl({
                   lines={updateLogs}
                   phase={phase === "published" ? "complete" : "active"}
                   copyState={logCopyState}
-                  onCopy={() => void copyUpdateLog()}
+                  onCopy={(lines) => void copyUpdateLog(lines)}
                 />
                 <p className="studio-update-progress-note">
                   发布阶段会短暂中断连接；关闭此窗口不会停止更新，可随时点击右上角按钮重新查看。

@@ -513,8 +513,17 @@ def test_application_status_uses_current_function_environment(
     assert captured["application_id"] == "application-id"
 
 
-def test_vefaas_update_logs_use_revision_cache_and_redaction(
+@pytest.mark.parametrize(
+    ("provider", "deployment_region"),
+    [
+        ("volcengine", "cn-beijing"),
+        ("byteplus", "ap-southeast-1"),
+    ],
+)
+def test_vefaas_update_logs_use_provider_revision_cache_and_redaction(
     monkeypatch: pytest.MonkeyPatch,
+    provider: CloudProvider,
+    deployment_region: str,
 ) -> None:
     calls: list[dict[str, Any]] = []
     clients: list[dict[str, str]] = []
@@ -533,8 +542,8 @@ def test_vefaas_update_logs_use_revision_cache_and_redaction(
 
     updater = StudioSelfUpdater(
         settings=_settings(
-            deployment_region="ap-southeast-1",
-            provider="byteplus",
+            deployment_region=deployment_region,
+            provider=provider,
         ),
         credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
         branding_logo=None,
@@ -546,7 +555,8 @@ def test_vefaas_update_logs_use_revision_cache_and_redaction(
 
     assert first == second
     assert len(calls) == 1
-    assert clients[0]["provider"] == "byteplus"
+    assert clients[0]["provider"] == provider
+    assert clients[0]["region"] == deployment_region
     assert calls[0] == {
         "app_id": "application-id",
         "revision_number": 7,
@@ -717,6 +727,47 @@ def test_status_recovers_update_from_vefaas_control_plane(
         assert status["errorId"]
         assert status["errorStage"] == "publishing"
         assert "deploy_fail" in status["errorLog"]
+
+
+def test_status_streams_vefaas_logs_during_local_publish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest()
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+    updater._target_version = manifest.version
+    updater._started_at = 123456
+    updater._set_progress("publishing", "已提交，正在等待新 Revision 发布")
+    monkeypatch.setattr(
+        updater,
+        "_load_vefaas_logs",
+        lambda revision: [f"revision={revision}", "Function installing dependencies"],
+    )
+
+    status = updater.status(
+        target_version=manifest.version,
+        started_at=123456,
+    )
+
+    assert status["state"] == "updating"
+    assert status["progressStage"] == "publishing"
+    assert status["updateLogs"][-2:] == [
+        "revision=0",
+        "Function installing dependencies",
+    ]
 
 
 def test_status_rejects_stale_deploy_success_for_unsubmitted_target(
