@@ -319,13 +319,17 @@ class AgentKitSkillRepository:
     ) -> dict[str, object]:
         from agentkit.sdk.skills import types as skills_types
         from agentkit.toolkit.cli.cli_skills_workflow import (
-            _ensure_bucket_ready,
             _make_content_hashed_zip_copy,
-            _tos_upload,
             _wait_for_running_version,
         )
         from agentkit.toolkit.config import GlobalConfigManager
-        from agentkit.toolkit.volcengine.services.tos_service import TOSService
+
+        from .storage import (
+            ensure_skill_publish_bucket,
+            resolve_skill_publish_credentials,
+            resolve_skill_publish_storage,
+            upload_skill_archive,
+        )
 
         client = self._client_factory(region)
         existing = client.list_skills(
@@ -344,39 +348,27 @@ class AgentKitSkillRepository:
             )
 
         config = GlobalConfigManager().load()
-        configured_bucket = (
-            os.getenv("VEADK_SKILL_CREATOR_TOS_BUCKET") or config.tos.bucket or ""
-        ).strip()
-        bucket = configured_bucket or TOSService.generate_bucket_name()
-        prefix = (
-            os.getenv("VEADK_SKILL_CREATOR_TOS_PREFIX")
-            or config.tos.prefix
-            or "agentkit/skills"
-        ).strip()
-        _ensure_bucket_ready(
-            bucket_name=bucket,
-            prefix=prefix,
+        storage = resolve_skill_publish_storage(
             region=region,
-            auto_bucket=not bool(configured_bucket),
-            assume_yes=True,
-            assume_no=False,
+            config_bucket=config.tos.bucket or "",
+            config_prefix=config.tos.prefix or "",
         )
+        credentials = resolve_skill_publish_credentials(provider=storage.provider)
+        ensure_skill_publish_bucket(storage, credentials)
         with tempfile.TemporaryDirectory(prefix="veadk-skill-upload-") as directory:
             archive_path = Path(directory) / f"{archive.name}.zip"
             archive_path.write_bytes(archive.content)
             hashed_path = _make_content_hashed_zip_copy(
                 str(archive_path), archive.name, directory
             )
-            tos_url = _tos_upload(
-                hashed_path, bucket, prefix, region, verify_bucket=False
-            )
+            tos_url = upload_skill_archive(hashed_path, storage, credentials)
         created = client.create_skill(
             skills_types.CreateSkillRequest(
                 Name=archive.name,
                 Description=archive.description,
                 TosUrl=tos_url,
                 SkillSpaces=[space_id],
-                BucketName=bucket,
+                BucketName=storage.bucket,
                 ProjectName=project_name,
                 Tags=[skills_types.TagForSkill(Key="author", Value=author)],
             )
