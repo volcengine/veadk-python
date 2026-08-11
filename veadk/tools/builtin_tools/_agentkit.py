@@ -232,6 +232,61 @@ def invoke_agentkit_exec_bash(
     )
 
 
+def _get_or_create_agentkit_session(
+    *,
+    client,
+    tool_id: str,
+    tool_user_session_id: str,
+    ttl: int,
+):
+    """Return the newest reusable session for ``tool_user_session_id`` or create one."""
+    from agentkit.sdk.tools import types as tools_types
+
+    try:
+        listing = client.list_sessions(
+            tools_types.ListSessionsRequest(
+                ToolId=tool_id,
+                Filters=[
+                    tools_types.FiltersItemForListSessions(
+                        Name="UserSessionId",
+                        Values=[tool_user_session_id],
+                    )
+                ],
+                PageSize=20,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"AgentKit ListSessions failed, falling back to create: {exc}")
+        listing = None
+
+    candidates = getattr(listing, "session_infos", None) or []
+    reusable = [
+        info
+        for info in candidates
+        if getattr(info, "user_session_id", None) == tool_user_session_id
+        and (getattr(info, "status", None) or "").strip().lower()
+        not in _SESSION_TERMINAL_STATUSES
+    ]
+    if reusable:
+        reusable.sort(
+            key=lambda info: getattr(info, "created_at", "") or "", reverse=True
+        )
+        chosen = reusable[0]
+        logger.debug(
+            f"Reusing AgentKit session {getattr(chosen, 'session_id', None)} "
+            f"for UserSessionId={tool_user_session_id}"
+        )
+        return chosen
+
+    return client.create_session(
+        tools_types.CreateSessionRequest(
+            ToolId=tool_id,
+            UserSessionId=tool_user_session_id,
+            Ttl=ttl,
+        )
+    )
+
+
 def ensure_agentkit_session_endpoint(
     *,
     tool_id: str,
@@ -262,12 +317,11 @@ def ensure_agentkit_session_endpoint(
         region=region,
         session_token=session_token,
     )
-    session = client.create_session(
-        tools_types.CreateSessionRequest(
-            ToolId=tool_id,
-            UserSessionId=tool_user_session_id,
-            Ttl=ttl,
-        )
+    session = _get_or_create_agentkit_session(
+        client=client,
+        tool_id=tool_id,
+        tool_user_session_id=tool_user_session_id,
+        ttl=ttl,
     )
     if not wait_until_ready:
         public_endpoint = getattr(session, "endpoint", None)
