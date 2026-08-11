@@ -25,10 +25,12 @@ import secrets
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Protocol
 
 from fastapi import File, Request, UploadFile
+
+from frontend.server.sandbox.tool_sessions import SandboxToolPair
 
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.agentkit_session_metadata import (
@@ -74,9 +76,14 @@ STUDIO_SANDBOX_TTL_SECONDS = 28_800
 STUDIO_SANDBOX_MAX_ACTIVE = 20
 STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH = SESSION_DISPLAY_NAME_MAX_LENGTH
 _SANDBOX_CHAT_TOOL_ENV = "SANDBOX_CHAT_CODEX"
+_SANDBOX_CHAT_SNAPSHOT_TOOL_ENV = "SANDBOX_CHAT_CODEX_SNAPSHOT"
 _SANDBOX_AGENT_TOOL_ENVS = {
     "openclaw": ("SANDBOX_CHAT_OPENCLAW", "SANDBOX_OPENCLAW_TOOL"),
     "hermes": ("SANDBOX_CHAT_HERMES", "SANDBOX_HERMES_TOOL"),
+}
+_SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS = {
+    "openclaw": "SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+    "hermes": "SANDBOX_CHAT_HERMES_SNAPSHOT",
 }
 _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 _SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
@@ -227,6 +234,15 @@ class SandboxCloudSession:
     display_name: str = ""
     created_by: str = ""
     creator_name: str = ""
+    persistent: bool = False
+
+
+def _session_for_tools(
+    session: SandboxCloudSession,
+    tools: SandboxToolPair,
+) -> SandboxCloudSession:
+    """Attach the browser-safe persistence mode derived from its Tool id."""
+    return replace(session, persistent=tools.is_persistent(session.tool_id))
 
 
 @dataclass
@@ -329,12 +345,20 @@ class SandboxCodexConnection(Protocol):
         """Resume an existing thread."""
         raise NotImplementedError
 
+    async def read_thread(self, thread_id: str) -> CodexThreadSnapshot:
+        """Read an existing thread without activating it."""
+        raise NotImplementedError
+
     async def fork_thread(self) -> CodexThreadSnapshot:
         """Fork the active thread."""
         raise NotImplementedError
 
     async def archive_thread(self, thread_id: str) -> CodexThreadSnapshot | None:
         """Archive one thread."""
+        raise NotImplementedError
+
+    async def delete_thread(self, thread_id: str) -> CodexThreadSnapshot | None:
+        """Permanently delete one thread."""
         raise NotImplementedError
 
     async def compact_thread(self) -> None:
@@ -730,35 +754,82 @@ class SandboxConversationService:
     """Manage reusable cloud Sessions and per-user conversation connections."""
 
     def __init__(
-        self, gateway: SandboxCloudGateway, tool_id: str | None = None
+        self,
+        gateway: SandboxCloudGateway,
+        tool_id: str | None = None,
+        snapshot_tool_id: str | None = None,
     ) -> None:
         self._gateway = gateway
         self._configured_tool_id = (tool_id or "").strip()
+        self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
         self._sessions: dict[tuple[str, str], SandboxConversation] = {}
         self._registry_lock = asyncio.Lock()
         self._sessions_starting = 0
 
     def capabilities(self) -> dict[str, object]:
         """Report whether the dedicated Codex Tool is configured."""
-        enabled = bool(self._tool_id(required=False))
-        return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
+        tools = self._tools()
+        enabled = bool(tools.configured)
+        return {
+            "enabled": enabled,
+            "reason": "" if enabled else "管理员未配置",
+            "persistentEnabled": bool(tools.persistent),
+            "persistentReason": "" if tools.persistent else "管理员未配置快照版 Tool",
+        }
 
-    def _tool_id(self, *, required: bool = True) -> str:
-        tool_id = (
-            self._configured_tool_id
-            or (os.getenv(_SANDBOX_CHAT_TOOL_ENV) or "").strip()
+    def _tools(self) -> SandboxToolPair:
+        return SandboxToolPair(
+            transient=(
+                self._configured_tool_id
+                or (os.getenv(_SANDBOX_CHAT_TOOL_ENV) or "").strip()
+            ),
+            persistent=(
+                self._configured_snapshot_tool_id
+                or (os.getenv(_SANDBOX_CHAT_SNAPSHOT_TOOL_ENV) or "").strip()
+            ),
         )
+
+    def _tool_id(self, *, persistent: bool = False, required: bool = True) -> str:
+        tool_id = self._tools().select(persistent)
         if required and not tool_id:
-            raise SandboxConfigurationError("管理员未配置")
+            detail = "快照版 " if persistent else ""
+            raise SandboxConfigurationError(f"管理员未配置{detail}Sandbox Tool。")
         return tool_id
+
+    async def _cloud_session(self, session_id: str) -> SandboxCloudSession:
+        """Find a Session across the configured transient and snapshot Tools."""
+        tools = self._tools()
+        if not tools.configured:
+            self._tool_id()
+        for tool_id in tools.configured:
+            try:
+                cloud = await self._gateway.get_session(tool_id, session_id)
+            except SandboxSessionNotFoundError:
+                continue
+            return _session_for_tools(cloud, tools)
+        raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
 
     async def list_sessions(
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSession]:
         """List the configured account's Sessions without exposing Endpoints."""
-        return await self._gateway.list_sessions(
-            self._tool_id(),
-            None if is_admin else owner_id,
+        tools = self._tools()
+        if not tools.configured:
+            self._tool_id()
+        sessions: dict[str, SandboxCloudSession] = {}
+        for tool_id in tools.configured:
+            found = await self._gateway.list_sessions(
+                tool_id,
+                None if is_admin else owner_id,
+            )
+            sessions.update(
+                (session.instance_id, _session_for_tools(session, tools))
+                for session in found
+            )
+        return sorted(
+            sessions.values(),
+            key=lambda session: session.created_at,
+            reverse=True,
         )
 
     async def create(
@@ -766,6 +837,7 @@ class SandboxConversationService:
         owner_id: str,
         display_name: object = "",
         creator_name: str = "",
+        persistent: object = True,
     ) -> SandboxCloudSession:
         """Create a cloud Session without opening a conversation connection."""
         if not isinstance(display_name, str):
@@ -775,7 +847,9 @@ class SandboxConversationService:
             raise SandboxValidationError(
                 f"智能体名称不能超过 {STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH} 个字符。"
             )
-        tool_id = self._tool_id()
+        if not isinstance(persistent, bool):
+            raise SandboxValidationError("persistent 必须是布尔值。")
+        tool_id = self._tool_id(persistent=persistent)
         await self.cleanup_expired()
         async with self._registry_lock:
             if len(self._sessions) + self._sessions_starting >= (
@@ -784,9 +858,13 @@ class SandboxConversationService:
                 raise SandboxCapacityError("Sandbox 创建或连接数已达上限，请稍后重试。")
             self._sessions_starting += 1
         try:
-            return await self._gateway.create_session(
+            created = await self._gateway.create_session(
                 tool_id, display_name, owner_id, creator_name
             )
+            authoritative = await self._gateway.get_session(
+                tool_id, created.instance_id
+            )
+            return _session_for_tools(authoritative, self._tools())
         finally:
             async with self._registry_lock:
                 self._sessions_starting -= 1
@@ -814,7 +892,7 @@ class SandboxConversationService:
                 raise SandboxCapacityError("智能体连接数已达上限，请稍后重试。")
             self._sessions_starting += 1
         try:
-            cloud = await self._gateway.get_session(self._tool_id(), session_id)
+            cloud = await self._cloud_session(session_id)
             _require_session_access(cloud, owner_id, is_admin=is_admin)
             if cloud.status.lower() != "ready" or not cloud.endpoint:
                 status = cloud.status or "Unknown"
@@ -1040,6 +1118,25 @@ class SandboxConversationService:
             ),
         }
 
+    async def delete_thread(
+        self, session_id: str, owner_id: str, thread_id: str
+    ) -> dict[str, object]:
+        """Remove a thread from history and replace it when it was active."""
+        session = self._owned(session_id, owner_id)
+        async with session.lock:
+            try:
+                snapshot = await session.codex.delete_thread(thread_id)
+            except ValueError as error:
+                raise SandboxValidationError(str(error)) from error
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
+        return {
+            "deleted": True,
+            **(
+                self._public_snapshot(session, snapshot) if snapshot is not None else {}
+            ),
+        }
+
     async def compact_thread(self, session_id: str, owner_id: str) -> None:
         """Start compacting the current Codex thread."""
         session = self._owned(session_id, owner_id)
@@ -1208,7 +1305,7 @@ class SandboxConversationService:
             raise SandboxSessionNotFoundError("智能体 Session 不存在或不属于当前用户。")
         session = self._sessions.pop(key, None)
         if session is None:
-            cloud = await self._gateway.get_session(self._tool_id(), session_id)
+            cloud = await self._cloud_session(session_id)
             _require_session_access(cloud, owner_id, is_admin=is_admin)
         else:
             cloud = session.cloud
@@ -1265,20 +1362,22 @@ class SandboxAgentSessionService:
         *,
         kind: str,
         tool_id: str | None = None,
+        snapshot_tool_id: str | None = None,
     ) -> None:
         if kind not in _SANDBOX_AGENT_TOOL_ENVS:
             raise ValueError(f"Unsupported Studio sandbox agent kind: {kind}")
         self._gateway = gateway
         self.kind = kind
         self._configured_tool_id = (tool_id or "").strip()
+        self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
         self._workspaces: dict[
             tuple[str, str], tuple[SandboxCloudSession, str, float]
         ] = {}
 
-    def _tool_id(self, *, required: bool = True) -> str:
-        tool_id = self._configured_tool_id
-        if not tool_id:
-            tool_id = next(
+    def _tools(self) -> SandboxToolPair:
+        transient = self._configured_tool_id
+        if not transient:
+            transient = next(
                 (
                     value
                     for env_name in _SANDBOX_AGENT_TOOL_ENVS[self.kind]
@@ -1286,20 +1385,61 @@ class SandboxAgentSessionService:
                 ),
                 "",
             )
+        persistent = (
+            self._configured_snapshot_tool_id
+            or (os.getenv(_SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS[self.kind]) or "").strip()
+        )
+        return SandboxToolPair(transient=transient, persistent=persistent)
+
+    def _tool_id(self, *, persistent: bool = False, required: bool = True) -> str:
+        tool_id = self._tools().select(persistent)
         if required and not tool_id:
-            raise SandboxConfigurationError("管理员未配置")
+            detail = "快照版 " if persistent else ""
+            raise SandboxConfigurationError(f"管理员未配置{detail}Sandbox Tool。")
         return tool_id
 
     def capabilities(self) -> dict[str, object]:
-        enabled = bool(self._tool_id(required=False))
-        return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
+        tools = self._tools()
+        enabled = bool(tools.configured)
+        return {
+            "enabled": enabled,
+            "reason": "" if enabled else "管理员未配置",
+            "persistentEnabled": bool(tools.persistent),
+            "persistentReason": "" if tools.persistent else "管理员未配置快照版 Tool",
+        }
+
+    async def _cloud_session(self, session_id: str) -> SandboxCloudSession:
+        tools = self._tools()
+        if not tools.configured:
+            self._tool_id()
+        for tool_id in tools.configured:
+            try:
+                cloud = await self._gateway.get_session(tool_id, session_id)
+            except SandboxSessionNotFoundError:
+                continue
+            return _session_for_tools(cloud, tools)
+        raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
 
     async def list_sessions(
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSession]:
-        return await self._gateway.list_sessions(
-            self._tool_id(),
-            None if is_admin else owner_id,
+        tools = self._tools()
+        if not tools.configured:
+            self._tool_id()
+        sessions: dict[str, SandboxCloudSession] = {}
+        for tool_id in tools.configured:
+            found = await self._gateway.list_sessions(
+                tool_id,
+                None if is_admin else owner_id,
+            )
+            sessions.update(
+                (session.instance_id, _session_for_tools(session, tools))
+                for session in found
+            )
+        return sorted(
+            sessions.values(),
+            key=lambda session: session.created_at,
+            reverse=True,
         )
 
     async def create(
@@ -1307,6 +1447,7 @@ class SandboxAgentSessionService:
         owner_id: str,
         display_name: object = "",
         creator_name: str = "",
+        persistent: object = True,
     ) -> SandboxCloudSession:
         if not isinstance(display_name, str):
             raise SandboxValidationError("智能体名称必须是文本。")
@@ -1315,9 +1456,14 @@ class SandboxAgentSessionService:
             raise SandboxValidationError(
                 f"智能体名称不能超过 {STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH} 个字符。"
             )
-        return await self._gateway.create_session(
-            self._tool_id(), display_name, owner_id, creator_name
+        if not isinstance(persistent, bool):
+            raise SandboxValidationError("persistent 必须是布尔值。")
+        tool_id = self._tool_id(persistent=persistent)
+        created = await self._gateway.create_session(
+            tool_id, display_name, owner_id, creator_name
         )
+        authoritative = await self._gateway.get_session(tool_id, created.instance_id)
+        return _session_for_tools(authoritative, self._tools())
 
     async def open(
         self,
@@ -1328,7 +1474,7 @@ class SandboxAgentSessionService:
     ) -> tuple[SandboxCloudSession, str]:
         """Resolve one ready Session and issue an opaque WebUI capability."""
         self._cleanup_expired()
-        cloud = await self._gateway.get_session(self._tool_id(), session_id)
+        cloud = await self._cloud_session(session_id)
         _require_session_access(cloud, owner_id, is_admin=is_admin)
         if cloud.status.lower() != "ready" or not cloud.endpoint:
             status = cloud.status or "Unknown"
@@ -1356,7 +1502,12 @@ class SandboxAgentSessionService:
             for candidate_owner, candidate_id in self._workspaces
         ):
             raise SandboxSessionNotFoundError("智能体 Session 不存在或不属于当前用户。")
-        cloud = await self._gateway.get_session(self._tool_id(), session_id)
+        workspace = self._workspaces.get((owner_id, session_id))
+        cloud = (
+            workspace[0]
+            if workspace is not None
+            else await self._cloud_session(session_id)
+        )
         _require_session_access(cloud, owner_id, is_admin=is_admin)
         self._workspaces = {
             key: workspace
@@ -1468,7 +1619,7 @@ def mount_sandbox_agent_routes(
             },
         )
 
-    def _public_session(session: SandboxCloudSession, kind: str) -> dict[str, str]:
+    def _public_session(session: SandboxCloudSession, kind: str) -> dict[str, object]:
         return {
             "sessionId": session.instance_id,
             "userSessionId": session.user_session_id,
@@ -1479,6 +1630,7 @@ def mount_sandbox_agent_routes(
             "createdBy": session.creator_name or session.created_by,
             "displayName": session.display_name,
             "toolName": kind,
+            "persistent": session.persistent,
         }
 
     @app.get("/web/{kind}/capabilities")
@@ -1507,7 +1659,7 @@ def mount_sandbox_agent_routes(
     async def _create_sandbox_agent_session(
         kind: str,
         request: Request,
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         owner_id = owner_resolver(request)
         try:
             body = await request.body()
@@ -1526,6 +1678,7 @@ def mount_sandbox_agent_routes(
                 owner_id,
                 data.get("displayName", ""),
                 creator_resolver(request) if creator_resolver else owner_id,
+                data.get("persistent", True),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -1645,7 +1798,7 @@ def mount_sandbox_routes(
     def _is_admin(request: Request) -> bool:
         return bool(admin_resolver and admin_resolver(request))
 
-    def _public_session(session: SandboxCloudSession) -> dict[str, str]:
+    def _public_session(session: SandboxCloudSession) -> dict[str, object]:
         return {
             "sessionId": session.instance_id,
             "userSessionId": session.user_session_id,
@@ -1655,6 +1808,7 @@ def mount_sandbox_routes(
             "toolType": session.tool_type,
             "createdBy": session.creator_name or session.created_by,
             "displayName": session.display_name,
+            "persistent": session.persistent,
         }
 
     async def _request_object(
@@ -1711,7 +1865,7 @@ def mount_sandbox_routes(
         return {"sessions": [_public_session(session) for session in sessions]}
 
     @app.post("/web/sandbox/sessions")
-    async def _start_sandbox_session(request: Request) -> dict[str, str]:
+    async def _start_sandbox_session(request: Request) -> dict[str, object]:
         owner_id = owner_resolver(request)
         try:
             body = await request.body()
@@ -1730,6 +1884,7 @@ def mount_sandbox_routes(
                 owner_id,
                 data.get("displayName", ""),
                 creator_resolver(request) if creator_resolver else owner_id,
+                data.get("persistent", True),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -1879,6 +2034,20 @@ def mount_sandbox_routes(
             if not isinstance(thread_id, str):
                 raise SandboxValidationError("Thread ID 必须是文本。")
             return await service.archive_thread(session_id, owner_id, thread_id)
+        except SandboxError as error:
+            raise _http_error(error) from error
+
+    @app.post("/web/sandbox/sessions/{session_id}/threads/delete")
+    async def _delete_sandbox_thread(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        try:
+            data = await _request_object(request)
+            thread_id = data.get("threadId")
+            if not isinstance(thread_id, str):
+                raise SandboxValidationError("Thread ID 必须是文本。")
+            return await service.delete_thread(session_id, owner_id, thread_id)
         except SandboxError as error:
             raise _http_error(error) from error
 

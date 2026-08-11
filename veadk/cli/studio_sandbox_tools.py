@@ -53,12 +53,19 @@ def studio_sandbox_model_base_url(provider: str) -> str:
         raise ValueError(f"Unsupported Studio cloud provider: {provider}") from error
 
 
-def studio_sandbox_tool_name(application_name: str, purpose: str) -> str:
+def studio_sandbox_tool_name(
+    application_name: str,
+    purpose: str,
+    *,
+    snapshot: bool = False,
+) -> str:
     """Return a stable, account-local Tool name for one Studio capability."""
     safe_name = re.sub(r"[^a-z0-9-]+", "-", application_name.lower()).strip("-")
-    safe_name = safe_name[:30].rstrip("-") or "studio"
+    suffix = "_snapshot" if snapshot else ""
+    safe_name = safe_name[: 30 - len(suffix)].rstrip("-") or "studio"
     digest = f"{zlib.crc32(application_name.encode()):08x}"
-    return f"veadk-studio-{safe_name}-{purpose}-{digest}"
+    name = f"veadk-studio-{safe_name}-{purpose}-{digest}"
+    return f"{name}{suffix}"
 
 
 def _wait_for_ready_tool(
@@ -67,6 +74,7 @@ def _wait_for_ready_tool(
     *,
     tool_id: str,
     name: str,
+    enable_snapshot: bool,
     timeout_seconds: float,
     poll_interval: float,
     sleep: Callable[[float], None],
@@ -76,6 +84,14 @@ def _wait_for_ready_tool(
         tool = tools_client.get_tool(tools_types.GetToolRequest(ToolId=tool_id))
         status = (tool.status or "").strip()
         if status == _READY_STATUS:
+            actual_snapshot = bool(getattr(tool, "enable_snapshot", False))
+            if actual_snapshot != enable_snapshot:
+                expected = "enabled" if enable_snapshot else "disabled"
+                actual = "enabled" if actual_snapshot else "disabled"
+                raise RuntimeError(
+                    f"AgentKit Tool '{name}' has snapshot {actual}; "
+                    f"expected snapshot {expected}."
+                )
             return tool_id
         if status in _FAILED_STATUSES:
             raise RuntimeError(
@@ -134,6 +150,7 @@ def _ensure_studio_environment_tool(
     secret_key: str = "",
     region: str = "cn-beijing",
     session_token: str = "",
+    enable_snapshot: bool = False,
     client: Any | None = None,
     timeout_seconds: float = 600.0,
     poll_interval: float = 5.0,
@@ -165,6 +182,7 @@ def _ensure_studio_environment_tool(
                 Name=name,
                 ToolType=tool_type,
                 ProjectName=_PROJECT_NAME,
+                EnableSnapshot=enable_snapshot,
                 CpuMilli=4000,
                 MemoryMb=8192,
                 AuthorizerConfiguration=tools_types.AuthorizerForCreateTool(
@@ -190,6 +208,7 @@ def _ensure_studio_environment_tool(
         tools_types,
         tool_id=tool_id,
         name=name,
+        enable_snapshot=enable_snapshot,
         timeout_seconds=timeout_seconds,
         poll_interval=poll_interval,
         sleep=sleep,
@@ -215,6 +234,7 @@ def ensure_studio_agent_tool(
     secret_key: str = "",
     region: str = "cn-beijing",
     session_token: str = "",
+    enable_snapshot: bool = False,
     client: Any | None = None,
     timeout_seconds: float = 600.0,
     poll_interval: float = 5.0,
@@ -253,6 +273,7 @@ def ensure_studio_agent_tool(
                 Name=name,
                 ToolType=tool_type,
                 ProjectName=_PROJECT_NAME,
+                EnableSnapshot=enable_snapshot,
                 ModelAgentName=normalized_model_name,
                 CpuMilli=4000,
                 MemoryMb=8192,
@@ -279,6 +300,7 @@ def ensure_studio_agent_tool(
         tools_types,
         tool_id=tool_id,
         name=name,
+        enable_snapshot=enable_snapshot,
         timeout_seconds=timeout_seconds,
         poll_interval=poll_interval,
         sleep=sleep,

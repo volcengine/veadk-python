@@ -21,6 +21,7 @@ import type {
   StudioAccess,
   UiFeatures,
 } from "../adk/client";
+import type { SandboxThreadSummary } from "../adk/sandbox";
 import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
@@ -39,6 +40,20 @@ export type SidebarPage =
   | "search"
   | "feedback"
   | null;
+
+export interface SidebarSandboxHistory {
+  threads: SandboxThreadSummary[];
+  currentThreadId: string;
+  loading: boolean;
+  error: string;
+  hasMore: boolean;
+  busyThreadId: string;
+  newDisabled: boolean;
+  onNew: () => void;
+  onSelect: (threadId: string) => void;
+  onLoadMore: () => void;
+  onDelete: (thread: SandboxThreadSummary) => void;
+}
 
 function ApplicationsIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -72,6 +87,7 @@ export interface SidebarProps {
   streamingSids?: Set<string>;
   /** Session ids whose latest reply is currently being evaluated. */
   evaluatingSids?: Set<string>;
+  sandboxHistory?: SidebarSandboxHistory;
   onNewChat: () => void;
   onSearch: () => void;
   onQuickCreate: () => void;
@@ -237,6 +253,7 @@ export function Sidebar({
   access,
   streamingSids,
   evaluatingSids,
+  sandboxHistory,
   onNewChat,
   onSearch,
   onQuickCreate,
@@ -383,79 +400,195 @@ export function Sidebar({
       </div>
 
       {show("history") && (
-      <div className="sidebar-history">
-        <div className="history-head">
-          <span>历史会话</span>
-          {show("newChat") && (
-            <button
-              type="button"
-              className="history-new-chat"
-              onClick={onNewChat}
-              aria-label="新建会话"
-              title="新建会话"
-            >
-              <Plus className="icon" />
-            </button>
-          )}
-        </div>
-        <div className="history-list">
-          {sorted.length === 0 && (
-            <div className="history-empty">暂无会话</div>
-          )}
-          {sorted.map((s) => {
-            const title = sessionTitle(s.events);
-            const streaming = streamingSids?.has(s.id) === true;
-            const evaluating = !streaming && evaluatingSids?.has(s.id) === true;
-            return (
-              <div
-                key={s.id}
-                className={`history-item ${s.id === currentSessionId ? "active" : ""}`}
-              >
-                <button
-                  className="history-item-btn"
-                  onClick={() => onPickSession(s.id)}
-                  aria-current={s.id === currentSessionId ? "page" : undefined}
-                  title={title}
-                >
-                  {streaming && (
-                    <span className="history-streaming" title="正在生成…" aria-label="正在生成" />
-                  )}
-                  <span className="history-title">{title}</span>
-                  {evaluating && (
-                    <span className="history-evaluating-status" title="正在自动评测">
-                      <span className="history-evaluating" aria-hidden="true" />
-                      评测中
-                    </span>
-                  )}
-                </button>
+        <div className="sidebar-history">
+          <div className="history-head">
+            <span>历史会话</span>
+            {show("newChat") && (
               <button
-                className="history-more"
-                title="更多"
-                onClick={() => setMenuFor((m) => (m === s.id ? null : s.id))}
+                type="button"
+                className="history-new-chat"
+                onClick={sandboxHistory?.onNew ?? onNewChat}
+                disabled={sandboxHistory?.newDisabled}
+                aria-label="新建会话"
+                title="新建会话"
               >
-                <MoreHorizontal className="icon" />
+                <Plus className="icon" />
               </button>
-              {menuFor === s.id && (
-                <>
-                  <div className="menu-scrim" onClick={() => setMenuFor(null)} />
-                  <div className="history-menu">
-                    <button
-                      className="menu-item menu-item--danger"
-                      onClick={() => {
-                        setMenuFor(null);
-                        onDeleteSession(s.id);
-                      }}
-                    >
-                      <Trash2 className="icon" /> 删除
-                    </button>
+            )}
+          </div>
+          <div className="history-list">
+            {sandboxHistory ? (
+              <>
+                {sandboxHistory.loading && sandboxHistory.threads.length === 0 ? (
+                  <div className="history-empty" role="status">
+                    正在加载历史会话…
                   </div>
-                </>
-              )}
-              </div>
-            );
-          })}
+                ) : null}
+                {sandboxHistory.error ? (
+                  <div className="history-error" role="alert">
+                    {sandboxHistory.error}
+                  </div>
+                ) : null}
+                {!sandboxHistory.loading &&
+                !sandboxHistory.error &&
+                sandboxHistory.threads.length === 0 ? (
+                  <div className="history-empty">暂无会话</div>
+                ) : null}
+                {sandboxHistory.threads.map((thread) => {
+                  const active = thread.id === sandboxHistory.currentThreadId;
+                  const title =
+                    thread.name ||
+                    thread.preview ||
+                    `Thread ${thread.id.slice(0, 8)}`;
+                  const busy = thread.id === sandboxHistory.busyThreadId;
+                  return (
+                    <div
+                      key={thread.id}
+                      className={`history-item ${active ? "active" : ""}`}
+                    >
+                      <button
+                        type="button"
+                        className="history-item-btn"
+                        onClick={() => sandboxHistory.onSelect(thread.id)}
+                        aria-current={active ? "page" : undefined}
+                        title={title}
+                        disabled={busy}
+                      >
+                        <span className="history-title">{title}</span>
+                        {active ? (
+                          <span className="history-current-badge">当前</span>
+                        ) : null}
+                      </button>
+                      <button
+                        type="button"
+                        className="history-more"
+                        aria-label={`管理历史会话：${title}`}
+                        title="更多"
+                        disabled={busy}
+                        onClick={() =>
+                          setMenuFor((current) =>
+                            current === thread.id ? null : thread.id,
+                          )
+                        }
+                      >
+                        <MoreHorizontal className="icon" />
+                      </button>
+                      {menuFor === thread.id ? (
+                        <>
+                          <div
+                            className="menu-scrim"
+                            onClick={() => setMenuFor(null)}
+                          />
+                          <div className="history-menu">
+                            <button
+                              type="button"
+                              className="menu-item menu-item--danger"
+                              onClick={() => {
+                                setMenuFor(null);
+                                sandboxHistory.onDelete(thread);
+                              }}
+                            >
+                              <Trash2 className="icon" /> 删除
+                            </button>
+                          </div>
+                        </>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                {sandboxHistory.hasMore ? (
+                  <button
+                    type="button"
+                    className="history-load-more"
+                    disabled={sandboxHistory.loading}
+                    onClick={sandboxHistory.onLoadMore}
+                  >
+                    {sandboxHistory.loading ? "加载中…" : "加载更多"}
+                  </button>
+                ) : null}
+              </>
+            ) : (
+              <>
+                {sorted.length === 0 && (
+                  <div className="history-empty">暂无会话</div>
+                )}
+                {sorted.map((s) => {
+                  const title = sessionTitle(s.events);
+                  const streaming = streamingSids?.has(s.id) === true;
+                  const evaluating = !streaming && evaluatingSids?.has(s.id) === true;
+                  return (
+                    <div
+                      key={s.id}
+                      className={`history-item ${
+                        s.id === currentSessionId ? "active" : ""
+                      }`}
+                    >
+                      <button
+                        className="history-item-btn"
+                        onClick={() => onPickSession(s.id)}
+                        aria-current={
+                          s.id === currentSessionId ? "page" : undefined
+                        }
+                        title={title}
+                      >
+                        {streaming && (
+                          <span
+                            className="history-streaming"
+                            title="正在生成…"
+                            aria-label="正在生成"
+                          />
+                        )}
+                        <span className="history-title">{title}</span>
+                        {evaluating && (
+                          <span
+                            className="history-evaluating-status"
+                            title="正在自动评测"
+                          >
+                            <span
+                              className="history-evaluating"
+                              aria-hidden="true"
+                            />
+                            评测中
+                          </span>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        className="history-more"
+                        aria-label={`管理历史会话：${title}`}
+                        title="更多"
+                        onClick={() =>
+                          setMenuFor((m) => (m === s.id ? null : s.id))
+                        }
+                      >
+                        <MoreHorizontal className="icon" />
+                      </button>
+                      {menuFor === s.id && (
+                        <>
+                          <div
+                            className="menu-scrim"
+                            onClick={() => setMenuFor(null)}
+                          />
+                          <div className="history-menu">
+                            <button
+                              className="menu-item menu-item--danger"
+                              onClick={() => {
+                                setMenuFor(null);
+                                onDeleteSession(s.id);
+                              }}
+                            >
+                              <Trash2 className="icon" /> 删除
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </div>
         </div>
-      </div>
       )}
 
       <div className="sidebar-footer">

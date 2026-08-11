@@ -484,6 +484,30 @@
   opacity: 0.66;
 }
 
+.sandbox-dialog-persistence {
+  display: grid;
+  gap: 3px;
+  margin-top: 12px;
+  text-align: left;
+}
+
+.sandbox-dialog-persistence-control {
+  justify-self: start;
+  color: hsl(var(--foreground));
+  font-weight: 550;
+}
+
+.sandbox-dialog-persistence-description {
+  margin: 0 0 0 26px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.sandbox-dialog-persistence-description.is-warning {
+  color: hsl(37 72% 36%);
+}
+
 .sandbox-dialog-actions {
   display: flex;
   justify-content: flex-end;

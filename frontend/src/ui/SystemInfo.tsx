@@ -174,7 +174,12 @@ export function SystemInfo({ version, localMode, role }: SystemInfoProps) {
                   {sandboxTools.map((tool) => (
                     <dl className="system-info-tool" key={tool.kind}>
                       <div>
-                        <dt>{tool.label}</dt>
+                        <dt className="system-info-tool-label">
+                          <span>{tool.label}</span>
+                          {tool.snapshot ? (
+                            <span className="system-info-tool-badge">快照版</span>
+                          ) : null}
+                        </dt>
                         <dd className={tool.toolId ? "" : "is-empty"}>
                           {tool.toolId || "未配置"}
                         </dd>

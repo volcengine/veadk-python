@@ -146,6 +146,7 @@ import {
   type SandboxPermissions,
   type SandboxSession as SandboxSessionInfo,
   type SandboxSkill,
+  type SandboxThreadSummary,
   type SandboxToolLaunch,
 } from "./adk/sandbox";
 import { getSandboxCapability } from "./adk/newChatCapabilities";
@@ -191,6 +192,7 @@ import { SandboxAgentWorkspace } from "./ui/SandboxAgentWorkspace";
 import { SandboxComposer } from "./ui/SandboxComposer";
 import { sandboxSnapshotTurns } from "./ui/sandboxCommands";
 import { useSandboxCodexCommands } from "./ui/useSandboxCodexCommands";
+import { StudioConfirmDialog } from "./ui/StudioConfirmDialog";
 import byteplusLogo from "./assets/byteplus.svg";
 import defaultSiteLogo from "./assets/logo.svg";
 import {
@@ -800,6 +802,8 @@ export default function App() {
     useState<SandboxSessionInfo | null>(null);
   const [sandboxAgentWorkspace, setSandboxAgentWorkspace] =
     useState<SandboxAgentWorkspaceData | null>(null);
+  const [sandboxThreadDeleteTarget, setSandboxThreadDeleteTarget] =
+    useState<SandboxThreadSummary | null>(null);
   const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
   const sandboxSessionIdRef = useRef(sandboxSession?.id ?? "");
@@ -2601,7 +2605,7 @@ export default function App() {
     }
   }
 
-  async function launchSandboxSession(displayName: string) {
+  async function launchSandboxSession(displayName: string, persistent: boolean) {
     sandboxLaunchAbortRef.current?.abort();
     const controller = new AbortController();
     sandboxLaunchAbortRef.current = controller;
@@ -2611,10 +2615,12 @@ export default function App() {
       const createdSession = sandboxLaunchKind === "codex"
         ? await sandboxClient.startSession({
             displayName,
+            persistent,
             signal: controller.signal,
           })
         : await sandboxClient.startAgentSession(sandboxLaunchKind, {
             displayName,
+            persistent,
             signal: controller.signal,
           });
       if (sandboxLaunchAbortRef.current !== controller) return;
@@ -2755,6 +2761,13 @@ export default function App() {
     setMyAgents(true);
   }
 
+  async function confirmSandboxThreadDelete() {
+    const target = sandboxThreadDeleteTarget;
+    if (!target) return;
+    const deleted = await sandboxCommands.deleteThread(target.id);
+    if (deleted) setSandboxThreadDeleteTarget(null);
+  }
+
   function exitSandboxSession() {
     sandboxMessageAbortRef.current?.abort();
     sandboxMessageAbortRef.current = null;
@@ -2778,6 +2791,7 @@ export default function App() {
     setSandboxApproval(null);
     setSandboxApprovalBusy(false);
     setSandboxApprovalError("");
+    setSandboxThreadDeleteTarget(null);
     setSandboxUploadBusy(false);
     sandboxUploadRunRef.current += 1;
     const closingSession = sandboxSession;
@@ -3202,6 +3216,7 @@ export default function App() {
         }
         return next;
       });
+      void sandboxCommands.refreshThreads();
     } catch (messageError) {
       if ((messageError as Error)?.name === "AbortError") {
         return;
@@ -4512,6 +4527,21 @@ export default function App() {
         activePage={sidebarActivePage}
         streamingSids={streamingSids}
         evaluatingSids={evaluatingSids}
+        sandboxHistory={sandboxSession
+          ? {
+              threads: sandboxCommands.threads,
+              currentThreadId: sandboxSession.threadId,
+              loading: sandboxCommands.threadsLoading,
+              error: sandboxCommands.threadsError,
+              hasMore: sandboxCommands.threadsHasMore,
+              busyThreadId: sandboxCommands.threadActionId,
+              newDisabled: sandboxBusy || sandboxCommands.commandBusy,
+              onNew: () => void sandboxCommands.newThread(),
+              onSelect: (threadId) => void sandboxCommands.resumeThread(threadId),
+              onLoadMore: () => void sandboxCommands.loadMoreThreads(),
+              onDelete: setSandboxThreadDeleteTarget,
+            }
+          : undefined}
         onNewChat={openNewChat}
         onSearch={() => {
           setPlatformFeedbackOrigin(null);
@@ -5599,8 +5629,29 @@ export default function App() {
         agentKind={sandboxLaunchKind}
         error={sandboxLaunchError}
         onCancel={cancelSandboxLaunch}
-        onConfirm={(displayName) => void launchSandboxSession(displayName)}
+        onConfirm={(displayName, persistent) =>
+          void launchSandboxSession(displayName, persistent)
+        }
       />
+
+      {sandboxThreadDeleteTarget ? (
+        <StudioConfirmDialog
+          title="删除 Codex 历史会话"
+          description={`将删除“${
+            sandboxThreadDeleteTarget.name ||
+            sandboxThreadDeleteTarget.preview ||
+            `Thread ${sandboxThreadDeleteTarget.id.slice(0, 8)}`
+          }”，并从历史会话中移除。`}
+          confirmLabel="确认删除"
+          variant="danger"
+          busy={sandboxCommands.threadActionId === sandboxThreadDeleteTarget.id}
+          onCancel={() => {
+            if (sandboxCommands.threadActionId) return;
+            setSandboxThreadDeleteTarget(null);
+          }}
+          onConfirm={() => void confirmSandboxThreadDelete()}
+        />
+      ) : null}
 
       {sandboxSession ? (
         <>

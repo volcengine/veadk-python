@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Checkbox } from "@openai/apps-sdk-ui/components/Checkbox";
 import {
   SANDBOX_DISPLAY_NAME_MAX_LENGTH,
   type SandboxAgentKind,
@@ -15,7 +16,7 @@ export interface SandboxLaunchDialogProps {
   agentKind?: "codex" | SandboxAgentKind;
   error?: string;
   onCancel: () => void;
-  onConfirm: (displayName: string) => void;
+  onConfirm: (displayName: string, persistent: boolean) => void;
 }
 
 export function SandboxLaunchDialog({
@@ -38,11 +39,13 @@ export function SandboxLaunchDialog({
   const composingRef = useRef(false);
   const onCancelRef = useRef(onCancel);
   const [displayName, setDisplayName] = useState(defaultDisplayName);
+  const [persistent, setPersistent] = useState(true);
   onCancelRef.current = onCancel;
 
   useEffect(() => {
     if (!open) return;
     setDisplayName(defaultDisplayName);
+    setPersistent(true);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const focusFrame = window.requestAnimationFrame(() => {
@@ -105,7 +108,7 @@ export function SandboxLaunchDialog({
         onSubmit={(event) => {
           event.preventDefault();
           if (!loading && !composingRef.current && validDisplayName) {
-            onConfirm(validDisplayName);
+            onConfirm(validDisplayName, persistent);
           }
         }}
       >
@@ -166,6 +169,31 @@ export function SandboxLaunchDialog({
               }}
             />
           </label>
+          <div
+            className="sandbox-dialog-persistence"
+            role="group"
+            aria-describedby="sandbox-persistence-description"
+          >
+            <Checkbox
+              id="sandbox-persistence"
+              className="sandbox-dialog-persistence-control"
+              checked={persistent}
+              disabled={loading}
+              onCheckedChange={setPersistent}
+              label="持久化"
+            />
+            <p
+              id="sandbox-persistence-description"
+              className={`sandbox-dialog-persistence-description${
+                persistent ? "" : " is-warning"
+              }`}
+              role={persistent ? undefined : "status"}
+            >
+              {persistent
+                ? "保留智能体数据，后续可继续使用。"
+                : "智能体将在 8 小时后清空"}
+            </p>
+          </div>
         </div>
         <footer className="sandbox-dialog-actions">
           <button ref={cancelButtonRef} type="button" onClick={onCancel}>

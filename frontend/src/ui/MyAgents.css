@@ -247,7 +247,6 @@
   border: 1px solid hsl(var(--border));
   border-radius: 12px;
   background: hsl(var(--panel));
-  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.035);
 }
 
 .my-agent-card-title {
@@ -399,7 +398,8 @@
 }
 
 .my-agent-created-at,
-.my-agent-region {
+.my-agent-region,
+.my-agent-expiry {
   width: 100%;
   display: flex;
   align-items: center;
@@ -408,15 +408,22 @@
 }
 
 .my-agent-created-at dt,
-.my-agent-region dt {
+.my-agent-region dt,
+.my-agent-expiry dt {
   color: hsl(var(--foreground));
   font-weight: 600;
 }
 
 .my-agent-created-at dd,
-.my-agent-region dd {
+.my-agent-region dd,
+.my-agent-expiry dd {
   color: hsl(var(--muted-foreground));
   font-weight: 400;
+}
+
+.my-agent-expiry.is-expiring dd {
+  color: hsl(38 78% 36%);
+  font-weight: 550;
 }
 
 .my-agent-region dd {
@@ -548,6 +555,12 @@
   min-height: 220px;
   display: grid;
   place-items: center;
+}
+
+.my-agent-sandbox-empty-title {
+  max-width: none;
+  white-space: nowrap;
+  text-wrap: nowrap;
 }
 
 .my-agent-empty {

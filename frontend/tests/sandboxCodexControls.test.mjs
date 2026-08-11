@@ -7,6 +7,9 @@ const appSource = source("../src/App.tsx");
 const blocksSource = source("../src/blocks.ts");
 const composerSource = source("../src/ui/SandboxComposer.tsx");
 const controlsSource = source("../src/ui/SandboxControls.tsx");
+const sidebarSource = source("../src/ui/Sidebar.tsx");
+const commandHookSource = source("../src/ui/useSandboxCodexCommands.ts");
+const confirmDialogSource = source("../src/ui/StudioConfirmDialog.tsx");
 const commandsSource = source("../src/ui/sandboxCommands.ts");
 const controlIconsSource = source("../src/ui/icons/SandboxControlIcons.tsx");
 const sessionStylesSource = source("../src/ui/SandboxSession.css");
@@ -45,6 +48,37 @@ test("Codex commands and Skills are wired through the current session", () => {
     sessionStylesSource,
     /\.sandbox-composer-input > \.comp-input\s*\{[^}]*min-height:\s*28px[^}]*padding:\s*4px 0[^}]*line-height:\s*20px/,
   );
+});
+
+test("active Codex Sandbox threads replace normal history in the Sidebar", () => {
+  assert.match(sidebarSource, /export interface SidebarSandboxHistory/);
+  assert.match(sidebarSource, /sandboxHistory\?: SidebarSandboxHistory/);
+  assert.match(sidebarSource, /sandboxHistory \? \(/);
+  assert.match(sidebarSource, /sandboxHistory\.threads\.map/);
+  assert.match(sidebarSource, /sandboxHistory\.currentThreadId/);
+  assert.match(sidebarSource, /onNew: \(\) => void/);
+  assert.match(sidebarSource, /newDisabled: boolean/);
+  assert.match(sidebarSource, /sandboxHistory\?\.onNew \?\? onNewChat/);
+  assert.match(sidebarSource, /disabled=\{sandboxHistory\?\.newDisabled\}/);
+  assert.match(sidebarSource, /sandboxHistory\.onSelect\(thread\.id\)/);
+  assert.match(sidebarSource, /sandboxHistory\.onDelete\(thread\)/);
+  assert.match(sidebarSource, /sandboxHistory\.onLoadMore/);
+  assert.match(sidebarSource, /加载更多/);
+  assert.match(sidebarSource, /role="alert"/);
+  assert.match(commandHookSource, /const \[threadsNextCursor, setThreadsNextCursor\]/);
+  assert.match(commandHookSource, /loadMoreThreads/);
+  assert.match(commandHookSource, /async function newThread\(\)/);
+  assert.match(commandHookSource, /requestNewThread/);
+  assert.match(commandHookSource, /deleteThread/);
+  assert.match(commandHookSource, /sandboxClient\.deleteThread/);
+  assert.match(commandHookSource, /threadsRequestRef\.current \+= 1/);
+  assert.match(appSource, /void sandboxCommands\.refreshThreads\(\)/);
+  assert.match(appSource, /sandboxHistory=\{sandboxSession/);
+  assert.match(appSource, /onNew: \(\) => void sandboxCommands\.newThread\(\)/);
+  assert.match(appSource, /newDisabled: sandboxBusy \|\| sandboxCommands\.commandBusy/);
+  assert.match(appSource, /<StudioConfirmDialog/);
+  assert.match(appSource, /删除 Codex 历史会话/);
+  assert.match(confirmDialogSource, /role="alertdialog"/);
 });
 
 test("Codex token usage and approvals are presented per assistant turn", () => {

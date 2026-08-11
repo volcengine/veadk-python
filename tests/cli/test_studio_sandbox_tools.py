@@ -28,6 +28,7 @@ from veadk.cli.studio_sandbox_tools import (
     ensure_studio_dev_env_tool,
     studio_sandbox_agent_model_name,
     studio_sandbox_model_base_url,
+    studio_sandbox_tool_name,
 )
 
 
@@ -88,6 +89,60 @@ def test_ensure_studio_code_env_tool_creates_ready_code_env() -> None:
     assert getattr(request, "cpu_milli") == 4000
     assert getattr(request, "memory_mb") == 8192
     assert getattr(request, "envs") is None
+    assert getattr(request, "enable_snapshot") is False
+
+
+def test_ensure_studio_code_env_tool_creates_snapshot_enabled_code_env() -> None:
+    requests: list[object] = []
+    client = SimpleNamespace(
+        list_tools=lambda _: SimpleNamespace(tools=[], next_token=None),
+        get_tool=lambda _: SimpleNamespace(status="Ready", enable_snapshot=True),
+        create_tool=lambda request: (
+            requests.append(request) or SimpleNamespace(tool_id="snapshot-tool")
+        ),
+    )
+
+    assert (
+        ensure_studio_code_env_tool(
+            name="veadk-studio-demo-chat-12345678_snapshot",
+            enable_snapshot=True,
+            client=client,
+            timeout_seconds=0,
+        )
+        == "snapshot-tool"
+    )
+    assert getattr(requests[0], "tool_type") == "CodeEnv"
+    assert getattr(requests[0], "enable_snapshot") is True
+
+
+def test_ensure_studio_code_env_tool_rejects_reused_tool_with_wrong_snapshot_mode() -> (
+    None
+):
+    client = SimpleNamespace(
+        list_tools=lambda _: SimpleNamespace(
+            tools=[
+                SimpleNamespace(
+                    name="veadk-studio-demo-chat-12345678_snapshot",
+                    project_name="default",
+                    tool_type="CodeEnv",
+                    tool_id="tool-existing",
+                )
+            ],
+            next_token=None,
+        ),
+        get_tool=lambda _: SimpleNamespace(status="Ready", enable_snapshot=False),
+        create_tool=lambda _: (_ for _ in ()).throw(
+            AssertionError("an exact-name Tool must not be recreated")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="expected snapshot enabled"):
+        ensure_studio_code_env_tool(
+            name="veadk-studio-demo-chat-12345678_snapshot",
+            enable_snapshot=True,
+            client=client,
+            timeout_seconds=0,
+        )
 
 
 def test_ensure_studio_dev_env_tool_creates_ready_dev_env() -> None:
@@ -142,6 +197,50 @@ def test_ensure_studio_agent_tool_creates_managed_tool(
     assert request.tool_type == tool_type
     assert request.model_agent_name == "doubao-seed-evolving"
     assert request.envs is None
+    assert request.enable_snapshot is False
+
+
+@pytest.mark.parametrize("kind", ["openclaw", "hermes"])
+def test_ensure_studio_agent_tool_creates_snapshot_enabled_managed_tool(
+    kind: str,
+) -> None:
+    requests: list[object] = []
+    client = SimpleNamespace(
+        list_tools=lambda _: SimpleNamespace(tools=[], next_token=None),
+        get_tool=lambda _: SimpleNamespace(status="Ready", enable_snapshot=True),
+        create_tool=lambda request: (
+            requests.append(request) or SimpleNamespace(tool_id=f"snapshot-{kind}")
+        ),
+    )
+
+    ensure_studio_agent_tool(
+        name=f"veadk-studio-demo-{kind}-12345678_snapshot",
+        kind=kind,
+        model_name="doubao-seed-evolving",
+        enable_snapshot=True,
+        client=client,
+        timeout_seconds=0,
+    )
+
+    assert requests[0].enable_snapshot is True
+
+
+def test_snapshot_tool_name_is_distinct_and_has_snapshot_suffix() -> None:
+    standard = studio_sandbox_tool_name("Studio App", "chat")
+    snapshot = studio_sandbox_tool_name("Studio App", "chat", snapshot=True)
+
+    assert snapshot == f"{standard}_snapshot"
+    assert snapshot.endswith("_snapshot")
+
+
+@pytest.mark.parametrize("purpose", ["chat", "openclaw", "hermes"])
+def test_snapshot_tool_name_preserves_the_standard_length_bound(purpose: str) -> None:
+    application_name = "a" * 100
+    standard = studio_sandbox_tool_name(application_name, purpose)
+    snapshot = studio_sandbox_tool_name(application_name, purpose, snapshot=True)
+
+    assert len(snapshot) <= len(standard)
+    assert snapshot.endswith("_snapshot")
 
 
 def test_agent_model_credential_is_bound_to_tool_as_complete_env_set() -> None:

@@ -45,6 +45,13 @@ test("system information page lists sandbox tools and the current identity user 
   assert.match(systemInfoSource, /setUserPoolsReloadKey/);
   assert.match(systemInfoSource, /role="alert"/);
   assert.match(systemInfoSource, /未配置/);
+  assert.match(clientSource, /snapshot: boolean/);
+  assert.match(clientSource, /typeof \(item as SandboxToolInfo\)\.snapshot !== "boolean"/);
+  assert.match(
+    systemInfoSource,
+    /tool\.snapshot \?\s*\(\s*<span className="system-info-tool-badge">快照版<\/span>\s*\)\s*: null/,
+  );
+  assert.match(systemInfoStylesSource, /\.system-info-tool-badge\s*\{/);
   assert.match(systemInfoSource, /本地模式未配置用户池/);
   assert.match(systemInfoSource, /当前 Studio 未配置用户池/);
   assert.match(systemInfoSource, /Volcengine credentials not found/);

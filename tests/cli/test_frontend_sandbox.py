@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -217,6 +218,11 @@ class _FakeCodex:
             return None
         return await self.new_thread()
 
+    async def delete_thread(self, thread_id: str) -> CodexThreadSnapshot | None:
+        if thread_id != self.thread_id:
+            return None
+        return await self.new_thread()
+
     async def compact_thread(self) -> None:
         return None
 
@@ -323,7 +329,7 @@ class _FakeGateway:
             creator_name=creator_name,
         )
         self.sessions[session.instance_id] = session
-        return session
+        return replace(session, expire_at="")
 
     async def delete_session(self, session: SandboxCloudSession) -> None:
         self.deleted.append(session)
@@ -339,9 +345,17 @@ class _FakeGateway:
         return None
 
 
-def _app(gateway: _FakeGateway, tool_id: str | None = "tool-studio") -> FastAPI:
+def _app(
+    gateway: _FakeGateway,
+    tool_id: str | None = "tool-studio",
+    snapshot_tool_id: str | None = "tool-studio-snapshot",
+) -> FastAPI:
     app = FastAPI()
-    service = SandboxConversationService(gateway, tool_id=tool_id)
+    service = SandboxConversationService(
+        gateway,
+        tool_id=tool_id,
+        snapshot_tool_id=snapshot_tool_id,
+    )
 
     def _owner(request: Request) -> str:
         owner = request.headers.get("X-Test-User", "")
@@ -365,7 +379,16 @@ def _app(gateway: _FakeGateway, tool_id: str | None = "tool-studio") -> FastAPI:
     return app
 
 
-def _agent_app(gateway: _FakeGateway) -> FastAPI:
+def _agent_app(
+    gateway: _FakeGateway,
+    *,
+    snapshot_tool_ids: dict[str, str] | None = None,
+) -> FastAPI:
+    if snapshot_tool_ids is None:
+        snapshot_tool_ids = {
+            "openclaw": "tool-openclaw-snapshot",
+            "hermes": "tool-hermes-snapshot",
+        }
     app = FastAPI()
 
     def _owner(request: Request) -> str:
@@ -387,11 +410,13 @@ def _agent_app(gateway: _FakeGateway) -> FastAPI:
                 gateway,
                 kind="openclaw",
                 tool_id="tool-openclaw",
+                snapshot_tool_id=snapshot_tool_ids.get("openclaw"),
             ),
             "hermes": SandboxAgentSessionService(
                 gateway,
                 kind="hermes",
                 tool_id="tool-hermes",
+                snapshot_tool_id=snapshot_tool_ids.get("hermes"),
             ),
         },
         _owner,
@@ -463,8 +488,11 @@ def test_managed_agent_routes_create_session_and_return_card_data(
     assert created.status_code == 200
     assert created.json()["toolName"] == kind
     assert created.json()["displayName"] == f"我的 {kind}"
+    assert created.json()["persistent"] is True
+    assert created.json()["expireAt"] == "2026-07-30T17:00:00Z"
     assert "endpoint" not in created.json()
-    assert gateway.tool_ids == [tool_id, tool_id, tool_id, tool_id, tool_id]
+    assert tool_id in gateway.tool_ids
+    assert f"{tool_id}-snapshot" in gateway.tool_ids
     assert listed.status_code == 200
     assert [item["sessionId"] for item in listed.json()["sessions"]] == [
         created.json()["sessionId"]
@@ -483,6 +511,68 @@ def test_managed_agent_routes_create_session_and_return_card_data(
     assert deleted.json() == {"deleted": True}
     assert listed_after_delete.json() == {"sessions": []}
     assert [session.instance_id for session in gateway.deleted] == [session_id]
+
+
+@pytest.mark.parametrize("kind", ["openclaw", "hermes"])
+def test_managed_agent_routes_select_and_resolve_both_tool_variants(
+    kind: str,
+) -> None:
+    gateway = _FakeGateway()
+    headers = {"X-Test-User": "alice"}
+    with TestClient(_agent_app(gateway)) as client:
+        persistent = client.post(f"/web/{kind}/sessions", headers=headers)
+        temporary = client.post(
+            f"/web/{kind}/sessions",
+            headers=headers,
+            json={"persistent": False},
+        )
+        invalid = client.post(
+            f"/web/{kind}/sessions",
+            headers=headers,
+            json={"persistent": 1},
+        )
+        listed = client.get(f"/web/{kind}/sessions", headers=headers)
+        opened = client.post(
+            f"/web/{kind}/sessions/{persistent.json()['sessionId']}/open",
+            headers=headers,
+        )
+        deleted = client.delete(
+            f"/web/{kind}/sessions/{temporary.json()['sessionId']}",
+            headers=headers,
+        )
+
+    assert persistent.status_code == 200
+    assert persistent.json()["persistent"] is True
+    assert temporary.status_code == 200
+    assert temporary.json()["persistent"] is False
+    assert invalid.status_code == 422
+    assert {item["persistent"] for item in listed.json()["sessions"]} == {
+        False,
+        True,
+    }
+    assert opened.json()["persistent"] is True
+    assert deleted.json() == {"deleted": True}
+    assert gateway.deleted[0].tool_id == f"tool-{kind}"
+
+
+def test_managed_agent_persistent_create_requires_snapshot_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SANDBOX_CHAT_OPENCLAW_SNAPSHOT", raising=False)
+    gateway = _FakeGateway()
+    headers = {"X-Test-User": "alice"}
+    with TestClient(_agent_app(gateway, snapshot_tool_ids={})) as client:
+        missing = client.post("/web/openclaw/sessions", headers=headers)
+        temporary = client.post(
+            "/web/openclaw/sessions",
+            headers=headers,
+            json={"persistent": False},
+        )
+
+    assert missing.status_code == 503
+    assert "快照" in missing.text
+    assert temporary.status_code == 200
+    assert temporary.json()["persistent"] is False
 
 
 def test_managed_agent_routes_enforce_username_scope() -> None:
@@ -594,10 +684,13 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
                 "toolType": "CodeEnv",
                 "createdBy": "alice",
                 "displayName": "",
+                "persistent": False,
             }
         ]
     }
     assert create.json()["displayName"] == "我的智能体"
+    assert create.json()["persistent"] is True
+    assert create.json()["expireAt"] == "2026-07-30T17:00:00Z"
     assert gateway.display_names == ["我的智能体"]
     assert connected.status_code == 200
     assert connected.json()["sessionId"] == "remote-existing"
@@ -616,6 +709,68 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
     assert disconnected.json() == {"disconnected": True}
     assert gateway.deleted == []
     assert session_id == "remote-1"
+
+
+def test_sandbox_routes_select_and_resolve_both_tool_variants() -> None:
+    gateway = _FakeGateway()
+    headers = {"X-Test-User": "alice"}
+    with TestClient(_app(gateway)) as client:
+        persistent = client.post(
+            "/web/sandbox/sessions",
+            headers=headers,
+            json={"displayName": "Persistent"},
+        )
+        temporary = client.post(
+            "/web/sandbox/sessions",
+            headers=headers,
+            json={"displayName": "Temporary", "persistent": False},
+        )
+        invalid = client.post(
+            "/web/sandbox/sessions",
+            headers=headers,
+            json={"persistent": "yes"},
+        )
+        listed = client.get("/web/sandbox/sessions", headers=headers)
+        opened_persistent = client.post(
+            f"/web/sandbox/sessions/{persistent.json()['sessionId']}/connect",
+            headers=headers,
+        )
+        deleted_temporary = client.delete(
+            f"/web/sandbox/sessions/{temporary.json()['sessionId']}",
+            headers=headers,
+        )
+
+    assert persistent.status_code == 200
+    assert persistent.json()["persistent"] is True
+    assert gateway.sessions[persistent.json()["sessionId"]].tool_id == (
+        "tool-studio-snapshot"
+    )
+    assert temporary.status_code == 200
+    assert temporary.json()["persistent"] is False
+    assert gateway.deleted[0].tool_id == "tool-studio"
+    assert invalid.status_code == 422
+    assert {item["persistent"] for item in listed.json()["sessions"]} == {False, True}
+    assert opened_persistent.json()["persistent"] is True
+    assert deleted_temporary.json() == {"deleted": True}
+
+
+def test_sandbox_persistent_create_requires_snapshot_tool() -> None:
+    gateway = _FakeGateway()
+    with TestClient(_app(gateway, snapshot_tool_id=None)) as client:
+        missing = client.post(
+            "/web/sandbox/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+        temporary = client.post(
+            "/web/sandbox/sessions",
+            headers={"X-Test-User": "alice"},
+            json={"persistent": False},
+        )
+
+    assert missing.status_code == 503
+    assert "快照" in missing.text
+    assert temporary.status_code == 200
+    assert temporary.json()["persistent"] is False
 
 
 def test_sandbox_list_scope_follows_user_role() -> None:
@@ -640,8 +795,8 @@ def test_sandbox_list_scope_follows_user_role() -> None:
         )
 
     assert [item["sessionId"] for item in alice_list.json()["sessions"]] == [
-        "remote-existing",
         alice["sessionId"],
+        "remote-existing",
     ]
     assert [item["sessionId"] for item in developer_list.json()["sessions"]] == [
         bob["sessionId"]
@@ -655,7 +810,7 @@ def test_sandbox_list_scope_follows_user_role() -> None:
         "alice",
         "bob",
     }
-    assert gateway.usernames[-3:] == ["alice", "bob", None]
+    assert gateway.usernames[-6:] == ["alice", "alice", "bob", "bob", None, None]
 
 
 def test_sandbox_admin_can_delete_another_users_session() -> None:
@@ -732,6 +887,11 @@ def test_sandbox_codex_commands_skills_threads_and_token_usage() -> None:
             headers=headers,
             json={"threadId": "thread-fork"},
         )
+        deleted_thread = client.post(
+            f"{root}/threads/delete",
+            headers=headers,
+            json={"threadId": "thread-old"},
+        )
         status = client.get(f"{root}/status", headers=headers)
 
     assert models.json()["models"][0]["id"] == "gpt-test"
@@ -754,6 +914,7 @@ def test_sandbox_codex_commands_skills_threads_and_token_usage() -> None:
     assert compacted.json() == {"started": True}
     assert archived.json()["archived"] is True
     assert archived.json()["threadId"] == "thread-new"
+    assert deleted_thread.json() == {"deleted": True}
     assert status.json()["model"] == "gpt-next"
     assert status.json()["threadId"] == "thread-new"
 
@@ -891,26 +1052,61 @@ def test_sandbox_capabilities_report_configured_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SANDBOX_CHAT_CODEX", "configured-tool")
-    with TestClient(_app(_FakeGateway(), tool_id=None)) as client:
+    monkeypatch.delenv("SANDBOX_CHAT_CODEX_SNAPSHOT", raising=False)
+    with TestClient(
+        _app(_FakeGateway(), tool_id=None, snapshot_tool_id=None)
+    ) as client:
         response = client.get(
             "/web/sandbox/capabilities", headers={"X-Test-User": "alice"}
         )
 
     assert response.status_code == 200
-    assert response.json() == {"enabled": True, "reason": ""}
+    assert response.json() == {
+        "enabled": True,
+        "reason": "",
+        "persistentEnabled": False,
+        "persistentReason": "管理员未配置快照版 Tool",
+    }
+
+
+def test_sandbox_snapshot_tool_can_be_configured_by_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SANDBOX_CHAT_CODEX", "configured-tool")
+    monkeypatch.setenv("SANDBOX_CHAT_CODEX_SNAPSHOT", "configured-snapshot-tool")
+    gateway = _FakeGateway()
+    with TestClient(_app(gateway, tool_id=None, snapshot_tool_id=None)) as client:
+        created = client.post(
+            "/web/sandbox/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert created.status_code == 200
+    assert created.json()["persistent"] is True
+    assert gateway.sessions[created.json()["sessionId"]].tool_id == (
+        "configured-snapshot-tool"
+    )
 
 
 def test_sandbox_capabilities_report_admin_not_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("SANDBOX_CHAT_CODEX", raising=False)
-    with TestClient(_app(_FakeGateway(), tool_id=None)) as client:
+    monkeypatch.delenv("SANDBOX_CHAT_CODEX_SNAPSHOT", raising=False)
+    with TestClient(
+        _app(_FakeGateway(), tool_id=None, snapshot_tool_id=None)
+    ) as client:
         response = client.get(
             "/web/sandbox/capabilities", headers={"X-Test-User": "alice"}
         )
 
     assert response.status_code == 200
-    assert response.json() == {"enabled": False, "reason": "管理员未配置"}
+    assert response.json() == {
+        "enabled": False,
+        "reason": "管理员未配置",
+        "persistentEnabled": False,
+        "persistentReason": "管理员未配置快照版 Tool",
+    }
 
 
 @pytest.mark.asyncio
@@ -968,7 +1164,11 @@ def test_sandbox_route_requires_an_identity() -> None:
 
 @pytest.mark.asyncio
 async def test_service_owner_check_does_not_reveal_session() -> None:
-    service = SandboxConversationService(_FakeGateway(), tool_id="tool-studio")
+    service = SandboxConversationService(
+        _FakeGateway(),
+        tool_id="tool-studio",
+        snapshot_tool_id="tool-studio-snapshot",
+    )
     cloud = await service.create("alice")
     session = await service.connect(cloud.instance_id, "alice")
 
@@ -979,7 +1179,11 @@ async def test_service_owner_check_does_not_reveal_session() -> None:
 @pytest.mark.asyncio
 async def test_service_allows_multiple_sessions_for_the_same_owner() -> None:
     gateway = _FakeGateway()
-    service = SandboxConversationService(gateway, tool_id="tool-studio")
+    service = SandboxConversationService(
+        gateway,
+        tool_id="tool-studio",
+        snapshot_tool_id="tool-studio-snapshot",
+    )
 
     first, second = await asyncio.gather(
         service.create("alice"),
@@ -1323,7 +1527,11 @@ async def test_disconnect_never_deletes_the_cloud_session() -> None:
             del session
             raise SandboxProvisioningError("delete failed")
 
-    service = SandboxConversationService(_FailDeleteGateway(), tool_id="tool-studio")
+    service = SandboxConversationService(
+        _FailDeleteGateway(),
+        tool_id="tool-studio",
+        snapshot_tool_id="tool-studio-snapshot",
+    )
     cloud = await service.create("alice")
     session = await service.connect(cloud.instance_id, "alice")
 

@@ -21,11 +21,11 @@ VeADK 自带一个 React 前端，用于渲染智能体经由 Google ADK API Ser
 - **新会话模式**：保留 Agent 对话模式；临时会话会在 AgentKit Sandbox 中启动 Codex Agent；Skill 创建模式会在两个独立的 AgentKit CodeEnv Session 中使用固定模型做真实 A/B 生成，完成后可对比、下载 ZIP 或添加到 AgentKit。
 - **Agent 选择器**：左上角切换 agent；长列表在视口内独立滚动，悬停可查看该 agent 的模型与挂载的工具。
 - **历史会话**：自动保存、按时间排序，可重新打开或删除。
-- **临时会话**：从新会话输入框启动独立的 AgentKit 沙箱临时会话。
-  Studio 会复用专属 CodeEnv Tool、为当前用户创建全新的 Sandbox Session，并通过
-  Codex 进行多轮对话，实时展示公开思考摘要、命令、文件修改、MCP 调用和最终回复。
-  退出后云端 Session 会被删除，内容不会写入普通历史会话；
-  页面刷新后可直接新建，遗留 Session 由 AgentKit 在 TTL 到期后自动回收。
+- **Sandbox 智能体**：创建 Codex、OpenClaw 或 Hermes 时默认勾选“是否持久化”，
+  使用对应的快照版 Tool；取消勾选会创建 8 小时临时 Session，并显示黄色清空提示。
+  Codex 通过标准 Codex App Server 进行多轮对话，实时展示公开思考摘要、命令、
+  文件修改、MCP 调用和最终回复；侧栏会列出 Codex 历史会话，并支持切换和删除。
+  退出只会断开当前连接，云端 Session 会保留到用户明确删除或到期。
 - **智能搜索**：「会话」源在当前 agent 的历史消息中做全文检索；「网页」源调用该 agent 挂载的联网搜索工具实时检索（使用服务端环境变量里的凭据）。
 - **消息反馈回流**：连接云端 AgentKit Runtime 时，回答下方的赞/踩按钮会将
   当前问题、回答和反馈状态写入 AgentKit 评测集。每个 Agent 自动维护
@@ -241,8 +241,10 @@ Application。未指定 `--region` 和 `--project` 时，会在北京、上海�
 设置。可用 `--path` 指定源码目录，默认为当前目录；本地需安装 Node.js 与 npm。
 Sandbox Tool ID 参数也只在显式传入时更新对应环境变量，包括
 `--sandbox-chat-codex-tool-id`、`--sandbox-chat-openclaw-tool-id`、
-`--sandbox-chat-hermes-tool-id` 和 `--sandbox-dev-tool-id`；未传的 Tool ID 保留
-云上已有值，不会被清空。
+`--sandbox-chat-hermes-tool-id`、对应的三个 `--sandbox-chat-*-snapshot-tool-id`
+和 `--sandbox-dev-tool-id`。部署时未指定会自动创建三组普通/快照 Sandbox Tool；
+快照版 Tool 名称以 `_snapshot` 结尾。更新时未传的 Tool ID 保留云上已有值，
+缺失的快照版 Tool 会自动补齐。
 
 ### Studio 一键更新
 

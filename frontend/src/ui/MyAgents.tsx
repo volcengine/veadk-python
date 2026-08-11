@@ -120,6 +120,20 @@ function formatCreatedAt(value: string): string {
   }).format(date).replace(/\//g, "-");
 }
 
+export function formatSandboxRemainingTime(
+  expireAt: string,
+  nowMs = Date.now(),
+): string {
+  const expireTime = Date.parse(expireAt);
+  if (!Number.isFinite(expireTime) || expireTime - nowMs < 60_000) {
+    return "即将清空";
+  }
+  const remainingMinutes = Math.ceil((expireTime - nowMs) / 60_000);
+  const hours = Math.floor(remainingMinutes / 60);
+  const minutes = remainingMinutes % 60;
+  return `${hours} 小时 ${minutes} 分钟`;
+}
+
 function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
   return {
     id: runtime.runtimeId,
@@ -206,6 +220,7 @@ function AgentCard({
   connected,
   showOwnership,
   deploymentTask,
+  nowMs,
   onViewDeploymentTask,
   onEditDraft,
   onDeleteDraft,
@@ -218,6 +233,7 @@ function AgentCard({
   connected?: boolean;
   showOwnership?: boolean;
   deploymentTask?: DeploymentTaskUpdate;
+  nowMs: number;
   onViewDeploymentTask?: (task: DeploymentTaskUpdate) => void;
   onEditDraft?: (draft: WorkspaceAgentDraft) => void;
   onDeleteDraft?: (draft: WorkspaceAgentDraft) => void;
@@ -272,6 +288,20 @@ function AgentCard({
             <dt>{agent.specificationLabel}</dt>
             <dd>{agent.specification}</dd>
           </div>
+          {agent.sandbox ? (
+            <div
+              className={`my-agent-expiry${
+                agent.sandbox.persistent ? "" : " is-expiring"
+              }`}
+            >
+              <dt>剩余时间</dt>
+              <dd>
+                {agent.sandbox.persistent
+                  ? "永不过期"
+                  : formatSandboxRemainingTime(agent.sandbox.expireAt, nowMs)}
+              </dd>
+            </div>
+          ) : null}
         </dl>
       </div>
       <footer className="my-agent-actions">
@@ -392,6 +422,18 @@ export function MyAgents({
   const [sandboxError, setSandboxError] = useState("");
   const [connectingAgentId, setConnectingAgentId] = useState("");
   const [draftToDelete, setDraftToDelete] = useState<WorkspaceAgentDraft | null>(null);
+  const [remainingTimeNow, setRemainingTimeNow] = useState(() => Date.now());
+  const hasExpiringSandboxAgents = sandboxAgents.some(
+    (agent) => agent.sandbox?.persistent === false,
+  );
+
+  useEffect(() => {
+    if (!hasExpiringSandboxAgents) return;
+    setRemainingTimeNow(Date.now());
+    const timer = window.setInterval(() => setRemainingTimeNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [hasExpiringSandboxAgents]);
+
   const draftAgents = useMemo(() => drafts.map(draftToAgent), [drafts]);
   const activeDeploymentTasks = useMemo(() => {
     const byId = new Map<string, DeploymentTaskUpdate>();
@@ -688,7 +730,9 @@ export function MyAgents({
                 <EmptyMessage.Icon>
                   <AgentTypeIcon type={activeType} />
                 </EmptyMessage.Icon>
-                <EmptyMessage.Title>暂无 {activeLabel}</EmptyMessage.Title>
+                <EmptyMessage.Title className="my-agent-sandbox-empty-title">
+                  暂无 {activeLabel}
+                </EmptyMessage.Title>
                 {canCreate ? (
                   <EmptyMessage.ActionRow>
                     <Button
@@ -745,6 +789,7 @@ export function MyAgents({
                   agent={agent}
                   cloudProvider={cloudProvider}
                   deploymentTask={deploymentTaskForAgent(agent)}
+                  nowMs={remainingTimeNow}
                   onViewDeploymentTask={onViewDeploymentTask}
                   onUse={useAgent}
                   onViewDetails={(agent) => {

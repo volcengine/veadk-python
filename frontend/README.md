@@ -38,14 +38,17 @@ server that `veadk frontend` launches — no separate backend.
   scroll independently.
 - **Sandbox Agents**: create and reopen user-owned Codex, OpenClaw, and Hermes
   AgentKit Sessions from the Agent page. Each type supports list, detail, and
-  explicit deletion. Codex streams reasoning, tool activity, and replies into
-  the normal conversation renderer; leaving the conversation only disconnects
-  it, so the Agent remains available until the user deletes it. OpenClaw and
-  Hermes expose their main interface and Terminal through Studio.
+  explicit deletion. Persistence is enabled by default through a snapshot Tool;
+  clearing it creates an eight-hour transient Session and shows an expiry
+  warning. Codex streams reasoning, tool activity, and replies into the normal
+  conversation renderer, while its sidebar history can resume or remove
+  standard Codex App Server threads. Leaving the conversation only
+  disconnects it, so the Agent remains available until the user deletes it.
+  OpenClaw and Hermes expose their main interface and Terminal through Studio.
 - **System information**: open a full page from the account menu to inspect the
-  Studio version, configured Sandbox Tool IDs, and available Identity user
-  pools. Resource identifiers remain read-only and require Agent-management
-  access.
+  Studio version, configured Sandbox Tool IDs (with snapshot Tools badged), and
+  available Identity user pools. Resource identifiers remain read-only and
+  require Agent-management access.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
 - **Automation directory**: browse development and message-channel integrations
@@ -159,6 +162,14 @@ and are never returned to the browser.
 Temporary Sandbox state is process-local. Run Studio with one server worker, or
 configure session affinity so create, message, and delete requests from the same
 browser reach the same instance.
+
+Local Studio reads transient and snapshot Tool IDs from
+`SANDBOX_CHAT_CODEX`/`SANDBOX_CHAT_CODEX_SNAPSHOT`,
+`SANDBOX_CHAT_OPENCLAW`/`SANDBOX_CHAT_OPENCLAW_SNAPSHOT`, and
+`SANDBOX_CHAT_HERMES`/`SANDBOX_CHAT_HERMES_SNAPSHOT`. Cloud deployment creates
+all six Tools when their IDs are omitted; the three snapshot Tool names end in
+`_snapshot`. The matching `--sandbox-chat-*-tool-id` and
+`--sandbox-chat-*-snapshot-tool-id` options select existing Tools instead.
 
 ## Development specification
 
