@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from frontend.server.storage import StudioProvider
 from frontend.server.storage import provisioning
 
 
@@ -63,23 +64,41 @@ def _patch_cloud(
     )
 
 
+@pytest.mark.parametrize(
+    ("provider", "region", "expected_host"),
+    [
+        (
+            "volcengine",
+            "cn-beijing",
+            "veadk-studio-2100123456.tos-cn-beijing.volces.com",
+        ),
+        (
+            "byteplus",
+            "ap-southeast-1",
+            "veadk-studio-2100123456.tos-ap-southeast-1.bytepluses.com",
+        ),
+    ],
+)
 def test_auto_storage_uses_stable_account_bucket_and_creates_it_private(
     monkeypatch: pytest.MonkeyPatch,
+    provider: StudioProvider,
+    region: str,
+    expected_host: str,
 ) -> None:
     client = _FakeTosClient()
     _patch_cloud(monkeypatch, client)
 
     config = provisioning.resolve_studio_storage_for_deploy(
-        provider="volcengine",
-        region="cn-beijing",
+        provider=provider,
+        region=region,
         access_key="ak",
         secret_key="sk",
         source={},
     )
 
     assert config.bucket == "veadk-studio-2100123456"
-    assert config.region == "cn-beijing"
-    assert config.object_host == ("veadk-studio-2100123456.tos-cn-beijing.volces.com")
+    assert config.region == region
+    assert config.object_host == expected_host
     assert client.created == [{"bucket": "veadk-studio-2100123456"}]
 
 
