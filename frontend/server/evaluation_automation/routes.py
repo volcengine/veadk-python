@@ -60,7 +60,7 @@ def mount_routes(
         region: str = Query(default="cn-beijing", min_length=1),
     ) -> dict[str, Any]:
         authorize(request, runtimeId, region)
-        snapshot = service.get_optimizations(runtimeId, appName)
+        snapshot = await service.get_optimizations(runtimeId, appName)
         if snapshot is None:
             return {
                 "runtimeId": runtimeId,

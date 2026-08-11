@@ -502,7 +502,7 @@ def test_feedback_cases_list_agentkit_dataset_items(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     class _Automation:
-        def get_optimizations(self, runtime_id: str, app_name: str) -> None:
+        async def get_optimizations(self, runtime_id: str, app_name: str) -> None:
             del runtime_id, app_name
 
         async def close(self) -> None:

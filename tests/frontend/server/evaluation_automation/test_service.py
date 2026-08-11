@@ -155,7 +155,7 @@ async def test_service_evaluates_latest_turn_and_updates_optimization_snapshot()
     assert case.kind == "good"
     assert case.source == "auto"
     assert case.reason == "回答准确且完整。"
-    snapshot = optimizations.get("runtime", "agent")
+    snapshot = await optimizations.get("runtime", "agent")
     assert snapshot is not None
     assert snapshot.groups[0].module == "prompt"
     await service.close()

@@ -34,7 +34,7 @@ from .models import (
     OptimizationSnapshot,
     RunSseActivity,
 )
-from .repository import InMemoryOptimizationRepository, auto_item_key
+from .repository import auto_item_key
 from .scheduler import QuietSessionScheduler
 
 logger = get_logger(__name__)
@@ -62,6 +62,16 @@ class CaseRepository(Protocol):
     ) -> list[AutoEvaluationCase]: ...
 
 
+class OptimizationRepository(Protocol):
+    async def put(self, snapshot: OptimizationSnapshot) -> None: ...
+
+    async def get(
+        self,
+        runtime_id: str,
+        app_name: str,
+    ) -> OptimizationSnapshot | None: ...
+
+
 RuntimeGet = Callable[[RunSseActivity, str], Awaitable[dict[str, Any]]]
 CaseRepositoryFactory = Callable[[RunSseActivity], Awaitable[CaseRepository]]
 
@@ -72,7 +82,7 @@ class EvaluationAutomationService:
         *,
         evaluator: Evaluator,
         optimizer: Optimizer,
-        optimization_repository: InMemoryOptimizationRepository,
+        optimization_repository: OptimizationRepository,
         runtime_get: RuntimeGet,
         case_repository: CaseRepositoryFactory,
         quiet_seconds: float = 300,
@@ -180,7 +190,7 @@ class EvaluationAutomationService:
                     agent_info=agent_info,
                     cases=cases,
                 )
-                self._optimizations.put(
+                await self._optimizations.put(
                     OptimizationSnapshot(
                         runtimeId=activity.runtime_id,
                         appName=activity.app_name,
@@ -234,12 +244,12 @@ class EvaluationAutomationService:
         repository = await self._case_repository(activity)
         return await repository.list_cases(agent_name=agent_name, page_size=page_size)
 
-    def get_optimizations(
+    async def get_optimizations(
         self,
         runtime_id: str,
         app_name: str,
     ) -> OptimizationSnapshot | None:
-        return self._optimizations.get(runtime_id, app_name)
+        return await self._optimizations.get(runtime_id, app_name)
 
     async def close(self) -> None:
         await self.scheduler.close()

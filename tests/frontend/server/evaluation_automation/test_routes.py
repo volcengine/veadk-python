@@ -15,12 +15,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from frontend.server.evaluation_automation.models import AutomaticEvaluationStatus
+from frontend.server.evaluation_automation.models import (
+    AutomaticEvaluationStatus,
+    OptimizationSnapshot,
+)
 from frontend.server.evaluation_automation.routes import mount_routes
 
 
@@ -72,3 +75,31 @@ def test_status_route_authorizes_and_filters_the_current_user() -> None:
         app_name="agent",
         user_id="user",
     )
+
+
+def test_optimization_route_reads_the_persisted_snapshot() -> None:
+    service = Mock()
+    service.get_optimizations = AsyncMock(
+        return_value=OptimizationSnapshot(
+            runtimeId="runtime",
+            appName="agent",
+            optimizerVersion="v1",
+            sourceItemKeys=["case-1"],
+            groups=[],
+        )
+    )
+    app = FastAPI()
+    mount_routes(app, service, Mock())
+
+    response = TestClient(app).get(
+        "/web/evaluation/optimizations",
+        params={
+            "runtimeId": "runtime",
+            "region": "cn-beijing",
+            "appName": "agent",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["sourceItemKeys"] == ["case-1"]
+    service.get_optimizations.assert_awaited_once_with("runtime", "agent")

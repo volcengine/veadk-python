@@ -1084,7 +1084,7 @@ def test_studio_runtime_proxy_only_schedules_successful_completed_sse(
         def session_completed(self, activity: Any) -> None:
             self.completed.append(activity)
 
-        def get_optimizations(self, runtime_id: str, app_name: str) -> None:
+        async def get_optimizations(self, runtime_id: str, app_name: str) -> None:
             del runtime_id, app_name
 
         async def close(self) -> None:
