@@ -249,6 +249,12 @@ When `--user-pool-id` and `--allowed-client-id` are omitted, deployment creates
 or reuses them in the selected `--region` and prints the resolved IDs. Pass both
 options to keep using existing Identity resources.
 
+After automatic provisioning, the success summary lists every Sandbox type and
+Tool ID, the private Studio TOS address, and the resolved Identity user pool and
+client IDs. It also links to the matching Volcengine or BytePlus Identity
+console. Password sign-in remains disabled by default for security; configure
+an SSO identity provider before inviting users to the deployed Studio.
+
 Studio checks `latest.json` every three minutes and lists newer releases with
 their changelog and Git SHA. An accepted update verifies the selected complete
 Bundle, replaces the current Function code, and releases the existing

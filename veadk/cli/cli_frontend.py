@@ -7762,6 +7762,7 @@ def frontend_deploy(
         if session_token:
             os.environ["BYTEPLUS_SESSION_TOKEN"] = session_token
 
+    auto_identity_resources = not (user_pool_id and allowed_client_id)
     user_pool_domain = ""
     if user_pool_id and allowed_client_id:
         identity_region = _resolve_studio_identity_region(
@@ -7833,6 +7834,9 @@ def frontend_deploy(
         resolve_studio_storage_for_deploy,
     )
 
+    auto_storage = not str(
+        veadk_environments.get("VEADK_STUDIO_TOS_BUCKET") or ""
+    ).strip()
     click.echo("Ensuring Studio persistent storage…")
     try:
         storage_config = resolve_studio_storage_for_deploy(
@@ -8275,6 +8279,22 @@ def frontend_deploy(
         if user_pool_domain:
             click.echo(f"   user pool domain: {user_pool_domain}")
         click.echo(f"   client id: {allowed_client_id}")
+        if auto_identity_resources or auto_storage or missing_sandbox_tools:
+            identity_console = (
+                "https://console.byteplus.com/identity"
+                if provider_id == "byteplus"
+                else "https://console.volcengine.com/identity"
+            )
+            click.echo("")
+            click.echo("   Cloud resources configured for this Studio:")
+            for kind, tool_id in resolved_sandbox_tool_ids.items():
+                click.echo(f"   [{sandbox_tool_labels[kind]}]: {tool_id}")
+            click.echo(f"   TOS (private): https://{storage_config.object_host}")
+            click.echo(f"   user pool id: {user_pool_id}")
+            click.echo(f"   client id: {allowed_client_id}")
+            click.echo(f"   Identity console: {identity_console}")
+            click.echo("   Password sign-in is disabled by default for security.")
+            click.echo("   Configure an SSO identity provider before inviting users.")
         click.echo("   (open the URL — you'll be redirected through SSO login)")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
