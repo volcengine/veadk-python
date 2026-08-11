@@ -1246,6 +1246,7 @@ def _run_frontend_server(
             access_key=access_key,
             secret_key=secret_key,
             session_token=session_token or "",
+            provider=provider,
             region=region,
             project_name=str(getattr(runtime, "project_name", "") or "default"),
             runtime_id=runtime_id,

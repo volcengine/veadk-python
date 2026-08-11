@@ -26,6 +26,8 @@ from volcenginesdkapmplusserver import (
     ListSpanRequest,
 )
 
+from veadk.utils.cloud_provider import CloudProvider, apmplus_openapi_host
+
 _SESSION_TAGS = (
     "gen_ai.session.id",
     "gen_ai.conversation.id",
@@ -107,6 +109,7 @@ def load_apmplus_trace(
     access_key: str,
     secret_key: str,
     session_token: str,
+    provider: CloudProvider,
     region: str,
     project_name: str,
     runtime_id: str,
@@ -123,6 +126,7 @@ def load_apmplus_trace(
     configuration.sk = secret_key
     configuration.session_token = session_token
     configuration.region = region
+    configuration.host = f"https://{apmplus_openapi_host(provider)}"
     api = APMPLUSSERVERApi(volcenginesdkcore.ApiClient(configuration))
 
     end_time = now_ms if now_ms is not None else int(time.time() * 1000)
