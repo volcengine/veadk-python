@@ -2551,6 +2551,56 @@ export async function startStudioUpdate(
   return (await res.json()) as { version: string };
 }
 
+/** Per-user invocation summary returned by the Studio usage endpoint. */
+export interface AgentUsageUser {
+  userId: string;
+  displayName: string;
+  invocationCount: number;
+  lastUsedAt: string;
+}
+
+/** One server-paginated usage snapshot for a deployed Agent. */
+export interface AgentUsageResponse {
+  runtimeId: string;
+  appName: string;
+  totalInvocations: number;
+  totalUsers: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  users: AgentUsageUser[];
+}
+
+/** Load usage for one deployed Runtime app. */
+export async function getAgentUsage({
+  runtimeId,
+  region,
+  appName,
+  page = 1,
+  pageSize = 20,
+  signal,
+}: {
+  runtimeId: string;
+  region: string;
+  appName: string;
+  page?: number;
+  pageSize?: number;
+  signal?: AbortSignal;
+}): Promise<AgentUsageResponse> {
+  const params = new URLSearchParams({
+    runtimeId,
+    region,
+    appName,
+    page: String(page),
+    pageSize: String(pageSize),
+  });
+  const res = await apiFetch(`/web/agent-usage?${params.toString()}`, { signal });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "加载 Agent 用量失败"));
+  }
+  return (await res.json()) as AgentUsageResponse;
+}
+
 /** One AgentKit runtime as listed by `/web/runtimes` (control-plane). */
 export interface CloudRuntime {
   name: string;

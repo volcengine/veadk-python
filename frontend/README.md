@@ -475,6 +475,25 @@ veadk studio deploy \
   --vefaas-app-name <app-name>
 ```
 
+## Agent usage statistics
+
+The `用量统计` tab on a deployed Agent records one invocation after a Studio
+`run_sse` stream finishes successfully without an SSE error. Failed, cancelled,
+direct API Server, and direct A2A calls are not counted. The tab shows total
+invocations, unique signed-in users, per-user invocation counts, and each
+user's latest successful invocation.
+
+Usage is stored in the private Studio TOS bucket configured by
+`VEADK_STUDIO_TOS_BUCKET` and `VEADK_STUDIO_TOS_REGION`. Cloud deployments
+provision and inject this storage automatically. Each invocation is an
+immutable object, so concurrent Studio instances do not overwrite a shared
+counter. User identifiers are hashed in object keys and remain visible only in
+the private object content and the authorized management API.
+
+Only Studio administrators and developers who can access the Runtime may read
+the user list. A storage failure never interrupts the Agent response; the tab
+instead reports that usage statistics are temporarily unavailable.
+
 ## Agent naming
 
 Studio validates every root and nested Agent name against Google ADK rules.

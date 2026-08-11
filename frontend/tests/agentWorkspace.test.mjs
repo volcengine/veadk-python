@@ -131,11 +131,11 @@ test("agent details show capability badges and deployment state before the flow"
 test("agent details expose detected integration methods without inventing unavailable endpoints", () => {
   assert.match(
     workspaceSource,
-    /type AgentSection = "basic" \| "evaluations" \| "optimizations" \| "integrations"/,
+    /type AgentSection = "basic" \| "usage" \| "evaluations" \| "optimizations" \| "integrations"/,
   );
   assert.match(
     workspaceSource,
-    /\{ id: "basic", label: "基本信息" \},\s*\{ id: "evaluations", label: "评测集" \},\s*\{ id: "optimizations", label: "优化项" \},\s*\{ id: "integrations", label: "接入方法" \}/,
+    /\{ id: "basic", label: "基本信息" \},\s*\{ id: "usage", label: "用量统计" \},\s*\{ id: "evaluations", label: "评测集" \},\s*\{ id: "optimizations", label: "优化项" \},\s*\{ id: "integrations", label: "接入方法" \}/,
   );
   assert.match(workspaceSource, /role="tablist"/);
   assert.match(workspaceSource, /role="tab"/);
@@ -202,6 +202,54 @@ test("agent details expose detected integration methods without inventing unavai
   )?.[1] ?? "";
   assert.doesNotMatch(integrationPanelLayout, /grid-template-columns:/);
   assert.match(workspaceStyles, /prefers-reduced-motion:\s*reduce/);
+});
+
+test("runtime-backed Agent details load and paginate usage without stale responses", () => {
+  assert.match(clientSource, /export interface AgentUsageUser/);
+  assert.match(clientSource, /export interface AgentUsageResponse/);
+  assert.match(clientSource, /export async function getAgentUsage/);
+  assert.match(
+    clientSource,
+    /new URLSearchParams\(\{[\s\S]*?runtimeId,[\s\S]*?region,[\s\S]*?appName,[\s\S]*?page: String\(page\),[\s\S]*?pageSize: String\(pageSize\)/,
+  );
+  assert.match(clientSource, /`\/web\/agent-usage\?\$\{params\.toString\(\)\}`/);
+  assert.match(clientSource, /httpErrorMessage\(res, "加载 Agent 用量失败"\)/);
+
+  assert.match(
+    workspaceSource,
+    /selectedAgent\?\.runtimeId\s*\? AGENT_SECTIONS\s*:\s*AGENT_SECTIONS\.filter\(\(item\) => item\.id !== "usage"\)/,
+  );
+  assert.match(workspaceSource, /section !== "usage" \|\| !runtimeId/);
+  assert.match(
+    workspaceSource,
+    /getAgentUsage\(\{[\s\S]*?page: agentUsagePage,[\s\S]*?pageSize: AGENT_USAGE_PAGE_SIZE,[\s\S]*?signal: controller\.signal/,
+  );
+  assert.match(workspaceSource, /const requestId = agentUsageRequestRef\.current \+ 1/);
+  assert.match(workspaceSource, /requestId !== agentUsageRequestRef\.current/);
+  assert.match(workspaceSource, /controller\.abort\(\)/);
+  assert.match(workspaceSource, /response\.runtimeId !== runtimeId/);
+  assert.match(workspaceSource, /response\.appName !== appName/);
+
+  assert.match(workspaceSource, /<h3>使用概览<\/h3>/);
+  assert.match(workspaceSource, /<dt>总调用次数<\/dt>/);
+  assert.match(workspaceSource, /<dt>使用用户数<\/dt>/);
+  assert.match(workspaceSource, /<th scope="col">用户<\/th>/);
+  assert.match(workspaceSource, /<th scope="col">调用次数<\/th>/);
+  assert.match(workspaceSource, /<th scope="col">最近使用<\/th>/);
+  assert.match(workspaceSource, /正在加载用量统计/);
+  assert.match(workspaceSource, /暂无使用记录。用户成功调用后将在这里显示。/);
+  assert.match(workspaceSource, /className="aw-usage-state is-error" role="alert"/);
+  assert.match(workspaceSource, /setAgentUsageReloadToken/);
+  assert.match(workspaceSource, /aria-label="用量用户列表分页"/);
+  assert.match(workspaceSource, /setAgentUsagePage\(\(page\) => Math\.max\(1, page - 1\)\)/);
+  assert.match(workspaceSource, /setAgentUsagePage\(\(page\) => page \+ 1\)/);
+  assert.match(workspaceStyles, /\.aw-usage-summary/);
+  assert.match(
+    workspaceStyles,
+    /\.aw-usage-table-wrap\s*\{[\s\S]*?overflow-x:\s*auto/,
+  );
+  assert.match(workspaceStyles, /\.aw-usage-state\.is-error/);
+  assert.match(workspaceStyles, /\.aw-usage-pagination button:disabled/);
 });
 
 test("workspace uses cached runtime data and prefetches likely next views", () => {
