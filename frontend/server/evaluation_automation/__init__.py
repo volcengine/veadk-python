@@ -21,27 +21,59 @@ from typing import Any
 
 import httpx
 
+from frontend.server.storage import StudioProvider, StudioStorageConfig
+from veadk.utils.logger import get_logger
+
 from .datasets import ensure_feedback_sets
 from .model_gateway import StructuredEvaluationModels
 from .models import RunSseActivity
 from .repository import (
     AgentKitAutoEvaluationRepository,
     InMemoryOptimizationRepository,
+    TosOptimizationRepository,
 )
 from .routes import mount_routes
 from .service import EvaluationAutomationService
 from .sse import RunSseObservation, observed_sse_stream
 
 OpenApiPost = Callable[..., Awaitable[dict[str, Any]]]
+CredentialResolver = Callable[[], tuple[str, str, str | None]]
+logger = get_logger(__name__)
 
 
 def create_service(
     *,
     openapi_post: OpenApiPost,
+    provider: StudioProvider = "volcengine",
+    resolve_credentials: CredentialResolver | None = None,
     quiet_seconds: float = 300,
 ) -> EvaluationAutomationService:
     models = StructuredEvaluationModels()
-    optimizations = InMemoryOptimizationRepository()
+    storage = StudioStorageConfig.from_env(provider)
+    if storage.configured and resolve_credentials is not None:
+
+        def tos_client() -> Any:
+            import tos
+
+            access_key, secret_key, session_token = resolve_credentials()
+            return tos.TosClientV2(
+                ak=access_key,
+                sk=secret_key,
+                security_token=session_token,
+                endpoint=storage.endpoint,
+                region=storage.region,
+            )
+
+        optimizations = TosOptimizationRepository(
+            bucket=storage.bucket,
+            client_factory=tos_client,
+        )
+    else:
+        logger.warning(
+            "Studio optimization snapshots are using process-local storage because "
+            "VEADK_STUDIO_TOS_BUCKET/REGION or a credential resolver is unavailable."
+        )
+        optimizations = InMemoryOptimizationRepository()
 
     async def runtime_get(
         activity: RunSseActivity,

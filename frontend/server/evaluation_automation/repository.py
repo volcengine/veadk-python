@@ -19,8 +19,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import quote
 
 from veadk.integrations.agentkit.evaluation import AgentKitOpenApiError
 
@@ -46,6 +48,8 @@ AUTO_FIELD_KEYS = (
 _MAX_DATASET_NAME_LENGTH = 50
 _DUPLICATE_DATASET_ERROR_CODE = "601104504"
 _LOOKUP_DELAYS = (0.25, 0.5, 1.0, 2.0, 4.0)
+_OPTIMIZATION_KEY_PREFIX = "veadk-studio/v1/evaluation-optimizations"
+_MAX_OPTIMIZATION_BYTES = 8 * 1024 * 1024
 
 
 class AgentKitPost(Protocol):
@@ -311,16 +315,81 @@ class AgentKitAutoEvaluationRepository:
 
 
 class InMemoryOptimizationRepository:
-    """POC snapshot store; replaceable without changing orchestration."""
+    """Process-local fallback used when Studio storage is not configured."""
 
     def __init__(self) -> None:
         self._items: dict[tuple[str, str], OptimizationSnapshot] = {}
 
-    def put(self, snapshot: OptimizationSnapshot) -> None:
+    async def put(self, snapshot: OptimizationSnapshot) -> None:
         self._items[(snapshot.runtime_id, snapshot.app_name)] = snapshot
 
-    def get(self, runtime_id: str, app_name: str) -> OptimizationSnapshot | None:
+    async def get(
+        self,
+        runtime_id: str,
+        app_name: str,
+    ) -> OptimizationSnapshot | None:
         return self._items.get((runtime_id, app_name))
+
+
+class TosOptimizationRepository:
+    """Persist the latest optimization snapshot for each Runtime application."""
+
+    def __init__(
+        self,
+        *,
+        bucket: str,
+        client_factory: Callable[[], Any],
+    ) -> None:
+        if not bucket.strip():
+            raise ValueError("TOS optimization storage requires a bucket.")
+        self._bucket = bucket
+        self._client_factory = client_factory
+
+    async def put(self, snapshot: OptimizationSnapshot) -> None:
+        await asyncio.to_thread(self._put, snapshot)
+
+    def _put(self, snapshot: OptimizationSnapshot) -> None:
+        content = snapshot.model_dump_json(by_alias=True).encode("utf-8")
+        self._client_factory().put_object(
+            bucket=self._bucket,
+            key=self._key(snapshot.runtime_id, snapshot.app_name),
+            content=content,
+            content_type="application/json",
+        )
+
+    async def get(
+        self,
+        runtime_id: str,
+        app_name: str,
+    ) -> OptimizationSnapshot | None:
+        return await asyncio.to_thread(self._get, runtime_id, app_name)
+
+    def _get(
+        self,
+        runtime_id: str,
+        app_name: str,
+    ) -> OptimizationSnapshot | None:
+        import tos
+
+        try:
+            response = self._client_factory().get_object(
+                bucket=self._bucket,
+                key=self._key(runtime_id, app_name),
+            )
+        except tos.exceptions.TosServerError as error:
+            if error.status_code == 404:
+                return None
+            raise
+        content = b"".join(response)
+        if len(content) > _MAX_OPTIMIZATION_BYTES:
+            raise ValueError("Studio optimization snapshot is too large.")
+        return OptimizationSnapshot.model_validate_json(content)
+
+    @staticmethod
+    def _key(runtime_id: str, app_name: str) -> str:
+        runtime_segment = quote(runtime_id, safe="")
+        app_segment = quote(app_name, safe="")
+        return f"{_OPTIMIZATION_KEY_PREFIX}/{runtime_segment}/{app_segment}.json"
 
 
 def _extract_items(response: dict[str, Any]) -> list[dict[str, Any]]:

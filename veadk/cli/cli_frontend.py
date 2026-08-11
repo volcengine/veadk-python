@@ -5057,6 +5057,8 @@ def _run_frontend_server(
 
         evaluation_automation = create_evaluation_automation_service(
             openapi_post=_evaluation_automation_openapi_post,
+            provider=provider,
+            resolve_credentials=_resolve_ve_credentials,
         )
         app.state.evaluation_automation = evaluation_automation
         original_lifespan = app.router.lifespan_context
