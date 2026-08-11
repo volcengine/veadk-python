@@ -27,6 +27,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query
 from google.adk.agents.base_agent import BaseAgent
+from google.adk.code_executors import UnsafeLocalCodeExecutor
 from google.adk.events import Event, EventActions
 from google.adk.sessions import BaseSessionService, Session
 from google.adk.tools.skill_toolset import SkillToolset
@@ -491,7 +492,12 @@ class SessionCapabilityService:
                 )
             )
         if loaded_skills:
-            agent_tools.append(SkillToolset(skills=loaded_skills))
+            agent_tools.append(
+                SkillToolset(
+                    skills=loaded_skills,
+                    code_executor=UnsafeLocalCodeExecutor(),
+                )
+            )
             instruction = getattr(agent, "instruction", None)
             if isinstance(instruction, str):
                 skill_names = ", ".join(
