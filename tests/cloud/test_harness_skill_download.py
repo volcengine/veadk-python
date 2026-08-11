@@ -18,8 +18,17 @@ from __future__ import annotations
 
 import io
 import zipfile
+from types import SimpleNamespace
 
 import httpx
+import pytest
+from google.adk.agents import LlmAgent
+from google.adk.agents.invocation_context import InvocationContext
+from google.adk.code_executors import UnsafeLocalCodeExecutor
+from google.adk.sessions import InMemorySessionService, Session
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools import ToolContext
+from google.adk.tools.skill_toolset import SkillToolset
 
 from veadk.cloud.harness_app import utils
 from veadk.skills.skill import Skill as VeADKSkill
@@ -140,3 +149,86 @@ def test_build_skill_toolset_loads_skills_center_space(monkeypatch, tmp_path):
 
     assert calls == ["ss-test"]
     assert [skill.name for skill in toolset._list_skills()] == ["center-skill"]
+    assert isinstance(toolset._code_executor, UnsafeLocalCodeExecutor)
+
+
+def test_incremental_skills_preserve_existing_code_executor(monkeypatch, tmp_path):
+    existing_dir = tmp_path / "existing"
+    incoming_dir = tmp_path / "incoming"
+    _write_adk_skill(existing_dir, name="existing")
+    _write_adk_skill(incoming_dir, name="incoming")
+
+    executor = UnsafeLocalCodeExecutor()
+    existing_toolset = SkillToolset(
+        skills=[load_skill_from_dir(existing_dir)],
+        code_executor=executor,
+    )
+    incoming_toolset = SkillToolset(
+        skills=[load_skill_from_dir(incoming_dir)],
+        code_executor=UnsafeLocalCodeExecutor(),
+    )
+    agent = SimpleNamespace(tools=[existing_toolset])
+    monkeypatch.setattr(
+        utils,
+        "build_skill_toolset",
+        lambda skill_ids, download_dir=None: incoming_toolset,
+    )
+
+    utils._add_incremental_skills(agent, ["incoming"])
+
+    merged_toolset = agent.tools[0]
+    assert [skill.name for skill in merged_toolset._list_skills()] == [
+        "existing",
+        "incoming",
+    ]
+    assert merged_toolset._code_executor is executor
+
+
+@pytest.mark.asyncio
+async def test_build_skill_toolset_runs_python_script(monkeypatch, tmp_path):
+    skill_dir = tmp_path / "python-sum"
+    _write_adk_skill(skill_dir, name="python-sum")
+    scripts_dir = skill_dir / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "add.py").write_text(
+        "import sys\nprint(int(sys.argv[1]) + int(sys.argv[2]))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        utils,
+        "_download_and_extract_skill",
+        lambda skill, download_dir: skill_dir,
+    )
+
+    toolset = utils.build_skill_toolset(["python-sum"], download_dir=tmp_path)
+    run_script = next(
+        tool for tool in await toolset.get_tools() if tool.name == "run_skill_script"
+    )
+    agent = LlmAgent(name="test_agent", model="gemini-2.0-flash")
+    invocation_context = InvocationContext(
+        session_service=InMemorySessionService(),
+        invocation_id="test-invocation",
+        agent=agent,
+        session=Session(
+            id="test-session",
+            appName=agent.name,
+            userId="test-user",
+        ),
+    )
+
+    result = await run_script.run_async(
+        args={
+            "skill_name": "python-sum",
+            "file_path": "scripts/add.py",
+            "args": ["17", "25"],
+        },
+        tool_context=ToolContext(invocation_context),
+    )
+
+    assert result == {
+        "skill_name": "python-sum",
+        "file_path": "scripts/add.py",
+        "stdout": "42\n",
+        "stderr": "",
+        "status": "success",
+    }

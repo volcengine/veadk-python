@@ -38,6 +38,7 @@ from urllib.parse import urlencode
 
 import frontmatter
 import httpx
+from google.adk.code_executors import UnsafeLocalCodeExecutor
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools.skill_toolset import SkillToolset
 
@@ -371,7 +372,10 @@ def build_skill_toolset(
                 )
         except Exception as e:
             raise SkillLoadError(f"Skill '{skill}' failed to load: {e}") from e
-    return SkillToolset(skills=loaded_skills)
+    return SkillToolset(
+        skills=loaded_skills,
+        code_executor=UnsafeLocalCodeExecutor(),
+    )
 
 
 def config_from_env() -> HarnessConfig:
@@ -525,7 +529,12 @@ def _add_incremental_skills(
         return
 
     agent.tools.remove(existing_toolset)
-    agent.tools.append(SkillToolset(skills=existing_skills + new_skills))
+    agent.tools.append(
+        SkillToolset(
+            skills=existing_skills + new_skills,
+            code_executor=(existing_toolset._code_executor or toolset._code_executor),
+        )
+    )
 
 
 def _remove_a2a_registry_tools(agent: Agent) -> None:

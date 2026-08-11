@@ -77,7 +77,7 @@ _MINIMAL_FRONTEND_GOLDEN = {
 _FULL_FRONTEND_GOLDEN = {
     "app.py": "56183a125e505c543294356fc9c7662a5eedb3b8661070f6be1df9b579e35ed4",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
-    "agents/full_agent/agent.py": "e355eea82be49e735b5ea740ed9115980d05c5b1b083a19a8b75b3242f5f00bb",
+    "agents/full_agent/agent.py": "cc2b0b6be7f781573fbbd744becdf2608b8ebff881b9e58a979fe695485ffe30",
     "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/full_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "3e6a5c1ee1c96ed7394240f9c0503c295552cb497ad51c68dd867dd4945f750b",
@@ -190,7 +190,9 @@ def test_full_project_matches_frontend_codegen_golden() -> None:
     assert project.name == "full_agent"
     assert "enableA2ui" not in draft.model_dump()
     assert "enable_a2ui" not in agent_py
-    assert "skills_agent = SkillToolset(skills=[" in agent_py
+    assert "skills_agent = SkillToolset(" in agent_py
+    assert "from google.adk.code_executors import UnsafeLocalCodeExecutor" in agent_py
+    assert "code_executor=UnsafeLocalCodeExecutor()" in agent_py
     root_agent_block = agent_py.rsplit("agent = Agent(", 1)[1].split(
         "\n)\n\nAGENT_DISPLAY_NAMES",
         1,
