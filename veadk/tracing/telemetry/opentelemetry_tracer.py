@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import json
-import time
 from typing import Any
 
 from opentelemetry import trace as trace_api
@@ -249,13 +248,11 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
     def force_export(self) -> None:
         """Force immediate export of all pending spans across all processors.
 
-        This method triggers force_flush on all configured span processors,
-        ensuring that buffered span data is immediately sent to exporters.
-        Includes a small delay between flushes to prevent overwhelming exporters.
+        The global TracerProvider owns the complete processor pipeline, including
+        processors installed before VeADK initialized. Flushing the provider
+        therefore covers both externally managed and VeADK-managed processors.
         """
-        for processor in self._processors:
-            time.sleep(0.05)
-            processor.force_flush()
+        self._global_tracer_provider.force_flush()
         portal_metric_recorder.force_flush()
 
     @override

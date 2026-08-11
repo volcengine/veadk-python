@@ -244,21 +244,59 @@ def test_add_exporter_is_idempotent(fresh_global_tracer_provider):
     assert sum(processor is exporter.processor for processor in tracer._processors) == 1
 
 
-def test_force_export_flushes_portal_metrics_recorder(
+def test_force_export_flushes_global_trace_and_metric_providers(
     fresh_global_tracer_provider,
     monkeypatch,
 ):
-    flush_calls = []
+    trace_flush_calls = []
+    metric_flush_calls = []
     monkeypatch.setattr(
         opentelemetry_tracer_module,
         "portal_metric_recorder",
-        SimpleNamespace(force_flush=lambda: flush_calls.append(True) or True),
+        SimpleNamespace(force_flush=lambda: metric_flush_calls.append(True) or True),
     )
     tracer = OpentelemetryTracer()
+    monkeypatch.setattr(
+        tracer._global_tracer_provider,
+        "force_flush",
+        lambda: trace_flush_calls.append(True) or True,
+    )
 
     tracer.force_export()
 
-    assert flush_calls == [True]
+    assert trace_flush_calls == [True]
+    assert metric_flush_calls == [True]
+
+
+def test_force_export_flushes_processor_from_preconfigured_provider(
+    fresh_global_tracer_provider,
+):
+    class CountingSpanProcessor(trace_sdk.SpanProcessor):
+        def __init__(self):
+            self.flush_calls = 0
+
+        def on_start(self, span, parent_context=None):
+            pass
+
+        def on_end(self, span):
+            pass
+
+        def shutdown(self):
+            pass
+
+        def force_flush(self, timeout_millis=30000):
+            self.flush_calls += 1
+            return True
+
+    tracer_provider = trace_sdk.TracerProvider()
+    external_processor = CountingSpanProcessor()
+    tracer_provider.add_span_processor(external_processor)
+    trace_api.set_tracer_provider(tracer_provider)
+
+    tracer = OpentelemetryTracer()
+    tracer.force_export()
+
+    assert external_processor.flush_calls == 1
 
 
 def test_tracing_registers_apmplus_without_global_provider(
