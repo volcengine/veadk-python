@@ -47,6 +47,7 @@ from veadk.cli.studio_release import (
     StudioReleaseManifest,
     StudioReleaseStore,
 )
+from veadk.utils.cloud_provider import DEFAULT_CLOUD_PROVIDER, CloudProvider
 from veadk.version import VERSION
 
 logger = logging.getLogger(__name__)
@@ -91,9 +92,13 @@ class StudioUpdateSettings:
     application_id: str
     function_id: str
     project: str
+    provider: CloudProvider
 
     @classmethod
-    def from_env(cls) -> StudioUpdateSettings:
+    def from_env(
+        cls,
+        provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+    ) -> StudioUpdateSettings:
         """Load self-update settings injected during Studio deployment."""
         return cls(
             bucket=os.getenv("VEADK_STUDIO_UPDATE_BUCKET", "").strip(),
@@ -108,6 +113,7 @@ class StudioUpdateSettings:
             application_id=os.getenv("VEADK_STUDIO_APPLICATION_ID", "").strip(),
             function_id=os.getenv("VEADK_STUDIO_FUNCTION_ID", "").strip(),
             project=os.getenv("VEADK_STUDIO_PROJECT", "default").strip(),
+            provider=provider,
         )
 
     @property
@@ -356,7 +362,7 @@ class StudioSelfUpdater:
                 store.download_bundle(manifest, archive)
                 self._set_progress("preparing", "正在准备 VeFaaS Function 代码")
                 extract_studio_bundle(archive, package_dir)
-                self._preserve_branding(package_dir)
+                self._prepare_package(package_dir)
                 release_environment = read_studio_release_environment(
                     package_dir,
                     remove=True,
@@ -369,16 +375,26 @@ class StudioSelfUpdater:
                     session_token=session_token or "",
                     region=self._settings.deployment_region,
                     project_name=self._settings.project,
+                    provider=self._settings.provider,
                 )
+                environment_overrides = {
+                    "VEADK_STUDIO_RELEASE_VERSION": manifest.version,
+                    **release_environment,
+                }
+                if self._settings.provider == "byteplus":
+                    environment_overrides.update(
+                        {
+                            "CLOUD_PROVIDER": "byteplus",
+                            "AGENTKIT_CLOUD_PROVIDER": "byteplus",
+                            "BYTEPLUS_REGION": self._settings.deployment_region,
+                        }
+                    )
                 self._set_progress("submitting", "正在提交 VeFaaS Function 更新")
                 service.submit_application_code_bundle_update(
                     application_id=self._settings.application_id,
                     function_id=self._settings.function_id,
                     path=str(package_dir),
-                    environment_overrides={
-                        "VEADK_STUDIO_RELEASE_VERSION": manifest.version,
-                        **release_environment,
-                    },
+                    environment_overrides=environment_overrides,
                 )
             self._submitted_version = manifest.version
             self._set_progress("publishing", "已提交，正在等待新 Revision 发布")
@@ -544,6 +560,7 @@ class StudioSelfUpdater:
                 session_token=session_token or "",
                 region=self._settings.deployment_region,
                 project_name=self._settings.project,
+                provider=self._settings.provider,
             )
             raw_lines = service._get_application_logs(
                 self._settings.application_id,
@@ -568,8 +585,13 @@ class StudioSelfUpdater:
         """Return the fixed VeFaaS Function console URL for this Studio."""
         if not self._settings.deployment_region or not self._settings.function_id:
             return ""
+        console_host = (
+            "console.byteplus.com"
+            if self._settings.provider == "byteplus"
+            else "console.volcengine.com"
+        )
         return (
-            "https://console.volcengine.com/vefaas/"
+            f"https://{console_host}/vefaas/"
             f"region:vefaas+{self._settings.deployment_region}/function/detail/"
             f"{self._settings.function_id}"
         )
@@ -585,6 +607,7 @@ class StudioSelfUpdater:
             session_token=session_token or "",
             region=self._settings.deployment_region,
             project_name=self._settings.project,
+            provider=self._settings.provider,
         )
         status, response = service._get_application_status(
             self._settings.application_id
@@ -596,20 +619,40 @@ class StudioSelfUpdater:
                 cloud_resource = json.loads(cloud_resource)
             except json.JSONDecodeError:
                 cloud_resource = {}
-        function = (
+        function_snapshot = (
             cloud_resource.get("framework", {}).get("function", {})
             if isinstance(cloud_resource, dict)
             else {}
         )
-        environment = {
-            str(item.get("Key", "")): str(item.get("Value", ""))
-            for item in function.get("Envs", [])
-            if isinstance(item, dict)
-        }
+        try:
+            from volcenginesdkvefaas import GetFunctionRequest
+
+            current_function = service.client.get_function(
+                GetFunctionRequest(id=self._settings.function_id)
+            )
+            environment = {
+                str(item.key): str(item.value)
+                for item in (getattr(current_function, "envs", None) or [])
+            }
+            function_updated_at = _parse_vefaas_time(
+                getattr(current_function, "last_update_time", None)
+            )
+        except Exception:
+            logger.debug(
+                "Failed to read the current VeFaaS Function state",
+                exc_info=True,
+            )
+            environment = {
+                str(item.get("Key", "")): str(item.get("Value", ""))
+                for item in function_snapshot.get("Envs", [])
+                if isinstance(item, dict)
+            }
+            function_updated_at = _parse_vefaas_time(
+                function_snapshot.get("LastUpdateTime")
+            )
         revision_number = int(
             result.get("NewRevisionNumber") or result.get("StableRevisionNumber") or 0
         )
-        function_updated_at = _parse_vefaas_time(function.get("LastUpdateTime"))
         application_updated_at = _parse_vefaas_time(result.get("UpdateTime"))
         release_pending = bool(
             function_updated_at
@@ -674,13 +717,13 @@ class StudioSelfUpdater:
             session_token=session_token or "",
         )
 
-    def _preserve_branding(self, package_dir: Path) -> None:
-        if self._branding_logo is None:
-            return
-        filename = f"site-logo.{self._branding_logo.extension}"
-        (package_dir / filename).write_bytes(self._branding_logo.content)
+    def _prepare_package(self, package_dir: Path) -> None:
+        filename = None
+        if self._branding_logo is not None:
+            filename = f"site-logo.{self._branding_logo.extension}"
+            (package_dir / filename).write_bytes(self._branding_logo.content)
         (package_dir / "run.sh").write_text(
-            studio_run_script(filename),
+            studio_run_script(filename, provider=self._settings.provider),
             encoding="utf-8",
         )
         (package_dir / "run.sh").chmod(0o755)

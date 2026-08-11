@@ -1517,7 +1517,7 @@ def _run_frontend_server(
     mount_studio_update_routes(
         app,
         StudioSelfUpdater(
-            settings=StudioUpdateSettings.from_env(),
+            settings=StudioUpdateSettings.from_env(provider=provider),
             credential_resolver=_resolve_ve_credentials,
             branding_logo=branding_logo,
         ),

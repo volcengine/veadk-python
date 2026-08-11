@@ -41,6 +41,7 @@ from veadk.cli.studio_self_update import (
     extract_studio_bundle,
     mount_studio_update_routes,
 )
+from veadk.utils.cloud_provider import CloudProvider
 
 
 def test_studio_release_version_defaults_to_bundled(
@@ -85,7 +86,11 @@ def _manifest() -> StudioReleaseManifest:
     )
 
 
-def _settings(*, deployment_region: str = "cn-beijing") -> StudioUpdateSettings:
+def _settings(
+    *,
+    deployment_region: str = "cn-beijing",
+    provider: CloudProvider = "volcengine",
+) -> StudioUpdateSettings:
     return StudioUpdateSettings(
         bucket="studio-releases",
         deployment_region=deployment_region,
@@ -93,6 +98,7 @@ def _settings(*, deployment_region: str = "cn-beijing") -> StudioUpdateSettings:
         application_id="application-id",
         function_id="function-id",
         project="default",
+        provider=provider,
     )
 
 
@@ -118,6 +124,12 @@ def test_shanghai_studio_uses_beijing_release_source(
 
     assert updater._settings.deployment_region == "cn-shanghai"
     assert captured["region"] == STUDIO_RELEASE_REGION
+
+
+def test_studio_update_settings_keep_active_provider() -> None:
+    settings = StudioUpdateSettings.from_env(provider="byteplus")
+
+    assert settings.provider == "byteplus"
 
 
 def _bundle(
@@ -150,7 +162,7 @@ def test_self_update_preserves_deployed_branding_logo(tmp_path: Path) -> None:
     package = tmp_path / "package"
     package.mkdir()
     updater = StudioSelfUpdater(
-        settings=_settings(),
+        settings=_settings(provider="byteplus"),
         credential_resolver=lambda: ("ak", "sk", "token"),
         branding_logo=SiteLogo(
             content=b"logo",
@@ -159,12 +171,12 @@ def test_self_update_preserves_deployed_branding_logo(tmp_path: Path) -> None:
         ),
     )
 
-    updater._preserve_branding(package)
+    updater._prepare_package(package)
 
     assert (package / "site-logo.png").read_bytes() == b"logo"
-    assert '--site-logo "$ROOT_DIR/site-logo.png"' in (package / "run.sh").read_text(
-        encoding="utf-8"
-    )
+    run_script = (package / "run.sh").read_text(encoding="utf-8")
+    assert '--site-logo "$ROOT_DIR/site-logo.png"' in run_script
+    assert "--provider byteplus" in run_script
 
 
 def test_submit_latest_uses_fixed_deployment_ids_and_sts(
@@ -208,13 +220,18 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
 
         def submit_application_code_bundle_update(self, **kwargs: Any) -> None:
             package = Path(str(kwargs["path"]))
-            assert (package / "run.sh").is_file()
+            assert "--provider byteplus" in (package / "run.sh").read_text(
+                encoding="utf-8"
+            )
             assert (package / "requirements.txt").is_file()
             assert not (package / STUDIO_RELEASE_ENVIRONMENT_FILENAME).exists()
             captured["update"] = kwargs
 
     updater = StudioSelfUpdater(
-        settings=_settings(deployment_region="cn-shanghai"),
+        settings=_settings(
+            deployment_region="ap-southeast-1",
+            provider="byteplus",
+        ),
         credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
         branding_logo=None,
     )
@@ -228,14 +245,18 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
         "access_key": "sts-ak",
         "secret_key": "sts-sk",
         "session_token": "sts-token",
-        "region": "cn-shanghai",
+        "region": "ap-southeast-1",
         "project_name": "default",
+        "provider": "byteplus",
     }
     update = captured["update"]
     assert update["application_id"] == "application-id"
     assert update["function_id"] == "function-id"
     assert update["environment_overrides"] == {
         "VEADK_STUDIO_RELEASE_VERSION": manifest.version,
+        "CLOUD_PROVIDER": "byteplus",
+        "AGENTKIT_CLOUD_PROVIDER": "byteplus",
+        "BYTEPLUS_REGION": "ap-southeast-1",
         "VEADK_STUDIO_APMPLUS_AID": "12345",
         "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
     }
@@ -314,14 +335,104 @@ def test_submit_latest_reports_missing_vefaas_permissions(
     )
 
 
+def test_byteplus_console_url_uses_byteplus_domain() -> None:
+    updater = StudioSelfUpdater(
+        settings=_settings(
+            provider="byteplus",
+            deployment_region="ap-southeast-1",
+        ),
+        credential_resolver=lambda: ("ak", "sk", ""),
+        branding_logo=None,
+    )
+
+    assert updater._console_url() == (
+        "https://console.byteplus.com/vefaas/"
+        "region:vefaas+ap-southeast-1/function/detail/function-id"
+    )
+
+
+def test_application_status_uses_current_function_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _Client:
+        def get_function(self, request: Any) -> SimpleNamespace:
+            captured["function_id"] = request.id
+            return SimpleNamespace(
+                envs=[
+                    SimpleNamespace(
+                        key="VEADK_STUDIO_RELEASE_VERSION",
+                        value="20260810201000",
+                    )
+                ],
+                last_update_time="2026-08-10 13:34:01.333 +0000 UTC",
+            )
+
+    class _VeFaaS:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+            self.client = _Client()
+
+        def _get_application_status(self, application_id: str) -> tuple[str, dict]:
+            captured["application_id"] = application_id
+            return (
+                "deploy_success",
+                {
+                    "Result": {
+                        "CloudResource": json.dumps(
+                            {
+                                "framework": {
+                                    "function": {
+                                        "Envs": [
+                                            {
+                                                "Key": "VEADK_STUDIO_RELEASE_VERSION",
+                                                "Value": "bundled",
+                                            }
+                                        ],
+                                        "LastUpdateTime": (
+                                            "2026-08-10 13:30:00.000 +0000 UTC"
+                                        ),
+                                    }
+                                }
+                            }
+                        ),
+                        "StableRevisionNumber": 4,
+                        "UpdateTime": "2026-08-10T13:34:50.417Z",
+                    }
+                },
+            )
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    updater = StudioSelfUpdater(
+        settings=_settings(
+            provider="byteplus",
+            deployment_region="ap-southeast-1",
+        ),
+        credential_resolver=lambda: ("ak", "sk", "token"),
+        branding_logo=None,
+    )
+
+    assert updater._application_status() == (
+        "deploy_success",
+        "20260810201000",
+        4,
+        False,
+    )
+    assert captured["provider"] == "byteplus"
+    assert captured["function_id"] == "function-id"
+    assert captured["application_id"] == "application-id"
+
+
 def test_vefaas_update_logs_use_revision_cache_and_redaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict[str, Any]] = []
+    clients: list[dict[str, str]] = []
 
     class _VeFaaS:
-        def __init__(self, **_kwargs: str) -> None:
-            pass
+        def __init__(self, **kwargs: str) -> None:
+            clients.append(kwargs)
 
         def _get_application_logs(self, app_id: str, **kwargs: Any) -> list[str]:
             calls.append({"app_id": app_id, **kwargs})
@@ -332,7 +443,10 @@ def test_vefaas_update_logs_use_revision_cache_and_redaction(
             ]
 
     updater = StudioSelfUpdater(
-        settings=_settings(),
+        settings=_settings(
+            deployment_region="ap-southeast-1",
+            provider="byteplus",
+        ),
         credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
         branding_logo=None,
     )
@@ -343,6 +457,7 @@ def test_vefaas_update_logs_use_revision_cache_and_redaction(
 
     assert first == second
     assert len(calls) == 1
+    assert clients[0]["provider"] == "byteplus"
     assert calls[0] == {
         "app_id": "application-id",
         "revision_number": 7,
