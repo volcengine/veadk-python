@@ -32,6 +32,7 @@ _SKILL_API_TIMEOUT = 1800
 _A2A_POLL_INTERVAL = 2.0
 _A2A_REQUEST_TIMEOUT = 60
 _A2A_HISTORY_LENGTH = 20
+_A2A_RETRY_STATUS_CODES = frozenset({502, 503, 504})
 _A2A_TERMINAL_STATES = frozenset(
     {
         "completed",
@@ -69,6 +70,24 @@ def _skill_api_url(endpoint: str, path: str) -> str:
     return urlunsplit(
         (parts.scheme, parts.netloc, joined_path, parts.query, parts.fragment)
     )
+
+
+def _a2a_jsonrpc_url(endpoint: str) -> str:
+    if not endpoint:
+        raise RuntimeError("AgentKit session endpoint is empty")
+    parts = urlsplit(endpoint)
+    normalized_path = parts.path.rstrip("/")
+    if normalized_path.endswith("/a2a"):
+        return urlunsplit(
+            (
+                parts.scheme,
+                parts.netloc,
+                normalized_path,
+                parts.query,
+                parts.fragment,
+            )
+        )
+    return _skill_api_url(endpoint, "/a2a")
 
 
 def _post_json(
@@ -189,8 +208,39 @@ def _post_a2a_jsonrpc(
     endpoint: str,
     payload: dict[str, object],
     timeout: int,
+    retry_until: float | None = None,
 ) -> dict:
-    raw = _post_json(endpoint=endpoint, path="/a2a", payload=payload, timeout=timeout)
+    url = _a2a_jsonrpc_url(endpoint)
+    while True:
+        request_timeout = (
+            _a2a_request_timeout(retry_until) if retry_until is not None else timeout
+        )
+        if request_timeout <= 0:
+            raise TimeoutError("Timed out while waiting for A2A endpoint")
+        req = request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with request.urlopen(req, timeout=request_timeout) as response:
+                raw = response.read()
+            break
+        except error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            if exc.code in _A2A_RETRY_STATUS_CODES and retry_until is not None:
+                remaining = retry_until - time.monotonic()
+                if remaining > 0:
+                    time.sleep(min(_A2A_POLL_INTERVAL, remaining))
+                    continue
+            raise RuntimeError(
+                f"AgentKit Skill /a2a request failed with HTTP {exc.code}: {detail}"
+            ) from exc
+        except error.URLError as exc:
+            raise RuntimeError(
+                f"AgentKit Skill /a2a endpoint is not reachable: {exc.reason}"
+            ) from exc
     try:
         response = json.loads(raw.decode("utf-8"))
     except json.JSONDecodeError as exc:
@@ -244,6 +294,7 @@ def _execute_skills_via_a2a(
                 },
             },
             timeout=_a2a_request_timeout(deadline),
+            retry_until=deadline,
         ),
     )
     task_id = _a2a_task_id(task)
@@ -267,6 +318,7 @@ def _execute_skills_via_a2a(
                     },
                 },
                 timeout=_a2a_request_timeout(deadline),
+                retry_until=deadline,
             ),
         )
 

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import importlib.util
+import io
 import json
 import sys
 import types
@@ -397,6 +398,125 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         self.assertEqual("custom timeout", result)
         self.assertEqual([60], captured_timeouts)
 
+    def test_a2a_posts_to_vefaas_a2a_endpoint_with_query_auth(self):
+        captured_requests = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "test-1",
+                        "result": {
+                            "kind": "task",
+                            "id": "task-1",
+                            "status": {
+                                "state": "completed",
+                                "message": {
+                                    "parts": [{"kind": "text", "text": "hello result"}]
+                                },
+                            },
+                        },
+                    }
+                ).encode()
+
+        def fake_urlopen(request, timeout=None):
+            captured_requests.append((request, timeout))
+            return FakeResponse()
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: (
+                "https://sandbox.test/?faasInstanceName=inst&Authorization=key"
+            ),
+        )
+
+        with patch.object(module.request, "urlopen", fake_urlopen):
+            result = module.execute_skills("hello", tool_context=self._tool_context())
+
+        self.assertEqual("hello result", result)
+        self.assertEqual(1, len(captured_requests))
+        send_request, send_timeout = captured_requests[0]
+        send_payload = json.loads(send_request.data.decode())
+        self.assertEqual(
+            "https://sandbox.test/a2a?faasInstanceName=inst&Authorization=key",
+            send_request.full_url,
+        )
+        self.assertEqual("application/json", send_request.get_header("Content-type"))
+        self.assertIsNone(send_request.get_header("Accept"))
+        self.assertEqual(60, send_timeout)
+        self.assertEqual("2.0", send_payload["jsonrpc"])
+        self.assertEqual("message/send", send_payload["method"])
+        self.assertEqual("message", send_payload["params"]["message"]["kind"])
+        self.assertEqual("user", send_payload["params"]["message"]["role"])
+        self.assertEqual(
+            [{"kind": "text", "text": "hello"}],
+            send_payload["params"]["message"]["parts"],
+        )
+        self.assertFalse(send_payload["params"]["configuration"]["blocking"])
+        self.assertEqual(20, send_payload["params"]["configuration"]["historyLength"])
+        self.assertEqual("session-1", send_payload["params"]["metadata"]["session_id"])
+        self.assertEqual("user", send_payload["params"]["metadata"]["user_id"])
+
+    def test_retry_502(self):
+        captured_timeouts = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "send",
+                        "result": {
+                            "kind": "task",
+                            "id": "task-1",
+                            "status": {
+                                "state": "completed",
+                                "message": {
+                                    "parts": [{"kind": "text", "text": "retry ok"}]
+                                },
+                            },
+                        },
+                    }
+                ).encode()
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
+
+        def fake_urlopen(request, timeout=None):
+            captured_timeouts.append(timeout)
+            if len(captured_timeouts) == 1:
+                raise module.error.HTTPError(
+                    request.full_url,
+                    502,
+                    "Bad Gateway",
+                    hdrs=None,
+                    fp=io.BytesIO(b"temporary gateway error"),
+                )
+            return FakeResponse()
+
+        with (
+            patch.object(module.request, "urlopen", fake_urlopen),
+            patch.object(module.time, "sleep") as sleep,
+        ):
+            result = module.execute_skills("hello", tool_context=self._tool_context())
+
+        self.assertEqual("retry ok", result)
+        self.assertEqual([60, 60], captured_timeouts)
+        sleep.assert_called_once_with(2.0)
+
     def test_a2a_mode_raises_when_task_fails(self):
         responses = [
             {
@@ -456,6 +576,50 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
                 "https://sandbox.test/?faasInstanceName=inst&Authorization=key",
                 "/a2a",
             ),
+        )
+
+    def test_a2a_jsonrpc_url_appends_a2a_before_vefaas_query(self):
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "",
+        )
+
+        self.assertEqual(
+            "https://sandbox.test/a2a?faasInstanceName=inst&Authorization=key",
+            module._a2a_jsonrpc_url(
+                "https://sandbox.test/?faasInstanceName=inst&Authorization=key"
+            ),
+        )
+        self.assertEqual(
+            "https://sc56tro0thc3nstnfkabv.apigateway-cn-beijing.volceapi.com/a2a"
+            "?faasInstanceName=vefaas-example-sandbox&Authorization=test-token",
+            module._a2a_jsonrpc_url(
+                "https://sc56tro0thc3nstnfkabv.apigateway-cn-beijing.volceapi.com"
+                "?faasInstanceName=vefaas-example-sandbox&Authorization=test-token"
+            ),
+        )
+
+    def test_a2a_jsonrpc_url_keeps_explicit_a2a_endpoint(self):
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "",
+        )
+
+        endpoint = "https://sandbox.test/a2a?faasInstanceName=inst&Authorization=key"
+        self.assertEqual(endpoint, module._a2a_jsonrpc_url(endpoint))
+        self.assertEqual(
+            endpoint,
+            module._a2a_jsonrpc_url(
+                "https://sandbox.test/a2a/?faasInstanceName=inst&Authorization=key"
+            ),
+        )
+
+    def test_a2a_jsonrpc_url_appends_a2a_for_plain_endpoint(self):
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "",
+        )
+
+        self.assertEqual(
+            "https://sandbox.test/a2a",
+            module._a2a_jsonrpc_url("https://sandbox.test"),
         )
 
     def test_raises_runtime_error_when_session_endpoint_is_unavailable(self):
