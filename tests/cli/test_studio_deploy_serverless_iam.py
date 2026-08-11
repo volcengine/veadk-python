@@ -208,6 +208,14 @@ def test_studio_deploy_checks_serverless_role_with_custom_function_role(
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
+        "frontend.server.storage.provisioning.resolve_studio_storage_for_deploy",
+        lambda **kwargs: SimpleNamespace(
+            bucket="veadk-studio-test",
+            region=kwargs["region"],
+            object_host=f"veadk-studio-test.tos-{kwargs['region']}.volces.com",
+        ),
+    )
+    monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
         lambda **kwargs: f"auto-{kwargs['name']}",
     )

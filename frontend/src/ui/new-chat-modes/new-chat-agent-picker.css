@@ -20,13 +20,13 @@
   gap: 6px;
   max-width: min(220px, 42vw);
   min-height: 36px;
-  padding: 2px 8px 2px 6px;
+  padding: 2px 8px;
   border: 0;
   border-radius: 7px;
   background: transparent;
   color: hsl(var(--muted-foreground));
   font: inherit;
-  font-size: 15px;
+  font-size: 13px;
   line-height: 20px;
   cursor: pointer;
   transition: color 140ms ease, background 140ms ease;
@@ -48,9 +48,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.new-chat-agent-picker__trigger-icon,
 .new-chat-agent-picker__trigger-chevron { display: block; }
-.new-chat-agent-picker__trigger-icon { width: 17px; height: 17px; flex: 0 0 auto; }
 .new-chat-agent-picker__trigger-chevron {
   width: 13px;
   height: 13px;

@@ -35,7 +35,11 @@ export function ImageGenerateIcon(props: ToolIconProps) {
       <rect x="3.25" y="5.25" width="15.5" height="13.5" rx="2.25" />
       <circle cx="8.1" cy="9.3" r="1.35" />
       <path d="m4.7 16.5 3.65-3.7 2.45 2.25 2.2-2.2 4.35 4.1" />
-      <path d="m19.4 2.75.48 1.37 1.37.48-1.37.48-.48 1.37-.48-1.37-1.37-.48 1.37-.48.48-1.37Z" fill="currentColor" stroke="none" />
+      <path
+        d="m19.4 2.75.48 1.37 1.37.48-1.37.48-.48 1.37-.48-1.37-1.37-.48 1.37-.48.48-1.37Z"
+        fill="currentColor"
+        stroke="none"
+      />
     </svg>
   );
 }
@@ -52,8 +56,14 @@ export function VideoGenerateIcon(props: ToolIconProps) {
       aria-hidden="true"
       {...props}
     >
-      <rect x="3.25" y="5.25" width="17.5" height="13.5" rx="2.4" />
-      <path d="M3.25 9h17.5M6.75 5.25 9.3 9M12 5.25 14.55 9M17.25 5.25 19.8 9" />
+      <path
+        className="video-generate-icon__body"
+        d="M3.25 9h17.5v7.35a2.4 2.4 0 0 1-2.4 2.4H5.65a2.4 2.4 0 0 1-2.4-2.4V9Z"
+      />
+      <g className="video-generate-icon__clapper">
+        <path d="M3.25 9V7.65a2.4 2.4 0 0 1 2.4-2.4h12.7a2.4 2.4 0 0 1 2.4 2.4V9H3.25Z" />
+        <path d="M6.75 5.25 9.3 9M12 5.25 14.55 9M17.25 5.25 19.8 9" />
+      </g>
       <path d="m10.25 11.45 4 2.55-4 2.55v-5.1Z" />
     </svg>
   );
@@ -132,7 +142,11 @@ export function LoadSkillIcon(props: ToolIconProps) {
     >
       <path d="M4.25 6.25h6.25c1 0 1.5.55 1.5 1.45v11.05c0-.9-.5-1.45-1.5-1.45H4.25V6.25Z" />
       <path d="M19.75 9.1v8.2H13.5c-1 0-1.5.55-1.5 1.45V7.7c0-.9.5-1.45 1.5-1.45h2.15" />
-      <path d="m19 3.2.58 1.62 1.62.58-1.62.58L19 7.6l-.58-1.62-1.62-.58 1.62-.58L19 3.2Z" fill="currentColor" stroke="none" />
+      <path
+        d="m19 3.2.58 1.62 1.62.58-1.62.58L19 7.6l-.58-1.62-1.62-.58 1.62-.58L19 3.2Z"
+        fill="currentColor"
+        stroke="none"
+      />
     </svg>
   );
 }

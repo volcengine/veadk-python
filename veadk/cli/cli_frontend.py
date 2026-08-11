@@ -31,7 +31,7 @@ import sys
 import tempfile
 import unicodedata
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import monotonic
@@ -111,6 +111,30 @@ _CP_PIPELINE_RUN_RE = re.compile(
     r"Pipeline triggered successfully,\s*run ID:\s*(?P<id>\S+)"
 )
 _RUNTIME_DESCRIPTION_MAX_BYTES = 255
+_STUDIO_STORAGE_ENV_KEYS = (
+    "VEADK_STUDIO_TOS_BUCKET",
+    "VEADK_STUDIO_TOS_REGION",
+    "VEADK_VIDEO_ASSET_STORAGE",
+    "VEADK_VIDEO_TOS_BUCKET",
+    "VEADK_VIDEO_TOS_REGION",
+    "VEADK_VIDEO_TOS_ENDPOINT",
+    "VEADK_VIDEO_TOS_PREFIX",
+    "VEADK_VIDEO_MAX_FILE_BYTES",
+    "VEADK_MEDIA_STORAGE",
+    "VEADK_MEDIA_TOS_PREFIX",
+    "DATABASE_TOS_BUCKET",
+    "DATABASE_TOS_REGION",
+    "DATABASE_TOS_ENDPOINT",
+)
+
+
+def _studio_storage_environment(
+    source: Mapping[str, str | None],
+) -> dict[str, str]:
+    """Return only the non-secret Studio storage settings safe for VeFaaS."""
+    return {
+        key: str(source[key]) for key in _STUDIO_STORAGE_ENV_KEYS if source.get(key)
+    }
 
 
 def _byteplus_vefaas_application_name_suggestion(name: str) -> str:
@@ -1381,6 +1405,26 @@ def _run_frontend_server(
     def _coerce_cloud_region(region: str | None) -> str:
         return (region or "").strip() or _default_cloud_region()
 
+    from frontend.server.video.routes import (
+        build_video_service,
+        mount_video_routes,
+    )
+
+    def _video_owner(request: Request) -> str:
+        principal = _current_principal(request)
+        if access_policy.enabled and principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        return principal.owner_id if principal is not None else "local"
+
+    mount_video_routes(
+        app,
+        service=build_video_service(
+            provider=provider,
+            resolve_credentials=_resolve_ve_credentials,
+        ),
+        identity_resolver=_video_owner,
+    )
+
     from frontend.server.deployment_resources import (
         mount_deployment_resource_routes,
     )
@@ -1557,6 +1601,7 @@ def _run_frontend_server(
             "A2A_REGISTRY_ACCESS_KEY",
             "A2A_REGISTRY_SECRET_KEY",
             "A2A_REGISTRY_SESSION_TOKEN",
+            *_STUDIO_STORAGE_ENV_KEYS,
         }
     )
 
@@ -1713,7 +1758,10 @@ def _run_frontend_server(
     @app.get("/web/system-info")
     async def _web_system_info(request: Request):
         """Return non-secret Studio resource identifiers for system diagnostics."""
-        _require_agent_management(request)
+        _require_studio_admin(request)
+        from frontend.server.storage import StudioStorageConfig
+
+        storage_config = StudioStorageConfig.from_env(provider)
         sandbox_tools = (
             ("codex", "Codex Sandbox", "SANDBOX_CHAT_CODEX"),
             ("openclaw", "OpenClaw Sandbox", "SANDBOX_CHAT_OPENCLAW"),
@@ -1721,6 +1769,9 @@ def _run_frontend_server(
             ("dev", "Dev Sandbox", "SANDBOX_DEV"),
         )
         return {
+            "storage": {
+                "tosAddress": storage_config.object_host,
+            },
             "sandboxTools": [
                 {
                     "kind": kind,
@@ -1728,7 +1779,7 @@ def _run_frontend_server(
                     "toolId": (os.getenv(environment_key) or "").strip(),
                 }
                 for kind, label, environment_key in sandbox_tools
-            ]
+            ],
         }
 
     @app.get("/web/agent-info/{app_name}")
@@ -2189,6 +2240,7 @@ def _run_frontend_server(
             "AGENTKIT_CLOUD_PROVIDER",
             "BYTEPLUS_WEB_SEARCH_API_KEY",
             "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY",
+            *_STUDIO_STORAGE_ENV_KEYS,
         ):
             if os.getenv(key):
                 env[key] = os.environ[key]
@@ -7667,6 +7719,38 @@ def frontend_deploy(
     # shipped as a plain env var.
     os.environ["IAM_ROLE"] = role_trn
 
+    from frontend.server.storage.provisioning import (
+        StudioStorageProvisioningError,
+        resolve_studio_storage_for_deploy,
+    )
+
+    click.echo("Ensuring Studio persistent storage…")
+    try:
+        storage_config = resolve_studio_storage_for_deploy(
+            provider=provider_id,
+            region=region,
+            access_key=ak,
+            secret_key=sk,
+            session_token=session_token or "",
+            source=veadk_environments,
+        )
+    except StudioStorageProvisioningError as error:
+        detail = _safe_exception_detail(
+            error,
+            secrets=(ak, sk, session_token),
+        )
+        raise click.ClickException(
+            f"Failed to provision Studio persistent storage.\n{detail}"
+        ) from error
+    studio_storage_environment = _studio_storage_environment(veadk_environments)
+    studio_storage_environment.update(
+        {
+            "VEADK_STUDIO_TOS_BUCKET": storage_config.bucket,
+            "VEADK_STUDIO_TOS_REGION": storage_config.region,
+        }
+    )
+    click.echo(f"Studio persistent storage ready: {storage_config.object_host}")
+
     sandbox_tool_ids = {
         "codex": sandbox_chat_codex_tool_id,
         "openclaw": sandbox_chat_openclaw_tool_id,
@@ -7881,6 +7965,7 @@ def frontend_deploy(
     veadk_environments["VEADK_STUDIO_DEPLOY_ID"] = studio_deploy_id
     veadk_environments["VEADK_STUDIO_USER_POOL_ID"] = user_pool_id
     veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] = region
+    veadk_environments.update(studio_storage_environment)
     veadk_environments.update(apmplus_environment)
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret

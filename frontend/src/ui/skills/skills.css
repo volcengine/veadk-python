@@ -647,7 +647,11 @@
 .skill-generation__spinner circle { opacity: .2; }
 .skill-generation__activity .skill-conversation { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
 .skill-generation__files-empty { display: grid; flex: 1; place-items: center; color: hsl(var(--muted-foreground)); font-size: 12.5px; }
+.skill-generation__ready-actions { grid-column: 1 / -1; display: flex; min-width: 0; align-items: flex-end; gap: 10px; }
+.skill-generation__publish-target { width: min(320px, 36%); min-width: 240px; }
+.skill-generation__publish-target .skill-config-select { margin-bottom: 0; }
 .skill-generation__followup { grid-column: 1 / -1; display: flex; align-items: flex-end; gap: 8px; padding: 6px 6px 6px 12px; border: 1px solid hsl(var(--border)); border-radius: 18px; background: hsl(var(--background)); }
+.skill-generation__ready-actions .skill-generation__followup { min-width: 0; flex: 1; }
 .skill-generation__followup textarea { min-width: 0; min-height: 36px; max-height: 120px; flex: 1; box-sizing: border-box; padding: 8px 4px; resize: none; border: 0; outline: 0; background: transparent; color: hsl(var(--foreground)); font: inherit; font-size: 13px; line-height: 20px; }
 .skill-generation__followup textarea::placeholder { color: hsl(var(--muted-foreground)); }
 .skill-generation__followup .skill-button { height: 36px; min-height: 36px; }
@@ -683,6 +687,8 @@ button.skill-file-tree__row:hover { background: hsl(var(--foreground) / .045); c
   .skill-generation__candidate { grid-template-columns: 1fr; overflow-y: auto; }
   .skill-generation__activity,
   .skill-generation__files { min-height: 420px; }
+  .skill-generation__ready-actions { grid-column: 1; align-items: stretch; flex-direction: column; }
+  .skill-generation__publish-target { width: 100%; min-width: 0; }
   .skill-generation__followup { grid-column: 1; }
 }
 
