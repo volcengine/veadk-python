@@ -17,7 +17,7 @@ const LTM_IDS = new Set([
   "openviking",
   "mem0",
 ]);
-const KB_IDS = new Set(["opensearch", "viking", "context_search"]);
+const KB_IDS = new Set(["opensearch", "viking", "context_search", "openviking"]);
 const EXPORTER_IDS = new Set(["apmplus", "cozeloop", "tls"]);
 const TOOL_IDS = new Set([
   "web_search",

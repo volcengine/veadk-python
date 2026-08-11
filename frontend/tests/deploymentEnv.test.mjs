@@ -331,6 +331,75 @@ test("declares the OpenViking long-term memory runtime configuration", () => {
   assert.match(projectPreviewStyles, /\.pp-env-help:hover \.pp-env-help-popover/);
 });
 
+test("declares the OpenViking knowledge runtime configuration", () => {
+  const openviking = KB_BACKENDS.find((option) => option.id === "openviking");
+
+  assert.ok(openviking);
+  assert.equal(openviking.label, "OpenViking Knowledge");
+  assert.equal(openviking.pipExtra, undefined);
+  assert.deepEqual(
+    openviking.env.map((env) => [env.key, env.required, env.placeholder ?? ""]),
+    [
+      [
+        "DATABASE_OPENVIKING_URL",
+        true,
+        "https://api.vikingdb.cn-beijing.volces.com/openviking",
+      ],
+      ["DATABASE_OPENVIKING_API_KEY", true, ""],
+      ["DATABASE_OPENVIKING_USER_ID", false, "default"],
+      [
+        "DATABASE_OPENVIKING_TARGET_URI",
+        false,
+        "viking://user/default/resources/<index>/",
+      ],
+    ],
+  );
+  assert.match(
+    openviking.env.find((env) => env.key === "DATABASE_OPENVIKING_USER_ID")
+      ?.help ?? "",
+    /viking:\/\/user\/<此值>\/resources\/<知识库索引>\//,
+  );
+  assert.match(
+    openviking.env.find((env) => env.key === "DATABASE_OPENVIKING_TARGET_URI")
+      ?.help ?? "",
+    /KnowledgeBase index/,
+  );
+  assert.equal(
+    firstMissingRuntimeEnv(openviking.env, {
+      DATABASE_OPENVIKING_URL: "https://openviking.local",
+    })?.key,
+    "DATABASE_OPENVIKING_API_KEY",
+  );
+  assert.deepEqual(
+    runtimeEnvVars(openviking.env, {
+      DATABASE_OPENVIKING_URL: "https://openviking.local",
+      DATABASE_OPENVIKING_API_KEY: "test-api-key",
+      DATABASE_OPENVIKING_TARGET_URI: "viking://user/team/resources/faq/",
+    }),
+    [
+      {
+        key: "DATABASE_OPENVIKING_URL",
+        value: "https://openviking.local",
+      },
+      { key: "DATABASE_OPENVIKING_API_KEY", value: "test-api-key" },
+      {
+        key: "DATABASE_OPENVIKING_TARGET_URI",
+        value: "viking://user/team/resources/faq/",
+      },
+    ],
+  );
+  assert.match(customCreateSource, /OpenViking 资源索引/);
+  assert.match(customCreateSource, /id === "viking" \|\| id === "openviking"/);
+  assert.match(
+    customCreateSource,
+    /item\.key === "DATABASE_OPENVIKING_USER_ID"[\s\S]*<OpenVikingKnowledgeIndexField/,
+  );
+  assert.match(
+    customCreateSource,
+    /默认值：留空[\s\S]*viking:\/\/user\/\{知识库归属 ID，未填则 default\}\/resources\/\{资源索引\}\//,
+  );
+});
+
 test("does not request auto-resolved credentials per component", () => {
   const envKeys = [
     ...BUILTIN_TOOLS,
