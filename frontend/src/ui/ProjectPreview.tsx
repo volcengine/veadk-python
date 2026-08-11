@@ -77,12 +77,12 @@ import {
   type IdentityUserPool,
 } from "../adk/client";
 import {
-  trackAgentDeployFailed,
-  trackAgentDeploySucceeded,
-  trackAgentSourceDownloadFailed,
-  trackAgentSourceDownloadSucceeded,
-  type DeploymentTelemetryOrigin,
-} from "../adk/telemetryEvents";
+  beginAgentDeploy,
+  beginAgentSourceDownload,
+  classifyTelemetryError,
+  type AgentDeployFailedProps,
+  type AgentDeployStartedProps,
+} from "../telemetry";
 import {
   cloudRegionOptions,
   defaultCloudRegion,
@@ -98,12 +98,36 @@ import {
   DeploymentResources,
   deploymentResourcesError,
 } from "./DeploymentResources";
+
 import {
   DeploymentSelect,
   type DeploymentSelectOption,
 } from "./DeploymentSelect";
 import { mergeDeployBuildLog } from "./deployBuildLog";
 import "./ProjectPreview.css";
+
+interface DeploymentTelemetryOrigin {
+  source: AgentDeployStartedProps["deploySource"];
+  createMode: AgentDeployStartedProps["createMode"];
+  aiAssisted: boolean;
+}
+
+function telemetryDeployPhase(
+  phase: string | undefined,
+): AgentDeployFailedProps["failedPhase"] {
+  switch (phase) {
+    case "prepare":
+    case "upload":
+    case "build":
+    case "deploy":
+    case "publish":
+    case "update":
+    case "evaluation":
+      return phase;
+    default:
+      return "unknown";
+  }
+}
 
 const CodeEditor = lazy(() => import("./CodeEditor"));
 const ignoreCanvasAction = () => undefined;
@@ -886,11 +910,14 @@ export function ProjectPreview({
     project.files.find((f) => f.path === selected) ?? null;
   const networkMode = network?.mode ?? "public";
   const deploymentTelemetryBase = () => ({
-    telemetry: deploymentTelemetry,
-    action: deploymentRuntimeId ? "update" as const : "create" as const,
-    region: deployRegion,
-    networkType: networkMode,
-    feishuEnabled,
+    agentId: String(agentName?.trim() || project.name || "unknown"),
+    deployAction: deploymentRuntimeId ? "update" as const : "create" as const,
+    deploySource: deploymentTelemetry.source,
+    createMode: deploymentTelemetry.createMode,
+    aiAssisted: deploymentTelemetry.aiAssisted ? 1 as const : 0 as const,
+    deployRegion: String(deployRegion),
+    runtimeNetworkType: networkMode,
+    feishuEnabled: feishuEnabled ? 1 as const : 0 as const,
   });
   const automaticEnvRows = runtimeEnvDisplayRows(
     feishuEnabled ? [...deploymentEnv, ...FEISHU_ENV] : deploymentEnv,
@@ -1091,6 +1118,7 @@ export function ProjectPreview({
     const taskId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let taskRuntimeName = agentName?.trim() || project.name || "生成中…";
     const taskStartedAt = Date.now();
+    const operation = beginAgentDeploy(deploymentTelemetryBase());
     const initialTask: DeploymentTaskUpdate = {
       id: taskId,
       runtimeName: taskRuntimeName,
@@ -1214,9 +1242,8 @@ export function ProjectPreview({
         setDeployResult(result);
         setActivePhase(null);
       }
-      trackAgentDeploySucceeded({
-        ...deploymentTelemetryBase(),
-        runtimeId: result.runtimeId || deploymentRuntimeId || "",
+      operation.succeed({
+        runtimeId: String(result.runtimeId || deploymentRuntimeId || ""),
       });
       onDeploymentTaskChange?.({
         id: taskId,
@@ -1250,6 +1277,10 @@ export function ProjectPreview({
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof DOMException && err.name === "AbortError") {
+        operation.fail({
+          failedPhase: telemetryDeployPhase(latestPhase),
+          ...classifyTelemetryError(err, { phase: latestPhase }),
+        });
         if (mountedRef.current) {
           setDeployError(null);
           setActivePhase(null);
@@ -1269,10 +1300,9 @@ export function ProjectPreview({
       }
       if (mountedRef.current) setDeployError(message);
       const buildLog = mergeBuildFailureLog(message);
-      trackAgentDeployFailed({
-        ...deploymentTelemetryBase(),
-        phase: latestPhase,
-        error: err,
+      operation.fail({
+        failedPhase: telemetryDeployPhase(latestPhase),
+        ...classifyTelemetryError(err, { phase: latestPhase }),
       });
       onDeploymentTaskChange?.({
         id: taskId,
@@ -1376,8 +1406,14 @@ export function ProjectPreview({
   }
 
   function handleDownloadZip() {
-    const startedAt = Date.now();
-    const action = deploymentRuntimeId ? "update" as const : "create" as const;
+    const base = deploymentTelemetryBase();
+    const operation = beginAgentSourceDownload({
+      agentId: base.agentId,
+      deployAction: base.deployAction,
+      deploySource: base.deploySource,
+      createMode: base.createMode,
+      aiAssisted: base.aiAssisted,
+    });
     try {
       const blob = buildZip(project.files);
       const url = URL.createObjectURL(blob);
@@ -1388,20 +1424,14 @@ export function ProjectPreview({
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      trackAgentSourceDownloadSucceeded({
-        telemetry: deploymentTelemetry,
-        action,
+      operation.succeed({
         fileCount: project.files.length,
         zipSizeBytes: blob.size,
-        durationMs: Date.now() - startedAt,
       });
     } catch (error) {
-      trackAgentSourceDownloadFailed({
-        telemetry: deploymentTelemetry,
-        action,
+      operation.fail({
         fileCount: project.files.length,
-        durationMs: Date.now() - startedAt,
-        error,
+        ...classifyTelemetryError(error),
       });
       throw error;
     }

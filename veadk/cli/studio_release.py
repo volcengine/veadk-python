@@ -348,7 +348,6 @@ def build_studio_release(
     from veadk.cli.studio_package import (
         build_frontend_assets,
         build_local_studio_requirements,
-        studio_release_environment_from_env,
         write_studio_package,
     )
 
@@ -373,15 +372,10 @@ def build_studio_release(
             dependency_wheels=dependency_wheels,
             provider="byteplus",
         )
-        try:
-            release_environment = studio_release_environment_from_env()
-        except ValueError as error:
-            raise StudioReleaseError(str(error)) from error
         write_studio_package(
             package_dir,
             requirements=requirements,
             site_logo=None,
-            release_environment=release_environment,
             provider=None,
         )
         bundle = output_dir / f"studio-bundle-{version}.zip"

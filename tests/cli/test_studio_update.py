@@ -705,6 +705,10 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
         "veadk.cli.studio_package.write_studio_package", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
+        "veadk.cli.cli_frontend._new_studio_deploy_id",
+        lambda: "stddep_update",
+    )
+    monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
         lambda **kwargs: code_tools.append(kwargs) or "codex-snapshot-tool",
     )
@@ -725,7 +729,14 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
     class _FakeVeFaaS:
         def __init__(self, **_: str) -> None:
             self.client = SimpleNamespace(
-                get_function=lambda _request: SimpleNamespace(envs=[])
+                get_function=lambda _request: SimpleNamespace(
+                    envs=[
+                        SimpleNamespace(
+                            key="OAUTH2_USER_POOL_ID",
+                            value="legacy-user-pool",
+                        )
+                    ]
+                )
             )
 
         def update_application_code_bundle(self, **kwargs: object) -> str:
@@ -760,6 +771,12 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
     overrides = captured["environment_overrides"]
     assert overrides == {
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
+        "VEADK_STUDIO_DEPLOY_ID": "stddep_update",
+        "VEADK_STUDIO_USER_POOL_ID": "legacy-user-pool",
+        "VEADK_STUDIO_APPLICATION_ID": "app-id",
+        "VEADK_STUDIO_FUNCTION_ID": "function-app-id",
+        "VEADK_STUDIO_DEPLOY_REGION": "cn-beijing",
+        "VEADK_STUDIO_PROJECT": "default",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
         "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",

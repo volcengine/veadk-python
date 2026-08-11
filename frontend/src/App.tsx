@@ -333,22 +333,46 @@ import {
   isAuthenticationPending,
 } from "./adk/authSession";
 import {
-  identifyStudioTelemetryUser,
-  initStudioTelemetry,
-} from "./adk/telemetry";
-import {
-  trackAgentConnectFailed,
-  trackAgentConnectSucceeded,
-  trackAgentMessageFailed,
-  trackAgentMessageSucceeded,
-  trackSandboxCreateFailed,
-  trackSandboxCreateSucceeded,
-  trackStudioLoaded,
-  type AgentConnectSource,
-  type AgentMessageSource,
-} from "./adk/telemetryEvents";
+  beginAgentConnect,
+  beginAgentMessage,
+  beginSandboxCreate,
+  classifyTelemetryError,
+  identifyTelemetryUser,
+  initTelemetry,
+  setTelemetryContext,
+  trackStudioSessionStarted,
+  type AgentConnectStartedProps,
+  type AgentConnectSucceededProps,
+  type AgentMessageStartedProps,
+} from "./telemetry";
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
 import { buildSurfaces } from "./a2ui/Surface";
+
+type AgentConnectSource = AgentConnectStartedProps["connectSource"];
+type AgentMessageSource = AgentMessageStartedProps["messageSource"];
+
+function telemetrySandboxStatus(
+  status: string,
+): AgentConnectSucceededProps["sandboxStatus"] {
+  const normalized = status.trim().toLowerCase();
+  switch (normalized) {
+    case "creating":
+    case "starting":
+    case "initializing":
+    case "pending":
+    case "running":
+    case "ready":
+    case "failed":
+    case "error":
+    case "stopped":
+    case "expired":
+    case "deleting":
+    case "deleted":
+      return normalized;
+    default:
+      return "unknown";
+  }
+}
 
 /** Hand-drawn "from zero" mark: a blank Agent canvas ready to create. */
 function ScratchIcon({ className }: { className?: string }) {
@@ -2156,8 +2180,24 @@ export default function App() {
   // chat; privileged pages remain explicit navigation destinations.
   useEffect(() => {
     getUiConfig().then((cfg) => {
-      initStudioTelemetry(cfg.telemetry);
-      trackStudioLoaded({ agentsSource: cfg.agentsSource });
+      const environment = import.meta.env.MODE === "development"
+        ? "dev"
+        : import.meta.env.MODE === "staging"
+        ? "staging"
+        : "prod";
+      void initTelemetry({ enabled: cfg.telemetry.enabled, environment });
+      const studio = cfg.telemetry.studio;
+      setTelemetryContext({
+        userPoolId: studio?.userPoolId ?? "",
+        studioDeployId: studio?.deployId ?? "",
+        applicationId: studio?.applicationId ?? "",
+        functionId: studio?.functionId ?? "",
+        studioRegion: studio?.region ?? "",
+        studioProject: studio?.project ?? "",
+        studioVersion: studio?.version || cfg.version,
+        environment,
+        cloudProvider: cfg.provider,
+      });
       setFeatures(cfg.features);
       setAgentsSource(cfg.agentsSource);
       setCloudProvider(cfg.provider);
@@ -2168,13 +2208,21 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !userInfo || !access) return;
-    identifyStudioTelemetryUser({
-      userId: access.telemetry.userId,
-      role: access.role,
-      local: localMode,
+    if (
+      authStatus !== "authenticated" ||
+      !userInfo ||
+      !access ||
+      !uiConfigLoaded
+    ) return;
+    const userUniqueId = String(access.telemetry.userId).trim();
+    if (!userUniqueId) return;
+    identifyTelemetryUser({
+      userUniqueId,
+      userRole: access.role === "admin" ? "admin" : "member",
+      userSource: localMode ? "local" : "sso",
     });
-  }, [access, authStatus, localMode, userInfo]);
+    trackStudioSessionStarted({ agentsSource });
+  }, [access, agentsSource, authStatus, localMode, uiConfigLoaded, userInfo]);
 
   useEffect(() => {
     setNewRuntimeRegion((region) => {
@@ -2611,6 +2659,10 @@ export default function App() {
     sandboxLaunchAbortRef.current = controller;
     setSandboxLaunchState("loading");
     setSandboxLaunchError("");
+    const operation = beginSandboxCreate({
+      sandboxKind: sandboxLaunchKind,
+      sandboxSource: sandboxLaunchFromAgents ? "my_agents" : "new_chat",
+    });
     try {
       const createdSession = sandboxLaunchKind === "codex"
         ? await sandboxClient.startSession({
@@ -2623,12 +2675,11 @@ export default function App() {
             persistent,
             signal: controller.signal,
           });
-      if (sandboxLaunchAbortRef.current !== controller) return;
-      trackSandboxCreateSucceeded({
-        kind: sandboxLaunchKind,
-        source: sandboxLaunchFromAgents ? "my_agents" : "new_chat",
-        sessionId: createdSession.id,
-      });
+      if (sandboxLaunchAbortRef.current !== controller) {
+        operation.fail({ errorKind: "abort" });
+        return;
+      }
+      operation.succeed({ sandboxId: String(createdSession.id) });
       if (sandboxLaunchFromAgents) {
         setSandboxAgentRefreshKey((current) => current + 1);
         setSandboxLaunchOpen(false);
@@ -2665,13 +2716,9 @@ export default function App() {
       setSandboxLaunchOpen(false);
       setSandboxLaunchState("confirm");
     } catch (launchError) {
+      operation.fail(classifyTelemetryError(launchError));
       if ((launchError as Error)?.name === "AbortError") return;
       if (sandboxLaunchAbortRef.current !== controller) return;
-      trackSandboxCreateFailed({
-        kind: sandboxLaunchKind,
-        source: sandboxLaunchFromAgents ? "my_agents" : "new_chat",
-        error: launchError,
-      });
       setSandboxLaunchError(
         launchError instanceof Error
           ? launchError.message
@@ -2690,15 +2737,16 @@ export default function App() {
     source: AgentConnectSource = "my_agents",
   ) {
     setError("");
-    const startedAt = Date.now();
+    const operation = beginAgentConnect({
+      targetId: String(session.id),
+      agentKind: session.toolName,
+      connectSource: source,
+    });
     try {
       if (session.toolName === "codex") {
         const connected = await sandboxClient.connectSession(session.id);
-        trackAgentConnectSucceeded({
-          kind: session.toolName,
-          source,
-          durationMs: Date.now() - startedAt,
-          sandboxStatus: connected.status,
+        operation.succeed({
+          sandboxStatus: telemetrySandboxStatus(connected.status),
         });
         viewSidRef.current = "";
         setSessionId("");
@@ -2718,23 +2766,15 @@ export default function App() {
         session.toolName,
         session.id,
       );
-      trackAgentConnectSucceeded({
-        kind: session.toolName,
-        source,
-        durationMs: Date.now() - startedAt,
-        sandboxStatus: workspace.session.status,
+      operation.succeed({
+        sandboxStatus: telemetrySandboxStatus(workspace.session.status),
       });
       setSandboxAgentWorkspace(workspace);
       setSandboxAgentDetailTarget(null);
       setMyAgents(false);
       setManageAgents(false);
     } catch (cause) {
-      trackAgentConnectFailed({
-        kind: session.toolName,
-        source,
-        durationMs: Date.now() - startedAt,
-        error: cause,
-      });
+      operation.fail(classifyTelemetryError(cause));
       setError(cause instanceof Error ? cause.message : String(cause));
       throw cause;
     }
@@ -3071,7 +3111,13 @@ export default function App() {
     setError("");
     setSandboxApproval(null);
     setSandboxApprovalError("");
-    const messageStartedAt = Date.now();
+    const operation = beginAgentMessage({
+      agentId: String(activeSession.id),
+      agentKind: activeSession.toolName,
+      messageSource: "composer",
+      sessionState: "existing",
+      sessionId: String(activeSession.id),
+    });
     const controller = new AbortController();
     sandboxMessageAbortRef.current?.abort();
     sandboxMessageAbortRef.current = controller;
@@ -3207,13 +3253,15 @@ export default function App() {
       if (
         controller.signal.aborted ||
         sandboxMessageAbortRef.current !== controller
-      ) return;
-      trackAgentMessageSucceeded({
-        kind: activeSession.toolName,
-        source: "composer",
-        sessionState: "existing",
-        durationMs: Date.now() - messageStartedAt,
-      });
+      ) {
+        operation.fail({
+          sessionId: String(activeSession.id),
+          failedPhase: "sandbox_send",
+          errorKind: "abort",
+        });
+        return;
+      }
+      operation.succeed({ sessionId: String(activeSession.id) });
       setSandboxTurns((current) => {
         const next = current.slice();
         const assistantIndex = next.findIndex(
@@ -3237,20 +3285,17 @@ export default function App() {
       });
       void sandboxCommands.refreshThreads();
     } catch (messageError) {
+      operation.fail({
+        sessionId: String(activeSession.id),
+        failedPhase: "sandbox_send",
+        ...classifyTelemetryError(messageError),
+      });
       if ((messageError as Error)?.name === "AbortError") {
         return;
       }
       if (sandboxMessageAbortRef.current !== controller) {
         return;
       }
-      trackAgentMessageFailed({
-        kind: activeSession.toolName,
-        source: "composer",
-        sessionState: "existing",
-        durationMs: Date.now() - messageStartedAt,
-        phase: "sandbox_send",
-        error: messageError,
-      });
       setSandboxTurns((current) =>
         current.filter(
           (turn) =>
@@ -3650,10 +3695,18 @@ export default function App() {
       !userId
     ) return;
     setError("");
-    const messageStartedAt = Date.now();
     const createsSession = !sessionId;
     const sessionState = createsSession ? "new" : "existing";
     const trackRuntimeMessage = Boolean(currentRuntime);
+    const messageOperation = currentRuntime
+      ? beginAgentMessage({
+          agentId: String(appName),
+          agentKind: "runtime",
+          messageSource,
+          sessionState,
+          ...(sessionId ? { sessionId: String(sessionId) } : {}),
+        })
+      : null;
 
     const userBlocks: Turn["blocks"] = [];
     if (selectedInvocation.skills.length > 0 || selectedInvocation.targetAgent) {
@@ -3693,13 +3746,9 @@ export default function App() {
         setInvocation(selectedInvocation);
       }
       if (trackRuntimeMessage) {
-        trackAgentMessageFailed({
-          kind: "runtime",
-          source: messageSource,
-          sessionState,
-          durationMs: Date.now() - messageStartedAt,
-          phase: "create_session",
-          error: e,
+        messageOperation?.fail({
+          failedPhase: "create_session",
+          ...classifyTelemetryError(e),
         });
       }
       setError(String(e));
@@ -3738,13 +3787,10 @@ export default function App() {
           setInvocation(selectedInvocation);
         }
         if (trackRuntimeMessage) {
-          trackAgentMessageFailed({
-            kind: "runtime",
-            source: messageSource,
-            sessionState,
-            durationMs: Date.now() - messageStartedAt,
-            phase: "mount_task_capabilities",
-            error: e,
+          messageOperation?.fail({
+            sessionId: String(sid),
+            failedPhase: "mount_task_capabilities",
+            ...classifyTelemetryError(e),
           });
         }
         setError(`任务能力挂载失败：${String(e)}`);
@@ -3839,29 +3885,34 @@ export default function App() {
         });
       }
       void refreshSessions(appName);
-      if (!ctrl.signal.aborted && trackRuntimeMessage) {
+      if (trackRuntimeMessage && ctrl.signal.aborted) {
+        messageOperation?.fail({
+          sessionId: String(sid),
+          failedPhase: "run_sse",
+          errorKind: "abort",
+        });
+      } else if (trackRuntimeMessage) {
         if (streamFailed) {
-          trackAgentMessageFailed({
-            kind: "runtime",
-            source: messageSource,
-            sessionState,
-            durationMs: Date.now() - messageStartedAt,
-            phase: "run_sse",
-            error: streamError ?? "run_sse failed",
+          messageOperation?.fail({
+            sessionId: String(sid),
+            failedPhase: "run_sse",
+            ...classifyTelemetryError(streamError ?? "run_sse failed"),
           });
         } else {
-          trackAgentMessageSucceeded({
-            kind: "runtime",
-            source: messageSource,
-            sessionState,
-            durationMs: Date.now() - messageStartedAt,
-          });
+          messageOperation?.succeed({ sessionId: String(sid) });
         }
       }
       if (!ctrl.signal.aborted && !streamFailed && eventId) {
         automaticEvaluationStatusRefreshRef.current();
       }
     } catch (e) {
+      if (trackRuntimeMessage) {
+        messageOperation?.fail({
+          sessionId: String(sid),
+          failedPhase: "run_sse",
+          ...classifyTelemetryError(e),
+        });
+      }
       // An abort (unmount / session delete) is expected — surface only real
       // errors, and only while this session is on screen.
       if (
@@ -3869,16 +3920,6 @@ export default function App() {
         !ctrl.signal.aborted &&
         viewSidRef.current === sid
       ) {
-        if (trackRuntimeMessage) {
-          trackAgentMessageFailed({
-            kind: "runtime",
-            source: messageSource,
-            sessionState,
-            durationMs: Date.now() - messageStartedAt,
-            phase: "run_sse",
-            error: e,
-          });
-        }
         setError(String(e));
       }
     } finally {
@@ -4363,7 +4404,11 @@ export default function App() {
     source: AgentConnectSource,
   ): Promise<string> => {
     if (!agent.runtime) throw new Error("缺少 Runtime 信息，无法连接智能体。");
-    const startedAt = Date.now();
+    const operation = beginAgentConnect({
+      targetId: String(agent.runtime.runtimeId),
+      agentKind: "runtime",
+      connectSource: source,
+    });
     try {
       const agentId = await connectRuntime(
         agent.runtime.runtimeId,
@@ -4371,21 +4416,13 @@ export default function App() {
         agent.runtime.region,
         agent.runtime.currentVersion,
       );
-      trackAgentConnectSucceeded({
-        kind: "runtime",
-        source,
-        durationMs: Date.now() - startedAt,
+      operation.succeed({
         runtimeRegion: agent.runtime.region,
-        runtimeIsMine: agent.isMine,
+        runtimeIsMine: agent.isMine ? 1 : 0,
       });
       return agentId;
     } catch (error) {
-      trackAgentConnectFailed({
-        kind: "runtime",
-        source,
-        durationMs: Date.now() - startedAt,
-        error,
-      });
+      operation.fail(classifyTelemetryError(error));
       throw error;
     }
   };
@@ -4474,7 +4511,11 @@ export default function App() {
     setFeedbackCaseReturnAgentId("");
     setFeedbackTargetEventId("");
     if (agent.runtimeId && agent.id.startsWith("detail:")) {
-      const startedAt = Date.now();
+      const operation = beginAgentConnect({
+        targetId: String(agent.runtimeId),
+        agentKind: "runtime",
+        connectSource: "agent_workspace",
+      });
       try {
         const agentId = await connectRuntime(
           agent.runtimeId,
@@ -4482,20 +4523,12 @@ export default function App() {
           agent.region ?? defaultCloudRegion(cloudProvider),
           agent.currentVersion,
         );
-        trackAgentConnectSucceeded({
-          kind: "runtime",
-          source: "agent_workspace",
-          durationMs: Date.now() - startedAt,
+        operation.succeed({
           runtimeRegion: agent.region,
         });
         await refreshCurrentAgentAndStartNewChat(agentId);
       } catch (cause) {
-        trackAgentConnectFailed({
-          kind: "runtime",
-          source: "agent_workspace",
-          durationMs: Date.now() - startedAt,
-          error: cause,
-        });
+        operation.fail(classifyTelemetryError(cause));
         setError(cause instanceof Error ? cause.message : String(cause));
       }
       return;

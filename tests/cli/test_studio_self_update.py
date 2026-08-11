@@ -26,7 +26,6 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from veadk.cli.frontend_branding import SiteLogo
-from veadk.cli.studio_package import STUDIO_RELEASE_ENVIRONMENT_FILENAME
 from veadk.cli.studio_release import (
     STUDIO_RELEASE_REGION,
     StudioReleaseError,
@@ -136,16 +135,10 @@ def _bundle(
     path: Path,
     *,
     unsafe_name: str | None = None,
-    release_environment: dict[str, str] | None = None,
 ) -> None:
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("run.sh", "#!/bin/bash\n")
         archive.writestr("requirements.txt", "veadk-python\n")
-        if release_environment:
-            archive.writestr(
-                STUDIO_RELEASE_ENVIRONMENT_FILENAME,
-                json.dumps(release_environment),
-            )
         if unsafe_name:
             archive.writestr(unsafe_name, "unsafe")
 
@@ -184,13 +177,7 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     tmp_path: Path,
 ) -> None:
     archive = tmp_path / "source.zip"
-    _bundle(
-        archive,
-        release_environment={
-            "VEADK_STUDIO_APMPLUS_AID": "12345",
-            "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
-        },
-    )
+    _bundle(archive)
     content = archive.read_bytes()
     manifest = StudioReleaseManifest(
         version="20260724153045",
@@ -225,7 +212,6 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
                 encoding="utf-8"
             )
             assert (package / "requirements.txt").is_file()
-            assert not (package / STUDIO_RELEASE_ENVIRONMENT_FILENAME).exists()
             captured["update"] = kwargs
 
     def _resources(**kwargs: Any) -> dict[str, str]:
@@ -272,8 +258,6 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
         "CLOUD_PROVIDER": "byteplus",
         "AGENTKIT_CLOUD_PROVIDER": "byteplus",
         "BYTEPLUS_REGION": "ap-southeast-1",
-        "VEADK_STUDIO_APMPLUS_AID": "12345",
-        "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
         "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
         "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",

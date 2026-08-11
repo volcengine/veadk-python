@@ -30,29 +30,6 @@ _REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 ReleaseState = Literal["queued", "running", "succeeded", "failed"]
 
 
-class StudioApmplusReleaseConfig(BaseModel):
-    """APMPlus Web SDK config passed through the release request."""
-
-    aid: str
-    token: str
-
-    @field_validator("aid")
-    @classmethod
-    def _validate_aid(cls, value: str) -> str:
-        value = value.strip()
-        if not value.isdigit():
-            raise ValueError("Studio APMPlus aid must be an integer")
-        return value
-
-    @field_validator("token")
-    @classmethod
-    def _validate_token(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Studio APMPlus token is required")
-        return value
-
-
 @dataclass(frozen=True)
 class ReleaseServerSettings:
     """Runtime settings injected into the VeFaaS Function."""
@@ -112,10 +89,6 @@ class ReleaseRequest(BaseModel):
     request_id: str = Field(alias="requestId")
     changelog: tuple[str, ...] = ()
     source_key: str = Field(default="", alias="sourceKey")
-    studio_apmplus: StudioApmplusReleaseConfig | None = Field(
-        default=None,
-        alias="studioApmplus",
-    )
 
     @field_validator("repository")
     @classmethod

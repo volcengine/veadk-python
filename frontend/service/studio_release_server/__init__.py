@@ -23,7 +23,6 @@ from frontend.service.studio_release_server.models import (
     ReleaseStatus,
     SourceUpload,
     SourceUploadRequest,
-    StudioApmplusReleaseConfig,
 )
 from frontend.service.studio_release_server.service import ReleaseService
 
@@ -35,7 +34,6 @@ __all__ = [
     "ReleaseStatus",
     "SourceUpload",
     "SourceUploadRequest",
-    "StudioApmplusReleaseConfig",
     "StudioReleaseBuilder",
     "create_app",
 ]

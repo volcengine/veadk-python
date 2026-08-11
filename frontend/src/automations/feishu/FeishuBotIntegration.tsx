@@ -13,9 +13,10 @@ import {
   type DeployStage,
 } from "../../adk/client";
 import {
-  trackAgentDeployFailed,
-  trackAgentDeploySucceeded,
-} from "../../adk/telemetryEvents";
+  beginAgentDeploy,
+  classifyTelemetryError,
+  type AgentDeployFailedProps,
+} from "../../telemetry";
 import feishuLogo from "../../assets/feishu-logo.svg";
 import { agentNameProblem } from "../../create/agentNameValidation";
 import { TextShimmer } from "../../ui/text-shimmer/TextShimmer";
@@ -86,6 +87,23 @@ function stageIndex(phase: string | null): number {
   return index < 0 ? 0 : index;
 }
 
+function telemetryDeployPhase(
+  phase: string | undefined,
+): AgentDeployFailedProps["failedPhase"] {
+  switch (phase) {
+    case "prepare":
+    case "upload":
+    case "build":
+    case "deploy":
+    case "publish":
+    case "update":
+    case "evaluation":
+      return phase;
+    default:
+      return "unknown";
+  }
+}
+
 export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
   const [agentName, setAgentName] = useState("feishu_assistant");
   const [appId, setAppId] = useState("");
@@ -105,6 +123,9 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
   const regionOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const regionFocusIndexRef = useRef(0);
   const taskIdRef = useRef<string | null>(null);
+  const deploymentOperationRef = useRef<ReturnType<
+    typeof beginAgentDeploy
+  > | null>(null);
   const latestPhaseRef = useRef("prepare");
   const cancelledRef = useRef(false);
   const mountedRef = useRef(true);
@@ -177,6 +198,17 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
     setActiveStage(null);
     setDeployError("");
     setResult(null);
+    const operation = beginAgentDeploy({
+      agentId: String(agentName.trim()),
+      deployAction: "create",
+      deploySource: "feishu_automation",
+      createMode: "feishu_template",
+      aiAssisted: 0,
+      deployRegion: String(region),
+      runtimeNetworkType: "public",
+      feishuEnabled: 1,
+    });
+    deploymentOperationRef.current = operation;
     try {
       const deployed = await deployFeishuBotRuntime({
         agentName: agentName.trim(),
@@ -191,42 +223,34 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
           setActiveStage(stage);
         },
       });
-      if (!mountedRef.current || cancelledRef.current) return;
-      trackAgentDeploySucceeded({
-        telemetry: {
-          source: "feishu_automation",
-          createMode: "feishu_template",
-          aiAssisted: false,
-        },
-        action: "create",
-        region,
-        networkType: "public",
-        feishuEnabled: true,
-        runtimeId: deployed.runtimeId || "",
-      });
+      if (cancelledRef.current) {
+        operation.fail({
+          failedPhase: telemetryDeployPhase(latestPhaseRef.current),
+          errorKind: "abort",
+        });
+        return;
+      }
+      operation.succeed({ runtimeId: String(deployed.runtimeId || "") });
+      if (!mountedRef.current) return;
       setResult(deployed);
       setAppSecret("");
       setShowSecret(false);
       setDeploymentStatus("succeeded");
     } catch (error) {
-      if (!mountedRef.current || cancelledRef.current) return;
-      trackAgentDeployFailed({
-        telemetry: {
-          source: "feishu_automation",
-          createMode: "feishu_template",
-          aiAssisted: false,
-        },
-        action: "create",
-        region,
-        networkType: "public",
-        feishuEnabled: true,
-        phase: latestPhaseRef.current,
-        error,
+      operation.fail({
+        failedPhase: telemetryDeployPhase(latestPhaseRef.current),
+        ...(cancelledRef.current
+          ? { errorKind: "abort" as const }
+          : classifyTelemetryError(error, { phase: latestPhaseRef.current })),
       });
+      if (!mountedRef.current || cancelledRef.current) return;
       setDeploymentStatus("failed");
       setDeployError(error instanceof Error ? error.message : String(error));
     } finally {
       if (taskIdRef.current === taskId) taskIdRef.current = null;
+      if (deploymentOperationRef.current === operation) {
+        deploymentOperationRef.current = null;
+      }
     }
   };
 
@@ -241,6 +265,10 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
     setDeployError("");
     try {
       await cancelAgentkitDeployment(taskId);
+      deploymentOperationRef.current?.fail({
+        failedPhase: telemetryDeployPhase(latestPhaseRef.current),
+        errorKind: "abort",
+      });
       if (mountedRef.current) setDeploymentStatus("cancelled");
     } catch (error) {
       cancelledRef.current = false;

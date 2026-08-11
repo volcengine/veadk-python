@@ -124,8 +124,6 @@ jobs:
     env:
       RELEASE_SERVER_URL: ${{ secrets.STUDIO_RELEASE_SERVER_URL }}
       RELEASE_SERVER_API_KEY: ${{ secrets.STUDIO_RELEASE_SERVER_API_KEY }}
-      STUDIO_APMPLUS_AID: ${{ vars.STUDIO_APMPLUS_AID }}
-      STUDIO_APMPLUS_TOKEN: ${{ secrets.STUDIO_APMPLUS_TOKEN }}
 
     steps:
       - name: Validate release server configuration
@@ -143,20 +141,6 @@ jobs:
           if (( ${#RELEASE_SERVER_API_KEY} < 32 )); then
             echo "STUDIO_RELEASE_SERVER_API_KEY must contain at least 32 characters." >&2
             exit 1
-          fi
-          if [[ -n "$STUDIO_APMPLUS_AID$STUDIO_APMPLUS_TOKEN" ]]; then
-            test -n "$STUDIO_APMPLUS_AID" || {
-              echo "STUDIO_APMPLUS_AID is required when STUDIO_APMPLUS_TOKEN is configured." >&2
-              exit 1
-            }
-            test -n "$STUDIO_APMPLUS_TOKEN" || {
-              echo "STUDIO_APMPLUS_TOKEN is required when STUDIO_APMPLUS_AID is configured." >&2
-              exit 1
-            }
-            [[ "$STUDIO_APMPLUS_AID" =~ ^[0-9]+$ ]] || {
-              echo "STUDIO_APMPLUS_AID must be an integer." >&2
-              exit 1
-            }
           fi
           echo "RELEASE_SERVER_URL=$release_server_url" >> "$GITHUB_ENV"
 
@@ -188,13 +172,6 @@ jobs:
               "requestId": job_id,
               "changelog": [os.environ["STUDIO_CHANGELOG"]],
           }
-          studio_apmplus_aid = os.getenv("STUDIO_APMPLUS_AID", "").strip()
-          studio_apmplus_token = os.getenv("STUDIO_APMPLUS_TOKEN", "").strip()
-          if studio_apmplus_aid and studio_apmplus_token:
-              payload_data["studioApmplus"] = {
-                  "aid": studio_apmplus_aid,
-                  "token": studio_apmplus_token,
-              }
           payload = json.dumps(payload_data).encode()
           request = urllib.request.Request(
               f"{os.environ['RELEASE_SERVER_URL']}/release",
