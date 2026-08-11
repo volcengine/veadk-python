@@ -78,8 +78,8 @@ from veadk.cli.frontend_skill_creator import (
     _sandbox_model_config,
     _validated_activities,
 )
-from veadk.cli.studio_sandbox_tools import studio_sandbox_agent_model_name
 from veadk.cli.studio_model_catalog import provider_allows_model
+from veadk.cli.studio_sandbox_tools import studio_sandbox_agent_model_name
 from veadk.skills.skill import Skill
 from veadk.utils.cloud_provider import cloud_provider_from_env
 from veadk.utils.logger import get_logger
@@ -2659,6 +2659,7 @@ class SkillWorkbenchService:
                 "SKILL_PUBLISH_FAILED",
                 "发布 Skill 失败，无法确认本次发布结果，请刷新 Skill 中心确认。",
                 status_code=502,
+                original_error=error,
             ) from error
         except Exception as error:
             logger.error(
@@ -2672,6 +2673,7 @@ class SkillWorkbenchService:
                 "SKILL_PUBLISH_FAILED",
                 "发布 Skill 失败，无法确认本次发布结果，请刷新 Skill 中心确认。",
                 status_code=502,
+                original_error=error,
             ) from error
 
     def _publish_once(
@@ -2762,13 +2764,17 @@ class SkillWorkbenchService:
             ),
         )
         from agentkit.toolkit.cli.cli_skills_workflow import (
-            _ensure_bucket_ready,
             _make_content_hashed_zip_copy,
-            _tos_upload,
             _wait_for_running_version,
         )
         from agentkit.toolkit.config import GlobalConfigManager
-        from agentkit.toolkit.volcengine.services.tos_service import TOSService
+
+        from .storage import (
+            ensure_skill_publish_bucket,
+            resolve_skill_publish_credentials,
+            resolve_skill_publish_storage,
+            upload_skill_archive,
+        )
 
         config = GlobalConfigManager().load()
         effective_region = (
@@ -2777,23 +2783,15 @@ class SkillWorkbenchService:
             and source_region in supported_regions
             else body.region or self._region
         )
-        configured_bucket = (
-            os.getenv("VEADK_SKILL_CREATOR_TOS_BUCKET") or config.tos.bucket or ""
-        ).strip()
-        bucket = configured_bucket or TOSService.generate_bucket_name()
-        prefix = (
-            os.getenv("VEADK_SKILL_CREATOR_TOS_PREFIX")
-            or config.tos.prefix
-            or "agentkit/skills"
-        ).strip()
-        _ensure_bucket_ready(
-            bucket_name=bucket,
-            prefix=prefix,
+        storage = resolve_skill_publish_storage(
             region=effective_region,
-            auto_bucket=not bool(configured_bucket),
-            assume_yes=True,
-            assume_no=False,
+            config_bucket=config.tos.bucket or "",
+            config_prefix=config.tos.prefix or "",
         )
+        credentials = resolve_skill_publish_credentials(provider=storage.provider)
+        bucket = storage.bucket
+        report("preparing", "正在准备发布存储")
+        ensure_skill_publish_bucket(storage, credentials)
         report("uploading", "正在上传 Skill 包")
         with tempfile.TemporaryDirectory(prefix="veadk-skill-publish-") as directory:
             archive_path = Path(directory) / f"{archive.name}.zip"
@@ -2801,9 +2799,7 @@ class SkillWorkbenchService:
             hashed_path = _make_content_hashed_zip_copy(
                 str(archive_path), archive.name, directory
             )
-            tos_url = _tos_upload(
-                hashed_path, bucket, prefix, effective_region, verify_bucket=False
-            )
+            tos_url = upload_skill_archive(hashed_path, storage, credentials)
         report("registering", "正在写入 AgentKit Skill")
         client = self._skills_client_factory(effective_region)
         effective_project = (
