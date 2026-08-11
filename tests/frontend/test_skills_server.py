@@ -17,8 +17,10 @@ from __future__ import annotations
 import base64
 import io
 import json
+import sys
 import stat
 import zipfile
+from types import ModuleType
 from types import SimpleNamespace
 
 import pytest
@@ -35,7 +37,10 @@ from frontend.server.skills.models import (
     UpdateSkillSpaceBody,
 )
 from frontend.server.skills.prompts import decorate_intent
-from frontend.server.skills.repository import AgentKitSkillRepository
+from frontend.server.skills.repository import (
+    AgentKitSkillRepository,
+    SkillRepositoryError,
+)
 from frontend.server.skills.routes import _convert_error
 from frontend.server.skills.service import SkillService
 from veadk.cli.frontend_skill_creator import _sandbox_model_config
@@ -299,6 +304,159 @@ def test_repository_adds_author_tag_when_creating_space() -> None:
     assert request.tags[0].key == "author"
     assert request.tags[0].value == "person@example.com"
     assert result["author"] == "person@example.com"
+
+
+class _FakeSkillRequest:
+    def __init__(self, **kwargs: object) -> None:
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+            setattr(self, _pascal_to_snake(key), value)
+
+
+def _pascal_to_snake(value: str) -> str:
+    result = []
+    for index, char in enumerate(value):
+        if char.isupper() and index > 0:
+            result.append("_")
+        result.append(char.lower())
+    return "".join(result)
+
+
+class _FakeSkillClient:
+    def __init__(self, space_items: list[object]) -> None:
+        self.space_items = space_items
+        self.space_requests: list[object] = []
+        self.create_requests: list[object] = []
+        self.publish_requests: list[object] = []
+
+    def list_skills(self, request: object) -> SimpleNamespace:
+        del request
+        raise AssertionError(
+            "upload conflict checks must stay scoped to the target space"
+        )
+
+    def list_skills_by_skill_space(self, request: object) -> SimpleNamespace:
+        self.space_requests.append(request)
+        return SimpleNamespace(
+            items=self.space_items,
+            total_count=len(self.space_items),
+        )
+
+    def create_skill(self, request: object) -> SimpleNamespace:
+        self.create_requests.append(request)
+        return SimpleNamespace(id="skill-new")
+
+    def publish_skill_to_skill_space(self, request: object) -> None:
+        self.publish_requests.append(request)
+
+
+def _install_fake_agentkit_modules(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_types = SimpleNamespace(
+        ListSkillsBySkillSpaceRequest=_FakeSkillRequest,
+        CreateSkillRequest=_FakeSkillRequest,
+        PublishSkillToSkillSpaceRequest=_FakeSkillRequest,
+        SkillBasicInfo=_FakeSkillRequest,
+        TagForSkill=_FakeSkillRequest,
+    )
+    agentkit = ModuleType("agentkit")
+    sdk = ModuleType("agentkit.sdk")
+    skills = ModuleType("agentkit.sdk.skills")
+    toolkit = ModuleType("agentkit.toolkit")
+    cli = ModuleType("agentkit.toolkit.cli")
+    workflow = ModuleType("agentkit.toolkit.cli.cli_skills_workflow")
+    config = ModuleType("agentkit.toolkit.config")
+    skills.types = fake_types  # type: ignore[attr-defined]
+    workflow._make_content_hashed_zip_copy = (  # type: ignore[attr-defined]
+        lambda archive_path, _name, _directory: archive_path
+    )
+    workflow._wait_for_running_version = (  # type: ignore[attr-defined]
+        lambda **_kwargs: SimpleNamespace(version="v1")
+    )
+
+    class GlobalConfigManager:
+        def load(self) -> SimpleNamespace:
+            return SimpleNamespace(tos=SimpleNamespace(bucket="", prefix=""))
+
+    config.GlobalConfigManager = GlobalConfigManager  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "agentkit", agentkit)
+    monkeypatch.setitem(sys.modules, "agentkit.sdk", sdk)
+    monkeypatch.setitem(sys.modules, "agentkit.sdk.skills", skills)
+    monkeypatch.setitem(sys.modules, "agentkit.toolkit", toolkit)
+    monkeypatch.setitem(sys.modules, "agentkit.toolkit.cli", cli)
+    monkeypatch.setitem(
+        sys.modules,
+        "agentkit.toolkit.cli.cli_skills_workflow",
+        workflow,
+    )
+    monkeypatch.setitem(sys.modules, "agentkit.toolkit.config", config)
+
+
+def _stub_skill_publish_storage(monkeypatch: pytest.MonkeyPatch) -> None:
+    from frontend.server.skills import storage
+
+    monkeypatch.setattr(storage, "ensure_skill_publish_bucket", lambda *_args: None)
+    monkeypatch.setattr(
+        storage,
+        "resolve_skill_publish_credentials",
+        lambda *, provider: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        storage,
+        "resolve_skill_publish_storage",
+        lambda **_kwargs: SimpleNamespace(provider="fake", bucket="skill-bucket"),
+    )
+    monkeypatch.setattr(
+        storage,
+        "upload_skill_archive",
+        lambda *_args: "https://storage.invalid/skill.zip",
+    )
+
+
+def test_publish_archive_allows_same_name_in_other_space(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_agentkit_modules(monkeypatch)
+    _stub_skill_publish_storage(monkeypatch)
+    client = _FakeSkillClient(space_items=[])
+    repository = AgentKitSkillRepository(lambda _region: client)
+    skill_archive = validate_skill_archive(archive({"SKILL.md": SKILL_MD.encode()}))
+
+    result = repository.publish_archive(
+        region="cn-beijing",
+        project_name="default",
+        space_id="space-b",
+        archive=skill_archive,
+        author="person@example.com",
+    )
+
+    assert result["skillId"] == "skill-new"
+    assert client.space_requests[0].skill_space_id == "space-b"
+    assert client.create_requests[0].skill_spaces == ["space-b"]
+    assert client.publish_requests[0].skill_spaces == ["space-b"]
+
+
+def test_publish_archive_rejects_same_name_in_target_space(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_agentkit_modules(monkeypatch)
+    _stub_skill_publish_storage(monkeypatch)
+    client = _FakeSkillClient(space_items=[SimpleNamespace(skill_name="example-skill")])
+    repository = AgentKitSkillRepository(lambda _region: client)
+    skill_archive = validate_skill_archive(archive({"SKILL.md": SKILL_MD.encode()}))
+
+    with pytest.raises(SkillRepositoryError) as raised:
+        repository.publish_archive(
+            region="cn-beijing",
+            project_name="default",
+            space_id="space-b",
+            archive=skill_archive,
+            author="person@example.com",
+        )
+
+    assert raised.value.code == "SKILL_NAME_CONFLICT"
+    assert client.space_requests[0].skill_space_id == "space-b"
+    assert client.create_requests == []
+    assert client.publish_requests == []
 
 
 def test_space_update_and_delete_use_the_selected_region() -> None:
