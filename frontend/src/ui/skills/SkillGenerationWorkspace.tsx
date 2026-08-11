@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CloudProvider, CloudRegion } from "../../adk/cloudProvider";
-import { isSupportedCloudRegion } from "../../adk/cloudProvider";
+import { formatCloudRegion, isSupportedCloudRegion } from "../../adk/cloudProvider";
 import type { SkillSpaceRef } from "../../create/skills/skillspace";
 import { TextShimmer } from "../text-shimmer/TextShimmer";
 import { SkillConversationStream } from "./SkillConversationStream";
@@ -66,7 +66,10 @@ interface CandidateRun {
 export interface SkillGenerationWorkspaceProps {
   operation: "create" | "optimize";
   cloudProvider: CloudProvider;
-  space: SkillSpaceRef;
+  space?: SkillSpaceRef;
+  availableSpaces?: SkillSpaceRef[];
+  spacesLoading?: boolean;
+  initialIntent?: string;
   source?: SkillCenterOptimizationSource;
   onBack: () => void;
   onPublished: () => void;
@@ -150,6 +153,10 @@ function modelNameProblem(model: string): string {
   return "";
 }
 
+function publishSpaceKey(space: SkillSpaceRef): string {
+  return `${space.region || ""}:${space.id}`;
+}
+
 function BackIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -166,14 +173,18 @@ function BackIcon() {
 
 export function SkillGenerationWorkspace({
   operation,
+  cloudProvider,
   space,
+  availableSpaces = [],
+  spacesLoading = false,
+  initialIntent = "",
   source,
   onBack,
   onPublished,
 }: SkillGenerationWorkspaceProps) {
   const [capability, setCapability] = useState<SkillWorkbenchCapability | null>(null);
   const [capabilityError, setCapabilityError] = useState<Error | null>(null);
-  const [intent, setIntent] = useState("");
+  const [intent, setIntent] = useState(initialIntent);
   const [name, setName] = useState("");
   const [groups, setGroups] = useState<GroupConfig[]>([]);
   const [runs, setRuns] = useState<CandidateRun[]>([]);
@@ -184,6 +195,9 @@ export function SkillGenerationWorkspace({
   const [actionError, setActionError] = useState<Error | null>(null);
   const [publishProgress, setPublishProgress] = useState("");
   const [publishedId, setPublishedId] = useState("");
+  const [selectedPublishSpaceKey, setSelectedPublishSpaceKey] = useState(
+    space ? publishSpaceKey(space) : "",
+  );
   const [now, setNow] = useState(Date.now());
   const runsRef = useRef<CandidateRun[]>([]);
 
@@ -308,6 +322,15 @@ export function SkillGenerationWorkspace({
   }, [runs.some((run) => run.task?.state === "running" || run.repairing)]);
 
   const active = runs.find((run) => run.id === activeId) || runs[0];
+  const needsPublishSpace = operation === "create" && !space;
+  const selectedPublishSpace = availableSpaces.find(
+    (item) => publishSpaceKey(item) === selectedPublishSpaceKey,
+  ) ?? null;
+  const publishSpace = space ?? selectedPublishSpace;
+  const publishSpaceOptions = availableSpaces.map((item) => ({
+    value: publishSpaceKey(item),
+    label: `${item.name.trim() || "未命名 Skill Space"} · ${formatCloudRegion(item.region || "cn-beijing", cloudProvider)}`,
+  }));
   const nameError = skillNameProblem(name);
   const canGenerate = Boolean(
     capability?.enabled
@@ -422,16 +445,17 @@ export function SkillGenerationWorkspace({
     setAction("publish");
     setActionError(null);
     try {
+      if (!publishSpace) throw new Error("请选择上传的 Skill Space");
       const artifact = active.artifact || await getSkillWorkbenchArtifact(active.task.jobId, active.task.revision);
-      const rawRegion = source?.region || space.region || "";
+      const rawRegion = source?.region || publishSpace.region || "";
       if (!isSupportedCloudRegion(rawRegion)) throw new Error("当前 Skill 地域不受支持");
       await publishSkillWorkbenchTask({
         jobId: active.task.jobId,
         expectedRevision: active.task.revision,
         expectedArtifactSha256: artifact.sha256,
         disposition: operation === "optimize" ? "update-source" : "create-new",
-        skillSpaceIds: [source?.skillSpaceId || space.id],
-        projectName: source?.projectName || space.projectName,
+        skillSpaceIds: [publishSpace.id],
+        projectName: source?.projectName || publishSpace.projectName,
         region: rawRegion as CloudRegion,
         onProgress: (progress) => setPublishProgress(progress.message),
       });
@@ -485,7 +509,7 @@ export function SkillGenerationWorkspace({
         </button>
         <div>
           <h1>{title}</h1>
-          <p>{space.name}</p>
+          <p>{space?.name || "主页技能生成"}</p>
         </div>
         {runs.length > 0 ? <span className="skill-generation__ttl">{remainingLabel(active?.task, now)}</span> : null}
       </header>
@@ -602,11 +626,25 @@ export function SkillGenerationWorkspace({
                 {active.artifact ? <SkillFileTree files={active.artifact.files} /> : <div className="skill-generation__files-empty">{active.task?.state === "ready" ? "正在读取文件…" : "生成过程中会在这里显示完整文件树"}</div>}
               </section>
               {active.task?.state === "ready" ? (
-                <footer className="skill-generation__followup">
-                  <textarea value={followUp} onChange={(event) => setFollowUp(event.target.value)} placeholder="继续调整这个候选方案" />
-                  <button type="button" className="skill-button" disabled={!followUp.trim() || Boolean(action)} onClick={() => void refine()}>继续调整</button>
-                  <button type="button" className="skill-button skill-button--primary" disabled={Boolean(action) || Boolean(publishedId)} onClick={() => void publish()}>{action === "publish" ? publishProgress || "上传中…" : operation === "optimize" ? "覆盖原 Skill" : "上传到当前空间"}</button>
-                </footer>
+                <div className="skill-generation__ready-actions">
+                  {needsPublishSpace ? (
+                    <div className="skill-generation__publish-target">
+                      <SkillConfigSelect
+                        label="上传到 Skill Space"
+                        value={selectedPublishSpaceKey}
+                        options={publishSpaceOptions}
+                        onChange={setSelectedPublishSpaceKey}
+                        disabled={spacesLoading}
+                        placeholder={spacesLoading ? "正在加载 Skill Space" : "选择 Skill Space"}
+                      />
+                    </div>
+                  ) : null}
+                  <footer className="skill-generation__followup">
+                    <textarea value={followUp} onChange={(event) => setFollowUp(event.target.value)} placeholder="继续调整这个候选方案" />
+                    <button type="button" className="skill-button" disabled={!followUp.trim() || Boolean(action)} onClick={() => void refine()}>继续调整</button>
+                    <button type="button" className="skill-button skill-button--primary" disabled={Boolean(action) || Boolean(publishedId) || !publishSpace} onClick={() => void publish()}>{action === "publish" ? publishProgress || "上传中…" : operation === "optimize" ? "覆盖原 Skill" : needsPublishSpace ? "上传到 Skill Space" : "上传到当前空间"}</button>
+                  </footer>
+                </div>
               ) : null}
               {actionError ? <div className="skill-inline-error skill-generation__action-error"><SkillErrorDetails error={actionError} /></div> : null}
             </div>

@@ -1958,6 +1958,9 @@ export interface SandboxToolInfo {
 }
 
 export interface SystemInfoResponse {
+  storage: {
+    tosAddress: string;
+  };
   sandboxTools: SandboxToolInfo[];
 }
 
@@ -1968,8 +1971,14 @@ export async function getSystemInfo(
   if (!response.ok) {
     throw new Error(await httpErrorMessage(response, "加载系统信息失败"));
   }
-  const payload = (await response.json()) as { sandboxTools?: unknown };
-  if (!Array.isArray(payload.sandboxTools)) {
+  const payload = (await response.json()) as {
+    storage?: { tosAddress?: unknown };
+    sandboxTools?: unknown;
+  };
+  if (
+    typeof payload.storage?.tosAddress !== "string" ||
+    !Array.isArray(payload.sandboxTools)
+  ) {
     throw new Error("系统信息响应格式无效");
   }
   const sandboxTools = payload.sandboxTools.map((item) => {
@@ -1984,7 +1993,10 @@ export async function getSystemInfo(
     }
     return item as SandboxToolInfo;
   });
-  return { sandboxTools };
+  return {
+    storage: { tosAddress: payload.storage.tosAddress },
+    sandboxTools,
+  };
 }
 
 export interface IdentityUserPool {

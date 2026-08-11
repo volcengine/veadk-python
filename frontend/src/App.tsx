@@ -78,7 +78,10 @@ import {
 } from "./blocks";
 import { Sidebar, type SidebarPage } from "./ui/Sidebar";
 import { AgentInfoPanel } from "./ui/AgentTopology";
-import { SkillCenterView } from "./ui/SkillCenter";
+import {
+  SkillCenterView,
+  type SkillCenterWorkspaceLaunch,
+} from "./ui/SkillCenter";
 import { AddAgentKitView } from "./ui/AddAgentKit";
 import { AgentWorkspace } from "./ui/AgentWorkspace";
 import {
@@ -122,8 +125,13 @@ import {
   type WorkspaceAgentDraft,
 } from "./create/agentDraftStorage";
 import type { DeployResult, DeploymentTaskUpdate } from "./ui/ProjectPreview";
-import type { NewChatMode, NewChatTask } from "./ui/new-chat-modes/types";
-import { NewChatFeatureCarousel } from "./ui/new-chat-modes/NewChatFeatureCarousel";
+import type {
+  NewChatMode,
+  NewChatSkillAction,
+  NewChatSkillTarget,
+  NewChatTask,
+  NewChatWorkspaceMode,
+} from "./ui/new-chat-modes/types";
 import { NewChatFeatureNotice } from "./ui/new-chat-modes/NewChatFeatureNotice";
 import {
   NEW_CHAT_TASK_OPTIONAL_TOOLS,
@@ -141,6 +149,27 @@ import {
   type SandboxToolLaunch,
 } from "./adk/sandbox";
 import { getSandboxCapability } from "./adk/newChatCapabilities";
+import { getSkillWorkbenchCapability } from "./ui/skill-workbench/api";
+import {
+  createVideoTask,
+  downloadVideoTask,
+  enhanceVideoPrompt,
+  getVideoTask,
+  uploadVideoAsset,
+  videoResultPreviewUrl,
+  type VideoAssetKind,
+  type VideoCapabilities,
+} from "./adk/video";
+import type { NewChatVideoConfig } from "./ui/new-chat-modes/video-types";
+import {
+  createVideoGenerationTask,
+  isVideoTaskRunning,
+  updateVideoGenerationTask,
+  type VideoGenerationTask,
+  type VideoTaskErrorStage,
+  type VideoTaskEvent,
+} from "./ui/new-chat-modes/video-task";
+import { NewChatVideoTaskDialog } from "./ui/new-chat-modes/NewChatVideoTaskDialog";
 import {
   SandboxLaunchDialog,
   type SandboxLaunchState,
@@ -191,22 +220,26 @@ interface NewChatCapabilitiesState {
   harnessEnabled?: boolean;
   builtinTools?: string[];
   temporaryEnabled?: boolean;
+  skillCustomizationEnabled?: boolean;
 }
 
 async function probeNewChatCapabilities(
   agentId: string,
 ): Promise<NewChatCapabilitiesState> {
-  const [sandboxResult, harnessResult] = await Promise.allSettled([
+  const [sandboxResult, skillResult, harnessResult] = await Promise.allSettled([
     getSandboxCapability(),
-    listSessionBuiltinTools(agentId),
+    getSkillWorkbenchCapability(),
+    agentId ? listSessionBuiltinTools(agentId) : Promise.resolve<string[]>([]),
   ]);
   return {
     agentId,
     ready: true,
-    harnessEnabled: harnessResult.status === "fulfilled",
+    harnessEnabled: !!agentId && harnessResult.status === "fulfilled",
     builtinTools: harnessResult.status === "fulfilled" ? harnessResult.value : [],
     temporaryEnabled:
       sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
+    skillCustomizationEnabled:
+      skillResult.status === "fulfilled" && skillResult.value.enabled,
   };
 }
 
@@ -697,6 +730,37 @@ function automaticEvaluationTargetForSelection(
   return null;
 }
 
+function videoAssetsForConfig(
+  config: NewChatVideoConfig,
+): Array<{ file: File; kind: VideoAssetKind }> {
+  if (config.taskMode === "text_to_video") return [];
+  const candidates = config.taskMode === "first_last_frame"
+    ? [
+        config.firstFrame
+          ? { file: config.firstFrame, kind: "first_frame" as const }
+          : null,
+        config.lastFrame
+          ? { file: config.lastFrame, kind: "last_frame" as const }
+          : null,
+      ]
+    : [
+        config.referenceImage
+          ? { file: config.referenceImage, kind: "reference_image" as const }
+          : null,
+        config.referenceVideo
+          ? { file: config.referenceVideo, kind: "reference_video" as const }
+          : null,
+      ];
+  return candidates.filter(
+    (item): item is { file: File; kind: VideoAssetKind } => item !== null,
+  );
+}
+
+function videoTaskFileName(taskId: string, outputFormat: "mp4" | "mov"): string {
+  const safeId = taskId.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 36);
+  return `video-${safeId || "result"}.${outputFormat}`;
+}
+
 export default function App() {
   const [apps, setApps] = useState<string[]>([]);
   const [appName, setAppName] = useState("");
@@ -821,15 +885,24 @@ export default function App() {
   }
   const [input, setInput] = useState("");
   const [newChatMode, setNewChatMode] = useState<NewChatMode>("agent");
+  const [newChatWorkspaceMode, setNewChatWorkspaceMode] =
+    useState<NewChatWorkspaceMode>("agent");
+  const [newChatSkillAction, setNewChatSkillAction] =
+    useState<NewChatSkillAction>("create");
+  const [newChatSkillTarget, setNewChatSkillTarget] =
+    useState<NewChatSkillTarget | null>(null);
   const [newChatTask, setNewChatTask] = useState<NewChatTask | null>(null);
+  const [videoTask, setVideoTask] = useState<VideoGenerationTask | null>(null);
+  const [videoTaskDialogOpen, setVideoTaskDialogOpen] = useState(false);
+  const videoTaskRef = useRef<VideoGenerationTask | null>(null);
+  const videoTaskAbortRef = useRef<AbortController | null>(null);
   const [newChatCapabilities, setNewChatCapabilities] =
     useState<NewChatCapabilitiesState>({});
   const newChatCapabilitiesCacheRef = useRef(
     new Map<string, NewChatCapabilitiesState>(),
   );
   const newChatCapabilitiesReady =
-    !appName ||
-    (newChatCapabilities.ready === true && newChatCapabilities.agentId === appName);
+    newChatCapabilities.ready === true && newChatCapabilities.agentId === appName;
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [invocation, setInvocation] = useState<FrontendInvocation>(emptyInvocation);
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
@@ -900,6 +973,228 @@ export default function App() {
   // banner (per-session transcripts/topology don't need it).
   const viewSidRef = useRef("");
   const [error, setError] = useState("");
+
+  function commitVideoTask(
+    localId: string,
+    runId: number,
+    event: VideoTaskEvent,
+  ): VideoGenerationTask | null {
+    const current = videoTaskRef.current;
+    if (!current || current.localId !== localId || current.runId !== runId) {
+      return null;
+    }
+    const next = updateVideoGenerationTask(current, event);
+    videoTaskRef.current = next;
+    setVideoTask(next);
+    return next;
+  }
+
+  async function executeVideoTask(
+    localId: string,
+    runId: number,
+    startingStage: VideoTaskErrorStage,
+  ) {
+    videoTaskAbortRef.current?.abort();
+    const controller = new AbortController();
+    videoTaskAbortRef.current = controller;
+    let stage = startingStage;
+
+    try {
+      let current = videoTaskRef.current;
+      if (!current || current.localId !== localId || current.runId !== runId) return;
+
+      if (stage === "optimization" && current.assetIds.length === 0) {
+        const assets = videoAssetsForConfig(current.config);
+        if (assets.length > 0) {
+          const uploaded = await Promise.all(
+            assets.map((asset) => uploadVideoAsset(asset.file, asset.kind, controller.signal)),
+          );
+          if (controller.signal.aborted) return;
+          current = commitVideoTask(localId, runId, {
+            type: "assets_uploaded",
+            assetIds: uploaded.map((asset) => asset.assetId),
+          });
+          if (!current) return;
+        }
+      }
+
+      if (stage === "optimization") {
+        const enhancement = await enhanceVideoPrompt({
+          prompt: current.requestedPrompt,
+          taskMode: current.requestedMode,
+          assetIds: current.assetIds,
+          ratio: current.config.aspectRatio,
+          resolution: current.config.resolution,
+          durationSeconds: current.config.durationSeconds,
+        }, controller.signal);
+        if (controller.signal.aborted) return;
+        current = commitVideoTask(localId, runId, {
+          type: "optimization_succeeded",
+          optimizedPrompt: enhancement.enhancedPrompt,
+          resolvedMode: enhancement.resolvedTaskMode,
+          enhancerModel: enhancement.enhancerModel,
+        });
+        if (!current) return;
+        stage = "generation";
+      }
+
+      if (!current.optimizedPrompt || !current.resolvedMode) {
+        throw new Error("提示词优化结果不完整，请重新优化后再试。");
+      }
+
+      const created = await createVideoTask({
+        enhancedPrompt: current.optimizedPrompt,
+        resolvedTaskMode: current.resolvedMode,
+        assetIds: current.assetIds,
+        ratio: current.config.aspectRatio,
+        resolution: current.config.resolution,
+        durationSeconds: current.config.durationSeconds,
+      }, controller.signal);
+      if (controller.signal.aborted) return;
+      current = commitVideoTask(localId, runId, {
+        type: "generation_started",
+        remoteTaskId: created.taskId,
+        generationModel: created.generationModel,
+      });
+      if (!current) return;
+
+      while (!controller.signal.aborted) {
+        const remote = await getVideoTask(created.taskId, controller.signal);
+        if (controller.signal.aborted) return;
+        if (remote.status === "failed") {
+          throw new Error(remote.error || "视频生成失败，请稍后重试。");
+        }
+        if (remote.status === "succeeded") {
+          if (!remote.videoUrl) {
+            throw new Error("视频任务已完成，但服务端未返回预览地址。");
+          }
+          commitVideoTask(localId, runId, {
+            type: "generation_succeeded",
+            output: {
+              previewUrl: videoResultPreviewUrl(remote.videoUrl),
+              fileName: videoTaskFileName(created.taskId, remote.outputFormat),
+              mimeType: remote.outputFormat === "mov" ? "video/quicktime" : "video/mp4",
+            },
+          });
+          return;
+        }
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 1800));
+      }
+    } catch (cause) {
+      if (controller.signal.aborted) return;
+      commitVideoTask(localId, runId, {
+        type: "failed",
+        stage,
+        error: cause instanceof Error ? cause.message : String(cause),
+      });
+    }
+  }
+
+  function startVideoTask(
+    prompt: string,
+    config: NewChatVideoConfig,
+    capabilities: VideoCapabilities,
+  ) {
+    if (isVideoTaskRunning(videoTaskRef.current)) {
+      setVideoTaskDialogOpen(true);
+      return;
+    }
+    if (config.taskMode === "video_editing" && !config.referenceVideo) {
+      setError("视频编辑需要先添加待编辑视频。");
+      return;
+    }
+    if (config.taskMode === "video_extension" && !config.referenceVideo) {
+      setError("视频续写需要先添加基础视频。");
+      return;
+    }
+    if (
+      config.taskMode === "reference_to_video" &&
+      !config.referenceImage &&
+      !config.referenceVideo
+    ) {
+      setError("参考素材生视频需要至少添加一项参考图片或参考视频。");
+      return;
+    }
+    if (
+      config.taskMode === "text_to_video" &&
+      (config.referenceImage || config.referenceVideo || config.firstFrame || config.lastFrame)
+    ) {
+      setError("文生视频不使用参考素材，请先移除已添加的图片或视频。");
+      return;
+    }
+    if (config.taskMode === "first_last_frame" && !config.firstFrame) {
+      setError("首尾帧生成需要先添加首帧图片。");
+      return;
+    }
+    if (
+      capabilities.supportedModes.length > 0 &&
+      config.taskMode !== "auto" &&
+      !capabilities.supportedModes.includes(config.taskMode)
+    ) {
+      setError("当前平台暂不支持所选视频任务模式。");
+      return;
+    }
+    const assets = videoAssetsForConfig(config);
+    if (assets.length > 0 && !capabilities.assetStorageAvailable) {
+      setError(
+        capabilities.assetStorageUnavailableReason ||
+          "管理员未配置持久化存储",
+      );
+      return;
+    }
+    const oversized = assets.find(
+      ({ file }) => capabilities.maxAssetBytes > 0 && file.size > capabilities.maxAssetBytes,
+    );
+    if (oversized) {
+      setError(`${oversized.file.name} 超出当前平台允许的素材大小。`);
+      return;
+    }
+
+    const next = createVideoGenerationTask({
+      prompt,
+      config,
+      enhancerModel: capabilities.enhancerModel,
+      generationModel: capabilities.generationModel,
+    });
+    videoTaskRef.current = next;
+    setVideoTask(next);
+    setVideoTaskDialogOpen(true);
+    setInput("");
+    setError("");
+    void executeVideoTask(next.localId, next.runId, "optimization");
+  }
+
+  function retryVideoTask() {
+    const current = videoTaskRef.current;
+    if (!current || current.status !== "error" || !current.errorStage) return;
+    const stage = current.errorStage;
+    const next = updateVideoGenerationTask(current, { type: "retry", stage });
+    videoTaskRef.current = next;
+    setVideoTask(next);
+    setVideoTaskDialogOpen(true);
+    void executeVideoTask(next.localId, next.runId, stage);
+  }
+
+  async function downloadCurrentVideoTask() {
+    const current = videoTaskRef.current;
+    if (!current?.remoteTaskId || !current.output) return;
+    try {
+      const blob = await downloadVideoTask(current.remoteTaskId);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = current.output.fileName;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  useEffect(() => () => {
+    videoTaskAbortRef.current?.abort();
+  }, []);
+
   const [draftStorageError, setDraftStorageError] = useState("");
   const [feedbackPendingIds, setFeedbackPendingIds] = useState<Set<string>>(
     () => new Set(),
@@ -1121,6 +1416,8 @@ export default function App() {
   // flashing the notice in the common, configured case).
   const [hasCreds, setHasCreds] = useState(true);
   const [skillCenter, setSkillCenter] = useState(false);
+  const [skillCenterLaunch, setSkillCenterLaunch] =
+    useState<SkillCenterWorkspaceLaunch | null>(null);
   const [addAgent, setAddAgent] = useState(false);
   // The "添加 Agent" chooser (two cards: AgentKit / 从 0 快速创建).
   const [addMenu, setAddMenu] = useState(false);
@@ -1795,7 +2092,7 @@ export default function App() {
   }, [localMode, userId]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !userId || !appName) {
+    if (authStatus !== "authenticated" || !userId) {
       setNewChatCapabilities({});
       return;
     }
@@ -1815,6 +2112,21 @@ export default function App() {
       cancelled = true;
     };
   }, [appName, authStatus, userId]);
+
+  useLayoutEffect(() => {
+    if (
+      !newChatCapabilitiesReady ||
+      newChatCapabilities.skillCustomizationEnabled !== false ||
+      newChatWorkspaceMode !== "skill"
+    ) return;
+    setNewChatWorkspaceMode("agent");
+    setNewChatSkillTarget(null);
+    setNewChatTask(null);
+  }, [
+    newChatCapabilities.skillCustomizationEnabled,
+    newChatCapabilitiesReady,
+    newChatWorkspaceMode,
+  ]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || !userId) {
@@ -2969,6 +3281,7 @@ export default function App() {
     setGreeting(pickGreeting());
     setNewChatMode("agent");
     setNewChatTask(null);
+    setNewChatSkillTarget(null);
     const abandonedSession = sessionId && persistentTurns.length === 0 && attachments.length > 0
       ? sessionId
       : "";
@@ -2999,6 +3312,7 @@ export default function App() {
     setPlatformFeedbackOrigin(null);
     setCreateView(null);
     setSkillCenter(false);
+    setSkillCenterLaunch(null);
     setAddAgent(false);
     setAddMenu(false);
     setSearchView(false);
@@ -4254,6 +4568,7 @@ export default function App() {
           setMyAgents(false);
           setSystemInfo(false);
           setApplicationsView(null);
+          setSkillCenterLaunch(null);
           setSkillCenter(true);
           setError("");
         }}
@@ -4392,14 +4707,62 @@ export default function App() {
               />
             ) : (
               <Composer
-              sessionId={sessionId}
-              sessionInitializing={initializingSession}
-              appName={appName}
-              agentName={appName ? labelOf(appName) : "Agent"}
-              value={input}
-              onChange={setInput}
-              onSubmit={() => {
+                cloudProvider={cloudProvider}
+                sessionId={sessionId}
+                sessionInitializing={initializingSession}
+                appName={appName}
+                agentName={appName ? labelOf(appName) : "Agent"}
+                value={input}
+                onChange={setInput}
+                videoTask={videoTask}
+                onOpenVideoTask={() => {
+                  if (videoTaskRef.current) setVideoTaskDialogOpen(true);
+                }}
+                onVideoSubmit={startVideoTask}
+                onSubmit={() => {
                 const text = input;
+                if (
+                  !sandboxSession &&
+                  turns.length === 0 &&
+                  newChatWorkspaceMode === "skill"
+                ) {
+                  if (!text.trim()) return;
+                  let launch: SkillCenterWorkspaceLaunch;
+                  if (newChatSkillAction === "create") {
+                    launch = {
+                      operation: "create",
+                      initialIntent: text.trim(),
+                      selectPublishSpace: true,
+                    };
+                  } else {
+                    const target = newChatSkillTarget;
+                    if (!target) {
+                      setError("请先选择需要优化的 Skill。");
+                      return;
+                    }
+                    launch = {
+                      operation: "optimize",
+                      initialIntent: text.trim(),
+                      space: target.space,
+                      source: {
+                        kind: "skill-center",
+                        skillId: target.skill.skillId,
+                        version: target.skill.version,
+                        region: target.space.region || defaultCloudRegion(cloudProvider),
+                        projectName: target.space.projectName,
+                        skillSpaceId: target.space.id,
+                        skillSpaceName: target.space.name,
+                        name: target.skill.skillName || target.skill.skillId,
+                        description: target.skill.skillDescription,
+                      },
+                    };
+                  }
+                  setInput("");
+                  setError("");
+                  setSkillCenterLaunch(launch);
+                  setSkillCenter(true);
+                  return;
+                }
                 setInput("");
                 if (sandboxSession) {
                   void sendSandboxMessage(text);
@@ -4417,7 +4780,12 @@ export default function App() {
                   ? false
                   : !userId ||
                     newChatMode === "temporary" ||
-                    (newChatMode === "agent" && !appName)
+                    (newChatWorkspaceMode === "agent" &&
+                      newChatMode === "agent" &&
+                      !appName) ||
+                    (newChatWorkspaceMode === "skill" &&
+                      newChatSkillAction === "optimize" &&
+                      !newChatSkillTarget)
               }
               busy={
                 sandboxSession
@@ -4435,11 +4803,20 @@ export default function App() {
               onAddFiles={addFiles}
               onRemoveAttachment={removeDraftAttachment}
               newChatMode={sandboxSession ? "agent" : newChatMode}
+              newChatWorkspaceMode={sandboxSession ? "agent" : newChatWorkspaceMode}
+              newChatSkillAction={newChatSkillAction}
+              newChatSkillTarget={newChatSkillTarget}
+              skillCustomizationEnabled={
+                newChatCapabilitiesReady &&
+                newChatCapabilities.skillCustomizationEnabled === true
+              }
               newChatTask={sandboxSession ? null : newChatTask}
               newChatLayout={!sandboxSession && turns.length === 0}
+              showWorkspaceTabs={!sandboxSession && turns.length === 0}
               showAgentPicker={
                 !sandboxSession &&
                 turns.length === 0 &&
+                newChatWorkspaceMode === "agent" &&
                 newChatMode === "agent"
               }
               agentPickerDisabled={!userId || conversationBusy}
@@ -4472,6 +4849,13 @@ export default function App() {
                 openSandboxAgent(session, "new_chat_picker")
               }
               showModeSelector={false}
+              onWorkspaceModeChange={(mode) => {
+                setNewChatWorkspaceMode(mode);
+                if (mode !== "agent") setNewChatTask(null);
+                setError("");
+              }}
+              onSkillActionChange={setNewChatSkillAction}
+              onSkillTargetChange={setNewChatSkillTarget}
               temporaryEnabled={newChatCapabilitiesReady && newChatCapabilities.temporaryEnabled}
               harnessEnabled={newChatCapabilitiesReady && newChatCapabilities.harnessEnabled}
               builtinTools={
@@ -4529,7 +4913,11 @@ export default function App() {
                 onSubmit={submitPlatformIssueFeedback}
               />
             ) : systemInfo ? (
-              <SystemInfo version={version} localMode={agentsSource === "local"} />
+              <SystemInfo
+                version={version}
+                localMode={agentsSource === "local"}
+                role={access?.role ?? "user"}
+              />
             ) : applicationsView === "coding-agents" ? (
               <CodingAgentsIntegration
                 onBack={() => setApplicationsView("catalog")}
@@ -4765,7 +5153,11 @@ export default function App() {
                 onCancel={() => setAddAgent(false)}
               />
             ) : skillCenter ? (
-              <SkillCenterView cloudProvider={cloudProvider} />
+              <SkillCenterView
+                cloudProvider={cloudProvider}
+                initialWorkspace={skillCenterLaunch}
+                onInitialWorkspaceConsumed={() => setSkillCenterLaunch(null)}
+              />
             ) : visibleCreateView !== null && !hasCreds ? (
               <div
                 style={{
@@ -4921,7 +5313,6 @@ export default function App() {
                   </div>
                   {composer}
                 </div>
-                <NewChatFeatureCarousel />
               </div>
             ) : (
               <>
@@ -5278,6 +5669,14 @@ export default function App() {
         checking={authRecoveryChecking}
         error={authRecoveryError}
         onLogin={() => void recoverAuthentication()}
+      />
+
+      <NewChatVideoTaskDialog
+        open={videoTaskDialogOpen}
+        task={videoTask}
+        onClose={() => setVideoTaskDialogOpen(false)}
+        onRetry={retryVideoTask}
+        onDownload={() => void downloadCurrentVideoTask()}
       />
 
       {confirmLeave && (

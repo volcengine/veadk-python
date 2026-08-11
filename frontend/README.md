@@ -325,6 +325,37 @@ This path does not require TOS credentials, a Lark application, or `lark-cli`.
 A successful request returns `{ "submitted": true }`; the UI shows an accessible
 success state instead of exposing an internal trace ID.
 
+## Studio persistent storage
+
+For a cloud deployment, Studio uses the deployment region and automatically
+creates or reuses the private bucket `veadk-studio-<account-id>`. The stable
+account-derived name makes repeated deployments idempotent. A bucket created in
+one region cannot be recreated under the same name in another region; changing
+the deployment region requires an explicitly configured bucket.
+
+Administrators can override the automatic bucket by setting only its name; the
+deployment region remains the storage region:
+
+```bash
+export VEADK_STUDIO_TOS_BUCKET=teststudio
+```
+
+The server derives the provider-specific endpoint, such as
+`tos-cn-beijing.volces.com`, and never sends TOS credentials to the
+browser. Local Studio uses the configured Volcengine or BytePlus AK/SK; VeFaaS
+uses its IAM role credentials. Studio objects use the versioned, user-first
+layout
+`veadk-studio/v1/users/<encoded-user-id>/<namespace>/<scope>/<resource-id>/`.
+Video reference assets currently use the `video/<asset-role>/<asset-id>/`
+namespace and store `content` plus `metadata.json` below it.
+
+Local Studio still accepts `VEADK_STUDIO_TOS_BUCKET` together with
+`VEADK_STUDIO_TOS_REGION`. When local storage is not configured,
+persistent-storage-dependent controls are disabled and show
+`管理员未配置持久化存储`; text-only features remain available. The older
+`VEADK_VIDEO_TOS_*` and `DATABASE_TOS_*` settings remain a temporary
+compatibility fallback.
+
 ## Multimodal media
 
 The composer accepts PNG, JPEG, WebP, GIF, TXT, Markdown, PDF, MP4, WebM, and
@@ -408,6 +439,11 @@ uses the Tool supplied through `--sandbox-dev-tool-id`:
 export SANDBOX_DEV=<dev-env-tool-id>
 veadk studio --agents-dir examples
 ```
+
+The new-session page shows `技能定制` only after this Dev Sandbox and its model
+credential are confirmed usable. If the administrator has not configured a
+usable Dev Sandbox, the mode is hidden rather than exposing an action that must
+fail.
 
 Each task has its own one-hour DevEnv session. Leaving a running task stops and
 releases its session; task state remains in Sandbox so polling can continue

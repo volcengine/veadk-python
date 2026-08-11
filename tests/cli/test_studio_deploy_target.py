@@ -80,6 +80,21 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
         lambda **_: None,
     )
+    monkeypatch.setattr(
+        "frontend.server.storage.provisioning.resolve_studio_storage_for_deploy",
+        lambda **kwargs: SimpleNamespace(
+            bucket="veadk-studio-2100123456",
+            region=kwargs["region"],
+            object_host=(
+                f"veadk-studio-2100123456.tos-{kwargs['region']}."
+                + (
+                    "bytepluses.com"
+                    if kwargs["provider"] == "byteplus"
+                    else "volces.com"
+                )
+            ),
+        ),
+    )
 
 
 def test_studio_credentials_prefer_inline_environment(
@@ -721,6 +736,8 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] == "veadk/studio/main"
     assert veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] == expected_region
     assert veadk_environments["VEADK_STUDIO_PROJECT"] == expected_project
+    assert veadk_environments["VEADK_STUDIO_TOS_BUCKET"] == ("veadk-studio-2100123456")
+    assert veadk_environments["VEADK_STUDIO_TOS_REGION"] == expected_region
     assert "VEADK_STUDIO_UPDATE_REGION" not in veadk_environments
     assert sorted(credential_tool_ids) == [
         "chat-code-env-id",
