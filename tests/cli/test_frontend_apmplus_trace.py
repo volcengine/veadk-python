@@ -23,6 +23,7 @@ from veadk.cli.frontend_apmplus_trace import (
     load_apmplus_trace,
     normalize_apmplus_trace,
 )
+from veadk.utils.cloud_provider import CloudProvider
 
 
 class _Span:
@@ -33,10 +34,20 @@ class _Span:
         return self.value
 
 
-def test_apmplus_trace_filters_session_runtime_and_invocation(
+@pytest.mark.parametrize(
+    ("provider", "expected_host"),
+    [
+        ("volcengine", "https://open.volcengineapi.com"),
+        ("byteplus", "https://open.byteplusapi.com"),
+    ],
+)
+def test_apmplus_trace_uses_provider_endpoint_and_filters_spans(
     monkeypatch: pytest.MonkeyPatch,
+    provider: CloudProvider,
+    expected_host: str,
 ) -> None:
     requests: list[Any] = []
+    hosts: list[str] = []
     rows = [
         _Span(
             {
@@ -69,8 +80,8 @@ def test_apmplus_trace_filters_session_runtime_and_invocation(
     ]
 
     class _FakeApi:
-        def __init__(self, _client: object) -> None:
-            pass
+        def __init__(self, client: Any) -> None:
+            hosts.append(client.configuration.host)
 
         def list_span(self, request: Any) -> SimpleNamespace:
             requests.append(request)
@@ -85,6 +96,7 @@ def test_apmplus_trace_filters_session_runtime_and_invocation(
         access_key="ak",
         secret_key="sk",
         session_token="token",
+        provider=provider,
         region="cn-beijing",
         project_name="default",
         runtime_id="runtime-1",
@@ -94,6 +106,7 @@ def test_apmplus_trace_filters_session_runtime_and_invocation(
     )
 
     assert [span["span_id"] for span in trace] == ["span-1", "span-2"]
+    assert hosts == [expected_host]
     assert requests[0].project_name == "default"
     assert requests[0].order_by == "start_time"
     assert requests[0].filters[0].key == "operation_name"
