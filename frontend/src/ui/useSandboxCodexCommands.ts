@@ -41,6 +41,7 @@ export function useSandboxCodexCommands({
   onError,
 }: UseSandboxCodexCommandsOptions) {
   const sessionIdRef = useRef(session?.id ?? "");
+  const threadsRequestRef = useRef(0);
   sessionIdRef.current = session?.id ?? "";
   const [commandBusy, setCommandBusy] = useState(false);
   const [models, setModels] = useState<SandboxModel[]>([]);
@@ -54,8 +55,11 @@ export function useSandboxCodexCommands({
   const [threads, setThreads] = useState<SandboxThreadSummary[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
   const [threadsError, setThreadsError] = useState("");
+  const [threadsNextCursor, setThreadsNextCursor] = useState("");
+  const [threadActionId, setThreadActionId] = useState("");
 
   useEffect(() => {
+    threadsRequestRef.current += 1;
     setCommandBusy(false);
     setModels([]);
     setModelsLoading(false);
@@ -68,6 +72,8 @@ export function useSandboxCodexCommands({
     setThreads([]);
     setThreadsLoading(false);
     setThreadsError("");
+    setThreadsNextCursor("");
+    setThreadActionId("");
   }, [session?.id]);
 
   const loadModels = useCallback(async (): Promise<SandboxModel[]> => {
@@ -114,30 +120,107 @@ export function useSandboxCodexCommands({
     }
   }, [onError]);
 
-  const openThreads = useCallback(async () => {
+  const loadThreadsPage = useCallback(async (
+    cursor = "",
+    append = false,
+  ) => {
     const activeSessionId = sessionIdRef.current;
     if (!activeSessionId) return;
-    setThreadsOpen(true);
+    const requestId = ++threadsRequestRef.current;
     setThreadsLoading(true);
     setThreadsError("");
     try {
-      const page = await sandboxClient.listThreads(activeSessionId);
-      if (sessionIdRef.current === activeSessionId) setThreads(page.threads);
+      const page = await sandboxClient.listThreads(
+        activeSessionId,
+        cursor ? { cursor } : {},
+      );
+      if (
+        sessionIdRef.current === activeSessionId &&
+        threadsRequestRef.current === requestId
+      ) {
+        setThreads((current) => {
+          if (!append) return page.threads;
+          const merged = new Map(current.map((thread) => [thread.id, thread]));
+          for (const thread of page.threads) merged.set(thread.id, thread);
+          return [...merged.values()];
+        });
+        setThreadsNextCursor(page.nextCursor ?? "");
+      }
     } catch (error) {
-      if (sessionIdRef.current === activeSessionId) {
+      if (
+        sessionIdRef.current === activeSessionId &&
+        threadsRequestRef.current === requestId
+      ) {
         setThreadsError(error instanceof Error ? error.message : String(error));
       }
     } finally {
-      if (sessionIdRef.current === activeSessionId) setThreadsLoading(false);
+      if (
+        sessionIdRef.current === activeSessionId &&
+        threadsRequestRef.current === requestId
+      ) {
+        setThreadsLoading(false);
+      }
     }
   }, []);
 
+  const refreshThreads = useCallback(
+    () => loadThreadsPage("", false),
+    [loadThreadsPage],
+  );
+
+  const loadMoreThreads = useCallback(async () => {
+    if (!threadsNextCursor || threadsLoading) return;
+    await loadThreadsPage(threadsNextCursor, true);
+  }, [loadThreadsPage, threadsLoading, threadsNextCursor]);
+
+  const openThreads = useCallback(async () => {
+    setThreadsOpen(true);
+    await refreshThreads();
+  }, [refreshThreads]);
+
+  useEffect(() => {
+    if (!session?.id) return;
+    void refreshThreads();
+  }, [refreshThreads, session?.id]);
+
   function applySnapshot(snapshot: SandboxThreadSnapshot) {
     onSnapshot(snapshot);
+    setThreads((current) => [
+      snapshot.thread,
+      ...current.filter((thread) => thread.id !== snapshot.thread.id),
+    ]);
     setSelectedSkills([]);
     setSkills([]);
     setSkillsLoaded(false);
     setThreadsOpen(false);
+  }
+
+  async function requestNewThread(activeSessionId: string) {
+    const snapshot = await sandboxClient.newThread(activeSessionId);
+    if (sessionIdRef.current !== activeSessionId) return;
+    applySnapshot(snapshot);
+    onActivity("已新建 Codex 对话", [
+      { label: "Thread", value: snapshot.threadId, code: true },
+    ]);
+  }
+
+  async function newThread() {
+    const activeSessionId = sessionIdRef.current;
+    if (!activeSessionId || commandBusy || conversationBusy) return;
+    setCommandBusy(true);
+    setThreadsError("");
+    onError("");
+    try {
+      await requestNewThread(activeSessionId);
+    } catch (error) {
+      if (sessionIdRef.current === activeSessionId) {
+        const message = error instanceof Error ? error.message : String(error);
+        setThreadsError(message);
+        onError(message);
+      }
+    } finally {
+      if (sessionIdRef.current === activeSessionId) setCommandBusy(false);
+    }
   }
 
   async function resumeThread(threadId: string) {
@@ -165,6 +248,39 @@ export function useSandboxCodexCommands({
       }
     } finally {
       if (sessionIdRef.current === activeSessionId) setCommandBusy(false);
+    }
+  }
+
+  async function deleteThread(threadId: string): Promise<boolean> {
+    const activeSessionId = sessionIdRef.current;
+    if (!activeSessionId || commandBusy || conversationBusy) return false;
+    threadsRequestRef.current += 1;
+    setThreadsLoading(false);
+    setCommandBusy(true);
+    setThreadActionId(threadId);
+    setThreadsError("");
+    onError("");
+    try {
+      const result = await sandboxClient.deleteThread(activeSessionId, threadId);
+      if (sessionIdRef.current !== activeSessionId) return false;
+      if (result.snapshot) applySnapshot(result.snapshot);
+      setThreads((current) => current.filter((thread) => thread.id !== threadId));
+      onActivity("已删除 Codex 历史会话", [
+        { label: "Thread", value: threadId, code: true },
+      ]);
+      return true;
+    } catch (error) {
+      if (sessionIdRef.current === activeSessionId) {
+        const message = error instanceof Error ? error.message : String(error);
+        setThreadsError(message);
+        onError(message);
+      }
+      return false;
+    } finally {
+      if (sessionIdRef.current === activeSessionId) {
+        setCommandBusy(false);
+        setThreadActionId("");
+      }
     }
   }
 
@@ -228,12 +344,7 @@ export function useSandboxCodexCommands({
           sandboxModelDetails(available, activeSession.model),
         );
       } else if (command.name === "new" || command.name === "clear") {
-        const snapshot = await sandboxClient.newThread(activeSession.id);
-        if (sessionIdRef.current !== activeSession.id) return true;
-        applySnapshot(snapshot);
-        onActivity("已新建 Codex 对话", [
-          { label: "Thread", value: snapshot.threadId, code: true },
-        ]);
+        await requestNewThread(activeSession.id);
       } else if (command.name === "resume") {
         const snapshot = await sandboxClient.resumeThread(
           activeSession.id,
@@ -265,6 +376,9 @@ export function useSandboxCodexCommands({
         );
         if (sessionIdRef.current !== activeSession.id) return true;
         if (result.snapshot) applySnapshot(result.snapshot);
+        setThreads((current) =>
+          current.filter((thread) => thread.id !== archivedThreadId)
+        );
         onActivity("已归档 Codex 对话", [
           { label: "Thread", value: archivedThreadId, code: true },
         ]);
@@ -313,13 +427,19 @@ export function useSandboxCodexCommands({
     threads,
     threadsLoading,
     threadsError,
+    threadsHasMore: Boolean(threadsNextCursor),
+    threadActionId,
     openThreads,
+    refreshThreads,
+    loadMoreThreads,
     closeThreads: () => {
       if (commandBusy) return;
       setThreadsOpen(false);
       setThreadsError("");
     },
+    newThread,
     resumeThread,
+    deleteThread,
     executeSlash,
   };
 }

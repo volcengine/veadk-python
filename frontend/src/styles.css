@@ -884,6 +884,15 @@ body {
 }
 .history-list { flex: 1; overflow-y: auto; padding: 4px 10px 12px; display: flex; flex-direction: column; gap: 2px; }
 .history-empty { padding: 16px 8px; font-size: 13px; color: hsl(var(--muted-foreground)); text-align: center; }
+.history-error {
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: hsl(var(--destructive) / 0.08);
+  color: hsl(var(--destructive));
+  font-size: 12px;
+  line-height: 1.5;
+}
 .history-item {
   position: relative;
   display: flex;
@@ -914,6 +923,27 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.history-current-badge {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: hsl(var(--foreground) / 0.08);
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.history-item-btn:focus-visible,
+.history-more:focus-visible,
+.history-load-more:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+.history-item-btn:disabled,
+.history-more:disabled {
+  cursor: wait;
+  opacity: 0.58;
 }
 /* Live "generating…" dot on a session that's currently streaming. */
 .history-streaming {
@@ -986,8 +1016,29 @@ body {
   opacity: 0;
   transition: opacity 0.12s, background 0.12s;
 }
-.history-item:hover .history-more { opacity: 1; }
+.history-item:hover .history-more,
+.history-item:focus-within .history-more { opacity: 1; }
 .history-more:hover { background: hsl(var(--border)); color: hsl(var(--foreground)); }
+.history-load-more {
+  min-height: 32px;
+  margin-top: 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.history-load-more:hover:not(:disabled) {
+  background: hsl(var(--foreground) / 0.05);
+  color: hsl(var(--foreground));
+}
+.history-load-more:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
 .menu-scrim { position: fixed; inset: 0; z-index: 30; }
 .history-menu {
   position: absolute;

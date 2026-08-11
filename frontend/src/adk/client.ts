@@ -1947,14 +1947,18 @@ export async function listDeploymentResources(
 
 export type SandboxToolKind =
   | "codex"
+  | "codex_snapshot"
   | "openclaw"
+  | "openclaw_snapshot"
   | "hermes"
+  | "hermes_snapshot"
   | "dev";
 
 export interface SandboxToolInfo {
   kind: SandboxToolKind;
   label: string;
   toolId: string;
+  snapshot: boolean;
 }
 
 export interface SystemInfoResponse {
@@ -1987,7 +1991,8 @@ export async function getSystemInfo(
       typeof item !== "object" ||
       typeof (item as SandboxToolInfo).kind !== "string" ||
       typeof (item as SandboxToolInfo).label !== "string" ||
-      typeof (item as SandboxToolInfo).toolId !== "string"
+      typeof (item as SandboxToolInfo).toolId !== "string" ||
+      typeof (item as SandboxToolInfo).snapshot !== "boolean"
     ) {
       throw new Error("系统信息响应格式无效");
     }

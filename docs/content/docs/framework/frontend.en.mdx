@@ -26,14 +26,14 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
 - **Agent picker**: switch agents from the top-left; long lists scroll within
   the viewport, and hovering an agent shows its model and mounted tools.
 - **Session history**: auto-saved, time-sorted, reopen or delete.
-- **Temporary session**: start an isolated temporary AgentKit Sandbox from the
-  new-chat composer. Studio reuses its dedicated CodeEnv tool,
-  creates a fresh user-owned Sandbox session, and runs multi-turn Codex chat
-  with live public reasoning summaries, commands, file changes, MCP calls, and
-  final replies.
-  Exiting deletes the cloud session without writing it to normal chat history;
-  after a reload, users can start another session and AgentKit reclaims the
-  abandoned session automatically when its TTL ends.
+- **Sandbox agents**: Codex, OpenClaw, and Hermes creation defaults to a checked
+  persistence option backed by the matching snapshot Tool. Clearing it creates
+  an eight-hour transient Session and shows a yellow expiry warning. Codex uses
+  the standard Codex App Server for multi-turn chat with live public reasoning
+  summaries, commands, file changes, MCP calls, and final replies. The sidebar
+  lists Codex threads and supports switching and removal. Exiting
+  only disconnects the browser; the cloud Session remains until explicit
+  deletion or expiry.
 - **Smart search**: the *Session* source full-text-searches the current agent's history; the *Web* source calls the agent's mounted web-search tool live (using credentials from the server's environment variables).
 - **Message feedback**: when connected to a cloud AgentKit Runtime, the
   like/dislike controls below each answer write the question, answer, and
@@ -281,9 +281,12 @@ otherwise the current values are retained. Use `--path` to select a source
 checkout; it defaults to the current directory. Node.js and npm must be
 installed locally.
 `--sandbox-chat-codex-tool-id`, `--sandbox-chat-openclaw-tool-id`,
-`--sandbox-chat-hermes-tool-id`, and `--sandbox-dev-tool-id` likewise
-replace only the explicitly supplied environment value. Omitting an option
-keeps that Tool ID from the deployed Function instead of clearing it.
+`--sandbox-chat-hermes-tool-id`, the three matching
+`--sandbox-chat-*-snapshot-tool-id` options, and `--sandbox-dev-tool-id`
+replace only explicitly supplied environment values. Deployment creates the
+three transient/snapshot Sandbox Tool pairs when IDs are omitted; snapshot Tool
+names end in `_snapshot`. Update preserves omitted Tool IDs and automatically
+repairs missing snapshot Tools.
 
 ### One-click Studio updates
 

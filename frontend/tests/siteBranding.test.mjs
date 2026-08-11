@@ -160,7 +160,7 @@ test("the main navbar owns the complete Agent selector", () => {
 test("history header offers a borderless new-session action", () => {
   assert.match(
     sidebarSource,
-    /className="history-new-chat"[\s\S]*?onClick=\{onNewChat\}[\s\S]*?aria-label="新建会话"/,
+    /className="history-new-chat"[\s\S]*?onClick=\{sandboxHistory\?\.onNew \?\? onNewChat\}[\s\S]*?aria-label="新建会话"/,
   );
   assert.match(
     stylesSource,

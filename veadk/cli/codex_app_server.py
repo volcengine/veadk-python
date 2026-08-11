@@ -687,6 +687,7 @@ class CodexAppServerSession:
                 "limit": 30,
                 "sortKey": "updated_at",
                 "sortDirection": "desc",
+                "sourceKinds": ["appServer", "cli", "vscode"],
                 "archived": archived,
                 **({"cursor": cursor} if cursor else {}),
                 **({"searchTerm": search_term} if search_term else {}),
@@ -713,7 +714,19 @@ class CodexAppServerSession:
             "thread/resume",
             {"threadId": thread_id, **self._thread_options()},
         )
-        return self._activate_thread_snapshot("thread/resume", result)
+        self._activate_thread_snapshot("thread/resume", result)
+        snapshot = await self.read_thread(thread_id)
+        self._workspace_locked = snapshot.workspace_locked
+        return snapshot
+
+    async def read_thread(self, thread_id: str) -> CodexThreadSnapshot:
+        """Read one thread's complete stored history without activating it."""
+        thread_id = _required_identifier(thread_id, "Thread ID")
+        result = await self.request(
+            "thread/read",
+            {"threadId": thread_id, "includeTurns": True},
+        )
+        return self._thread_snapshot("thread/read", result)
 
     async def fork_thread(self) -> CodexThreadSnapshot:
         """Fork and activate the current thread."""
@@ -728,10 +741,29 @@ class CodexAppServerSession:
         """Archive a thread and create a replacement when it was active."""
         self._ensure_thread_idle("归档对话")
         thread_id = _required_identifier(thread_id, "Thread ID")
+        active_thread_id = self.thread_id
+        if thread_id != active_thread_id:
+            try:
+                await self.resume_thread(thread_id)
+            except CodexAppServerError as error:
+                if "no rollout found for thread id" not in str(error):
+                    raise
+                return None
+        await self.request("thread/unsubscribe", {"threadId": thread_id})
         await self.request("thread/archive", {"threadId": thread_id})
-        if thread_id != self.thread_id:
+        if thread_id == active_thread_id:
+            return await self.new_thread()
+        try:
+            await self.resume_thread(active_thread_id)
             return None
-        return await self.new_thread()
+        except CodexAppServerError as error:
+            if "no rollout found for thread id" not in str(error):
+                raise
+            return await self.new_thread()
+
+    async def delete_thread(self, thread_id: str) -> CodexThreadSnapshot | None:
+        """Remove a thread from history using the app-server archive method."""
+        return await self.archive_thread(thread_id)
 
     async def compact_thread(self) -> None:
         """Start app-server compaction for the active thread."""
@@ -1200,36 +1232,54 @@ class CodexAppServerSession:
     def _activate_thread_snapshot(
         self, method: str, result: dict[str, object]
     ) -> CodexThreadSnapshot:
+        snapshot = self._thread_snapshot(method, result)
+        self.thread_id = snapshot.thread.id
+        if snapshot.cwd:
+            self.cwd = snapshot.cwd
+        self._workspace_locked = snapshot.workspace_locked
+        self._apply_runtime_settings(result)
+        if snapshot.model:
+            self.model = snapshot.model
+        self._skills_loaded = False
+        self._usage_by_turn_id.clear()
+        self._thread_token_total = None
+        self._model_context_window = None
+        return CodexThreadSnapshot(
+            thread=snapshot.thread,
+            messages=snapshot.messages,
+            model=self.model,
+            cwd=self.cwd,
+            workspace_locked=self._workspace_locked,
+        )
+
+    def _thread_snapshot(
+        self, method: str, result: dict[str, object]
+    ) -> CodexThreadSnapshot:
+        """Parse one app-server thread response without changing active state."""
         thread = result.get("thread")
         if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
             raise CodexAppServerError(f"Codex {method} 未返回有效的 Thread。")
         summary = _thread_summary(thread)
         if summary is None:
             raise CodexAppServerError(f"Codex {method} 未返回有效的 Thread。")
-        self.thread_id = thread["id"]
         cwd = result.get("cwd")
         if not isinstance(cwd, str):
             cwd = thread.get("cwd")
-        if isinstance(cwd, str) and cwd:
-            self.cwd = cwd
+        if not isinstance(cwd, str) or not cwd:
+            cwd = self.cwd
         turns = thread.get("turns")
-        self._workspace_locked = isinstance(turns, list) and bool(turns)
-        self._apply_runtime_settings(result)
+        workspace_locked = isinstance(turns, list) and bool(turns)
         model = result.get("model")
         if not isinstance(model, str):
             model = thread.get("model")
-        if isinstance(model, str) and model:
-            self.model = model
-        self._skills_loaded = False
-        self._usage_by_turn_id.clear()
-        self._thread_token_total = None
-        self._model_context_window = None
+        if not isinstance(model, str) or not model:
+            model = self.model
         return CodexThreadSnapshot(
             thread=summary,
             messages=_thread_messages(turns, summary.updated_at),
-            model=self.model,
-            cwd=self.cwd,
-            workspace_locked=self._workspace_locked,
+            model=model,
+            cwd=cwd,
+            workspace_locked=workspace_locked,
         )
 
     def _ensure_thread_idle(self, action: str) -> None:
