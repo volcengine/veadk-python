@@ -254,6 +254,76 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         self.assertEqual("tip-from-state", request_obj.headers["X-tip-token-key"])
         self.assertIn(b'"prompt": "do work"', request_obj.data)
 
+    def test_execute_skills_forwards_custom_timeout(self):
+        session_kwargs = []
+        request_timeouts = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return b'{"content": "api result"}'
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **kwargs: (
+                session_kwargs.append(kwargs) or "https://sandbox.test"
+            ),
+        )
+
+        with patch.object(
+            module.request,
+            "urlopen",
+            lambda _request, timeout=None: (
+                request_timeouts.append(timeout) or FakeResponse()
+            ),
+        ):
+            result = module.execute_skills(
+                "do work",
+                tool_context=self._tool_context(),
+                timeout=120,
+            )
+
+        self.assertEqual("api result", result)
+        self.assertEqual(1800, session_kwargs[0]["ttl"])
+        self.assertEqual([120], request_timeouts)
+
+    def test_execute_skills_forwards_custom_timeout_to_legacy_path(self):
+        captured_kwargs = {}
+        module = _load_execute_skills_module(
+            run_sandbox_agent=lambda **kwargs: (
+                captured_kwargs.update(kwargs) or "legacy result"
+            ),
+        )
+
+        result = module.execute_skills(
+            "do work",
+            tool_context=self._tool_context(),
+            env_vars={"CUSTOM_VALUE": "custom"},
+            timeout=120,
+        )
+
+        self.assertEqual("legacy result", result)
+        self.assertEqual(120, captured_kwargs["timeout"])
+
+    def test_execute_skills_rejects_invalid_timeout(self):
+        module = _load_execute_skills_module()
+
+        for timeout in (0, -1, 901, 1.5, True):
+            with self.subTest(timeout=timeout):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"timeout must be an integer between 1 and 900 seconds",
+                ):
+                    module.execute_skills(
+                        "do work",
+                        tool_context=self._tool_context(),
+                        timeout=timeout,
+                    )
+
     def test_health_check_retries_502_until_upstream_is_ready(self):
         attempts = []
 

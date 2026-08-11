@@ -40,6 +40,13 @@ _SKILL_API_HEALTH_POLL_INTERVAL = 1.0
 _SKILL_API_HEALTH_REQUEST_TIMEOUT = 5.0
 
 
+def _validate_timeout(timeout: int) -> None:
+    if type(timeout) is not int or not 1 <= timeout <= _SKILL_API_TIMEOUT:
+        raise ValueError(
+            f"timeout must be an integer between 1 and {_SKILL_API_TIMEOUT} seconds"
+        )
+
+
 def _skill_api_upgrade_hint(path: str) -> str:
     api_path = (
         "/v1/skills/stream"
@@ -266,6 +273,7 @@ def execute_skills(
     tool_context: ToolContext = None,
     env_vars: Optional[dict[str, str]] = None,
     prefer_stream: bool = False,
+    timeout: int = _SKILL_API_TIMEOUT,
 ) -> str:
     """Execute skills in a sandbox and return the output.
 
@@ -276,12 +284,16 @@ def execute_skills(
         env_vars (Optional[dict[str, str]]): Environment variables passed to the
             skill agent process for this execution only. Requests with custom
             environment variables use the legacy RunCode execution path.
+        timeout (int, optional): Maximum execution time in seconds. Defaults to
+            900. The value can be adjusted for each call but must be between 1
+            and 900 seconds.
 
     Returns:
         str: The output of the code execution.
     """
     if tool_context is None:
         raise ValueError("tool_context is required for execute_skills")
+    _validate_timeout(timeout)
 
     tool_id = resolve_agentkit_tool_id("AGENTKIT_TOOL_ID_SKILLS")
     if env_vars:
@@ -296,7 +308,7 @@ def execute_skills(
             workflow_prompt=workflow_prompt,
             tool_id=tool_id,
             tool_context=tool_context,
-            timeout=_SKILL_API_TIMEOUT,
+            timeout=timeout,
             extra_env_vars=extra_env_vars,
         )
 
@@ -305,5 +317,5 @@ def execute_skills(
         tool_id=tool_id,
         tool_context=tool_context,
         prefer_stream=prefer_stream,
-        timeout=_SKILL_API_TIMEOUT,
+        timeout=timeout,
     )

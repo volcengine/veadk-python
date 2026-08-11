@@ -26,15 +26,24 @@ from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_MAX_TIMEOUT = 300
+
+
+def _validate_timeout(name: str, value: int) -> None:
+    if type(value) is not int or not 1 <= value <= _MAX_TIMEOUT:
+        raise ValueError(
+            f"{name} must be an integer between 1 and {_MAX_TIMEOUT} seconds"
+        )
+
 
 def run_code(
     code: str,
     language: str,
     tool_context: ToolContext,
-    timeout: int = 30,
+    timeout: int = _MAX_TIMEOUT,
     exec_dir: str = "/tmp",
     env: dict[str, str] | None = None,
-    hard_timeout: int = 300,
+    hard_timeout: int = _MAX_TIMEOUT,
     max_output_length: int = 30000,
 ) -> str:
     """Run code in a code sandbox and return the output.
@@ -43,15 +52,20 @@ def run_code(
     Args:
         code (str): The code to run.
         language (str): The execution language. Use ``python3`` for code or ``bash`` for shell scripts.
-        timeout (int, optional): The timeout in seconds for the code execution. Defaults to 30.
+        timeout (int, optional): The timeout in seconds for the code execution.
+            Defaults to 300 and must be between 1 and 300 seconds.
         exec_dir (str, optional): Working directory for Bash execution. Defaults to ``/tmp``.
         env (dict[str, str], optional): Environment variables for Bash execution.
-        hard_timeout (int, optional): Hard timeout for Bash execution. Defaults to 300 seconds.
+        hard_timeout (int, optional): Hard timeout for Bash execution. Defaults
+            to 300 and must be between 1 and 300 seconds.
         max_output_length (int, optional): Maximum Bash output length. Defaults to 30000.
 
     Returns:
         str: The output of the code execution.
     """
+
+    _validate_timeout("timeout", timeout)
+    _validate_timeout("hard_timeout", hard_timeout)
 
     tool_id = resolve_agentkit_tool_id("AGENTKIT_TOOL_ID_SCRIPT")
     service, region, host, _ = get_agentkit_endpoint_config()
