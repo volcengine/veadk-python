@@ -104,12 +104,21 @@ test("Studio explains the update restart window", () => {
   assert.match(controlSource, /<span>选择版本<\/span>/);
   assert.match(controlSource, /targetRelease\.changelog\.map/);
   assert.match(controlSource, /暂无更新说明/);
+  assert.match(
+    controlStyleSource,
+    /\.studio-update-changelog ul\s*\{[\s\S]*?list-style:\s*disc outside;/,
+  );
+  assert.match(
+    controlStyleSource,
+    /\.studio-update-changelog li\s*\{[\s\S]*?display:\s*list-item;/,
+  );
   assert.match(controlStyleSource, /background: #1664ff/);
 });
 
 test("Studio exposes detailed update stages that can be reopened", () => {
   assert.match(controlSource, /下载并校验完整更新包/);
   assert.match(controlSource, /准备 VeFaaS Function 代码/);
+  assert.match(controlSource, /检查并补齐 Studio 云资源/);
   assert.match(controlSource, /发布新 Revision 并重启服务/);
   assert.match(controlSource, /setDialogOpen\(true\)/);
   assert.match(controlSource, /关闭此窗口不会停止更新/);
@@ -120,9 +129,11 @@ test("Studio exposes detailed update stages that can be reopened", () => {
 
 test("Studio renders bounded VeFaaS logs without stealing manual scroll", () => {
   assert.match(clientSource, /updateLogs: string\[\]/);
-  assert.match(controlSource, /VeFaaS 更新日志/);
+  assert.match(controlSource, /VeFaaS 实时部署日志/);
   assert.match(controlSource, /role="log"/);
   assert.match(controlSource, /aria-live="off"/);
+  assert.match(controlSource, /aria-busy=\{phase === "active"\}/);
+  assert.match(controlSource, /if \(lines\.length\) setVisibleLines\(lines\)/);
   assert.match(
     controlSource,
     /root\.scrollHeight - root\.scrollTop - root\.clientHeight < 24/,

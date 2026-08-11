@@ -47,12 +47,17 @@ def stage_studio_provider_requirements(
 def studio_run_script(
     site_logo_filename: str | None = None,
     *,
-    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+    provider: CloudProvider | None = DEFAULT_CLOUD_PROVIDER,
 ) -> str:
     """Return the authenticated VeFaaS entrypoint used by Studio."""
+    provider_argument = (
+        provider
+        if provider is not None
+        else '"${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}"'
+    )
     command = (
         "exec python3 -m veadk.cli.cli studio "
-        f"--provider {provider} --auth-mode frontend"
+        f"--provider {provider_argument} --auth-mode frontend"
     )
     if site_logo_filename:
         command += f' --site-logo "$ROOT_DIR/{site_logo_filename}"'
@@ -98,7 +103,7 @@ def write_studio_package(
     requirements: str,
     site_logo: SiteLogo | None,
     release_environment: dict[str, str] | None = None,
-    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+    provider: CloudProvider | None = DEFAULT_CLOUD_PROVIDER,
 ) -> None:
     """Write the Studio entrypoint, requirements, and optional logo."""
     package_dir.mkdir(parents=True, exist_ok=True)

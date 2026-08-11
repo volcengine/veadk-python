@@ -165,7 +165,7 @@ def write_studio_dependency_manifest(destination: Path) -> None:
                 "url": dependency.url,
                 "sha256": dependency.sha256,
             }
-            for dependency in STUDIO_DEPENDENCY_WHEELS
+            for dependency in studio_dependency_wheels("byteplus")
         ]
     }
     destination.write_text(

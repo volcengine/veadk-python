@@ -382,7 +382,9 @@ def _studio_run_script() -> str:
         "HOST=0.0.0.0\n"
         "PORT=${_FAAS_RUNTIME_PORT:-8000}\n"
         "export PYTHONPATH=$PYTHONPATH:./site-packages\n"
-        "exec python3 -m veadk.cli.cli studio --auth-mode frontend "
+        "exec python3 -m veadk.cli.cli studio "
+        '--provider "${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}" '
+        "--auth-mode frontend "
         '--host "$HOST" --port "$PORT"\n'
     )
 

@@ -554,6 +554,10 @@ def test_standalone_publisher_builds_bundle_from_source_files(
             "VEADK_STUDIO_APMPLUS_AID": "12345",
             "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
         }
+        assert (
+            b'--provider "${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}"'
+            in archive.read("run.sh")
+        )
     assert manifest.git_sha == "a" * 40
     assert manifest.sha256 == hashlib.sha256(bundle.read_bytes()).hexdigest()
 

@@ -29,6 +29,7 @@ from veadk.cli.studio_dependencies import (
 from veadk.cli.studio_package import (
     STUDIO_RELEASE_ENVIRONMENT_FILENAME,
     read_studio_release_environment,
+    studio_run_script,
     write_studio_package,
 )
 from veadk.cli.studio_release import (
@@ -304,6 +305,15 @@ def test_write_dependency_manifest_uses_pinned_wheel_metadata(
         "veadk.cli.studio_dependencies.STUDIO_DEPENDENCY_WHEELS",
         (dependency,),
     )
+    byteplus_dependency = StudioDependencyWheel(
+        filename="byteplus.whl",
+        url="https://example.com/byteplus.whl",
+        sha256="b" * 64,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_dependencies.BYTEPLUS_STUDIO_DEPENDENCY_WHEELS",
+        (byteplus_dependency,),
+    )
     manifest = tmp_path / "dependencies.json"
 
     write_studio_dependency_manifest(manifest)
@@ -314,9 +324,23 @@ def test_write_dependency_manifest_uses_pinned_wheel_metadata(
                 "filename": dependency.filename,
                 "url": dependency.url,
                 "sha256": dependency.sha256,
-            }
+            },
+            {
+                "filename": byteplus_dependency.filename,
+                "url": byteplus_dependency.url,
+                "sha256": byteplus_dependency.sha256,
+            },
         ]
     }
+
+
+def test_release_entrypoint_reads_deployed_provider() -> None:
+    run_script = studio_run_script(provider=None)
+
+    assert (
+        '--provider "${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}"'
+        in run_script
+    )
 
 
 def test_studio_package_carries_release_environment(tmp_path: Path) -> None:
@@ -384,9 +408,11 @@ def test_build_release_uses_prepared_frontend_and_wheels(
         *,
         frontend_assets: Path | None = None,
         dependency_wheels: Path | None = None,
+        provider: str = "volcengine",
     ) -> str:
         captured["frontend"] = frontend_assets
         captured["wheels"] = dependency_wheels
+        captured["requirements_provider"] = provider
         package_dir.mkdir(parents=True)
         (package_dir / "veadk.whl").write_bytes(b"wheel")
         return "./veadk.whl\n"
@@ -397,9 +423,11 @@ def test_build_release_uses_prepared_frontend_and_wheels(
         requirements: str,
         site_logo: object,
         release_environment: dict[str, str],
+        provider: str | None = "volcengine",
     ) -> None:
         del site_logo
         captured["release_environment"] = release_environment
+        captured["package_provider"] = provider
         (package_dir / "requirements.txt").write_text(
             requirements,
             encoding="utf-8",
@@ -434,6 +462,8 @@ def test_build_release_uses_prepared_frontend_and_wheels(
     assert captured == {
         "frontend": frontend_assets,
         "wheels": dependency_wheels,
+        "requirements_provider": "byteplus",
+        "package_provider": None,
         "release_environment": {
             "VEADK_STUDIO_APMPLUS_AID": "12345",
             "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",

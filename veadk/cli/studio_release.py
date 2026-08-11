@@ -371,6 +371,7 @@ def build_studio_release(
             package_dir,
             frontend_assets=resolved_frontend_assets,
             dependency_wheels=dependency_wheels,
+            provider="byteplus",
         )
         try:
             release_environment = studio_release_environment_from_env()
@@ -381,6 +382,7 @@ def build_studio_release(
             requirements=requirements,
             site_logo=None,
             release_environment=release_environment,
+            provider=None,
         )
         bundle = output_dir / f"studio-bundle-{version}.zip"
         _zip_directory(package_dir, bundle)
