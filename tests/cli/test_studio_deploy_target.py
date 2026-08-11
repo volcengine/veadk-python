@@ -429,6 +429,25 @@ def test_studio_deploy_auto_identity_is_injected_and_printed(
     assert "client id: client-created" in result.output
     assert captured["configured_user_pool"] == "pool-created"
     assert "Configured the user pool for IdP-only sign-in." in result.output
+    tos_domain = "bytepluses.com" if expected_provider == "byteplus" else "volces.com"
+    identity_console = (
+        "https://console.byteplus.com/identity"
+        if expected_provider == "byteplus"
+        else "https://console.volcengine.com/identity"
+    )
+    assert "Cloud resources configured for this Studio:" in result.output
+    assert "[Codex]: codex-tool" in result.output
+    assert "[OpenClaw]: openclaw-tool" in result.output
+    assert "[Hermes]: hermes-tool" in result.output
+    assert "[Dev Sandbox]: dev-tool" in result.output
+    assert (
+        "TOS (private): "
+        f"https://veadk-studio-2100123456.tos-{expected_region}.{tos_domain}"
+        in result.output
+    )
+    assert f"Identity console: {identity_console}" in result.output
+    assert "Password sign-in is disabled by default for security." in result.output
+    assert "Configure an SSO identity provider before inviting users." in result.output
 
 
 def test_studio_credentials_fall_back_to_volc_default_profile(
@@ -648,6 +667,11 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
 ) -> None:
     captured: dict[str, object] = {}
     credential_tool_ids: list[str] = []
+    monkeypatch.setitem(
+        veadk_environments,
+        "VEADK_STUDIO_TOS_BUCKET",
+        "existing-studio-storage",
+    )
 
     if update_bucket_env is None:
         monkeypatch.delenv("VEADK_STUDIO_UPDATE_BUCKET", raising=False)
@@ -777,6 +801,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert ("Warning:" in result.output) == (
         expected_identity_region != expected_region
     )
+    assert "Cloud resources configured for this Studio:" not in result.output
     callback = captured["callback"]
     assert isinstance(callback, dict)
     assert callback["dismiss_login_page_enabled"] is False
@@ -1521,6 +1546,10 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
         assert f"AgentKit {label} Tool is ready." in result.output
         assert f"Creating AgentKit {label} model credential" in result.output
         assert f"AgentKit {label} model credential is ready." in result.output
+    assert "[Codex]: chat-tool" in result.output
+    assert "[OpenClaw]: openclaw-tool" in result.output
+    assert "[Hermes]: hermes-tool" in result.output
+    assert "[Dev Sandbox]: dev-tool" in result.output
 
 
 @pytest.mark.parametrize(
