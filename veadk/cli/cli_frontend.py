@@ -1467,7 +1467,12 @@ def _run_frontend_server(
         return default_region(provider)
 
     def _coerce_cloud_region(region: str | None) -> str:
-        return (region or "").strip() or _default_cloud_region()
+        candidate = (region or "").strip()
+        if provider == "byteplus" and candidate.startswith("cn-"):
+            return _default_cloud_region()
+        if provider == "volcengine" and candidate.startswith("ap-"):
+            return _default_cloud_region()
+        return candidate or _default_cloud_region()
 
     from frontend.server.video.routes import (
         build_video_service,

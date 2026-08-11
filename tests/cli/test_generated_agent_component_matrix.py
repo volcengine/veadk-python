@@ -275,6 +275,7 @@ def test_byteplus_generated_project_uses_byteplus_modelark_defaults() -> None:
             cloudProvider="byteplus",
             knowledgebase=True,
             knowledgebaseBackend="opensearch",
+            builtinTools=["image_generate", "image_edit", "video_generate"],
         )
     )
     env_example = _files(project)[".env.example"]
@@ -289,7 +290,11 @@ def test_byteplus_generated_project_uses_byteplus_modelark_defaults() -> None:
         "MODEL_EMBEDDING_API_BASE=https://ark.ap-southeast.bytepluses.com/api/v3"
         in env_example
     )
+    assert "MODEL_IMAGE_NAME=dola-seedream-5-0-pro-260628" in env_example
+    assert "MODEL_EDIT_NAME=seededit-3-0-i2i-250628" in env_example
+    assert "MODEL_VIDEO_NAME=dreamina-seedance-2-0-260128" in env_example
     assert "ark.cn-beijing.volces.com" not in env_example
+    assert "doubao-" not in env_example
 
 
 def test_run_code_generates_tool_import_and_sandbox_env() -> None:

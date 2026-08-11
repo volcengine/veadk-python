@@ -79,6 +79,7 @@ from veadk.cli.frontend_skill_creator import (
     _validated_activities,
 )
 from veadk.cli.studio_sandbox_tools import studio_sandbox_agent_model_name
+from veadk.cli.studio_model_catalog import provider_allows_model
 from veadk.skills.skill import Skill
 from veadk.utils.cloud_provider import cloud_provider_from_env
 from veadk.utils.logger import get_logger
@@ -308,11 +309,23 @@ def _model_options(tool: Any) -> list[dict[str, str]]:
     options: list[dict[str, str]] = []
     seen: set[str] = set()
     for model_id, label in candidates:
+        if not provider_allows_model(provider, model_id):
+            continue
         if model_id in seen:
             continue
         seen.add(model_id)
         options.append({"id": model_id, "label": label})
     return options
+
+
+def _validate_model_for_provider(provider: str, model_id: str) -> None:
+    if provider_allows_model(provider, model_id):
+        return
+    raise SkillWorkbenchError(
+        "SKILL_MODEL_UNSUPPORTED",
+        "当前 Studio 环境不支持该模型，请选择可用的模型 ID。",
+        status_code=422,
+    )
 
 
 class SkillWorkbenchError(RuntimeError):
@@ -1074,6 +1087,7 @@ class SkillWorkbenchService:
                 "请填写模型 ID。",
                 status_code=422,
             )
+        _validate_model_for_provider(cloud_provider_from_env(), selected_model)
         request_payload: dict[str, object] = {
             "jobId": job_id,
             "operation": body.operation,

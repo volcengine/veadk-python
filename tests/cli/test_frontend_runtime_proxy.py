@@ -194,6 +194,46 @@ def test_byteplus_runtime_list_uses_vefaas_iam_credentials(
     assert calls == [("iam-ak", "iam-sk", "iam-token", "ap-southeast-1")]
 
 
+def test_byteplus_runtime_detail_coerces_volcengine_region(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path, provider="byteplus")
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "bp-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "bp-sk")
+    monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-1")
+    calls: list[str] = []
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            calls.append(kwargs["region"])
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                runtime_id=getattr(request, "runtime_id", ""),
+                name="runtime-bp",
+                status="Ready",
+                network_configurations=[],
+                envs=[],
+                tags=[],
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-detail",
+            params={"runtimeId": "runtime-bp-id", "region": "cn-shanghai"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["region"] == "ap-southeast-1"
+    assert calls == ["ap-southeast-1"]
+
+
 def test_ui_config_serves_custom_branding(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

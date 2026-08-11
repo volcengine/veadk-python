@@ -56,6 +56,10 @@ from veadk.cli.agentkit_sandbox_region import (
     is_agentkit_resource_not_found,
     sandbox_region_candidates,
 )
+from veadk.cli.studio_model_catalog import (
+    BYTEPLUS_SKILL_CREATOR_MODELS,
+    BYTEPLUS_STUDIO_AGENT_MODEL_NAME,
+)
 
 
 _MODELS = (
@@ -703,8 +707,18 @@ def _sandbox_provider() -> str:
     )
 
 
+def _models_for_provider(
+    provider: str | None = None,
+) -> tuple[tuple[str, str, str], ...]:
+    provider_id = (provider or _sandbox_provider()).strip().lower()
+    if provider_id == "byteplus":
+        return BYTEPLUS_SKILL_CREATOR_MODELS
+    return _MODELS
+
+
 def _sandbox_model_config(provider: str | None = None) -> tuple[str, str]:
-    if (provider or _sandbox_provider()) == "byteplus":
+    provider_id = (provider or _sandbox_provider()).strip().lower()
+    if provider_id == "byteplus":
         return _BYTEPLUS_MODEL_PROVIDER, _BYTEPLUS_MODEL_BASE_URL
     return _MODEL_PROVIDER, _MODEL_BASE_URL
 
@@ -732,6 +746,7 @@ def ensure_skill_creator_model_credential(
     """Resolve an Ark API key and bind it directly to the CodeEnv Tool."""
     from veadk.auth.veauth.ark_veauth import get_ark_token
 
+    provider_id = provider.strip().lower()
     tools_client = client or AgentkitToolsClient(
         access_key=access_key,
         secret_key=secret_key,
@@ -746,9 +761,14 @@ def ensure_skill_creator_model_credential(
         secret_key=secret_key,
         session_token=session_token,
     )
-    model_provider, model_base_url = _sandbox_model_config(provider)
+    model_provider, model_base_url = _sandbox_model_config(provider_id)
     session_envs = build_exec_session_envs(
-        model_name=model_name or _MODELS[0][1],
+        model_name=model_name
+        or (
+            BYTEPLUS_STUDIO_AGENT_MODEL_NAME
+            if provider_id == "byteplus"
+            else _MODELS[0][1]
+        ),
         model_api_key=model_api_key,
         model_provider=model_provider,
         model_base_url=model_base_url,
@@ -808,7 +828,7 @@ class SkillCreatorService:
             "reason": reason,
             "models": [
                 {"candidateId": candidate_id, "id": model, "label": label}
-                for candidate_id, model, label in _MODELS
+                for candidate_id, model, label in _models_for_provider()
             ],
             "publishEnabled": enabled,
         }
@@ -845,7 +865,7 @@ class SkillCreatorService:
                     }
                 ],
             }
-            for candidate_id, model, label in _MODELS
+            for candidate_id, model, label in _models_for_provider()
         ]
         failures: list[Exception] = []
 
@@ -872,7 +892,7 @@ class SkillCreatorService:
                         model_base_url,
                         prompt,
                     ): (candidate_id, model, label)
-                    for candidate_id, model, label in _MODELS
+                    for candidate_id, model, label in _models_for_provider()
                 }
                 for future in as_completed(futures):
                     candidate_id, model, label = futures[future]
@@ -913,7 +933,7 @@ class SkillCreatorService:
         tool_id = self._tool_id()
         candidates = [
             self._candidate_status(tool_id, job_id, candidate_id, model, label)
-            for candidate_id, model, label in _MODELS
+            for candidate_id, model, label in _models_for_provider()
         ]
         terminal = all(item["status"] in {"succeeded", "failed"} for item in candidates)
         return {
@@ -1073,7 +1093,7 @@ class SkillCreatorService:
         self._validate_job_owner(job_id, owner_id)
         tool_id = self._tool_id()
         instances = []
-        for candidate_id, _, _ in _MODELS:
+        for candidate_id, _, _ in _models_for_provider():
             try:
                 session = self._find_session(
                     tool_id, self._session_id(job_id, candidate_id)
@@ -1315,7 +1335,7 @@ class SkillCreatorService:
             raise SkillCreatorError("无权访问该 Skill 创建任务")
 
     def _model(self, candidate_id: str) -> tuple[str, str, str]:
-        for item in _MODELS:
+        for item in _models_for_provider():
             if item[0] == candidate_id:
                 return item
         raise SkillCreatorError("Skill 候选方案无效")

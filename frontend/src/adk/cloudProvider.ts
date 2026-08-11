@@ -16,6 +16,12 @@ export const BYTEPLUS_DEFAULT_EMBEDDING_NAME = "skylark-embedding-vision-250615"
 export const VOLCENGINE_DEFAULT_EMBEDDING_NAME = "doubao-embedding-vision-250615";
 export const BYTEPLUS_PLANNER_MODEL_NAME = "seed-2-0-lite-260228";
 export const VOLCENGINE_PLANNER_MODEL_NAME = "doubao-seed-2-0-lite-260428";
+export const BYTEPLUS_DEFAULT_IMAGE_MODEL_NAME = "dola-seedream-5-0-pro-260628";
+export const VOLCENGINE_DEFAULT_IMAGE_MODEL_NAME = "doubao-seedream-5-0-260128";
+export const BYTEPLUS_DEFAULT_IMAGE_EDIT_MODEL_NAME = "seededit-3-0-i2i-250628";
+export const VOLCENGINE_DEFAULT_IMAGE_EDIT_MODEL_NAME = "doubao-seededit-3-0-i2i-250628";
+export const BYTEPLUS_DEFAULT_VIDEO_MODEL_NAME = "dreamina-seedance-2-0-260128";
+export const VOLCENGINE_DEFAULT_VIDEO_MODEL_NAME = "doubao-seedance-2-0-260128";
 
 const VOLCENGINE_REGIONS: CloudRegionOption[] = [
   { value: "cn-beijing", label: "华北 2（北京）" },
@@ -73,4 +79,22 @@ export function plannerModelName(provider: CloudProvider): string {
   return provider === "byteplus"
     ? BYTEPLUS_PLANNER_MODEL_NAME
     : VOLCENGINE_PLANNER_MODEL_NAME;
+}
+
+export function defaultImageModelName(provider: CloudProvider): string {
+  return provider === "byteplus"
+    ? BYTEPLUS_DEFAULT_IMAGE_MODEL_NAME
+    : VOLCENGINE_DEFAULT_IMAGE_MODEL_NAME;
+}
+
+export function defaultImageEditModelName(provider: CloudProvider): string {
+  return provider === "byteplus"
+    ? BYTEPLUS_DEFAULT_IMAGE_EDIT_MODEL_NAME
+    : VOLCENGINE_DEFAULT_IMAGE_EDIT_MODEL_NAME;
+}
+
+export function defaultVideoModelName(provider: CloudProvider): string {
+  return provider === "byteplus"
+    ? BYTEPLUS_DEFAULT_VIDEO_MODEL_NAME
+    : VOLCENGINE_DEFAULT_VIDEO_MODEL_NAME;
 }

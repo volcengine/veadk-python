@@ -29,7 +29,7 @@ from veadk.cli.generated_agent_catalog import (
     STM_BY_ID,
     TOOL_BY_ID,
     EnvVar,
-    embedding_env_for_provider,
+    env_for_provider,
     model_env_for_provider,
 )
 
@@ -421,13 +421,7 @@ def _add_import(acc: _Acc, line: str) -> None:
 
 
 def _add_env(acc: _Acc, env: tuple[EnvVar, ...]) -> None:
-    if acc.cloud_provider != "byteplus":
-        acc.env.extend(env)
-        return
-    embedding_env_by_key = {
-        item.key: item for item in embedding_env_for_provider(acc.cloud_provider)
-    }
-    acc.env.extend(embedding_env_by_key.get(item.key, item) for item in env)
+    acc.env.extend(env_for_provider(acc.cloud_provider, env))
 
 
 def _emit_tool_stub(acc: _Acc, name: str, description: str) -> str:
