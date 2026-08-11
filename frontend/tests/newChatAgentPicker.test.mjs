@@ -46,8 +46,8 @@ test("keeps message actions disabled while leaving the Agent picker available", 
   assert.match(appSource, /agentPickerDisabled=\{!userId \|\| conversationBusy\}/);
   assert.match(
     appSource,
-    /newChatMode === "agent" && !appName/,
-    "the textarea, attachments, and send action remain disabled without an Agent",
+    /newChatWorkspaceMode === "agent"[\s\S]*?newChatMode === "agent"[\s\S]*?!appName/,
+    "Agent workspace message actions remain disabled without an Agent",
   );
 });
 
@@ -63,22 +63,24 @@ test("renders a two-level Agent type and runtime menu", () => {
   assert.match(pickerSource, /sandboxClient\.listSessions/);
   assert.match(pickerSource, /sandboxClient\.listAgentSessions/);
   assert.match(pickerSource, /onSelectSandboxSession\(session\)/);
-  assert.match(appSource, /onSelectRuntime=\{async \(runtime\) => \{[\s\S]*?connectMyAgent/);
-  assert.match(appSource, /onSelectSandboxSession=\{openSandboxAgent\}/);
+  assert.match(appSource, /onSelectRuntime=\{async \(runtime\) => \{[\s\S]*?source: "new_chat_picker"/);
+  assert.match(appSource, /onSelectSandboxSession=\{\(session\) =>[\s\S]*?openSandboxAgent\(session, "new_chat_picker"\)/);
   assert.doesNotMatch(pickerSource, /暂未开放/);
   assert.match(pickerSource, /disabled/);
   assert.match(pickerStyles, /\.new-chat-agent-picker__submenu/);
 });
 
-test("reuses the blinking Sidebar Agent face for the trigger and general type", () => {
+test("keeps the Agent face in menu options but removes it from the compact trigger", () => {
   assert.match(pickerSource, /import \{ AgentFaceIcon \} from "\.\.\/AgentFaceIcon"/);
   assert.match(
     pickerSource,
     /className = "new-chat-agent-picker__type-icon"[\s\S]*?type === "general"[\s\S]*?<AgentFaceIcon className=\{className\}/,
   );
+  assert.doesNotMatch(pickerSource, /new-chat-agent-picker__trigger-icon/);
+  assert.doesNotMatch(pickerStyles, /new-chat-agent-picker__trigger-icon/);
   assert.match(
-    pickerSource,
-    /<AgentFaceIcon className="new-chat-agent-picker__trigger-icon"/,
+    pickerStyles,
+    /\.new-chat-agent-picker__trigger\s*\{[\s\S]*?font-size:\s*13px;/,
   );
   assert.match(agentFaceSource, /sidebar-agent-face__eye/);
   assert.match(

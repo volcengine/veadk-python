@@ -2,8 +2,19 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Github, LogIn } from "lucide-react";
 import type { SiteBranding } from "../adk/client";
 import { fetchProviders, loginTo, USERNAME_RE, type Provider } from "../adk/identity";
-import defaultSiteLogo from "../assets/volcengine.svg";
+import byteplusLogo from "../assets/byteplus.svg";
+import defaultSiteLogo from "../assets/logo.svg";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
+
+const PROVIDER_POWERED_COPY = {
+  volcengine: "火山引擎 AgentKit 提供企业级 Agent 解决方案",
+  byteplus: "BytePlus AgentKit 提供企业级 Agent 解决方案",
+};
+
+const PROVIDER_LEGAL_URL = {
+  volcengine: "https://docs.volcengine.com/docs/86681/1925174?lang=zh",
+  byteplus: "https://docs.byteplus.com/en/docs/legal",
+};
 
 function providerIcon(id: string) {
   if (id.toLowerCase() === "github") return <Github className="icon" />;
@@ -12,11 +23,12 @@ function providerIcon(id: string) {
 
 export interface LoginPageProps {
   branding: SiteBranding;
+  cloudProvider: "volcengine" | "byteplus";
   /** Chosen username for the no-SSO local mode. */
   onUsername: (name: string) => void;
 }
 
-export function LoginPage({ branding, onUsername }: LoginPageProps) {
+export function LoginPage({ branding, cloudProvider, onUsername }: LoginPageProps) {
   const [providers, setProviders] = useState<Provider[] | null>(null);
   const [providerError, setProviderError] = useState("");
   const [providerAttempt, setProviderAttempt] = useState(0);
@@ -48,6 +60,7 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
   }, [showUsernameLogin]);
 
   const valid = USERNAME_RE.test(name);
+  const fallbackLogo = cloudProvider === "byteplus" ? byteplusLogo : defaultSiteLogo;
   const submit = () => {
     if (valid) onUsername(name);
   };
@@ -58,7 +71,7 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
         <span className="login-brand">
           <img
             className="login-brand-logo"
-            src={branding.logoUrl || defaultSiteLogo}
+            src={branding.logoUrl || fallbackLogo}
             width={20}
             height={20}
             alt=""
@@ -128,11 +141,11 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
             </>
           )}
 
-          <p className="login-powered">火山引擎 AgentKit 提供企业级 Agent 解决方案</p>
+          <p className="login-powered">{PROVIDER_POWERED_COPY[cloudProvider]}</p>
           <p className="login-legal">
             继续即表示你已阅读并同意 AgentKit{" "}
             <a
-              href="https://docs.volcengine.com/docs/86681/1925174?lang=zh"
+              href={PROVIDER_LEGAL_URL[cloudProvider]}
               target="_blank"
               rel="noreferrer"
             >

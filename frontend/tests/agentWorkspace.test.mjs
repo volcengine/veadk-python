@@ -248,7 +248,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   );
   assert.match(
     appSource,
-    /const finishDeployment = useCallback[\s\S]*?removeWorkspaceDraft\(editingDraftId\)[\s\S]*?setFocusedWorkspaceAgentId\(agentId\)[\s\S]*?setManageAgents\(true\)/,
+    /const finishDeployment = useCallback[\s\S]*?removeWorkspaceDraft\(completedDraftId\)[\s\S]*?setFocusedWorkspaceAgentId\(agentId\)[\s\S]*?setFocusedDeploymentTaskId\(""\)[\s\S]*?setManageAgents\(true\)/,
   );
   assert.match(appSource, /onDeploymentStarted=\{startDeployment\}/);
   assert.match(appSource, /onDeploymentComplete=\{finishDeployment\}/);
@@ -264,7 +264,16 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /deploymentRuntimeId\?: string/);
   assert.match(projectPreviewSource, /onDeploymentStarted\?: \(task: DeploymentTaskUpdate\)/);
   assert.match(projectPreviewSource, /onDeploymentComplete\?: \(result: DeployResult\)/);
+  assert.match(projectPreviewSource, /draftId\?: string/);
   assert.match(projectPreviewSource, /const isRuntimeUpdate = deploymentActionLabel\.includes\("更新"\)/);
+  assert.match(
+    projectPreviewSource,
+    /aria-describedby=\{isRuntimeUpdate \? deploymentRegionHelpId : undefined\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /更新时沿用现有 Runtime 的部署区域，无法修改。/,
+  );
   assert.match(projectPreviewSource, /onDeploymentStarted\?\.\(initialTask\)/);
   assert.match(projectPreviewSource, /RuntimeProbeError/);
   assert.match(projectPreviewSource, /import \{ mergeDeployBuildLog \} from "\.\/deployBuildLog"/);
@@ -275,10 +284,14 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /const mergeBuildFailureLog = \(message: string\): DeployBuildLogSnapshot \| undefined =>/);
   assert.match(projectPreviewSource, /"----- 构建失败 -----"[\s\S]*?latestBuildLog = mergeDeployBuildLog\(latestBuildLog/);
   assert.match(projectPreviewSource, /latestPhase = s\.phase/);
-  assert.match(projectPreviewSource, /message: failedInBuild \? "构建镜像失败，详见构建日志。" : message/);
+  assert.match(projectPreviewSource, /label: "部署失败",\s*message,\s*\.\.\.\(buildLog/);
   assert.match(
     projectPreviewSource,
     /await onDeploymentComplete\?\.\(result\)[\s\S]*?catch \(error\)[\s\S]*?error instanceof RuntimeProbeError[\s\S]*?status: "success"[\s\S]*?label: "部署完成，暂未连接"[\s\S]*?message: error\.message/,
+  );
+  assert.match(
+    appSource,
+    /const startDeployment = useCallback[\s\S]*?flushPendingWorkspaceDraft\(\)[\s\S]*?draftId: editingDraftId[\s\S]*?updateDeploymentTask\(linkedTask\)[\s\S]*?openDeploymentDetail\(linkedTask\)/,
   );
   assert.doesNotMatch(workspaceSource, /aw-deployment-focus/);
   assert.match(
@@ -293,12 +306,29 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
     workspaceSource,
     /const shouldShowDeploymentTask = Boolean\([\s\S]*?deploymentTask\.status !== "success"[\s\S]*?focusedDeploymentTaskActive/,
   );
+  assert.match(
+    workspaceSource,
+    /const deploymentInProgress = deploymentTask\?\.status === "running"/,
+  );
   assert.match(workspaceSource, /if \(!focusedDeploymentTaskId\) return;/);
   assert.doesNotMatch(workspaceSource, /activeDeploymentTaskId/);
   assert.match(
     workspaceSource,
-    /className="aw-agent-head"[\s\S]*?\{deploymentTask && shouldShowDeploymentTask && \([\s\S]*?className="aw-detail-deployment"[\s\S]*?<DeploymentProgressCard task=\{deploymentTask\} \/>[\s\S]*?<nav className="aw-agent-tabs"/,
+    /className=\{`aw-main\$\{deploymentInProgress \? " is-deploying" : ""\}`\}[\s\S]*?className="aw-agent-head"[\s\S]*?\{deploymentTask && shouldShowDeploymentTask && \([\s\S]*?className=\{`aw-detail-deployment\$\{deploymentInProgress \? " is-running" : ""\}`\}[\s\S]*?<DeploymentProgressCard[\s\S]*?task=\{deploymentTask\}[\s\S]*?<nav[\s\S]*?className="aw-agent-tabs"/,
   );
+  assert.match(
+    workspaceSource,
+    /const deploymentDraft = deploymentTask\?\.draftId[\s\S]*?drafts\.find\(\(item\) => item\.id === deploymentTask\.draftId\)[\s\S]*?deploymentTask\.agentDraft/,
+  );
+  assert.match(
+    workspaceSource,
+    /task\.status === "error" \|\| task\.status === "cancelled"[\s\S]*?onReturnToEdit[\s\S]*?>返回编辑<\/button>/,
+  );
+  assert.match(
+    workspaceSource,
+    /<DeploymentProgressCard[\s\S]*?task=\{deploymentTask\}[\s\S]*?onReturnToEdit=\{deploymentDraft[\s\S]*?onEditDraft\(deploymentDraft\)/,
+  );
+  assert.match(workspaceStyles, /\.aw-deploy-progress-actions\s*\{/);
   assert.match(workspaceSource, /const BUILD_STEP_INDEX = DEPLOYMENT_STEPS\.findIndex/);
   assert.match(workspaceSource, /const shouldAutoExpand = Boolean\([\s\S]*?deploymentStepIndex\(task\) === BUILD_STEP_INDEX/);
   assert.match(workspaceSource, /useState\(shouldAutoExpand\)/);
@@ -319,8 +349,20 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
     /className="aw-basic-stack">\s*\{deploymentTask && <DeploymentProgressCard/,
   );
   assert.match(workspaceStyles, /\.aw-detail-deployment\s*\{[\s\S]*?padding:\s*0 24px 16px;/);
+  assert.match(
+    workspaceStyles,
+    /\.aw-detail-deployment\.is-running\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?min-height:\s*0;[\s\S]*?overflow-y:\s*auto;[\s\S]*?overscroll-behavior:\s*contain;/,
+  );
+  assert.match(
+    workspaceStyles,
+    /\.aw-main\.is-deploying \.aw-agent-tabs,[\s\S]*?\.aw-main\.is-deploying \.aw-content,[\s\S]*?\.aw-main\.is-deploying \.aw-basic-actions\s*\{[\s\S]*?display:\s*none;/,
+  );
   assert.match(projectPreviewSource, /await onDeploymentComplete\?\.\(result\)/);
   assert.match(projectPreviewSource, /runtimeId: result\.runtimeId \|\| deploymentRuntimeId/);
+  assert.match(
+    appSource,
+    /const finishDeployment = useCallback[\s\S]*?removeWorkspaceDraft\(completedDraftId\)[\s\S]*?setEditingDraftId\(""\)[\s\S]*?await connectRuntime\([\s\S]*?waitForReady: true/,
+  );
 });
 
 test("runtime update deployments stay on the existing agent row", () => {
@@ -416,6 +458,8 @@ test("runtime refresh preserves agent order and detail loading uses an overlay",
 
 test("runtime updates use the Agent selected in management instead of the active chat connection", () => {
   assert.match(clientSource, /export interface RuntimeUpdateCapability/);
+  assert.match(clientSource, /envs: \{ key: string; value: string \}\[\]/);
+  assert.match(clientSource, /network: NetworkConfig/);
   assert.match(clientSource, /agent\?:\s*\{[\s\S]*?\}\s*\| null/);
   assert.match(clientSource, /export async function getRuntimeUpdateCapability/);
   assert.match(clientSource, /\/web\/runtime-update-capability\?\$\{params\.toString\(\)\}/);
@@ -439,6 +483,12 @@ test("runtime updates use the Agent selected in management instead of the active
   assert.match(handler, /capability\.runtime\.runtimeId/);
   assert.match(handler, /capability\.runtime\.region/);
   assert.match(handler, /capability\.runtime\.currentVersion/);
+  assert.match(handler, /capability\.runtime\.envs\.map/);
+  assert.match(
+    handler,
+    /envValues:\s*\{[\s\S]*?\.\.\.runtimeEnvValues,[\s\S]*?\.\.\.\(nextDraft\.deployment\?\.envValues \?\? \{\}\)/,
+  );
+  assert.match(handler, /network:\s*capability\.runtime\.network/);
 });
 
 test("runtime update capability checks ignore aborted and stale selections", () => {

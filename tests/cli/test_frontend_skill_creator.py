@@ -86,7 +86,11 @@ def test_archive_metadata_requires_safe_single_matching_root() -> None:
         service._archive_metadata(unsafe.getvalue())
 
 
-def test_create_job_runs_fixed_models_in_independent_candidates() -> None:
+def test_create_job_runs_fixed_models_in_independent_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "volcengine")
+    monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
     service = SkillCreatorService(tool_id="tool-id")
     calls: list[tuple[str, str]] = []
     progress: list[dict[str, Any]] = []
@@ -329,38 +333,43 @@ def test_archive_metadata_rejects_symlink_entry() -> None:
         SkillCreatorService(tool_id="tool-id")._archive_metadata(output.getvalue())
 
 
-def test_model_credential_is_bound_directly_to_tool() -> None:
+@pytest.mark.parametrize(
+    ("provider", "expected_base_url", "expected_model_provider"),
+    [
+        ("volcengine", _MODEL_BASE_URL, "model_square"),
+        (
+            "byteplus",
+            "https://ark.ap-southeast.bytepluses.com/api/v3",
+            "byteplus_model_square",
+        ),
+    ],
+)
+def test_model_credential_is_bound_directly_to_tool(
+    provider: str,
+    expected_base_url: str,
+    expected_model_provider: str,
+) -> None:
     access_key = os.urandom(16).hex()
     model_api_key = os.urandom(24).hex()
     secret_key = os.urandom(24).hex()
-    calls: list[tuple[str, dict[str, object]]] = []
+    updates: list[object] = []
+    client = SimpleNamespace(
+        get_tool=lambda _: SimpleNamespace(
+            envs=[SimpleNamespace(key="EXISTING_ENV", value="preserved")]
+        ),
+        update_tool=updates.append,
+    )
 
-    class FakeApi:
-        def call(
-            self,
-            _service: str,
-            action: str,
-            _version: str,
-            body: dict[str, object],
-        ) -> dict[str, object]:
-            calls.append((action, body))
-            if action == "GetTool":
-                return {
-                    "Tool": {"Envs": [{"Key": "EXISTING_ENV", "Value": "preserved"}]}
-                }
-            return {}
-
-    with (
-        patch("agentkit.auth._openapi.OpenApiClient", return_value=FakeApi()),
-        patch(
-            "veadk.auth.veauth.ark_veauth.get_ark_token",
-            return_value=model_api_key,
-        ) as get_ark_token,
-    ):
+    with patch(
+        "veadk.auth.veauth.ark_veauth.get_ark_token",
+        return_value=model_api_key,
+    ) as get_ark_token:
         ensure_skill_creator_model_credential(
             tool_id="tool-id",
             access_key=access_key,
             secret_key=secret_key,
+            provider=provider,
+            client=client,
         )
 
     get_ark_token.assert_called_once_with(
@@ -369,15 +378,69 @@ def test_model_credential_is_bound_directly_to_tool() -> None:
         secret_key=secret_key,
         session_token=None,
     )
-    assert [action for action, _ in calls] == ["GetTool", "UpdateTool"]
-    update_body = calls[1][1]
+    assert len(updates) == 1
     envs = {
-        item["Key"]: item["Value"]
-        for item in cast(list[dict[str, str]], update_body["Envs"])
+        item.key: item.value for item in cast(list[Any], getattr(updates[0], "envs"))
     }
     assert envs["EXISTING_ENV"] == "preserved"
     assert envs["CODEX_API_KEY"] == model_api_key
-    assert envs["CODEX_BASE_URL"] == _MODEL_BASE_URL
+    assert envs["CODEX_BASE_URL"] == expected_base_url
+    assert envs["AGENTKIT_SANDBOX_MODEL_PROVIDER"] == expected_model_provider
+
+
+def test_code_env_credential_accepts_a_provider_specific_default_model() -> None:
+    updates: list[object] = []
+    client = SimpleNamespace(
+        get_tool=lambda _: SimpleNamespace(envs=[]),
+        update_tool=updates.append,
+    )
+
+    with patch(
+        "veadk.auth.veauth.ark_veauth.get_ark_token",
+        return_value=os.urandom(24).hex(),
+    ):
+        ensure_skill_creator_model_credential(
+            tool_id="codex-tool-id",
+            access_key=os.urandom(16).hex(),
+            secret_key=os.urandom(24).hex(),
+            provider="byteplus",
+            model_name="seed-2-0-lite-260228",
+            client=client,
+        )
+
+    envs = {
+        item.key: item.value for item in cast(list[Any], getattr(updates[0], "envs"))
+    }
+    assert envs["CODEX_MODEL"] == "seed-2-0-lite-260228"
+    assert envs["OPENCODE_MODEL"] == "seed-2-0-lite-260228"
+    assert envs["ANTHROPIC_MODEL"] == "seed-2-0-lite-260228"
+
+
+def test_code_env_credential_defaults_to_byteplus_model() -> None:
+    updates: list[object] = []
+    client = SimpleNamespace(
+        get_tool=lambda _: SimpleNamespace(envs=[]),
+        update_tool=updates.append,
+    )
+
+    with patch(
+        "veadk.auth.veauth.ark_veauth.get_ark_token",
+        return_value=os.urandom(24).hex(),
+    ):
+        ensure_skill_creator_model_credential(
+            tool_id="dev-tool-id",
+            access_key=os.urandom(16).hex(),
+            secret_key=os.urandom(24).hex(),
+            provider="byteplus",
+            client=client,
+        )
+
+    envs = {
+        item.key: item.value for item in cast(list[Any], getattr(updates[0], "envs"))
+    }
+    assert envs["CODEX_MODEL"] == "seed-2-0-lite-260228"
+    assert envs["OPENCODE_MODEL"] == "seed-2-0-lite-260228"
+    assert envs["ANTHROPIC_MODEL"] == "seed-2-0-lite-260228"
 
 
 def test_candidate_session_never_overrides_tool_model_credential(monkeypatch) -> None:
@@ -455,6 +518,32 @@ def test_routes_mount_and_report_disabled_without_sandbox(monkeypatch) -> None:
     assert len(response.json()["models"]) == 2
 
 
+def test_routes_report_byteplus_skill_creator_models(monkeypatch) -> None:
+    monkeypatch.delenv("SANDBOX_SKILL_CREATOR", raising=False)
+    monkeypatch.delenv("VEADK_SKILL_CREATOR_TOOL_ID", raising=False)
+    monkeypatch.delenv("AGENTKIT_SANDBOX_TOOL_ID", raising=False)
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    app = FastAPI()
+    mount_skill_creator_routes(app, lambda request: "test-user")
+
+    response = TestClient(app).get("/web/skill-creator/capabilities")
+
+    assert response.status_code == 200
+    assert response.json()["models"] == [
+        {
+            "candidateId": "a",
+            "id": "seed-2-0-lite-260228",
+            "label": "Seed 2.0 Lite",
+        },
+        {
+            "candidateId": "b",
+            "id": "deepseek-v4-flash-260425",
+            "label": "DeepSeek V4 Flash",
+        },
+    ]
+
+
 def test_skill_creator_reads_only_dedicated_sandbox_tool_env(monkeypatch) -> None:
     monkeypatch.setenv("SANDBOX_SKILL_CREATOR", "skill-creator-tool")
     monkeypatch.setenv("VEADK_SKILL_CREATOR_TOOL_ID", "legacy-tool")
@@ -468,6 +557,7 @@ def test_skill_creator_reads_only_dedicated_sandbox_tool_env(monkeypatch) -> Non
 
 
 def test_skill_creator_uses_configured_sandbox_region(monkeypatch) -> None:
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "volcengine")
     monkeypatch.setenv("AGENTKIT_SANDBOX_REGION", "cn-shanghai")
     tool = SimpleNamespace(
         tool_type="CodeEnv",
@@ -485,7 +575,8 @@ def test_skill_creator_uses_configured_sandbox_region(monkeypatch) -> None:
     client_class.assert_called_once_with(region="cn-shanghai")
 
 
-def test_skill_creator_retries_tool_lookup_in_shanghai() -> None:
+def test_skill_creator_retries_tool_lookup_in_shanghai(monkeypatch) -> None:
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "volcengine")
     regions: list[str] = []
     tool = SimpleNamespace(
         tool_type="CodeEnv",

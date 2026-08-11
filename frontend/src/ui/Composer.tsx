@@ -15,7 +15,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { motion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import type {
   AgentSkill,
   AgentTarget,
@@ -24,35 +24,40 @@ import type {
   FrontendInvocation,
   RuntimeScope,
 } from "../adk/client";
+import type { CloudProvider } from "../adk/cloudProvider";
+import { getVideoCapabilities, type VideoCapabilities } from "../adk/video";
 import type { SandboxSession } from "../adk/sandbox";
 import { InvocationChips } from "./InvocationChips";
 import { MediaGroup } from "./Media";
 import { isImeCompositionEvent } from "./composerKeyboard";
 import { NewChatModeSelector } from "./new-chat-modes/NewChatModeSelector";
 import { NewChatAgentPicker } from "./new-chat-modes/NewChatAgentPicker";
-import type { NewChatMode, NewChatTask } from "./new-chat-modes/types";
+import { NewChatSkillControls } from "./new-chat-modes/NewChatSkillControls";
+import {
+  NewChatInlineAssetInput,
+  NewChatVideoControls,
+} from "./new-chat-modes/NewChatVideoControls";
+import { NewChatWorkspaceTabs } from "./new-chat-modes/NewChatWorkspaceTabs";
+import { NewChatCompactSelect } from "./new-chat-modes/NewChatCompactSelect";
+import {
+  DEFAULT_NEW_CHAT_VIDEO_CONFIG,
+  VIDEO_TASK_MODE_OPTIONS,
+  type NewChatVideoConfig,
+  type VideoTaskMode,
+} from "./new-chat-modes/video-types";
+import {
+  isVideoTaskRunning,
+  type VideoGenerationTask,
+} from "./new-chat-modes/video-task";
+import type {
+  NewChatMode,
+  NewChatSkillAction,
+  NewChatSkillTarget,
+  NewChatTask,
+  NewChatWorkspaceMode,
+} from "./new-chat-modes/types";
 import { NEW_CHAT_TASK_TOOLS } from "./new-chat-modes/taskTools";
-import { SKILL_MODELS } from "./skill-create/types";
 import { VideoGenerateIcon } from "./builtin-tools/icons";
-
-function SkillCreateIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      {...props}
-    >
-      <rect x="4.25" y="6.25" width="13.5" height="13.5" rx="2.5" />
-      <path d="M11 10v6M8 13h6" />
-      <path d="m19.25 2.75.53 1.47 1.47.53-1.47.53-.53 1.47-.53-1.47-1.47-.53 1.47-.53.53-1.47Z" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
 
 interface CompletionTrigger {
   kind: "skill" | "agent";
@@ -62,8 +67,7 @@ interface CompletionTrigger {
 }
 
 type CompletionItem =
-  | { kind: "skill"; value: AgentSkill }
-  | { kind: "agent"; value: AgentTarget };
+  { kind: "skill"; value: AgentSkill } | { kind: "agent"; value: AgentTarget };
 
 const TASK_SHORTCUTS = [
   {
@@ -107,6 +111,7 @@ const TASK_SHORTCUTS = [
 }>;
 
 export interface ComposerProps {
+  cloudProvider: CloudProvider;
   sessionId: string;
   sessionInitializing?: boolean;
   appName: string;
@@ -114,6 +119,13 @@ export interface ComposerProps {
   value: string;
   onChange: (v: string) => void;
   onSubmit: () => void;
+  onVideoSubmit?: (
+    prompt: string,
+    config: NewChatVideoConfig,
+    capabilities: VideoCapabilities,
+  ) => void;
+  videoTask?: VideoGenerationTask | null;
+  onOpenVideoTask?: () => void;
   disabled: boolean; // not connected yet
   busy: boolean; // a turn is streaming
   showMeta: boolean;
@@ -127,13 +139,20 @@ export interface ComposerProps {
   onAddFiles: (files: FileList | File[]) => void;
   onRemoveAttachment: (id: string) => void;
   newChatMode?: NewChatMode;
+  newChatWorkspaceMode?: NewChatWorkspaceMode;
+  newChatSkillAction?: NewChatSkillAction;
+  newChatSkillTarget?: NewChatSkillTarget | null;
+  skillCustomizationEnabled?: boolean;
   newChatTask?: NewChatTask | null;
   newChatLayout?: boolean;
+  showWorkspaceTabs?: boolean;
   showModeSelector?: boolean;
+  onWorkspaceModeChange?: (value: NewChatWorkspaceMode) => void;
+  onSkillActionChange?: (value: NewChatSkillAction) => void;
+  onSkillTargetChange?: (value: NewChatSkillTarget | null) => void;
   onModeChange?: (value: NewChatMode) => void;
   onTaskChange?: (value: NewChatTask | null) => void;
   temporaryEnabled?: boolean;
-  skillCreateEnabled?: boolean;
   harnessEnabled?: boolean;
   builtinTools?: readonly string[];
   showAgentPicker?: boolean;
@@ -145,6 +164,7 @@ export interface ComposerProps {
 }
 
 export function Composer({
+  cloudProvider,
   sessionId,
   sessionInitializing = false,
   appName,
@@ -152,6 +172,9 @@ export function Composer({
   value,
   onChange,
   onSubmit,
+  onVideoSubmit,
+  videoTask = null,
+  onOpenVideoTask,
   disabled,
   busy,
   showMeta,
@@ -165,13 +188,20 @@ export function Composer({
   onAddFiles,
   onRemoveAttachment,
   newChatMode = "agent",
+  newChatWorkspaceMode = "agent",
+  newChatSkillAction = "create",
+  newChatSkillTarget = null,
+  skillCustomizationEnabled = false,
   newChatTask = null,
   newChatLayout = false,
+  showWorkspaceTabs = false,
   showModeSelector = false,
+  onWorkspaceModeChange,
+  onSkillActionChange,
+  onSkillTargetChange,
   onModeChange,
   onTaskChange,
   temporaryEnabled,
-  skillCreateEnabled,
   harnessEnabled = false,
   builtinTools = [],
   showAgentPicker = false,
@@ -189,6 +219,50 @@ export function Composer({
   const [trigger, setTrigger] = useState<CompletionTrigger | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [sessionIdCopied, setSessionIdCopied] = useState(false);
+  const [newChatVideoConfig, setNewChatVideoConfig] = useState(
+    DEFAULT_NEW_CHAT_VIDEO_CONFIG,
+  );
+  const [videoCapabilities, setVideoCapabilities] =
+    useState<VideoCapabilities | null>(null);
+  const [videoCapabilitiesLoading, setVideoCapabilitiesLoading] =
+    useState(false);
+  const [videoCapabilitiesError, setVideoCapabilitiesError] = useState("");
+
+  useEffect(() => {
+    if (!newChatLayout || newChatWorkspaceMode !== "video") return;
+    const controller = new AbortController();
+    setVideoCapabilitiesLoading(true);
+    setVideoCapabilitiesError("");
+    void getVideoCapabilities(controller.signal)
+      .then((capabilities) => {
+        if (!controller.signal.aborted) setVideoCapabilities(capabilities);
+      })
+      .catch((cause: unknown) => {
+        if (!controller.signal.aborted) {
+          setVideoCapabilities(null);
+          setVideoCapabilitiesError(
+            cause instanceof Error ? cause.message : String(cause),
+          );
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setVideoCapabilitiesLoading(false);
+      });
+    return () => controller.abort();
+  }, [cloudProvider, newChatLayout, newChatWorkspaceMode]);
+
+  useEffect(() => {
+    if (
+      !videoCapabilities?.supportedModes.length ||
+      newChatVideoConfig.taskMode === "auto" ||
+      videoCapabilities.supportedModes.includes(newChatVideoConfig.taskMode)
+    )
+      return;
+    setNewChatVideoConfig((current) => ({
+      ...current,
+      taskMode: videoCapabilities.supportedModes[0],
+    }));
+  }, [newChatVideoConfig.taskMode, videoCapabilities]);
 
   async function copySessionId() {
     if (!sessionId) return;
@@ -209,30 +283,101 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [value]);
 
-  const skillMode = newChatMode === "skill-create";
-  useEffect(() => {
-    if (!skillMode) return;
-    setMenuOpen(false);
-    setTrigger(null);
-  }, [skillMode]);
-  const uploadPending = !skillMode && attachments.some((attachment) => attachment.status !== "ready");
-  const canSend = !disabled && !busy && !uploadPending &&
-    (value.trim().length > 0 || (!skillMode && attachments.length > 0));
-  const placeholderText = skillMode
-    ? `描述你想创建的 Skill，将使用 ${SKILL_MODELS.join(" 和 ")} 并行创建…`
-    : disabled ? "请先选择智能体" : `向 ${agentName} 发消息…`;
+  const uploadPending = attachments.some(
+    (attachment) => attachment.status !== "ready",
+  );
+  const videoMode = newChatLayout && newChatWorkspaceMode === "video";
+  const requiredInlineAsset = !videoMode
+    ? null
+    : newChatVideoConfig.taskMode === "first_last_frame"
+      ? {
+          asset: newChatVideoConfig.firstFrame,
+          kind: "image" as const,
+          label: "首帧",
+        }
+      : newChatVideoConfig.taskMode === "video_editing" ||
+          newChatVideoConfig.taskMode === "video_extension"
+        ? {
+            asset: newChatVideoConfig.referenceVideo,
+            kind: "video" as const,
+            label:
+              newChatVideoConfig.taskMode === "video_editing"
+                ? "待编辑视频"
+                : "基础视频",
+          }
+        : null;
+  const videoTaskRunning = isVideoTaskRunning(videoTask);
+  const canOpenVideoTask = videoMode && Boolean(videoTask) && !value.trim();
+  const canSend = videoMode
+    ? videoTaskRunning ||
+      canOpenVideoTask ||
+      (!disabled &&
+        !busy &&
+        !uploadPending &&
+        (!requiredInlineAsset || Boolean(requiredInlineAsset.asset)) &&
+        Boolean(videoCapabilities) &&
+        value.trim().length > 0)
+    : !disabled &&
+      !busy &&
+      !uploadPending &&
+      (value.trim().length > 0 || attachments.length > 0);
+
+  function submitComposer() {
+    if (videoMode) {
+      if (videoTaskRunning || canOpenVideoTask) {
+        onOpenVideoTask?.();
+        return;
+      }
+      if (videoCapabilities && value.trim()) {
+        onVideoSubmit?.(value.trim(), newChatVideoConfig, videoCapabilities);
+      }
+      return;
+    }
+    onSubmit();
+  }
+  const workspacePlaceholder =
+    newChatWorkspaceMode === "skill"
+      ? newChatSkillAction === "optimize"
+        ? "描述你想优化的技能…"
+        : "描述你想生成的技能…"
+      : newChatWorkspaceMode === "video"
+        ? "描述你想创作的视频…"
+        : `向 ${agentName} 发消息…`;
+  const placeholderText =
+    disabled && newChatWorkspaceMode === "agent"
+      ? "请先选择智能体"
+      : disabled &&
+          newChatWorkspaceMode === "skill" &&
+          newChatSkillAction === "optimize" &&
+          !newChatSkillTarget
+        ? "请先选择需要优化的 Skill"
+        : workspacePlaceholder;
 
   const query = trigger?.query.toLocaleLowerCase() ?? "";
-  const suggestions: CompletionItem[] = trigger?.kind === "skill"
-    ? skills
-        .filter((skill) => !invocation.skills.some((selected) => selected.name === skill.name))
-        .filter((skill) => `${skill.name} ${skill.description}`.toLocaleLowerCase().includes(query))
-        .map((value) => ({ kind: "skill" as const, value }))
-    : trigger?.kind === "agent"
-      ? agents
-          .filter((agent) => `${agent.name} ${agent.description}`.toLocaleLowerCase().includes(query))
-          .map((value) => ({ kind: "agent" as const, value }))
-      : [];
+  const suggestions: CompletionItem[] =
+    trigger?.kind === "skill"
+      ? skills
+          .filter(
+            (skill) =>
+              !invocation.skills.some(
+                (selected) => selected.name === skill.name,
+              ),
+          )
+          .filter((skill) =>
+            `${skill.name} ${skill.description}`
+              .toLocaleLowerCase()
+              .includes(query),
+          )
+          .map((value) => ({ kind: "skill" as const, value }))
+      : trigger?.kind === "agent"
+        ? agents
+            .filter((agent) =>
+              `${agent.name} ${agent.description}`
+                .toLocaleLowerCase()
+                .includes(query),
+            )
+            .map((value) => ({ kind: "agent" as const, value }))
+        : [];
 
   function pick(input: React.RefObject<HTMLInputElement | null>) {
     setMenuOpen(false);
@@ -277,9 +422,13 @@ export function Composer({
     });
   }
 
-  const selectedTask = TASK_SHORTCUTS.find((task) => task.value === newChatTask);
+  const selectedTask = TASK_SHORTCUTS.find(
+    (task) => task.value === newChatTask,
+  );
   const availableTaskShortcuts = TASK_SHORTCUTS.filter((task) =>
-    NEW_CHAT_TASK_TOOLS[task.value].every((tool) => builtinTools.includes(tool)),
+    NEW_CHAT_TASK_TOOLS[task.value].every((tool) =>
+      builtinTools.includes(tool),
+    ),
   );
 
   function updateCompletion(nextValue: string, cursor: number) {
@@ -296,7 +445,8 @@ export function Composer({
       start: cursor - tokenLength,
       end: cursor,
     };
-    const completionChanged = !trigger ||
+    const completionChanged =
+      !trigger ||
       trigger.kind !== nextTrigger.kind ||
       trigger.query !== nextTrigger.query ||
       trigger.start !== nextTrigger.start ||
@@ -332,7 +482,10 @@ export function Composer({
       return;
     }
     if (invocation.skills.length > 0) {
-      onInvocationChange({ ...invocation, skills: invocation.skills.slice(0, -1) });
+      onInvocationChange({
+        ...invocation,
+        skills: invocation.skills.slice(0, -1),
+      });
     }
   }
 
@@ -343,18 +496,20 @@ export function Composer({
   }
 
   return (
-    <div className={`composer${newChatLayout ? " composer--new-chat" : ""}${skillMode ? " composer--skill-mode" : ""}${selectedTask ? ` composer--has-task composer--task-${selectedTask.value}` : ""}`}>
-      {!skillMode ? (
-        <InvocationChips
-          value={invocation}
-          onRemoveSkill={(name) => onInvocationChange({
+    <div
+      className={`composer${newChatLayout ? " composer--new-chat" : ""}${selectedTask ? ` composer--has-task composer--task-${selectedTask.value}` : ""}`}
+    >
+      <InvocationChips
+        value={invocation}
+        onRemoveSkill={(name) =>
+          onInvocationChange({
             ...invocation,
             skills: invocation.skills.filter((skill) => skill.name !== name),
-          })}
-          onRemoveAgent={() => onInvocationChange({ skills: [] })}
-        />
-      ) : null}
-      {!skillMode && attachments.length > 0 && (
+          })
+        }
+        onRemoveAgent={() => onInvocationChange({ skills: [] })}
+      />
+      {attachments.length > 0 && (
         <MediaGroup
           appName={appName}
           compact
@@ -363,19 +518,51 @@ export function Composer({
         />
       )}
 
-      <div className="composer-box">
+      {newChatLayout && showWorkspaceTabs && onWorkspaceModeChange ? (
+        <NewChatWorkspaceTabs
+          value={newChatWorkspaceMode}
+          onChange={onWorkspaceModeChange}
+          disabled={busy}
+          skillCustomizationEnabled={skillCustomizationEnabled}
+        />
+      ) : null}
+
+      <div
+        id={
+          newChatLayout && showWorkspaceTabs
+            ? "new-chat-workspace-panel"
+            : undefined
+        }
+        className="composer-box"
+        role={newChatLayout && showWorkspaceTabs ? "tabpanel" : undefined}
+        aria-labelledby={
+          newChatLayout && showWorkspaceTabs
+            ? `new-chat-workspace-tab-${newChatWorkspaceMode}`
+            : undefined
+        }
+      >
         {trigger ? (
-          <div className="composer-command-menu" role="listbox" aria-label={trigger.kind === "skill" ? "可用技能" : "可用子 Agent"}>
+          <div
+            className="composer-command-menu"
+            role="listbox"
+            aria-label={trigger.kind === "skill" ? "可用技能" : "可用子 Agent"}
+          >
             <div className="composer-command-head">
               {trigger.kind === "skill" ? <Sparkles /> : <AtSign />}
-              <span>{trigger.kind === "skill" ? "调用技能" : "使用子 Agent"}</span>
+              <span>
+                {trigger.kind === "skill" ? "调用技能" : "使用子 Agent"}
+              </span>
               <kbd>{trigger.kind === "skill" ? "/" : "@"}</kbd>
             </div>
             {capabilitiesLoading ? (
-              <div className="composer-command-empty"><Loader2 className="spin" /> 正在读取 Agent 能力…</div>
+              <div className="composer-command-empty">
+                <Loader2 className="spin" /> 正在读取 Agent 能力…
+              </div>
             ) : suggestions.length === 0 ? (
               <div className="composer-command-empty">
-                {trigger.kind === "skill" ? "当前 Agent 没有匹配技能" : "当前 Agent 没有匹配子 Agent"}
+                {trigger.kind === "skill"
+                  ? "当前 Agent 没有匹配技能"
+                  : "当前 Agent 没有匹配子 Agent"}
               </div>
             ) : (
               <div className="composer-command-list">
@@ -392,21 +579,37 @@ export function Composer({
                     }}
                     onMouseEnter={() => setActiveIndex(index)}
                   >
-                    <span className={`composer-command-icon composer-command-icon--${item.kind}`}>
+                    <span
+                      className={`composer-command-icon composer-command-icon--${item.kind}`}
+                    >
                       {item.kind === "skill" ? <Sparkles /> : <Bot />}
                     </span>
                     <span className="composer-command-copy">
-                      <strong>{item.kind === "skill" ? "/" : "@"}{item.value.name}</strong>
-                      <span>{item.value.description || (item.kind === "skill" ? "加载并执行该技能" : "将本轮交给该 Agent")}</span>
+                      <strong>
+                        {item.kind === "skill" ? "/" : "@"}
+                        {item.value.name}
+                      </strong>
+                      <span>
+                        {item.value.description ||
+                          (item.kind === "skill"
+                            ? "加载并执行该技能"
+                            : "将本轮交给该 Agent")}
+                      </span>
                     </span>
-                    <kbd>{index === activeIndex ? "↵" : item.kind === "skill" ? "技能" : "Agent"}</kbd>
+                    <kbd>
+                      {index === activeIndex
+                        ? "↵"
+                        : item.kind === "skill"
+                          ? "技能"
+                          : "Agent"}
+                    </kbd>
                   </button>
                 ))}
               </div>
             )}
           </div>
         ) : null}
-        {!skillMode ? <div className="composer-menu-wrap">
+        <div className="composer-menu-wrap">
           <button
             type="button"
             className="comp-icon"
@@ -451,9 +654,12 @@ export function Composer({
               </div>
             </>
           )}
-        </div> : null}
+        </div>
 
-        {showAgentPicker && onSelectRuntime && onSelectSandboxSession ? (
+        {newChatWorkspaceMode === "agent" &&
+        showAgentPicker &&
+        onSelectRuntime &&
+        onSelectSandboxSession ? (
           <NewChatAgentPicker
             selectedAgentName={appName ? agentName : ""}
             selectedRuntimeId={selectedRuntimeId}
@@ -464,17 +670,86 @@ export function Composer({
           />
         ) : null}
 
+        {newChatLayout &&
+        newChatWorkspaceMode === "skill" &&
+        onSkillActionChange ? (
+          <NewChatSkillControls
+            action={newChatSkillAction}
+            onActionChange={onSkillActionChange}
+            optimizationSource={newChatSkillTarget}
+            onOptimizationSourceChange={onSkillTargetChange}
+            disabled={busy}
+          />
+        ) : null}
+
+        {newChatLayout && newChatWorkspaceMode === "video" ? (
+          <>
+            <div className="new-chat-video-task-mode">
+              <NewChatCompactSelect
+                label="任务模式"
+                hideLabel
+                value={newChatVideoConfig.taskMode}
+                options={
+                  videoCapabilities?.supportedModes?.length
+                    ? VIDEO_TASK_MODE_OPTIONS.filter(
+                        (option) =>
+                          option.value === "auto" ||
+                          videoCapabilities.supportedModes.includes(
+                            option.value as VideoTaskMode,
+                          ),
+                      )
+                    : VIDEO_TASK_MODE_OPTIONS
+                }
+                onChange={(taskMode) =>
+                  setNewChatVideoConfig((current) => ({
+                    ...current,
+                    taskMode: taskMode as VideoTaskMode,
+                  }))
+                }
+                placeholder="选择任务模式"
+                disabled={
+                  busy ||
+                  videoTaskRunning ||
+                  videoCapabilitiesLoading ||
+                  !videoCapabilities
+                }
+              />
+            </div>
+            <div
+              className="new-chat-video-generation-model"
+              title={
+                videoCapabilitiesError || videoCapabilities?.generationModel
+              }
+            >
+              {videoCapabilitiesLoading ? (
+                <Loader2
+                  className="icon spin"
+                  role="status"
+                  aria-label="正在加载生成模型"
+                />
+              ) : (
+                <strong>
+                  {videoCapabilities?.generationModel || "模型不可用"}
+                </strong>
+              )}
+            </div>
+          </>
+        ) : null}
+
         {showModeSelector && onModeChange ? (
           <NewChatModeSelector
             value={newChatMode}
             onChange={onModeChange}
             disabled={busy}
             temporaryEnabled={temporaryEnabled}
-            skillCreateEnabled={skillCreateEnabled}
           />
         ) : null}
 
-        {newChatLayout && newChatMode === "agent" && selectedTask && onTaskChange ? (
+        {newChatLayout &&
+        newChatWorkspaceMode === "agent" &&
+        newChatMode === "agent" &&
+        selectedTask &&
+        onTaskChange ? (
           <button
             type="button"
             className={`new-chat-task-chip new-chat-task-chip--${selectedTask.value}`}
@@ -490,23 +765,31 @@ export function Composer({
           </button>
         ) : null}
 
-        {newChatLayout && skillMode && onModeChange ? (
-          <button
-            type="button"
-            className="new-chat-task-chip new-chat-task-chip--skill"
-            aria-label="退出创建 Skill"
-            disabled={busy}
-            onClick={() => onModeChange("agent")}
-          >
-            <span className="new-chat-task-chip__icon" aria-hidden="true">
-              <SkillCreateIcon className="new-chat-task-chip__task-icon" />
-              <X className="new-chat-task-chip__remove-icon" />
-            </span>
-            <span>Skill</span>
-          </button>
-        ) : null}
-
-        <div className="composer-input-stack">
+        <div
+          className={`composer-input-stack${requiredInlineAsset ? " has-inline-asset" : ""}`}
+        >
+          {requiredInlineAsset ? (
+            <NewChatInlineAssetInput
+              asset={requiredInlineAsset.asset}
+              kind={requiredInlineAsset.kind}
+              label={requiredInlineAsset.label}
+              disabled={
+                busy ||
+                videoTaskRunning ||
+                !(videoCapabilities?.assetStorageAvailable ?? false)
+              }
+              unavailableReason={
+                videoCapabilities?.assetStorageUnavailableReason || ""
+              }
+              onChange={(asset) =>
+                setNewChatVideoConfig((current) =>
+                  current.taskMode === "first_last_frame"
+                    ? { ...current, firstFrame: asset }
+                    : { ...current, referenceVideo: asset },
+                )
+              }
+            />
+          ) : null}
           <textarea
             ref={ref}
             className="comp-input scroll"
@@ -517,49 +800,58 @@ export function Composer({
             aria-expanded={Boolean(trigger)}
             onChange={(e) => {
               onChange(e.target.value);
-              if (!skillMode) updateCompletion(e.target.value, e.target.selectionStart);
+              updateCompletion(e.target.value, e.target.selectionStart);
             }}
             onSelect={(e) => {
-              if (!skillMode) updateCompletion(e.currentTarget.value, e.currentTarget.selectionStart);
+              updateCompletion(
+                e.currentTarget.value,
+                e.currentTarget.selectionStart,
+              );
             }}
             onBlur={() => setTimeout(() => setTrigger(null), 0)}
             onKeyDown={(e) => {
-            if (isImeCompositionEvent(e.nativeEvent)) return;
-            if (trigger) {
-              if (e.key === "ArrowDown" && suggestions.length > 0) {
-                e.preventDefault();
-                setActiveIndex((index) => (index + 1) % suggestions.length);
+              if (isImeCompositionEvent(e.nativeEvent)) return;
+              if (trigger) {
+                if (e.key === "ArrowDown" && suggestions.length > 0) {
+                  e.preventDefault();
+                  setActiveIndex((index) => (index + 1) % suggestions.length);
+                  return;
+                }
+                if (e.key === "ArrowUp" && suggestions.length > 0) {
+                  e.preventDefault();
+                  setActiveIndex(
+                    (index) =>
+                      (index - 1 + suggestions.length) % suggestions.length,
+                  );
+                  return;
+                }
+                if (
+                  (e.key === "Enter" || e.key === "Tab") &&
+                  suggestions[activeIndex]
+                ) {
+                  e.preventDefault();
+                  choose(suggestions[activeIndex]);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setTrigger(null);
+                  return;
+                }
+              }
+              if (
+                e.key === "Backspace" &&
+                !value &&
+                e.currentTarget.selectionStart === 0 &&
+                e.currentTarget.selectionEnd === 0
+              ) {
+                removeLastInvocation();
                 return;
               }
-              if (e.key === "ArrowUp" && suggestions.length > 0) {
+              if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                setActiveIndex((index) => (index - 1 + suggestions.length) % suggestions.length);
-                return;
+                if (canSend) submitComposer();
               }
-              if ((e.key === "Enter" || e.key === "Tab") && suggestions[activeIndex]) {
-                e.preventDefault();
-                choose(suggestions[activeIndex]);
-                return;
-              }
-              if (e.key === "Escape") {
-                e.preventDefault();
-                setTrigger(null);
-                return;
-              }
-            }
-            if (
-              e.key === "Backspace" &&
-              !value &&
-              e.currentTarget.selectionStart === 0 &&
-              e.currentTarget.selectionEnd === 0
-            ) {
-              removeLastInvocation();
-              return;
-            }
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              if (canSend) onSubmit();
-            }
             }}
           />
           {newChatLayout && value.length === 0 ? (
@@ -576,16 +868,49 @@ export function Composer({
           type="button"
           className="comp-send"
           disabled={!canSend}
-          onClick={onSubmit}
-          aria-label="发送"
+          onClick={submitComposer}
+          aria-label={
+            videoTaskRunning || canOpenVideoTask ? "查看视频生成进度" : "发送"
+          }
+          title={videoCapabilitiesError || undefined}
           whileTap={canSend ? { scale: 0.9 } : undefined}
           transition={{ type: "spring", stiffness: 600, damping: 22 }}
         >
-          {busy ? <Loader2 className="icon spin" /> : <ArrowUp className="icon" />}
+          {busy || videoTaskRunning ? (
+            <Loader2 className="icon spin" />
+          ) : (
+            <ArrowUp className="icon" />
+          )}
         </motion.button>
       </div>
 
-      {newChatLayout && newChatMode === "agent" && harnessEnabled && !selectedTask ? (
+      <AnimatePresence initial={false}>
+        {newChatLayout &&
+        showWorkspaceTabs &&
+        newChatWorkspaceMode === "video" ? (
+          <NewChatVideoControls
+            key="new-chat-video-controls"
+            config={newChatVideoConfig}
+            onChange={setNewChatVideoConfig}
+            enhancerModel={videoCapabilities?.enhancerModel || ""}
+            assetStorageAvailable={
+              videoCapabilities?.assetStorageAvailable ?? false
+            }
+            assetStorageUnavailableReason={
+              videoCapabilities?.assetStorageUnavailableReason || ""
+            }
+            modelsLoading={videoCapabilitiesLoading}
+            modelsError={videoCapabilitiesError}
+            disabled={busy || videoTaskRunning}
+          />
+        ) : null}
+      </AnimatePresence>
+
+      {newChatLayout &&
+      newChatWorkspaceMode === "agent" &&
+      newChatMode === "agent" &&
+      harnessEnabled &&
+      !selectedTask ? (
         <div className="task-shortcuts" aria-label="选择任务类型">
           {availableTaskShortcuts.map((task) => {
             const TaskIcon = task.icon;
@@ -602,22 +927,17 @@ export function Composer({
               </button>
             );
           })}
-          {skillCreateEnabled === true ? (
-            <button
-              type="button"
-              className="task-shortcut"
-              disabled={busy}
-              onClick={() => onModeChange?.("skill-create")}
-            >
-              <SkillCreateIcon />
-              <span>创建 Skill</span>
-            </button>
-          ) : null}
         </div>
       ) : null}
 
-      {newChatLayout && newChatMode === "agent" && selectedTask ? (
-        <div className="prompt-suggestions" aria-label={`${selectedTask.label}企业提示词`}>
+      {newChatLayout &&
+      newChatWorkspaceMode === "agent" &&
+      newChatMode === "agent" &&
+      selectedTask ? (
+        <div
+          className="prompt-suggestions"
+          aria-label={`${selectedTask.label}企业提示词`}
+        >
           {selectedTask.prompts.map((prompt) => {
             const PromptIcon = selectedTask.icon;
             return (

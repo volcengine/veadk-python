@@ -18,8 +18,6 @@ import {
   ChevronRight,
   Download,
   ExternalLink,
-  Eye,
-  EyeOff,
   File,
   FileDown,
   FilePlus,
@@ -74,13 +72,36 @@ import {
   RuntimeProbeError,
   type DeployAuthentication,
   type DeployBuildLogSnapshot,
+  type DeployResources,
   type DeployStage,
   type IdentityUserPool,
 } from "../adk/client";
+import {
+  trackAgentDeployFailed,
+  trackAgentDeploySucceeded,
+  trackAgentSourceDownloadFailed,
+  trackAgentSourceDownloadSucceeded,
+  type DeploymentTelemetryOrigin,
+} from "../adk/telemetryEvents";
+import {
+  cloudRegionOptions,
+  defaultCloudRegion,
+  formatCloudRegion,
+  type CloudProvider,
+} from "../adk/cloudProvider";
 import feishuLogo from "../assets/feishu-logo.svg";
 import { buildZip } from "./zip";
 import { ProjectCodeBrowser } from "./CodeBrowserDialog";
 import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
+import {
+  DEFAULT_DEPLOY_RESOURCES,
+  DeploymentResources,
+  deploymentResourcesError,
+} from "./DeploymentResources";
+import {
+  DeploymentSelect,
+  type DeploymentSelectOption,
+} from "./DeploymentSelect";
 import { mergeDeployBuildLog } from "./deployBuildLog";
 import "./ProjectPreview.css";
 
@@ -167,180 +188,6 @@ function DeploymentConfirmDialog({
       </section>
     </div>,
     document.body,
-  );
-}
-
-interface DeploymentSelectOption {
-  value: string;
-  label: string;
-  description?: string;
-  badge?: string;
-}
-
-interface DeploymentSelectProps {
-  ariaLabel: string;
-  value: string;
-  placeholder: string;
-  options: DeploymentSelectOption[];
-  disabled?: boolean;
-  onChange: (value: string) => void;
-}
-
-function DeploymentSelect({
-  ariaLabel,
-  value,
-  placeholder,
-  options,
-  disabled = false,
-  onChange,
-}: DeploymentSelectProps) {
-  const listboxId = useId();
-  const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const [open, setOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const selectedOption = options.find((option) => option.value === value);
-
-  useEffect(() => {
-    if (!open) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      if (
-        event.target instanceof Node &&
-        rootRef.current &&
-        !rootRef.current.contains(event.target)
-      ) {
-        setOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", handlePointerDown);
-    return () => window.removeEventListener("pointerdown", handlePointerDown);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    optionRefs.current[activeIndex]?.focus();
-  }, [activeIndex, open]);
-
-  const openMenu = (direction: 1 | -1 = 1) => {
-    const selectedIndex = options.findIndex((option) => option.value === value);
-    const nextIndex =
-      selectedIndex >= 0
-        ? selectedIndex
-        : direction === 1
-          ? 0
-          : Math.max(0, options.length - 1);
-    setActiveIndex(nextIndex);
-    setOpen(true);
-  };
-
-  const moveActiveOption = (nextIndex: number) => {
-    if (options.length === 0) return;
-    setActiveIndex((nextIndex + options.length) % options.length);
-  };
-
-  const selectOption = (option: DeploymentSelectOption) => {
-    onChange(option.value);
-    setOpen(false);
-    triggerRef.current?.focus();
-  };
-
-  return (
-    <div
-      className="pp-deployment-select"
-      ref={rootRef}
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && open) {
-          event.preventDefault();
-          setOpen(false);
-          triggerRef.current?.focus();
-          return;
-        }
-        if (event.key === "Tab") {
-          setOpen(false);
-          return;
-        }
-        if (event.key === "ArrowDown") {
-          event.preventDefault();
-          if (!open) openMenu(1);
-          else moveActiveOption(activeIndex + 1);
-        } else if (event.key === "ArrowUp") {
-          event.preventDefault();
-          if (!open) openMenu(-1);
-          else moveActiveOption(activeIndex - 1);
-        } else if (open && event.key === "Home") {
-          event.preventDefault();
-          setActiveIndex(0);
-        } else if (open && event.key === "End") {
-          event.preventDefault();
-          setActiveIndex(Math.max(0, options.length - 1));
-        }
-      }}
-    >
-      <button
-        ref={triggerRef}
-        type="button"
-        className="pp-deployment-select-trigger"
-        aria-label={ariaLabel}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={open ? listboxId : undefined}
-        disabled={disabled || options.length === 0}
-        onClick={() => {
-          if (open) setOpen(false);
-          else openMenu();
-        }}
-      >
-        <span className={!selectedOption ? "is-placeholder" : undefined}>
-          {selectedOption?.label ?? placeholder}
-        </span>
-        <ChevronDown
-          aria-hidden="true"
-          className={`pp-deployment-select-chevron${open ? " is-open" : ""}`}
-        />
-      </button>
-      {open && (
-        <div
-          id={listboxId}
-          className="pp-deployment-select-menu"
-          role="listbox"
-          aria-label={ariaLabel}
-        >
-          {options.map((option, index) => {
-            const selected = option.value === value;
-            return (
-              <button
-                key={option.value}
-                ref={(node) => {
-                  optionRefs.current[index] = node;
-                }}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                tabIndex={index === activeIndex ? 0 : -1}
-                className={`pp-deployment-select-option${selected ? " is-selected" : ""}`}
-                title={option.description}
-                onFocus={() => setActiveIndex(index)}
-                onClick={() => selectOption(option)}
-              >
-                <span className="pp-deployment-select-copy">
-                  <span className="pp-deployment-select-name">
-                    {option.label}
-                    {option.badge && (
-                      <span className="pp-deployment-select-badge">
-                        {option.badge}
-                      </span>
-                    )}
-                  </span>
-                  {option.description && <small>{option.description}</small>}
-                </span>
-                {selected && <Check aria-hidden="true" />}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -613,6 +460,7 @@ export interface DeployOptions {
     };
   };
   envs?: DeployEnvVar[];
+  resources?: DeployResources;
 }
 
 export interface DeployEnvVar {
@@ -622,6 +470,8 @@ export interface DeployEnvVar {
 
 export interface DeploymentTaskUpdate {
   id: string;
+  /** Workspace draft that can be reopened when deployment does not complete. */
+  draftId?: string;
   runtimeName: string;
   runtimeId?: string;
   region: string;
@@ -696,10 +546,14 @@ export interface ProjectPreviewProps {
   /** Runtime network settings edited on the deploy page. */
   network?: NetworkConfig;
   onNetworkChange?: (network: NetworkConfig | undefined) => void;
-  /** Selected deploy region (cn-beijing / cn-shanghai). */
+  /** Selected deploy region for the active cloud provider. */
   deployRegion?: string;
+  /** Active cloud provider; controls deploy-region choices. */
+  cloudProvider?: CloudProvider;
   /** Called when the user changes the deploy region. */
   onDeployRegionChange?: (region: string) => void;
+  /** Creation entry and method used to group Studio deployment telemetry. */
+  deploymentTelemetry?: DeploymentTelemetryOrigin;
   /** Deploy-page toolbar actions. */
   onBack?: () => void;
   backLabel?: string;
@@ -823,8 +677,14 @@ export function ProjectPreview({
   onDeploymentEnvChange,
   network,
   onNetworkChange,
-  deployRegion = "cn-beijing",
+  cloudProvider = "volcengine",
+  deployRegion = defaultCloudRegion(cloudProvider),
   onDeployRegionChange,
+  deploymentTelemetry = {
+    source: "unknown",
+    createMode: "unknown",
+    aiAssisted: false,
+  },
   onBack,
   backLabel = "返回配置",
   onExportYaml,
@@ -854,19 +714,30 @@ export function ProjectPreview({
   const [activePhase, setActivePhase] = useState<string | null>(null);
   const [addingAgent, setAddingAgent] = useState(false);
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
-  const [showEnvValues, setShowEnvValues] = useState(false);
+  const [deployResources, setDeployResources] = useState<DeployResources>(
+    DEFAULT_DEPLOY_RESOURCES,
+  );
+  const [deployResourcesValidationError, setDeployResourcesValidationError] =
+    useState<string | null>(null);
   const [regionMenuOpen, setRegionMenuOpen] = useState(false);
+  const deploymentRegionHelpId = useId();
   const [authenticationType, setAuthenticationType] =
     useState<DeployAuthentication["type"]>("api_key");
   const [userPoolUid, setUserPoolUid] = useState("");
+  const deployRegionOptions = cloudRegionOptions(cloudProvider);
+  const deployRegionLabel = formatCloudRegion(deployRegion, cloudProvider);
   const [minInstance, setMinInstance] = useState("1");
   const [maxInstance, setMaxInstance] = useState(
     inMemorySession ? "1" : "5",
   );
   const [createEvaluationSets, setCreateEvaluationSets] = useState(true);
+  const supportsEvaluationSets = cloudProvider !== "byteplus";
+  const effectiveCreateEvaluationSets =
+    supportsEvaluationSets && createEvaluationSets;
   const [deploymentActionTarget, setDeploymentActionTarget] =
     useState<HTMLElement | null>(null);
   const mountedRef = useRef(true);
+  const previousDeployRegionRef = useRef(deployRegion);
   const instanceRange = validateRuntimeInstanceRange(minInstance, maxInstance);
   const needsInstanceUpdate =
     !isRuntimeUpdate &&
@@ -878,9 +749,21 @@ export function ProjectPreview({
   const deploymentStepsWithInstanceUpdate = needsInstanceUpdate
     ? [...baseDeploymentSteps, INSTANCE_UPDATE_STEP]
     : baseDeploymentSteps;
-  const deploymentSteps = createEvaluationSets
+  const deploymentSteps = effectiveCreateEvaluationSets
     ? [...deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP]
     : deploymentStepsWithInstanceUpdate;
+
+  useEffect(() => {
+    if (!onDeployRegionChange || isRuntimeUpdate) return;
+    if (deployRegionOptions.some((region) => region.value === deployRegion)) return;
+    onDeployRegionChange(defaultCloudRegion(cloudProvider));
+  }, [
+    cloudProvider,
+    deployRegion,
+    deployRegionOptions,
+    isRuntimeUpdate,
+    onDeployRegionChange,
+  ]);
 
   useEffect(() => {
     if (!deploymentActionTargetId) {
@@ -892,7 +775,7 @@ export function ProjectPreview({
 
   const deploymentRegionPicker = (showLabel: boolean) => (
     <div
-      className="pp-network-region"
+      className={`pp-network-region${regionMenuOpen ? " is-open" : ""}`}
       onKeyDown={(event) => {
         if (event.key === "Escape") setRegionMenuOpen(false);
       }}
@@ -904,12 +787,11 @@ export function ProjectPreview({
         aria-label="部署区域"
         aria-haspopup="listbox"
         aria-expanded={regionMenuOpen}
+        aria-describedby={isRuntimeUpdate ? deploymentRegionHelpId : undefined}
         disabled={deploying || isRuntimeUpdate || !onDeployRegionChange}
         onClick={() => setRegionMenuOpen((open) => !open)}
       >
-        <span>
-          {deployRegion === "cn-shanghai" ? "华东 2（上海）" : "华北 2（北京）"}
-        </span>
+        <span>{deployRegionLabel}</span>
         <ChevronDown
           className={`pp-region-chevron${regionMenuOpen ? " is-open" : ""}`}
         />
@@ -918,10 +800,7 @@ export function ProjectPreview({
         <>
           <div className="menu-scrim" onClick={() => setRegionMenuOpen(false)} />
           <div className="pp-region-menu" role="listbox" aria-label="部署区域">
-            {[
-              { value: "cn-beijing", label: "华北 2（北京）" },
-              { value: "cn-shanghai", label: "华东 2（上海）" },
-            ].map((region) => {
+            {deployRegionOptions.map((region) => {
               const selected = region.value === deployRegion;
               return (
                 <button
@@ -943,6 +822,11 @@ export function ProjectPreview({
           </div>
         </>
       )}
+      {isRuntimeUpdate && (
+        <span id={deploymentRegionHelpId} className="pp-region-help">
+          更新时沿用现有 Runtime 的部署区域，无法修改。
+        </span>
+      )}
     </div>
   );
 
@@ -957,6 +841,20 @@ export function ProjectPreview({
     setMinInstance("1");
     setMaxInstance(inMemorySession ? "1" : "5");
   }, [inMemorySession]);
+
+  useEffect(() => {
+    if (previousDeployRegionRef.current === deployRegion) return;
+    previousDeployRegionRef.current = deployRegion;
+    setDeployResources((resources) => ({
+      tos: resources.tos.mode === "existing" ? { mode: "existing" } : resources.tos,
+      cr: resources.cr.mode === "existing" ? { mode: "existing" } : resources.cr,
+      codePipeline:
+        resources.codePipeline.mode === "existing"
+          ? { mode: "existing" }
+          : resources.codePipeline,
+    }));
+    setDeployResourcesValidationError(null);
+  }, [deployRegion]);
 
   useEffect(() => {
     if (!flowPreviewOpen) return;
@@ -987,6 +885,13 @@ export function ProjectPreview({
   const selectedFile =
     project.files.find((f) => f.path === selected) ?? null;
   const networkMode = network?.mode ?? "public";
+  const deploymentTelemetryBase = () => ({
+    telemetry: deploymentTelemetry,
+    action: deploymentRuntimeId ? "update" as const : "create" as const,
+    region: deployRegion,
+    networkType: networkMode,
+    feishuEnabled,
+  });
   const automaticEnvRows = runtimeEnvDisplayRows(
     feishuEnabled ? [...deploymentEnv, ...FEISHU_ENV] : deploymentEnv,
     deploymentEnvValues,
@@ -1109,6 +1014,15 @@ export function ProjectPreview({
 
   async function requestDeploymentConfirmation() {
     if (!onDeploy || deploying || deployDisabled) return;
+    if (!isRuntimeUpdate) {
+      const resourceError = deploymentResourcesError(deployResources);
+      if (resourceError) {
+        setDeployResourcesValidationError(resourceError);
+        setDeployError(resourceError);
+        return;
+      }
+    }
+    setDeployResourcesValidationError(null);
     if (!instanceRange.valid) {
       setDeployError(instanceRange.error);
       return;
@@ -1190,7 +1104,7 @@ export function ProjectPreview({
       instanceRange: needsInstanceUpdate
         ? { min: instanceRange.min, max: instanceRange.max }
         : undefined,
-      createEvaluationSets,
+      createEvaluationSets: effectiveCreateEvaluationSets,
     };
     onDeploymentTaskChange?.(initialTask);
     onDeploymentStarted?.(initialTask);
@@ -1282,7 +1196,7 @@ export function ProjectPreview({
                     : { type: "api_key" as const },
               }
             : {}),
-          createEvaluationSets,
+          createEvaluationSets: effectiveCreateEvaluationSets,
           ...(feishuEnabled
             ? {
                 im: {
@@ -1293,12 +1207,17 @@ export function ProjectPreview({
               }
             : {}),
           envs,
+          ...(!isRuntimeUpdate ? { resources: deployResources } : {}),
         },
       );
       if (mountedRef.current) {
         setDeployResult(result);
         setActivePhase(null);
       }
+      trackAgentDeploySucceeded({
+        ...deploymentTelemetryBase(),
+        runtimeId: result.runtimeId || deploymentRuntimeId || "",
+      });
       onDeploymentTaskChange?.({
         id: taskId,
         runtimeName: result.agentName || taskRuntimeName,
@@ -1350,7 +1269,11 @@ export function ProjectPreview({
       }
       if (mountedRef.current) setDeployError(message);
       const buildLog = mergeBuildFailureLog(message);
-      const failedInBuild = Boolean(buildLog);
+      trackAgentDeployFailed({
+        ...deploymentTelemetryBase(),
+        phase: latestPhase,
+        error: err,
+      });
       onDeploymentTaskChange?.({
         id: taskId,
         runtimeName: taskRuntimeName,
@@ -1360,7 +1283,7 @@ export function ProjectPreview({
         status: "error",
         phase: latestPhase,
         label: "部署失败",
-        message: failedInBuild ? "构建镜像失败，详见构建日志。" : message,
+        message,
         ...(buildLog ? { buildLog } : terminalBuildLogUpdate("complete")),
         retry: requestDeploymentConfirmation,
       });
@@ -1453,15 +1376,35 @@ export function ProjectPreview({
   }
 
   function handleDownloadZip() {
-    const blob = buildZip(project.files);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${project.name || "project"}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const startedAt = Date.now();
+    const action = deploymentRuntimeId ? "update" as const : "create" as const;
+    try {
+      const blob = buildZip(project.files);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${project.name || "project"}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      trackAgentSourceDownloadSucceeded({
+        telemetry: deploymentTelemetry,
+        action,
+        fileCount: project.files.length,
+        zipSizeBytes: blob.size,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      trackAgentSourceDownloadFailed({
+        telemetry: deploymentTelemetry,
+        action,
+        fileCount: project.files.length,
+        durationMs: Date.now() - startedAt,
+        error,
+      });
+      throw error;
+    }
   }
 
   const artifactActions = (
@@ -2002,25 +1945,44 @@ export function ProjectPreview({
                 </div>
               </section>
 
-              <section className="pp-config-section">
-                <div className="pp-config-label">评测集</div>
-                <label className="pp-evaluation-set-option">
-                  <input
-                    type="checkbox"
-                    checked={createEvaluationSets}
+              {supportsEvaluationSets && (
+                <section className="pp-config-section">
+                  <div className="pp-config-label">评测集</div>
+                  <label className="pp-evaluation-set-option">
+                    <input
+                      type="checkbox"
+                      checked={createEvaluationSets}
+                      disabled={deploying}
+                      onChange={(event) =>
+                        setCreateEvaluationSets(event.currentTarget.checked)
+                      }
+                    />
+                    <span>
+                      <strong>自动创建评测集</strong>
+                      <small>
+                        部署成功后，自动创建 Good Case 和 Bad Case 评测集。
+                      </small>
+                    </span>
+                  </label>
+                </section>
+              )}
+
+              {!isRuntimeUpdate && (
+                <section className="pp-config-section pp-resource-section">
+                  <div className="pp-config-label">资源配置</div>
+                  <DeploymentResources
+                    value={deployResources}
+                    agentName={agentName || project.name || "agentkit-app"}
+                    region={deployRegion}
                     disabled={deploying}
-                    onChange={(event) =>
-                      setCreateEvaluationSets(event.currentTarget.checked)
-                    }
+                    validationError={deployResourcesValidationError}
+                    onChange={(resources) => {
+                      setDeployResources(resources);
+                      setDeployResourcesValidationError(null);
+                    }}
                   />
-                  <span>
-                    <strong>自动创建评测集</strong>
-                    <small>
-                      部署成功后，自动创建 Good Case 和 Bad Case 评测集。
-                    </small>
-                  </span>
-                </label>
-              </section>
+                </section>
+              )}
 
               <section className="pp-config-section pp-env-section">
                 <div className="pp-env-head">
@@ -2035,14 +1997,6 @@ export function ProjectPreview({
                       组件配置会自动同步到这里，部署前可核对最终值。
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    className="pp-icon-btn"
-                    title={showEnvValues ? "隐藏值" : "显示值"}
-                    onClick={() => setShowEnvValues((value) => !value)}
-                  >
-                    {showEnvValues ? <EyeOff className="pp-ic" /> : <Eye className="pp-ic" />}
-                  </button>
                 </div>
                 <button
                   type="button"
@@ -2131,7 +2085,7 @@ export function ProjectPreview({
                                 ) : (
                                   <input
                                     className="pp-env-value"
-                                    type={fixed || showEnvValues ? "text" : "password"}
+                                    type="text"
                                     value={row.value}
                                     placeholder={
                                       row.required ? "必填，尚未填写" : "可选，尚未填写"
@@ -2179,7 +2133,7 @@ export function ProjectPreview({
                           onChange={(e) => updateEnvRow(row.id, { key: e.currentTarget.value })}
                         />
                         <input
-                          type={showEnvValues ? "text" : "password"}
+                          type="text"
                           value={row.value}
                           placeholder="值"
                           disabled={deploying}
@@ -2282,9 +2236,7 @@ export function ProjectPreview({
                       <div className="pp-deploy-result-field">
                         <label>区域</label>
                         <code>
-                          {deployResult.region === "cn-shanghai"
-                            ? "上海 (cn-shanghai)"
-                            : "北京 (cn-beijing)"}
+                          {formatCloudRegion(deployResult.region, cloudProvider)}
                         </code>
                       </div>
                     )}

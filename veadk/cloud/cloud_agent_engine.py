@@ -27,6 +27,7 @@ from veadk.config import getenv, veadk_environments
 from veadk.integrations.ve_apig.ve_apig import APIGateway
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 from veadk.integrations.ve_identity.identity_client import IdentityClient
+from veadk.utils.cloud_provider import DEFAULT_CLOUD_PROVIDER, CloudProvider
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
 
@@ -75,6 +76,10 @@ class CloudAgentEngine(BaseModel):
     ) or getenv("VOLC_SESSIONTOKEN", "", allow_false_values=True)
     region: str = "cn-beijing"
     project: str = "default"
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER
+    vefaas_application_template_id: str = getenv(
+        "VEFAAS_APPLICATION_TEMPLATE_ID", "", allow_false_values=True
+    )
 
     def model_post_init(self, context: Any, /) -> None:
         """Initializes the internal VeFaaS service after Pydantic model validation.
@@ -97,18 +102,22 @@ class CloudAgentEngine(BaseModel):
             session_token=self.volcengine_session_token,
             region=self.region,
             project_name=self.project,
+            provider=self.provider,
+            application_template_id=self.vefaas_application_template_id,
         )
         self._veapig_service = APIGateway(
             access_key=self.volcengine_access_key,
             secret_key=self.volcengine_secret_key,
             region=self.region,
             session_token=self.volcengine_session_token,
+            provider=self.provider,
         )
         self._veidentity_service = IdentityClient(
             access_key=self.volcengine_access_key,
             secret_key=self.volcengine_secret_key,
             session_token=self.volcengine_session_token,
             region=self.region,
+            provider=self.provider,
         )
 
     def _prepare(self, path: str, name: str):
@@ -235,6 +244,8 @@ class CloudAgentEngine(BaseModel):
         client_secret: str = "",
         reuse_gateway: bool = False,
         local_test: bool = False,
+        enable_mcp_session: bool = True,
+        keep_failed_deploy: bool = False,
     ) -> CloudApp:
         """Deploys a local agent project to Volcengine FaaS, creating necessary resources.
 
@@ -311,6 +322,8 @@ class CloudAgentEngine(BaseModel):
                 gateway_service_name=gateway_service_name,
                 gateway_upstream_name=gateway_upstream_name,
                 enable_key_auth=enable_key_auth,
+                enable_mcp_session=enable_mcp_session,
+                keep_failed_deploy=keep_failed_deploy,
             )
             _ = function_id  # for future use
 

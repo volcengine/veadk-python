@@ -18,7 +18,13 @@ import {
   TRANSFER_REQUEST_TIMEOUT_MS,
 } from "./timeout";
 import type { AgentProject } from "../create/project";
-import type { AgentDraft } from "../create/types";
+import type { AgentDraft, NetworkConfig } from "../create/types";
+import type { IssueFeedbackReport } from "./issueFeedback";
+import {
+  BYTEPLUS_DEFAULT_REGION,
+  VOLCENGINE_DEFAULT_REGION,
+  type CloudProvider,
+} from "./cloudProvider";
 
 /** An ADK event as serialised over `/run_sse` (camelCase, by_alias=True). */
 export interface AdkUsage {
@@ -65,12 +71,12 @@ export interface AdkEvent {
 /** A single OpenTelemetry span as returned by /debug/trace/session/{id}. */
 export interface TraceSpan {
   name: string;
-  span_id: number;
-  trace_id: number;
+  span_id: string | number;
+  trace_id: string | number;
   start_time: number; // nanoseconds
   end_time: number; // nanoseconds
   attributes: Record<string, unknown>;
-  parent_span_id: number | null;
+  parent_span_id: string | number | null;
 }
 
 export interface AdkSession {
@@ -133,6 +139,28 @@ export interface AgentFeedbackCasesResponse {
   projectName: string;
   sets: AgentFeedbackSetSummary[];
   items: AgentFeedbackCase[];
+  unsupported?: boolean;
+  unsupportedMessage?: string;
+}
+
+export type AutomaticEvaluationState = "pending" | "running";
+
+export interface AutomaticEvaluationStatus {
+  runtimeId: string;
+  appName: string;
+  userId: string;
+  sessionId: string;
+  state: AutomaticEvaluationState;
+  scheduledAt: string;
+  dueAt: string;
+  startedAt: string | null;
+}
+
+export interface AutomaticEvaluationStatusesResponse {
+  runtimeId: string;
+  appName: string;
+  userId: string;
+  items: AutomaticEvaluationStatus[];
 }
 
 export type AgentOptimizationPriority = "high" | "medium" | "low";
@@ -395,6 +423,15 @@ async function apiFetch(
   return response;
 }
 
+/** Same-origin Studio request with the active local or OAuth identity attached. */
+export function studioFetch(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  return apiFetch(path, init, {}, timeoutMs);
+}
+
 function formatErrorDetail(detail: unknown): string {
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) {
@@ -417,14 +454,17 @@ function formatErrorDetail(detail: unknown): string {
 }
 
 async function httpErrorMessage(res: Response, fallback: string): Promise<string> {
+  const context = `${fallback}（HTTP ${res.status}）`;
   const text = await res.text().catch(() => "");
-  if (!text) return `${fallback} (${res.status})`;
+  if (!text) return context;
   try {
     const data = JSON.parse(text) as { detail?: unknown; error?: unknown };
     const detail = formatErrorDetail(data.detail ?? data.error);
-    return detail || text || `${fallback} (${res.status})`;
+    return detail
+      ? `${context}\n${detail}\n原始响应：\n${text}`
+      : `${context}\n原始响应：\n${text}`;
   } catch {
-    return text || `${fallback} (${res.status})`;
+    return `${context}\n原始响应：\n${text}`;
   }
 }
 
@@ -447,6 +487,7 @@ export class RuntimeProbeError extends Error {
   constructor(
     message: string,
     readonly unsupported = false,
+    readonly retryable = false,
   ) {
     super(message);
     this.name = "RuntimeProbeError";
@@ -457,10 +498,11 @@ const PRIVATE_RUNTIME_UNREACHABLE_MESSAGE =
   "Runtime 已部署成功，但当前 Studio 无法访问私网 Runtime。请使用已绑定相同 VPC 的 Studio 访问，或改用公网 / 公网+VPC 部署。";
 const RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE =
   "Runtime 已部署成功，但 Studio 暂时无法连接服务。网关域名可能仍在生效，或当前网络/DNS 无法访问该 Runtime，请稍后在智能体管理页重试连接。";
-const RUNTIME_REGION_FALLBACKS = ["cn-beijing", "cn-shanghai"] as const;
+const VOLCENGINE_RUNTIME_REGION_FALLBACKS = ["cn-beijing", "cn-shanghai"] as const;
 const RUNTIME_APPS_CACHE_TTL_MS = 30_000;
 const RUNTIME_METADATA_CACHE_TTL_MS = 5 * 60 * 1000;
 const FEEDBACK_CASES_CACHE_TTL_MS = 60 * 1000;
+let activeCloudProvider: CloudProvider = "volcengine";
 
 interface ClientCacheEntry<T> {
   value?: T;
@@ -485,11 +527,29 @@ function runtimeAppsCacheKey(runtimeId: string, region: string): string {
   return `${region}:${runtimeId}`;
 }
 
-function runtimeRegionCandidates(region?: string): string[] {
-  const primary = region || "cn-beijing";
+export function setClientCloudProvider(provider: CloudProvider): void {
+  activeCloudProvider = provider;
+}
+
+export function runtimeRegionCandidates(region?: string): string[] {
+  const raw = (region || "").trim();
+  if (activeCloudProvider === "byteplus") {
+    return [raw && !raw.startsWith("cn-") ? raw : BYTEPLUS_DEFAULT_REGION];
+  }
+  const primary =
+    raw && !raw.startsWith("ap-") ? raw : VOLCENGINE_DEFAULT_REGION;
+  if (
+    !VOLCENGINE_RUNTIME_REGION_FALLBACKS.includes(
+      primary as (typeof VOLCENGINE_RUNTIME_REGION_FALLBACKS)[number],
+    )
+  ) {
+    return [primary];
+  }
   return [
     primary,
-    ...RUNTIME_REGION_FALLBACKS.filter((candidate) => candidate !== primary),
+    ...VOLCENGINE_RUNTIME_REGION_FALLBACKS.filter(
+      (candidate) => candidate !== primary,
+    ),
   ];
 }
 
@@ -556,11 +616,12 @@ export async function fetchRemoteApps(
       "runtime_json_timeout",
     ].includes(runtimeErrorCode)
   ) {
-    throw new RuntimeProbeError(RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE);
+    throw new RuntimeProbeError(RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE, false, true);
   }
   if (ep?.runtimeId && res.status === 404) {
     throw new RuntimeProbeError(
       "该 Runtime 的 Agent Server 未提供连接接口，请确认 Runtime 已就绪且版本兼容。",
+      true,
       true,
     );
   }
@@ -740,6 +801,29 @@ export async function getAgentFeedbackCases(args: {
       });
     }
   }
+}
+
+export async function getAutomaticEvaluationStatuses(args: {
+  runtimeId: string;
+  region?: string;
+  appName: string;
+  userId: string;
+}): Promise<AutomaticEvaluationStatusesResponse> {
+  let lastError: Error | null = null;
+  for (const region of runtimeRegionCandidates(args.region)) {
+    const query = new URLSearchParams({
+      runtimeId: args.runtimeId,
+      region,
+      appName: args.appName,
+      userId: args.userId,
+    });
+    const res = await apiFetch(`/web/evaluation/statuses?${query.toString()}`);
+    if (res.ok) {
+      return res.json() as Promise<AutomaticEvaluationStatusesResponse>;
+    }
+    lastError = new Error(await httpErrorMessage(res, "读取自动评测状态失败"));
+  }
+  throw lastError ?? new Error("读取自动评测状态失败");
 }
 
 export async function getAgentOptimizations(args: {
@@ -1114,14 +1198,31 @@ export function mediaContentUrl(appName: string, uri: string): string {
 export async function getSessionTrace(
   appName: string,
   sessionId: string,
+  endTimeMs?: number,
 ): Promise<TraceSpan[]> {
   const { app, ep } = resolve(appName);
-  const res = await apiFetch(
-    `/dev/apps/${encodeURIComponent(app)}/debug/trace/session/${encodeURIComponent(sessionId)}`,
-    {},
-    ep,
-  );
-  if (!res.ok) throw new Error(`trace failed: ${res.status}`);
+  let res: Response;
+  if (ep.runtimeId) {
+    const params = new URLSearchParams({
+      runtimeId: ep.runtimeId,
+      sessionId,
+      region: ep.region ?? "cn-beijing",
+    });
+    if (endTimeMs) params.set("endTimeMs", String(Math.round(endTimeMs)));
+    res = await apiFetch(`/web/runtime-trace?${params.toString()}`);
+    if (res.status === 404) {
+      throw new Error("该 Agent 暂未开启链路观测，请到控制台打开后使用。");
+    }
+  } else {
+    res = await apiFetch(
+      `/dev/apps/${encodeURIComponent(app)}/debug/trace/session/${encodeURIComponent(sessionId)}`,
+      {},
+      ep,
+    );
+  }
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "加载调用链路失败"));
+  }
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
     const responseType = contentType.split(";", 1)[0] || "Content-Type 缺失";
@@ -1132,6 +1233,24 @@ export async function getSessionTrace(
   const spans = (await res.json()) as unknown;
   if (!Array.isArray(spans)) throw new Error("trace failed: 返回格式无效");
   return spans as TraceSpan[];
+}
+
+export async function submitIssueFeedback(
+  report: IssueFeedbackReport,
+): Promise<{ submitted: true }> {
+  const res = await apiFetch("/web/issue-feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(report),
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "问题反馈上报失败"));
+  }
+  const result = (await res.json()) as { submitted?: unknown };
+  if (result.submitted !== true) {
+    throw new Error("问题反馈上报失败：服务端未确认提交结果");
+  }
+  return { submitted: true };
 }
 
 /** The agent-type vocabulary shared with the create wizard. */
@@ -1731,6 +1850,180 @@ export type DeployAuthentication =
   | { type: "api_key" }
   | { type: "user_pool"; userPoolUid: string };
 
+export type DeploymentResourceMode = "auto" | "create" | "existing";
+
+export interface DeployResources {
+  tos: {
+    mode: DeploymentResourceMode;
+    bucket?: string;
+  };
+  cr: {
+    mode: DeploymentResourceMode;
+    instance?: string;
+    namespace?: string;
+    repository?: string;
+  };
+  codePipeline: {
+    mode: DeploymentResourceMode;
+    workspaceId?: string;
+    workspaceName?: string;
+    pipelineId?: string;
+    pipelineName?: string;
+  };
+}
+
+export type DeploymentResourceKind =
+  | "tos-bucket"
+  | "cr-registry"
+  | "cr-namespace"
+  | "cr-repository"
+  | "cp-workspace"
+  | "cp-pipeline";
+
+export interface DeploymentResource {
+  id: string;
+  name: string;
+  region: string;
+  status: string;
+  compatible?: boolean;
+}
+
+export interface DeploymentResourceQuery {
+  kind: DeploymentResourceKind;
+  region: string;
+  registry?: string;
+  namespace?: string;
+  workspaceId?: string;
+  search?: string;
+  pageNumber?: number;
+  pageSize?: number;
+}
+
+export async function listDeploymentResources(
+  query: DeploymentResourceQuery,
+  signal?: AbortSignal,
+): Promise<{
+  serviceRegion: string;
+  items: DeploymentResource[];
+  pageNumber: number;
+  pageSize: number;
+  totalCount: number;
+  hasMore: boolean;
+}> {
+  const params = new URLSearchParams({ kind: query.kind, region: query.region });
+  if (query.registry) params.set("registry", query.registry);
+  if (query.namespace) params.set("namespace", query.namespace);
+  if (query.workspaceId) params.set("workspaceId", query.workspaceId);
+  if (query.search) params.set("search", query.search);
+  if (query.pageNumber) params.set("pageNumber", String(query.pageNumber));
+  if (query.pageSize) params.set("pageSize", String(query.pageSize));
+  const response = await apiFetch(
+    `/web/deployment-resources?${params.toString()}`,
+    { signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "加载云资源失败"));
+  }
+  const payload = (await response.json()) as {
+    serviceRegion?: unknown;
+    items?: unknown;
+    pageNumber?: unknown;
+    pageSize?: unknown;
+    totalCount?: unknown;
+    hasMore?: unknown;
+  };
+  if (
+    typeof payload.serviceRegion !== "string" ||
+    !Array.isArray(payload.items) ||
+    typeof payload.pageNumber !== "number" ||
+    typeof payload.pageSize !== "number" ||
+    typeof payload.totalCount !== "number" ||
+    typeof payload.hasMore !== "boolean"
+  ) {
+    throw new Error("云资源列表响应格式无效");
+  }
+  const items = payload.items.map((item) => {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      typeof (item as DeploymentResource).id !== "string" ||
+      typeof (item as DeploymentResource).name !== "string" ||
+      typeof (item as DeploymentResource).region !== "string" ||
+      typeof (item as DeploymentResource).status !== "string"
+    ) {
+      throw new Error("云资源列表响应格式无效");
+    }
+    return item as DeploymentResource;
+  });
+  return {
+    serviceRegion: payload.serviceRegion,
+    items,
+    pageNumber: payload.pageNumber,
+    pageSize: payload.pageSize,
+    totalCount: payload.totalCount,
+    hasMore: payload.hasMore,
+  };
+}
+
+export type SandboxToolKind =
+  | "codex"
+  | "codex_snapshot"
+  | "openclaw"
+  | "openclaw_snapshot"
+  | "hermes"
+  | "hermes_snapshot"
+  | "dev";
+
+export interface SandboxToolInfo {
+  kind: SandboxToolKind;
+  label: string;
+  toolId: string;
+  snapshot: boolean;
+}
+
+export interface SystemInfoResponse {
+  storage: {
+    tosAddress: string;
+  };
+  sandboxTools: SandboxToolInfo[];
+}
+
+export async function getSystemInfo(
+  signal?: AbortSignal,
+): Promise<SystemInfoResponse> {
+  const response = await apiFetch("/web/system-info", { signal });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "加载系统信息失败"));
+  }
+  const payload = (await response.json()) as {
+    storage?: { tosAddress?: unknown };
+    sandboxTools?: unknown;
+  };
+  if (
+    typeof payload.storage?.tosAddress !== "string" ||
+    !Array.isArray(payload.sandboxTools)
+  ) {
+    throw new Error("系统信息响应格式无效");
+  }
+  const sandboxTools = payload.sandboxTools.map((item) => {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      typeof (item as SandboxToolInfo).kind !== "string" ||
+      typeof (item as SandboxToolInfo).label !== "string" ||
+      typeof (item as SandboxToolInfo).toolId !== "string" ||
+      typeof (item as SandboxToolInfo).snapshot !== "boolean"
+    ) {
+      throw new Error("系统信息响应格式无效");
+    }
+    return item as SandboxToolInfo;
+  });
+  return {
+    storage: { tosAddress: payload.storage.tosAddress },
+    sandboxTools,
+  };
+}
+
 export interface IdentityUserPool {
   uid: string;
   name: string;
@@ -1836,6 +2129,7 @@ export async function deployAgentkitProject(
       };
     };
     envs?: { key: string; value: string }[];
+    resources?: DeployResources;
   },
 ): Promise<DeployAgentkitResult> {
   const taskId = opts?.taskId;
@@ -1876,6 +2170,7 @@ export async function deployAgentkitProject(
           authentication: opts?.authentication,
           im: opts?.im,
           envs: opts?.envs,
+          resources: opts?.resources,
         }),
       },
       {},
@@ -1965,7 +2260,7 @@ export interface ManagedRuntime {
 
 /** List AgentKit runtimes the server authorizes this user to manage. */
 export async function getMyRuntimes(
-  region = "cn-beijing",
+  region = VOLCENGINE_DEFAULT_REGION,
 ): Promise<ManagedRuntime[]> {
   const res = await apiFetch(`/web/my-runtimes?region=${encodeURIComponent(region)}`);
   if (!res.ok) throw new Error(`加载失败 (${res.status})`);
@@ -1992,25 +2287,56 @@ export interface SiteBranding {
   logoUrl: string;
 }
 
+export interface StudioTelemetryApmplusConfig {
+  aid: number;
+  token: string;
+  domain: string;
+  env: string;
+}
+
+export interface StudioTelemetryContext {
+  deployId: string;
+  userPoolId: string;
+  applicationId: string;
+  functionId: string;
+  region: string;
+  project: string;
+  version: string;
+}
+
+export interface StudioTelemetryConfig {
+  enabled: boolean;
+  provider?: "apmplus";
+  apmplus?: StudioTelemetryApmplusConfig;
+  studio?: StudioTelemetryContext;
+}
+
 export interface UiConfig {
   studio: boolean;
   version: string;
+  provider: "volcengine" | "byteplus";
   branding: SiteBranding;
   features: UiFeatures;
   defaultView: "chat" | "addAgent";
   /** Where the agent picker sources agents: local apps (`--dev`) or the user's
    *  cloud AgentKit runtimes (default). */
   agentsSource: "local" | "cloud";
+  telemetry: StudioTelemetryConfig;
 }
 
 export const DEFAULT_SITE_BRANDING: SiteBranding = {
-  title: "VeADK Studio",
+  title: "AgentKit Studio",
   logoUrl: "",
+};
+
+const DISABLED_STUDIO_TELEMETRY: StudioTelemetryConfig = {
+  enabled: false,
 };
 
 const DEFAULT_UI_CONFIG: UiConfig = {
   studio: false,
   version: "",
+  provider: "volcengine",
   branding: DEFAULT_SITE_BRANDING,
   features: {
     newChat: true,
@@ -2024,7 +2350,54 @@ const DEFAULT_UI_CONFIG: UiConfig = {
   },
   defaultView: "chat",
   agentsSource: "local",
+  telemetry: DISABLED_STUDIO_TELEMETRY,
 };
+
+function normalizeStudioTelemetryConfig(value: unknown): StudioTelemetryConfig {
+  if (!value || typeof value !== "object") return DISABLED_STUDIO_TELEMETRY;
+  const config = value as Partial<StudioTelemetryConfig>;
+  if (!config.enabled) return DISABLED_STUDIO_TELEMETRY;
+  const apmplus = config.apmplus;
+  if (
+    !apmplus ||
+    typeof apmplus.aid !== "number" ||
+    !Number.isFinite(apmplus.aid) ||
+    typeof apmplus.token !== "string" ||
+    !apmplus.token
+  ) {
+    return DISABLED_STUDIO_TELEMETRY;
+  }
+  const studio = (config.studio ?? {}) as Partial<StudioTelemetryContext>;
+  return {
+    enabled: true,
+    provider: config.provider === "apmplus" ? "apmplus" : undefined,
+    apmplus: {
+      aid: apmplus.aid,
+      token: apmplus.token,
+      domain: typeof apmplus.domain === "string" && apmplus.domain
+        ? apmplus.domain
+        : "apmplus.volces.com",
+      env: typeof apmplus.env === "string" && apmplus.env
+        ? apmplus.env
+        : "production",
+    },
+    studio: {
+      deployId: typeof studio.deployId === "string" ? studio.deployId : "",
+      userPoolId: typeof studio.userPoolId === "string"
+        ? studio.userPoolId
+        : "",
+      applicationId: typeof studio.applicationId === "string"
+        ? studio.applicationId
+        : "",
+      functionId: typeof studio.functionId === "string"
+        ? studio.functionId
+        : "",
+      region: typeof studio.region === "string" ? studio.region : "",
+      project: typeof studio.project === "string" ? studio.project : "",
+      version: typeof studio.version === "string" ? studio.version : "",
+    },
+  };
+}
 
 /** Fetch the UI feature gates; falls back to all-enabled on any error. */
 export async function getUiConfig(): Promise<UiConfig> {
@@ -2037,9 +2410,12 @@ export async function getUiConfig(): Promise<UiConfig> {
     const logoUrl = typeof d.branding?.logoUrl === "string"
       ? d.branding.logoUrl
       : DEFAULT_SITE_BRANDING.logoUrl;
+    const provider = d.provider === "byteplus" ? "byteplus" : "volcengine";
+    setClientCloudProvider(provider);
     return {
       studio: d.studio ?? false,
       version: typeof d.version === "string" ? d.version : "",
+      provider,
       branding: {
         title: typeof d.branding?.title === "string"
           ? d.branding.title
@@ -2049,6 +2425,7 @@ export async function getUiConfig(): Promise<UiConfig> {
       features: { ...DEFAULT_UI_CONFIG.features, ...(d.features ?? {}) },
       defaultView: d.defaultView ?? "chat",
       agentsSource: d.agentsSource === "cloud" ? "cloud" : "local",
+      telemetry: normalizeStudioTelemetryConfig(d.telemetry),
     };
   } catch {
     return DEFAULT_UI_CONFIG;
@@ -2060,6 +2437,9 @@ export type RuntimeScope = "all" | "mine";
 
 export interface StudioAccess {
   role: StudioRole;
+  telemetry: {
+    userId: string;
+  };
   capabilities: {
     createAgents: boolean;
     manageAgents: boolean;
@@ -2070,6 +2450,9 @@ export interface StudioAccess {
 /** Least-privileged fallback while access is loading or unavailable. */
 export const DEFAULT_STUDIO_ACCESS: StudioAccess = {
   role: "user",
+  telemetry: {
+    userId: "",
+  },
   capabilities: {
     createAgents: false,
     manageAgents: false,
@@ -2084,6 +2467,7 @@ export async function getStudioAccess(): Promise<StudioAccess> {
   const access = (await res.json()) as StudioAccess;
   if (
     !["admin", "developer", "user"].includes(access.role) ||
+    typeof access.telemetry?.userId !== "string" ||
     typeof access.capabilities?.createAgents !== "boolean" ||
     typeof access.capabilities?.manageAgents !== "boolean" ||
     !["all", "mine"].includes(access.capabilities?.runtimeScope)
@@ -2210,8 +2594,7 @@ export async function getRuntimes(
   const res = await apiFetch(`/web/runtimes?${p.toString()}`);
   if (!res.ok) {
     const detail = await httpErrorMessage(res, "加载 Runtime 失败");
-    const summary = `加载 Runtime 失败（HTTP ${res.status}）`;
-    throw new Error(detail === `加载 Runtime 失败 (${res.status})` ? summary : `${summary}：${detail}`);
+    throw new Error(detail);
   }
   const d = (await res.json()) as Partial<RuntimePage>;
   return { runtimes: d.runtimes ?? [], nextToken: d.nextToken ?? "" };
@@ -2339,6 +2722,8 @@ export interface RuntimeUpdateCapability {
     name: string;
     region: string;
     currentVersion?: number | null;
+    envs: { key: string; value: string }[];
+    network: NetworkConfig;
   };
   agent?: {
     appName: string;
@@ -2519,11 +2904,16 @@ export async function generateAgentDraftFromRequirement(
 
 export async function createGeneratedAgentTestRun(
   draft: AgentDraft,
+  runtime?: { runtimeId: string; region: string },
 ): Promise<GeneratedAgentTestRun> {
   const res = await apiFetch("/web/generated-agent-test-runs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ draft }),
+    body: JSON.stringify({
+      draft,
+      runtimeId: runtime?.runtimeId,
+      runtimeRegion: runtime?.region,
+    }),
   });
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, "创建调试运行失败"));

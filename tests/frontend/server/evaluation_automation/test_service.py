@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -58,6 +59,19 @@ class _Optimizer:
                 )
             ]
         )
+
+
+class _BlockingEvaluator:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def evaluate(self, **kwargs: Any) -> AutoEvaluationOutput:
+        assert kwargs["user_input"] == "问题"
+        assert kwargs["agent_output"] == "回答"
+        self.started.set()
+        await self.release.wait()
+        return AutoEvaluationOutput(score=0.92, reason="回答准确且完整。")
 
 
 class _CaseRepository:
@@ -129,6 +143,7 @@ async def test_service_evaluates_latest_turn_and_updates_optimization_snapshot()
         runtime_get=runtime_get,
         case_repository=case_repository,
         quiet_seconds=0,
+        minimum_running_seconds=0,
     )
     scheduler = service.scheduler
 
@@ -140,7 +155,7 @@ async def test_service_evaluates_latest_turn_and_updates_optimization_snapshot()
     assert case.kind == "good"
     assert case.source == "auto"
     assert case.reason == "回答准确且完整。"
-    snapshot = optimizations.get("runtime", "agent")
+    snapshot = await optimizations.get("runtime", "agent")
     assert snapshot is not None
     assert snapshot.groups[0].module == "prompt"
     await service.close()
@@ -181,6 +196,7 @@ async def test_reprocessing_the_same_event_uses_the_same_item_key() -> None:
         runtime_get=runtime_get,
         case_repository=case_repository,
         quiet_seconds=0,
+        minimum_running_seconds=0,
     )
 
     await service.evaluate_now(_activity())
@@ -188,4 +204,123 @@ async def test_reprocessing_the_same_event_uses_the_same_item_key() -> None:
     await service.evaluate_now(_activity())
 
     assert list(cases.items) == [first_key]
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_service_reports_pending_and_running_evaluation_status() -> None:
+    cases = _CaseRepository()
+    evaluator = _BlockingEvaluator()
+
+    async def runtime_get(activity: RunSseActivity, path: str) -> dict[str, Any]:
+        del activity
+        if "sessions" in path:
+            return {
+                "id": "session",
+                "events": [
+                    {
+                        "id": "user-event",
+                        "author": "user",
+                        "content": {"parts": [{"text": "问题"}]},
+                    },
+                    {
+                        "id": "assistant-event",
+                        "author": "agent",
+                        "content": {"parts": [{"text": "回答"}]},
+                    },
+                ],
+            }
+        return {"name": "客服助手"}
+
+    async def case_repository(activity: RunSseActivity) -> _CaseRepository:
+        del activity
+        return cases
+
+    service = EvaluationAutomationService(
+        evaluator=evaluator,
+        optimizer=_Optimizer(),
+        optimization_repository=InMemoryOptimizationRepository(),
+        runtime_get=runtime_get,
+        case_repository=case_repository,
+        quiet_seconds=0,
+        minimum_running_seconds=1,
+    )
+    activity = _activity()
+
+    service.session_completed(activity)
+    pending = service.list_statuses(
+        runtime_id="runtime",
+        app_name="agent",
+        user_id="user",
+    )
+    assert len(pending) == 1
+    assert pending[0].state == "pending"
+    assert pending[0].session_id == "session"
+
+    await evaluator.started.wait()
+    running = service.list_statuses(
+        runtime_id="runtime",
+        app_name="agent",
+        user_id="user",
+    )
+    assert len(running) == 1
+    assert running[0].state == "running"
+    assert running[0].started_at is not None
+
+    evaluator.release.set()
+    await asyncio.sleep(0.01)
+    assert (
+        service.list_statuses(
+            runtime_id="runtime",
+            app_name="agent",
+            user_id="user",
+        )[0].state
+        == "running"
+    )
+    await service.scheduler.wait_idle()
+    assert (
+        service.list_statuses(
+            runtime_id="runtime",
+            app_name="agent",
+            user_id="user",
+        )
+        == []
+    )
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_session_start_clears_pending_evaluation_status() -> None:
+    async def runtime_get(activity: RunSseActivity, path: str) -> dict[str, Any]:
+        raise AssertionError((activity, path))
+
+    async def case_repository(activity: RunSseActivity) -> _CaseRepository:
+        raise AssertionError(activity)
+
+    service = EvaluationAutomationService(
+        evaluator=_Evaluator(),
+        optimizer=_Optimizer(),
+        optimization_repository=InMemoryOptimizationRepository(),
+        runtime_get=runtime_get,
+        case_repository=case_repository,
+        quiet_seconds=300,
+    )
+    activity = _activity()
+
+    service.session_completed(activity)
+    assert service.list_statuses(
+        runtime_id="runtime",
+        app_name="agent",
+        user_id="user",
+    )
+
+    service.session_started(activity)
+    assert (
+        service.list_statuses(
+            runtime_id="runtime",
+            app_name="agent",
+            user_id="user",
+        )
+        == []
+    )
     await service.close()

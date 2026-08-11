@@ -26,10 +26,11 @@ from veadk.cli.generated_agent_catalog import (
     EXPORTER_BY_ID,
     KB_BY_ID,
     LTM_BY_ID,
-    MODEL_ENV,
     STM_BY_ID,
     TOOL_BY_ID,
     EnvVar,
+    env_for_provider,
+    model_env_for_provider,
 )
 
 _PYTHON_LICENSE_HEADER = """# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
@@ -83,6 +84,7 @@ class McpTool(BaseModel):
     transport: Literal["http", "stdio"] = "http"
     url: str = ""
     authToken: str = ""
+    authTokenEnv: str = ""
     command: str = ""
     args: list[str] = Field(default_factory=list)
 
@@ -172,6 +174,7 @@ class AgentDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = ""
+    cloudProvider: Literal["volcengine", "byteplus"] = "volcengine"
     description: str = ""
     instruction: str = ""
     agentType: Literal["llm", "sequential", "parallel", "loop", "a2a"] = "llm"
@@ -230,13 +233,16 @@ class GeneratedAgentTestRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     draft: AgentDraft
+    runtimeId: str = ""
+    runtimeRegion: str = "cn-beijing"
 
 
 class _Acc:
-    def __init__(self) -> None:
+    def __init__(self, cloud_provider: str = "volcengine") -> None:
+        self.cloud_provider = cloud_provider
         self.imports: list[str] = []
         self.pre_lines: list[str] = []
-        self.env: list[EnvVar] = list(MODEL_ENV)
+        self.env: list[EnvVar] = list(model_env_for_provider(cloud_provider))
         self.extras: set[str] = set()
         self.used_names: set[str] = set()
         self.agent_display_names: dict[str, str] = {}
@@ -246,6 +252,128 @@ def normalize_and_validate_draft(raw: Any) -> AgentDraft:
     if isinstance(raw, AgentDraft):
         return raw
     return AgentDraft.model_validate(raw)
+
+
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ENV_REFERENCE_RE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
+
+
+def _env_segment(value: str, fallback: str) -> str:
+    segment = re.sub(r"[^A-Z0-9]+", "_", (value or "").strip().upper())
+    return segment.strip("_") or fallback
+
+
+def _next_env_name(base: str, used: set[str]) -> str:
+    if base not in used:
+        return base
+    suffix = 2
+    while f"{base}_{suffix}" in used:
+        suffix += 1
+    return f"{base}_{suffix}"
+
+
+def prepare_mcp_auth(draft: AgentDraft) -> AgentDraft:
+    """Move transient MCP tokens into deployment env values on a deep copy."""
+    used: set[str] = set()
+    env_values = dict(draft.deployment.envValues)
+
+    def visit(node: AgentDraft) -> AgentDraft:
+        agent_segment = _env_segment(node.name, "AGENT")
+        tools: list[McpTool] = []
+        for index, tool in enumerate(node.mcpTools):
+            raw_token = tool.authToken.strip()
+            reference = _ENV_REFERENCE_RE.fullmatch(raw_token)
+            explicit = tool.authTokenEnv.strip()
+            env_name = explicit if _ENV_NAME_RE.fullmatch(explicit) else ""
+            if not env_name and reference:
+                env_name = reference.group(1)
+            if not env_name and raw_token:
+                tool_segment = _env_segment(tool.name, f"TOOL_{index + 1}")
+                env_name = _next_env_name(
+                    f"MCP_{agent_segment}_{tool_segment}_AUTH_TOKEN",
+                    used,
+                )
+            if env_name:
+                used.add(env_name)
+            if env_name and raw_token and reference is None:
+                env_values[env_name] = raw_token
+            tools.append(
+                tool.model_copy(
+                    deep=True,
+                    update={"authToken": "", "authTokenEnv": env_name},
+                )
+            )
+        return node.model_copy(
+            deep=True,
+            update={
+                "mcpTools": tools,
+                "subAgents": [visit(sub_agent) for sub_agent in node.subAgents],
+            },
+        )
+
+    prepared = visit(draft)
+    return prepared.model_copy(
+        update={
+            "deployment": prepared.deployment.model_copy(
+                update={"envValues": env_values}
+            )
+        }
+    )
+
+
+def _safe_draft_payload(draft: AgentDraft) -> dict[str, Any]:
+    """Serialize editable metadata without deployment values or MCP secrets."""
+    payload = draft.model_dump(mode="json", by_alias=True)
+    used: set[str] = set()
+
+    def sanitize(node: dict[str, Any]) -> None:
+        if node.get("cloudProvider") == "volcengine":
+            node.pop("cloudProvider", None)
+        agent_segment = _env_segment(str(node.get("name") or ""), "AGENT")
+        tools = node.get("mcpTools")
+        if isinstance(tools, list):
+            for index, raw_tool in enumerate(tools):
+                if not isinstance(raw_tool, dict):
+                    continue
+                raw_token = str(raw_tool.pop("authToken", "") or "").strip()
+                explicit = str(raw_tool.get("authTokenEnv") or "").strip()
+                reference = _ENV_REFERENCE_RE.fullmatch(raw_token)
+                env_name = explicit if _ENV_NAME_RE.fullmatch(explicit) else ""
+                if not env_name and reference:
+                    env_name = reference.group(1)
+                if not env_name and raw_token:
+                    tool_segment = _env_segment(
+                        str(raw_tool.get("name") or ""),
+                        f"TOOL_{index + 1}",
+                    )
+                    env_name = _next_env_name(
+                        f"MCP_{agent_segment}_{tool_segment}_AUTH_TOKEN",
+                        used,
+                    )
+                if env_name:
+                    used.add(env_name)
+                    raw_tool["authTokenEnv"] = env_name
+                else:
+                    raw_tool.pop("authTokenEnv", None)
+        deployment = node.get("deployment")
+        if isinstance(deployment, dict):
+            deployment.pop("envValues", None)
+        sub_agents = node.get("subAgents")
+        if isinstance(sub_agents, list):
+            for sub_agent in sub_agents:
+                if isinstance(sub_agent, dict):
+                    sanitize(sub_agent)
+        workflow = node.get("workflow")
+        if isinstance(workflow, dict) and isinstance(workflow.get("nodes"), list):
+            for workflow_node in workflow["nodes"]:
+                if not isinstance(workflow_node, dict):
+                    continue
+                workflow_agent = workflow_node.get("agent")
+                if isinstance(workflow_agent, dict):
+                    sanitize(workflow_agent)
+
+    sanitize(payload)
+    return payload
 
 
 def ident(raw: str, fallback: str) -> str:
@@ -293,7 +421,7 @@ def _add_import(acc: _Acc, line: str) -> None:
 
 
 def _add_env(acc: _Acc, env: tuple[EnvVar, ...]) -> None:
-    acc.env.extend(env)
+    acc.env.extend(env_for_provider(acc.cloud_provider, env))
 
 
 def _emit_tool_stub(acc: _Acc, name: str, description: str) -> str:
@@ -416,10 +544,20 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
             )
             v = _unique_ident(acc, f"{mcp_tool.name or 'mcp'}_mcp", "mcp_tool")
             headers = ""
-            if mcp_tool.authToken.strip():
+            if mcp_tool.authTokenEnv.strip():
+                _add_import(acc, "import os")
+                env_name = mcp_tool.authTokenEnv.strip()
                 headers = (
                     ', headers={"Authorization": '
-                    f"{_py_str('Bearer ' + mcp_tool.authToken.strip())}}}"
+                    f'"Bearer " + os.environ[{_py_str(env_name)}]}}'
+                )
+                acc.env.append(
+                    EnvVar(
+                        env_name,
+                        True,
+                        "",
+                        f"{mcp_tool.name.strip() or 'MCP'} Bearer Token",
+                    )
                 )
             acc.pre_lines.append(
                 f"{v} = MCPToolset(connection_params=StreamableHTTPConnectionParams("
@@ -470,6 +608,10 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
     ]
     if skill_folders:
         _add_import(acc, "from pathlib import Path as _Path")
+        _add_import(
+            acc,
+            "from google.adk.code_executors import UnsafeLocalCodeExecutor",
+        )
         _add_import(acc, "from google.adk.skills import load_skill_from_dir")
         _add_import(acc, "from google.adk.tools.skill_toolset import SkillToolset")
         v = _unique_ident(acc, f"skills_{var_name}", "skill_toolset")
@@ -479,7 +621,12 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
             for folder in skill_folders
         ]
         joined_loaders = ",\n".join(loaders)
-        acc.pre_lines.append(f"{v} = SkillToolset(skills=[\n{joined_loaders},\n    ])")
+        acc.pre_lines.append(
+            f"{v} = SkillToolset(\n"
+            f"    skills=[\n{joined_loaders},\n    ],\n"
+            "    code_executor=UnsafeLocalCodeExecutor(),\n"
+            ")"
+        )
         tool_exprs.append(v)
 
     kwargs = [
@@ -1141,6 +1288,7 @@ def _a2a_registry_env_values(draft: AgentDraft) -> dict[str, str]:
 
 def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
     """Return runtime env values allowed by active components in a debug draft."""
+    draft = prepare_mcp_auth(draft)
     allowed_keys: set[str] = set()
     fixed_values: dict[str, str] = {}
 
@@ -1152,6 +1300,9 @@ def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
             tool = TOOL_BY_ID.get(tool_id)
             if tool:
                 allow_env(tool.env)
+        for mcp_tool in node.mcpTools:
+            if mcp_tool.authTokenEnv:
+                allowed_keys.add(mcp_tool.authTokenEnv)
         if node.a2aRegistry.enabled:
             registry = node.a2aRegistry
             fixed_values.update(
@@ -1213,8 +1364,9 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
     if draft.agentType == "a2a":
         raise ValueError("Remote Agent cannot be the root Agent.")
 
+    draft = prepare_mcp_auth(draft)
     pkg = ident(draft.name, "my_agent")
-    acc = _Acc()
+    acc = _Acc(draft.cloudProvider)
     feishu_channel_enabled = bool(draft.deployment.feishuEnabled)
     if feishu_channel_enabled:
         acc.env.extend(
@@ -1240,7 +1392,7 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
     agent_definition = (
         "\n\n".join(acc.pre_lines)
         + f"\n\nAGENT_DISPLAY_NAMES = {acc.agent_display_names!r}\n"
-        + f"AGENT_DRAFT = {draft.model_dump(mode='json', by_alias=True)!r}\n"
+        + f"AGENT_DRAFT = {_safe_draft_payload(draft)!r}\n"
         + "\n# ADK 加载器要求：顶层 agent 必须命名为 root_agent\nroot_agent = agent\n"
     )
     agent_py = f"{_PYTHON_LICENSE_HEADER}\n{import_block}\n\n{agent_definition}"

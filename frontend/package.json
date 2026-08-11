@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@apmplus/web": "^2.10.1",
     "@codemirror/lang-javascript": "^6.2.5",
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lang-markdown": "^6.5.1",
@@ -21,7 +22,6 @@
     "@openai/apps-sdk-ui": "^0.2.2",
     "@uiw/react-codemirror": "^4.25.11",
     "@xyflow/react": "^12.11.0",
-    "embla-carousel-react": "^8.6.0",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.460.0",
     "motion": "^11.18.2",

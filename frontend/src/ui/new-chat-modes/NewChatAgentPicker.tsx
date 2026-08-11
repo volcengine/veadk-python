@@ -385,7 +385,6 @@ export function NewChatAgentPicker({
           }
         }}
       >
-        <AgentFaceIcon className="new-chat-agent-picker__trigger-icon" />
         <span title={selectedAgentName || "选择智能体"}>
           {selectedAgentName || "选择智能体"}
         </span>

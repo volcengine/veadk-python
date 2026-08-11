@@ -35,6 +35,7 @@ from veadk.cli.generated_agent_codegen import (
     AgentDraft,
     DeploymentConfig,
     GeneratedProject,
+    McpTool,
     MemoryConfig,
     debug_runtime_env_from_draft,
     generate_project_from_draft,
@@ -82,6 +83,7 @@ EXPECTED_KB_EXTRAS = {
     "opensearch": {"extensions"},
     "viking": set(),
     "context_search": set(),
+    "openviking": set(),
 }
 
 
@@ -183,6 +185,25 @@ def test_debug_runtime_forwards_active_tracing_env_and_enable_flag(
     }
 
 
+def test_debug_runtime_materializes_mcp_token_env_without_mutating_draft() -> None:
+    draft = AgentDraft(
+        name="debug-agent",
+        mcpTools=[
+            McpTool(
+                name="orders",
+                transport="http",
+                url="https://mcp.example.com/mcp",
+                authToken="debug-secret",
+            )
+        ],
+    )
+
+    assert debug_runtime_env_from_draft(draft) == {
+        "MCP_DEBUG_AGENT_ORDERS_AUTH_TOKEN": "debug-secret"
+    }
+    assert draft.mcpTools[0].authToken == "debug-secret"
+
+
 def test_debug_runtime_materializes_nested_a2a_registry_defaults() -> None:
     draft = AgentDraft(
         name="debug-a2a-env",
@@ -245,6 +266,35 @@ def test_managed_components_keep_only_component_specific_env() -> None:
     assert "TOOL_VESPEECH_API_KEY" not in env_keys
     assert "TOOL_VESEARCH_API_KEY" not in env_keys
     assert "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY" not in env_keys
+
+
+def test_byteplus_generated_project_uses_byteplus_modelark_defaults() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="byteplus-agent",
+            cloudProvider="byteplus",
+            knowledgebase=True,
+            knowledgebaseBackend="opensearch",
+            builtinTools=["image_generate", "image_edit", "video_generate"],
+        )
+    )
+    env_example = _files(project)[".env.example"]
+
+    assert "MODEL_AGENT_NAME=seed-2-0-lite-260228" in env_example
+    assert (
+        "MODEL_AGENT_API_BASE=https://ark.ap-southeast.bytepluses.com/api/v3"
+        in env_example
+    )
+    assert "MODEL_EMBEDDING_NAME=skylark-embedding-vision-250615" in env_example
+    assert (
+        "MODEL_EMBEDDING_API_BASE=https://ark.ap-southeast.bytepluses.com/api/v3"
+        in env_example
+    )
+    assert "MODEL_IMAGE_NAME=dola-seedream-5-0-pro-260628" in env_example
+    assert "MODEL_EDIT_NAME=seededit-3-0-i2i-250628" in env_example
+    assert "MODEL_VIDEO_NAME=dreamina-seedance-2-0-260128" in env_example
+    assert "ark.cn-beijing.volces.com" not in env_example
+    assert "doubao-" not in env_example
 
 
 def test_run_code_generates_tool_import_and_sandbox_env() -> None:
@@ -390,6 +440,28 @@ def test_viking_knowledgebase_uses_selected_index() -> None:
     agent_py = _files(project)["agents/kb_viking/agent.py"]
 
     assert 'KnowledgeBase(backend="viking", index="existing_kb"' in agent_py
+    _assert_python_files_compile(project)
+
+
+def test_openviking_knowledgebase_generates_required_runtime_env() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="kb-openviking",
+            knowledgebase=True,
+            knowledgebaseBackend="openviking",
+            knowledgebaseIndex="company_faq",
+        )
+    )
+    files = _files(project)
+    agent_py = files["agents/kb_openviking/agent.py"]
+
+    assert 'KnowledgeBase(backend="openviking", index="company_faq"' in agent_py
+    assert _env_keys(files[".env.example"]) == _catalog_env_keys(
+        MODEL_ENV,
+        next(item.env for item in KB_BACKENDS if item.id == "openviking"),
+    )
+    assert "DATABASE_OPENVIKING_TARGET_URI=\n" in files[".env.example"]
+    assert files["requirements.txt"].splitlines()[0] == _veadk_requirement(set())
     _assert_python_files_compile(project)
 
 

@@ -16,9 +16,16 @@ import {
   type ManagedRuntime,
   type RuntimeDetail,
 } from "../adk/client";
+import {
+  cloudRegionOptions,
+  defaultCloudRegion,
+  formatCloudRegion,
+  type CloudProvider,
+} from "../adk/cloudProvider";
 import "./ManageAgents.css";
 
 export interface ManageAgentsViewProps {
+  cloudProvider: CloudProvider;
   /** Runtime currently connected through the global Agent selector. */
   currentRuntimeId?: string;
   /** Connect a managed Runtime and switch the global Agent selector to it. */
@@ -37,6 +44,7 @@ interface DetailState {
 
 /** Lists the AgentKit runtimes the server authorizes this user to manage. */
 export function ManageAgentsView({
+  cloudProvider,
   currentRuntimeId,
   onConnect,
 }: ManageAgentsViewProps) {
@@ -47,8 +55,16 @@ export function ManageAgentsView({
   const [connecting, setConnecting] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, DetailState>>({});
-  const [regionFilter, setRegionFilter] = useState<string>("cn-beijing");
+  const regionOptions = cloudRegionOptions(cloudProvider);
+  const [regionFilter, setRegionFilter] = useState<string>(
+    defaultCloudRegion(cloudProvider),
+  );
   const [regionMenuOpen, setRegionMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (regionOptions.some((region) => region.value === regionFilter)) return;
+    setRegionFilter(defaultCloudRegion(cloudProvider));
+  }, [cloudProvider, regionFilter, regionOptions]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -157,7 +173,7 @@ export function ManageAgentsView({
               aria-haspopup="listbox"
               aria-expanded={regionMenuOpen}
             >
-              <span>{regionFilter === "cn-beijing" ? "北京" : "上海"}</span>
+              <span>{formatCloudRegion(regionFilter, cloudProvider)}</span>
               <ChevronDown
                 className={`manage-region-chevron${regionMenuOpen ? " is-open" : ""}`}
               />
@@ -169,10 +185,7 @@ export function ManageAgentsView({
                   onClick={() => setRegionMenuOpen(false)}
                 />
                 <div className="manage-region-menu" role="listbox" aria-label="区域">
-                  {[
-                    { value: "cn-beijing", label: "北京" },
-                    { value: "cn-shanghai", label: "上海" },
-                  ].map((region) => {
+                  {regionOptions.map((region) => {
                     const selected = region.value === regionFilter;
                     return (
                       <button

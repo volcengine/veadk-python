@@ -26,14 +26,14 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
 - **Agent picker**: switch agents from the top-left; long lists scroll within
   the viewport, and hovering an agent shows its model and mounted tools.
 - **Session history**: auto-saved, time-sorted, reopen or delete.
-- **Temporary session**: start an isolated temporary AgentKit Sandbox from the
-  new-chat composer. Studio reuses its dedicated CodeEnv tool,
-  creates a fresh user-owned Sandbox session, and runs multi-turn Codex chat
-  with live public reasoning summaries, commands, file changes, MCP calls, and
-  final replies.
-  Exiting deletes the cloud session without writing it to normal chat history;
-  after a reload, users can start another session and AgentKit reclaims the
-  abandoned session automatically when its TTL ends.
+- **Sandbox agents**: Codex, OpenClaw, and Hermes creation defaults to a checked
+  persistence option backed by the matching snapshot Tool. Clearing it creates
+  an eight-hour transient Session and shows a yellow expiry warning. Codex uses
+  the standard Codex App Server for multi-turn chat with live public reasoning
+  summaries, commands, file changes, MCP calls, and final replies. The sidebar
+  lists Codex threads and supports switching and removal. Exiting
+  only disconnects the browser; the cloud Session remains until explicit
+  deletion or expiry.
 - **Smart search**: the *Session* source full-text-searches the current agent's history; the *Web* source calls the agent's mounted web-search tool live (using credentials from the server's environment variables).
 - **Message feedback**: when connected to a cloud AgentKit Runtime, the
   like/dislike controls below each answer write the question, answer, and
@@ -187,78 +187,36 @@ After selecting a sub-agent, the `/` menu shows skills mounted on that target. C
 
 The frontend sends structured `veadkInvocation` metadata instead of inferring invocation intent from the message string. The backend plugin directs ADK to call the skill tool or invoke `transfer_to_agent` one tree edge at a time until it reaches the target. The same metadata is written to the first Google GenAI `Part`, so reopening session history restores the `/skill` and `@agent` chips.
 
-### Skill creation mode
+### Skill Center
 
-The new-chat **Skill creation** mode runs
-`doubao-seed-2-0-pro-260215` and `deepseek-v4-flash-260425` in parallel through
-Ark Responses. Each candidate gets an independent AgentKit CodeEnv session.
-The server validates the generated directory name, `SKILL.md` frontmatter,
-file count, size, and safe paths before packaging a ZIP. AgentKit credential
-configuration resolves the Ark API key with the deployer's AK/SK and writes it
-directly to each dedicated CodeEnv Tool. Per-job Session variables cannot
-override the Tool's model credential. Model credentials are never returned to
-the browser, and the Skill creation APIs require the Studio developer or admin
-role.
+Studio developers and admins create and optimize Skills from the Skill Center.
+Each candidate runs in an isolated DevEnv session on the shared Dev Sandbox
+Tool, streams public activity, and validates the generated files. Valid results
+can be previewed, downloaded, or published to AgentKit. Model credentials remain
+on the Tool and are never returned to the browser.
 
-After submission, both candidate conversations appear immediately and
-independently render public reasoning summaries, tool calls, and assistant
-messages returned by the generator. Private chain-of-thought and credentials
-never enter the page. Completed candidates still support preview, ZIP download,
-and AgentKit publishing. Once the real job ID is available, the frontend resumes
-polling directly from Sandbox state. An interrupted creation stream or a brief
-AgentKit control-plane delay no longer turns an intermediate state into an
-expired job.
-
-Before starting a local server, configure separate `Ready` AgentKit Tools for
-Codex, OpenClaw, Hermes, and Skill creation:
+Local Studio reads the DevEnv Tool ID from `SANDBOX_DEV`:
 
 ```bash
-export SANDBOX_CHAT_CODEX=<chat-code-env-tool-id>
-export SANDBOX_CHAT_OPENCLAW=<openclaw-env-tool-id>
-export SANDBOX_CHAT_HERMES=<hermes-env-tool-id>
-export SANDBOX_SKILL_CREATOR=<skill-code-env-tool-id>
-veadk frontend --agents-dir examples
+export SANDBOX_DEV=<dev-env-tool-id>
+veadk studio --agents-dir examples
 ```
 
-For local Studio, configure the Ark model variables on both dedicated CodeEnv
-Tools. Adding a candidate to AgentKit uploads its ZIP to TOS, then creates or
-updates the Skill through the Skills API. It is published to a SkillSpace only
-when the user provides SkillSpace IDs.
+Each task has a one-hour DevEnv session. Leaving a running task stops and
+releases that session; task state remains in Sandbox so polling can continue
+across frontend instances.
 
-| Environment variable | Default | Description |
-| :-- | :-- | :-- |
-| `SANDBOX_CHAT_CODEX` | — | AgentKit CodeEnv Tool ID dedicated to temporary chats. |
-| `SANDBOX_CHAT_OPENCLAW` | — | AgentKit ArkClawEnv Tool ID used by OpenClaw agents. |
-| `SANDBOX_CHAT_HERMES` | — | AgentKit HermesEnv Tool ID used by Hermes agents. |
-| `SANDBOX_SKILL_CREATOR` | — | AgentKit CodeEnv Tool ID dedicated to Skill creation. |
-| `VEADK_SKILL_CREATOR_TOS_BUCKET` | AgentKit account default | TOS bucket used for published artifacts. |
-| `VEADK_SKILL_CREATOR_TOS_PREFIX` | `agentkit/skills` | TOS object-key prefix. |
-| `VEADK_SKILL_CREATOR_PROJECT_NAME` | — | Project name used when creating a Skill. |
-
-Candidate sessions have a 30-minute TTL and are deleted immediately when the
-user starts over or leaves the job. Job state is stored in Sandbox rather than
-frontend-process memory, so polling and downloads continue to work when FaaS
-requests reach different instances.
-
-On the first cloud deployment, the command creates two independent CodeEnv
-Tools in parallel with the deployer's AK/SK when Tool IDs are omitted. Existing
-Tools can be selected with `--sandbox-chat-codex-tool-id` and
-`--sandbox-skill-creator-tool-id`. The Ark credential is resolved with the
-deployer's AK/SK and written directly to both Tools as model environment
-variables. Sandbox sessions inherit those Tool variables. The browser and
-VeFaaS Function receive only Tool IDs, never model credentials.
-
-If Tool or model-credential provisioning fails, the CLI prints the underlying
-error verbatim, including its original line breaks, after redacting credential
-values. Use the service action, error code, request ID, and request details to
-identify the missing permission or account resource.
+A cloud deployment creates the Dev Sandbox when no Tool ID is
+provided, or uses an existing Tool selected with `--sandbox-dev-tool-id`.
 
 ```bash
 veadk studio deploy \
-  --user-pool-id <pool-id> \
-  --allowed-client-id <client-id> \
   --vefaas-app-name <app-name>
 ```
+
+When `--user-pool-id` and `--allowed-client-id` are omitted, the deploy command
+creates or reuses a named user pool and Client in the selected `--region`, then
+prints their IDs. Pass both options to keep using existing resources.
 
 Deployment credentials can be supplied explicitly with
 `--volcengine-access-key` / `--volcengine-secret-key`, through the current
@@ -271,7 +229,7 @@ other sources are absent.
 Use `--site-title` for a system name of up to six characters and `--site-logo`
 for a local image or HTTP(S) image URL. The logo is used in the sidebar, login
 page, and browser favicon; the system name also becomes the browser page title.
-Omitting `--site-title` keeps the default `VeADK Studio` name; the six-character
+Omitting `--site-title` keeps the default `AgentKit Studio` name; the six-character
 limit applies only to custom names.
 
 ```bash
@@ -323,22 +281,24 @@ otherwise the current values are retained. Use `--path` to select a source
 checkout; it defaults to the current directory. Node.js and npm must be
 installed locally.
 `--sandbox-chat-codex-tool-id`, `--sandbox-chat-openclaw-tool-id`,
-`--sandbox-chat-hermes-tool-id`, and `--sandbox-skill-creator-tool-id` likewise
-replace only the explicitly supplied environment value. Omitting an option
-keeps that Tool ID from the deployed Function instead of clearing it.
+`--sandbox-chat-hermes-tool-id`, the three matching
+`--sandbox-chat-*-snapshot-tool-id` options, and `--sandbox-dev-tool-id`
+replace only explicitly supplied environment values. Deployment creates the
+three transient/snapshot Sandbox Tool pairs when IDs are omitted; snapshot Tool
+names end in `_snapshot`. Update preserves omitted Tool IDs and automatically
+repairs missing snapshot Tools.
 
 ### One-click Studio updates
 
-Configure a release channel during deployment:
+Studio reads new releases from the centrally maintained `veadk-studio` TOS
+source in `cn-beijing`; no release-region configuration is required for customer
+deployments. Administrators can update Studio directly from the navbar:
 
 ```bash
 veadk studio deploy \
   --user-pool-id <pool-id> \
   --allowed-client-id <client-id> \
-  --vefaas-app-name <app-name> \
-  --studio-update-bucket <tos-bucket> \
-  --studio-update-region cn-beijing \
-  --studio-update-prefix veadk/studio/main
+  --vefaas-app-name <app-name>
 ```
 
 Studio reads `latest.json` every three minutes. Administrators can inspect each

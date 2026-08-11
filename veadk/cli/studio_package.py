@@ -16,18 +16,49 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from veadk.cli.studio_dependencies import stage_studio_dependency_wheels
+from veadk.cli.studio_telemetry import (
+    normalize_studio_apmplus_release_environment,
+    studio_apmplus_release_environment_from_env,
+)
 from veadk.cli.frontend_branding import SiteLogo
+from veadk.utils.cloud_provider import DEFAULT_CLOUD_PROVIDER, CloudProvider
+
+STUDIO_RELEASE_ENVIRONMENT_FILENAME = ".studio-release-environment.json"
 
 
-def studio_run_script(site_logo_filename: str | None = None) -> str:
+def stage_studio_provider_requirements(
+    package_dir: Path,
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+) -> str:
+    """Stage provider-specific wheels and return their requirements lines."""
+    if provider != "byteplus":
+        return ""
+    dependencies = stage_studio_dependency_wheels(package_dir, provider=provider)
+    return "".join(f"./{path.name}\n" for path in dependencies)
+
+
+def studio_run_script(
+    site_logo_filename: str | None = None,
+    *,
+    provider: CloudProvider | None = DEFAULT_CLOUD_PROVIDER,
+) -> str:
     """Return the authenticated VeFaaS entrypoint used by Studio."""
-    command = "exec python3 -m veadk.cli.cli studio --auth-mode frontend"
+    provider_argument = (
+        provider
+        if provider is not None
+        else '"${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}"'
+    )
+    command = (
+        "exec python3 -m veadk.cli.cli studio "
+        f"--provider {provider_argument} --auth-mode frontend"
+    )
     if site_logo_filename:
         command += f' --site-logo "$ROOT_DIR/{site_logo_filename}"'
     command += ' --host "$HOST" --port "$PORT"\n'
@@ -71,6 +102,8 @@ def write_studio_package(
     *,
     requirements: str,
     site_logo: SiteLogo | None,
+    release_environment: dict[str, str] | None = None,
+    provider: CloudProvider | None = DEFAULT_CLOUD_PROVIDER,
 ) -> None:
     """Write the Studio entrypoint, requirements, and optional logo."""
     package_dir.mkdir(parents=True, exist_ok=True)
@@ -78,11 +111,43 @@ def write_studio_package(
         f"site-logo.{site_logo.extension}" if site_logo is not None else None
     )
     (package_dir / "run.sh").write_text(
-        studio_run_script(logo_filename), encoding="utf-8"
+        studio_run_script(logo_filename, provider=provider), encoding="utf-8"
     )
     if site_logo is not None and logo_filename is not None:
         (package_dir / logo_filename).write_bytes(site_logo.content)
     (package_dir / "requirements.txt").write_text(requirements, encoding="utf-8")
+    environment = normalize_studio_apmplus_release_environment(
+        release_environment or {}
+    )
+    if environment:
+        (package_dir / STUDIO_RELEASE_ENVIRONMENT_FILENAME).write_text(
+            json.dumps(environment, ensure_ascii=True, sort_keys=True),
+            encoding="utf-8",
+        )
+
+
+def studio_release_environment_from_env() -> dict[str, str]:
+    """Return release-time Studio environment defaults from the publisher env."""
+    return studio_apmplus_release_environment_from_env()
+
+
+def read_studio_release_environment(
+    package_dir: Path,
+    *,
+    remove: bool = False,
+) -> dict[str, str]:
+    """Read release-time Studio environment defaults from an extracted bundle."""
+    path = package_dir / STUDIO_RELEASE_ENVIRONMENT_FILENAME
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError("Studio release environment is not valid JSON.") from error
+    environment = normalize_studio_apmplus_release_environment(payload)
+    if remove:
+        path.unlink(missing_ok=True)
+    return environment
 
 
 def build_local_studio_requirements(
@@ -91,6 +156,7 @@ def build_local_studio_requirements(
     *,
     frontend_assets: Path | None = None,
     dependency_wheels: Path | None = None,
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
 ) -> str:
     """Build a local VeADK wheel and return its offline requirements."""
     _validate_source_checkout(source_root)
@@ -126,13 +192,15 @@ def build_local_studio_requirements(
     dependencies = stage_studio_dependency_wheels(
         package_dir,
         source_dir=dependency_wheels,
+        provider=provider,
     )
 
     shutil.rmtree(package_dir / "wheel-source", ignore_errors=True)
-    return "".join(
+    requirements = "".join(
         f"./{name}\n"
         for name in (*(path.name for path in dependencies), wheels[0].name)
     )
+    return requirements
 
 
 def _validate_source_checkout(source_root: Path) -> None:
@@ -171,5 +239,13 @@ def _stage_wheel_source(
         source_root / "veadk",
         wheel_source / "veadk",
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "webui"),
+    )
+    frontend_package = wheel_source / "frontend"
+    frontend_package.mkdir()
+    shutil.copy2(source_root / "frontend" / "__init__.py", frontend_package)
+    shutil.copytree(
+        source_root / "frontend" / "server",
+        frontend_package / "server",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
     shutil.copytree(frontend_assets, wheel_source / "veadk" / "webui")

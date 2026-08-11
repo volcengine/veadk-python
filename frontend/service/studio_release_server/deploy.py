@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 import veadk.config
+from veadk.cli.studio_release import STUDIO_RELEASE_REGION
 from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 
 _APPLICATION_NAME = "veadk-studio-release-server"
@@ -42,7 +43,7 @@ _GATEWAY_UPSTREAM_NAME = "veadk-studio-release-server"
 _GATEWAY_ROUTE_NAME = "veadk-studio-release-server"
 _GATEWAY_TIMEOUT_MILLISECONDS = 30 * 60 * 1000
 _BUCKET = "veadk-studio"
-_REGION = "cn-beijing"
+_REGION = STUDIO_RELEASE_REGION
 _RELEASE_PREFIX = "veadk/studio/main"
 _JOB_PREFIX = "veadk/studio/release-server/jobs"
 _REPOSITORY = "volcengine/veadk-python"
@@ -123,7 +124,7 @@ def _ensure_runtime_role(access_key: str, secret_key: str) -> str:
                     {
                         "PolicyName": _POLICY_NAME,
                         "PolicyDocument": policy_document,
-                        "Description": "Publish VeADK Studio releases to TOS",
+                        "Description": "Publish AgentKit Studio releases to TOS",
                     }
                 )
             )
@@ -140,7 +141,7 @@ def _ensure_runtime_role(access_key: str, secret_key: str) -> str:
                 {
                     "RoleName": _ROLE_NAME,
                     "TrustPolicyDocument": json.dumps(_TRUST_POLICY),
-                    "Description": "VeADK Studio release server runtime role",
+                    "Description": "AgentKit Studio release server runtime role",
                 }
             )
         )
@@ -273,10 +274,19 @@ def _find_named(items: list[Any], name: str) -> Any | None:
 def _find_function_id(service: Any) -> str:
     from volcenginesdkvefaas import ListFunctionsRequest
 
-    response = service.client.list_functions(
-        ListFunctionsRequest(page_number=1, page_size=100)
-    )
-    function = _find_named(list(getattr(response, "items", []) or []), _FUNCTION_NAME)
+    page_number = 1
+    page_size = 100
+    functions: list[Any] = []
+    while True:
+        response = service.client.list_functions(
+            ListFunctionsRequest(page_number=page_number, page_size=page_size)
+        )
+        functions.extend(list(getattr(response, "items", []) or []))
+        total = int(getattr(response, "total", 0) or 0)
+        if page_number * page_size >= total:
+            break
+        page_number += 1
+    function = _find_named(functions, _FUNCTION_NAME)
     return str(getattr(function, "id", "") or "")
 
 

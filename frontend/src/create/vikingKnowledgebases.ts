@@ -1,5 +1,5 @@
 // VikingDB KnowledgeBase client. The browser calls /web/viking-knowledgebases;
-// the server signs requests with server-side Volcengine credentials.
+// the server signs requests with server-side cloud credentials.
 
 import { DEFAULT_REQUEST_TIMEOUT_MS, requestSignal } from "../adk/timeout";
 
@@ -9,8 +9,16 @@ export interface VikingKnowledgebaseRef {
   description: string;
   projectName: string;
   region: string;
+  sourceKind?: "agentkit" | "knowledge" | "vector";
+  sourceLabel?: string;
   docCount?: number | null;
+  indexCount?: number | null;
   updatedAt?: string;
+  resourceId?: string;
+  agentkitKnowledgeId?: string;
+  providerKnowledgeId?: string;
+  providerType?: string;
+  status?: string;
 }
 
 export interface VikingKnowledgebasePage {
@@ -29,7 +37,7 @@ async function jfetch<T>(url: string): Promise<T> {
     signal: requestSignal(undefined, DEFAULT_REQUEST_TIMEOUT_MS),
   });
   if (res.status === 409) {
-    throw new Error("服务端未配置 Volcengine AK/SK，无法访问 VikingDB 知识库");
+    throw new Error("服务端未配置云厂商 AK/SK，无法访问 VikingDB 知识库");
   }
   if (res.status === 401) {
     throw new Error("请先登录以访问 VikingDB 知识库");
@@ -50,12 +58,12 @@ async function jfetch<T>(url: string): Promise<T> {
 export async function listVikingKnowledgebases(
   options: ListVikingKnowledgebasesOptions = {},
 ): Promise<VikingKnowledgebaseRef[]> {
-  const params = new URLSearchParams({
-    region: options.region || "cn-beijing",
-    project: options.project || "default",
-  });
+  const params = new URLSearchParams();
+  if (options.project) params.set("project", options.project);
+  if (options.region) params.set("region", options.region);
+  const query = params.toString();
   const data = await jfetch<VikingKnowledgebasePage>(
-    `/web/viking-knowledgebases?${params.toString()}`,
+    `/web/viking-knowledgebases${query ? `?${query}` : ""}`,
   );
   return data.items || [];
 }

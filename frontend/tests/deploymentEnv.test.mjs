@@ -331,6 +331,75 @@ test("declares the OpenViking long-term memory runtime configuration", () => {
   assert.match(projectPreviewStyles, /\.pp-env-help:hover \.pp-env-help-popover/);
 });
 
+test("declares the OpenViking knowledge runtime configuration", () => {
+  const openviking = KB_BACKENDS.find((option) => option.id === "openviking");
+
+  assert.ok(openviking);
+  assert.equal(openviking.label, "OpenViking Knowledge");
+  assert.equal(openviking.pipExtra, undefined);
+  assert.deepEqual(
+    openviking.env.map((env) => [env.key, env.required, env.placeholder ?? ""]),
+    [
+      [
+        "DATABASE_OPENVIKING_URL",
+        true,
+        "https://api.vikingdb.cn-beijing.volces.com/openviking",
+      ],
+      ["DATABASE_OPENVIKING_API_KEY", true, ""],
+      ["DATABASE_OPENVIKING_USER_ID", false, "default"],
+      [
+        "DATABASE_OPENVIKING_TARGET_URI",
+        false,
+        "viking://user/default/resources/<index>/",
+      ],
+    ],
+  );
+  assert.match(
+    openviking.env.find((env) => env.key === "DATABASE_OPENVIKING_USER_ID")
+      ?.help ?? "",
+    /viking:\/\/user\/<此值>\/resources\/<知识库索引>\//,
+  );
+  assert.match(
+    openviking.env.find((env) => env.key === "DATABASE_OPENVIKING_TARGET_URI")
+      ?.help ?? "",
+    /KnowledgeBase index/,
+  );
+  assert.equal(
+    firstMissingRuntimeEnv(openviking.env, {
+      DATABASE_OPENVIKING_URL: "https://openviking.local",
+    })?.key,
+    "DATABASE_OPENVIKING_API_KEY",
+  );
+  assert.deepEqual(
+    runtimeEnvVars(openviking.env, {
+      DATABASE_OPENVIKING_URL: "https://openviking.local",
+      DATABASE_OPENVIKING_API_KEY: "test-api-key",
+      DATABASE_OPENVIKING_TARGET_URI: "viking://user/team/resources/faq/",
+    }),
+    [
+      {
+        key: "DATABASE_OPENVIKING_URL",
+        value: "https://openviking.local",
+      },
+      { key: "DATABASE_OPENVIKING_API_KEY", value: "test-api-key" },
+      {
+        key: "DATABASE_OPENVIKING_TARGET_URI",
+        value: "viking://user/team/resources/faq/",
+      },
+    ],
+  );
+  assert.match(customCreateSource, /OpenViking 资源索引/);
+  assert.match(customCreateSource, /id === "viking" \|\| id === "openviking"/);
+  assert.match(
+    customCreateSource,
+    /item\.key === "DATABASE_OPENVIKING_USER_ID"[\s\S]*<OpenVikingKnowledgeIndexField/,
+  );
+  assert.match(
+    customCreateSource,
+    /默认值：留空[\s\S]*viking:\/\/user\/\{知识库归属 ID，未填则 default\}\/resources\/\{资源索引\}\//,
+  );
+});
+
 test("does not request auto-resolved credentials per component", () => {
   const envKeys = [
     ...BUILTIN_TOOLS,
@@ -399,10 +468,30 @@ test("keeps the generated project stable when only deployment channel settings c
   assert.doesNotMatch(customCreateSource, /buildPreviewProject/);
   assert.match(
     customCreateSource,
-    /generateAgentProject\(codegenDraft\(releaseDraft\)\)/,
+    /const releaseDraft = releaseVariant[\s\S]*?\.\.\.providerDraft[\s\S]*?generateAgentProject\(codegenDraft\(releaseDraft\)\)/,
   );
   assert.match(projectPreviewSource, /await onFeishuEnabledChange\(!feishuEnabled\)/);
   assert.match(projectPreviewSource, /deploying \|\| feishuUpdating/);
+});
+
+test("normalizes generated project drafts to the selected cloud provider", () => {
+  assert.match(customCreateSource, /function draftForCloudProvider/);
+  assert.match(
+    customCreateSource,
+    /setDraft\(\(current\) => draftForCloudProvider\(current, cloudProvider\)\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /const providerDraft = useMemo\([\s\S]*?draftForCloudProvider\(draft, cloudProvider\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /return nextProvider === "byteplus" && trimmed\.includes\("doubao-"\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /const variantDraft: AgentDraft = \{[\s\S]*?\.\.\.providerDraft[\s\S]*?debugRuntimeDraft\(variantDraft\)/,
+  );
 });
 
 test("uses concise placeholders for agent names and custom environment variables", () => {
@@ -422,7 +511,10 @@ test("collects non-automatic built-in tool settings for deployment", () => {
     customCreateSource,
     /BUILTIN_TOOLS\.find\(\(item\) => item\.id === toolId\)/,
   );
-  assert.match(customCreateSource, /selections\.push\(\{ env: tool\.env \}\)/);
+  assert.match(
+    customCreateSource,
+    /selections\.push\(\{ env: providerRuntimeEnv\(tool\.env, cloudProvider\) \}\)/,
+  );
 });
 
 test("materializes A2A registry defaults for deployment env", () => {
@@ -458,7 +550,7 @@ test("materializes A2A registry defaults for deployment env", () => {
   );
   assert.match(
     customCreateSource,
-    /deploymentEnvValues=\{\{[\s\S]*?\.\.\.draft\.deployment\?\.envValues,[\s\S]*?\.\.\.deploymentEnv\.fixedValues,/,
+    /deploymentEnvValues=\{\{[\s\S]*?\.\.\.providerDraft\.deployment\?\.envValues,[\s\S]*?\.\.\.deploymentEnv\.fixedValues,/,
   );
 });
 

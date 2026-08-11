@@ -1,3 +1,4 @@
+import { codingAgentsAutomation } from "./codingAgents";
 import { feishuBotAutomation } from "./feishuBot";
 import { pullRequestReviewAutomation } from "./pullRequestReview";
 import { runtimeDeliveryAutomation } from "./runtimeDelivery";
@@ -18,6 +19,7 @@ export const AUTOMATION_CATEGORIES: readonly {
 ];
 
 export const AUTOMATIONS: readonly AutomationDefinition[] = [
+  codingAgentsAutomation,
   templateProjectAutomation,
   runtimeDeliveryAutomation,
   pullRequestReviewAutomation,

@@ -17,11 +17,14 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
 import hashlib
 import json
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+
+from veadk.utils.cloud_provider import DEFAULT_CLOUD_PROVIDER, CloudProvider
 
 _PYPI_FILE_HOST = "https://files.pythonhosted.org"
 _PYPI_MIRROR_HOSTS = (
@@ -81,16 +84,39 @@ STUDIO_DEPENDENCY_WHEELS = (
     ),
 )
 
+BYTEPLUS_STUDIO_DEPENDENCY_WHEELS = (
+    StudioDependencyWheel(
+        filename="pydantic-2.12.5-py3-none-any.whl",
+        url=(
+            "https://files.pythonhosted.org/packages/5a/87/"
+            "b70ad306ebb6f9b585f114d0ac2137d792b48be34d732d60e597c2f8465a/"
+            "pydantic-2.12.5-py3-none-any.whl"
+        ),
+        sha256="e561593fccf61e8a20fc46dfc2dfe075b8be7d0188df33f221ad1f0139180f9d",
+    ),
+)
+
+
+def studio_dependency_wheels(
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+) -> tuple[StudioDependencyWheel, ...]:
+    """Return the dependency wheels to bundle for a Studio provider."""
+    if provider == "byteplus":
+        return STUDIO_DEPENDENCY_WHEELS + BYTEPLUS_STUDIO_DEPENDENCY_WHEELS
+    return STUDIO_DEPENDENCY_WHEELS
+
 
 def stage_studio_dependency_wheels(
     destination: Path,
     *,
     source_dir: Path | None = None,
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+    extra_wheels: Iterable[StudioDependencyWheel] = (),
 ) -> tuple[Path, ...]:
     """Copy or download pinned wheels after verifying every checksum."""
     destination.mkdir(parents=True, exist_ok=True)
     staged: list[Path] = []
-    for dependency in STUDIO_DEPENDENCY_WHEELS:
+    for dependency in studio_dependency_wheels(provider) + tuple(extra_wheels):
         if source_dir is None:
             content = _download_dependency(dependency)
         else:
@@ -139,7 +165,7 @@ def write_studio_dependency_manifest(destination: Path) -> None:
                 "url": dependency.url,
                 "sha256": dependency.sha256,
             }
-            for dependency in STUDIO_DEPENDENCY_WHEELS
+            for dependency in studio_dependency_wheels("byteplus")
         ]
     }
     destination.write_text(
@@ -178,8 +204,10 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "BYTEPLUS_STUDIO_DEPENDENCY_WHEELS",
     "STUDIO_DEPENDENCY_WHEELS",
     "StudioDependencyWheel",
     "stage_studio_dependency_wheels",
+    "studio_dependency_wheels",
     "write_studio_dependency_manifest",
 ]

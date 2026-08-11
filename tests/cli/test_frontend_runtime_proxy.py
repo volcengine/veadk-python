@@ -19,7 +19,7 @@ import json
 from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 import pytest
@@ -29,9 +29,10 @@ from fastapi.testclient import TestClient
 from veadk.cli.cli_frontend import (
     _build_agentkit_proxy_headers,
     _frontend_allow_origins,
-    _runtime_regions,
     _run_frontend_server,
+    _runtime_regions,
 )
+from veadk.consts import STUDIO_APMPLUS_DOMAIN, STUDIO_APMPLUS_ENV
 
 
 def _create_frontend_app(
@@ -41,6 +42,7 @@ def _create_frontend_app(
     site_logo: str | None = None,
     site_title: str | None = None,
     studio: bool = False,
+    provider: str = "volcengine",
 ) -> FastAPI:
     captured: dict[str, Any] = {}
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
@@ -70,6 +72,7 @@ def _create_frontend_app(
         auth_mode="frontend",
         generated_agent_test_run_ttl=60,
         open_browser=False,
+        provider=provider,  # type: ignore[arg-type]
         studio=studio,
     )
     return captured["app"]
@@ -114,6 +117,123 @@ def test_runtime_regions_use_byteplus_default_region(
     assert _runtime_regions("byteplus", "all") == ["ap-southeast-2"]
 
 
+def test_byteplus_runtime_list_uses_vefaas_iam_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path, provider="byteplus")
+    monkeypatch.delenv("BYTEPLUS_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SESSION_TOKEN", raising=False)
+    monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-1")
+    calls: list[tuple[str, str, str, str]] = []
+
+    import builtins
+
+    real_open = builtins.open
+
+    def _fake_open(path: object, *args: object, **kwargs: object):
+        if path == "/var/run/secrets/iam/credential":
+            return real_open(
+                tmp_path / "iam-credential.json",
+                *args,
+                **kwargs,
+            )
+        return real_open(path, *args, **kwargs)
+
+    (tmp_path / "iam-credential.json").write_text(
+        json.dumps(
+            {
+                "access_key_id": "iam-ak",
+                "secret_access_key": "iam-sk",
+                "session_token": "iam-token",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(builtins, "open", _fake_open)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            calls.append(
+                (
+                    kwargs["access_key"],
+                    kwargs["secret_key"],
+                    kwargs["session_token"],
+                    kwargs["region"],
+                )
+            )
+
+        def list_runtimes(self, _request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                agent_kit_runtimes=[
+                    SimpleNamespace(
+                        name="runtime-bp",
+                        runtime_id="runtime-bp-id",
+                        status="Ready",
+                        created_at="2026-08-06T10:00:00Z",
+                        tags=[],
+                    )
+                ],
+                next_token="",
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtimes",
+            params={"region": "all", "page_size": 1},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["runtimes"][0]["name"] == "runtime-bp"
+    assert calls == [("iam-ak", "iam-sk", "iam-token", "ap-southeast-1")]
+
+
+def test_byteplus_runtime_detail_coerces_volcengine_region(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path, provider="byteplus")
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "bp-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "bp-sk")
+    monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-1")
+    calls: list[str] = []
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            calls.append(kwargs["region"])
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                runtime_id=getattr(request, "runtime_id", ""),
+                name="runtime-bp",
+                status="Ready",
+                network_configurations=[],
+                envs=[],
+                tags=[],
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-detail",
+            params={"runtimeId": "runtime-bp-id", "region": "cn-shanghai"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["region"] == "ap-southeast-1"
+    assert calls == ["ap-southeast-1"]
+
+
 def test_ui_config_serves_custom_branding(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -144,6 +264,79 @@ def test_ui_config_serves_custom_branding(
     assert logo_response.status_code == 200
     assert logo_response.headers["content-type"].startswith("image/png")
     assert logo_response.content == logo
+
+
+def test_ui_config_serves_studio_telemetry_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("VEADK_STUDIO_APMPLUS_AID", "12345")
+    monkeypatch.setenv("VEADK_STUDIO_APMPLUS_TOKEN", "client-token")
+    monkeypatch.setenv("VEADK_STUDIO_APMPLUS_DOMAIN", "apmplus.example.com")
+    monkeypatch.setenv("VEADK_STUDIO_APMPLUS_ENV", "test")
+    monkeypatch.setenv("VEADK_STUDIO_DEPLOY_ID", "stddep_test")
+    monkeypatch.setenv("VEADK_STUDIO_USER_POOL_ID", "pool-id")
+    monkeypatch.setenv("VEADK_STUDIO_APPLICATION_ID", "app-id")
+    monkeypatch.setenv("VEADK_STUDIO_FUNCTION_ID", "func-id")
+    monkeypatch.setenv("VEADK_STUDIO_DEPLOY_REGION", "cn-beijing")
+    monkeypatch.setenv("VEADK_STUDIO_PROJECT", "studio-project")
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get("/web/ui-config")
+
+    assert response.status_code == 200
+    telemetry = response.json()["telemetry"]
+    assert telemetry["enabled"] is True
+    assert telemetry["provider"] == "apmplus"
+    assert telemetry["apmplus"] == {
+        "aid": 12345,
+        "token": "client-token",
+        "domain": "apmplus.example.com",
+        "env": "test",
+    }
+    assert telemetry["studio"]["deployId"] == "stddep_test"
+    assert telemetry["studio"]["userPoolId"] == "pool-id"
+    assert telemetry["studio"]["applicationId"] == "app-id"
+    assert telemetry["studio"]["functionId"] == "func-id"
+    assert telemetry["studio"]["region"] == "cn-beijing"
+    assert telemetry["studio"]["project"] == "studio-project"
+
+
+def test_ui_config_uses_fixed_studio_apmplus_domain_and_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("VEADK_STUDIO_APMPLUS_AID", "12345")
+    monkeypatch.setenv("VEADK_STUDIO_APMPLUS_TOKEN", "client-token")
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_DOMAIN", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_ENV", raising=False)
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get("/web/ui-config")
+
+    assert response.status_code == 200
+    assert response.json()["telemetry"]["apmplus"] == {
+        "aid": 12345,
+        "token": "client-token",
+        "domain": STUDIO_APMPLUS_DOMAIN,
+        "env": STUDIO_APMPLUS_ENV,
+    }
+
+
+def test_ui_config_disables_studio_telemetry_without_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_AID", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_TOKEN", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_DOMAIN", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_ENV", raising=False)
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get("/web/ui-config")
+
+    assert response.status_code == 200
+    assert response.json()["telemetry"] == {"enabled": False}
 
 
 def test_runtime_list_paginates_across_regions(
@@ -364,6 +557,95 @@ def test_runtime_list_surfaces_all_regional_failures(
     assert "cn-shanghai DNS lookup failed" in detail
 
 
+def test_viking_knowledgebases_include_agentkit_imported_bases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    requests: list[tuple[str, int]] = []
+
+    class _FakeKnowledgeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def list_knowledge_bases(self, request: Any) -> SimpleNamespace:
+            requests.append((request.next_token or "", request.max_results))
+            if not request.next_token:
+                return SimpleNamespace(
+                    knowledge_bases=[
+                        SimpleNamespace(
+                            name="vikingkl_we4191n",
+                            knowledge_id="kb-agentkit-we",
+                            provider_knowledge_id="kb-yef-example-we",
+                            provider_type="VIKINGDB_KNOWLEDGE",
+                            description="Imported from VikingDB",
+                            project_name="default",
+                            region=self.region,
+                            status="Ready",
+                            last_update_time="2026-02-10T12:45:32Z",
+                        )
+                    ],
+                    next_token="next-page",
+                )
+            return SimpleNamespace(
+                knowledge_bases=[
+                    SimpleNamespace(
+                        name="vikingkl_35idqf7",
+                        knowledge_id="kb-agentkit-35",
+                        provider_knowledge_id="kb-yef-example-35",
+                        provider_type="VIKINGDB_KNOWLEDGE",
+                        description="Second page",
+                        project_name="default",
+                        region=self.region,
+                        status="Ready",
+                        last_update_time="2026-02-10T14:33:09Z",
+                    )
+                ],
+                next_token="",
+            )
+
+    class _FakeKnowledgeService:
+        def __init__(self, **_: Any) -> None:
+            pass
+
+        def list_collections(self, **_: Any) -> list[Any]:
+            return []
+
+    class _FakeVikingDbApi:
+        def __init__(self, *_: Any, **__: Any) -> None:
+            pass
+
+        def list_vikingdb_collection(self, _request: Any) -> SimpleNamespace:
+            return SimpleNamespace(collections=[], total_count=0)
+
+    monkeypatch.setattr(
+        "agentkit.sdk.knowledge.client.AgentkitKnowledgeClient",
+        _FakeKnowledgeClient,
+    )
+    monkeypatch.setattr(
+        "volcengine.viking_knowledgebase.VikingKnowledgeBaseService",
+        _FakeKnowledgeService,
+    )
+    monkeypatch.setattr("volcenginesdkvikingdb.VIKINGDBApi", _FakeVikingDbApi)
+
+    with TestClient(app) as client:
+        response = client.get("/web/viking-knowledgebases")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert requests == [("", 100), ("next-page", 100)]
+    assert data["totalCount"] == 2
+    items = data["items"]
+    assert [item["name"] for item in items] == [
+        "vikingkl_35idqf7",
+        "vikingkl_we4191n",
+    ]
+    assert items[1]["id"] == "vikingkl_we4191n"
+    assert items[1]["resourceId"] == "kb-yef-example-we"
+    assert items[1]["agentkitKnowledgeId"] == "kb-agentkit-we"
+    assert items[1]["sourceKind"] == "agentkit"
+    assert items[1]["sourceLabel"] == "AgentKit Knowledge Base"
+
+
 @pytest.mark.parametrize(
     ("authorizer", "expected_authorization"),
     [
@@ -424,7 +706,7 @@ def test_runtime_proxy_uses_authorizer_credential(
 
     class _FakeUpstreamResponse:
         status_code = 200
-        headers = {"content-type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"content-type": "application/json"}
 
         async def aiter_raw(self):
             yield b'["demo_agent"]'
@@ -503,7 +785,7 @@ def test_runtime_proxy_accepts_post_delete_override(
 
     class _FakeUpstreamResponse:
         status_code = 200
-        headers = {"content-type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"content-type": "application/json"}
 
         async def aiter_raw(self):
             yield b"{}"
@@ -725,7 +1007,7 @@ def test_runtime_proxy_resolves_studio_media_before_forwarding(
 
     class _FakeUpstreamResponse:
         status_code = 200
-        headers = {"content-type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"content-type": "application/json"}
 
         async def aiter_raw(self):
             yield b"{}"
@@ -842,7 +1124,7 @@ def test_studio_runtime_proxy_only_schedules_successful_completed_sse(
         def session_completed(self, activity: Any) -> None:
             self.completed.append(activity)
 
-        def get_optimizations(self, runtime_id: str, app_name: str) -> None:
+        async def get_optimizations(self, runtime_id: str, app_name: str) -> None:
             del runtime_id, app_name
 
         async def close(self) -> None:

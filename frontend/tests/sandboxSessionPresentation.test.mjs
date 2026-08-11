@@ -91,13 +91,49 @@ test("sandbox launch dialog covers confirmation loading failure and retry", () =
   assert.match(dialogSource, /确认创建/);
   assert.match(dialogSource, /nativeEvent\.isComposing/);
   assert.match(dialogSource, /if \(event\.key === "Escape"/);
+  assert.match(dialogSource, /const \[persistent, setPersistent\] = useState\(true\)/);
+  assert.match(dialogSource, /setPersistent\(true\)/);
+  assert.match(
+    dialogSource,
+    /@openai\/apps-sdk-ui\/components\/Checkbox/,
+  );
+  assert.match(
+    dialogSource,
+    /<Checkbox[\s\S]*?className="sandbox-dialog-persistence-control"[\s\S]*?checked=\{persistent\}[\s\S]*?label="持久化"/,
+  );
+  assert.match(
+    dialogSource,
+    /id="sandbox-persistence-description"[\s\S]*?persistent[\s\S]*?保留智能体数据，后续可继续使用。[\s\S]*?智能体将在 8 小时后清空/,
+  );
+  assert.doesNotMatch(dialogSource, /是否持久化/);
+  assert.match(dialogSource, /智能体将在 8 小时后清空/);
+  assert.match(
+    stylesSource,
+    /\.sandbox-dialog-persistence-control \{[\s\S]*?justify-self: start/,
+  );
+  assert.doesNotMatch(stylesSource, /\.sandbox-dialog-persistence-control input/);
+  assert.match(
+    stylesSource,
+    /\.sandbox-dialog-persistence-description \{[\s\S]*?color: hsl\(var\(--muted-foreground\)\)/,
+  );
+  assert.match(
+    stylesSource,
+    /\.sandbox-dialog-persistence-description\.is-warning \{[\s\S]*?color: hsl\(37 72% 36%\)/,
+  );
+  assert.doesNotMatch(dialogSource, /id="sandbox-persistence-warning"/);
+  assert.match(dialogSource, /onConfirm\(validDisplayName, persistent\)/);
+  assert.match(appSource, /launchSandboxSession\(displayName: string, persistent: boolean\)/);
+  assert.match(appSource, /displayName,[\s\S]*?persistent,[\s\S]*?signal: controller\.signal/);
+  assert.match(sandboxClientSource, /persistent\?: boolean/);
+  assert.match(sandboxClientSource, /persistent: options\.persistent \?\? true/g);
   assert.match(appSource, /sandboxLaunchAbortRef\.current\?\.abort\(\)/);
 });
 
 test("active sandbox conversation identifies the selected agent and never uses normal sessions", () => {
   assert.match(sandboxSessionSource, /当前您在使用 \{agentName\} 智能体/);
   assert.doesNotMatch(sandboxSessionSource, /退出后对话内容消失/);
-  assert.match(sandboxSessionSource, /退出内置智能体/);
+  assert.match(sandboxSessionSource, /退出当前智能体/);
+  assert.doesNotMatch(sandboxSessionSource, /退出内置智能体/);
   assert.match(appSource, /sandboxClient\.sendMessage/);
   assert.doesNotMatch(sandboxClientSource, /runSSE/);
   assert.match(stylesSource, /\.main\.is-sandbox-session::before/);

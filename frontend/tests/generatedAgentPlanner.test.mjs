@@ -25,7 +25,11 @@ test("removes hidden capabilities from every generated Agent", () => {
   );
   const sanitizer = normalizeSource.slice(start);
 
-  assert.match(sanitizer, /GENERATED_TOOL_IDS\.has\(toolId\)/);
+  assert.match(
+    sanitizer,
+    /createBuiltinToolsForProvider\(cloudProvider\)\.map\(\(tool\) => tool\.id\)/,
+  );
+  assert.match(sanitizer, /generatedToolIds\.has\(toolId\)/);
   assert.match(sanitizer, /tracing: false/);
   assert.match(sanitizer, /tracingExporters: \[\]/);
   assert.match(sanitizer, /memory: \{ shortTerm: false, longTerm: false \}/);
@@ -37,11 +41,11 @@ test("removes hidden capabilities from every generated Agent", () => {
   assert.match(sanitizer, /knowledgebaseIndex: ""/);
   assert.match(
     sanitizer,
-    /subAgents: draft\.subAgents\.map\(sanitizeGeneratedDraftCapabilities\)/,
+    /subAgents: draft\.subAgents\.map\(\(child\) =>[\s\S]*?sanitizeGeneratedDraftCapabilities\(child, cloudProvider\)/,
   );
   assert.match(
     createSource,
-    /setDraft\(sanitizeGeneratedDraftCapabilities\(normalizeDraft\(result\.draft\)\)\)/,
+    /setDraft\([\s\S]*?draftForCloudProvider\([\s\S]*?sanitizeGeneratedDraftCapabilities\([\s\S]*?normalizeDraft\(result\.draft\),[\s\S]*?cloudProvider,[\s\S]*?\),[\s\S]*?cloudProvider,[\s\S]*?\)/,
   );
 });
 
@@ -49,9 +53,22 @@ test("keeps OpenViking long-term memory when normalizing imported drafts", () =>
   assert.match(normalizeSource, /"openviking"/);
 });
 
-test("feeds supported generated tool ids into the checklist selection", () => {
-  assert.match(createSource, /items=\{CREATE_BUILTIN_TOOLS\}/);
+test("feeds provider-supported generated tool ids into the checklist selection", () => {
+  assert.match(
+    createSource,
+    /createBuiltinToolsForProvider\(cloudProvider\)/,
+  );
+  assert.match(createSource, /new Set\(createBuiltinTools\.map\(\(tool\) => tool\.id\)\)/);
+  assert.match(createSource, /if \(!createBuiltinToolIds\.has\(id\)\) return/);
+  assert.match(createSource, /items=\{createBuiltinTools\}/);
   assert.match(createSource, /selected=\{builtinTools\}/);
+});
+
+test("keeps OpenViking knowledge when normalizing imported drafts", () => {
+  assert.match(
+    normalizeSource,
+    /const KB_IDS = new Set\(\["opensearch", "viking", "context_search", "openviking"\]\)/,
+  );
 });
 
 test("allows Agent generation to outlive the default request timeout", () => {
@@ -74,7 +91,7 @@ test("dims the input and shows a spinner while generation is active", () => {
 test("names the planner model and preserves generation errors verbatim", () => {
   assert.match(
     createSource,
-    /placeholder="描述目标，使用 doubao-seed-2-0-lite-260428 模型一键生成配置"/,
+    /placeholder=\{`描述目标，使用 \$\{plannerModelName\(cloudProvider\)\} 模型一键生成配置`\}/,
   );
   assert.match(
     createSource,

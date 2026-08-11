@@ -13,24 +13,47 @@ import {
   PanelLeftOpen,
   Plus,
   Trash2,
-  X,
 } from "lucide-react";
-import { createPortal } from "react-dom";
+import { ToolsSkills } from "@openai/apps-sdk-ui/components/Icon";
 import type {
   AdkSession,
   SiteBranding,
   StudioAccess,
   UiFeatures,
 } from "../adk/client";
+import type { SandboxThreadSummary } from "../adk/sandbox";
 import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
 import { AgentFaceIcon } from "./AgentFaceIcon";
-import volcengineLogo from "../assets/volcengine.svg";
+import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
+import defaultSiteLogo from "../assets/logo.svg";
+import byteplusLogo from "../assets/byteplus.svg";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 
-export type SidebarPage = "new-chat" | "agents" | "applications" | "search" | null;
+export type SidebarPage =
+  | "new-chat"
+  | "agents"
+  | "skills"
+  | "applications"
+  | "search"
+  | "feedback"
+  | null;
+
+export interface SidebarSandboxHistory {
+  threads: SandboxThreadSummary[];
+  currentThreadId: string;
+  loading: boolean;
+  error: string;
+  hasMore: boolean;
+  busyThreadId: string;
+  newDisabled: boolean;
+  onNew: () => void;
+  onSelect: (threadId: string) => void;
+  onLoadMore: () => void;
+  onDelete: (thread: SandboxThreadSummary) => void;
+}
 
 function ApplicationsIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -52,6 +75,7 @@ function ApplicationsIcon(props: SVGProps<SVGSVGElement>) {
 
 export interface SidebarProps {
   branding: SiteBranding;
+  cloudProvider: "volcengine" | "byteplus";
   sessions: AdkSession[];
   currentSessionId: string;
   activePage: SidebarPage;
@@ -61,6 +85,9 @@ export interface SidebarProps {
   access: StudioAccess;
   /** Session ids that are currently streaming a reply (shows a live dot). */
   streamingSids?: Set<string>;
+  /** Session ids whose latest reply is currently being evaluated. */
+  evaluatingSids?: Set<string>;
+  sandboxHistory?: SidebarSandboxHistory;
   onNewChat: () => void;
   onSearch: () => void;
   onQuickCreate: () => void;
@@ -68,10 +95,11 @@ export interface SidebarProps {
   onAddAgent: () => void;
   onMyAgents: () => void;
   onApplications: () => void;
+  onSystemInfo: () => void;
+  onIssueFeedback: () => void;
   onPickSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   userInfo?: Record<string, unknown>;
-  version: string;
   onLogout: () => void;
 }
 
@@ -107,64 +135,15 @@ function StudioRoleBadge({ role }: { role: StudioAccess["role"] }) {
   );
 }
 
-function SystemInfoDialog({
-  version,
-  onClose,
-}: {
-  version: string;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
-
-  return createPortal(
-    <div className="confirm-scrim" onMouseDown={onClose}>
-      <section
-        className="confirm-box system-info-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="system-info-title"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <header className="system-info-head">
-          <h2 id="system-info-title">系统信息</h2>
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={onClose}
-            aria-label="关闭系统信息"
-            autoFocus
-          >
-            <X className="icon" aria-hidden="true" />
-          </button>
-        </header>
-        <dl className="system-info-meta">
-          <div>
-            <dt>当前版本</dt>
-            <dd>{version || "—"}</dd>
-          </div>
-        </dl>
-      </section>
-    </div>,
-    document.body,
-  );
-}
-
 /** Account block pinned at the bottom of the sidebar: avatar + name, with a
  *  popover (opening upward) holding the full identity and account actions. */
 function SidebarUser({
   access,
   userInfo,
-  version,
+  onSystemInfo,
   onLogout,
-}: Pick<SidebarProps, "access" | "userInfo" | "version" | "onLogout">) {
+}: Pick<SidebarProps, "access" | "userInfo" | "onSystemInfo" | "onLogout">) {
   const [open, setOpen] = useState(false);
-  const [systemInfoOpen, setSystemInfoOpen] = useState(false);
   const [failedAvatarUrl, setFailedAvatarUrl] = useState("");
   if (!userInfo) return null;
   const name = displayName(userInfo);
@@ -242,7 +221,7 @@ function SidebarUser({
               className="account-action"
               onClick={() => {
                 setOpen(false);
-                setSystemInfoOpen(true);
+                onSystemInfo();
               }}
             >
               <Info className="icon" /> 系统信息
@@ -260,21 +239,21 @@ function SidebarUser({
           </div>
         </>
       )}
-      {systemInfoOpen ? (
-        <SystemInfoDialog version={version} onClose={() => setSystemInfoOpen(false)} />
-      ) : null}
     </div>
   );
 }
 
 export function Sidebar({
   branding,
+  cloudProvider,
   sessions,
   currentSessionId,
   activePage,
   features,
   access,
   streamingSids,
+  evaluatingSids,
+  sandboxHistory,
   onNewChat,
   onSearch,
   onQuickCreate,
@@ -282,15 +261,15 @@ export function Sidebar({
   onAddAgent,
   onMyAgents,
   onApplications,
+  onSystemInfo,
+  onIssueFeedback,
   onPickSession,
   onDeleteSession,
   userInfo,
-  version,
   onLogout,
 }: SidebarProps) {
-  // Creation and Skill Center live outside the #748-style sidebar.
+  // Agent creation still lives outside the main navigation.
   void onQuickCreate;
-  void onSkillCenter;
   void onAddAgent;
   // Per-module feature gates; a missing flag defaults to shown.
   const show = (k: keyof NonNullable<typeof features>) => features?.[k] !== false;
@@ -326,6 +305,7 @@ export function Sidebar({
     query.addEventListener("change", handleViewportChange);
     return () => query.removeEventListener("change", handleViewportChange);
   }, []);
+  const fallbackLogo = cloudProvider === "byteplus" ? byteplusLogo : defaultSiteLogo;
   return (
     <aside className={`sidebar ${collapsed ? "is-collapsed" : ""}`}>
       <div className="sidebar-top">
@@ -339,7 +319,7 @@ export function Sidebar({
           >
             <img
               className="brand-logo"
-              src={branding.logoUrl || volcengineLogo}
+              src={branding.logoUrl || fallbackLogo}
               width={20}
               height={20}
               alt=""
@@ -387,6 +367,23 @@ export function Sidebar({
           <AgentFaceIcon />
           <span className="sidebar-nav-label">智能体</span>
         </button>
+        {show("skillCenter") ? (
+          <button
+            className={`new-chat new-chat--skills${
+              activePage === "skills" ? " is-active" : ""
+            }`}
+            onClick={onSkillCenter}
+            aria-label="技能"
+            aria-current={activePage === "skills" ? "page" : undefined}
+            title="技能"
+          >
+            <ToolsSkills className="icon" aria-hidden="true" />
+            <span className="sidebar-nav-label">技能</span>
+          </button>
+        ) : null}
+        {show("search") && (
+          <SearchButton active={activePage === "search"} onClick={onSearch} />
+        )}
         <button
           className={`new-chat new-chat--applications${
             activePage === "applications" ? " is-active" : ""
@@ -398,85 +395,223 @@ export function Sidebar({
         >
           <ApplicationsIcon className="icon" />
           <span className="sidebar-nav-label">自动化</span>
+          <span className="sidebar-beta-badge">Beta</span>
         </button>
-        {show("search") && (
-          <SearchButton active={activePage === "search"} onClick={onSearch} />
-        )}
       </div>
 
       {show("history") && (
-      <div className="sidebar-history">
-        <div className="history-head">
-          <span>历史会话</span>
-          {show("newChat") && (
-            <button
-              type="button"
-              className="history-new-chat"
-              onClick={onNewChat}
-              aria-label="新建会话"
-              title="新建会话"
-            >
-              <Plus className="icon" />
-            </button>
-          )}
-        </div>
-        <div className="history-list">
-          {sorted.length === 0 && (
-            <div className="history-empty">暂无会话</div>
-          )}
-          {sorted.map((s) => {
-            const title = sessionTitle(s.events);
-            return (
-              <div
-                key={s.id}
-                className={`history-item ${s.id === currentSessionId ? "active" : ""}`}
-              >
-                <button
-                  className="history-item-btn"
-                  onClick={() => onPickSession(s.id)}
-                  aria-current={s.id === currentSessionId ? "page" : undefined}
-                  title={title}
-                >
-                  {streamingSids?.has(s.id) && (
-                    <span className="history-streaming" title="正在生成…" aria-label="正在生成" />
-                  )}
-                  <span className="history-title">{title}</span>
-                </button>
+        <div className="sidebar-history">
+          <div className="history-head">
+            <span>历史会话</span>
+            {show("newChat") && (
               <button
-                className="history-more"
-                title="更多"
-                onClick={() => setMenuFor((m) => (m === s.id ? null : s.id))}
+                type="button"
+                className="history-new-chat"
+                onClick={sandboxHistory?.onNew ?? onNewChat}
+                disabled={sandboxHistory?.newDisabled}
+                aria-label="新建会话"
+                title="新建会话"
               >
-                <MoreHorizontal className="icon" />
+                <Plus className="icon" />
               </button>
-              {menuFor === s.id && (
-                <>
-                  <div className="menu-scrim" onClick={() => setMenuFor(null)} />
-                  <div className="history-menu">
-                    <button
-                      className="menu-item menu-item--danger"
-                      onClick={() => {
-                        setMenuFor(null);
-                        onDeleteSession(s.id);
-                      }}
-                    >
-                      <Trash2 className="icon" /> 删除
-                    </button>
+            )}
+          </div>
+          <div className="history-list">
+            {sandboxHistory ? (
+              <>
+                {sandboxHistory.loading && sandboxHistory.threads.length === 0 ? (
+                  <div className="history-empty" role="status">
+                    正在加载历史会话…
                   </div>
-                </>
-              )}
-              </div>
-            );
-          })}
+                ) : null}
+                {sandboxHistory.error ? (
+                  <div className="history-error" role="alert">
+                    {sandboxHistory.error}
+                  </div>
+                ) : null}
+                {!sandboxHistory.loading &&
+                !sandboxHistory.error &&
+                sandboxHistory.threads.length === 0 ? (
+                  <div className="history-empty">暂无会话</div>
+                ) : null}
+                {sandboxHistory.threads.map((thread) => {
+                  const active = thread.id === sandboxHistory.currentThreadId;
+                  const title =
+                    thread.name ||
+                    thread.preview ||
+                    `Thread ${thread.id.slice(0, 8)}`;
+                  const busy = thread.id === sandboxHistory.busyThreadId;
+                  return (
+                    <div
+                      key={thread.id}
+                      className={`history-item ${active ? "active" : ""}`}
+                    >
+                      <button
+                        type="button"
+                        className="history-item-btn"
+                        onClick={() => sandboxHistory.onSelect(thread.id)}
+                        aria-current={active ? "page" : undefined}
+                        title={title}
+                        disabled={busy}
+                      >
+                        <span className="history-title">{title}</span>
+                        {active ? (
+                          <span className="history-current-badge">当前</span>
+                        ) : null}
+                      </button>
+                      <button
+                        type="button"
+                        className="history-more"
+                        aria-label={`管理历史会话：${title}`}
+                        title="更多"
+                        disabled={busy}
+                        onClick={() =>
+                          setMenuFor((current) =>
+                            current === thread.id ? null : thread.id,
+                          )
+                        }
+                      >
+                        <MoreHorizontal className="icon" />
+                      </button>
+                      {menuFor === thread.id ? (
+                        <>
+                          <div
+                            className="menu-scrim"
+                            onClick={() => setMenuFor(null)}
+                          />
+                          <div className="history-menu">
+                            <button
+                              type="button"
+                              className="menu-item menu-item--danger"
+                              onClick={() => {
+                                setMenuFor(null);
+                                sandboxHistory.onDelete(thread);
+                              }}
+                            >
+                              <Trash2 className="icon" /> 删除
+                            </button>
+                          </div>
+                        </>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                {sandboxHistory.hasMore ? (
+                  <button
+                    type="button"
+                    className="history-load-more"
+                    disabled={sandboxHistory.loading}
+                    onClick={sandboxHistory.onLoadMore}
+                  >
+                    {sandboxHistory.loading ? "加载中…" : "加载更多"}
+                  </button>
+                ) : null}
+              </>
+            ) : (
+              <>
+                {sorted.length === 0 && (
+                  <div className="history-empty">暂无会话</div>
+                )}
+                {sorted.map((s) => {
+                  const title = sessionTitle(s.events);
+                  const streaming = streamingSids?.has(s.id) === true;
+                  const evaluating = !streaming && evaluatingSids?.has(s.id) === true;
+                  return (
+                    <div
+                      key={s.id}
+                      className={`history-item ${
+                        s.id === currentSessionId ? "active" : ""
+                      }`}
+                    >
+                      <button
+                        className="history-item-btn"
+                        onClick={() => onPickSession(s.id)}
+                        aria-current={
+                          s.id === currentSessionId ? "page" : undefined
+                        }
+                        title={title}
+                      >
+                        {streaming && (
+                          <span
+                            className="history-streaming"
+                            title="正在生成…"
+                            aria-label="正在生成"
+                          />
+                        )}
+                        <span className="history-title">{title}</span>
+                        {evaluating && (
+                          <span
+                            className="history-evaluating-status"
+                            title="正在自动评测"
+                          >
+                            <span
+                              className="history-evaluating"
+                              aria-hidden="true"
+                            />
+                            评测中
+                          </span>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        className="history-more"
+                        aria-label={`管理历史会话：${title}`}
+                        title="更多"
+                        onClick={() =>
+                          setMenuFor((m) => (m === s.id ? null : s.id))
+                        }
+                      >
+                        <MoreHorizontal className="icon" />
+                      </button>
+                      {menuFor === s.id && (
+                        <>
+                          <div
+                            className="menu-scrim"
+                            onClick={() => setMenuFor(null)}
+                          />
+                          <div className="history-menu">
+                            <button
+                              className="menu-item menu-item--danger"
+                              onClick={() => {
+                                setMenuFor(null);
+                                onDeleteSession(s.id);
+                              }}
+                            >
+                              <Trash2 className="icon" /> 删除
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </div>
         </div>
-      </div>
       )}
 
-      <SidebarUser access={access}
-        userInfo={userInfo}
-        version={version}
-        onLogout={onLogout}
-      />
+      <div className="sidebar-footer">
+        <button
+          type="button"
+          className={`sidebar-feedback${
+            activePage === "feedback" ? " is-active" : ""
+          }`}
+          onClick={onIssueFeedback}
+          aria-label="问题反馈"
+          aria-current={activePage === "feedback" ? "page" : undefined}
+          title="问题反馈"
+        >
+          <IssueFeedbackIcon className="icon" />
+          <span className="sidebar-nav-label">问题反馈</span>
+        </button>
+        <SidebarUser
+          access={access}
+          userInfo={userInfo}
+          onSystemInfo={onSystemInfo}
+          onLogout={onLogout}
+        />
+      </div>
     </aside>
   );
 }

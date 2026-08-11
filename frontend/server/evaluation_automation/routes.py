@@ -29,6 +29,29 @@ def mount_routes(
     service: EvaluationAutomationService,
     authorize: Callable[[Request, str, str], Any],
 ) -> None:
+    @app.get("/web/evaluation/statuses")
+    async def get_statuses(
+        request: Request,
+        runtimeId: str = Query(..., min_length=1),
+        appName: str = Query(..., min_length=1),
+        userId: str = Query(..., min_length=1),
+        region: str = Query(default="cn-beijing", min_length=1),
+    ) -> dict[str, Any]:
+        authorize(request, runtimeId, region)
+        statuses = service.list_statuses(
+            runtime_id=runtimeId,
+            app_name=appName,
+            user_id=userId,
+        )
+        return {
+            "runtimeId": runtimeId,
+            "appName": appName,
+            "userId": userId,
+            "items": [
+                status.model_dump(mode="json", by_alias=True) for status in statuses
+            ],
+        }
+
     @app.get("/web/evaluation/optimizations")
     async def get_optimizations(
         request: Request,
@@ -37,7 +60,7 @@ def mount_routes(
         region: str = Query(default="cn-beijing", min_length=1),
     ) -> dict[str, Any]:
         authorize(request, runtimeId, region)
-        snapshot = service.get_optimizations(runtimeId, appName)
+        snapshot = await service.get_optimizations(runtimeId, appName)
         if snapshot is None:
             return {
                 "runtimeId": runtimeId,

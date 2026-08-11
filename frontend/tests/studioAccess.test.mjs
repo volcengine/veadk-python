@@ -19,7 +19,9 @@ const cliFrontendSource = readFileSync(
 
 test("Studio access fails closed until the server-derived role is known", () => {
   assert.match(clientSource, /export type StudioRole = "admin" \| "developer" \| "user"/);
-  assert.match(clientSource, /export const DEFAULT_STUDIO_ACCESS[\s\S]*?createAgents: false[\s\S]*?manageAgents: false[\s\S]*?runtimeScope: "mine"/);
+  assert.match(clientSource, /telemetry:\s*\{\s*userId: string;\s*\}/);
+  assert.match(clientSource, /export const DEFAULT_STUDIO_ACCESS[\s\S]*?userId: ""[\s\S]*?createAgents: false[\s\S]*?manageAgents: false[\s\S]*?runtimeScope: "mine"/);
+  assert.match(clientSource, /typeof access\.telemetry\?\.userId !== "string"/);
   assert.match(clientSource, /apiFetch\("\/web\/access"\)/);
   assert.match(appSource, /if \(!access\) \{\s*return <div className="boot" \/>;\s*\}/);
   assert.match(appSource, /setAccess\(DEFAULT_STUDIO_ACCESS\)/);
@@ -42,7 +44,7 @@ test("sidebar shows the OAuth email and translated role badge", () => {
   assert.match(sidebarSource, /developer: "开发者"/);
   assert.match(sidebarSource, /user: "普通用户"/);
   assert.match(sidebarSource, /typeof userInfo\.email === "string"/);
-  assert.match(sidebarSource, /<SidebarUser access=\{access\}/);
+  assert.match(sidebarSource, /<SidebarUser\s+access=\{access\}/);
   assert.match(stylesSource, /studio-role-badge--admin[\s\S]*?hsl\(271/);
   assert.match(stylesSource, /studio-role-badge--developer[\s\S]*?hsl\(47/);
   assert.match(stylesSource, /studio-role-badge--user[\s\S]*?hsl\(145/);

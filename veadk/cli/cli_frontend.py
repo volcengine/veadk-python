@@ -31,24 +31,43 @@ import sys
 import tempfile
 import unicodedata
 import zipfile
-
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import monotonic
 from typing import Any, Literal
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import click
 from pydantic import BaseModel, Field
 
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
+from veadk.cli.studio_telemetry import (
+    StudioTelemetryConfigurationError,
+    studio_apmplus_environment_from_options,
+    studio_telemetry_config,
+)
+from veadk.consts import STUDIO_APMPLUS_ENV
+from veadk.utils.cloud_provider import (
+    DEFAULT_BYTEPLUS_REGION,
+    DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION,
+    DEFAULT_CLOUD_PROVIDER,
+    CloudProvider,
+    agentkit_openapi_base,
+    default_region,
+    default_vefaas_application_template_id,
+    normalize_cloud_provider,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_BYTEPLUS_VEFAAS_APPLICATION_NAME_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
+)
 _BUILD_ERROR_MARKERS = (
     "no solution found",
     "unsatisfiable",
@@ -92,6 +111,69 @@ _CP_PIPELINE_RUN_RE = re.compile(
     r"Pipeline triggered successfully,\s*run ID:\s*(?P<id>\S+)"
 )
 _RUNTIME_DESCRIPTION_MAX_BYTES = 255
+_STUDIO_STORAGE_ENV_KEYS = (
+    "VEADK_STUDIO_TOS_BUCKET",
+    "VEADK_STUDIO_TOS_REGION",
+    "VEADK_VIDEO_ASSET_STORAGE",
+    "VEADK_VIDEO_TOS_BUCKET",
+    "VEADK_VIDEO_TOS_REGION",
+    "VEADK_VIDEO_TOS_ENDPOINT",
+    "VEADK_VIDEO_TOS_PREFIX",
+    "VEADK_VIDEO_MAX_FILE_BYTES",
+    "VEADK_MEDIA_STORAGE",
+    "VEADK_MEDIA_TOS_PREFIX",
+    "DATABASE_TOS_BUCKET",
+    "DATABASE_TOS_REGION",
+    "DATABASE_TOS_ENDPOINT",
+)
+
+
+def _studio_storage_environment(
+    source: Mapping[str, str | None],
+) -> dict[str, str]:
+    """Return only the non-secret Studio storage settings safe for VeFaaS."""
+    return {
+        key: str(source[key]) for key in _STUDIO_STORAGE_ENV_KEYS if source.get(key)
+    }
+
+
+def _byteplus_vefaas_application_name_suggestion(name: str) -> str:
+    suggestion = re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-")
+    suggestion = re.sub(r"-{2,}", "-", suggestion)
+    if not suggestion:
+        return "studio"
+    if len(suggestion) > 64:
+        suggestion = suggestion[:64].strip("-")
+    return suggestion or "studio"
+
+
+def _validate_byteplus_vefaas_application_name(name: str) -> None:
+    if _BYTEPLUS_VEFAAS_APPLICATION_NAME_RE.fullmatch(name):
+        return
+    suggestion = _byteplus_vefaas_application_name_suggestion(name)
+    raise click.ClickException(
+        "BytePlus VeFaaS application name must start and end with a lowercase "
+        "letter or digit, contain only lowercase letters, digits, and hyphens, "
+        "and be 1-64 characters long. "
+        f"Got {name!r}. Suggested value: {suggestion!r}."
+    )
+
+
+def _validate_distinct_sandbox_tool_ids(tool_ids: dict[str, object]) -> None:
+    """Reject one Tool id serving both transient and snapshot sessions."""
+    labels = {
+        "codex": "Codex",
+        "openclaw": "OpenClaw",
+        "hermes": "Hermes",
+    }
+    for kind, label in labels.items():
+        transient = str(tool_ids.get(kind) or "").strip()
+        snapshot = str(tool_ids.get(f"{kind}_snapshot") or "").strip()
+        if transient and transient == snapshot:
+            raise click.ClickException(
+                f"AgentKit {label} Tool and {label} Snapshot Tool must use "
+                "different Tool IDs."
+            )
 
 
 def _runtime_regions(provider: str, requested_region: str) -> list[str]:
@@ -99,8 +181,38 @@ def _runtime_regions(provider: str, requested_region: str) -> list[str]:
     if requested_region not in {"all", "", "*"}:
         return [requested_region]
     if provider == "byteplus":
-        return [os.getenv("BYTEPLUS_REGION") or "ap-southeast-1"]
+        return [os.getenv("BYTEPLUS_REGION") or DEFAULT_BYTEPLUS_REGION]
     return ["cn-beijing", "cn-shanghai"]
+
+
+def _vikingdb_openapi_host(provider: str) -> str:
+    """Return the Vector Database Cloud OpenAPI host."""
+    return (
+        "open.byteplusapi.com" if provider == "byteplus" else "open.volcengineapi.com"
+    )
+
+
+def _candidate_vikingdb_projects(project: str | None) -> list[str | None]:
+    """Return likely Vector Database projects to list when Studio has no picker."""
+    explicit = (project or "").strip()
+    if explicit:
+        return [explicit]
+    candidates: list[str | None] = [
+        os.getenv("DATABASE_VIKING_PROJECT"),
+        os.getenv("VEADK_STUDIO_PROJECT"),
+        "default",
+        None,
+    ]
+    result: list[str | None] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = (candidate or "").strip()
+        key = normalized or "<account-default>"
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(normalized or None)
+    return result
 
 
 def _normalize_runtime_description(value: object) -> str:
@@ -282,6 +394,10 @@ def _safe_exception_detail(
     return "\nCaused by:\n".join(parts)
 
 
+def _new_studio_deploy_id() -> str:
+    return f"stddep_{uuid4().hex}"
+
+
 def _claims_from_forwarded_jwt(authorization: str | None) -> dict | None:
     """Decode the JWT an upstream API gateway forwarded in the Authorization
     header, WITHOUT re-verifying its signature.
@@ -335,7 +451,7 @@ class _MessageFeedbackRequest(BaseModel):
     """One rating change for a persisted assistant Event."""
 
     runtime_id: str = Field(alias="runtimeId", min_length=1)
-    region: str = Field(default="cn-beijing", min_length=1)
+    region: str = Field(default="", min_length=0)
     app_name: str = Field(alias="appName", min_length=1)
     user_id: str = Field(alias="userId", min_length=1)
     session_id: str = Field(alias="sessionId", min_length=1)
@@ -348,7 +464,7 @@ class _DeleteFeedbackCasesRequest(BaseModel):
     """Feedback-derived evaluation cases to remove from AgentKit."""
 
     runtime_id: str = Field(alias="runtimeId", min_length=1)
-    region: str = Field(default="cn-beijing", min_length=1)
+    region: str = Field(default="", min_length=0)
     app_name: str = Field(alias="appName", min_length=1)
     item_ids: list[str] = Field(alias="itemIds", min_length=1, max_length=100)
 
@@ -697,12 +813,25 @@ def _serve_options(f):
             "(env: SANDBOX_CHAT_HERMES).",
         ),
         click.option(
-            "--sandbox-skill-creator-tool-id",
-            "--skill-creator-tool-id",
+            "--sandbox-chat-codex-snapshot-tool-id",
             default=None,
-            envvar="SANDBOX_SKILL_CREATOR",
-            help="AgentKit CodeEnv Tool ID used by Skill creation mode "
-            "(env: SANDBOX_SKILL_CREATOR).",
+            envvar="SANDBOX_CHAT_CODEX_SNAPSHOT",
+            help="Snapshot-enabled AgentKit CodeEnv Tool ID used by persistent chats "
+            "(env: SANDBOX_CHAT_CODEX_SNAPSHOT).",
+        ),
+        click.option(
+            "--sandbox-chat-openclaw-snapshot-tool-id",
+            default=None,
+            envvar="SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+            help="Snapshot-enabled AgentKit ArkClawEnv Tool ID used by persistent "
+            "OpenClaw agents (env: SANDBOX_CHAT_OPENCLAW_SNAPSHOT).",
+        ),
+        click.option(
+            "--sandbox-chat-hermes-snapshot-tool-id",
+            default=None,
+            envvar="SANDBOX_CHAT_HERMES_SNAPSHOT",
+            help="Snapshot-enabled AgentKit HermesEnv Tool ID used by persistent "
+            "Hermes agents (env: SANDBOX_CHAT_HERMES_SNAPSHOT).",
         ),
         click.option(
             "--admin",
@@ -762,7 +891,9 @@ def frontend(
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
-    sandbox_skill_creator_tool_id: str | None,
+    sandbox_chat_codex_snapshot_tool_id: str | None,
+    sandbox_chat_openclaw_snapshot_tool_id: str | None,
+    sandbox_chat_hermes_snapshot_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
     open_browser: bool,
@@ -792,7 +923,9 @@ def frontend(
         sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
         sandbox_chat_openclaw_tool_id=sandbox_chat_openclaw_tool_id,
         sandbox_chat_hermes_tool_id=sandbox_chat_hermes_tool_id,
-        sandbox_skill_creator_tool_id=sandbox_skill_creator_tool_id,
+        sandbox_chat_codex_snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,
+        sandbox_chat_openclaw_snapshot_tool_id=(sandbox_chat_openclaw_snapshot_tool_id),
+        sandbox_chat_hermes_snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
         open_browser=open_browser,
@@ -826,12 +959,14 @@ def studio(
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
-    sandbox_skill_creator_tool_id: str | None,
+    sandbox_chat_codex_snapshot_tool_id: str | None,
+    sandbox_chat_openclaw_snapshot_tool_id: str | None,
+    sandbox_chat_hermes_snapshot_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
     open_browser: bool,
 ) -> None:
-    """Launch VeADK Studio — the frontend trimmed to add & manage agents.
+    """Launch AgentKit Studio — the frontend trimmed to add & manage agents.
 
     Same server as `veadk frontend`, but studio mode: the UI feature-gates off
     chat/search/skill-center/history and lands on the add-agent page.
@@ -861,7 +996,9 @@ def studio(
         sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
         sandbox_chat_openclaw_tool_id=sandbox_chat_openclaw_tool_id,
         sandbox_chat_hermes_tool_id=sandbox_chat_hermes_tool_id,
-        sandbox_skill_creator_tool_id=sandbox_skill_creator_tool_id,
+        sandbox_chat_codex_snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,
+        sandbox_chat_openclaw_snapshot_tool_id=(sandbox_chat_openclaw_snapshot_tool_id),
+        sandbox_chat_hermes_snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
         open_browser=open_browser,
@@ -891,7 +1028,9 @@ def _run_frontend_server(
     sandbox_chat_codex_tool_id: str | None = None,
     sandbox_chat_openclaw_tool_id: str | None = None,
     sandbox_chat_hermes_tool_id: str | None = None,
-    sandbox_skill_creator_tool_id: str | None = None,
+    sandbox_chat_codex_snapshot_tool_id: str | None = None,
+    sandbox_chat_openclaw_snapshot_tool_id: str | None = None,
+    sandbox_chat_hermes_snapshot_tool_id: str | None = None,
     studio_admins: str | None = None,
     studio_developers: str | None = None,
     open_browser: bool,
@@ -932,8 +1071,16 @@ def _run_frontend_server(
         os.environ["SANDBOX_CHAT_OPENCLAW"] = sandbox_chat_openclaw_tool_id
     if sandbox_chat_hermes_tool_id:
         os.environ["SANDBOX_CHAT_HERMES"] = sandbox_chat_hermes_tool_id
-    if sandbox_skill_creator_tool_id:
-        os.environ["SANDBOX_SKILL_CREATOR"] = sandbox_skill_creator_tool_id
+    if sandbox_chat_codex_snapshot_tool_id:
+        os.environ["SANDBOX_CHAT_CODEX_SNAPSHOT"] = sandbox_chat_codex_snapshot_tool_id
+    if sandbox_chat_openclaw_snapshot_tool_id:
+        os.environ["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] = (
+            sandbox_chat_openclaw_snapshot_tool_id
+        )
+    if sandbox_chat_hermes_snapshot_tool_id:
+        os.environ["SANDBOX_CHAT_HERMES_SNAPSHOT"] = (
+            sandbox_chat_hermes_snapshot_tool_id
+        )
 
     from google.adk.cli.fast_api import get_fast_api_app
 
@@ -1080,6 +1227,109 @@ def _run_frontend_server(
             raise HTTPException(status_code=401, detail="Studio identity is required")
         return access_policy.role_for(principal)
 
+    from veadk.cli.frontend_issue_feedback import mount_issue_feedback_route
+
+    async def _load_runtime_apmplus_trace(
+        runtime: Any,
+        *,
+        runtime_id: str,
+        region: str,
+        session_id: str,
+        invocation_id: str = "",
+        end_time_ms: int | None = None,
+    ) -> list[dict]:
+        access_key, secret_key, session_token = _resolve_ve_credentials()
+        from veadk.cli.frontend_apmplus_trace import load_apmplus_trace
+
+        return await asyncio.to_thread(
+            load_apmplus_trace,
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token or "",
+            provider=provider,
+            region=region,
+            project_name=str(getattr(runtime, "project_name", "") or "default"),
+            runtime_id=runtime_id,
+            session_id=session_id,
+            invocation_id=invocation_id,
+            now_ms=end_time_ms,
+        )
+
+    async def _load_issue_feedback_trace(report: Any, request: Request) -> list[dict]:
+        runtime = _authorized_runtime(
+            request,
+            report.runtime_id,
+            report.region,
+            coded_access_error=True,
+        )
+        try:
+            return await _load_runtime_apmplus_trace(
+                runtime,
+                runtime_id=report.runtime_id,
+                region=report.region,
+                session_id=report.session_id,
+                invocation_id=report.invocation_id,
+            )
+        except Exception as error:  # noqa: BLE001 - feedback must remain usable
+            logger.warning(
+                "APMPlus issue-feedback trace query failed runtime_id=%s: %s",
+                report.runtime_id,
+                _redact_debug_text(str(error)),
+            )
+            return []
+
+    @app.get("/web/runtime-trace")
+    async def _web_runtime_trace(
+        request: Request,
+        runtimeId: str = "",
+        sessionId: str = "",
+        region: str = "cn-beijing",
+        endTimeMs: int | None = None,
+    ) -> list[dict]:
+        if not runtimeId or not sessionId:
+            raise HTTPException(
+                status_code=400,
+                detail="runtimeId and sessionId are required",
+            )
+        runtime = _authorized_runtime(
+            request,
+            runtimeId,
+            region,
+            coded_access_error=True,
+        )
+        try:
+            spans = await _load_runtime_apmplus_trace(
+                runtime,
+                runtime_id=runtimeId,
+                region=region,
+                session_id=sessionId,
+                end_time_ms=endTimeMs,
+            )
+        except Exception as error:
+            logger.warning(
+                "APMPlus Studio trace query failed runtime_id=%s: %s",
+                runtimeId,
+                _redact_debug_text(str(error)),
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="加载调用链路失败，请稍后重试。",
+            ) from error
+        if not spans:
+            raise HTTPException(
+                status_code=404,
+                detail="该 Agent 暂未开启链路观测，请到控制台打开后使用。",
+            )
+        from veadk.cli.frontend_apmplus_trace import normalize_apmplus_trace
+
+        return normalize_apmplus_trace(spans)
+
+    mount_issue_feedback_route(
+        app,
+        authorize=_request_role,
+        trace_loader=_load_issue_feedback_trace,
+    )
+
     def _require_agent_management(request: Request) -> StudioPrincipal | None:
         principal = _current_principal(request)
         if access_policy.enabled and principal is None:
@@ -1090,38 +1340,110 @@ def _run_frontend_server(
             )
         return principal
 
-    def _skill_creator_owner(request: Request) -> str:
-        principal = _require_agent_management(request)
-        return principal.owner_id if principal else "local"
+    from frontend.server.skills.devenv import mount_skill_workbench_routes
+    from frontend.server.skills.models import SkillIdentity
 
-    from veadk.cli.frontend_skill_creator import mount_skill_creator_routes
+    def _skill_identity(request: Request) -> SkillIdentity:
+        principal = _current_principal(request)
+        if access_policy.enabled and principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        author = (
+            (principal.display_name or principal.owner_id).strip()
+            if principal is not None
+            else "local"
+        )
+        return SkillIdentity(
+            author=author,
+            is_admin=access_policy.role_for(principal) == StudioRole.ADMIN,
+        )
 
-    mount_skill_creator_routes(app, _skill_creator_owner)
+    def _skill_workbench_tools_client(region: str):
+        from agentkit.sdk.tools.client import AgentkitToolsClient
+
+        access_key, secret_key, session_token = _resolve_ve_credentials()
+        client = AgentkitToolsClient(
+            access_key=access_key,
+            secret_key=secret_key,
+            region=region,
+            session_token=session_token or "",
+        )
+        if provider != "byteplus":
+            client.set_host("open.volcengineapi.com")
+        return client
+
+    def _skill_workbench_skills_client(region: str):
+        from agentkit.sdk.skills.client import AgentkitSkillsClient
+
+        access_key, secret_key, session_token = _resolve_ve_credentials()
+        return AgentkitSkillsClient(
+            access_key=access_key,
+            secret_key=secret_key,
+            region=region,
+            session_token=session_token or "",
+        )
+
+    mount_skill_workbench_routes(
+        app,
+        lambda request: _skill_identity(request).author,
+        lambda request: _skill_identity(request).author,
+        tools_client_factory=_skill_workbench_tools_client,
+        skills_client_factory=_skill_workbench_skills_client,
+    )
+
+    from veadk.cli.frontend_coding_agents import mount_coding_agent_routes
+
+    mount_coding_agent_routes(
+        app,
+        authorize=_require_agent_management,
+    )
 
     @app.get("/web/access")
     async def _web_access(request: Request):
         principal = _current_principal(request)
         if access_policy.enabled and principal is None:
             raise HTTPException(status_code=401, detail="Studio identity is required")
-        return access_policy.access_payload(principal)
+        payload = access_policy.access_payload(principal)
+        payload["telemetry"] = {
+            "userId": principal.owner_id if principal else "",
+        }
+        return payload
 
     def _resolve_ve_credentials() -> tuple[str, str, str | None]:
         """Resolve cloud credentials as (access_key, secret_key, session_token).
 
-        BytePlus uses its explicit environment credentials. Volcengine uses
-        environment credentials first, then the VeFaaS-injected STS credential
-        file so the same endpoints work locally and inside a VeFaaS function.
+        Environment credentials support local development. When Studio runs in
+        VeFaaS, the frontend function should use the IAM role's injected STS
+        credential file so long-lived deployer AK/SK do not need to be shipped
+        as function env vars.
         """
+
+        def _read_vefaas_iam_credentials() -> tuple[str, str, str | None] | None:
+            try:
+                with open("/var/run/secrets/iam/credential", encoding="utf-8") as f:
+                    data = json.load(f)
+                ak = data.get("access_key_id") or data.get("AccessKeyId")
+                sk = data.get("secret_access_key") or data.get("SecretAccessKey")
+                token = data.get("session_token") or data.get("SessionToken")
+                if ak and sk:
+                    return ak, sk, token or None
+            except (OSError, ValueError):
+                pass
+            return None
+
         if provider == "byteplus":
             ak = os.getenv("BYTEPLUS_ACCESS_KEY")
             sk = os.getenv("BYTEPLUS_SECRET_KEY")
             token = os.getenv("BYTEPLUS_SESSION_TOKEN")
             if ak and sk:
                 return ak, sk, token or None
+            credentials = _read_vefaas_iam_credentials()
+            if credentials is not None:
+                return credentials
             raise HTTPException(
                 status_code=400,
                 detail="BytePlus credentials not found (set BYTEPLUS_ACCESS_KEY/"
-                "BYTEPLUS_SECRET_KEY)",
+                "BYTEPLUS_SECRET_KEY, or run inside a VeFaaS function with an "
+                "IAM role)",
             )
 
         ak = os.getenv("VOLCENGINE_ACCESS_KEY")
@@ -1132,21 +1454,56 @@ def _run_frontend_server(
                 "VOLC_SESSIONTOKEN"
             )
             return ak, sk, token or None
-        try:
-            with open("/var/run/secrets/iam/credential", encoding="utf-8") as f:
-                data = json.load(f)
-            ak = data.get("access_key_id") or data.get("AccessKeyId")
-            sk = data.get("secret_access_key") or data.get("SecretAccessKey")
-            token = data.get("session_token") or data.get("SessionToken")
-            if ak and sk:
-                return ak, sk, token
-        except (OSError, ValueError):
-            pass
+        credentials = _read_vefaas_iam_credentials()
+        if credentials is not None:
+            return credentials
         raise HTTPException(
             status_code=400,
             detail="Volcengine credentials not found (set VOLCENGINE_ACCESS_KEY/"
             "SECRET_KEY, or run inside a VeFaaS function with an IAM role)",
         )
+
+    def _default_cloud_region() -> str:
+        return default_region(provider)
+
+    def _coerce_cloud_region(region: str | None) -> str:
+        candidate = (region or "").strip()
+        if provider == "byteplus" and candidate.startswith("cn-"):
+            return _default_cloud_region()
+        if provider == "volcengine" and candidate.startswith("ap-"):
+            return _default_cloud_region()
+        return candidate or _default_cloud_region()
+
+    from frontend.server.video.routes import (
+        build_video_service,
+        mount_video_routes,
+    )
+
+    def _video_owner(request: Request) -> str:
+        principal = _current_principal(request)
+        if access_policy.enabled and principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        return principal.owner_id if principal is not None else "local"
+
+    mount_video_routes(
+        app,
+        service=build_video_service(
+            provider=provider,
+            resolve_credentials=_resolve_ve_credentials,
+        ),
+        identity_resolver=_video_owner,
+    )
+
+    from frontend.server.deployment_resources import (
+        mount_deployment_resource_routes,
+    )
+
+    mount_deployment_resource_routes(
+        app,
+        authorize=_require_agent_management,
+        provider=provider,
+        resolve_credentials=_resolve_ve_credentials,
+    )
 
     def _require_studio_admin(request: Request) -> None:
         if _request_role(request) != StudioRole.ADMIN:
@@ -1165,7 +1522,7 @@ def _run_frontend_server(
     mount_studio_update_routes(
         app,
         StudioSelfUpdater(
-            settings=StudioUpdateSettings.from_env(),
+            settings=StudioUpdateSettings.from_env(provider=provider),
             credential_resolver=_resolve_ve_credentials,
             branding_logo=branding_logo,
         ),
@@ -1215,7 +1572,8 @@ def _run_frontend_server(
     sandbox_gateway = AgentkitSandboxGateway(
         _sandbox_client,
         region_candidates=sandbox_region_candidates(
-            os.getenv("AGENTKIT_SANDBOX_REGION")
+            os.getenv("AGENTKIT_SANDBOX_REGION"),
+            provider=provider,
         ),
     )
     sandbox_service = SandboxConversationService(
@@ -1312,6 +1670,7 @@ def _run_frontend_server(
             "A2A_REGISTRY_ACCESS_KEY",
             "A2A_REGISTRY_SECRET_KEY",
             "A2A_REGISTRY_SESSION_TOKEN",
+            *_STUDIO_STORAGE_ENV_KEYS,
         }
     )
 
@@ -1346,17 +1705,11 @@ def _run_frontend_server(
                     "set MODEL_AGENT_API_KEY in .env/config.yaml before deploying.",
                     e,
                 )
-        out["OTEL_SDK_DISABLED"] = "true"
         out["VEADK_DISABLE_EXPIRE_AT"] = "true"
-        # Force telemetry exporters off. The AgentKit runner sets
-        # apmplus_enable=True on every created runtime, which makes the
-        # platform inject ENABLE_APMPLUS=true into the container; pre-seeding
-        # the APMPlus api-key env with a harmless sentinel short-circuits the
-        # cached_property before it calls get_apmplus_token().
-        out["ENABLE_APMPLUS"] = "false"
-        out["ENABLE_COZELOOP"] = "false"
-        out["ENABLE_TLS"] = "false"
-        out["OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY"] = "tracing-disabled"
+        if provider == "byteplus":
+            out["CLOUD_PROVIDER"] = "byteplus"
+            out["AGENTKIT_CLOUD_PROVIDER"] = "byteplus"
+            out["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
         return out
 
     def _model_name(model: object) -> str:
@@ -1444,9 +1797,11 @@ def _run_frontend_server(
         as `veadk frontend` — all modules (chat/search/skill-center/history +
         add/manage agent) enabled, landing on the chat view. The `studio` flag
         is informational."""
+        version = current_studio_display_version()
         return {
             "studio": studio,
-            "version": current_studio_display_version(),
+            "version": version,
+            "provider": provider,
             "branding": {
                 "title": branding_title,
                 "logoUrl": "/web/site-logo" if branding_logo is not None else "",
@@ -1466,6 +1821,53 @@ def _run_frontend_server(
                 "generatedAgentTestRunDisabledReason": "",
             },
             "defaultView": "chat",
+            "telemetry": studio_telemetry_config(version),
+        }
+
+    @app.get("/web/system-info")
+    async def _web_system_info(request: Request):
+        """Return non-secret Studio resource identifiers for system diagnostics."""
+        _require_studio_admin(request)
+        from frontend.server.storage import StudioStorageConfig
+
+        storage_config = StudioStorageConfig.from_env(provider)
+        sandbox_tools = (
+            ("codex", "Codex Sandbox", "SANDBOX_CHAT_CODEX", False),
+            (
+                "codex_snapshot",
+                "Codex Sandbox",
+                "SANDBOX_CHAT_CODEX_SNAPSHOT",
+                True,
+            ),
+            ("openclaw", "OpenClaw Sandbox", "SANDBOX_CHAT_OPENCLAW", False),
+            (
+                "openclaw_snapshot",
+                "OpenClaw Sandbox",
+                "SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+                True,
+            ),
+            ("hermes", "Hermes Sandbox", "SANDBOX_CHAT_HERMES", False),
+            (
+                "hermes_snapshot",
+                "Hermes Sandbox",
+                "SANDBOX_CHAT_HERMES_SNAPSHOT",
+                True,
+            ),
+            ("dev", "Dev Sandbox", "SANDBOX_DEV", False),
+        )
+        return {
+            "storage": {
+                "tosAddress": storage_config.object_host,
+            },
+            "sandboxTools": [
+                {
+                    "kind": kind,
+                    "label": label,
+                    "toolId": (os.getenv(environment_key) or "").strip(),
+                    "snapshot": snapshot,
+                }
+                for kind, label, environment_key, snapshot in sandbox_tools
+            ],
         }
 
     @app.get("/web/agent-info/{app_name}")
@@ -1535,6 +1937,50 @@ def _run_frontend_server(
 
         if not q.strip():
             return {"mounted": True, "results": []}
+        if provider == "byteplus":
+            if not os.getenv("BYTEPLUS_WEB_SEARCH_API_KEY"):
+                return {
+                    "mounted": True,
+                    "results": [],
+                    "error": "服务端未配置 BYTEPLUS_WEB_SEARCH_API_KEY",
+                }
+            try:
+                from veadk.tools.builtin_tools.web_search import (
+                    _byteplus_web_search,
+                    _extract_web_results,
+                    _result_summary,
+                )
+
+                resp = _byteplus_web_search(q[:100], count=8)
+                results = []
+                for item in _extract_web_results(resp):
+                    results.append(
+                        {
+                            "title": str(item.get("Title") or item.get("title") or ""),
+                            "url": str(
+                                item.get("Url")
+                                or item.get("url")
+                                or item.get("Link")
+                                or item.get("link")
+                                or ""
+                            ),
+                            "siteName": str(
+                                item.get("SiteName")
+                                or item.get("siteName")
+                                or item.get("site_name")
+                                or ""
+                            ),
+                            "summary": _result_summary(item),
+                        }
+                    )
+                return {"mounted": True, "results": results}
+            except Exception as e:
+                logger.error(f"BytePlus web search error: {e}", exc_info=True)
+                return {
+                    "mounted": True,
+                    "results": [],
+                    "error": str(e),
+                }
 
         # Gate on the agent's tools only when we can introspect it locally.
         if agent is not None:
@@ -1627,6 +2073,29 @@ def _run_frontend_server(
         except Exception as e:
             logger.error(f"Skillhub proxy error: {e}")
             raise HTTPException(status_code=502, detail=f"Proxy error: {str(e)}")
+
+    @app.get("/harness/skills/findskill")
+    async def _studio_search_findskill(
+        query: str = "",
+        page_number: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=50),
+    ) -> dict[str, Any]:
+        """Expose the same public Skill Hub search contract used by chat skills."""
+        try:
+            from veadk.integrations.agentkit.session_capabilities import (
+                _search_findskill,
+            )
+
+            return await _search_findskill(
+                query=query,
+                page_number=page_number,
+                page_size=page_size,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="暂时无法搜索 Skill Hub，请稍后重试。",
+            ) from exc
 
     # ---- AgentKit proxy: proxy /agentkit-proxy/* to remote AgentKit ----
     @app.api_route(
@@ -1844,6 +2313,10 @@ def _run_frontend_server(
             "VOLCENGINE_SECRET_KEY",
             "VOLCENGINE_SESSION_TOKEN",
             "VOLCENGINE_REGION",
+            "BYTEPLUS_ACCESS_KEY",
+            "BYTEPLUS_SECRET_KEY",
+            "BYTEPLUS_SESSION_TOKEN",
+            "BYTEPLUS_REGION",
             "TOOL_WEB_SEARCH_ACCESS_KEY",
             "TOOL_WEB_SEARCH_SECRET_KEY",
             "TOOL_VESPEECH_APP_ID",
@@ -1852,8 +2325,10 @@ def _run_frontend_server(
             "TOOL_WEB_SCRAPER_ENDPOINT",
             "DATABASE_MEM0_API_KEY",
             "CLOUD_PROVIDER",
+            "AGENTKIT_CLOUD_PROVIDER",
             "BYTEPLUS_WEB_SEARCH_API_KEY",
             "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY",
+            *_STUDIO_STORAGE_ENV_KEYS,
         ):
             if os.getenv(key):
                 env[key] = os.environ[key]
@@ -2088,7 +2563,8 @@ def _run_frontend_server(
             GetSkillVersionRequest,
         )
 
-        client = _skills_client(region or "cn-beijing")
+        resolved_region = _coerce_cloud_region(region)
+        client = _skills_client(resolved_region)
         try:
             resp = client.get_skill_version(
                 GetSkillVersionRequest(id=skill_id, skill_version=version)
@@ -2106,7 +2582,7 @@ def _run_frontend_server(
                 except Exception:
                     logger.error(
                         f"GetSkillVersion({skill_id}@{version}) error for region "
-                        f"{region or 'cn-beijing'}: {version_error}",
+                        f"{resolved_region}: {version_error}",
                         exc_info=True,
                     )
                     raise HTTPException(
@@ -2116,7 +2592,7 @@ def _run_frontend_server(
             else:
                 logger.error(
                     f"GetSkillVersion({skill_id}@{version}) error for region "
-                    f"{region or 'cn-beijing'}: {version_error}",
+                    f"{resolved_region}: {version_error}",
                     exc_info=True,
                 )
                 raise HTTPException(
@@ -2381,6 +2857,24 @@ def _run_frontend_server(
                 data,
                 debug=True,
             )
+            runtime_envs: dict[str, str] = {}
+            runtime_id = str(data.get("runtimeId") or "").strip()
+            if runtime_id:
+                runtime_region = (
+                    str(data.get("runtimeRegion") or "cn-beijing").strip()
+                    or "cn-beijing"
+                )
+                runtime = _authorized_runtime(
+                    request,
+                    runtime_id,
+                    runtime_region,
+                    coded_access_error=True,
+                )
+                runtime_envs = {
+                    str(item.key): str(item.value or "")
+                    for item in (getattr(runtime, "envs", None) or [])
+                    if getattr(item, "key", None)
+                }
             temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
             app_name = _write_generated_project(project, temp_dir)
             port = _free_local_port()
@@ -2399,6 +2893,7 @@ def _run_frontend_server(
                 str(port),
             ]
             runner_env = _safe_runner_env()
+            runner_env.update(runtime_envs)
             runner_env.update(debug_runtime_env_from_draft(draft))
             with stdout_path.open("w", encoding="utf-8") as stdout_file:
                 with stderr_path.open("w", encoding="utf-8") as stderr_file:
@@ -2674,7 +3169,7 @@ def _run_frontend_server(
             if not runtime_id or task.get("destroyed") or task.get("destroying"):
                 return False
             task["destroying"] = True
-            region = str(task.get("region") or "cn-beijing")
+            region = str(task.get("region") or _default_cloud_region())
 
         try:
             _delete_agentkit_runtime(runtime_id, region)
@@ -2862,6 +3357,8 @@ def _run_frontend_server(
                 status_code=400,
                 detail="createEvaluationSets must be a boolean",
             )
+        if provider == "byteplus":
+            create_evaluation_sets = False
 
         min_instance = data.get("minInstance", 1)
         max_instance = data.get("maxInstance", 5)
@@ -2886,8 +3383,34 @@ def _run_frontend_server(
             min_instance != 1 or max_instance != 5
         )
 
-        region = config.get("region", "cn-beijing")
+        region = config.get("region") or _default_cloud_region()
         project_name = config.get("projectName", "default")
+        try:
+            from frontend.server.deployment_resources import (
+                DeploymentResourceService,
+                agentkit_code_pipeline_resources,
+                deployment_resource_tags,
+                deployment_resources_from_tags,
+            )
+
+            deployment_resource_service = DeploymentResourceService(
+                provider, region, _resolve_ve_credentials()
+            )
+            deployment_resource_config = {}
+            deployment_resource_tag_values: dict[str, str] = {}
+            if not runtime_id:
+                deployment_resource_config = await asyncio.to_thread(
+                    deployment_resource_service.resolve_deployment_config,
+                    data.get("resources"),
+                )
+                deployment_resource_tag_values = deployment_resource_tags(
+                    data.get("resources")
+                )
+        except (TypeError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            logger.exception("resolve deployment resources failed: %s", e)
+            raise HTTPException(status_code=502, detail=str(e)) from e
         existing_runtime = None
         if runtime_id:
             try:
@@ -2904,6 +3427,14 @@ def _run_frontend_server(
                     raise HTTPException(
                         status_code=409,
                         detail=update_capability["reason"],
+                    )
+                tagged_resources = deployment_resources_from_tags(
+                    _runtime_tags(existing_runtime)
+                )
+                if tagged_resources is not None:
+                    deployment_resource_config = await asyncio.to_thread(
+                        deployment_resource_service.resolve_deployment_config,
+                        tagged_resources,
                     )
             except HTTPException:
                 raise
@@ -2972,6 +3503,54 @@ def _run_frontend_server(
                 ),
             )
 
+        @contextmanager
+        def _agentkit_sdk_credential_env():
+            """Expose provider credentials only while AgentKit SDK deploys.
+
+            The deployed Studio reads temporary IAM credentials from VeFaaS at
+            runtime. AgentKit SDK's template renderer reads provider credentials
+            from process env, so bridge the IAM creds into env for the launch
+            call without copying them into the agent runtime environment.
+            """
+            if provider != "byteplus":
+                yield
+                return
+
+            keys = (
+                "BYTEPLUS_ACCESS_KEY",
+                "BYTEPLUS_SECRET_KEY",
+                "BYTEPLUS_SESSION_TOKEN",
+                "VOLCENGINE_ACCESS_KEY",
+                "VOLCENGINE_SECRET_KEY",
+                "VOLCENGINE_SESSION_TOKEN",
+                "VOLC_SESSIONTOKEN",
+            )
+            original = {key: os.environ.get(key) for key in keys}
+            ak, sk, token = _resolve_ve_credentials()
+            try:
+                os.environ["BYTEPLUS_ACCESS_KEY"] = ak
+                os.environ["BYTEPLUS_SECRET_KEY"] = sk
+                os.environ["VOLCENGINE_ACCESS_KEY"] = ak
+                os.environ["VOLCENGINE_SECRET_KEY"] = sk
+                if token:
+                    os.environ["BYTEPLUS_SESSION_TOKEN"] = token
+                    os.environ["VOLCENGINE_SESSION_TOKEN"] = token
+                    os.environ["VOLC_SESSIONTOKEN"] = token
+                else:
+                    for key in (
+                        "BYTEPLUS_SESSION_TOKEN",
+                        "VOLCENGINE_SESSION_TOKEN",
+                        "VOLC_SESSIONTOKEN",
+                    ):
+                        os.environ.pop(key, None)
+                yield
+            finally:
+                for key, value in original.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
         # Write the generated project (+ agentkit.yaml) into a temp dir. Passing
         # config_file makes the SDK resolve THIS dir as the project dir, so the
         # live server process is never chdir'd.
@@ -2997,6 +3576,11 @@ def _run_frontend_server(
         # agent needs at boot. User-provided envs (from the UI) take priority
         # over our defaults.
         runtime_envs = _collect_runtime_envs()
+        if existing_runtime is not None:
+            for item in getattr(existing_runtime, "envs", None) or []:
+                key = str(getattr(item, "key", "") or "").strip()
+                if key:
+                    runtime_envs[key] = str(getattr(item, "value", "") or "")
         for k, v in extra_runtime_envs.items():
             runtime_envs[k] = v
         if feishu_enabled:
@@ -3005,6 +3589,12 @@ def _run_frontend_server(
                     "FEISHU_APP_ID": feishu_app_id,
                     "FEISHU_APP_SECRET": feishu_app_secret,
                 }
+            )
+        if provider == "byteplus":
+            runtime_envs["CLOUD_PROVIDER"] = "byteplus"
+            runtime_envs["AGENTKIT_CLOUD_PROVIDER"] = "byteplus"
+            runtime_envs["DATABASE_VIKING_REGION"] = (
+                DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
             )
 
         # TOS build-artifact buckets are region-scoped. The SDK default template
@@ -3037,11 +3627,14 @@ def _run_frontend_server(
         elif runtime_network:
             cloud_config["runtime_network"] = runtime_network
         if region and region != "cn-beijing":
-            region_suffix = region.split("-")[-1]  # "shanghai" from "cn-shanghai"
+            region_suffix = (
+                region.split("-", 1)[1] if region.startswith("cn-") else region
+            )
             try:
                 from agentkit.utils.template_utils import render_template
 
-                bucket_base = render_template("agentkit-platform-{{account_id}}")
+                with _agentkit_sdk_credential_env():
+                    bucket_base = render_template("agentkit-platform-{{account_id}}")
             except Exception as e:
                 logger.warning(
                     "Could not resolve account_id for TOS bucket naming: %s; "
@@ -3051,6 +3644,9 @@ def _run_frontend_server(
                 )
                 bucket_base = "agentkit-platform"
             cloud_config["tos_bucket"] = f"{bucket_base}-{region_suffix}"
+            if provider == "byteplus":
+                cloud_config["cr_instance_name"] = bucket_base
+        cloud_config.update(deployment_resource_config)
 
         agentkit_config = {
             "common": {
@@ -3077,6 +3673,20 @@ def _run_frontend_server(
             "destroying": False,
             "destroy_on_cancel": not bool(runtime_id),
             "owner_id": owner_id,
+            "cp_workspace_id": str(
+                (
+                    ((data.get("resources") or {}).get("codePipeline") or {}).get(
+                        "workspaceId"
+                    )
+                )
+                or ""
+            ),
+            "cp_pipeline_id": str(
+                deployment_resource_config.get("cp_pipeline_id") or ""
+            ),
+            "cp_pipeline_name": str(
+                deployment_resource_config.get("cp_pipeline_name") or ""
+            ),
         }
         events: _queue.Queue = _queue.Queue()
         state = {"phase": "build", "build_error_excerpt": ""}
@@ -3084,7 +3694,10 @@ def _run_frontend_server(
         task_state["cp_log_stop_event"] = cp_log_stop_event
 
         _PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2, "update": 3}
-        _CP_WORKSPACE_NAME = "agentkit-cli-workspace"
+        _CP_WORKSPACE_NAME = str(
+            deployment_resource_config.get("cp_workspace_name")
+            or "agentkit-cli-workspace"
+        )
         _CP_LOG_POLL_INTERVAL = 5.0
 
         def _result_error_text(result) -> str:
@@ -3112,7 +3725,8 @@ def _run_frontend_server(
             if _is_tos_request_expired(error_text):
                 return (
                     "云构建拉取源码包时 TOS 临时下载签名已过期。"
-                    "已自动重试一次仍失败，请稍后重新点击部署。"
+                    "已自动重试一次仍失败，请稍后重新点击部署。\n"
+                    f"原始错误：\n{error_text}"
                 )
             return error_text
 
@@ -3328,7 +3942,8 @@ def _run_frontend_server(
                     access_key=ak,
                     secret_key=sk,
                     session_token=token or "",
-                    region="cn-beijing",
+                    region=region,
+                    provider=provider,
                 )
                 workspace_id = _resolve_cp_workspace_id(cp_client)
                 pipeline_id = _resolve_cp_pipeline_id(cp_client, workspace_id)
@@ -3464,6 +4079,7 @@ def _run_frontend_server(
                 # can filter by author. Restored right after.
                 rt_client = None
                 orig_create = None
+                orig_update = None
                 try:
                     from agentkit.sdk.runtime.client import (
                         AgentkitRuntimeClient as rt_client,
@@ -3471,6 +4087,7 @@ def _run_frontend_server(
                     from agentkit.sdk.runtime import types as _rt
 
                     orig_create = rt_client.create_runtime
+                    orig_update = rt_client.update_runtime
                     extra = [
                         _rt.TagsItemForCreateRuntime.model_validate(
                             {"Key": "veadk:managed", "Value": "true"}
@@ -3488,16 +4105,18 @@ def _run_frontend_server(
                                 {"Key": "veadk:owner", "Value": owner_id}
                             )
                         )
+                    extra.extend(
+                        _rt.TagsItemForCreateRuntime.model_validate(
+                            {"Key": key, "Value": value}
+                        )
+                        for key, value in deployment_resource_tag_values.items()
+                    )
 
                     def _tagged_create(self, req, _orig=orig_create, _extra=extra):
                         if task_state["cancel_event"].is_set():
                             raise RuntimeError("Deployment cancelled")
                         req.tags = [*(req.tags or []), *_extra]
-                        # The AgentKit runner hard-codes apmplus_enable=True on
-                        # every runtime; force it off so the container doesn't
-                        # try to fetch an APMPlus app-key with the deployer's
-                        # AK/SK at boot (breaks for STS temp credentials).
-                        req.apmplus_enable = False
+                        req.apmplus_enable = True
                         created = _create_runtime_with_description_fallback(
                             _orig, self, req
                         )
@@ -3517,10 +4136,15 @@ def _run_frontend_server(
                             raise RuntimeError("Deployment cancelled")
                         return created
 
+                    def _apmplus_update(self, req, _orig=orig_update):
+                        req.apmplus_enable = True
+                        return _orig(self, req)
+
                     rt_client.create_runtime = _tagged_create
+                    rt_client.update_runtime = _apmplus_update
                 except Exception as e:
                     logger.error("Could not prepare Runtime ownership tags: %s", e)
-                    result_box["error"] = str(e)
+                    result_box["error"] = _safe_exception_detail(e)
                     return
 
                 try:
@@ -3536,11 +4160,17 @@ def _run_frontend_server(
                                     f"({attempt}/2)..."
                                 ),
                             )
-                        result = sdk.launch(
-                            config_file=str(base / "agentkit.yaml"),
-                            preflight_mode=PreflightMode.WARN,
-                            reporter=_QReporter(),
-                        )
+                        with (
+                            _agentkit_sdk_credential_env(),
+                            agentkit_code_pipeline_resources(
+                                deployment_resource_config
+                            ),
+                        ):
+                            result = sdk.launch(
+                                config_file=str(base / "agentkit.yaml"),
+                                preflight_mode=PreflightMode.WARN,
+                                reporter=_QReporter(),
+                            )
                         if getattr(result, "success", False):
                             break
                         error_text = _result_error_text(result)
@@ -3578,10 +4208,12 @@ def _run_frontend_server(
                     result_box["result"] = result
                 except Exception as e:
                     logger.error(f"AgentKit launch error: {e}", exc_info=True)
-                    result_box["error"] = str(e)
+                    result_box["error"] = _safe_exception_detail(e)
                 finally:
                     if rt_client is not None and orig_create is not None:
                         rt_client.create_runtime = orig_create
+                    if rt_client is not None and orig_update is not None:
+                        rt_client.update_runtime = orig_update
                     if task_state["cancel_event"].is_set():
                         try:
                             _destroy_deploy_task_runtime(task_state)
@@ -3873,7 +4505,7 @@ def _run_frontend_server(
         _require_agent_management(request)
         data = await request.json()
         runtime_id = (data.get("runtimeId") or "").strip()
-        region = (data.get("region") or "cn-beijing").strip()
+        region = _coerce_cloud_region(data.get("region"))
         if not runtime_id:
             raise HTTPException(status_code=400, detail="runtimeId is required")
         try:
@@ -3895,23 +4527,17 @@ def _run_frontend_server(
     async def _web_runtime_detail(
         request: Request,
         runtimeId: str = "",
-        region: str = "cn-beijing",
+        region: str = "",
     ):
         """Control-plane detail for one runtime (used by the '管理 Agent' view).
 
         Returns config/status metadata from GetRuntime. This is NOT the in-container
-        agent graph (that lives on the runtime's data plane); env-var values that
-        look like secrets are masked before leaving the server.
+        agent graph (that lives on the runtime's data plane). Runtime visibility
+        authorization also grants access to its environment-variable values.
         """
         if not runtimeId:
             raise HTTPException(status_code=400, detail="runtimeId is required")
-
-        def _mask(key: str, value: str) -> str:
-            if not value:
-                return value
-            if any(s in key.upper() for s in ("KEY", "SECRET", "TOKEN", "PASSWORD")):
-                return (value[:3] + "***") if len(value) > 3 else "***"
-            return value
+        region = _coerce_cloud_region(region)
 
         try:
             r = _authorized_runtime(request, runtimeId, region)
@@ -3938,7 +4564,7 @@ def _run_frontend_server(
             else:
                 auth_type = "unknown"
             envs = [
-                {"key": e.key, "value": _mask(e.key or "", e.value or "")}
+                {"key": e.key, "value": e.value or ""}
                 for e in (getattr(r, "envs", None) or [])
             ]
             return {
@@ -4437,6 +5063,8 @@ def _run_frontend_server(
 
         evaluation_automation = create_evaluation_automation_service(
             openapi_post=_evaluation_automation_openapi_post,
+            provider=provider,
+            resolve_credentials=_resolve_ve_credentials,
         )
         app.state.evaluation_automation = evaluation_automation
         original_lifespan = app.router.lifespan_context
@@ -4476,7 +5104,7 @@ def _run_frontend_server(
         ):
             raise HTTPException(status_code=400, detail="invalid method override")
         upstream_method = method_override or request.method
-        region = request.query_params.get("region", "cn-beijing")
+        region = _coerce_cloud_region(request.query_params.get("region"))
         try:
             runtime = _authorized_runtime(
                 request,
@@ -4806,7 +5434,11 @@ def _run_frontend_server(
             # Expose the configured provider to the login page (unauthenticated).
             label = (
                 oauth2_provider_label
-                or _PROVIDER_LABELS.get(provider_id)
+                or (
+                    "BytePlus Identity"
+                    if provider == "byteplus" and provider_id == "veidentity"
+                    else _PROVIDER_LABELS.get(provider_id)
+                )
                 or provider_id.replace("_", " ").title()
             )
             providers = [
@@ -4847,12 +5479,19 @@ def _run_frontend_server(
 
     @app.get("/web/runtime-config")
     async def _web_runtime_config():
-        # Report whether Volcengine AK/SK are present in the server environment.
-        # The agent-creation workbench needs them to call Volcengine services, so
+        # Report whether cloud AK/SK are present in the server environment.
+        # The agent-creation workbench needs them to call cloud services, so
         # the SPA shows a "set AK/SK" notice when they are absent.
-        has_creds = bool(
-            os.getenv("VOLCENGINE_ACCESS_KEY") and os.getenv("VOLCENGINE_SECRET_KEY")
-        ) or os.path.exists("/var/run/secrets/iam/credential")
+        if provider == "byteplus":
+            has_creds = bool(
+                os.getenv("BYTEPLUS_ACCESS_KEY") and os.getenv("BYTEPLUS_SECRET_KEY")
+            )
+        else:
+            has_creds = bool(
+                os.getenv("VOLCENGINE_ACCESS_KEY")
+                and os.getenv("VOLCENGINE_SECRET_KEY")
+            )
+        has_creds = has_creds or os.path.exists("/var/run/secrets/iam/credential")
         return {"credentials": has_creds}
 
     @app.get("/web/identity/user-pools")
@@ -4894,7 +5533,7 @@ def _run_frontend_server(
             return "https://" + host.removeprefix("https://").removeprefix(
                 "http://"
             ).rstrip("/")
-        return f"https://agentkit.{region}.volcengineapi.com"
+        return agentkit_openapi_base(region, provider)
 
     def _agentkit_openapi_headers(
         *,
@@ -5131,6 +5770,50 @@ def _run_frontend_server(
             raise RuntimeError("Runtime returned an invalid JSON response")
         return data
 
+    def _runtime_network_payload(runtime: Any) -> dict[str, Any]:
+        network_configurations = list(
+            getattr(runtime, "network_configurations", None) or []
+        )
+        network_types = {
+            str(getattr(item, "network_type", "") or "").strip().lower()
+            for item in network_configurations
+        }
+        private_network = next(
+            (
+                item
+                for item in network_configurations
+                if str(getattr(item, "network_type", "") or "").strip().lower()
+                == "private"
+            ),
+            None,
+        )
+        mode = (
+            "both"
+            if "public" in network_types and private_network is not None
+            else "private"
+            if private_network is not None
+            else "public"
+        )
+        payload: dict[str, Any] = {"mode": mode}
+        vpc_configuration = getattr(private_network, "vpc_configuration", None)
+        if vpc_configuration is None:
+            return payload
+
+        vpc_id = str(getattr(vpc_configuration, "vpc_id", "") or "").strip()
+        if vpc_id:
+            payload["vpcId"] = vpc_id
+        subnet_ids = getattr(vpc_configuration, "subnet_ids", None) or []
+        if subnet_ids:
+            payload["subnetIds"] = ",".join(str(item) for item in subnet_ids)
+        shared_internet = getattr(
+            vpc_configuration,
+            "enable_shared_internet_access",
+            None,
+        )
+        if shared_internet is not None:
+            payload["enableSharedInternetAccess"] = bool(shared_internet)
+        return payload
+
     def _runtime_update_payload(runtime: Any, region: str) -> dict[str, Any]:
         tags = _runtime_tags(runtime)
         return {
@@ -5140,6 +5823,15 @@ def _run_frontend_server(
             "region": region,
             "currentVersion": getattr(runtime, "current_version_number", None),
             "managed": tags.get("veadk:managed") == "true",
+            "envs": [
+                {
+                    "key": str(getattr(item, "key", "") or ""),
+                    "value": str(getattr(item, "value", "") or ""),
+                }
+                for item in (getattr(runtime, "envs", None) or [])
+                if getattr(item, "key", None)
+            ],
+            "network": _runtime_network_payload(runtime),
         }
 
     def _runtime_update_result(
@@ -5314,9 +6006,10 @@ def _run_frontend_server(
         request: Request,
         runtimeId: str = Query(..., min_length=1),
         appName: str | None = Query(default=None, min_length=1),
-        region: str = Query(default="cn-beijing", min_length=1),
+        region: str = Query(default="", min_length=0),
     ) -> dict[str, Any]:
         _require_agent_management(request)
+        region = _coerce_cloud_region(region)
         capability, _runtime = await _runtime_update_capability_details(
             request,
             runtime_id=runtimeId,
@@ -5331,6 +6024,7 @@ def _run_frontend_server(
         request: Request,
     ) -> dict[str, Any]:
         """Persist one message rating in ADK state and AgentKit evaluation sets."""
+        feedback.region = _coerce_cloud_region(feedback.region)
         principal = _current_principal(request)
         if (
             principal is None
@@ -5346,6 +6040,17 @@ def _run_frontend_server(
             feedback.region,
             coded_access_error=True,
         )
+        if provider == "byteplus":
+            return {
+                "rating": None,
+                "evaluationSetId": None,
+                "evaluationSetName": None,
+                "workspaceId": None,
+                "evaluationItemId": None,
+                "syncStatus": "synced",
+                "statePersistence": "browser",
+                "updatedAt": time.time(),
+            }
         session_path = (
             f"apps/{quote(feedback.app_name, safe='')}/users/"
             f"{quote(feedback.user_id, safe='')}/sessions/"
@@ -5533,10 +6238,11 @@ def _run_frontend_server(
         request: Request,
         runtimeId: str = Query(..., min_length=1),
         appName: str = Query(..., min_length=1),
-        region: str = Query(default="cn-beijing", min_length=1),
+        region: str = Query(default="", min_length=0),
         page_size: int = Query(default=100, ge=1, le=200),
     ) -> dict[str, Any]:
         """List AgentKit evaluation-set items created from message feedback."""
+        region = _coerce_cloud_region(region)
         runtime = _authorized_runtime(
             request,
             runtimeId,
@@ -5669,6 +6375,19 @@ def _run_frontend_server(
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except RuntimeError as error:
+            if provider == "byteplus" and "AgentKit OpenAPI returned HTTP 404" in str(
+                error
+            ):
+                return {
+                    "agentName": appName,
+                    "runtimeId": runtimeId,
+                    "region": region,
+                    "projectName": getattr(runtime, "project_name", "") or "default",
+                    "sets": [],
+                    "items": [],
+                    "unsupported": True,
+                    "unsupportedMessage": "BytePlus 暂不支持 AgentKit 评测集。",
+                }
             raise HTTPException(
                 status_code=502,
                 detail="读取 AgentKit 评测集失败：" + _safe_exception_detail(error),
@@ -5680,6 +6399,7 @@ def _run_frontend_server(
         request: Request,
     ) -> dict[str, Any]:
         """Remove feedback cases and clear their thumbs state without deleting chat."""
+        deletion.region = _coerce_cloud_region(deletion.region)
         requested_ids = {
             item_id.strip()
             for item_id in deletion.item_ids
@@ -5835,18 +6555,24 @@ def _run_frontend_server(
 
     @app.get("/web/a2a-spaces")
     async def _web_list_a2a_spaces(
-        region: str = "cn-beijing",
+        region: str = "",
         page_size: int = Query(default=100, ge=1, le=100),
         project: str | None = None,
     ):
         """List all AgentKit A2A Spaces visible to server credentials."""
+        region = _coerce_cloud_region(region)
         try:
             _resolve_ve_credentials()
         except HTTPException:
             raise HTTPException(
                 status_code=409,
-                detail="Server Volcengine credentials not configured "
-                "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY).",
+                detail=(
+                    "Server BytePlus credentials not configured "
+                    "(set BYTEPLUS_ACCESS_KEY/BYTEPLUS_SECRET_KEY)."
+                    if provider == "byteplus"
+                    else "Server Volcengine credentials not configured "
+                    "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY)."
+                ),
             )
 
         all_items: list[dict[str, Any]] = []
@@ -5916,8 +6642,7 @@ def _run_frontend_server(
         }
 
     def _viking_knowledgebase_host(region: str) -> tuple[str, str]:
-        cloud_provider = os.getenv("CLOUD_PROVIDER", "volces").lower()
-        if cloud_provider == "byteplus":
+        if provider == "byteplus":
             return (
                 f"api-knowledgebase.mlp.{region}.bytepluses.com",
                 "https",
@@ -5933,25 +6658,210 @@ def _run_frontend_server(
             return data.get(name, fallback)
         return fallback
 
+    def _append_unique_viking_collection_item(
+        items: list[dict[str, Any]],
+        seen: set[tuple[str, str, str, str]],
+        item: dict[str, Any],
+    ) -> None:
+        key = (
+            str(item.get("sourceKind") or ""),
+            str(item.get("projectName") or ""),
+            str(item.get("region") or ""),
+            str(item.get("id") or ""),
+        )
+        if not key[-1] or key in seen:
+            return
+        seen.add(key)
+        items.append(item)
+
+    def _agentkit_viking_index(name: str, provider_knowledge_id: str) -> str:
+        provider_id = (provider_knowledge_id or "").strip()
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,127}", provider_id):
+            return provider_id
+        return name
+
+    def _list_agentkit_viking_knowledge_bases(
+        *,
+        access_key: str,
+        secret_key: str,
+        session_token: str | None,
+        region: str,
+        project: str | None,
+    ) -> list[dict[str, Any]]:
+        from agentkit.sdk.knowledge.client import AgentkitKnowledgeClient
+        from agentkit.sdk.knowledge import types as knowledge_types
+
+        client = AgentkitKnowledgeClient(
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token or "",
+            region=region,
+        )
+        items: list[dict[str, Any]] = []
+        next_token = ""
+        seen_tokens: set[str] = set()
+        for _ in range(100):
+            request = knowledge_types.ListKnowledgeBasesRequest(
+                max_results=100,
+                next_token=next_token or None,
+                project_name=project,
+                filters=[
+                    knowledge_types.FiltersItemForListKnowledgeBases(
+                        name="provider_type",
+                        values=["VIKINGDB_KNOWLEDGE"],
+                    )
+                ],
+            )
+            response = client.list_knowledge_bases(request)
+            for knowledge in response.knowledge_bases or []:
+                name = str(getattr(knowledge, "name", "") or "").strip()
+                knowledge_id = str(getattr(knowledge, "knowledge_id", "") or "").strip()
+                provider_id = str(
+                    getattr(knowledge, "provider_knowledge_id", "") or ""
+                ).strip()
+                index = _agentkit_viking_index(name, provider_id)
+                if not index:
+                    continue
+                resource_id = provider_id if provider_id.startswith("kb-") else ""
+                if not resource_id and knowledge_id.startswith("kb-"):
+                    resource_id = knowledge_id
+                items.append(
+                    {
+                        "id": index,
+                        "name": name or index,
+                        "description": str(getattr(knowledge, "description", "") or ""),
+                        "projectName": str(
+                            getattr(knowledge, "project_name", "") or project or ""
+                        ),
+                        "region": str(getattr(knowledge, "region", "") or region),
+                        "updatedAt": str(
+                            getattr(knowledge, "last_update_time", "") or ""
+                        ),
+                        "resourceId": resource_id,
+                        "agentkitKnowledgeId": knowledge_id,
+                        "providerKnowledgeId": provider_id,
+                        "providerType": str(
+                            getattr(knowledge, "provider_type", "") or ""
+                        ),
+                        "status": str(getattr(knowledge, "status", "") or ""),
+                        "sourceKind": "agentkit",
+                        "sourceLabel": "AgentKit Knowledge Base",
+                    }
+                )
+            token = str(getattr(response, "next_token", "") or "")
+            if not token or token in seen_tokens:
+                break
+            seen_tokens.add(token)
+            next_token = token
+        return items
+
+    def _list_vikingdb_vector_collections(
+        *,
+        access_key: str,
+        secret_key: str,
+        session_token: str | None,
+        region: str,
+        project: str | None,
+    ) -> list[dict[str, Any]]:
+        from volcenginesdkcore import ApiClient
+        from volcenginesdkcore.configuration import Configuration
+        from volcenginesdkvikingdb import ListVikingdbCollectionRequest, VIKINGDBApi
+
+        config = Configuration()
+        config.ak = access_key
+        config.sk = secret_key
+        config.session_token = session_token or ""
+        config.region = region
+        config.host = _vikingdb_openapi_host(provider)
+        client = VIKINGDBApi(ApiClient(config))
+
+        items: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for project_name in _candidate_vikingdb_projects(project):
+            page_number = 1
+            page_size = 100
+            while True:
+                request = ListVikingdbCollectionRequest(
+                    page_number=page_number,
+                    page_size=page_size,
+                    project_name=project_name,
+                )
+                try:
+                    response = client.list_vikingdb_collection(request)
+                except Exception:
+                    logger.debug(
+                        "skip VikingDB vector collection project %s in %s",
+                        project_name or "<account-default>",
+                        region,
+                        exc_info=True,
+                    )
+                    break
+                collections = list(getattr(response, "collections", None) or [])
+                for collection in collections:
+                    name = str(getattr(collection, "collection_name", "") or "")
+                    if not name:
+                        continue
+                    resolved_project = str(
+                        getattr(collection, "project_name", "") or project_name or ""
+                    )
+                    key = (resolved_project, region, name)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    items.append(
+                        {
+                            "id": name,
+                            "name": name,
+                            "description": str(
+                                getattr(collection, "description", "") or ""
+                            ),
+                            "projectName": resolved_project,
+                            "region": region,
+                            "updatedAt": str(
+                                getattr(collection, "update_time", "") or ""
+                            ),
+                            "resourceId": str(
+                                getattr(collection, "resource_id", "") or ""
+                            ),
+                            "sourceKind": "vector",
+                            "sourceLabel": "Vector DB",
+                            "indexCount": getattr(collection, "index_count", None),
+                        }
+                    )
+                total_count = int(getattr(response, "total_count", 0) or 0)
+                if not collections or page_number * page_size >= total_count:
+                    break
+                page_number += 1
+        return items
+
     @app.get("/web/viking-knowledgebases")
     async def _web_list_viking_knowledgebases(
-        region: str = "cn-beijing",
-        project: str = "default",
+        region: str = "",
+        project: str = "",
     ):
         """List VikingDB KnowledgeBase collections visible to server creds."""
         from volcengine.viking_knowledgebase import VikingKnowledgeBaseService
+
+        region = _coerce_cloud_region(region)
 
         try:
             ak, sk, token = _resolve_ve_credentials()
         except HTTPException:
             raise HTTPException(
                 status_code=409,
-                detail="Server Volcengine credentials not configured "
-                "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY).",
+                detail=(
+                    "Server BytePlus credentials not configured "
+                    "(set BYTEPLUS_ACCESS_KEY/BYTEPLUS_SECRET_KEY)."
+                    if provider == "byteplus"
+                    else "Server Volcengine credentials not configured "
+                    "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY)."
+                ),
             )
 
-        project_name = (project or "").strip() or "default"
+        project_name = (project or "").strip() or None
         host, scheme = _viking_knowledgebase_host(region)
+        items: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str, str]] = set()
         try:
             client = VikingKnowledgeBaseService(
                 host=host,
@@ -5969,21 +6879,19 @@ def _run_frontend_server(
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(
+            logger.warning(
                 f"List VikingDB knowledgebases error for {region}: {e}",
                 exc_info=True,
             )
-            raise HTTPException(
-                status_code=502,
-                detail="暂时无法加载 VikingDB 知识库，请稍后重试。",
-            )
+            collections = []
 
-        items: list[dict[str, Any]] = []
         for collection in collections or []:
             name = str(_collection_attr(collection, "collection_name", "") or "")
             if not name:
                 continue
-            items.append(
+            _append_unique_viking_collection_item(
+                items,
+                seen,
                 {
                     "id": name,
                     "name": name,
@@ -5991,8 +6899,8 @@ def _run_frontend_server(
                         _collection_attr(collection, "description", "") or ""
                     ),
                     "projectName": str(
-                        _collection_attr(collection, "project", project_name)
-                        or project_name
+                        _collection_attr(collection, "project", project_name or "")
+                        or ""
                     ),
                     "region": region,
                     "docCount": _collection_attr(collection, "doc_num", None),
@@ -6002,9 +6910,57 @@ def _run_frontend_server(
                     "resourceId": str(
                         _collection_attr(collection, "resource_id", "") or ""
                     ),
-                }
+                    "sourceKind": "knowledge",
+                    "sourceLabel": "Knowledge Engine",
+                },
             )
 
+        try:
+            agentkit_items = await asyncio.to_thread(
+                _list_agentkit_viking_knowledge_bases,
+                access_key=ak,
+                secret_key=sk,
+                session_token=token,
+                region=region,
+                project=project_name,
+            )
+            for item in agentkit_items:
+                _append_unique_viking_collection_item(items, seen, item)
+        except Exception as e:
+            logger.warning(
+                f"List AgentKit Viking knowledgebases error for {region}: {e}",
+                exc_info=True,
+            )
+
+        try:
+            vector_items = await asyncio.to_thread(
+                _list_vikingdb_vector_collections,
+                access_key=ak,
+                secret_key=sk,
+                session_token=token,
+                region=region,
+                project=project_name,
+            )
+            for item in vector_items:
+                _append_unique_viking_collection_item(items, seen, item)
+        except Exception as e:
+            logger.warning(
+                f"List VikingDB vector collections error for {region}: {e}",
+                exc_info=True,
+            )
+
+        if not items:
+            raise HTTPException(
+                status_code=502,
+                detail="暂时无法加载 VikingDB 知识库或向量库，请稍后重试。",
+            )
+        items.sort(
+            key=lambda item: (
+                str(item.get("sourceKind") or ""),
+                str(item.get("projectName") or ""),
+                str(item.get("name") or ""),
+            )
+        )
         return {"items": items, "totalCount": len(items)}
 
     # SkillSpace routes run sync SDK calls in worker threads. Detail responses
@@ -6020,8 +6976,13 @@ def _run_frontend_server(
         except HTTPException:
             raise HTTPException(
                 status_code=409,
-                detail="Server Volcengine credentials not configured "
-                "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY).",
+                detail=(
+                    "Server BytePlus credentials not configured "
+                    "(set BYTEPLUS_ACCESS_KEY/BYTEPLUS_SECRET_KEY)."
+                    if provider == "byteplus"
+                    else "Server Volcengine credentials not configured "
+                    "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY)."
+                ),
             )
         return AgentkitSkillsClient(
             access_key=ak,
@@ -6030,6 +6991,16 @@ def _run_frontend_server(
             session_token=token or "",
         )
 
+    from frontend.server.skills.repository import AgentKitSkillRepository
+    from frontend.server.skills.routes import _convert_error, mount_skill_routes
+    from frontend.server.skills.service import SkillService
+
+    mount_skill_routes(
+        app,
+        SkillService(AgentKitSkillRepository(_skills_client)),
+        _skill_identity,
+    )
+
     @app.get("/web/skill-spaces")
     async def _web_list_skill_spaces(
         region: str = "all",
@@ -6037,11 +7008,16 @@ def _run_frontend_server(
         page_size: int = Query(default=50, ge=1, le=100),
         project: str | None = None,
     ):
-        """List SkillSpaces visible to the server's credentials. Fetches from
-        both cn-beijing and cn-shanghai when region=all."""
+        """List SkillSpaces visible to the server's credentials.
+
+        In Volcengine mode, region=all spans Beijing and Shanghai. In BytePlus
+        mode it resolves to the BytePlus Studio region configured for this
+        server (currently ap-southeast-1).
+        """
         from agentkit.sdk.skills.types import ListSkillSpacesRequest
 
-        regions = ["cn-beijing", "cn-shanghai"] if region == "all" else [region]
+        aggregate_regions = region in {"all", "", "*"}
+        regions = _runtime_regions(provider, region)
         all_items = []
         total_count = 0
         project_name = (project or "").strip() or None
@@ -6049,8 +7025,8 @@ def _run_frontend_server(
         for reg in regions:
             try:
                 client = _skills_client(reg)
-                request_page = 1 if region == "all" else page
-                request_page_size = 50 if region == "all" else page_size
+                request_page = 1 if aggregate_regions else page
+                request_page_size = 50 if aggregate_regions else page_size
                 resp = await asyncio.to_thread(
                     client.list_skill_spaces,
                     ListSkillSpacesRequest(
@@ -6072,7 +7048,7 @@ def _run_frontend_server(
                             "skillCount": len(s.relations or []),
                         }
                     )
-                if region != "all":
+                if not aggregate_regions:
                     total_count = (
                         resp.total_count
                         if resp.total_count is not None
@@ -6082,22 +7058,19 @@ def _run_frontend_server(
                 raise
             except Exception as e:
                 logger.error(f"ListSkillSpaces error for {reg}: {e}", exc_info=True)
-                raise HTTPException(
-                    status_code=502,
-                    detail="暂时无法加载 AgentKit Skill Space，请稍后重试。",
-                )
+                raise _convert_error(e) from e
 
         return {
             "items": all_items,
-            "totalCount": len(all_items) if region == "all" else total_count,
-            "page": 1 if region == "all" else page,
-            "pageSize": 50 if region == "all" else page_size,
+            "totalCount": len(all_items) if aggregate_regions else total_count,
+            "page": 1 if aggregate_regions else page,
+            "pageSize": 50 if aggregate_regions else page_size,
         }
 
     @app.get("/web/skill-spaces/{space_id}/skills")
     async def _web_list_skills_in_space(
         space_id: str,
-        region: str = "cn-beijing",
+        region: str = "",
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=100, ge=1, le=100),
         project: str | None = None,
@@ -6107,6 +7080,7 @@ def _run_frontend_server(
         from agentkit.sdk.skills.types import ListSkillsBySkillSpaceRequest
 
         del project  # SkillSpace ID is already globally scoped by AgentKit.
+        region = _coerce_cloud_region(region)
         try:
             client = _skills_client(region)
             resp = await asyncio.to_thread(
@@ -6124,10 +7098,7 @@ def _run_frontend_server(
                 f"ListSkillsBySkillSpace({space_id}) error for {region}: {e}",
                 exc_info=True,
             )
-            raise HTTPException(
-                status_code=502,
-                detail="暂时无法加载该 Skill Space 的技能，请稍后重试。",
-            )
+            raise _convert_error(e) from e
 
         items = list(resp.items or [])
         return {
@@ -6153,11 +7124,12 @@ def _run_frontend_server(
         space_id: str,
         skill_id: str,
         version: str | None = None,
-        region: str = "cn-beijing",
+        region: str = "",
     ):
         """Fetch a specific skill version's SKILL.md content plus package files."""
         from agentkit.sdk.skills.types import GetSkillVersionRequest
 
+        region = _coerce_cloud_region(region)
         try:
             client = _skills_client(region)
             resp = await asyncio.to_thread(
@@ -6170,10 +7142,7 @@ def _run_frontend_server(
             logger.error(
                 f"GetSkillVersion({skill_id}@{version}) error: {e}", exc_info=True
             )
-            raise HTTPException(
-                status_code=502,
-                detail="暂时无法加载该技能详情，请稍后重试。",
-            )
+            raise _convert_error(e) from e
 
         resolved = await asyncio.to_thread(
             _skill_files_from_version_response,
@@ -6307,11 +7276,16 @@ def _resolve_studio_identity_region(
     client_id: str,
     deployment_region: str,
     session_token: str = "",
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
 ) -> str:
     """Locate a Studio user-pool client across supported Identity regions."""
     from veadk.integrations.ve_identity.identity_client import IdentityClient
 
-    supported_regions = ("cn-beijing", "cn-shanghai")
+    supported_regions = (
+        (default_region(provider),)
+        if provider == "byteplus"
+        else ("cn-beijing", "cn-shanghai")
+    )
     candidate_regions = (deployment_region,) + tuple(
         region for region in supported_regions if region != deployment_region
     )
@@ -6321,15 +7295,89 @@ def _resolve_studio_identity_region(
             secret_key=secret_key,
             session_token=session_token,
             region=candidate_region,
+            provider=provider,
         )
         if identity_client.user_pool_client_exists(
             user_pool_uid=user_pool_id,
             client_uid=client_id,
         ):
             return candidate_region
+    if provider == "byteplus":
+        raise click.ClickException(
+            f"Agent Identity user pool/client not found in {deployment_region}."
+        )
     raise click.ClickException(
         "VeIdentity user pool/client not found in cn-beijing or cn-shanghai."
     )
+
+
+def _resolve_or_create_studio_identity_resources(
+    *,
+    access_key: str,
+    secret_key: str,
+    user_pool_id: str | None,
+    client_id: str | None,
+    application_name: str,
+    region: str,
+    session_token: str = "",
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+) -> tuple[str, str, str]:
+    """Resolve or create the Studio user pool and web client in one region."""
+    from veadk.integrations.ve_identity.identity_client import IdentityClient
+
+    resolved_pool_id = (user_pool_id or "").strip()
+    resolved_client_id = (client_id or "").strip()
+    if resolved_client_id and not resolved_pool_id:
+        raise click.ClickException(
+            "--allowed-client-id requires --user-pool-id so the client can be "
+            "resolved within its user pool."
+        )
+
+    identity_client = IdentityClient(
+        access_key=access_key,
+        secret_key=secret_key,
+        session_token=session_token,
+        region=region,
+        provider=provider,
+    )
+
+    if resolved_pool_id:
+        user_pool = identity_client.get_user_pool(uid=resolved_pool_id)
+        if user_pool is None:
+            raise click.ClickException(
+                f"Identity user pool '{resolved_pool_id}' was not found in {region}."
+            )
+        resolved_pool_id, user_pool_domain = user_pool
+        click.echo(f"Using Identity user pool '{resolved_pool_id}' in {region}.")
+    else:
+        user_pool_name = f"veadk-studio-{application_name}"
+        user_pool = identity_client.get_user_pool(name=user_pool_name)
+        if user_pool is None:
+            click.echo(f"Creating Identity user pool '{user_pool_name}' in {region}…")
+            user_pool = identity_client.create_user_pool(name=user_pool_name)
+        else:
+            click.echo(f"Reusing Identity user pool '{user_pool_name}' in {region}.")
+        resolved_pool_id, user_pool_domain = user_pool
+
+    if resolved_client_id:
+        return resolved_pool_id, user_pool_domain, resolved_client_id
+
+    client_name = f"veadk-studio-{application_name}-web"
+    user_pool_client = identity_client.get_user_pool_client(
+        user_pool_uid=resolved_pool_id,
+        name=client_name,
+    )
+    if user_pool_client is None:
+        click.echo(f"Creating Identity client '{client_name}' in {region}…")
+        user_pool_client = identity_client.create_user_pool_client(
+            user_pool_uid=resolved_pool_id,
+            name=client_name,
+            client_type="WEB_APPLICATION",
+        )
+    else:
+        click.echo(f"Reusing Identity client '{client_name}' in {region}.")
+    resolved_client_id, _client_secret = user_pool_client
+    return resolved_pool_id, user_pool_domain, resolved_client_id
 
 
 def _resolve_studio_cloud_credentials(
@@ -6337,19 +7385,46 @@ def _resolve_studio_cloud_credentials(
     secret_key: str | None,
     credentials_path: Path | None = None,
     session_token: str | None = None,
+    *,
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
 ) -> tuple[str, str, str]:
     """Resolve Studio deploy credentials as AK, SK, and token."""
     import configparser
 
-    resolved_access_key = access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
-    resolved_secret_key = secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
-    resolved_session_token = (
-        session_token
-        or os.getenv("VOLCENGINE_SESSION_TOKEN", "")
-        or os.getenv("VOLC_SESSIONTOKEN", "")
-    )
+    if provider == "byteplus":
+        resolved_access_key = (
+            access_key
+            or os.getenv("BYTEPLUS_ACCESS_KEY", "")
+            or os.getenv("VOLCENGINE_ACCESS_KEY", "")
+        )
+        resolved_secret_key = (
+            secret_key
+            or os.getenv("BYTEPLUS_SECRET_KEY", "")
+            or os.getenv("VOLCENGINE_SECRET_KEY", "")
+        )
+        resolved_session_token = (
+            session_token
+            or os.getenv("BYTEPLUS_SESSION_TOKEN", "")
+            or os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+            or os.getenv("VOLC_SESSIONTOKEN", "")
+        )
+    else:
+        resolved_access_key = access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
+        resolved_secret_key = secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
+        resolved_session_token = (
+            session_token
+            or os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+            or os.getenv("VOLC_SESSIONTOKEN", "")
+        )
     if resolved_access_key and resolved_secret_key:
         return resolved_access_key, resolved_secret_key, resolved_session_token
+
+    if provider == "byteplus":
+        raise click.ClickException(
+            "BytePlus credentials required: pass --byteplus-access-key/"
+            "--byteplus-secret-key, or set BYTEPLUS_ACCESS_KEY/"
+            "BYTEPLUS_SECRET_KEY."
+        )
 
     path = credentials_path or Path.home() / ".volc" / "credentials"
     if path.is_file():
@@ -6387,13 +7462,15 @@ def _resolve_studio_cloud_credentials(
 @studio.command("deploy")
 @click.option(
     "--user-pool-id",
-    required=True,
-    help="VeIdentity User Pool UID that gates access (the gateway does SSO against it).",
+    default=None,
+    help="Existing Identity User Pool UID. When omitted, Studio creates or "
+    "reuses a pool in the deployment region.",
 )
 @click.option(
     "--allowed-client-id",
-    required=True,
-    help="VeIdentity client UID used for the SSO login at the gateway.",
+    default=None,
+    help="Existing Identity client UID used for SSO. When omitted, Studio "
+    "creates or reuses a web client in the deployment region.",
 )
 @click.option(
     "--client-secret",
@@ -6406,23 +7483,36 @@ def _resolve_studio_cloud_credentials(
     help="VeFaaS application/function name (4-64 chars, letters/digits/-, no underscore).",
 )
 @click.option(
-    "--region",
-    default="cn-beijing",
+    "--provider",
+    type=click.Choice(["volcengine", "byteplus"]),
+    default="volcengine",
     show_default=True,
-    type=click.Choice(["cn-beijing", "cn-shanghai"]),
-    help="Volcengine region for Studio deployment.",
+    help="Cloud provider for Studio deployment.",
+)
+@click.option(
+    "--region",
+    default=None,
+    type=click.Choice(["cn-beijing", "cn-shanghai", DEFAULT_BYTEPLUS_REGION]),
+    help="Cloud region for Studio deployment. Defaults to the provider region.",
 )
 @click.option(
     "--project",
     default="default",
     show_default=True,
-    help="Volcengine project for the VeFaaS function.",
+    help="Cloud project for the VeFaaS function.",
 )
 @click.option(
     "--iam-role",
     default=None,
     help="Pre-existing IAM role TRN to bind to the function. If omitted, a role "
     "is auto-created with the frontend deploy policy.",
+)
+@click.option(
+    "--vefaas-application-template-id",
+    "--application-template-id",
+    default=None,
+    envvar="VEFAAS_APPLICATION_TEMPLATE_ID",
+    help="Override the built-in VeFaaS Application Center TemplateId.",
 )
 @click.option(
     "--gateway-name",
@@ -6435,6 +7525,9 @@ def _resolve_studio_cloud_credentials(
 @click.option("--volcengine-access-key", default=None)
 @click.option("--volcengine-secret-key", default=None)
 @click.option("--volcengine-session-token", default=None)
+@click.option("--byteplus-access-key", default=None, envvar="BYTEPLUS_ACCESS_KEY")
+@click.option("--byteplus-secret-key", default=None, envvar="BYTEPLUS_SECRET_KEY")
+@click.option("--byteplus-session-token", default=None, envvar="BYTEPLUS_SESSION_TOKEN")
 @click.option(
     "--veadk-version",
     default="",
@@ -6448,6 +7541,13 @@ def _resolve_studio_cloud_credentials(
     help="Build a wheel from THIS checkout (incl. uncommitted changes + the "
     "current veadk/webui) and ship it, instead of installing veadk-python from "
     "PyPI. Use to deploy unreleased frontend/backend changes.",
+)
+@click.option(
+    "--keep-failed-deploy",
+    is_flag=True,
+    default=False,
+    help="Keep created VeFaaS application/function resources when deploy fails, "
+    "so release logs can be inspected in the console.",
 )
 @click.option(
     "--site-logo",
@@ -6476,6 +7576,14 @@ def _resolve_studio_cloud_credentials(
     help="Comma-separated Studio developer usernames or OAuth emails.",
 )
 @click.option(
+    "--sandbox-dev-tool-id",
+    "sandbox_dev_tool_id",
+    default=None,
+    envvar="SANDBOX_DEV",
+    help="Dedicated ready AgentKit DevEnv Tool ID for Studio development. "
+    "Default: create one during deployment.",
+)
+@click.option(
     "--sandbox-chat-codex-tool-id",
     "sandbox_chat_codex_tool_id",
     default=None,
@@ -6500,12 +7608,27 @@ def _resolve_studio_cloud_credentials(
     "Default: create one during deployment.",
 )
 @click.option(
-    "--sandbox-skill-creator-tool-id",
-    "--skill-creator-tool-id",
-    "sandbox_skill_creator_tool_id",
+    "--sandbox-chat-codex-snapshot-tool-id",
+    "sandbox_chat_codex_snapshot_tool_id",
     default=None,
-    envvar="SANDBOX_SKILL_CREATOR",
-    help="Dedicated ready AgentKit CodeEnv Tool ID used by Skill creation mode. "
+    envvar="SANDBOX_CHAT_CODEX_SNAPSHOT",
+    help="Dedicated snapshot-enabled AgentKit CodeEnv Tool ID. "
+    "Default: create one during deployment.",
+)
+@click.option(
+    "--sandbox-chat-openclaw-snapshot-tool-id",
+    "sandbox_chat_openclaw_snapshot_tool_id",
+    default=None,
+    envvar="SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+    help="Dedicated snapshot-enabled AgentKit ArkClawEnv Tool ID. "
+    "Default: create one during deployment.",
+)
+@click.option(
+    "--sandbox-chat-hermes-snapshot-tool-id",
+    "sandbox_chat_hermes_snapshot_tool_id",
+    default=None,
+    envvar="SANDBOX_CHAT_HERMES_SNAPSHOT",
+    help="Dedicated snapshot-enabled AgentKit HermesEnv Tool ID. "
     "Default: create one during deployment.",
 )
 @click.option(
@@ -6516,50 +7639,80 @@ def _resolve_studio_cloud_credentials(
     help="TOS bucket containing immutable Studio release bundles.",
 )
 @click.option(
-    "--studio-update-region",
-    default=None,
-    envvar="VEADK_STUDIO_UPDATE_REGION",
-    help="TOS region for Studio release bundles. Defaults to --region.",
-)
-@click.option(
     "--studio-update-prefix",
     default="veadk/studio/main",
     show_default=True,
     envvar="VEADK_STUDIO_UPDATE_PREFIX",
     help="TOS object prefix for the Studio main release channel.",
 )
+@click.option(
+    "--apmplus-aid",
+    default="",
+    envvar="VEADK_STUDIO_APMPLUS_AID",
+    help="APMPlus Client aid for Studio frontend telemetry.",
+)
+@click.option(
+    "--apmplus-token",
+    default="",
+    envvar="VEADK_STUDIO_APMPLUS_TOKEN",
+    help="APMPlus Client token for Studio frontend telemetry.",
+)
+@click.option(
+    "--apmplus-domain",
+    default="",
+    envvar="VEADK_STUDIO_APMPLUS_DOMAIN",
+    help="APMPlus Client reporting domain. Default: apmplus.volces.com.",
+)
+@click.option(
+    "--apmplus-env",
+    default="",
+    envvar="VEADK_STUDIO_APMPLUS_ENV",
+    help=f"APMPlus environment name. Default: {STUDIO_APMPLUS_ENV}.",
+)
 def frontend_deploy(
-    user_pool_id: str,
-    allowed_client_id: str,
+    user_pool_id: str | None,
+    allowed_client_id: str | None,
     client_secret: str,
     vefaas_app_name: str,
-    region: str,
+    provider: str,
+    region: str | None,
     project: str,
     iam_role: str | None,
+    vefaas_application_template_id: str | None,
     gateway_name: str,
     gateway_service_name: str,
     gateway_upstream_name: str,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
     volcengine_session_token: str | None,
+    byteplus_access_key: str | None,
+    byteplus_secret_key: str | None,
+    byteplus_session_token: str | None,
     veadk_version: str,
     from_source: bool,
+    keep_failed_deploy: bool,
     site_logo: str | None,
     site_title: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
+    sandbox_dev_tool_id: str | None,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
-    sandbox_skill_creator_tool_id: str | None,
+    sandbox_chat_codex_snapshot_tool_id: str | None,
+    sandbox_chat_openclaw_snapshot_tool_id: str | None,
+    sandbox_chat_hermes_snapshot_tool_id: str | None,
     studio_update_bucket: str,
-    studio_update_region: str | None,
     studio_update_prefix: str,
+    apmplus_aid: str,
+    apmplus_token: str,
+    apmplus_domain: str,
+    apmplus_env: str,
 ) -> None:
     """Deploy the SSO web frontend to VeFaaS.
 
     Builds a minimal function that runs `veadk studio --auth-mode frontend`,
-    with in-app SSO bound to the given VeIdentity user pool + client, and prints
+    with in-app SSO bound to a resolved Identity user pool + client, and prints
     the public URL. Inside the function the frontend uses the bound IAM role's
     STS credentials to manage AgentKit runtimes.
     """
@@ -6567,40 +7720,102 @@ def frontend_deploy(
 
     from veadk.config import veadk_environments
 
+    provider_id = normalize_cloud_provider(provider)
+    if provider_id == "byteplus":
+        region = region or DEFAULT_BYTEPLUS_REGION
+    else:
+        region = region or default_region(provider_id)
+    os.environ["CLOUD_PROVIDER"] = provider_id
+    os.environ["AGENTKIT_CLOUD_PROVIDER"] = provider_id
+    if provider_id == "byteplus":
+        _validate_byteplus_vefaas_application_name(vefaas_app_name)
+        if region != DEFAULT_BYTEPLUS_REGION:
+            raise click.ClickException(
+                "BytePlus Studio deployment currently supports only "
+                f"{DEFAULT_BYTEPLUS_REGION}; got {region}."
+            )
+        os.environ["BYTEPLUS_REGION"] = region
+    resolved_application_template_id = (
+        vefaas_application_template_id or ""
+    ).strip() or default_vefaas_application_template_id(provider_id, region)
+
     try:
         branding_title = normalize_site_title(site_title)
         branding_logo = resolve_site_logo(site_logo)
     except ValueError as error:
         raise click.ClickException(str(error)) from error
+    try:
+        apmplus_environment = studio_apmplus_environment_from_options(
+            apmplus_aid=apmplus_aid,
+            apmplus_token=apmplus_token,
+            apmplus_domain=apmplus_domain,
+            apmplus_env=apmplus_env,
+        )
+    except StudioTelemetryConfigurationError as error:
+        raise click.ClickException(str(error)) from error
 
     ak, sk, session_token = _resolve_studio_cloud_credentials(
-        volcengine_access_key,
-        volcengine_secret_key,
-        session_token=volcengine_session_token,
+        byteplus_access_key if provider_id == "byteplus" else volcengine_access_key,
+        byteplus_secret_key if provider_id == "byteplus" else volcengine_secret_key,
+        session_token=(
+            byteplus_session_token
+            if provider_id == "byteplus"
+            else volcengine_session_token
+        ),
+        provider=provider_id,
     )
+    if provider_id == "byteplus":
+        os.environ["BYTEPLUS_ACCESS_KEY"] = ak
+        os.environ["BYTEPLUS_SECRET_KEY"] = sk
+        if session_token:
+            os.environ["BYTEPLUS_SESSION_TOKEN"] = session_token
 
-    identity_region = _resolve_studio_identity_region(
-        access_key=ak,
-        secret_key=sk,
-        user_pool_id=user_pool_id,
-        client_id=allowed_client_id,
-        deployment_region=region,
-        session_token=session_token,
-    )
+    auto_identity_resources = not (user_pool_id and allowed_client_id)
+    user_pool_domain = ""
+    if user_pool_id and allowed_client_id:
+        identity_region = _resolve_studio_identity_region(
+            access_key=ak,
+            secret_key=sk,
+            user_pool_id=user_pool_id,
+            client_id=allowed_client_id,
+            deployment_region=region,
+            session_token=session_token,
+            provider=provider_id,
+        )
+    else:
+        identity_region = region
+        user_pool_id, user_pool_domain, allowed_client_id = (
+            _resolve_or_create_studio_identity_resources(
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token,
+                user_pool_id=user_pool_id,
+                client_id=allowed_client_id,
+                application_name=vefaas_app_name,
+                region=identity_region,
+                provider=provider_id,
+            )
+        )
     if identity_region != region:
         click.secho(
-            f"Warning: Studio deploys to {region}, but the VeIdentity user "
+            f"Warning: Studio deploys to {region}, but the Identity user "
             f"pool/client was found in {identity_region}. Continuing with "
             f"Identity region {identity_region}.",
             fg="yellow",
         )
 
     # 1) Ensure VeFaaS has its service role before provisioning cloud resources.
-    from veadk.cli.studio_deploy_serverless_iam import (
-        ensure_serverless_application_role,
-    )
+    if provider_id in {"volcengine", "byteplus"}:
+        from veadk.cli.studio_deploy_serverless_iam import (
+            ensure_serverless_application_role,
+        )
 
-    ensure_serverless_application_role(ak, sk, session_token=session_token)
+        ensure_serverless_application_role(
+            ak,
+            sk,
+            session_token=session_token,
+            provider=provider_id,
+        )
 
     # 2) Ensure the IAM role the function runs as (auto-create unless provided).
     if iam_role:
@@ -6610,38 +7825,92 @@ def frontend_deploy(
         from veadk.cli.frontend_deploy_iam import ensure_frontend_role
 
         click.echo("Ensuring IAM role + policy…")
-        role_trn = ensure_frontend_role(ak, sk, session_token=session_token)
+        role_trn = ensure_frontend_role(
+            ak,
+            sk,
+            session_token=session_token,
+            provider=provider_id,
+        )
         click.echo(f"IAM role ready: {role_trn}")
     # Consumed by VeFaaS._create_function as the function's Role (STS creds are
     # then injected into the instance); read via getenv from os.environ, NOT
     # shipped as a plain env var.
     os.environ["IAM_ROLE"] = role_trn
 
+    from frontend.server.storage.provisioning import (
+        StudioStorageProvisioningError,
+        resolve_studio_storage_for_deploy,
+    )
+
+    auto_storage = not str(
+        veadk_environments.get("VEADK_STUDIO_TOS_BUCKET") or ""
+    ).strip()
+    click.echo("Ensuring Studio persistent storage…")
+    try:
+        storage_config = resolve_studio_storage_for_deploy(
+            provider=provider_id,
+            region=region,
+            access_key=ak,
+            secret_key=sk,
+            session_token=session_token or "",
+            source=veadk_environments,
+        )
+    except StudioStorageProvisioningError as error:
+        detail = _safe_exception_detail(
+            error,
+            secrets=(ak, sk, session_token),
+        )
+        raise click.ClickException(
+            f"Failed to provision Studio persistent storage.\n{detail}"
+        ) from error
+    studio_storage_environment = _studio_storage_environment(veadk_environments)
+    studio_storage_environment.update(
+        {
+            "VEADK_STUDIO_TOS_BUCKET": storage_config.bucket,
+            "VEADK_STUDIO_TOS_REGION": storage_config.region,
+        }
+    )
+    click.echo(f"Studio persistent storage ready: {storage_config.object_host}")
+
     sandbox_tool_ids = {
         "codex": sandbox_chat_codex_tool_id,
-        "skill_creator": sandbox_skill_creator_tool_id,
+        "codex_snapshot": sandbox_chat_codex_snapshot_tool_id,
         "openclaw": sandbox_chat_openclaw_tool_id,
+        "openclaw_snapshot": sandbox_chat_openclaw_snapshot_tool_id,
         "hermes": sandbox_chat_hermes_tool_id,
+        "hermes_snapshot": sandbox_chat_hermes_snapshot_tool_id,
+        "dev": sandbox_dev_tool_id,
     }
     sandbox_tool_labels = {
         "codex": "Codex",
-        "skill_creator": "Skill Creator",
+        "codex_snapshot": "Codex Snapshot",
         "openclaw": "OpenClaw",
+        "openclaw_snapshot": "OpenClaw Snapshot",
         "hermes": "Hermes",
+        "hermes_snapshot": "Hermes Snapshot",
+        "dev": "Dev Sandbox",
     }
     sandbox_tool_purposes = {
         "codex": "chat",
-        "skill_creator": "skill",
+        "codex_snapshot": "chat",
         "openclaw": "openclaw",
+        "openclaw_snapshot": "openclaw",
         "hermes": "hermes",
+        "hermes_snapshot": "hermes",
+        "dev": "dev",
     }
     from veadk.cli.studio_sandbox_tools import (
-        STUDIO_SANDBOX_AGENT_MODEL_NAME,
         ensure_studio_agent_model_credential,
         ensure_studio_agent_tool,
         ensure_studio_code_env_tool,
+        ensure_studio_dev_env_tool,
+        studio_sandbox_agent_model_name,
+        studio_sandbox_model_base_url,
         studio_sandbox_tool_name,
     )
+
+    sandbox_agent_model_name = studio_sandbox_agent_model_name(provider_id)
+    sandbox_model_base_url = studio_sandbox_model_base_url(provider_id)
 
     missing_sandbox_tools: dict[str, str] = {}
     for kind, tool_id in sandbox_tool_ids.items():
@@ -6652,6 +7921,7 @@ def frontend_deploy(
         tool_name = studio_sandbox_tool_name(
             vefaas_app_name,
             sandbox_tool_purposes[kind],
+            snapshot=kind.endswith("_snapshot"),
         )
         click.echo(f"Creating AgentKit {label} Tool '{tool_name}'…")
         missing_sandbox_tools[kind] = tool_name
@@ -6660,9 +7930,21 @@ def frontend_deploy(
         with ThreadPoolExecutor(max_workers=len(missing_sandbox_tools)) as executor:
             tool_futures = {}
             for kind, tool_name in missing_sandbox_tools.items():
-                if kind in {"codex", "skill_creator"}:
+                base_kind = kind.removesuffix("_snapshot")
+                enable_snapshot = kind.endswith("_snapshot")
+                if base_kind == "codex":
                     future = executor.submit(
                         ensure_studio_code_env_tool,
+                        name=tool_name,
+                        enable_snapshot=enable_snapshot,
+                        region=region,
+                        access_key=ak,
+                        secret_key=sk,
+                        session_token=session_token or "",
+                    )
+                elif base_kind == "dev":
+                    future = executor.submit(
+                        ensure_studio_dev_env_tool,
                         name=tool_name,
                         region=region,
                         access_key=ak,
@@ -6673,8 +7955,9 @@ def frontend_deploy(
                     future = executor.submit(
                         ensure_studio_agent_tool,
                         name=tool_name,
-                        kind=kind,
-                        model_name=STUDIO_SANDBOX_AGENT_MODEL_NAME,
+                        kind=base_kind,
+                        enable_snapshot=enable_snapshot,
+                        model_name=sandbox_agent_model_name,
                         region=region,
                         access_key=ak,
                         secret_key=sk,
@@ -6710,10 +7993,20 @@ def frontend_deploy(
         resolved_sandbox_tool_ids[kind] = tool_id
         click.echo(f"Creating AgentKit {sandbox_tool_labels[kind]} model credential…")
 
-    with ThreadPoolExecutor(max_workers=len(resolved_sandbox_tool_ids)) as executor:
+    _validate_distinct_sandbox_tool_ids(resolved_sandbox_tool_ids)
+
+    if resolved_sandbox_tool_ids:
+        max_workers = len(resolved_sandbox_tool_ids)
+    else:
+        max_workers = 1
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         credential_futures = {}
         for kind, tool_id in resolved_sandbox_tool_ids.items():
-            if kind in {"codex", "skill_creator"}:
+            base_kind = kind.removesuffix("_snapshot")
+            if base_kind in {"codex", "dev"}:
+                code_model_name = (
+                    sandbox_agent_model_name if base_kind == "codex" else None
+                )
                 future = executor.submit(
                     ensure_skill_creator_model_credential,
                     tool_id=tool_id,
@@ -6721,17 +8014,21 @@ def frontend_deploy(
                     access_key=ak,
                     secret_key=sk,
                     session_token=session_token,
+                    provider=provider_id,
+                    model_name=code_model_name,
                 )
             else:
                 future = executor.submit(
                     ensure_studio_agent_model_credential,
                     tool_id=tool_id,
-                    kind=kind,
-                    model_name=STUDIO_SANDBOX_AGENT_MODEL_NAME,
+                    kind=base_kind,
+                    model_name=sandbox_agent_model_name,
+                    model_base_url=sandbox_model_base_url,
                     region=region,
                     access_key=ak,
                     secret_key=sk,
                     session_token=session_token,
+                    provider=provider_id,
                 )
             credential_futures[kind] = future
 
@@ -6750,10 +8047,13 @@ def frontend_deploy(
                 ) from error
             click.echo(f"AgentKit {label} model credential is ready.")
 
-    chat_codex_tool_id = resolved_sandbox_tool_ids["codex"]
-    skill_creator_tool_id = resolved_sandbox_tool_ids["skill_creator"]
-    openclaw_tool_id = resolved_sandbox_tool_ids["openclaw"]
-    hermes_tool_id = resolved_sandbox_tool_ids["hermes"]
+    chat_codex_tool_id = resolved_sandbox_tool_ids.get("codex", "")
+    chat_codex_snapshot_tool_id = resolved_sandbox_tool_ids.get("codex_snapshot", "")
+    openclaw_tool_id = resolved_sandbox_tool_ids.get("openclaw", "")
+    openclaw_snapshot_tool_id = resolved_sandbox_tool_ids.get("openclaw_snapshot", "")
+    hermes_tool_id = resolved_sandbox_tool_ids.get("hermes", "")
+    hermes_snapshot_tool_id = resolved_sandbox_tool_ids.get("hermes_snapshot", "")
+    dev_tool_id = resolved_sandbox_tool_ids.get("dev", "")
 
     # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
     # (i.e. the deployer's whole .env) as function env vars. The frontend must
@@ -6768,6 +8068,24 @@ def frontend_deploy(
     # `veadk frontend` resolves the client secret + registers the callback from
     # the pool/client UID via from_veidentity, so we only ship the UIDs here.
     veadk_environments.clear()
+    veadk_environments["CLOUD_PROVIDER"] = provider_id
+    veadk_environments["AGENTKIT_CLOUD_PROVIDER"] = provider_id
+    if provider_id == "byteplus":
+        veadk_environments["BYTEPLUS_REGION"] = region
+        veadk_environments["DATABASE_VIKING_REGION"] = (
+            DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
+        )
+        byteplus_web_search_api_key = os.getenv(
+            "BYTEPLUS_WEB_SEARCH_API_KEY",
+            "",
+        ).strip()
+        if byteplus_web_search_api_key:
+            veadk_environments["BYTEPLUS_WEB_SEARCH_API_KEY"] = (
+                byteplus_web_search_api_key
+            )
+        byteplus_web_search_url = os.getenv("BYTEPLUS_WEB_SEARCH_URL", "").strip()
+        if byteplus_web_search_url:
+            veadk_environments["BYTEPLUS_WEB_SEARCH_URL"] = byteplus_web_search_url
     veadk_environments["OAUTH2_USER_POOL_ID"] = user_pool_id
     veadk_environments["OAUTH2_USER_POOL_CLIENT_ID"] = allowed_client_id
     veadk_environments["OAUTH2_PROVIDER"] = "veidentity"
@@ -6779,14 +8097,22 @@ def frontend_deploy(
     if studio_developers:
         veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
-    veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
+    veadk_environments["SANDBOX_CHAT_CODEX_SNAPSHOT"] = chat_codex_snapshot_tool_id
     veadk_environments["SANDBOX_CHAT_OPENCLAW"] = openclaw_tool_id
+    veadk_environments["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] = openclaw_snapshot_tool_id
     veadk_environments["SANDBOX_CHAT_HERMES"] = hermes_tool_id
+    veadk_environments["SANDBOX_CHAT_HERMES_SNAPSHOT"] = hermes_snapshot_tool_id
+    veadk_environments["SANDBOX_DEV"] = dev_tool_id
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
     veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
-    veadk_environments["VEADK_STUDIO_UPDATE_REGION"] = studio_update_region or region
     veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] = studio_update_prefix
     veadk_environments["VEADK_STUDIO_PROJECT"] = project
+    studio_deploy_id = _new_studio_deploy_id()
+    veadk_environments["VEADK_STUDIO_DEPLOY_ID"] = studio_deploy_id
+    veadk_environments["VEADK_STUDIO_USER_POOL_ID"] = user_pool_id
+    veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] = region
+    veadk_environments.update(studio_storage_environment)
+    veadk_environments.update(apmplus_environment)
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 
@@ -6802,7 +8128,13 @@ def frontend_deploy(
     from veadk.integrations.ve_apig.ve_apig import APIGateway
 
     if not gateway_name:
-        apig = APIGateway(ak, sk, region, session_token=session_token)
+        apig = APIGateway(
+            ak,
+            sk,
+            region,
+            session_token=session_token,
+            provider=provider_id,
+        )
         gw = apig.find_serverless_gateway()
         if gw is not None:
             gateway_name = getattr(gw, "name")
@@ -6826,9 +8158,23 @@ def frontend_deploy(
             repo_root = Path(veadk.__file__).resolve().parent.parent
             click.echo(f"Building wheel from source at {repo_root}…")
             try:
-                requirements = build_local_studio_requirements(repo_root, Path(tmp))
+                requirements = build_local_studio_requirements(
+                    repo_root,
+                    Path(tmp),
+                    provider=provider_id,
+                )
             except ValueError as error:
                 raise click.ClickException(f"--from-source: {error}") from error
+        else:
+            from veadk.cli.studio_package import stage_studio_provider_requirements
+
+            try:
+                requirements = (
+                    stage_studio_provider_requirements(Path(tmp), provider_id)
+                    + requirements
+                )
+            except ValueError as error:
+                raise click.ClickException(str(error)) from error
 
         from veadk.cli.studio_package import write_studio_package
 
@@ -6836,6 +8182,7 @@ def frontend_deploy(
             Path(tmp),
             requirements=requirements,
             site_logo=branding_logo,
+            provider=provider_id,
         )
 
         # 3) Deploy the function + a plain public APIG trigger on the serverless
@@ -6848,6 +8195,8 @@ def frontend_deploy(
             volcengine_session_token=session_token,
             region=region,
             project=project,
+            provider=provider_id,
+            vefaas_application_template_id=resolved_application_template_id,
         )
         click.echo(
             f"Deploying frontend to VeFaaS as '{vefaas_app_name}' "
@@ -6861,9 +8210,21 @@ def frontend_deploy(
             gateway_upstream_name=gateway_upstream_name,
             use_adk_web=False,
             auth_method="none",
+            enable_mcp_session=False,
+            keep_failed_deploy=keep_failed_deploy,
         )
         url = (app.vefaas_endpoint or "").rstrip("/")
         redirect_uri = f"{url}/oauth2/callback"
+
+        from veadk.integrations.ve_identity.identity_client import IdentityClient
+
+        identity_client = IdentityClient(
+            access_key=ak,
+            secret_key=sk,
+            session_token=session_token,
+            region=identity_region,
+            provider=provider_id,
+        )
 
         # 4) Register the SSO callback on the user-pool client HERE, with the
         #    deployer's full credentials — the function's IAM role is granted
@@ -6871,16 +8232,7 @@ def frontend_deploy(
         #    id:UpdateUserPoolClient, so it can't register the callback itself.
         if url:
             try:
-                from veadk.integrations.ve_identity.identity_client import (
-                    IdentityClient,
-                )
-
-                IdentityClient(
-                    access_key=ak,
-                    secret_key=sk,
-                    session_token=session_token,
-                    region=identity_region,
-                ).register_callback_for_user_pool_client(
+                identity_client.register_callback_for_user_pool_client(
                     user_pool_uid=user_pool_id,
                     client_uid=allowed_client_id,
                     callback_url=redirect_uri,
@@ -6900,7 +8252,15 @@ def frontend_deploy(
         function_id = getattr(app, "vefaas_function_id", "")
         if url and function_id:
             click.echo(f"Setting OAUTH2_REDIRECT_URI={redirect_uri} and re-releasing…")
-            release_environment = {"OAUTH2_REDIRECT_URI": redirect_uri}
+            release_environment = {
+                "OAUTH2_REDIRECT_URI": redirect_uri,
+                "VEADK_STUDIO_DEPLOY_ID": studio_deploy_id,
+                "VEADK_STUDIO_USER_POOL_ID": veadk_environments[
+                    "VEADK_STUDIO_USER_POOL_ID"
+                ],
+                "VEADK_STUDIO_DEPLOY_REGION": region,
+            }
+            release_environment.update(apmplus_environment)
             if studio_update_bucket:
                 release_environment.update(
                     {
@@ -6914,15 +8274,48 @@ def frontend_deploy(
                 release_environment,
             )
 
+        # 6) Disable local account flows so Studio can only be entered through
+        #    the configured identity provider.
+        identity_client.configure_user_pool_for_idp_only(user_pool_id)
+        click.echo("Configured the user pool for IdP-only sign-in.")
+
         click.echo("")
         click.echo(f"✅ Frontend deployed: {url}")
         click.echo(f"   application id: {app.vefaas_application_id}")
+        click.echo(f"   identity region: {identity_region}")
+        click.echo(f"   user pool id: {user_pool_id}")
+        if user_pool_domain:
+            click.echo(f"   user pool domain: {user_pool_domain}")
+        click.echo(f"   client id: {allowed_client_id}")
+        if auto_identity_resources or auto_storage or missing_sandbox_tools:
+            identity_console = (
+                "https://console.byteplus.com/identity"
+                if provider_id == "byteplus"
+                else "https://console.volcengine.com/identity"
+            )
+            click.echo("")
+            click.echo("   Cloud resources configured for this Studio:")
+            for kind, tool_id in resolved_sandbox_tool_ids.items():
+                click.echo(f"   [{sandbox_tool_labels[kind]}]: {tool_id}")
+            click.echo(f"   TOS (private): https://{storage_config.object_host}")
+            click.echo(f"   user pool id: {user_pool_id}")
+            click.echo(f"   client id: {allowed_client_id}")
+            click.echo(f"   Identity console: {identity_console}")
+            click.echo("   Password sign-in is disabled by default for security.")
+            click.echo("   Configure an SSO identity provider before inviting users.")
         click.echo("   (open the URL — you'll be redirected through SSO login)")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 @studio.command("update")
+@click.option(
+    "--provider",
+    default=DEFAULT_CLOUD_PROVIDER,
+    type=click.Choice(["volcengine", "byteplus"]),
+    show_default=True,
+    help="Cloud provider for the existing Studio deployment.",
+)
 @click.option(
     "--vefaas-app-name",
     required=True,
@@ -6931,8 +8324,8 @@ def frontend_deploy(
 @click.option(
     "--region",
     default=None,
-    type=click.Choice(["cn-beijing", "cn-shanghai"]),
-    help="Limit Application lookup to one region (default: search both).",
+    type=click.Choice(["cn-beijing", "cn-shanghai", DEFAULT_BYTEPLUS_REGION]),
+    help="Limit Application lookup to one region.",
 )
 @click.option(
     "--project",
@@ -6957,6 +8350,12 @@ def frontend_deploy(
     help="Replace the deployed Studio title, at most 6 characters.",
 )
 @click.option(
+    "--sandbox-dev-tool-id",
+    "sandbox_dev_tool_id",
+    default=None,
+    help="Replace the Studio DevEnv Tool ID.",
+)
+@click.option(
     "--sandbox-chat-codex-tool-id",
     "sandbox_chat_codex_tool_id",
     default=None,
@@ -6975,27 +8374,50 @@ def frontend_deploy(
     help="Replace the Hermes AgentKit Tool ID.",
 )
 @click.option(
-    "--sandbox-skill-creator-tool-id",
-    "--skill-creator-tool-id",
-    "sandbox_skill_creator_tool_id",
+    "--sandbox-chat-codex-snapshot-tool-id",
+    "sandbox_chat_codex_snapshot_tool_id",
     default=None,
-    help="Replace the Skill Creator AgentKit CodeEnv Tool ID.",
+    help="Replace the snapshot-enabled temporary-chat AgentKit CodeEnv Tool ID.",
+)
+@click.option(
+    "--sandbox-chat-openclaw-snapshot-tool-id",
+    "sandbox_chat_openclaw_snapshot_tool_id",
+    default=None,
+    help="Replace the snapshot-enabled OpenClaw AgentKit Tool ID.",
+)
+@click.option(
+    "--sandbox-chat-hermes-snapshot-tool-id",
+    "sandbox_chat_hermes_snapshot_tool_id",
+    default=None,
+    help="Replace the snapshot-enabled Hermes AgentKit Tool ID.",
 )
 @click.option("--volcengine-access-key", default=None)
 @click.option("--volcengine-secret-key", default=None)
+@click.option("--volcengine-session-token", default=None)
+@click.option("--byteplus-access-key", default=None, envvar="BYTEPLUS_ACCESS_KEY")
+@click.option("--byteplus-secret-key", default=None, envvar="BYTEPLUS_SECRET_KEY")
+@click.option("--byteplus-session-token", default=None, envvar="BYTEPLUS_SESSION_TOKEN")
 def frontend_update(
+    provider: str,
     vefaas_app_name: str,
     region: str | None,
     project: str | None,
     path: Path,
     site_logo: str | None,
     site_title: str | None,
+    sandbox_dev_tool_id: str | None,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
     sandbox_chat_hermes_tool_id: str | None,
-    sandbox_skill_creator_tool_id: str | None,
+    sandbox_chat_codex_snapshot_tool_id: str | None,
+    sandbox_chat_openclaw_snapshot_tool_id: str | None,
+    sandbox_chat_hermes_snapshot_tool_id: str | None,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
+    volcengine_session_token: str | None,
+    byteplus_access_key: str | None,
+    byteplus_secret_key: str | None,
+    byteplus_session_token: str | None,
 ) -> None:
     """Build local Studio sources and update an existing VeFaaS Application."""
     import shutil
@@ -7009,28 +8431,49 @@ def frontend_update(
         find_studio_deployments,
         load_deployed_site_logo,
     )
-    from veadk.config import getenv
     from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
-    ak = volcengine_access_key or getenv("VOLCENGINE_ACCESS_KEY")
-    sk = volcengine_secret_key or getenv("VOLCENGINE_SECRET_KEY")
-    if not ak or not sk:
+    provider_id = normalize_cloud_provider(provider)
+    if provider_id == "byteplus":
+        if region is not None and region != DEFAULT_BYTEPLUS_REGION:
+            raise click.ClickException(
+                "BytePlus Studio update currently supports only "
+                f"{DEFAULT_BYTEPLUS_REGION}; got {region}."
+            )
+        region = region or DEFAULT_BYTEPLUS_REGION
+    elif region == DEFAULT_BYTEPLUS_REGION:
         raise click.ClickException(
-            "Volcengine credentials required: set VOLCENGINE_ACCESS_KEY/SECRET_KEY "
-            "or pass --volcengine-access-key/--volcengine-secret-key."
+            f"{DEFAULT_BYTEPLUS_REGION} is a BytePlus region. Use "
+            "--provider byteplus for BytePlus Studio updates."
         )
+
+    ak, sk, session_token = _resolve_studio_cloud_credentials(
+        byteplus_access_key if provider_id == "byteplus" else volcengine_access_key,
+        byteplus_secret_key if provider_id == "byteplus" else volcengine_secret_key,
+        session_token=(
+            byteplus_session_token
+            if provider_id == "byteplus"
+            else volcengine_session_token
+        ),
+        provider=provider_id,
+    )
 
     targets = find_studio_deployments(
         access_key=ak,
         secret_key=sk,
+        session_token=session_token,
         application_name=vefaas_app_name,
         region=region,
         project=project,
+        provider=provider_id,
     )
     if not targets:
-        scope = "/".join(value for value in (region, project) if value) or (
-            "cn-beijing and cn-shanghai across all visible projects"
+        default_scope = (
+            DEFAULT_BYTEPLUS_REGION
+            if provider_id == "byteplus"
+            else "cn-beijing and cn-shanghai across all visible projects"
         )
+        scope = "/".join(value for value in (region, project) if value) or default_scope
         raise click.ClickException(
             f"VeFaaS Application '{vefaas_app_name}' was not found in {scope}."
         )
@@ -7071,6 +8514,7 @@ def frontend_update(
                 source_root,
                 package_dir,
                 frontend_assets=frontend_assets,
+                provider=provider_id,
             )
         except ValueError as error:
             raise click.ClickException(str(error)) from error
@@ -7078,18 +8522,383 @@ def frontend_update(
             package_dir,
             requirements=requirements,
             site_logo=branding_logo,
+            provider=provider_id,
         )
 
         click.echo(f"Updating '{vefaas_app_name}' in {target.region}/{target.project}…")
         service = VeFaaS(
             access_key=ak,
             secret_key=sk,
+            session_token=session_token,
             region=target.region,
             project_name=target.project,
+            provider=provider_id,
         )
         environment_overrides = {"AGENTKIT_SANDBOX_REGION": target.region}
+        service_client = getattr(service, "client", None)
+        current_env: dict[str, str] = {}
+        if service_client is not None:
+            import volcenginesdkvefaas
+
+            function = service_client.get_function(
+                volcenginesdkvefaas.GetFunctionRequest(id=target.function_id)
+            )
+            current_env = {
+                item.key: item.value for item in (getattr(function, "envs", None) or [])
+            }
+
+        snapshot_tool_ids = {
+            "codex_snapshot": sandbox_chat_codex_snapshot_tool_id
+            if sandbox_chat_codex_snapshot_tool_id is not None
+            else current_env.get("SANDBOX_CHAT_CODEX_SNAPSHOT", ""),
+            "openclaw_snapshot": sandbox_chat_openclaw_snapshot_tool_id
+            if sandbox_chat_openclaw_snapshot_tool_id is not None
+            else current_env.get("SANDBOX_CHAT_OPENCLAW_SNAPSHOT", ""),
+            "hermes_snapshot": sandbox_chat_hermes_snapshot_tool_id
+            if sandbox_chat_hermes_snapshot_tool_id is not None
+            else current_env.get("SANDBOX_CHAT_HERMES_SNAPSHOT", ""),
+        }
+        if service_client is not None:
+            from veadk.cli.frontend_skill_creator import (
+                ensure_skill_creator_model_credential,
+            )
+            from veadk.cli.studio_sandbox_tools import (
+                ensure_studio_agent_model_credential,
+                ensure_studio_agent_tool,
+                ensure_studio_code_env_tool,
+                studio_sandbox_agent_model_name,
+                studio_sandbox_model_base_url,
+                studio_sandbox_tool_name,
+            )
+
+            snapshot_labels = {
+                "codex_snapshot": "Codex Snapshot",
+                "openclaw_snapshot": "OpenClaw Snapshot",
+                "hermes_snapshot": "Hermes Snapshot",
+            }
+            snapshot_purposes = {
+                "codex_snapshot": "chat",
+                "openclaw_snapshot": "openclaw",
+                "hermes_snapshot": "hermes",
+            }
+            sandbox_agent_model_name = studio_sandbox_agent_model_name(provider_id)
+            sandbox_model_base_url = studio_sandbox_model_base_url(provider_id)
+            missing_snapshot_tools = {
+                kind: studio_sandbox_tool_name(
+                    vefaas_app_name,
+                    snapshot_purposes[kind],
+                    snapshot=True,
+                )
+                for kind, tool_id in snapshot_tool_ids.items()
+                if not str(tool_id or "").strip()
+            }
+            if missing_snapshot_tools:
+                with ThreadPoolExecutor(
+                    max_workers=len(missing_snapshot_tools)
+                ) as executor:
+                    tool_futures = {}
+                    for kind, tool_name in missing_snapshot_tools.items():
+                        label = snapshot_labels[kind]
+                        click.echo(f"Creating AgentKit {label} Tool '{tool_name}'…")
+                        base_kind = kind.removesuffix("_snapshot")
+                        if base_kind == "codex":
+                            future = executor.submit(
+                                ensure_studio_code_env_tool,
+                                name=tool_name,
+                                enable_snapshot=True,
+                                region=target.region,
+                                access_key=ak,
+                                secret_key=sk,
+                                session_token=session_token or "",
+                            )
+                        else:
+                            future = executor.submit(
+                                ensure_studio_agent_tool,
+                                name=tool_name,
+                                kind=base_kind,
+                                enable_snapshot=True,
+                                model_name=sandbox_agent_model_name,
+                                region=target.region,
+                                access_key=ak,
+                                secret_key=sk,
+                                session_token=session_token or "",
+                            )
+                        tool_futures[kind] = future
+                    for kind, future in tool_futures.items():
+                        label = snapshot_labels[kind]
+                        try:
+                            snapshot_tool_ids[kind] = future.result()
+                        except Exception as error:
+                            detail = _safe_exception_detail(
+                                error,
+                                secrets=(ak, sk, session_token),
+                            )
+                            raise click.ClickException(
+                                f"Failed to provision the AgentKit {label} Tool. "
+                                f"Underlying error:\n{detail}"
+                            ) from error
+                        click.echo(f"AgentKit {label} Tool is ready.")
+
+                with ThreadPoolExecutor(
+                    max_workers=len(missing_snapshot_tools)
+                ) as executor:
+                    credential_futures = {}
+                    for kind in missing_snapshot_tools:
+                        tool_id = snapshot_tool_ids[kind]
+                        base_kind = kind.removesuffix("_snapshot")
+                        label = snapshot_labels[kind]
+                        click.echo(f"Creating AgentKit {label} model credential…")
+                        if base_kind == "codex":
+                            future = executor.submit(
+                                ensure_skill_creator_model_credential,
+                                tool_id=tool_id,
+                                region=target.region,
+                                access_key=ak,
+                                secret_key=sk,
+                                session_token=session_token,
+                                provider=provider_id,
+                                model_name=sandbox_agent_model_name,
+                            )
+                        else:
+                            future = executor.submit(
+                                ensure_studio_agent_model_credential,
+                                tool_id=tool_id,
+                                kind=base_kind,
+                                model_name=sandbox_agent_model_name,
+                                model_base_url=sandbox_model_base_url,
+                                region=target.region,
+                                access_key=ak,
+                                secret_key=sk,
+                                session_token=session_token,
+                                provider=provider_id,
+                            )
+                        credential_futures[kind] = future
+                    for kind, future in credential_futures.items():
+                        label = snapshot_labels[kind]
+                        try:
+                            future.result()
+                        except Exception as error:
+                            detail = _safe_exception_detail(
+                                error,
+                                secrets=(ak, sk, session_token),
+                            )
+                            raise click.ClickException(
+                                f"Failed to provision the AgentKit {label} model "
+                                f"credential. Underlying error:\n{detail}"
+                            ) from error
+                        click.echo(f"AgentKit {label} model credential is ready.")
+
+            environment_overrides["SANDBOX_CHAT_CODEX_SNAPSHOT"] = str(
+                snapshot_tool_ids["codex_snapshot"] or ""
+            )
+            environment_overrides["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] = str(
+                snapshot_tool_ids["openclaw_snapshot"] or ""
+            )
+            environment_overrides["SANDBOX_CHAT_HERMES_SNAPSHOT"] = str(
+                snapshot_tool_ids["hermes_snapshot"] or ""
+            )
+        if provider_id == "byteplus":
+            environment_overrides["CLOUD_PROVIDER"] = provider_id
+            environment_overrides["AGENTKIT_CLOUD_PROVIDER"] = provider_id
+            environment_overrides["BYTEPLUS_REGION"] = target.region
+            environment_overrides["DATABASE_VIKING_REGION"] = (
+                DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
+            )
+            has_explicit_sandbox_tool = any(
+                tool_id is not None
+                for tool_id in (
+                    sandbox_dev_tool_id,
+                    sandbox_chat_codex_tool_id,
+                    sandbox_chat_openclaw_tool_id,
+                    sandbox_chat_hermes_tool_id,
+                )
+            )
+            repair_sandbox_tools = (
+                service_client is not None or has_explicit_sandbox_tool
+            )
+            byteplus_sandbox_tool_ids = {
+                "dev": sandbox_dev_tool_id
+                if sandbox_dev_tool_id is not None
+                else current_env.get("SANDBOX_DEV", ""),
+                "codex": sandbox_chat_codex_tool_id
+                if sandbox_chat_codex_tool_id is not None
+                else current_env.get("SANDBOX_CHAT_CODEX", ""),
+                "openclaw": sandbox_chat_openclaw_tool_id
+                if sandbox_chat_openclaw_tool_id is not None
+                else current_env.get("SANDBOX_CHAT_OPENCLAW", ""),
+                "hermes": sandbox_chat_hermes_tool_id
+                if sandbox_chat_hermes_tool_id is not None
+                else current_env.get("SANDBOX_CHAT_HERMES", ""),
+            }
+            byteplus_sandbox_labels = {
+                "dev": "Dev Sandbox",
+                "codex": "Codex",
+                "openclaw": "OpenClaw",
+                "hermes": "Hermes",
+            }
+            byteplus_sandbox_purposes = {
+                "dev": "dev",
+                "codex": "chat",
+                "openclaw": "openclaw",
+                "hermes": "hermes",
+            }
+            if repair_sandbox_tools:
+                from veadk.cli.frontend_skill_creator import (
+                    ensure_skill_creator_model_credential,
+                )
+                from veadk.cli.studio_sandbox_tools import (
+                    ensure_studio_agent_model_credential,
+                    ensure_studio_agent_tool,
+                    ensure_studio_code_env_tool,
+                    ensure_studio_dev_env_tool,
+                    studio_sandbox_agent_model_name,
+                    studio_sandbox_model_base_url,
+                    studio_sandbox_tool_name,
+                )
+
+                sandbox_agent_model_name = studio_sandbox_agent_model_name(provider_id)
+                sandbox_model_base_url = studio_sandbox_model_base_url(provider_id)
+                missing_sandbox_tools: dict[str, str] = {}
+                for kind, tool_id in byteplus_sandbox_tool_ids.items():
+                    label = byteplus_sandbox_labels[kind]
+                    if str(tool_id or "").strip():
+                        click.echo(f"Using AgentKit {label} Tool '{tool_id}'.")
+                        continue
+                    tool_name = studio_sandbox_tool_name(
+                        vefaas_app_name,
+                        byteplus_sandbox_purposes[kind],
+                        snapshot=kind.endswith("_snapshot"),
+                    )
+                    click.echo(f"Creating AgentKit {label} Tool '{tool_name}'…")
+                    missing_sandbox_tools[kind] = tool_name
+
+                if missing_sandbox_tools:
+                    with ThreadPoolExecutor(
+                        max_workers=len(missing_sandbox_tools)
+                    ) as ex:
+                        tool_futures = {}
+                        for kind, tool_name in missing_sandbox_tools.items():
+                            base_kind = kind.removesuffix("_snapshot")
+                            enable_snapshot = kind.endswith("_snapshot")
+                            if base_kind == "codex":
+                                future = ex.submit(
+                                    ensure_studio_code_env_tool,
+                                    name=tool_name,
+                                    enable_snapshot=enable_snapshot,
+                                    region=target.region,
+                                    access_key=ak,
+                                    secret_key=sk,
+                                    session_token=session_token or "",
+                                )
+                            elif base_kind == "dev":
+                                future = ex.submit(
+                                    ensure_studio_dev_env_tool,
+                                    name=tool_name,
+                                    region=target.region,
+                                    access_key=ak,
+                                    secret_key=sk,
+                                    session_token=session_token or "",
+                                )
+                            else:
+                                future = ex.submit(
+                                    ensure_studio_agent_tool,
+                                    name=tool_name,
+                                    kind=base_kind,
+                                    enable_snapshot=enable_snapshot,
+                                    model_name=sandbox_agent_model_name,
+                                    region=target.region,
+                                    access_key=ak,
+                                    secret_key=sk,
+                                    session_token=session_token or "",
+                                )
+                            tool_futures[kind] = future
+                        for kind, future in tool_futures.items():
+                            label = byteplus_sandbox_labels[kind]
+                            try:
+                                byteplus_sandbox_tool_ids[kind] = future.result()
+                            except Exception as error:
+                                detail = _safe_exception_detail(
+                                    error,
+                                    secrets=(ak, sk, session_token),
+                                )
+                                raise click.ClickException(
+                                    f"Failed to provision the AgentKit {label} Tool. "
+                                    f"Underlying error:\n{detail}"
+                                ) from error
+                            click.echo(f"AgentKit {label} Tool is ready.")
+
+                credential_futures = {}
+                with ThreadPoolExecutor(
+                    max_workers=len(byteplus_sandbox_tool_ids)
+                ) as ex:
+                    for kind, tool_id in byteplus_sandbox_tool_ids.items():
+                        tool_id = str(tool_id or "").strip()
+                        if not tool_id:
+                            continue
+                        label = byteplus_sandbox_labels[kind]
+                        click.echo(f"Creating AgentKit {label} model credential…")
+                        base_kind = kind.removesuffix("_snapshot")
+                        if base_kind in {"codex", "dev"}:
+                            code_model_name = (
+                                sandbox_agent_model_name
+                                if base_kind == "codex"
+                                else None
+                            )
+                            future = ex.submit(
+                                ensure_skill_creator_model_credential,
+                                tool_id=tool_id,
+                                region=target.region,
+                                access_key=ak,
+                                secret_key=sk,
+                                session_token=session_token,
+                                provider=provider_id,
+                                model_name=code_model_name,
+                            )
+                        else:
+                            future = ex.submit(
+                                ensure_studio_agent_model_credential,
+                                tool_id=tool_id,
+                                kind=base_kind,
+                                model_name=sandbox_agent_model_name,
+                                model_base_url=sandbox_model_base_url,
+                                region=target.region,
+                                access_key=ak,
+                                secret_key=sk,
+                                session_token=session_token,
+                                provider=provider_id,
+                            )
+                        credential_futures[kind] = future
+                    for kind, future in credential_futures.items():
+                        label = byteplus_sandbox_labels[kind]
+                        try:
+                            future.result()
+                        except Exception as error:
+                            detail = _safe_exception_detail(
+                                error,
+                                secrets=(ak, sk, session_token),
+                            )
+                            raise click.ClickException(
+                                f"Failed to provision the AgentKit {label} model "
+                                f"credential. Underlying error:\n{detail}"
+                            ) from error
+                        click.echo(f"AgentKit {label} model credential is ready.")
+
+                environment_overrides["SANDBOX_CHAT_CODEX"] = str(
+                    byteplus_sandbox_tool_ids["codex"] or ""
+                )
+                environment_overrides["SANDBOX_CHAT_OPENCLAW"] = str(
+                    byteplus_sandbox_tool_ids["openclaw"] or ""
+                )
+                environment_overrides["SANDBOX_CHAT_HERMES"] = str(
+                    byteplus_sandbox_tool_ids["hermes"] or ""
+                )
+                environment_overrides["SANDBOX_DEV"] = str(
+                    byteplus_sandbox_tool_ids["dev"] or ""
+                )
         if branding_title is not None:
             environment_overrides["VEADK_SITE_TITLE"] = branding_title
+        if sandbox_dev_tool_id is not None:
+            environment_overrides["SANDBOX_DEV"] = sandbox_dev_tool_id
         if sandbox_chat_codex_tool_id is not None:
             environment_overrides["SANDBOX_CHAT_CODEX"] = sandbox_chat_codex_tool_id
         if sandbox_chat_openclaw_tool_id is not None:
@@ -7098,10 +8907,45 @@ def frontend_update(
             )
         if sandbox_chat_hermes_tool_id is not None:
             environment_overrides["SANDBOX_CHAT_HERMES"] = sandbox_chat_hermes_tool_id
-        if sandbox_skill_creator_tool_id is not None:
-            environment_overrides["SANDBOX_SKILL_CREATOR"] = (
-                sandbox_skill_creator_tool_id
+        if sandbox_chat_codex_snapshot_tool_id is not None:
+            environment_overrides["SANDBOX_CHAT_CODEX_SNAPSHOT"] = (
+                sandbox_chat_codex_snapshot_tool_id
             )
+        if sandbox_chat_openclaw_snapshot_tool_id is not None:
+            environment_overrides["SANDBOX_CHAT_OPENCLAW_SNAPSHOT"] = (
+                sandbox_chat_openclaw_snapshot_tool_id
+            )
+        if sandbox_chat_hermes_snapshot_tool_id is not None:
+            environment_overrides["SANDBOX_CHAT_HERMES_SNAPSHOT"] = (
+                sandbox_chat_hermes_snapshot_tool_id
+            )
+        _validate_distinct_sandbox_tool_ids(
+            {
+                "codex": environment_overrides.get(
+                    "SANDBOX_CHAT_CODEX", current_env.get("SANDBOX_CHAT_CODEX", "")
+                ),
+                "codex_snapshot": environment_overrides.get(
+                    "SANDBOX_CHAT_CODEX_SNAPSHOT",
+                    current_env.get("SANDBOX_CHAT_CODEX_SNAPSHOT", ""),
+                ),
+                "openclaw": environment_overrides.get(
+                    "SANDBOX_CHAT_OPENCLAW",
+                    current_env.get("SANDBOX_CHAT_OPENCLAW", ""),
+                ),
+                "openclaw_snapshot": environment_overrides.get(
+                    "SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+                    current_env.get("SANDBOX_CHAT_OPENCLAW_SNAPSHOT", ""),
+                ),
+                "hermes": environment_overrides.get(
+                    "SANDBOX_CHAT_HERMES",
+                    current_env.get("SANDBOX_CHAT_HERMES", ""),
+                ),
+                "hermes_snapshot": environment_overrides.get(
+                    "SANDBOX_CHAT_HERMES_SNAPSHOT",
+                    current_env.get("SANDBOX_CHAT_HERMES_SNAPSHOT", ""),
+                ),
+            }
+        )
         url = service.update_application_code_bundle(
             application_id=target.application_id,
             function_id=target.function_id,

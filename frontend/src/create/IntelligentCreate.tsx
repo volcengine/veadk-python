@@ -9,6 +9,7 @@ import {
   generateAgentProject,
 } from "../adk/client";
 import type { DeployStage } from "../adk/client";
+import type { CloudProvider } from "../adk/cloudProvider";
 import { applyEvent, emptyAcc, type Acc } from "../blocks";
 import { Markdown } from "../ui/Markdown";
 import {
@@ -42,6 +43,8 @@ const APP_B = "dogfooding_b";
 
 export interface IntelligentCreateProps {
   userId: string;
+  /** Cloud provider selected by the Studio shell. */
+  cloudProvider?: CloudProvider;
   /** App-level breadcrumb also handles leaving; kept for parity. */
   onBack: () => void;
   onCreate: (draft: AgentDraft) => void;
@@ -83,7 +86,10 @@ function stripFence(raw: string): string {
  *  backend to produce the project. Tolerant of surrounding
  *  prose: falls back to the first `{ … }` slice. Returns null when the text
  *  isn't a config (e.g. a clarifying question). */
-async function parseProject(raw: string): Promise<AgentProject | null> {
+async function parseProject(
+  raw: string,
+  cloudProvider: CloudProvider = "volcengine",
+): Promise<AgentProject | null> {
   const candidates: string[] = [];
   const stripped = stripFence(raw);
   candidates.push(stripped);
@@ -103,7 +109,7 @@ async function parseProject(raw: string): Promise<AgentProject | null> {
           typeof (obj as Record<string, unknown>).instruction === "string")
       ) {
         // Shared path: config -> normalized draft -> backend generated files.
-        return await generateAgentProject(normalizeDraft(obj));
+        return await generateAgentProject(normalizeDraft({ ...obj, cloudProvider }));
       }
     } catch {
       /* try next candidate */
@@ -114,6 +120,7 @@ async function parseProject(raw: string): Promise<AgentProject | null> {
 
 export function IntelligentCreate({
   userId,
+  cloudProvider = "volcengine",
   onBack,
   onCreate,
   onAgentAdded,
@@ -219,7 +226,7 @@ export function IntelligentCreate({
       acc = applyEvent(acc, evt);
     }
     const finalText = accText(acc).trim();
-    return { project: await parseProject(finalText), finalText };
+    return { project: await parseProject(finalText, cloudProvider), finalText };
   }
 
   const handleDeploy = async (
@@ -308,7 +315,7 @@ export function IntelligentCreate({
       }
 
       const finalText = accText(acc).trim();
-      const parsed = await parseProject(finalText);
+      const parsed = await parseProject(finalText, cloudProvider);
       if (parsed) {
         setProject(parsed);
         pushAssistant(
@@ -471,6 +478,11 @@ export function IntelligentCreate({
               onDeploy={handleDeploy}
               onAgentAdded={onAgentAdded}
               onDeploymentTaskChange={onDeploymentTaskChange}
+              deploymentTelemetry={{
+                source: "scratch",
+                createMode: "intelligent",
+                aiAssisted: true,
+              }}
             />
           ) : (
             <div className="ic-preview-empty">

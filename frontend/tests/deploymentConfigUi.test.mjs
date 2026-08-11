@@ -55,7 +55,7 @@ test("offers code execution with its sandbox configuration", () => {
   );
   assert.match(
     customCreateSource,
-    /createGeneratedAgentTestRun\([\s\S]*?debugRuntimeDraft\(variantDraft\)/,
+    /createGeneratedAgentTestRun\([\s\S]*?debugRuntimeDraft\(variantDraft\)[\s\S]*?runtimeId: deploymentTarget\.runtimeId[\s\S]*?region: deploymentTarget\.region/,
   );
   assert.match(
     customCreateSource,
@@ -107,7 +107,7 @@ test("reuses the build canvas as a read-only expandable deployment preview", () 
   );
 });
 
-test("lets the whole publish page scroll with builder-style deployment cards", () => {
+test("lets the whole publish page scroll with white deployment cards", () => {
   assert.match(
     projectPreviewStyles,
     /\.pp-root\.is-deploy\s*\{[\s\S]*?overflow-y:\s*auto;/,
@@ -122,11 +122,22 @@ test("lets the whole publish page scroll with builder-style deployment cards", (
   );
   assert.match(
     projectPreviewStyles,
-    /\.pp-config-section\s*\{[\s\S]*?border:\s*1px solid[\s\S]*?border-radius:\s*18px;[\s\S]*?\.pp-config-label\s*\{[\s\S]*?background:\s*hsl\(var\(--muted\) \/ 0\.34\)/,
+    /\.pp-config-section\s*\{[\s\S]*?border:\s*1px solid[\s\S]*?border-radius:\s*18px;[\s\S]*?\.pp-config-label\s*\{[\s\S]*?background:\s*transparent/,
   );
   assert.match(
     projectPreviewStyles,
     /\.pp-config-actions\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?left:\s*calc\(\(100vw \+ var\(--pp-sidebar-width, 0px\)\) \/ 2\);[\s\S]*?transform:\s*translateX\(-50%\);/,
+  );
+});
+
+test("lets deployment dropdowns escape rounded configuration cards", () => {
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-config-section:has\(\.pp-network-region\)\s*\{[^}]*overflow:\s*visible;/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-config-section:has\(\.pp-network-region\) > \.pp-config-label\s*\{[^}]*border-radius:\s*17px 17px 0 0;/,
   );
 });
 
@@ -227,6 +238,14 @@ test("uses a flipping Feishu channel card instead of a switch", () => {
   assert.match(projectPreviewSource, /deploymentRegionPicker\(false\)/);
   assert.match(
     projectPreviewStyles,
+    /\.pp-region-trigger:disabled\s*\{[\s\S]*?cursor:\s*not-allowed;[\s\S]*?opacity:\s*0\.58;/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-region-help\s*\{[\s\S]*?font-size:\s*12px;[\s\S]*?line-height:\s*1\.5;/,
+  );
+  assert.match(
+    projectPreviewStyles,
     /\.pp-channel-remove\s*\{[\s\S]*?background:\s*hsl\(var\(--destructive\) \/ 0\.07\);[\s\S]*?color:\s*hsl\(0 46% 36%\);/,
   );
 });
@@ -305,6 +324,18 @@ test("shows the total environment variable count beside the section title", () =
   );
 });
 
+test("keeps deployment environment variable values visible", () => {
+  assert.doesNotMatch(projectPreviewSource, /showEnvValues|EyeOff|隐藏值|显示值/);
+  assert.match(
+    projectPreviewSource,
+    /className="pp-env-value"\s*type="text"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /placeholder="名称"[\s\S]*?type="text"[\s\S]*?placeholder="值"/,
+  );
+});
+
 test("lays out network settings in two columns", () => {
   assert.match(
     projectPreviewSource,
@@ -370,6 +401,11 @@ test("requires explicit confirmation before starting deployment", () => {
     /disabled=\{deploying \|\| isRuntimeUpdate \|\| !onNetworkChange\}/,
   );
   assert.match(projectPreviewSource, /现有 Runtime 的区域与网络模式保持不变。/);
+  assert.match(projectPreviewSource, /const networkMode = network\?\.mode \?\? "public"/);
+  assert.match(
+    projectPreviewSource,
+    /checked=\{networkMode === mode\}[\s\S]*?disabled=\{deploying \|\| isRuntimeUpdate \|\| !onNetworkChange\}/,
+  );
 });
 
 test("creates feedback evaluation sets by default and sends the deployment choice", () => {
@@ -379,11 +415,19 @@ test("creates feedback evaluation sets by default and sends the deployment choic
   );
   assert.match(
     projectPreviewSource,
+    /const supportsEvaluationSets = cloudProvider !== "byteplus"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /const effectiveCreateEvaluationSets =[\s\S]*supportsEvaluationSets && createEvaluationSets/,
+  );
+  assert.match(
+    projectPreviewSource,
     /type="checkbox"[\s\S]*?checked=\{createEvaluationSets\}[\s\S]*?setCreateEvaluationSets/,
   );
   assert.match(
     projectPreviewSource,
-    /createEvaluationSets,\s*[\s\S]*?envs,/,
+    /createEvaluationSets: effectiveCreateEvaluationSets,\s*[\s\S]*?envs,/,
   );
   assert.match(
     adkClientSource,
@@ -395,10 +439,10 @@ test("creates feedback evaluation sets by default and sends the deployment choic
   );
   assert.match(
     projectPreviewSource,
-    /createEvaluationSets[\s\S]*?\[\.\.\.deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP\][\s\S]*?: deploymentStepsWithInstanceUpdate/,
+    /effectiveCreateEvaluationSets[\s\S]*?\[\.\.\.deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP\][\s\S]*?: deploymentStepsWithInstanceUpdate/,
   );
   assert.match(
     projectPreviewSource,
-    /const initialTask: DeploymentTaskUpdate =[\s\S]*?createEvaluationSets,\s*\n\s*};/,
+    /const initialTask: DeploymentTaskUpdate =[\s\S]*?createEvaluationSets: effectiveCreateEvaluationSets,\s*\n\s*};/,
   );
 });

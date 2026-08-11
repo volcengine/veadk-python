@@ -1,7 +1,9 @@
 import {
   type CSSProperties,
   type ComponentType,
+  Fragment,
   lazy,
+  type ReactNode,
   Suspense,
   useEffect,
   useMemo,
@@ -44,7 +46,7 @@ import {
   A2A_REGISTRY_DEFAULTS,
   A2A_REGISTRY_ENV,
   BUILTIN_TOOLS,
-  CREATE_BUILTIN_TOOLS,
+  createBuiltinToolsForProvider,
   STM_BACKENDS,
   LTM_BACKENDS,
   KB_BACKENDS,
@@ -71,6 +73,12 @@ import {
 import { displayDescription } from "./displayText";
 import { localPickerMatches } from "./localPickerSearch";
 import { draftToYaml } from "./configYaml";
+import {
+  mcpAuthTokenInputValue,
+  mcpUrlNeedsPathWarning,
+  prepareMcpAuth,
+  updateMcpAuthTokenInput,
+} from "./mcpAuth";
 import {
   normalizeDraft,
   sanitizeGeneratedDraftCapabilities,
@@ -108,11 +116,27 @@ import {
   generateAgentProject,
   runGeneratedAgentTestSSE,
 } from "../adk/client";
+import {
+  trackAgentDebugFailed,
+  trackAgentDebugSucceeded,
+  type AgentDebugFailedPhase,
+} from "../adk/telemetryEvents";
 import type {
   DeployStage,
   GeneratedAgentTestRun,
   UiFeatures,
 } from "../adk/client";
+import {
+  defaultCloudRegion,
+  defaultEmbeddingModelName,
+  defaultImageEditModelName,
+  defaultImageModelName,
+  defaultModelApiBase,
+  defaultModelName,
+  defaultVideoModelName,
+  plannerModelName,
+  type CloudProvider,
+} from "../adk/cloudProvider";
 import { applyEvent, emptyAcc, type Block } from "../blocks";
 import "./CustomCreate.css";
 
@@ -368,6 +392,39 @@ function a2aRegistryEnvValues(
   }
   return values;
 }
+
+function providerRuntimeEnv(
+  env: EnvVar[],
+  cloudProvider: CloudProvider,
+): EnvVar[] {
+  if (cloudProvider !== "byteplus") return env;
+  return env.map((item) => {
+    if (item.key === "MODEL_EMBEDDING_NAME") {
+      return { ...item, placeholder: defaultEmbeddingModelName(cloudProvider) };
+    }
+    if (item.key === "MODEL_EMBEDDING_API_BASE") {
+      return { ...item, placeholder: defaultModelApiBase(cloudProvider) };
+    }
+    if (item.key === "MODEL_IMAGE_NAME") {
+      return { ...item, placeholder: defaultImageModelName(cloudProvider) };
+    }
+    if (item.key === "MODEL_EDIT_NAME") {
+      return { ...item, placeholder: defaultImageEditModelName(cloudProvider) };
+    }
+    if (item.key === "MODEL_VIDEO_NAME") {
+      return { ...item, placeholder: defaultVideoModelName(cloudProvider) };
+    }
+    if (
+      item.key === "MODEL_IMAGE_API_BASE" ||
+      item.key === "MODEL_EDIT_API_BASE" ||
+      item.key === "MODEL_VIDEO_API_BASE"
+    ) {
+      return { ...item, placeholder: defaultModelApiBase(cloudProvider) };
+    }
+    return item;
+  });
+}
+
 /* ---------------------------------------------------------------- *
  * Multi-select checklist. Each row = label + desc, toggling the id in
  * `selected`. Used for built-in tools and tracing exporters.
@@ -466,10 +523,12 @@ function RuntimeEnvFields({
   env,
   values,
   onChange,
+  renderAfterField,
 }: {
   env: EnvVar[];
   values: Record<string, string>;
   onChange: (key: string, value: string) => void;
+  renderAfterField?: (item: EnvVar) => ReactNode;
 }) {
   if (env.length === 0) {
     return <p className="cw-env-empty">此后端无需额外运行参数。</p>;
@@ -481,70 +540,114 @@ function RuntimeEnvFields({
         const jsonError = runtimeEnvJsonError(item, values);
         const controlId = `cw-env-${item.key}`;
         return (
-          <label className="cw-env-field" key={item.key} htmlFor={controlId}>
-            <span className="cw-env-field-head">
-              <span className="cw-env-field-title">
-                <span className="cw-env-field-label">
-                  {item.comment || item.key}
-                  {item.required && <span className="cw-req">*</span>}
-                </span>
-                {item.help && (
-                  <span
-                    className="cw-env-help"
-                    tabIndex={0}
-                    data-help={item.help}
-                    aria-label={`${item.comment || item.key}说明：${item.help}`}
-                  >
-                    ?
-                    <span className="cw-env-help-popover" role="tooltip">
-                      {item.help}
-                    </span>
+          <Fragment key={item.key}>
+            <label className="cw-env-field" htmlFor={controlId}>
+              <span className="cw-env-field-head">
+                <span className="cw-env-field-title">
+                  <span className="cw-env-field-label">
+                    {item.comment || item.key}
+                    {item.required && <span className="cw-req">*</span>}
                   </span>
-                )}
-                {item.link && (
-                  <a
-                    className="cw-env-link"
-                    href={item.link.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={`打开 OpenViking ${item.link.label}`}
-                    aria-label={`打开 OpenViking ${item.link.label}`}
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    <ExternalLink aria-hidden="true" />
-                  </a>
-                )}
+                  {item.help && (
+                    <span
+                      className="cw-env-help"
+                      tabIndex={0}
+                      data-help={item.help}
+                      aria-label={`${item.comment || item.key}说明：${item.help}`}
+                    >
+                      ?
+                      <span className="cw-env-help-popover" role="tooltip">
+                        {item.help}
+                      </span>
+                    </span>
+                  )}
+                  {item.link && (
+                    <a
+                      className="cw-env-link"
+                      href={item.link.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`打开 OpenViking ${item.link.label}`}
+                      aria-label={`打开 OpenViking ${item.link.label}`}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <ExternalLink aria-hidden="true" />
+                    </a>
+                  )}
+                </span>
+                {item.comment && <code title={item.key}>{item.key}</code>}
               </span>
-              {item.comment && <code title={item.key}>{item.key}</code>}
-            </span>
-            {item.multiline || item.format === "json" ? (
-              <textarea
-                id={controlId}
-                className="cw-input cw-env-textarea"
-                value={value}
-                placeholder={item.placeholder || "请输入参数值"}
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={!!jsonError}
-                onChange={(event) => onChange(item.key, event.currentTarget.value)}
-              />
-            ) : (
-              <input
-                id={controlId}
-                className="cw-input"
-                type={isSensitiveEnv(item.key) ? "password" : "text"}
-                value={value}
-                placeholder={item.placeholder || "请输入参数值"}
-                autoComplete="off"
-                aria-invalid={!!jsonError}
-                onChange={(event) => onChange(item.key, event.currentTarget.value)}
-              />
-            )}
-            {jsonError && <span className="cw-env-error">{jsonError}</span>}
-          </label>
+              {item.multiline || item.format === "json" ? (
+                <textarea
+                  id={controlId}
+                  className="cw-input cw-env-textarea"
+                  value={value}
+                  placeholder={item.placeholder || "请输入参数值"}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-invalid={!!jsonError}
+                  onChange={(event) => onChange(item.key, event.currentTarget.value)}
+                />
+              ) : (
+                <input
+                  id={controlId}
+                  className="cw-input"
+                  type={isSensitiveEnv(item.key) ? "password" : "text"}
+                  value={value}
+                  placeholder={item.placeholder || "请输入参数值"}
+                  autoComplete="off"
+                  aria-invalid={!!jsonError}
+                  onChange={(event) => onChange(item.key, event.currentTarget.value)}
+                />
+              )}
+              {jsonError && <span className="cw-env-error">{jsonError}</span>}
+            </label>
+            {renderAfterField?.(item)}
+          </Fragment>
         );
       })}
     </div>
+  );
+}
+
+const OPENVIKING_KNOWLEDGE_INDEX_HELP =
+  "默认值：留空；生成项目时使用 Agent 名自动生成，例如 my_agent_kb。未配置 DATABASE_OPENVIKING_TARGET_URI 时，默认 URI 拼接为 viking://user/{知识库归属 ID，未填则 default}/resources/{资源索引}/；如果填写了 DATABASE_OPENVIKING_TARGET_URI，则直接使用该完整 URI。";
+
+function OpenVikingKnowledgeIndexField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (index: string) => void;
+}) {
+  const controlId = "cw-openviking-knowledge-index";
+  return (
+    <label className="cw-env-field" htmlFor={controlId}>
+      <span className="cw-env-field-head">
+        <span className="cw-env-field-title">
+          <span className="cw-env-field-label">OpenViking 资源索引</span>
+          <span
+            className="cw-env-help"
+            tabIndex={0}
+            data-help={OPENVIKING_KNOWLEDGE_INDEX_HELP}
+            aria-label={`OpenViking 资源索引说明：${OPENVIKING_KNOWLEDGE_INDEX_HELP}`}
+          >
+            ?
+            <span className="cw-env-help-popover" role="tooltip">
+              {OPENVIKING_KNOWLEDGE_INDEX_HELP}
+            </span>
+          </span>
+        </span>
+      </span>
+      <input
+        id={controlId}
+        className="cw-input"
+        value={value}
+        placeholder=""
+        autoComplete="off"
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+    </label>
   );
 }
 
@@ -553,7 +656,9 @@ function a2aSpaceDisplayName(space: A2aSpaceRef): string {
 }
 
 function vikingKnowledgebaseDisplayName(item: VikingKnowledgebaseRef): string {
-  return item.name.trim() || item.id || "未命名知识库";
+  const name = item.name.trim() || item.id || "未命名知识库";
+  const details = [item.sourceLabel, item.projectName].filter(Boolean);
+  return details.length ? `${name} · ${details.join(" · ")}` : name;
 }
 
 function A2aSpaceSelect({
@@ -653,7 +758,7 @@ function A2aSpaceSelect({
   };
 
   return (
-    <div className="cw-a2a-space-picker" ref={pickerRef}>
+    <div className={`cw-a2a-space-picker${open ? " is-open" : ""}`} ref={pickerRef}>
       <div className="cw-a2a-space-row">
         <div className="cw-a2a-space-select-wrap">
           <button
@@ -772,7 +877,7 @@ function VikingKnowledgebaseSelect({
   onChange,
 }: {
   value: string;
-  onChange: (index: string) => void;
+  onChange: (item: VikingKnowledgebaseRef) => void;
 }) {
   const [items, setItems] = useState<VikingKnowledgebaseRef[]>([]);
   const [loading, setLoading] = useState(false);
@@ -821,6 +926,10 @@ function VikingKnowledgebaseSelect({
           item.id,
           item.description,
           item.projectName,
+          item.resourceId,
+          item.agentkitKnowledgeId,
+          item.providerKnowledgeId,
+          item.sourceLabel,
         ]),
       ),
     [items, searchQuery],
@@ -852,8 +961,8 @@ function VikingKnowledgebaseSelect({
     };
   }, [open]);
 
-  const selectItem = (index: string) => {
-    onChange(index);
+  const selectItem = (item: VikingKnowledgebaseRef) => {
+    onChange(item);
     setOpen(false);
   };
 
@@ -867,7 +976,10 @@ function VikingKnowledgebaseSelect({
   }
 
   return (
-    <div className="cw-a2a-space-picker cw-viking-kb-picker" ref={pickerRef}>
+    <div
+      className={`cw-a2a-space-picker cw-viking-kb-picker${open ? " is-open" : ""}`}
+      ref={pickerRef}
+    >
       <div className="cw-a2a-space-row">
         <div className="cw-a2a-space-select-wrap">
           <button
@@ -914,7 +1026,18 @@ function VikingKnowledgebaseSelect({
                     role="option"
                     aria-selected
                     className="cw-a2a-space-option is-selected"
-                    onClick={() => selectItem(value)}
+                    onClick={() =>
+                      selectItem({
+                        id: value,
+                        name: value,
+                        description: "",
+                        projectName: "",
+                        region: "",
+                        sourceKind: "knowledge",
+                        sourceLabel: "Knowledge Engine",
+                        resourceId: "",
+                      })
+                    }
                   >
                     {value}
                   </button>
@@ -922,6 +1045,14 @@ function VikingKnowledgebaseSelect({
                 {filteredItems.map((item) => {
                   const optionLabel = vikingKnowledgebaseDisplayName(item);
                   const selected = item.id === value;
+                  const optionIds = [
+                    item.id,
+                    item.resourceId,
+                    item.agentkitKnowledgeId,
+                    item.providerKnowledgeId,
+                  ]
+                    .filter(Boolean)
+                    .join(" / ");
                   return (
                     <button
                       key={item.id}
@@ -931,8 +1062,8 @@ function VikingKnowledgebaseSelect({
                       className={`cw-a2a-space-option ${
                         selected ? "is-selected" : ""
                       }`}
-                      title={`${optionLabel} (${item.id})`}
-                      onClick={() => selectItem(item.id)}
+                      title={optionIds ? `${optionLabel} (${optionIds})` : optionLabel}
+                      onClick={() => selectItem(item)}
                     >
                       {optionLabel}
                     </button>
@@ -1059,11 +1190,28 @@ function McpToolEditor({
                       placeholder="MCP 服务地址（StreamableHTTP）"
                       onChange={(e) => update(i, { url: e.target.value })}
                     />
+                    {mcpUrlNeedsPathWarning(t.url ?? "") && (
+                      <p className="cw-mcp-warning">
+                        <Info aria-hidden="true" />
+                        <span>
+                          当前地址不是以 /mcp 结尾，请确认它是实际的 MCP
+                          Endpoint。Studio 会保留该地址，不会自动补充路径。
+                        </span>
+                      </p>
+                    )}
                     <input
                       className="cw-input"
-                      value={t.authToken ?? ""}
+                      value={mcpAuthTokenInputValue(t)}
                       placeholder="Bearer Token（可选）"
-                      onChange={(e) => update(i, { authToken: e.target.value })}
+                      onChange={(e) =>
+                        onChange(
+                          tools.map((tool, index) =>
+                            index === i
+                              ? updateMcpAuthTokenInput(tool, e.target.value)
+                              : tool,
+                          ),
+                        )
+                      }
                     />
                   </>
                 ) : (
@@ -1198,9 +1346,11 @@ const SKILL_SOURCES: {
 function SkillsSourceTabs({
   selected,
   onChange,
+  cloudProvider,
 }: {
   selected: SelectedSkill[];
   onChange: (next: SelectedSkill[]) => void;
+  cloudProvider: CloudProvider;
 }) {
   const [active, setActive] = useState<SkillSource>("local");
   const [open, setOpen] = useState(false);
@@ -1327,7 +1477,11 @@ function SkillsSourceTabs({
                     <LocalPicker selected={selected} onChange={onChange} />
                   )}
                   {active === "skillspace" && (
-                    <SkillSpacePicker selected={selected} onChange={onChange} />
+                    <SkillSpacePicker
+                      selected={selected}
+                      onChange={onChange}
+                      cloudProvider={cloudProvider}
+                    />
                   )}
                 </div>
               </div>
@@ -1417,10 +1571,14 @@ function updateNode(
   return { ...root, subAgents };
 }
 
-function addChild(root: AgentDraft, path: NodePath): AgentDraft {
+function addChild(
+  root: AgentDraft,
+  path: NodePath,
+  cloudProvider: CloudProvider = "volcengine",
+): AgentDraft {
   return updateNode(root, path, (n) => ({
     ...n,
-    subAgents: [...n.subAgents, emptyDraft()],
+    subAgents: [...n.subAgents, emptyDraft(cloudProvider)],
   }));
 }
 
@@ -1428,10 +1586,11 @@ function insertChild(
   root: AgentDraft,
   parentPath: NodePath,
   index: number,
+  cloudProvider: CloudProvider = "volcengine",
 ): AgentDraft {
   return updateNode(root, parentPath, (n) => {
     const subAgents = n.subAgents.slice();
-    subAgents.splice(index, 0, emptyDraft());
+    subAgents.splice(index, 0, emptyDraft(cloudProvider));
     return { ...n, subAgents };
   });
 }
@@ -1544,12 +1703,27 @@ function countDraftAgents(root: AgentDraft): number {
 
 /** Collect only settings used by active components across the Agent tree. */
 function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
+  const prepared = prepareMcpAuth(root);
   const selections: RuntimeEnvSelection[] = [];
-  const fixedValues: Record<string, string> = {};
+  const fixedValues: Record<string, string> = { ...prepared.envValues };
+  const cloudProvider = prepared.draft.cloudProvider ?? "volcengine";
   const visit = (node: AgentDraft) => {
     for (const toolId of node.builtinTools ?? []) {
       const tool = BUILTIN_TOOLS.find((item) => item.id === toolId);
-      if (tool) selections.push({ env: tool.env });
+      if (tool) selections.push({ env: providerRuntimeEnv(tool.env, cloudProvider) });
+    }
+    for (const mcpTool of node.mcpTools ?? []) {
+      if (mcpTool.authTokenEnv) {
+        selections.push({
+          env: [
+            {
+              key: mcpTool.authTokenEnv,
+              required: false,
+              comment: `${mcpTool.name.trim() || "MCP"} Bearer Token`,
+            },
+          ],
+        });
+      }
     }
     if (node.a2aRegistry?.enabled) {
       selections.push({ env: A2A_REGISTRY_ENV });
@@ -1561,26 +1735,35 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
     if (node.memory.shortTerm) {
       selections.push({
         env:
-          STM_BACKENDS.find(
-            (item) => item.id === (node.shortTermBackend ?? "local"),
-          )?.env ?? [],
+          providerRuntimeEnv(
+            STM_BACKENDS.find(
+              (item) => item.id === (node.shortTermBackend ?? "local"),
+            )?.env ?? [],
+            cloudProvider,
+          ),
       });
     }
     if (node.memory.longTerm) {
       selections.push({
         env:
-          LTM_BACKENDS.find(
-            (item) => item.id === (node.longTermBackend ?? "local"),
-          )?.env ?? [],
+          providerRuntimeEnv(
+            LTM_BACKENDS.find(
+              (item) => item.id === (node.longTermBackend ?? "local"),
+            )?.env ?? [],
+            cloudProvider,
+          ),
       });
     }
     if (node.knowledgebase) {
       selections.push({
         env:
-          KB_BACKENDS.find(
-            (item) =>
-              item.id === (node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND),
-          )?.env ?? [],
+          providerRuntimeEnv(
+            KB_BACKENDS.find(
+              (item) =>
+                item.id === (node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND),
+            )?.env ?? [],
+            cloudProvider,
+          ),
       });
     }
     if (node.tracing) {
@@ -1598,7 +1781,7 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
     }
     node.subAgents.forEach(visit);
   };
-  visit(root);
+  visit(prepared.draft);
   const config = runtimeEnvConfiguration(selections);
   return {
     specs: config.specs,
@@ -1820,9 +2003,65 @@ interface DebugTraceTarget {
   variantName: string;
 }
 
-function codegenDraft(draft: AgentDraft): AgentDraft {
+function sameBaseUrl(a: string | undefined, b: string): boolean {
+  const normalize = (value: string | undefined) =>
+    (value ?? "").trim().replace(/\/+$/, "");
+  return normalize(a) === normalize(b);
+}
+
+function shouldUseProviderDefaultModel(
+  modelName: string | undefined,
+  previousProvider: CloudProvider,
+  nextProvider: CloudProvider,
+): boolean {
+  const trimmed = (modelName ?? "").trim();
+  if (!trimmed) return true;
+  if (trimmed === defaultModelName(previousProvider)) return true;
+  if (trimmed === defaultModelName(nextProvider)) return false;
+  return nextProvider === "byteplus" && trimmed.includes("doubao-");
+}
+
+function draftForCloudProvider(
+  draft: AgentDraft,
+  cloudProvider: CloudProvider,
+): AgentDraft {
+  const previousProvider = draft.cloudProvider ?? "volcengine";
+  const nextSubAgents = draft.subAgents.map((child) =>
+    draftForCloudProvider(child, cloudProvider),
+  );
+  const nextModelName = shouldUseProviderDefaultModel(
+    draft.modelName,
+    previousProvider,
+    cloudProvider,
+  )
+    ? defaultModelName(cloudProvider)
+    : draft.modelName;
+  const shouldUseProviderDefaultBase =
+    sameBaseUrl(draft.modelApiBase, defaultModelApiBase(previousProvider)) ||
+    (cloudProvider === "byteplus" &&
+      (draft.modelApiBase ?? "").includes("volces.com"));
+  const nextModelApiBase = shouldUseProviderDefaultBase
+    ? defaultModelApiBase(cloudProvider)
+    : draft.modelApiBase;
+  const changed =
+    draft.cloudProvider !== cloudProvider ||
+    nextModelName !== draft.modelName ||
+    nextModelApiBase !== draft.modelApiBase ||
+    nextSubAgents.some((child, index) => child !== draft.subAgents[index]);
+  if (!changed) return draft;
   return {
     ...draft,
+    cloudProvider,
+    modelName: nextModelName,
+    modelApiBase: nextModelApiBase,
+    subAgents: nextSubAgents,
+  };
+}
+
+function codegenDraft(draft: AgentDraft): AgentDraft {
+  const prepared = prepareMcpAuth(draft).draft;
+  return {
+    ...prepared,
     deployment: {
       feishuEnabled: !!draft.deployment?.feishuEnabled,
     },
@@ -2435,6 +2674,8 @@ interface CustomCreateProps extends CreateModeProps {
   features?: UiFeatures;
   /** Publish deploy progress into the persistent app header. */
   onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;
+  /** Specific creation path inside the scratch flow. */
+  createMode?: "custom" | "yaml_import";
   /** Existing Runtime target when editing an Agent from the library. */
   deploymentTarget?: {
     runtimeId: string;
@@ -2445,6 +2686,8 @@ interface CustomCreateProps extends CreateModeProps {
   };
   /** Region selected before entering the create flow. */
   initialDeployRegion?: string;
+  /** Cloud provider selected by the Studio shell. */
+  cloudProvider?: CloudProvider;
   /** Called after an existing Runtime has been updated and released. */
   onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
   /** Called once the persistent deployment task has been created. */
@@ -2462,8 +2705,10 @@ export function CustomCreate({
   initialDraft,
   features,
   onDeploymentTaskChange,
+  createMode = "custom",
   deploymentTarget,
-  initialDeployRegion = "cn-beijing",
+  cloudProvider = "volcengine",
+  initialDeployRegion = defaultCloudRegion(cloudProvider),
   onDeploymentComplete,
   onDeploymentStarted,
   onDraftChange,
@@ -2473,11 +2718,19 @@ export function CustomCreate({
   void onBack; // no footer nav in the single-scroll layout; back lives in app chrome
   void onDiscard; // the discard action is intentionally hidden in this flow
   const [draft, setDraft] = useState<AgentDraft>(
-    () => initialDraft ?? emptyDraft(),
+    () =>
+      draftForCloudProvider(
+        initialDraft ?? emptyDraft(cloudProvider),
+        cloudProvider,
+      ),
   );
+  useEffect(() => {
+    setDraft((current) => draftForCloudProvider(current, cloudProvider));
+  }, [cloudProvider]);
   const [aiRequirement, setAiRequirement] = useState("");
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiGenerated, setAiGenerated] = useState(false);
+  const [usedAiGeneration, setUsedAiGeneration] = useState(false);
   const [aiErrorDialog, setAiErrorDialog] = useState<string | null>(null);
   const trimmedAiRequirement = aiRequirement.trim();
   const aiRequirementError =
@@ -2496,8 +2749,11 @@ export function CustomCreate({
   useEffect(() => {
     if (draftSnapshot === lastNotifiedDraftSnapshotRef.current) return;
     lastNotifiedDraftSnapshotRef.current = draftSnapshot;
-    onDraftChangeRef.current?.(draft, draftDirty);
-  }, [draft, draftDirty, draftSnapshot]);
+    onDraftChangeRef.current?.(
+      draftForCloudProvider(draft, cloudProvider),
+      draftDirty,
+    );
+  }, [cloudProvider, draft, draftDirty, draftSnapshot]);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("build");
   const [showErrors, setShowErrors] = useState(false);
   const [validationPulse, setValidationPulse] = useState(0);
@@ -2510,21 +2766,27 @@ export function CustomCreate({
   const debugDisabledReason =
     features?.generatedAgentTestRunDisabledReason ||
     "当前后端暂不支持生成 Agent 调试运行。";
-  const [debugVariants, setDebugVariants] = useState<DebugVariant[]>(() => [
-    {
-      id: "baseline",
-      name: "基准组",
-      modelName: defaultDebugModelName(initialDraft ?? emptyDraft()),
-      description: (initialDraft ?? emptyDraft()).description,
-      instruction: (initialDraft ?? emptyDraft()).instruction,
-      optimizations: [],
-      configOpen: false,
-      phase: "idle",
-      runtimeSnapshot: "",
-      messages: [],
-      error: null,
-    },
-  ]);
+  const [debugVariants, setDebugVariants] = useState<DebugVariant[]>(() => {
+    const initialProviderDraft = draftForCloudProvider(
+      initialDraft ?? emptyDraft(cloudProvider),
+      cloudProvider,
+    );
+    return [
+      {
+        id: "baseline",
+        name: "基准组",
+        modelName: defaultDebugModelName(initialProviderDraft),
+        description: initialProviderDraft.description,
+        instruction: initialProviderDraft.instruction,
+        optimizations: [],
+        configOpen: false,
+        phase: "idle",
+        runtimeSnapshot: "",
+        messages: [],
+        error: null,
+      },
+    ];
+  });
   const [selectedVariantId, setSelectedVariantId] = useState("baseline");
   const debugVariantSequenceRef = useRef(1);
   const baselineModelEditedRef = useRef(false);
@@ -2713,12 +2975,21 @@ export function CustomCreate({
     setBuildErr("");
     try {
       const result = await generateAgentDraftFromRequirement(requirement);
-      setDraft(sanitizeGeneratedDraftCapabilities(normalizeDraft(result.draft)));
+      setDraft(
+        draftForCloudProvider(
+          sanitizeGeneratedDraftCapabilities(
+            normalizeDraft(result.draft),
+            cloudProvider,
+          ),
+          cloudProvider,
+        ),
+      );
       setSelectedPath([]);
       setProject(null);
       setShowErrors(false);
       setBuildErr("");
       setAiGenerated(true);
+      setUsedAiGeneration(true);
     } catch (error) {
       setAiErrorDialog(
         error instanceof Error ? error.message : String(error),
@@ -2731,7 +3002,7 @@ export function CustomCreate({
   const addCanvasStep = (path: NodePath) => {
     const parent = getNode(draft, path);
     if (!nodeAcceptsChildren(parent) || path.length >= MAX_TREE_DEPTH) return;
-    const next = addChild(draft, path);
+    const next = addChild(draft, path, cloudProvider);
     const childIndex = getNode(next, path).subAgents.length - 1;
     applyTree(next, [...path, childIndex]);
   };
@@ -2745,7 +3016,7 @@ export function CustomCreate({
       return;
     }
     const safeIndex = Math.max(0, Math.min(index, parent.subAgents.length));
-    const next = insertChild(draft, parentPath, safeIndex);
+    const next = insertChild(draft, parentPath, safeIndex, cloudProvider);
     applyTree(next, [...parentPath, safeIndex]);
   };
 
@@ -2755,7 +3026,7 @@ export function CustomCreate({
     ) {
       return;
     }
-    setDraft(emptyDraft());
+    setDraft(emptyDraft(cloudProvider));
     setSelectedPath([]);
     setShowErrors(false);
   };
@@ -2770,14 +3041,24 @@ export function CustomCreate({
 
   // Root-only rich sections read these off the root draft directly.
   const builtinTools = node.builtinTools ?? [];
+  const createBuiltinTools = useMemo(
+    () => createBuiltinToolsForProvider(cloudProvider),
+    [cloudProvider],
+  );
+  const createBuiltinToolIds = useMemo(
+    () => new Set(createBuiltinTools.map((tool) => tool.id)),
+    [createBuiltinTools],
+  );
   const mcpTools = node.mcpTools ?? [];
   const selectedSkills = node.selectedSkills ?? [];
-  const toggleBuiltin = (id: string) =>
+  const toggleBuiltin = (id: string) => {
+    if (!createBuiltinToolIds.has(id)) return;
     patch({
       builtinTools: builtinTools.includes(id)
         ? builtinTools.filter((x) => x !== id)
         : [...builtinTools, id],
     });
+  };
 
   // Detail-pane branching is driven by the SELECTED node's type.
   const orchestrator = isOrchestratorType(node.agentType);
@@ -2807,14 +3088,21 @@ export function CustomCreate({
     [draft, duplicateNames],
   );
   const canFinish = problems.length === 0;
+  const providerDraft = useMemo(
+    () => draftForCloudProvider(draft, cloudProvider),
+    [cloudProvider, draft],
+  );
   const currentDebugSnapshot = useMemo(
-    () => debugSnapshotKey(draft),
-    [draft],
+    () => debugSnapshotKey(providerDraft),
+    [providerDraft],
   );
   const selectedDebugVariant =
     debugVariants.find((variant) => variant.id === selectedVariantId) ??
     debugVariants[0];
-  const deploymentEnv = useMemo(() => collectDeploymentEnv(draft), [draft]);
+  const deploymentEnv = useMemo(
+    () => collectDeploymentEnv(providerDraft),
+    [providerDraft],
+  );
 
   // Smooth-scroll to the first invalid section during validation.
   const scrollToSection = (id: StepId) => {
@@ -2929,7 +3217,7 @@ export function CustomCreate({
     }
     const invalidEnv = firstInvalidRuntimeEnv(
       deploymentEnv.specs,
-      draft.deployment?.envValues ?? {},
+      providerDraft.deployment?.envValues ?? {},
     );
     if (invalidEnv) {
       setBuildErr(
@@ -2946,12 +3234,12 @@ export function CustomCreate({
       if (releaseVariant) setSelectedVariantId(releaseVariant.id);
       const releaseDraft = releaseVariant
         ? {
-            ...draft,
-            modelName: releaseVariant.modelName || draft.modelName,
+            ...providerDraft,
+            modelName: releaseVariant.modelName || providerDraft.modelName,
             description: releaseVariant.description,
             instruction: releaseVariant.instruction,
           }
-        : draft;
+        : providerDraft;
       const generated = await generateAgentProject(codegenDraft(releaseDraft));
       if (releaseDraft !== draft) setDraft(releaseDraft);
       setProject(generated);
@@ -3002,19 +3290,30 @@ export function CustomCreate({
     setDebugInput("");
 
     let createdRun: GeneratedAgentTestRun | null = null;
+    let failedPhase: AgentDebugFailedPhase | undefined;
+    const debugStartedAt = Date.now();
+    const variantType = id === "baseline" ? "baseline" : "comparison";
     try {
       await cleanupDebugVariantRun(id);
       await cleanupStoredDebugRuns();
       const variantDraft: AgentDraft = {
-        ...draft,
-        modelName: variant.modelName || draft.modelName,
+        ...providerDraft,
+        modelName: variant.modelName || providerDraft.modelName,
         description: variant.description,
         instruction: variant.instruction,
       };
+      failedPhase = "create_test_run";
       createdRun = await createGeneratedAgentTestRun(
         debugRuntimeDraft(variantDraft),
+        deploymentTarget
+          ? {
+              runtimeId: deploymentTarget.runtimeId,
+              region: deploymentTarget.region,
+            }
+          : undefined,
       );
       rememberDebugTestRun(createdRun.runId);
+      failedPhase = "create_test_session";
       const sessionId = await createGeneratedAgentTestSession(
         createdRun.runId,
         "test_user",
@@ -3028,6 +3327,10 @@ export function CustomCreate({
             : item,
         ),
       );
+      trackAgentDebugSucceeded({
+        durationMs: Date.now() - debugStartedAt,
+        variantType,
+      });
     } catch (err) {
       if (createdRun) {
         try {
@@ -3049,6 +3352,12 @@ export function CustomCreate({
             : item,
         ),
       );
+      trackAgentDebugFailed({
+        durationMs: Date.now() - debugStartedAt,
+        variantType,
+        phase: failedPhase,
+        error: err,
+      });
     }
   };
 
@@ -3254,9 +3563,9 @@ export function CustomCreate({
               ...variant,
               modelName: baselineModelEditedRef.current
                 ? variant.modelName
-                : defaultDebugModelName(draft),
-              description: draft.description,
-              instruction: draft.instruction,
+                : defaultDebugModelName(providerDraft),
+              description: providerDraft.description,
+              instruction: providerDraft.instruction,
             }
           : variant,
       ),
@@ -3330,7 +3639,7 @@ export function CustomCreate({
                 value={aiRequirement}
                 maxLength={8000}
                 disabled={aiGenerating}
-                placeholder="描述目标，使用 doubao-seed-2-0-lite-260428 模型一键生成配置"
+                placeholder={`描述目标，使用 ${plannerModelName(cloudProvider)} 模型一键生成配置`}
                 aria-invalid={Boolean(aiRequirementError)}
                 aria-describedby={
                   aiRequirementError ? "ai-requirement-error" : undefined
@@ -3666,7 +3975,7 @@ export function CustomCreate({
                       <input
                         className="cw-input"
                         value={node.modelName ?? ""}
-                        placeholder="doubao-seed-2-1-pro-260628"
+                        placeholder={defaultModelName(cloudProvider)}
                               onChange={(e) =>
                                 patch({ modelName: e.target.value })
                               }
@@ -3717,7 +4026,7 @@ export function CustomCreate({
                             <input
                               className="cw-input"
                               value={node.modelApiBase ?? ""}
-                              placeholder="https://ark.cn-beijing.volces.com/api/v3/"
+                              placeholder={defaultModelApiBase(cloudProvider)}
                               onChange={(e) =>
                                 patch({ modelApiBase: e.target.value })
                               }
@@ -3744,7 +4053,7 @@ export function CustomCreate({
                       </span>
                       <div className="cw-tools-list-shell">
                         <Checklist
-                          items={CREATE_BUILTIN_TOOLS}
+                          items={createBuiltinTools}
                           selected={builtinTools}
                           onToggle={toggleBuiltin}
                           scrollRows={6}
@@ -3793,6 +4102,7 @@ export function CustomCreate({
                     <SkillsSourceTabs
                       selected={selectedSkills}
                       onChange={(next) => patch({ selectedSkills: next })}
+                      cloudProvider={cloudProvider}
                     />
                   </div>
             </Section>
@@ -3816,7 +4126,7 @@ export function CustomCreate({
                             patch({
                               knowledgebaseBackend: id,
                               knowledgebaseIndex:
-                                id === "viking"
+                                id === "viking" || id === "openviking"
                                   ? node.knowledgebaseIndex
                                   : "",
                             })
@@ -3828,9 +4138,33 @@ export function CustomCreate({
                             <label className="cw-label">VikingDB 知识库</label>
                             <VikingKnowledgebaseSelect
                               value={node.knowledgebaseIndex ?? ""}
-                              onChange={(knowledgebaseIndex) =>
-                                patch({ knowledgebaseIndex })
-                              }
+                              onChange={(knowledgebase) => {
+                                patch({
+                                  knowledgebaseIndex: knowledgebase.id,
+                                });
+                                if (knowledgebase.projectName) {
+                                  patchDeploymentEnv(
+                                    "DATABASE_VIKING_PROJECT",
+                                    knowledgebase.projectName,
+                                  );
+                                }
+                                if (knowledgebase.region) {
+                                  patchDeploymentEnv(
+                                    "DATABASE_VIKING_REGION",
+                                    knowledgebase.region,
+                                  );
+                                }
+                                if (knowledgebase.sourceKind) {
+                                  patchDeploymentEnv(
+                                    "DATABASE_VIKING_COLLECTION_KIND",
+                                    knowledgebase.sourceKind,
+                                  );
+                                }
+                                patchDeploymentEnv(
+                                  "DATABASE_VIKING_RESOURCE_ID",
+                                  knowledgebase.resourceId ?? "",
+                                );
+                              }}
                             />
                           </div>
                         )}
@@ -3845,6 +4179,20 @@ export function CustomCreate({
                           }
                           values={draft.deployment?.envValues ?? {}}
                           onChange={patchDeploymentEnv}
+                          renderAfterField={
+                            (node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND) ===
+                            "openviking"
+                              ? (item) =>
+                                  item.key === "DATABASE_OPENVIKING_USER_ID" ? (
+                                    <OpenVikingKnowledgeIndexField
+                                      value={node.knowledgebaseIndex ?? ""}
+                                      onChange={(knowledgebaseIndex) =>
+                                        patch({ knowledgebaseIndex })
+                                      }
+                                    />
+                                  ) : null
+                              : undefined
+                          }
                         />
                       </div>
                     )}
@@ -3998,6 +4346,7 @@ export function CustomCreate({
           {project ? (
             <ProjectPreview
               embedded
+              cloudProvider={cloudProvider}
               project={project}
               agentDraft={draft}
               agentName={draft.name || "未命名 Agent"}
@@ -4044,7 +4393,7 @@ export function CustomCreate({
               }}
               deploymentEnv={deploymentEnv.specs}
               deploymentEnvValues={{
-                ...draft.deployment?.envValues,
+                ...providerDraft.deployment?.envValues,
                 ...deploymentEnv.fixedValues,
               }}
               onDeploymentEnvChange={patchDeploymentEnv}
@@ -4060,10 +4409,15 @@ export function CustomCreate({
               }
               deployRegion={deployRegion}
               onDeployRegionChange={setDeployRegion}
+              deploymentTelemetry={{
+                source: "scratch",
+                createMode,
+                aiAssisted: usedAiGeneration,
+              }}
               onExportYaml={() =>
                 downloadText(
-                  `${draft.name || "agent"}.yaml`,
-                  draftToYaml(draft),
+                  `${providerDraft.name || "agent"}.yaml`,
+                  draftToYaml(providerDraft),
                   "text/yaml",
                 )
               }

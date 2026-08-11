@@ -29,13 +29,12 @@ import textwrap
 import time
 import uuid
 import zipfile
-
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
 from typing import Any
-import requests
 
+import requests
 from agentkit.sdk.skills import types as skills_types
 from agentkit.sdk.skills.client import AgentkitSkillsClient
 from agentkit.sdk.tools import types as tools_types
@@ -56,7 +55,10 @@ from veadk.cli.agentkit_sandbox_region import (
     is_agentkit_resource_not_found,
     sandbox_region_candidates,
 )
-
+from veadk.cli.studio_model_catalog import (
+    BYTEPLUS_SKILL_CREATOR_MODELS,
+    BYTEPLUS_STUDIO_AGENT_MODEL_NAME,
+)
 
 _MODELS = (
     ("a", "doubao-seed-2-0-pro-260215", "豆包 Seed 2.0 Pro"),
@@ -64,6 +66,8 @@ _MODELS = (
 )
 _MODEL_PROVIDER = "model_square"
 _MODEL_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+_BYTEPLUS_MODEL_PROVIDER = "byteplus_model_square"
+_BYTEPLUS_MODEL_BASE_URL = "https://ark.ap-southeast.bytepluses.com/api/v3"
 _REGION = "cn-beijing"
 _SESSION_TTL_SECONDS = 1800
 _SESSION_DISCOVERY_ATTEMPTS = 6
@@ -689,10 +693,39 @@ def _safe_json_response(
     return payload
 
 
+def _sandbox_provider() -> str:
+    return (
+        (
+            os.getenv("AGENTKIT_CLOUD_PROVIDER")
+            or os.getenv("CLOUD_PROVIDER")
+            or "volcengine"
+        )
+        .strip()
+        .lower()
+    )
+
+
+def _models_for_provider(
+    provider: str | None = None,
+) -> tuple[tuple[str, str, str], ...]:
+    provider_id = (provider or _sandbox_provider()).strip().lower()
+    if provider_id == "byteplus":
+        return BYTEPLUS_SKILL_CREATOR_MODELS
+    return _MODELS
+
+
+def _sandbox_model_config(provider: str | None = None) -> tuple[str, str]:
+    provider_id = (provider or _sandbox_provider()).strip().lower()
+    if provider_id == "byteplus":
+        return _BYTEPLUS_MODEL_PROVIDER, _BYTEPLUS_MODEL_BASE_URL
+    return _MODEL_PROVIDER, _MODEL_BASE_URL
+
+
 def _validate_model_base_url(value: str) -> str:
     """Require the Ark model endpoint configured by Studio deployment."""
     normalized = value.rstrip("/")
-    if normalized != _MODEL_BASE_URL:
+    _, expected_base_url = _sandbox_model_config()
+    if normalized != expected_base_url:
         raise SkillCreatorError("Sandbox 模型服务地址无效")
     return normalized
 
@@ -704,37 +737,39 @@ def ensure_skill_creator_model_credential(
     secret_key: str,
     session_token: str | None = None,
     region: str = _REGION,
+    provider: str = "volcengine",
+    model_name: str | None = None,
+    client: Any | None = None,
 ) -> None:
     """Resolve an Ark API key and bind it directly to the CodeEnv Tool."""
-    from agentkit.auth._openapi import OpenApiClient
     from veadk.auth.veauth.ark_veauth import get_ark_token
 
-    api = OpenApiClient(
+    provider_id = provider.strip().lower()
+    tools_client = client or AgentkitToolsClient(
         access_key=access_key,
         secret_key=secret_key,
-        session_token=session_token,
+        session_token=session_token or "",
         region=region,
     )
-    response = api.call("agentkit", "GetTool", "2025-10-30", {"ToolId": tool_id})
-    tool = response.get("Tool") if isinstance(response.get("Tool"), dict) else response
-    if not isinstance(tool, dict):
-        raise SkillCreatorError("AgentKit Tool 响应格式错误")
-    envs = {
-        item.get("Key"): item.get("Value")
-        for item in tool.get("Envs", [])
-        if item.get("Key")
-    }
+    tool = tools_client.get_tool(tools_types.GetToolRequest(ToolId=tool_id))
+    envs = {item.key: item.value for item in tool.envs or [] if item.key}
     model_api_key = get_ark_token(
         region=region,
         access_key=access_key,
         secret_key=secret_key,
         session_token=session_token,
     )
+    model_provider, model_base_url = _sandbox_model_config(provider_id)
     session_envs = build_exec_session_envs(
-        model_name=_MODELS[0][1],
+        model_name=model_name
+        or (
+            BYTEPLUS_STUDIO_AGENT_MODEL_NAME
+            if provider_id == "byteplus"
+            else _MODELS[0][1]
+        ),
         model_api_key=model_api_key,
-        model_provider=_MODEL_PROVIDER,
-        model_base_url=_MODEL_BASE_URL,
+        model_provider=model_provider,
+        model_base_url=model_base_url,
         model_provider_was_provided=True,
         model_base_url_was_provided=True,
         include_codex_config=True,
@@ -746,14 +781,9 @@ def ensure_skill_creator_model_credential(
     if all(envs.get(key) == value for key, value in updates.items()):
         return
     envs.update(updates)
-    api.call(
-        "agentkit",
-        "UpdateTool",
-        "2025-10-30",
-        {
-            "ToolId": tool_id,
-            "Envs": [{"Key": key, "Value": value} for key, value in envs.items()],
-        },
+    updated_envs = [{"Key": key, "Value": value} for key, value in envs.items()]
+    tools_client.update_tool(
+        tools_types.UpdateToolRequest(ToolId=tool_id, Envs=updated_envs)
     )
 
 
@@ -763,7 +793,8 @@ class SkillCreatorService:
     def __init__(self, tool_id: str | None = None, region: str | None = None) -> None:
         self._configured_tool_id = (tool_id or "").strip()
         self._region = sandbox_region_candidates(
-            region or os.getenv("AGENTKIT_SANDBOX_REGION")
+            region or os.getenv("AGENTKIT_SANDBOX_REGION"),
+            provider=_sandbox_provider(),
         )[0]
 
     def capabilities(self) -> dict[str, Any]:
@@ -795,7 +826,7 @@ class SkillCreatorService:
             "reason": reason,
             "models": [
                 {"candidateId": candidate_id, "id": model, "label": label}
-                for candidate_id, model, label in _MODELS
+                for candidate_id, model, label in _models_for_provider()
             ],
             "publishEnabled": enabled,
         }
@@ -832,7 +863,7 @@ class SkillCreatorService:
                     }
                 ],
             }
-            for candidate_id, model, label in _MODELS
+            for candidate_id, model, label in _models_for_provider()
         ]
         failures: list[Exception] = []
 
@@ -859,7 +890,7 @@ class SkillCreatorService:
                         model_base_url,
                         prompt,
                     ): (candidate_id, model, label)
-                    for candidate_id, model, label in _MODELS
+                    for candidate_id, model, label in _models_for_provider()
                 }
                 for future in as_completed(futures):
                     candidate_id, model, label = futures[future]
@@ -900,7 +931,7 @@ class SkillCreatorService:
         tool_id = self._tool_id()
         candidates = [
             self._candidate_status(tool_id, job_id, candidate_id, model, label)
-            for candidate_id, model, label in _MODELS
+            for candidate_id, model, label in _models_for_provider()
         ]
         terminal = all(item["status"] in {"succeeded", "failed"} for item in candidates)
         return {
@@ -948,32 +979,26 @@ class SkillCreatorService:
         archive, _ = self.download(job_id, candidate_id, owner_id)
         name, description = self._archive_metadata(archive)
         from agentkit.toolkit.cli.cli_skills_workflow import (
-            _ensure_bucket_ready,
             _make_content_hashed_zip_copy,
-            _tos_upload,
             _wait_for_running_version,
         )
         from agentkit.toolkit.config import GlobalConfigManager
-        from agentkit.toolkit.volcengine.services.tos_service import TOSService
+
+        from frontend.server.skills.storage import (
+            ensure_skill_publish_bucket,
+            resolve_skill_publish_credentials,
+            resolve_skill_publish_storage,
+            upload_skill_archive,
+        )
 
         config = GlobalConfigManager().load()
-        configured_bucket = (
-            os.getenv("VEADK_SKILL_CREATOR_TOS_BUCKET") or config.tos.bucket or ""
-        ).strip()
-        bucket = configured_bucket or TOSService.generate_bucket_name()
-        prefix = (
-            os.getenv("VEADK_SKILL_CREATOR_TOS_PREFIX")
-            or config.tos.prefix
-            or "agentkit/skills"
-        ).strip()
-        _ensure_bucket_ready(
-            bucket_name=bucket,
-            prefix=prefix,
+        storage = resolve_skill_publish_storage(
             region=self._region,
-            auto_bucket=not bool(configured_bucket),
-            assume_yes=True,
-            assume_no=False,
+            config_bucket=config.tos.bucket or "",
+            config_prefix=config.tos.prefix or "",
         )
+        credentials = resolve_skill_publish_credentials(provider=storage.provider)
+        ensure_skill_publish_bucket(storage, credentials)
 
         with tempfile.TemporaryDirectory(prefix="veadk-skill-publish-") as temp_dir:
             archive_path = Path(temp_dir) / f"{name}.zip"
@@ -981,9 +1006,7 @@ class SkillCreatorService:
             hashed_path = _make_content_hashed_zip_copy(
                 str(archive_path), name, temp_dir
             )
-            tos_url = _tos_upload(
-                hashed_path, bucket, prefix, self._region, verify_bucket=False
-            )
+            tos_url = upload_skill_archive(hashed_path, storage, credentials)
 
         client = AgentkitSkillsClient(region=self._region)
         effective_project = (
@@ -1013,7 +1036,7 @@ class SkillCreatorService:
                     Description=description,
                     TosUrl=tos_url,
                     SkillSpaces=skill_space_ids or None,
-                    BucketName=bucket,
+                    BucketName=storage.bucket,
                 )
             )
         else:
@@ -1023,7 +1046,7 @@ class SkillCreatorService:
                     Description=description,
                     TosUrl=tos_url,
                     SkillSpaces=skill_space_ids or None,
-                    BucketName=bucket,
+                    BucketName=storage.bucket,
                     ProjectName=effective_project,
                 )
             )
@@ -1060,7 +1083,7 @@ class SkillCreatorService:
         self._validate_job_owner(job_id, owner_id)
         tool_id = self._tool_id()
         instances = []
-        for candidate_id, _, _ in _MODELS:
+        for candidate_id, _, _ in _models_for_provider():
             try:
                 session = self._find_session(
                     tool_id, self._session_id(job_id, candidate_id)
@@ -1083,9 +1106,10 @@ class SkillCreatorService:
         del label
         client = AgentkitToolsClient(region=self._region)
         session_id = self._session_id(job_id, candidate_id)
+        model_provider, _ = _sandbox_model_config()
         session_envs = build_exec_session_envs(
             model_name=model,
-            model_provider=_MODEL_PROVIDER,
+            model_provider=model_provider,
             model_base_url=model_base_url,
             model_provider_was_provided=True,
             model_base_url_was_provided=True,
@@ -1213,7 +1237,7 @@ class SkillCreatorService:
             ],
         )
         response = None
-        regions = sandbox_region_candidates(self._region)
+        regions = sandbox_region_candidates(self._region, provider=_sandbox_provider())
         for index, region in enumerate(regions):
             try:
                 response = AgentkitToolsClient(region=region).list_sessions(request)
@@ -1267,7 +1291,7 @@ class SkillCreatorService:
 
     def _get_tool(self, tool_id: str) -> Any:
         request = tools_types.GetToolRequest(ToolId=tool_id)
-        regions = sandbox_region_candidates(self._region)
+        regions = sandbox_region_candidates(self._region, provider=_sandbox_provider())
         for index, region in enumerate(regions):
             try:
                 tool = AgentkitToolsClient(region=region).get_tool(request)
@@ -1301,7 +1325,7 @@ class SkillCreatorService:
             raise SkillCreatorError("无权访问该 Skill 创建任务")
 
     def _model(self, candidate_id: str) -> tuple[str, str, str]:
-        for item in _MODELS:
+        for item in _models_for_provider():
             if item[0] == candidate_id:
                 return item
         raise SkillCreatorError("Skill 候选方案无效")

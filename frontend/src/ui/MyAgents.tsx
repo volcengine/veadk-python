@@ -10,6 +10,11 @@ import {
   type RuntimeScope,
 } from "../adk/client";
 import {
+  defaultCloudRegion,
+  formatCloudRegion,
+  type CloudProvider,
+} from "../adk/cloudProvider";
+import {
   sandboxClient,
   sandboxStatusLabel,
   type SandboxAgentKind,
@@ -43,8 +48,6 @@ export interface MyAgentCardData {
 }
 
 export type AgentType = "general" | "codex" | "openclaw" | "hermes";
-type RuntimeRegion = "cn-beijing" | "cn-shanghai";
-const DEFAULT_CREATE_REGION: RuntimeRegion = "cn-beijing";
 
 const AGENT_TYPES: Array<{ id: AgentType; label: string }> = [
   { id: "general", label: "通用智能体" },
@@ -117,10 +120,18 @@ function formatCreatedAt(value: string): string {
   }).format(date).replace(/\//g, "-");
 }
 
-function formatRuntimeRegion(region: string): string {
-  if (region === "cn-shanghai") return "上海";
-  if (region === "cn-beijing") return "北京";
-  return region || "—";
+export function formatSandboxRemainingTime(
+  expireAt: string,
+  nowMs = Date.now(),
+): string {
+  const expireTime = Date.parse(expireAt);
+  if (!Number.isFinite(expireTime) || expireTime - nowMs < 60_000) {
+    return "即将清空";
+  }
+  const remainingMinutes = Math.ceil((expireTime - nowMs) / 60_000);
+  const hours = Math.floor(remainingMinutes / 60);
+  const minutes = remainingMinutes % 60;
+  return `${hours} 小时 ${minutes} 分钟`;
 }
 
 function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
@@ -202,23 +213,27 @@ async function loadRuntimeAgents(
 
 function AgentCard({
   agent,
+  cloudProvider,
   onUse,
   onViewDetails,
   connecting,
   connected,
   showOwnership,
   deploymentTask,
+  nowMs,
   onViewDeploymentTask,
   onEditDraft,
   onDeleteDraft,
 }: {
   agent: MyAgentCardData;
+  cloudProvider: CloudProvider;
   onUse?: (agent: MyAgentCardData) => Promise<void>;
   onViewDetails?: (agent: MyAgentCardData) => void;
   connecting?: boolean;
   connected?: boolean;
   showOwnership?: boolean;
   deploymentTask?: DeploymentTaskUpdate;
+  nowMs: number;
   onViewDeploymentTask?: (task: DeploymentTaskUpdate) => void;
   onEditDraft?: (draft: WorkspaceAgentDraft) => void;
   onDeleteDraft?: (draft: WorkspaceAgentDraft) => void;
@@ -253,7 +268,7 @@ function AgentCard({
                 <span className="my-agent-deploying-badge">部署中</span>
               ) : null}
               <span className="my-agent-region-badge">
-                {formatRuntimeRegion(agent.runtime.region)}
+                {formatCloudRegion(agent.runtime.region, cloudProvider)}
               </span>
               {showOwnership && agent.isMine ? (
                 <span className="runtime-owner-badge">我创建的</span>
@@ -273,6 +288,20 @@ function AgentCard({
             <dt>{agent.specificationLabel}</dt>
             <dd>{agent.specification}</dd>
           </div>
+          {agent.sandbox ? (
+            <div
+              className={`my-agent-expiry${
+                agent.sandbox.persistent ? "" : " is-expiring"
+              }`}
+            >
+              <dt>剩余时间</dt>
+              <dd>
+                {agent.sandbox.persistent
+                  ? "永不过期"
+                  : formatSandboxRemainingTime(agent.sandbox.expireAt, nowMs)}
+              </dd>
+            </div>
+          ) : null}
         </dl>
       </div>
       <footer className="my-agent-actions">
@@ -337,9 +366,10 @@ function AgentCard({
 }
 
 export interface MyAgentsProps {
+  cloudProvider: CloudProvider;
   canCreate: boolean;
   runtimeScope: RuntimeScope;
-  onCreateAgent: (region: RuntimeRegion) => void;
+  onCreateAgent: (region: string) => void;
   onUseAgent: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails: (agent: MyAgentCardData) => void;
   onCreateSandboxAgent: (kind: "codex" | SandboxAgentKind) => void;
@@ -357,6 +387,7 @@ export interface MyAgentsProps {
 }
 
 export function MyAgents({
+  cloudProvider,
   canCreate,
   runtimeScope,
   onCreateAgent,
@@ -391,6 +422,18 @@ export function MyAgents({
   const [sandboxError, setSandboxError] = useState("");
   const [connectingAgentId, setConnectingAgentId] = useState("");
   const [draftToDelete, setDraftToDelete] = useState<WorkspaceAgentDraft | null>(null);
+  const [remainingTimeNow, setRemainingTimeNow] = useState(() => Date.now());
+  const hasExpiringSandboxAgents = sandboxAgents.some(
+    (agent) => agent.sandbox?.persistent === false,
+  );
+
+  useEffect(() => {
+    if (!hasExpiringSandboxAgents) return;
+    setRemainingTimeNow(Date.now());
+    const timer = window.setInterval(() => setRemainingTimeNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [hasExpiringSandboxAgents]);
+
   const draftAgents = useMemo(() => drafts.map(draftToAgent), [drafts]);
   const activeDeploymentTasks = useMemo(() => {
     const byId = new Map<string, DeploymentTaskUpdate>();
@@ -586,7 +629,7 @@ export function MyAgents({
   const showEmpty = !showInitialLoading && visibleAgents.length === 0;
   const createAgent = canCreate
     ? activeType === "general"
-      ? () => onCreateAgent(DEFAULT_CREATE_REGION)
+      ? () => onCreateAgent(defaultCloudRegion(cloudProvider))
       : () => onCreateSandboxAgent(activeType)
     : undefined;
   const createDisabledReason = !canCreate
@@ -687,7 +730,9 @@ export function MyAgents({
                 <EmptyMessage.Icon>
                   <AgentTypeIcon type={activeType} />
                 </EmptyMessage.Icon>
-                <EmptyMessage.Title>暂无 {activeLabel}</EmptyMessage.Title>
+                <EmptyMessage.Title className="my-agent-sandbox-empty-title">
+                  暂无 {activeLabel}
+                </EmptyMessage.Title>
                 {canCreate ? (
                   <EmptyMessage.ActionRow>
                     <Button
@@ -717,7 +762,7 @@ export function MyAgents({
                     <Button
                       color="primary"
                       size="lg"
-                      onClick={() => onCreateAgent(DEFAULT_CREATE_REGION)}
+                      onClick={() => onCreateAgent(defaultCloudRegion(cloudProvider))}
                     >
                       <AddIcon />
                       创建智能体
@@ -742,7 +787,9 @@ export function MyAgents({
                 <AgentCard
                   key={agent.id}
                   agent={agent}
+                  cloudProvider={cloudProvider}
                   deploymentTask={deploymentTaskForAgent(agent)}
+                  nowMs={remainingTimeNow}
                   onViewDeploymentTask={onViewDeploymentTask}
                   onUse={useAgent}
                   onViewDetails={(agent) => {

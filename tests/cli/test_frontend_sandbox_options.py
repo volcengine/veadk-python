@@ -18,7 +18,7 @@ import os
 from typing import Any
 
 import pytest
-from click import Command
+from click import ClickException, Command
 from click.testing import CliRunner
 
 from veadk.cli.cli_frontend import frontend, studio
@@ -51,7 +51,9 @@ def test_sandbox_tool_options_are_shared_by_local_serve_commands(
     monkeypatch.setenv("SANDBOX_CHAT_CODEX", "chat-from-env")
     monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW", "openclaw-from-env")
     monkeypatch.setenv("SANDBOX_CHAT_HERMES", "hermes-from-env")
-    monkeypatch.setenv("SANDBOX_SKILL_CREATOR", "skill-from-env")
+    monkeypatch.setenv("SANDBOX_CHAT_CODEX_SNAPSHOT", "chat-snapshot-from-env")
+    monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW_SNAPSHOT", "openclaw-snapshot-from-env")
+    monkeypatch.setenv("SANDBOX_CHAT_HERMES_SNAPSHOT", "hermes-snapshot-from-env")
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._run_frontend_server",
         lambda **kwargs: captured.update(kwargs),
@@ -66,8 +68,12 @@ def test_sandbox_tool_options_are_shared_by_local_serve_commands(
             "openclaw-from-cli",
             "--sandbox-chat-hermes-tool-id",
             "hermes-from-cli",
-            "--sandbox-skill-creator-tool-id",
-            "skill-from-cli",
+            "--sandbox-chat-codex-snapshot-tool-id",
+            "chat-snapshot-from-cli",
+            "--sandbox-chat-openclaw-snapshot-tool-id",
+            "openclaw-snapshot-from-cli",
+            "--sandbox-chat-hermes-snapshot-tool-id",
+            "hermes-snapshot-from-cli",
         ],
     )
 
@@ -75,7 +81,14 @@ def test_sandbox_tool_options_are_shared_by_local_serve_commands(
     assert captured["sandbox_chat_codex_tool_id"] == "chat-from-cli"
     assert captured["sandbox_chat_openclaw_tool_id"] == "openclaw-from-cli"
     assert captured["sandbox_chat_hermes_tool_id"] == "hermes-from-cli"
-    assert captured["sandbox_skill_creator_tool_id"] == "skill-from-cli"
+    assert captured["sandbox_chat_codex_snapshot_tool_id"] == ("chat-snapshot-from-cli")
+    assert captured["sandbox_chat_openclaw_snapshot_tool_id"] == (
+        "openclaw-snapshot-from-cli"
+    )
+    assert captured["sandbox_chat_hermes_snapshot_tool_id"] == (
+        "hermes-snapshot-from-cli"
+    )
+    assert "sandbox_skill_creator_tool_id" not in captured
 
 
 def test_local_sandbox_tool_options_fall_back_to_environment(
@@ -85,7 +98,9 @@ def test_local_sandbox_tool_options_fall_back_to_environment(
     monkeypatch.setenv("SANDBOX_CHAT_CODEX", "chat-from-env")
     monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW", "openclaw-from-env")
     monkeypatch.setenv("SANDBOX_CHAT_HERMES", "hermes-from-env")
-    monkeypatch.setenv("SANDBOX_SKILL_CREATOR", "skill-from-env")
+    monkeypatch.setenv("SANDBOX_CHAT_CODEX_SNAPSHOT", "chat-snapshot-from-env")
+    monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW_SNAPSHOT", "openclaw-snapshot-from-env")
+    monkeypatch.setenv("SANDBOX_CHAT_HERMES_SNAPSHOT", "hermes-snapshot-from-env")
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._run_frontend_server",
         lambda **kwargs: captured.update(kwargs),
@@ -97,7 +112,14 @@ def test_local_sandbox_tool_options_fall_back_to_environment(
     assert captured["sandbox_chat_codex_tool_id"] == "chat-from-env"
     assert captured["sandbox_chat_openclaw_tool_id"] == "openclaw-from-env"
     assert captured["sandbox_chat_hermes_tool_id"] == "hermes-from-env"
-    assert captured["sandbox_skill_creator_tool_id"] == "skill-from-env"
+    assert captured["sandbox_chat_codex_snapshot_tool_id"] == ("chat-snapshot-from-env")
+    assert captured["sandbox_chat_openclaw_snapshot_tool_id"] == (
+        "openclaw-snapshot-from-env"
+    )
+    assert captured["sandbox_chat_hermes_snapshot_tool_id"] == (
+        "hermes-snapshot-from-env"
+    )
+    assert "sandbox_skill_creator_tool_id" not in captured
 
 
 @pytest.mark.parametrize("command", [frontend, studio])
@@ -133,3 +155,60 @@ def test_local_serve_commands_accept_explicit_byteplus_provider(
 
     assert result.exit_code == 0, result.output
     assert captured["provider"] == "byteplus"
+
+
+def test_studio_deploy_byteplus_uses_builtin_application_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BYTEPLUS_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SESSION_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_studio_cloud_credentials",
+        lambda *_, **__: (_ for _ in ()).throw(
+            ClickException("BytePlus credentials required.")
+        ),
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--provider",
+            "byteplus",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+            "--iam-role",
+            "trn:iam::3001037806:role/dev",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "BytePlus credentials required" in result.output
+    assert "--vefaas-application-template-id" not in result.output
+
+
+def test_studio_deploy_byteplus_rejects_non_singapore_region() -> None:
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--provider",
+            "byteplus",
+            "--region",
+            "cn-beijing",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "currently supports only ap-southeast-1" in result.output

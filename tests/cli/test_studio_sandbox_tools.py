@@ -25,6 +25,10 @@ from veadk.cli.studio_sandbox_tools import (
     ensure_studio_agent_model_credential,
     ensure_studio_agent_tool,
     ensure_studio_code_env_tool,
+    ensure_studio_dev_env_tool,
+    studio_sandbox_agent_model_name,
+    studio_sandbox_model_base_url,
+    studio_sandbox_tool_name,
 )
 
 
@@ -85,6 +89,81 @@ def test_ensure_studio_code_env_tool_creates_ready_code_env() -> None:
     assert getattr(request, "cpu_milli") == 4000
     assert getattr(request, "memory_mb") == 8192
     assert getattr(request, "envs") is None
+    assert getattr(request, "enable_snapshot") is False
+
+
+def test_ensure_studio_code_env_tool_creates_snapshot_enabled_code_env() -> None:
+    requests: list[object] = []
+    client = SimpleNamespace(
+        list_tools=lambda _: SimpleNamespace(tools=[], next_token=None),
+        get_tool=lambda _: SimpleNamespace(status="Ready", enable_snapshot=True),
+        create_tool=lambda request: (
+            requests.append(request) or SimpleNamespace(tool_id="snapshot-tool")
+        ),
+    )
+
+    assert (
+        ensure_studio_code_env_tool(
+            name="veadk-studio-demo-chat-12345678_snapshot",
+            enable_snapshot=True,
+            client=client,
+            timeout_seconds=0,
+        )
+        == "snapshot-tool"
+    )
+    assert getattr(requests[0], "tool_type") == "CodeEnv"
+    assert getattr(requests[0], "enable_snapshot") is True
+
+
+def test_ensure_studio_code_env_tool_rejects_reused_tool_with_wrong_snapshot_mode() -> (
+    None
+):
+    client = SimpleNamespace(
+        list_tools=lambda _: SimpleNamespace(
+            tools=[
+                SimpleNamespace(
+                    name="veadk-studio-demo-chat-12345678_snapshot",
+                    project_name="default",
+                    tool_type="CodeEnv",
+                    tool_id="tool-existing",
+                )
+            ],
+            next_token=None,
+        ),
+        get_tool=lambda _: SimpleNamespace(status="Ready", enable_snapshot=False),
+        create_tool=lambda _: (_ for _ in ()).throw(
+            AssertionError("an exact-name Tool must not be recreated")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="expected snapshot enabled"):
+        ensure_studio_code_env_tool(
+            name="veadk-studio-demo-chat-12345678_snapshot",
+            enable_snapshot=True,
+            client=client,
+            timeout_seconds=0,
+        )
+
+
+def test_ensure_studio_dev_env_tool_creates_ready_dev_env() -> None:
+    requests: list[object] = []
+    client = SimpleNamespace(
+        list_tools=lambda _: SimpleNamespace(tools=[], next_token=None),
+        get_tool=lambda _: SimpleNamespace(status="Ready"),
+        create_tool=lambda request: (
+            requests.append(request) or SimpleNamespace(tool_id="dev-tool")
+        ),
+    )
+
+    assert (
+        ensure_studio_dev_env_tool(
+            name="veadk-studio-demo-dev-12345678",
+            client=client,
+            timeout_seconds=0,
+        )
+        == "dev-tool"
+    )
+    assert getattr(requests[0], "tool_type") == "DevEnv"
 
 
 @pytest.mark.parametrize(
@@ -118,33 +197,67 @@ def test_ensure_studio_agent_tool_creates_managed_tool(
     assert request.tool_type == tool_type
     assert request.model_agent_name == "doubao-seed-evolving"
     assert request.envs is None
+    assert request.enable_snapshot is False
+
+
+@pytest.mark.parametrize("kind", ["openclaw", "hermes"])
+def test_ensure_studio_agent_tool_creates_snapshot_enabled_managed_tool(
+    kind: str,
+) -> None:
+    requests: list[object] = []
+    client = SimpleNamespace(
+        list_tools=lambda _: SimpleNamespace(tools=[], next_token=None),
+        get_tool=lambda _: SimpleNamespace(status="Ready", enable_snapshot=True),
+        create_tool=lambda request: (
+            requests.append(request) or SimpleNamespace(tool_id=f"snapshot-{kind}")
+        ),
+    )
+
+    ensure_studio_agent_tool(
+        name=f"veadk-studio-demo-{kind}-12345678_snapshot",
+        kind=kind,
+        model_name="doubao-seed-evolving",
+        enable_snapshot=True,
+        client=client,
+        timeout_seconds=0,
+    )
+
+    assert requests[0].enable_snapshot is True
+
+
+def test_snapshot_tool_name_is_distinct_and_has_snapshot_suffix() -> None:
+    standard = studio_sandbox_tool_name("Studio App", "chat")
+    snapshot = studio_sandbox_tool_name("Studio App", "chat", snapshot=True)
+
+    assert snapshot == f"{standard}_snapshot"
+    assert snapshot.endswith("_snapshot")
+
+
+@pytest.mark.parametrize("purpose", ["chat", "openclaw", "hermes"])
+def test_snapshot_tool_name_preserves_the_standard_length_bound(purpose: str) -> None:
+    application_name = "a" * 100
+    standard = studio_sandbox_tool_name(application_name, purpose)
+    snapshot = studio_sandbox_tool_name(application_name, purpose, snapshot=True)
+
+    assert len(snapshot) <= len(standard)
+    assert snapshot.endswith("_snapshot")
 
 
 def test_agent_model_credential_is_bound_to_tool_as_complete_env_set() -> None:
     access_key = os.urandom(16).hex()
     model_api_key = os.urandom(24).hex()
     secret_key = os.urandom(24).hex()
-    calls: list[tuple[str, dict[str, object]]] = []
-
-    class FakeApi:
-        def call(
-            self,
-            _service: str,
-            action: str,
-            _version: str,
-            body: dict[str, object],
-        ) -> dict[str, object]:
-            calls.append((action, body))
-            if action == "GetTool":
-                return {"Tool": {"Envs": [{"Key": "EXISTING_ENV", "Value": "kept"}]}}
-            return {}
-
-    with (
-        patch("agentkit.auth._openapi.OpenApiClient", return_value=FakeApi()),
-        patch(
-            "veadk.auth.veauth.ark_veauth.get_ark_token",
-            return_value=model_api_key,
+    updates: list[object] = []
+    client = SimpleNamespace(
+        get_tool=lambda _: SimpleNamespace(
+            envs=[SimpleNamespace(key="EXISTING_ENV", value="kept")]
         ),
+        update_tool=updates.append,
+    )
+
+    with patch(
+        "veadk.auth.veauth.ark_veauth.get_ark_token",
+        return_value=model_api_key,
     ):
         ensure_studio_agent_model_credential(
             tool_id="tool-openclaw",
@@ -152,11 +265,13 @@ def test_agent_model_credential_is_bound_to_tool_as_complete_env_set() -> None:
             model_name="doubao-seed-evolving",
             access_key=access_key,
             secret_key=secret_key,
+            client=client,
         )
 
-    assert [action for action, _ in calls] == ["GetTool", "UpdateTool"]
-    updated_envs = cast(list[dict[str, str]], calls[1][1]["Envs"])
-    envs = {item["Key"]: item["Value"] for item in updated_envs}
+    assert len(updates) == 1
+    assert getattr(updates[0], "model_agent_name") == "doubao-seed-evolving"
+    updated_envs = cast(list[object], getattr(updates[0], "envs"))
+    envs = {getattr(item, "key"): getattr(item, "value") for item in updated_envs}
     assert envs == {
         "EXISTING_ENV": "kept",
         "MODEL_AGENT_API_KEY": model_api_key,
@@ -164,3 +279,16 @@ def test_agent_model_credential_is_bound_to_tool_as_complete_env_set() -> None:
         "MODEL_AGENT_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
         "ARK_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
     }
+
+
+def test_byteplus_agent_model_configuration() -> None:
+    assert studio_sandbox_agent_model_name("byteplus") == "seed-2-0-lite-260228"
+    assert studio_sandbox_model_base_url("byteplus") == (
+        "https://ark.ap-southeast.bytepluses.com/api/v3"
+    )
+
+
+def test_volcengine_agent_model_configuration() -> None:
+    assert studio_sandbox_agent_model_name("volcengine") == (
+        "doubao-seed-2-1-pro-260628"
+    )

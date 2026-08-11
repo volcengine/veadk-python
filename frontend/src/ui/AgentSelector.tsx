@@ -30,7 +30,11 @@ import {
   type RuntimeDetail,
 } from "../adk/client";
 import { connectRuntime } from "../adk/connections";
-import { AgentIdentityIcon } from "./AgentIdentityIcon";
+import {
+  trackAgentConnectFailed,
+  trackAgentConnectSucceeded,
+} from "../adk/telemetryEvents";
+import { AgentFaceIcon } from "./AgentFaceIcon";
 import { SkillCapabilityIcon, ToolCapabilityIcon } from "./CapabilityIcons";
 import { RuntimeIdentityIcon } from "./RuntimeIdentityIcon";
 
@@ -279,13 +283,27 @@ export function AgentSelector({
     (pageCache[page + 1] !== undefined || tokens[page + 1] !== undefined);
 
   function connect(rt: CloudRuntime) {
+    const startedAt = Date.now();
     setConnecting(rt.runtimeId);
     connectRuntime(rt.runtimeId, rt.name, rt.region)
       .then(async (agentId) => {
         await onSelect(agentId);
+        trackAgentConnectSucceeded({
+          kind: "runtime",
+          source: "navbar_picker",
+          durationMs: Date.now() - startedAt,
+          runtimeRegion: rt.region,
+          runtimeIsMine: rt.isMine,
+        });
         onClose();
       })
       .catch((error) => {
+        trackAgentConnectFailed({
+          kind: "runtime",
+          source: "navbar_picker",
+          durationMs: Date.now() - startedAt,
+          error,
+        });
         if (error instanceof RuntimeAccessDeniedError) {
           setError(error.message);
           return;
@@ -300,6 +318,27 @@ export function AgentSelector({
         setUnsupported((s) => new Set(s).add(rt.runtimeId));
       })
       .finally(() => setConnecting(null));
+  }
+
+  async function selectLocalApp(app: string) {
+    const startedAt = Date.now();
+    try {
+      await onSelect(app);
+      trackAgentConnectSucceeded({
+        kind: "local",
+        source: "navbar_picker",
+        durationMs: Date.now() - startedAt,
+      });
+      onClose();
+    } catch (error) {
+      trackAgentConnectFailed({
+        kind: "local",
+        source: "navbar_picker",
+        durationMs: Date.now() - startedAt,
+        error,
+      });
+      setError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   if (!open) return null;
@@ -326,7 +365,7 @@ export function AgentSelector({
         <div className="agentsel-main">
           <div className="agentsel-head">
             <span className="agentsel-title">
-              <AgentIdentityIcon /> 选择 Agent
+              <AgentFaceIcon /> 选择 Agent
             </span>
             <div className="agentsel-head-actions">
               {agentsSource === "cloud" && (
@@ -359,12 +398,9 @@ export function AgentSelector({
                     <li key={app}>
                       <button
                         className={`agentsel-item ${app === currentId ? "active" : ""}`}
-                        onClick={() => {
-                          onSelect(app);
-                          onClose();
-                        }}
+                        onClick={() => void selectLocalApp(app)}
                       >
-                        <AgentIdentityIcon />
+                        <AgentFaceIcon />
                         <span className="agentsel-item-name">{app}</span>
                       </button>
                     </li>
@@ -646,7 +682,7 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
       ) : info ? (
         <>
           <div className="agentsel-identity">
-            <AgentIdentityIcon className="agentsel-identity-icon" />
+            <AgentFaceIcon className="agentsel-identity-icon" />
             <div className="agentsel-identity-copy">
               <strong title={info.name}>{info.name || "未命名 Agent"}</strong>
               {info.model && <span title={info.model}>{info.model}</span>}

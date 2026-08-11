@@ -38,14 +38,26 @@ server that `veadk frontend` launches — no separate backend.
   scroll independently.
 - **Sandbox Agents**: create and reopen user-owned Codex, OpenClaw, and Hermes
   AgentKit Sessions from the Agent page. Each type supports list, detail, and
-  explicit deletion. Codex streams reasoning, tool activity, and replies into
-  the normal conversation renderer; leaving the conversation only disconnects
-  it, so the Agent remains available until the user deletes it. OpenClaw and
-  Hermes expose their main interface and Terminal through Studio.
+  explicit deletion. Persistence is enabled by default through a snapshot Tool;
+  clearing it creates an eight-hour transient Session and shows an expiry
+  warning. Codex streams reasoning, tool activity, and replies into the normal
+  conversation renderer, while its sidebar history can resume or remove
+  standard Codex App Server threads. Leaving the conversation only
+  disconnects it, so the Agent remains available until the user deletes it.
+  OpenClaw and Hermes expose their main interface and Terminal through Studio.
+- **System information**: open a full page from the account menu to inspect the
+  Studio version, configured Sandbox Tool IDs (with snapshot Tools badged), and
+  available Identity user pools. Resource identifiers remain read-only and
+  require Agent-management access.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
 - **Automation directory**: browse development and message-channel integrations
-  from the Studio sidebar. GitHub-backed automations can add a basic AgentKit
+  from the Studio sidebar. The local Coding Agents integration detects Trae,
+  Claude Code, and Codex across macOS, Linux, and Windows, then globally installs
+  the bundled VeADK development and AgentKit platform-operation Skills. The
+  browser can select only fixed client and Skill identifiers; arbitrary shell
+  commands, filesystem targets, and Skill content are never accepted. GitHub-backed
+  automations can add a basic AgentKit
   project, configure Runtime continuous delivery, or add automatic Pull Request
   review. The browser creates GitHub branches, files, and Pull Requests directly;
   repository tokens stay in the current form state and are never persisted. The
@@ -82,17 +94,24 @@ server that `veadk frontend` launches — no separate backend.
   probes and lists confirmed API Server and A2A integration endpoints; protocols
   that the Runtime does not expose are shown as unavailable. The integration
   panel switches between the detected protocols and provides a Python request
-  example for each one. Runtime API Keys stay masked as `****` and are fetched
-  only after the user explicitly reveals them; examples always use placeholders
+  example for each one. While a deployment is running, the detail page keeps the
+  Agent heading and a scrollable deployment panel visible, then reloads the
+  normal detail tabs after the Runtime connects. Runtime API Keys stay masked as
+  `****` and are fetched only after the user explicitly reveals them; examples
+  always use placeholders
   instead of credentials. Long descriptions, names, component summaries, IDs,
   and environment values stay inside the scrollable panel.
 - **Custom-agent workbench**: configure an agent with a rich Markdown
   system-prompt editor (including heading and list shortcuts), then debug with
   expandable, copyable runner error details, per-result Trace inspection, and
   review. In-progress drafts are stored only in the current browser and scoped
-  to the signed-in user. MCP tokens and deployment environment values are never
-  persisted and must be entered again after a reload. Long descriptions and
-  prompts scroll within bounded editors, while the sidebar stays pinned to the
+  to the signed-in user. MCP tokens are converted to Runtime environment
+  variables: generated source retains only the `${ENV_NAME}` reference, while
+  YAML and browser drafts preserve the corresponding environment value.
+  Runtime updates reload existing values, and the deployment form keeps all
+  environment values visible to users who can view the Agent. Entering a
+  replacement Token overrides the previous value. Long descriptions and prompts
+  scroll within bounded editors, while the sidebar stays pinned to the
   viewport. On narrow desktop windows, the structure, configuration, and debug
   panels stack vertically instead of squeezing the form. The deployment page
   pairs an inspectable Agent topology with a vertically aligned action rail for
@@ -109,7 +128,9 @@ server that `veadk frontend` launches — no separate backend.
   forwards its Volcengine credentials to debug runs and deployed runtimes. A
   global task list keeps Runtime, region, and progress
   visible across page switches, follows the actual generated Runtime name, and
-  supports cancellation or retry. Remote topology and trace requests use the selected
+  keeps failed or cancelled drafts available for editing. Successful releases clear
+  their drafts before Studio waits up to 60 seconds for the Runtime endpoint to become
+  reachable. Remote topology and trace requests use the selected
   Runtime endpoint. The Remote Agent type is available only for child Agents;
   its generated internal proxy mounts AgentKit A2A center agents dynamically
   from the center ID, recall count, region, and OpenAPI endpoint. Remote names,
@@ -142,11 +163,19 @@ Temporary Sandbox state is process-local. Run Studio with one server worker, or
 configure session affinity so create, message, and delete requests from the same
 browser reach the same instance.
 
+Local Studio reads transient and snapshot Tool IDs from
+`SANDBOX_CHAT_CODEX`/`SANDBOX_CHAT_CODEX_SNAPSHOT`,
+`SANDBOX_CHAT_OPENCLAW`/`SANDBOX_CHAT_OPENCLAW_SNAPSHOT`, and
+`SANDBOX_CHAT_HERMES`/`SANDBOX_CHAT_HERMES_SNAPSHOT`. Cloud deployment creates
+all six Tools when their IDs are omitted; the three snapshot Tool names end in
+`_snapshot`. The matching `--sandbox-chat-*-tool-id` and
+`--sandbox-chat-*-snapshot-tool-id` options select existing Tools instead.
+
 ## Development specification
 
 All frontend changes must follow [`SPEC.md`](SPEC.md). It defines the required
 code, visual, interaction, security, code-generation, and testing conventions
-for VeADK Studio, including these non-negotiable rules:
+for AgentKit Studio, including these non-negotiable rules:
 
 - New or updated product icons must be repository-owned, hand-drawn SVG React
   components. Do not add generic icon-library, emoji, or remote-icon usage.
@@ -206,20 +235,25 @@ local image or a downloaded network image into the VeFaaS deployment package.
 
 ## In-app Studio updates
 
-Studio deployments use the `veadk-studio` TOS bucket in the deployment region
-as their immutable release channel by default, so administrators can update the
-frontend and Python backend together from the navbar without extra options:
+Studio deployments use the centrally maintained `veadk-studio` TOS bucket in
+`cn-beijing` as their immutable release channel, regardless of the deployment
+region. Administrators can update the frontend and Python backend together from
+the navbar without extra options:
 
 ```bash
 veadk studio deploy \
-  --user-pool-id <pool-id> \
-  --allowed-client-id <client-id> \
   --vefaas-app-name <app-name>
 ```
 
-Use `--studio-update-bucket`, `--studio-update-region`, and
-`--studio-update-prefix` (or their `VEADK_STUDIO_UPDATE_*` environment
-variables) to override the default release channel.
+When `--user-pool-id` and `--allowed-client-id` are omitted, deployment creates
+or reuses them in the selected `--region` and prints the resolved IDs. Pass both
+options to keep using existing Identity resources.
+
+After automatic provisioning, the success summary lists every Sandbox type and
+Tool ID, the private Studio TOS address, and the resolved Identity user pool and
+client IDs. It also links to the matching Volcengine or BytePlus Identity
+console. Password sign-in remains disabled by default for security; configure
+an SSO identity provider before inviting users to the deployed Studio.
 
 Studio checks `latest.json` every three minutes and lists newer releases with
 their changelog and Git SHA. An accepted update verifies the selected complete
@@ -294,6 +328,51 @@ open until the server finishes or the caller explicitly cancels them.
 client's skip-consent setting when it registers the deployed callback URL. This
 avoids presenting a second authorization confirmation after login.
 
+## Issue feedback
+
+Assistant responses expose an issue-feedback action, and the sidebar provides a
+platform feedback page. Both flows submit through `POST /web/issue-feedback`.
+The Studio server redacts credentials, includes the selected Runtime ID and
+available conversation/trace context, then posts anonymously to the matching
+public Lark form. Runtime deployments enable APMPlus by default; remote feedback
+queries APMPlus by Session ID on the server, while local feedback uses the
+in-memory development trace endpoint. Trace lookup failures do not block the
+feedback submission. Form records store their submission time in Beijing time.
+This path does not require TOS credentials, a Lark application, or `lark-cli`.
+A successful request returns `{ "submitted": true }`; the UI shows an accessible
+success state instead of exposing an internal trace ID.
+
+## Studio persistent storage
+
+For a cloud deployment, Studio uses the deployment region and automatically
+creates or reuses the private bucket `veadk-studio-<account-id>`. The stable
+account-derived name makes repeated deployments idempotent. A bucket created in
+one region cannot be recreated under the same name in another region; changing
+the deployment region requires an explicitly configured bucket.
+
+Administrators can override the automatic bucket by setting only its name; the
+deployment region remains the storage region:
+
+```bash
+export VEADK_STUDIO_TOS_BUCKET=teststudio
+```
+
+The server derives the provider-specific endpoint, such as
+`tos-cn-beijing.volces.com`, and never sends TOS credentials to the
+browser. Local Studio uses the configured Volcengine or BytePlus AK/SK; VeFaaS
+uses its IAM role credentials. Studio objects use the versioned, user-first
+layout
+`veadk-studio/v1/users/<encoded-user-id>/<namespace>/<scope>/<resource-id>/`.
+Video reference assets currently use the `video/<asset-role>/<asset-id>/`
+namespace and store `content` plus `metadata.json` below it.
+
+Local Studio still accepts `VEADK_STUDIO_TOS_BUCKET` together with
+`VEADK_STUDIO_TOS_REGION`. When local storage is not configured,
+persistent-storage-dependent controls are disabled and show
+`管理员未配置持久化存储`; text-only features remain available. The older
+`VEADK_VIDEO_TOS_*` and `DATABASE_TOS_*` settings remain a temporary
+compatibility fallback.
+
 ## Multimodal media
 
 The composer accepts PNG, JPEG, WebP, GIF, TXT, Markdown, PDF, MP4, WebM, and
@@ -361,50 +440,33 @@ tool or transfer one tree edge at a time until it reaches the selected agent.
 The same metadata is attached to the first Google GenAI `Part`, so session
 history restores the `/skill` and `@agent` chips after a reload.
 
-### Skill creation mode
+### Skill Center
 
-Skill creation uses `doubao-seed-2-0-pro-260215` and
-`deepseek-v4-flash-260425` through Ark Responses. The real Ark API key is kept
-by AgentKit credential hosting; Studio and the two isolated Sandbox sessions
-receive only its revocable gateway ticket. Credentials are never returned to
-the browser or copied into per-job Session variables. Studio also rejects
-non-HTTPS or non-Volcengine credential relay URLs. Skill creation is limited
-to Studio developers and admins.
+Studio developers and admins create and optimize Skills from the Skill Center.
+Each candidate runs in an isolated session on the shared AgentKit Dev Sandbox,
+streams its public activity, validates the generated files, and can then be
+previewed, downloaded, or published to AgentKit. Model credentials remain on
+the Tool and are never returned to the browser.
 
-After submission, Studio opens both candidate conversations immediately. Each
-conversation independently renders public reasoning summaries, tool calls, and
-assistant messages returned by the generator. Private chain-of-thought and
-credentials never enter the UI. Completed candidates still support preview,
-ZIP download, and AgentKit publish.
-
-Configure separate ready AgentKit Tools for Codex, OpenClaw, Hermes, and Skill
-creation before starting the server. The Tool IDs are intentionally server-only
-and cannot be supplied by the browser:
+Local Studio reads the DevEnv Tool ID from `SANDBOX_DEV`. A cloud
+deployment creates the Dev Sandbox automatically when the ID is omitted, or
+uses the Tool supplied through `--sandbox-dev-tool-id`:
 
 ```bash
-export SANDBOX_CHAT_CODEX=<chat-code-env-tool-id>
-export SANDBOX_CHAT_OPENCLAW=<openclaw-env-tool-id>
-export SANDBOX_CHAT_HERMES=<hermes-env-tool-id>
-export SANDBOX_SKILL_CREATOR=<skill-code-env-tool-id>
-veadk frontend --agents-dir examples
+export SANDBOX_DEV=<dev-env-tool-id>
+veadk studio --agents-dir examples
 ```
 
-Publishing a generated Skill uses TOS and the AgentKit Skills API. Set
-`VEADK_SKILL_CREATOR_TOS_BUCKET`, `VEADK_SKILL_CREATOR_TOS_PREFIX`, and
-`VEADK_SKILL_CREATOR_PROJECT_NAME` only when their defaults are unsuitable.
-Each candidate session expires after 30 minutes and is deleted immediately when
-a job is discarded. Job state lives in Sandbox rather than frontend-process
-memory, so polling and downloads continue to work when FaaS requests reach a
-different instance.
+The new-session page shows `技能定制` only after this Dev Sandbox and its model
+credential are confirmed usable. If the administrator has not configured a
+usable Dev Sandbox, the mode is hidden rather than exposing an action that must
+fail.
 
-For local Studio, run the AgentKit `credential-hosting` command and bind its
-result to both CodeEnv Tools. A cloud deployment creates both Tools in parallel
-when their IDs are omitted. Alternatively, select existing Tools with
-`--sandbox-chat-codex-tool-id`, `--sandbox-chat-openclaw-tool-id`,
-`--sandbox-chat-hermes-tool-id`, and `--sandbox-skill-creator-tool-id`. The
-deploy command obtains the Ark key with the deployer's Volcengine credentials,
-stores it through AgentKit credential hosting, and binds only the returned
-ticket and relay URL to the Tools:
+Each task has its own one-hour DevEnv session. Leaving a running task stops and
+releases its session; task state remains in Sandbox so polling can continue
+across frontend instances.
+
+Deploy Studio with:
 
 ```bash
 veadk studio deploy \

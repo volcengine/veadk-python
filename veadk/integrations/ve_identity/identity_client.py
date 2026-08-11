@@ -40,6 +40,7 @@ from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 from veadk.config import settings
 
 from veadk.utils.logger import get_logger
+from veadk.utils.cloud_provider import CloudProvider, cloud_provider_from_env
 
 logger = get_logger(__name__)
 
@@ -75,11 +76,28 @@ def refresh_credentials(func):
     def _refresh_creds(self: IdentityClient):
         """Helper to refresh credentials."""
         # Step 1: Get initial credentials from constructor or environment variables
-        ak = self._initial_access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
-        sk = self._initial_secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
-        session_token = self._initial_session_token or os.getenv(
-            "VOLCENGINE_SESSION_TOKEN", ""
-        )
+        if self.provider == "byteplus":
+            ak = (
+                self._initial_access_key
+                or os.getenv("BYTEPLUS_ACCESS_KEY", "")
+                or os.getenv("VOLCENGINE_ACCESS_KEY", "")
+            )
+            sk = (
+                self._initial_secret_key
+                or os.getenv("BYTEPLUS_SECRET_KEY", "")
+                or os.getenv("VOLCENGINE_SECRET_KEY", "")
+            )
+            session_token = (
+                self._initial_session_token
+                or os.getenv("BYTEPLUS_SESSION_TOKEN", "")
+                or os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+            )
+        else:
+            ak = self._initial_access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
+            sk = self._initial_secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
+            session_token = self._initial_session_token or os.getenv(
+                "VOLCENGINE_SESSION_TOKEN", ""
+            )
 
         # Step 2: Clear expired session_token
         if self._is_sts_credential_expired():
@@ -143,6 +161,7 @@ class IdentityClient:
         secret_key: Optional[str] = None,
         session_token: Optional[str] = None,
         region: str = "cn-beijing",
+        provider: CloudProvider | None = None,
     ):
         """Initialize the identity client.
 
@@ -156,13 +175,35 @@ class IdentityClient:
             KeyError: If required environment variables are not set.
         """
         self.region = region
+        self.provider = provider or cloud_provider_from_env()
 
         # Store initial credentials for fallback
-        self._initial_access_key = access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
-        self._initial_secret_key = secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
-        self._initial_session_token = session_token or os.getenv(
-            "VOLCENGINE_SESSION_TOKEN", ""
-        )
+        if self.provider == "byteplus":
+            self._initial_access_key = (
+                access_key
+                or os.getenv("BYTEPLUS_ACCESS_KEY", "")
+                or os.getenv("VOLCENGINE_ACCESS_KEY", "")
+            )
+            self._initial_secret_key = (
+                secret_key
+                or os.getenv("BYTEPLUS_SECRET_KEY", "")
+                or os.getenv("VOLCENGINE_SECRET_KEY", "")
+            )
+            self._initial_session_token = (
+                session_token
+                or os.getenv("BYTEPLUS_SESSION_TOKEN", "")
+                or os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+            )
+        else:
+            self._initial_access_key = access_key or os.getenv(
+                "VOLCENGINE_ACCESS_KEY", ""
+            )
+            self._initial_secret_key = secret_key or os.getenv(
+                "VOLCENGINE_SECRET_KEY", ""
+            )
+            self._initial_session_token = session_token or os.getenv(
+                "VOLCENGINE_SESSION_TOKEN", ""
+            )
 
         # Initialize configuration and API client
         configuration = volcenginesdkcore.Configuration()
@@ -171,6 +212,8 @@ class IdentityClient:
         configuration.sk = self._initial_secret_key
         configuration.session_token = self._initial_session_token
         configuration.logger = {}
+        if self.provider == "byteplus":
+            configuration.host = f"https://id.{region}.byteplusapi.com"
 
         self._api_client = volcenginesdkid.IDApi(
             volcenginesdkcore.ApiClient(configuration)
@@ -240,6 +283,8 @@ class IdentityClient:
         sts_config.ak = access_key
         sts_config.sk = secret_key
         sts_config.logger = {}
+        if self.provider == "byteplus":
+            sts_config.host = "https://sts.byteplusapi.com"
 
         # Create an STS API client
         sts_client = volcenginesdksts.STSApi(volcenginesdkcore.ApiClient(sts_config))
@@ -745,6 +790,23 @@ class IdentityClient:
         response: CreateUserPoolResponse = self._api_client.create_user_pool(request)
 
         return response.uid, response.domain
+
+    @refresh_credentials
+    def configure_user_pool_for_idp_only(self, user_pool_uid: str) -> None:
+        """Disable local sign-up, recovery, and sign-in for a user pool."""
+        from volcenginesdkid import UpdateUserPoolRequest
+
+        request = UpdateUserPoolRequest(
+            email_passwordless_sign_in_enabled=False,
+            password_sign_in_enabled=False,
+            self_account_recovery_enabled=False,
+            self_sign_up_enabled=False,
+            sign_up_auto_verification_enabled=False,
+            sms_passwordless_sign_in_enabled=False,
+            unconfirmed_user_sign_in_enabled=False,
+            user_pool_uid=user_pool_uid,
+        )
+        self._api_client.update_user_pool(request)
 
     @refresh_credentials
     def list_user_pools(self, *, page_size: int = 100) -> list[dict[str, str]]:

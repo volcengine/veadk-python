@@ -42,6 +42,10 @@ from vanna.core.tool import ToolContext
 
 from veadk.utils.logger import get_logger
 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
+from veadk.utils.cloud_provider import (
+    DEFAULT_BYTEPLUS_REGION,
+    cloud_provider_from_env,
+)
 
 logger = get_logger(__name__)
 
@@ -72,28 +76,38 @@ class VikingDBAgentMemory(AgentMemory):
         volcengine_access_key: Optional[str] = None,
         volcengine_secret_key: Optional[str] = None,
         session_token: str = "",
-        region: str = "cn-beijing",
+        region: str = "",
         host: Optional[str] = None,
         collection_prefix: str = "vanna_train",
         embedding_model: str = "doubao-embedding",
-        cloud_provider: str = "volces",
+        cloud_provider: Optional[str] = None,
     ):
-        self.volcengine_access_key = volcengine_access_key or os.getenv(
-            "VOLCENGINE_ACCESS_KEY"
+        self.cloud_provider = (
+            cloud_provider.lower() if cloud_provider else cloud_provider_from_env()
         )
-        self.volcengine_secret_key = volcengine_secret_key or os.getenv(
-            "VOLCENGINE_SECRET_KEY"
+        self.volcengine_access_key = volcengine_access_key or (
+            os.getenv("BYTEPLUS_ACCESS_KEY")
+            if self.cloud_provider == "byteplus"
+            else os.getenv("VOLCENGINE_ACCESS_KEY")
+        )
+        self.volcengine_secret_key = volcengine_secret_key or (
+            os.getenv("BYTEPLUS_SECRET_KEY")
+            if self.cloud_provider == "byteplus"
+            else os.getenv("VOLCENGINE_SECRET_KEY")
         )
         self.session_token = session_token
-        self.region = region
-        self.cloud_provider = cloud_provider.lower()
+        self.region = region or (
+            os.getenv("DATABASE_VIKING_REGION", DEFAULT_BYTEPLUS_REGION)
+            if self.cloud_provider == "byteplus"
+            else os.getenv("DATABASE_VIKING_REGION", "cn-beijing")
+        )
 
         # Auto-generate host based on cloud provider
         if not host:
             if self.cloud_provider == "byteplus":
                 self.host = "api-vikingdb.mlp.ap-mya.byteplus.com"
             else:
-                if region == "cn-beijing":
+                if self.region == "cn-beijing":
                     self.host = "api-vikingdb.volces.com"
                 else:
                     self.host = "api-vikingdb.mlp.cn-shanghai.volces.com"
@@ -129,9 +143,22 @@ class VikingDBAgentMemory(AgentMemory):
                 logger.warning(f"Failed to get VeFaaS credentials: {e}")
 
         if not (ak and sk):
+            credential_label = (
+                "BytePlus" if self.cloud_provider == "byteplus" else "Volcengine"
+            )
+            access_env = (
+                "BYTEPLUS_ACCESS_KEY"
+                if self.cloud_provider == "byteplus"
+                else "VOLCENGINE_ACCESS_KEY"
+            )
+            secret_env = (
+                "BYTEPLUS_SECRET_KEY"
+                if self.cloud_provider == "byteplus"
+                else "VOLCENGINE_SECRET_KEY"
+            )
             raise ValueError(
-                "Volcengine credentials not found. Please set VOLCENGINE_ACCESS_KEY "
-                "and VOLCENGINE_SECRET_KEY environment variables."
+                f"{credential_label} credentials not found. Please set {access_env} "
+                f"and {secret_env} environment variables."
             )
 
         self._client = VikingDBService(

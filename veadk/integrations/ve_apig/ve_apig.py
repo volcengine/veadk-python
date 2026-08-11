@@ -18,6 +18,11 @@ import volcenginesdkcore
 from volcenginesdkapig import APIGApi
 from volcenginesdkapig20221112 import APIG20221112Api, UpstreamListForCreateRouteInput
 
+from veadk.utils.cloud_provider import (
+    DEFAULT_CLOUD_PROVIDER,
+    CloudProvider,
+    apig_openapi_host,
+)
 from veadk.utils.volcengine_sign import ve_request
 
 
@@ -28,16 +33,21 @@ class APIGateway:
         secret_key: str,
         region: str = "cn-beijing",
         session_token: str = "",
+        provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
     ):
         self.ak = access_key
         self.sk = secret_key
         self.session_token = session_token
         self.region = region
+        self.provider = provider
+        self.openapi_host = apig_openapi_host(region, provider)
         configuration = volcenginesdkcore.Configuration()
         configuration.ak = self.ak
         configuration.sk = self.sk
         configuration.session_token = self.session_token
         configuration.region = region
+        if provider == "byteplus":
+            configuration.host = f"https://{self.openapi_host}"
 
         self.api_client = volcenginesdkcore.ApiClient(configuration=configuration)
         self.apig_20221112_client = APIG20221112Api(api_client=self.api_client)
@@ -204,7 +214,7 @@ class APIGateway:
             service="apig",
             version="2021-03-03",
             region=self.region,
-            host="open.volcengineapi.com",
+            host=self.openapi_host,
             session_token=self.session_token,
         )
 
@@ -241,7 +251,7 @@ class APIGateway:
             service="apig",
             version="2021-03-03",
             region=self.region,
-            host="open.volcengineapi.com",
+            host=self.openapi_host,
             session_token=self.session_token,
         )
 

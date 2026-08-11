@@ -27,6 +27,8 @@ import {
   downloadArtifact,
   previewArtifact,
   getAgentInfo,
+  getAutomaticEvaluationStatuses,
+  getSessionTrace,
   getSessionCapabilities,
   getSession,
   getStudioAccess,
@@ -37,6 +39,7 @@ import {
   removeSessionCapability,
   runSSE,
   refreshAgentFeedbackCases,
+  submitIssueFeedback,
   submitMessageFeedback,
   upsertCachedAgentFeedbackCase,
   uploadMedia,
@@ -55,8 +58,15 @@ import {
   type SiteBranding,
   type SessionCapabilities,
   type StudioAccess,
+  type UiConfig,
   type UiFeatures,
 } from "./adk/client";
+import {
+  issueFeedbackToolCalls,
+  traceForInvocation,
+  type IssueFeedbackIssue,
+  type IssueFeedbackModule,
+} from "./adk/issueFeedback";
 import { requiresSessionCapabilityRunner } from "./adk/sessionCapabilities";
 import {
   applyEvent,
@@ -68,7 +78,10 @@ import {
 } from "./blocks";
 import { Sidebar, type SidebarPage } from "./ui/Sidebar";
 import { AgentInfoPanel } from "./ui/AgentTopology";
-import { SkillCenterView } from "./ui/SkillCenter";
+import {
+  SkillCenterView,
+  type SkillCenterWorkspaceLaunch,
+} from "./ui/SkillCenter";
 import { AddAgentKitView } from "./ui/AddAgentKit";
 import { AgentWorkspace } from "./ui/AgentWorkspace";
 import {
@@ -77,8 +90,10 @@ import {
   type MyAgentCardData,
 } from "./ui/MyAgents";
 import { Applications, type ApplicationId } from "./ui/Applications";
+import { SystemInfo } from "./ui/SystemInfo";
 import { GitHubIntegration } from "./ui/GitHubIntegration";
 import { FeishuBotIntegration } from "./automations/feishu/FeishuBotIntegration";
+import { CodingAgentsIntegration } from "./automations/coding-agents/CodingAgentsIntegration";
 import { SearchView } from "./ui/Search";
 import {
   buildAgentEntries,
@@ -90,6 +105,7 @@ import {
   type AgentEntry,
   type RemoteConnection,
 } from "./adk/connections";
+import { defaultCloudRegion, formatCloudRegion } from "./adk/cloudProvider";
 import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
 import { Composer } from "./ui/Composer";
 import { InvocationChips } from "./ui/InvocationChips";
@@ -109,11 +125,13 @@ import {
   type WorkspaceAgentDraft,
 } from "./create/agentDraftStorage";
 import type { DeployResult, DeploymentTaskUpdate } from "./ui/ProjectPreview";
-import { createSkillJob, deleteSkillJob } from "./ui/skill-create/api";
-import { SkillCreateWorkspace } from "./ui/skill-create/SkillCreateWorkspace";
-import { SKILL_MODELS, type SkillCreationJob } from "./ui/skill-create/types";
-import type { NewChatMode, NewChatTask } from "./ui/new-chat-modes/types";
-import { NewChatFeatureCarousel } from "./ui/new-chat-modes/NewChatFeatureCarousel";
+import type {
+  NewChatMode,
+  NewChatSkillAction,
+  NewChatSkillTarget,
+  NewChatTask,
+  NewChatWorkspaceMode,
+} from "./ui/new-chat-modes/types";
 import { NewChatFeatureNotice } from "./ui/new-chat-modes/NewChatFeatureNotice";
 import {
   NEW_CHAT_TASK_OPTIONAL_TOOLS,
@@ -128,12 +146,31 @@ import {
   type SandboxPermissions,
   type SandboxSession as SandboxSessionInfo,
   type SandboxSkill,
+  type SandboxThreadSummary,
   type SandboxToolLaunch,
 } from "./adk/sandbox";
+import { getSandboxCapability } from "./adk/newChatCapabilities";
+import { getSkillWorkbenchCapability } from "./ui/skill-workbench/api";
 import {
-  getSandboxCapability,
-  getSkillCreatorCapability,
-} from "./adk/newChatCapabilities";
+  createVideoTask,
+  downloadVideoTask,
+  enhanceVideoPrompt,
+  getVideoTask,
+  uploadVideoAsset,
+  videoResultPreviewUrl,
+  type VideoAssetKind,
+  type VideoCapabilities,
+} from "./adk/video";
+import type { NewChatVideoConfig } from "./ui/new-chat-modes/video-types";
+import {
+  createVideoGenerationTask,
+  isVideoTaskRunning,
+  updateVideoGenerationTask,
+  type VideoGenerationTask,
+  type VideoTaskErrorStage,
+  type VideoTaskEvent,
+} from "./ui/new-chat-modes/video-task";
+import { NewChatVideoTaskDialog } from "./ui/new-chat-modes/NewChatVideoTaskDialog";
 import {
   SandboxLaunchDialog,
   type SandboxLaunchState,
@@ -155,11 +192,29 @@ import { SandboxAgentWorkspace } from "./ui/SandboxAgentWorkspace";
 import { SandboxComposer } from "./ui/SandboxComposer";
 import { sandboxSnapshotTurns } from "./ui/sandboxCommands";
 import { useSandboxCodexCommands } from "./ui/useSandboxCodexCommands";
-import defaultSiteLogo from "./assets/volcengine.svg";
+import { StudioConfirmDialog } from "./ui/StudioConfirmDialog";
+import byteplusLogo from "./assets/byteplus.svg";
+import defaultSiteLogo from "./assets/logo.svg";
 import {
   FeedbackDownIcon,
   FeedbackUpIcon,
+  IssueFeedbackIcon,
 } from "./ui/icons/FeedbackIcons";
+
+interface IssueFeedbackTarget {
+  turn: Turn;
+  input: string;
+}
+
+function issueFeedbackModuleForPage(page: string): IssueFeedbackModule {
+  if (page === "agents") return "agents";
+  if (page === "applications") return "applications";
+  if (page === "search") return "search";
+  if (["conversation", "new-chat", "sandbox"].includes(page)) {
+    return "conversation";
+  }
+  return "other";
+}
 
 interface NewChatCapabilitiesState {
   agentId?: string;
@@ -167,7 +222,7 @@ interface NewChatCapabilitiesState {
   harnessEnabled?: boolean;
   builtinTools?: string[];
   temporaryEnabled?: boolean;
-  skillCreateEnabled?: boolean;
+  skillCustomizationEnabled?: boolean;
 }
 
 async function probeNewChatCapabilities(
@@ -175,17 +230,17 @@ async function probeNewChatCapabilities(
 ): Promise<NewChatCapabilitiesState> {
   const [sandboxResult, skillResult, harnessResult] = await Promise.allSettled([
     getSandboxCapability(),
-    getSkillCreatorCapability(),
-    listSessionBuiltinTools(agentId),
+    getSkillWorkbenchCapability(),
+    agentId ? listSessionBuiltinTools(agentId) : Promise.resolve<string[]>([]),
   ]);
   return {
     agentId,
     ready: true,
-    harnessEnabled: harnessResult.status === "fulfilled",
+    harnessEnabled: !!agentId && harnessResult.status === "fulfilled",
     builtinTools: harnessResult.status === "fulfilled" ? harnessResult.value : [],
     temporaryEnabled:
       sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
-    skillCreateEnabled:
+    skillCustomizationEnabled:
       skillResult.status === "fulfilled" && skillResult.value.enabled,
   };
 }
@@ -193,10 +248,14 @@ async function probeNewChatCapabilities(
 type CreateMode = QuickCreateKind | "package";
 
 type CreateView = "menu" | CreateMode | null;
+type CustomCreateMode = "custom" | "yaml_import";
 
 // Persist the last view so a page refresh restores where the user was.
 const LS = { app: "veadk.appName", view: "veadk.view", session: "veadk.sessionId" } as const;
 const DRAFT_AUTOSAVE_DELAY_MS = 600;
+const AUTO_EVALUATION_RUNNING_POLL_MS = 1_000;
+const AUTO_EVALUATION_RETRY_POLL_MS = 5_000;
+const AUTO_EVALUATION_MIN_PENDING_POLL_MS = 500;
 const EMPTY_STRING_SET: Set<string> = new Set<string>();
 const EMPTY_STRING_ARR: string[] = [];
 
@@ -257,6 +316,8 @@ function loadView(): CreateView {
 import { TraceDrawer } from "./ui/TraceDrawer";
 import { LoginPage } from "./ui/LoginPage";
 import { AuthExpiredDialog } from "./ui/AuthExpiredDialog";
+import { IssueFeedbackDialog } from "./ui/IssueFeedbackDialog";
+import { PlatformFeedback } from "./ui/PlatformFeedback";
 import { Markdown } from "./ui/Markdown";
 import {
   clearLocalUser,
@@ -271,6 +332,21 @@ import {
   authenticationRestored,
   isAuthenticationPending,
 } from "./adk/authSession";
+import {
+  identifyStudioTelemetryUser,
+  initStudioTelemetry,
+} from "./adk/telemetry";
+import {
+  trackAgentConnectFailed,
+  trackAgentConnectSucceeded,
+  trackAgentMessageFailed,
+  trackAgentMessageSucceeded,
+  trackSandboxCreateFailed,
+  trackSandboxCreateSucceeded,
+  trackStudioLoaded,
+  type AgentConnectSource,
+  type AgentMessageSource,
+} from "./adk/telemetryEvents";
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
 import { buildSurfaces } from "./a2ui/Surface";
 
@@ -631,6 +707,62 @@ function runtimeIdForSelection(
   )?.runtimeId ?? "";
 }
 
+interface AutomaticEvaluationTarget {
+  runtimeId: string;
+  region: string;
+  appName: string;
+}
+
+function automaticEvaluationTargetForSelection(
+  connections: RemoteConnection[],
+  selectedAppName: string,
+): AutomaticEvaluationTarget | null {
+  for (const connection of connections) {
+    const runtimeApp = connection.apps.find(
+      (app) => remoteAppId(connection.id, app) === selectedAppName,
+    );
+    if (runtimeApp && connection.runtimeId) {
+      return {
+        runtimeId: connection.runtimeId,
+        region: connection.region ?? "cn-beijing",
+        appName: runtimeApp,
+      };
+    }
+  }
+  return null;
+}
+
+function videoAssetsForConfig(
+  config: NewChatVideoConfig,
+): Array<{ file: File; kind: VideoAssetKind }> {
+  if (config.taskMode === "text_to_video") return [];
+  const candidates = config.taskMode === "first_last_frame"
+    ? [
+        config.firstFrame
+          ? { file: config.firstFrame, kind: "first_frame" as const }
+          : null,
+        config.lastFrame
+          ? { file: config.lastFrame, kind: "last_frame" as const }
+          : null,
+      ]
+    : [
+        config.referenceImage
+          ? { file: config.referenceImage, kind: "reference_image" as const }
+          : null,
+        config.referenceVideo
+          ? { file: config.referenceVideo, kind: "reference_video" as const }
+          : null,
+      ];
+  return candidates.filter(
+    (item): item is { file: File; kind: VideoAssetKind } => item !== null,
+  );
+}
+
+function videoTaskFileName(taskId: string, outputFormat: "mp4" | "mov"): string {
+  const safeId = taskId.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 36);
+  return `video-${safeId || "result"}.${outputFormat}`;
+}
+
 export default function App() {
   const [apps, setApps] = useState<string[]>([]);
   const [appName, setAppName] = useState("");
@@ -670,12 +802,40 @@ export default function App() {
     useState<SandboxSessionInfo | null>(null);
   const [sandboxAgentWorkspace, setSandboxAgentWorkspace] =
     useState<SandboxAgentWorkspaceData | null>(null);
+  const [sandboxThreadDeleteTarget, setSandboxThreadDeleteTarget] =
+    useState<SandboxThreadSummary | null>(null);
   const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
   const sandboxSessionIdRef = useRef(sandboxSession?.id ?? "");
   const sandboxActiveAssistantTurnIdRef = useRef("");
   const sandboxUploadRunRef = useRef(0);
+  const sandboxPreviewUrlsRef = useRef<Set<string>>(new Set());
   sandboxSessionIdRef.current = sandboxSession?.id ?? "";
+  useEffect(() => () => {
+    for (const previewUrl of sandboxPreviewUrlsRef.current) {
+      URL.revokeObjectURL(previewUrl);
+    }
+    sandboxPreviewUrlsRef.current.clear();
+  }, []);
+
+  function createSandboxPreviewUrl(file: File) {
+    const previewUrl = URL.createObjectURL(file);
+    sandboxPreviewUrlsRef.current.add(previewUrl);
+    return previewUrl;
+  }
+
+  function releaseSandboxPreviewUrl(previewUrl?: string) {
+    if (!previewUrl || !sandboxPreviewUrlsRef.current.delete(previewUrl)) return;
+    URL.revokeObjectURL(previewUrl);
+  }
+
+  function releaseAllSandboxPreviews() {
+    for (const previewUrl of sandboxPreviewUrlsRef.current) {
+      URL.revokeObjectURL(previewUrl);
+    }
+    sandboxPreviewUrlsRef.current.clear();
+  }
+
   // Turns are stored PER SESSION, so a background stream can keep updating its
   // own session's transcript while you view another one — no cross-session
   // leak, no data loss, and no re-fetch when you switch back (its entry is
@@ -729,18 +889,24 @@ export default function App() {
   }
   const [input, setInput] = useState("");
   const [newChatMode, setNewChatMode] = useState<NewChatMode>("agent");
+  const [newChatWorkspaceMode, setNewChatWorkspaceMode] =
+    useState<NewChatWorkspaceMode>("agent");
+  const [newChatSkillAction, setNewChatSkillAction] =
+    useState<NewChatSkillAction>("create");
+  const [newChatSkillTarget, setNewChatSkillTarget] =
+    useState<NewChatSkillTarget | null>(null);
   const [newChatTask, setNewChatTask] = useState<NewChatTask | null>(null);
+  const [videoTask, setVideoTask] = useState<VideoGenerationTask | null>(null);
+  const [videoTaskDialogOpen, setVideoTaskDialogOpen] = useState(false);
+  const videoTaskRef = useRef<VideoGenerationTask | null>(null);
+  const videoTaskAbortRef = useRef<AbortController | null>(null);
   const [newChatCapabilities, setNewChatCapabilities] =
     useState<NewChatCapabilitiesState>({});
   const newChatCapabilitiesCacheRef = useRef(
     new Map<string, NewChatCapabilitiesState>(),
   );
   const newChatCapabilitiesReady =
-    !appName ||
-    (newChatCapabilities.ready === true && newChatCapabilities.agentId === appName);
-  const [skillJob, setSkillJob] = useState<SkillCreationJob | null>(null);
-  const [skillCreating, setSkillCreating] = useState(false);
-  const skillCreationRunRef = useRef(0);
+    newChatCapabilities.ready === true && newChatCapabilities.agentId === appName;
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [invocation, setInvocation] = useState<FrontendInvocation>(emptyInvocation);
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
@@ -765,8 +931,13 @@ export default function App() {
   const [streamPresentationSids, setStreamPresentationSids] = useState<Set<string>>(
     () => new Set(),
   );
+  const [evaluatingSids, setEvaluatingSids] = useState<Set<string>>(
+    () => new Set(),
+  );
   const streamAbortsRef = useRef<Map<string, AbortController>>(new Map());
   const streamPresentationTimersRef = useRef<Map<string, number>>(new Map());
+  const automaticEvaluationStatusTimerRef = useRef<number | undefined>(undefined);
+  const automaticEvaluationStatusRefreshRef = useRef<() => void>(() => {});
   const setStreaming = (sid: string, on: boolean) =>
     setStreamingSids((s) => {
       const n = new Set(s);
@@ -793,15 +964,251 @@ export default function App() {
     }, 2400);
     streamPresentationTimersRef.current.set(sid, timer);
   };
+  const setEvaluating = (sid: string, on: boolean) => {
+    setEvaluatingSids((current) => {
+      if (current.has(sid) === on) return current;
+      const next = new Set(current);
+      if (on) next.add(sid);
+      else next.delete(sid);
+      return next;
+    });
+  };
   // The session currently on screen — used to gate the single global error
   // banner (per-session transcripts/topology don't need it).
   const viewSidRef = useRef("");
   const [error, setError] = useState("");
+
+  function commitVideoTask(
+    localId: string,
+    runId: number,
+    event: VideoTaskEvent,
+  ): VideoGenerationTask | null {
+    const current = videoTaskRef.current;
+    if (!current || current.localId !== localId || current.runId !== runId) {
+      return null;
+    }
+    const next = updateVideoGenerationTask(current, event);
+    videoTaskRef.current = next;
+    setVideoTask(next);
+    return next;
+  }
+
+  async function executeVideoTask(
+    localId: string,
+    runId: number,
+    startingStage: VideoTaskErrorStage,
+  ) {
+    videoTaskAbortRef.current?.abort();
+    const controller = new AbortController();
+    videoTaskAbortRef.current = controller;
+    let stage = startingStage;
+
+    try {
+      let current = videoTaskRef.current;
+      if (!current || current.localId !== localId || current.runId !== runId) return;
+
+      if (stage === "optimization" && current.assetIds.length === 0) {
+        const assets = videoAssetsForConfig(current.config);
+        if (assets.length > 0) {
+          const uploaded = await Promise.all(
+            assets.map((asset) => uploadVideoAsset(asset.file, asset.kind, controller.signal)),
+          );
+          if (controller.signal.aborted) return;
+          current = commitVideoTask(localId, runId, {
+            type: "assets_uploaded",
+            assetIds: uploaded.map((asset) => asset.assetId),
+          });
+          if (!current) return;
+        }
+      }
+
+      if (stage === "optimization") {
+        const enhancement = await enhanceVideoPrompt({
+          prompt: current.requestedPrompt,
+          taskMode: current.requestedMode,
+          assetIds: current.assetIds,
+          ratio: current.config.aspectRatio,
+          resolution: current.config.resolution,
+          durationSeconds: current.config.durationSeconds,
+        }, controller.signal);
+        if (controller.signal.aborted) return;
+        current = commitVideoTask(localId, runId, {
+          type: "optimization_succeeded",
+          optimizedPrompt: enhancement.enhancedPrompt,
+          resolvedMode: enhancement.resolvedTaskMode,
+          enhancerModel: enhancement.enhancerModel,
+        });
+        if (!current) return;
+        stage = "generation";
+      }
+
+      if (!current.optimizedPrompt || !current.resolvedMode) {
+        throw new Error("提示词优化结果不完整，请重新优化后再试。");
+      }
+
+      const created = await createVideoTask({
+        enhancedPrompt: current.optimizedPrompt,
+        resolvedTaskMode: current.resolvedMode,
+        assetIds: current.assetIds,
+        ratio: current.config.aspectRatio,
+        resolution: current.config.resolution,
+        durationSeconds: current.config.durationSeconds,
+      }, controller.signal);
+      if (controller.signal.aborted) return;
+      current = commitVideoTask(localId, runId, {
+        type: "generation_started",
+        remoteTaskId: created.taskId,
+        generationModel: created.generationModel,
+      });
+      if (!current) return;
+
+      while (!controller.signal.aborted) {
+        const remote = await getVideoTask(created.taskId, controller.signal);
+        if (controller.signal.aborted) return;
+        if (remote.status === "failed") {
+          throw new Error(remote.error || "视频生成失败，请稍后重试。");
+        }
+        if (remote.status === "succeeded") {
+          if (!remote.videoUrl) {
+            throw new Error("视频任务已完成，但服务端未返回预览地址。");
+          }
+          commitVideoTask(localId, runId, {
+            type: "generation_succeeded",
+            output: {
+              previewUrl: videoResultPreviewUrl(remote.videoUrl),
+              fileName: videoTaskFileName(created.taskId, remote.outputFormat),
+              mimeType: remote.outputFormat === "mov" ? "video/quicktime" : "video/mp4",
+            },
+          });
+          return;
+        }
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 1800));
+      }
+    } catch (cause) {
+      if (controller.signal.aborted) return;
+      commitVideoTask(localId, runId, {
+        type: "failed",
+        stage,
+        error: cause instanceof Error ? cause.message : String(cause),
+      });
+    }
+  }
+
+  function startVideoTask(
+    prompt: string,
+    config: NewChatVideoConfig,
+    capabilities: VideoCapabilities,
+  ) {
+    if (isVideoTaskRunning(videoTaskRef.current)) {
+      setVideoTaskDialogOpen(true);
+      return;
+    }
+    if (config.taskMode === "video_editing" && !config.referenceVideo) {
+      setError("视频编辑需要先添加待编辑视频。");
+      return;
+    }
+    if (config.taskMode === "video_extension" && !config.referenceVideo) {
+      setError("视频续写需要先添加基础视频。");
+      return;
+    }
+    if (
+      config.taskMode === "reference_to_video" &&
+      !config.referenceImage &&
+      !config.referenceVideo
+    ) {
+      setError("参考素材生视频需要至少添加一项参考图片或参考视频。");
+      return;
+    }
+    if (
+      config.taskMode === "text_to_video" &&
+      (config.referenceImage || config.referenceVideo || config.firstFrame || config.lastFrame)
+    ) {
+      setError("文生视频不使用参考素材，请先移除已添加的图片或视频。");
+      return;
+    }
+    if (config.taskMode === "first_last_frame" && !config.firstFrame) {
+      setError("首尾帧生成需要先添加首帧图片。");
+      return;
+    }
+    if (
+      capabilities.supportedModes.length > 0 &&
+      config.taskMode !== "auto" &&
+      !capabilities.supportedModes.includes(config.taskMode)
+    ) {
+      setError("当前平台暂不支持所选视频任务模式。");
+      return;
+    }
+    const assets = videoAssetsForConfig(config);
+    if (assets.length > 0 && !capabilities.assetStorageAvailable) {
+      setError(
+        capabilities.assetStorageUnavailableReason ||
+          "管理员未配置持久化存储",
+      );
+      return;
+    }
+    const oversized = assets.find(
+      ({ file }) => capabilities.maxAssetBytes > 0 && file.size > capabilities.maxAssetBytes,
+    );
+    if (oversized) {
+      setError(`${oversized.file.name} 超出当前平台允许的素材大小。`);
+      return;
+    }
+
+    const next = createVideoGenerationTask({
+      prompt,
+      config,
+      enhancerModel: capabilities.enhancerModel,
+      generationModel: capabilities.generationModel,
+    });
+    videoTaskRef.current = next;
+    setVideoTask(next);
+    setVideoTaskDialogOpen(true);
+    setInput("");
+    setError("");
+    void executeVideoTask(next.localId, next.runId, "optimization");
+  }
+
+  function retryVideoTask() {
+    const current = videoTaskRef.current;
+    if (!current || current.status !== "error" || !current.errorStage) return;
+    const stage = current.errorStage;
+    const next = updateVideoGenerationTask(current, { type: "retry", stage });
+    videoTaskRef.current = next;
+    setVideoTask(next);
+    setVideoTaskDialogOpen(true);
+    void executeVideoTask(next.localId, next.runId, stage);
+  }
+
+  async function downloadCurrentVideoTask() {
+    const current = videoTaskRef.current;
+    if (!current?.remoteTaskId || !current.output) return;
+    try {
+      const blob = await downloadVideoTask(current.remoteTaskId);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = current.output.fileName;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  useEffect(() => () => {
+    videoTaskAbortRef.current?.abort();
+  }, []);
+
   const [draftStorageError, setDraftStorageError] = useState("");
   const [feedbackPendingIds, setFeedbackPendingIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [issueFeedbackTarget, setIssueFeedbackTarget] =
+    useState<IssueFeedbackTarget | null>(null);
+  const [platformFeedbackOrigin, setPlatformFeedbackOrigin] =
+    useState<string | null>(null);
   const [traceOpen, setTraceOpen] = useState(false);
+  const [traceEndTimeMs, setTraceEndTimeMs] = useState<number>();
   const [greeting, setGreeting] = useState(pickGreeting);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [authExpired, setAuthExpired] = useState(false);
@@ -828,6 +1235,8 @@ export default function App() {
   });
   const [agentsSource, setAgentsSource] = useState<"local" | "cloud">("cloud");
   const [siteBranding, setSiteBranding] = useState<SiteBranding>(DEFAULT_SITE_BRANDING);
+  const [cloudProvider, setCloudProvider] =
+    useState<UiConfig["provider"]>("volcengine");
   const [version, setVersion] = useState("");
   const [uiConfigLoaded, setUiConfigLoaded] = useState(false);
   const [localMode, setLocalMode] = useState(false);
@@ -869,6 +1278,7 @@ export default function App() {
     },
     onSnapshot: (snapshot) => {
       const activeSessionId = sandboxSessionIdRef.current;
+      releaseAllSandboxPreviews();
       setSandboxTurns(sandboxSnapshotTurns(snapshot));
       setSandboxSession((current) =>
         current?.id === activeSessionId
@@ -916,18 +1326,6 @@ export default function App() {
       } else if (item.uri) {
         void deleteMedia(appName, item.uri).catch((e) => setError(String(e)));
       }
-    }
-  }
-
-  function discardSkillCreation() {
-    skillCreationRunRef.current += 1;
-    const job = skillJob;
-    setSkillJob(null);
-    setSkillCreating(false);
-    if (job && !job.id.startsWith("pending-")) {
-      void deleteSkillJob(job.id).catch((cause) => {
-        setError(cause instanceof Error ? cause.message : String(cause));
-      });
     }
   }
 
@@ -1017,16 +1415,20 @@ export default function App() {
       return next;
     });
   }, []);
-  // Whether the server has Volcengine AK/SK. The agent-creation workbench needs
+  // Whether the server has cloud AK/SK. The agent-creation workbench needs
   // them; assume present until the runtime-config check says otherwise (avoids
   // flashing the notice in the common, configured case).
   const [hasCreds, setHasCreds] = useState(true);
   const [skillCenter, setSkillCenter] = useState(false);
+  const [skillCenterLaunch, setSkillCenterLaunch] =
+    useState<SkillCenterWorkspaceLaunch | null>(null);
   const [addAgent, setAddAgent] = useState(false);
   // The "添加 Agent" chooser (two cards: AgentKit / 从 0 快速创建).
   const [addMenu, setAddMenu] = useState(false);
   // A draft imported from YAML, used to pre-fill the custom wizard once.
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
+  const [customCreateMode, setCustomCreateMode] =
+    useState<CustomCreateMode>("custom");
   const [savedAgentDrafts, setSavedAgentDrafts] = useState<WorkspaceAgentDraft[]>([]);
   const savedAgentDraftsRef = useRef<WorkspaceAgentDraft[]>([]);
   const pendingWorkspaceDraftRef = useRef<WorkspaceAgentDraft | null>(null);
@@ -1048,6 +1450,7 @@ export default function App() {
   const [feedbackCasePreview, setFeedbackCasePreview] =
     useState<AgentFeedbackCase | null>(null);
   const [myAgents, setMyAgents] = useState(false);
+  const [systemInfo, setSystemInfo] = useState(false);
   const [applicationsView, setApplicationsView] =
     useState<"catalog" | ApplicationId | null>(null);
   // A search result may belong to a different agent; remember it so the
@@ -1078,7 +1481,9 @@ export default function App() {
     appName?: string;
     currentVersion?: number | null;
   } | null>(null);
-  const [newRuntimeRegion, setNewRuntimeRegion] = useState("cn-beijing");
+  const [newRuntimeRegion, setNewRuntimeRegion] = useState<string>(
+    defaultCloudRegion(cloudProvider),
+  );
   const [focusedDeploymentTaskId, setFocusedDeploymentTaskId] = useState("");
   const [focusedWorkspaceAgentId, setFocusedWorkspaceAgentId] = useState("");
   const [agentDetailTarget, setAgentDetailTarget] =
@@ -1118,14 +1523,15 @@ export default function App() {
     }
   }, []);
 
-  const flushPendingWorkspaceDraft = useCallback(() => {
+  const flushPendingWorkspaceDraft = useCallback((): boolean => {
     const pending = pendingWorkspaceDraftRef.current;
-    if (!pending) return;
-    cancelPendingWorkspaceDraft();
-    commitWorkspaceDrafts([
+    if (!pending) return true;
+    const committed = commitWorkspaceDrafts([
       pending,
       ...savedAgentDraftsRef.current.filter((item) => item.id !== pending.id),
     ]);
+    if (committed) cancelPendingWorkspaceDraft();
+    return committed;
   }, [cancelPendingWorkspaceDraft, commitWorkspaceDrafts]);
 
   const saveWorkspaceDraft = useCallback(
@@ -1453,24 +1859,43 @@ export default function App() {
   }, []);
 
   const startDeployment = useCallback((task: DeploymentTaskUpdate) => {
+    flushPendingWorkspaceDraft();
+    const linkedTask = editingDraftId
+      ? { ...task, draftId: editingDraftId }
+      : task;
     if (editingDraftId) {
       setDraftDeploymentTaskIds((current) => ({
         ...current,
         [editingDraftId]: task.id,
       }));
     }
-    openDeploymentDetail(task);
-  }, [editingDraftId, openDeploymentDetail]);
+    updateDeploymentTask(linkedTask);
+    openDeploymentDetail(linkedTask);
+  }, [editingDraftId, flushPendingWorkspaceDraft, openDeploymentDetail, updateDeploymentTask]);
 
   const finishDeployment = useCallback(
     async (result: DeployResult) => {
       if (!result.runtimeId) throw new Error("部署完成，但未返回 Runtime ID。");
+      const completedDraftId = editingDraftId;
+      if (completedDraftId) {
+        removeWorkspaceDraft(completedDraftId);
+        setDraftDeploymentTaskIds((current) => {
+          if (!current[completedDraftId]) return current;
+          const next = { ...current };
+          delete next[completedDraftId];
+          return next;
+        });
+      }
+      setEditingDraftId("");
+      editingDraftBaselineRef.current = null;
+      setRuntimeUpdateTarget(null);
       const fallbackRegion = runtimeUpdateTarget?.region ?? newRuntimeRegion;
       const agentId = await connectRuntime(
         result.runtimeId,
         result.agentName,
         result.region ?? fallbackRegion,
         result.version,
+        { waitForReady: true },
       );
       setConnections(loadConnections());
       setAgentInfoRefreshKey((key) => key + 1);
@@ -1483,18 +1908,9 @@ export default function App() {
         return next;
       });
       invalidateRuntimeAgentCache();
-      setRuntimeUpdateTarget(null);
-      removeWorkspaceDraft(editingDraftId);
-      setDraftDeploymentTaskIds((current) => {
-        if (!editingDraftId || !current[editingDraftId]) return current;
-        const next = { ...current };
-        delete next[editingDraftId];
-        return next;
-      });
-      setEditingDraftId("");
-      editingDraftBaselineRef.current = null;
       setFocusedWorkspaceAgentId(agentId);
       setFocusedWorkspaceAgentSection("basic");
+      setFocusedDeploymentTaskId("");
       setCreateView(null);
       setManageAgents(true);
       setAppName(agentId);
@@ -1680,7 +2096,7 @@ export default function App() {
   }, [localMode, userId]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !userId || !appName) {
+    if (authStatus !== "authenticated" || !userId) {
       setNewChatCapabilities({});
       return;
     }
@@ -1700,6 +2116,21 @@ export default function App() {
       cancelled = true;
     };
   }, [appName, authStatus, userId]);
+
+  useLayoutEffect(() => {
+    if (
+      !newChatCapabilitiesReady ||
+      newChatCapabilities.skillCustomizationEnabled !== false ||
+      newChatWorkspaceMode !== "skill"
+    ) return;
+    setNewChatWorkspaceMode("agent");
+    setNewChatSkillTarget(null);
+    setNewChatTask(null);
+  }, [
+    newChatCapabilities.skillCustomizationEnabled,
+    newChatCapabilitiesReady,
+    newChatWorkspaceMode,
+  ]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || !userId) {
@@ -1725,13 +2156,39 @@ export default function App() {
   // chat; privileged pages remain explicit navigation destinations.
   useEffect(() => {
     getUiConfig().then((cfg) => {
+      initStudioTelemetry(cfg.telemetry);
+      trackStudioLoaded({ agentsSource: cfg.agentsSource });
       setFeatures(cfg.features);
       setAgentsSource(cfg.agentsSource);
+      setCloudProvider(cfg.provider);
       setSiteBranding(cfg.branding);
       setVersion(cfg.version);
       setUiConfigLoaded(true);
     });
   }, []);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !userInfo || !access) return;
+    identifyStudioTelemetryUser({
+      userId: access.telemetry.userId,
+      role: access.role,
+      local: localMode,
+    });
+  }, [access, authStatus, localMode, userInfo]);
+
+  useEffect(() => {
+    setNewRuntimeRegion((region) => {
+      const providerDefault = defaultCloudRegion(cloudProvider);
+      if (!region) return providerDefault;
+      if (cloudProvider === "byteplus" && region.startsWith("cn-")) {
+        return providerDefault;
+      }
+      if (cloudProvider === "volcengine" && region.startsWith("ap-")) {
+        return providerDefault;
+      }
+      return region;
+    });
+  }, [cloudProvider]);
 
   useEffect(() => {
     if (!access) return;
@@ -1767,10 +2224,11 @@ export default function App() {
       document.head.appendChild(favicon);
     }
     favicon.removeAttribute("type");
-    favicon.href = siteBranding.logoUrl || defaultSiteLogo;
-  }, [siteBranding]);
+    favicon.href = siteBranding.logoUrl
+      || (cloudProvider === "byteplus" ? byteplusLogo : defaultSiteLogo);
+  }, [cloudProvider, siteBranding]);
 
-  // Check whether the server has Volcengine AK/SK (needed by the workbench).
+  // Check whether the server has cloud AK/SK (needed by the workbench).
   useEffect(() => {
     fetch("/web/runtime-config", { signal: AbortSignal.timeout(10_000) })
       .then((r) => (r.ok ? r.json() : null))
@@ -1927,6 +2385,104 @@ export default function App() {
     // any navigation path that doesn't set it synchronously).
     viewSidRef.current = sessionId;
   }, [sessionId]);
+  useEffect(
+    () => {
+      const target = automaticEvaluationTargetForSelection(connections, appName);
+      if (!target || !userId) {
+        automaticEvaluationStatusRefreshRef.current = () => {};
+        setEvaluatingSids((current) =>
+          current.size === 0 ? current : new Set(),
+        );
+        return;
+      }
+      const {
+        runtimeId: evaluationRuntimeId,
+        region: evaluationRegion,
+        appName: evaluationAppName,
+      } = target;
+
+      let disposed = false;
+      let requestGeneration = 0;
+
+      function clearTimer() {
+        if (automaticEvaluationStatusTimerRef.current === undefined) return;
+        window.clearTimeout(automaticEvaluationStatusTimerRef.current);
+        automaticEvaluationStatusTimerRef.current = undefined;
+      }
+
+      function schedulePoll(delayMs: number) {
+        clearTimer();
+        automaticEvaluationStatusTimerRef.current = window.setTimeout(
+          () => void poll(),
+          delayMs,
+        );
+      }
+
+      async function poll() {
+        const generation = ++requestGeneration;
+        try {
+          const response = await getAutomaticEvaluationStatuses({
+            runtimeId: evaluationRuntimeId,
+            region: evaluationRegion,
+            appName: evaluationAppName,
+            userId,
+          });
+          if (disposed || generation !== requestGeneration) return;
+
+          const nextEvaluating = new Set(
+            response.items
+              .filter((status) => status.state === "running")
+              .map((status) => status.sessionId),
+          );
+          setEvaluatingSids((current) => {
+            if (
+              current.size === nextEvaluating.size &&
+              [...nextEvaluating].every((sid) => current.has(sid))
+            ) {
+              return current;
+            }
+            return nextEvaluating;
+          });
+
+          if (nextEvaluating.size > 0) {
+            schedulePoll(AUTO_EVALUATION_RUNNING_POLL_MS);
+            return;
+          }
+          const pendingDueTimes = response.items
+            .filter((status) => status.state === "pending")
+            .map((status) => Date.parse(status.dueAt))
+            .filter(Number.isFinite);
+          if (pendingDueTimes.length > 0) {
+            schedulePoll(Math.max(
+              AUTO_EVALUATION_MIN_PENDING_POLL_MS,
+              Math.min(...pendingDueTimes) - Date.now(),
+            ));
+          }
+        } catch {
+          if (!disposed && generation === requestGeneration) {
+            schedulePoll(AUTO_EVALUATION_RETRY_POLL_MS);
+          }
+        }
+      }
+
+      const refresh = () => {
+        clearTimer();
+        void poll();
+      };
+      automaticEvaluationStatusRefreshRef.current = refresh;
+      refresh();
+
+      return () => {
+        disposed = true;
+        requestGeneration += 1;
+        clearTimer();
+        if (automaticEvaluationStatusRefreshRef.current === refresh) {
+          automaticEvaluationStatusRefreshRef.current = () => {};
+        }
+      };
+    },
+    [appName, connections, userId],
+  );
   // Abort the in-flight stream when the whole view unmounts.
   useEffect(
     () => () => streamAbortsRef.current.forEach((c) => c.abort()),
@@ -2049,7 +2605,7 @@ export default function App() {
     }
   }
 
-  async function launchSandboxSession(displayName: string) {
+  async function launchSandboxSession(displayName: string, persistent: boolean) {
     sandboxLaunchAbortRef.current?.abort();
     const controller = new AbortController();
     sandboxLaunchAbortRef.current = controller;
@@ -2059,13 +2615,20 @@ export default function App() {
       const createdSession = sandboxLaunchKind === "codex"
         ? await sandboxClient.startSession({
             displayName,
+            persistent,
             signal: controller.signal,
           })
         : await sandboxClient.startAgentSession(sandboxLaunchKind, {
             displayName,
+            persistent,
             signal: controller.signal,
           });
       if (sandboxLaunchAbortRef.current !== controller) return;
+      trackSandboxCreateSucceeded({
+        kind: sandboxLaunchKind,
+        source: sandboxLaunchFromAgents ? "my_agents" : "new_chat",
+        sessionId: createdSession.id,
+      });
       if (sandboxLaunchFromAgents) {
         setSandboxAgentRefreshKey((current) => current + 1);
         setSandboxLaunchOpen(false);
@@ -2084,10 +2647,9 @@ export default function App() {
       setInput("");
       setInvocation(emptyInvocation());
       setNewChatMode("temporary");
-      discardSkillCreation();
-      setSkillCreating(false);
       discardDraftAttachments(attachments);
       setAttachments([]);
+      releaseAllSandboxPreviews();
       setSandboxTurns([]);
       setSandboxSession(nextSession);
       setCreateView(null);
@@ -2105,6 +2667,11 @@ export default function App() {
     } catch (launchError) {
       if ((launchError as Error)?.name === "AbortError") return;
       if (sandboxLaunchAbortRef.current !== controller) return;
+      trackSandboxCreateFailed({
+        kind: sandboxLaunchKind,
+        source: sandboxLaunchFromAgents ? "my_agents" : "new_chat",
+        error: launchError,
+      });
       setSandboxLaunchError(
         launchError instanceof Error
           ? launchError.message
@@ -2118,31 +2685,59 @@ export default function App() {
     }
   }
 
-  async function openSandboxAgent(session: SandboxSessionInfo) {
+  async function openSandboxAgent(
+    session: SandboxSessionInfo,
+    source: AgentConnectSource = "my_agents",
+  ) {
     setError("");
-    if (session.toolName === "codex") {
-      const connected = await sandboxClient.connectSession(session.id);
-      viewSidRef.current = "";
-      setSessionId("");
-      setPendingTurns([]);
-      setInput("");
-      setInvocation(emptyInvocation());
-      setSandboxTurns([]);
-      setSandboxSession(connected);
+    const startedAt = Date.now();
+    try {
+      if (session.toolName === "codex") {
+        const connected = await sandboxClient.connectSession(session.id);
+        trackAgentConnectSucceeded({
+          kind: session.toolName,
+          source,
+          durationMs: Date.now() - startedAt,
+          sandboxStatus: connected.status,
+        });
+        viewSidRef.current = "";
+        setSessionId("");
+        setPendingTurns([]);
+        setInput("");
+        setInvocation(emptyInvocation());
+        releaseAllSandboxPreviews();
+        setSandboxTurns([]);
+        setSandboxSession(connected);
+        setSandboxAgentDetailTarget(null);
+        setSandboxAgentWorkspace(null);
+        setMyAgents(false);
+        setManageAgents(false);
+        return;
+      }
+      const workspace = await sandboxClient.openAgentSession(
+        session.toolName,
+        session.id,
+      );
+      trackAgentConnectSucceeded({
+        kind: session.toolName,
+        source,
+        durationMs: Date.now() - startedAt,
+        sandboxStatus: workspace.session.status,
+      });
+      setSandboxAgentWorkspace(workspace);
       setSandboxAgentDetailTarget(null);
-      setSandboxAgentWorkspace(null);
       setMyAgents(false);
       setManageAgents(false);
-      return;
+    } catch (cause) {
+      trackAgentConnectFailed({
+        kind: session.toolName,
+        source,
+        durationMs: Date.now() - startedAt,
+        error: cause,
+      });
+      setError(cause instanceof Error ? cause.message : String(cause));
+      throw cause;
     }
-    const workspace = await sandboxClient.openAgentSession(
-      session.toolName,
-      session.id,
-    );
-    setSandboxAgentWorkspace(workspace);
-    setSandboxAgentDetailTarget(null);
-    setMyAgents(false);
-    setManageAgents(false);
   }
 
   function openSandboxAgentDetails(session: SandboxSessionInfo) {
@@ -2166,14 +2761,21 @@ export default function App() {
     setMyAgents(true);
   }
 
+  async function confirmSandboxThreadDelete() {
+    const target = sandboxThreadDeleteTarget;
+    if (!target) return;
+    const deleted = await sandboxCommands.deleteThread(target.id);
+    if (deleted) setSandboxThreadDeleteTarget(null);
+  }
+
   function exitSandboxSession() {
     sandboxMessageAbortRef.current?.abort();
     sandboxMessageAbortRef.current = null;
     sandboxSessionIdRef.current = "";
     sandboxActiveAssistantTurnIdRef.current = "";
     setSandboxBusy(false);
+    releaseAllSandboxPreviews();
     setSandboxTurns([]);
-    releaseAttachmentPreviews(attachments);
     setAttachments([]);
     setInput("");
     setError("");
@@ -2189,6 +2791,7 @@ export default function App() {
     setSandboxApproval(null);
     setSandboxApprovalBusy(false);
     setSandboxApprovalError("");
+    setSandboxThreadDeleteTarget(null);
     setSandboxUploadBusy(false);
     sandboxUploadRunRef.current += 1;
     const closingSession = sandboxSession;
@@ -2361,7 +2964,7 @@ export default function App() {
         name: file.name,
         sizeBytes: file.size,
         status: "uploading",
-        previewUrl: URL.createObjectURL(file),
+        previewUrl: createSandboxPreviewUrl(file),
       };
       return { file, attachment };
     });
@@ -2433,9 +3036,9 @@ export default function App() {
       if (sandboxUploadRunRef.current === uploadRun) {
         setSandboxUploadBusy(false);
       } else {
-        releaseAttachmentPreviews(
-          drafts.map(({ attachment }) => attachment),
-        );
+        for (const { attachment } of drafts) {
+          releaseSandboxPreviewUrl(attachment.previewUrl);
+        }
       }
     }
   }
@@ -2443,7 +3046,7 @@ export default function App() {
   function removeSandboxAttachment(id: string) {
     const removed = attachments.find((item) => item.id === id);
     if (!removed) return;
-    releaseAttachmentPreviews([removed]);
+    releaseSandboxPreviewUrl(removed.previewUrl);
     setAttachments((current) => current.filter((item) => item.id !== id));
   }
 
@@ -2464,6 +3067,7 @@ export default function App() {
     setError("");
     setSandboxApproval(null);
     setSandboxApprovalError("");
+    const messageStartedAt = Date.now();
     const controller = new AbortController();
     sandboxMessageAbortRef.current?.abort();
     sandboxMessageAbortRef.current = controller;
@@ -2487,6 +3091,7 @@ export default function App() {
           mimeType: attachment.mimeType,
           name: attachment.name,
           sizeBytes: attachment.sizeBytes,
+          previewUrl: attachment.previewUrl,
         })),
       });
     }
@@ -2584,6 +3189,12 @@ export default function App() {
         },
       );
       if (sandboxMessageAbortRef.current !== controller) return;
+      trackAgentMessageSucceeded({
+        kind: activeSession.toolName,
+        source: "composer",
+        sessionState: "existing",
+        durationMs: Date.now() - messageStartedAt,
+      });
       setSandboxTurns((current) => {
         const next = current.slice();
         const assistantIndex = next.findIndex(
@@ -2605,16 +3216,22 @@ export default function App() {
         }
         return next;
       });
-      releaseAttachmentPreviews(messageAttachments);
+      void sandboxCommands.refreshThreads();
     } catch (messageError) {
       if ((messageError as Error)?.name === "AbortError") {
-        releaseAttachmentPreviews(messageAttachments);
         return;
       }
       if (sandboxMessageAbortRef.current !== controller) {
-        releaseAttachmentPreviews(messageAttachments);
         return;
       }
+      trackAgentMessageFailed({
+        kind: activeSession.toolName,
+        source: "composer",
+        sessionState: "existing",
+        durationMs: Date.now() - messageStartedAt,
+        phase: "sandbox_send",
+        error: messageError,
+      });
       setSandboxTurns((current) =>
         current.filter(
           (turn) =>
@@ -2679,8 +3296,7 @@ export default function App() {
     setGreeting(pickGreeting());
     setNewChatMode("agent");
     setNewChatTask(null);
-    discardSkillCreation();
-    setSkillCreating(false);
+    setNewChatSkillTarget(null);
     const abandonedSession = sessionId && persistentTurns.length === 0 && attachments.length > 0
       ? sessionId
       : "";
@@ -2708,8 +3324,10 @@ export default function App() {
   }
 
   function openNewChat() {
+    setPlatformFeedbackOrigin(null);
     setCreateView(null);
     setSkillCenter(false);
+    setSkillCenterLaunch(null);
     setAddAgent(false);
     setAddMenu(false);
     setSearchView(false);
@@ -2718,6 +3336,7 @@ export default function App() {
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
+    setSystemInfo(false);
     setApplicationsView(null);
     startNewChat();
   }
@@ -2726,6 +3345,7 @@ export default function App() {
     try {
       // Deleting a session with a running stream — abort just that one.
       streamAbortsRef.current.get(id)?.abort();
+      setEvaluating(id, false);
       await deleteSessionMedia(appName, userId, id);
       await deleteSession(appName, userId, id);
       const presentationTimer = streamPresentationTimersRef.current.get(id);
@@ -2757,7 +3377,6 @@ export default function App() {
     setPendingTurns([]);
     setNewChatMode("agent");
     setNewChatTask(null);
-    discardSkillCreation();
     setInvocation(emptyInvocation());
     setSessionCapabilities(null);
     setSessionBuiltinTools([]);
@@ -3000,6 +3619,7 @@ export default function App() {
     text: string,
     atts: Attachment[] = [],
     selectedInvocation: FrontendInvocation = emptyInvocation(),
+    messageSource: AgentMessageSource = "composer",
   ) {
     // `busy` here = the CURRENT session is already streaming (can't double-send
     // to it). Other sessions can stream concurrently.
@@ -3011,6 +3631,10 @@ export default function App() {
       !userId
     ) return;
     setError("");
+    const messageStartedAt = Date.now();
+    const createsSession = !sessionId;
+    const sessionState = createsSession ? "new" : "existing";
+    const trackRuntimeMessage = Boolean(currentRuntime);
 
     const userBlocks: Turn["blocks"] = [];
     if (selectedInvocation.skills.length > 0 || selectedInvocation.targetAgent) {
@@ -3033,7 +3657,6 @@ export default function App() {
       { role: "user", blocks: userBlocks, meta: { ts: Date.now() / 1000 } },
       { role: "assistant", blocks: [] },
     ];
-    const createsSession = !sessionId;
     if (createsSession) {
       setPendingTurns(optimisticTurns);
       setInitializingSession(true);
@@ -3049,6 +3672,16 @@ export default function App() {
         setInitializingSession(false);
         setInput(text);
         setInvocation(selectedInvocation);
+      }
+      if (trackRuntimeMessage) {
+        trackAgentMessageFailed({
+          kind: "runtime",
+          source: messageSource,
+          sessionState,
+          durationMs: Date.now() - messageStartedAt,
+          phase: "create_session",
+          error: e,
+        });
       }
       setError(String(e));
       return;
@@ -3085,6 +3718,16 @@ export default function App() {
           setInput(text);
           setInvocation(selectedInvocation);
         }
+        if (trackRuntimeMessage) {
+          trackAgentMessageFailed({
+            kind: "runtime",
+            source: messageSource,
+            sessionState,
+            durationMs: Date.now() - messageStartedAt,
+            phase: "mount_task_capabilities",
+            error: e,
+          });
+        }
         setError(`任务能力挂载失败：${String(e)}`);
         return;
       }
@@ -3118,6 +3761,8 @@ export default function App() {
       let ts = Date.now() / 1000;
       let eventId = "";
       let invocationId = "";
+      let streamFailed = false;
+      let streamError: unknown = null;
       for await (const event of runSSE({
         appName,
         userId,
@@ -3131,6 +3776,8 @@ export default function App() {
         if (ctrl.signal.aborted) break;
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
         if (typeof errMsg === "string" && errMsg) {
+          streamFailed = true;
+          streamError = errMsg;
           if (viewSidRef.current === sid) setError(errMsg);
           break;
         }
@@ -3173,6 +3820,28 @@ export default function App() {
         });
       }
       void refreshSessions(appName);
+      if (!ctrl.signal.aborted && trackRuntimeMessage) {
+        if (streamFailed) {
+          trackAgentMessageFailed({
+            kind: "runtime",
+            source: messageSource,
+            sessionState,
+            durationMs: Date.now() - messageStartedAt,
+            phase: "run_sse",
+            error: streamError ?? "run_sse failed",
+          });
+        } else {
+          trackAgentMessageSucceeded({
+            kind: "runtime",
+            source: messageSource,
+            sessionState,
+            durationMs: Date.now() - messageStartedAt,
+          });
+        }
+      }
+      if (!ctrl.signal.aborted && !streamFailed && eventId) {
+        automaticEvaluationStatusRefreshRef.current();
+      }
     } catch (e) {
       // An abort (unmount / session delete) is expected — surface only real
       // errors, and only while this session is on screen.
@@ -3181,6 +3850,16 @@ export default function App() {
         !ctrl.signal.aborted &&
         viewSidRef.current === sid
       ) {
+        if (trackRuntimeMessage) {
+          trackAgentMessageFailed({
+            kind: "runtime",
+            source: messageSource,
+            sessionState,
+            durationMs: Date.now() - messageStartedAt,
+            phase: "run_sse",
+            error: e,
+          });
+        }
         setError(String(e));
       }
     } finally {
@@ -3195,7 +3874,12 @@ export default function App() {
   function onAction(action: A2uiAction | undefined, node: A2uiComponent) {
     const name = action?.event?.name ?? node.id;
     const context = action?.event?.context ?? {};
-    send(`[ui-action] ${name}: ${JSON.stringify(context)}`);
+    void send(
+      `[ui-action] ${name}: ${JSON.stringify(context)}`,
+      [],
+      emptyInvocation(),
+      "a2ui_action",
+    );
   }
 
   /** Complete an MCP/tool OAuth request: open the authorize URL, capture the
@@ -3242,6 +3926,7 @@ export default function App() {
       let ts = Date.now() / 1000;
       let eventId = lastTurn?.meta?.eventId ?? "";
       let invocationId = lastTurn?.meta?.invocationId ?? "";
+      let streamFailed = false;
       for await (const event of runSSE({
         appName,
         userId,
@@ -3254,6 +3939,12 @@ export default function App() {
         sessionCapabilities: requiresSessionCapabilityRunner(sessionCapabilities),
       })) {
         if (ctrl.signal.aborted) break;
+        const errMsg = event.error ?? event.errorMessage ?? event.error_message;
+        if (typeof errMsg === "string" && errMsg) {
+          streamFailed = true;
+          if (viewSidRef.current === sid) setError(errMsg);
+          break;
+        }
         applyStreamSignals(sid, event);
         const eventAuthor = event.author && event.author !== "user"
           ? event.author
@@ -3297,6 +3988,9 @@ export default function App() {
         });
       }
       void refreshSessions(appName);
+      if (!ctrl.signal.aborted && !streamFailed && eventId) {
+        automaticEvaluationStatusRefreshRef.current();
+      }
     } catch (e) {
       if (
         (e as Error)?.name !== "AbortError" &&
@@ -3328,7 +4022,13 @@ export default function App() {
     return <div className="boot" />; // resolving identity
   }
   if (authStatus === "unauthenticated") {
-    return <LoginPage branding={siteBranding} onUsername={onUsername} />;
+    return (
+      <LoginPage
+        branding={siteBranding}
+        cloudProvider={cloudProvider}
+        onUsername={onUsername}
+      />
+    );
   }
   if (!access) {
     return <div className="boot" />;
@@ -3388,6 +4088,75 @@ export default function App() {
       ) ?? agentInfo?.appName ?? currentConn.apps[0] ?? currentConn.name
     : "";
 
+  const submitIssueFeedbackForTurn = async (feedback: {
+    issues: IssueFeedbackIssue[];
+    description: string;
+  }): Promise<void> => {
+    const target = issueFeedbackTarget;
+    const sid = sessionId;
+    if (!target || !sid) throw new Error("当前会话不可用，请关闭后重试。");
+    const invocationId = target.turn.meta?.invocationId ?? "";
+    const sessionTrace = connectedRuntimeId
+      ? []
+      : await getSessionTrace(appName, sid).catch(() => []);
+    await submitIssueFeedback({
+      source: "agent_exec",
+      module: "conversation",
+      issues: feedback.issues,
+      problem: "",
+      description: feedback.description,
+      page: "conversation",
+      appName: currentRuntimeAppName || appName,
+      runtimeId: connectedRuntimeId,
+      region: currentRuntime?.region ?? "cn-beijing",
+      sessionId: sid,
+      eventId: target.turn.meta?.eventId ?? target.turn.meta?.localId ?? "",
+      invocationId,
+      input: target.input,
+      output: turnText(target.turn),
+      toolCalls: issueFeedbackToolCalls(target.turn),
+      trace: traceForInvocation(sessionTrace, invocationId),
+    });
+  };
+
+  const submitPlatformIssueFeedback = async (feedback: {
+    module: IssueFeedbackModule;
+    issues: IssueFeedbackIssue[];
+    description: string;
+  }): Promise<void> => {
+    const sid = sandboxSession ? "" : sessionId;
+    const contextTurns = sandboxSession || sid ? turns : [];
+    const sessionTrace = sid && appName && !connectedRuntimeId
+      ? await getSessionTrace(appName, sid).catch(() => [])
+      : [];
+    await submitIssueFeedback({
+      source: "platform",
+      module: feedback.module,
+      issues: feedback.issues,
+      problem: "",
+      description: feedback.description,
+      page: platformFeedbackOrigin ?? "unknown",
+      appName: currentRuntimeAppName || appName,
+      runtimeId: connectedRuntimeId,
+      region: currentRuntime?.region ?? "cn-beijing",
+      sessionId: sid,
+      eventId: "",
+      invocationId: "",
+      input: contextTurns
+        .filter((turn) => turn.role === "user")
+        .map(turnText)
+        .filter(Boolean)
+        .join("\n\n"),
+      output: contextTurns
+        .filter((turn) => turn.role === "assistant")
+        .map(turnText)
+        .filter(Boolean)
+        .join("\n\n"),
+      toolCalls: contextTurns.flatMap(issueFeedbackToolCalls),
+      trace: sessionTrace,
+    });
+  };
+
   const rateAssistantTurn = async (
     turn: Turn,
     rating: MessageFeedbackRating | null,
@@ -3396,6 +4165,7 @@ export default function App() {
     const eventId = turn.meta?.eventId;
     const sid = sessionId;
     if (!eventId || !sid || !currentRuntime) return;
+    if (cloudProvider === "byteplus") return;
     const output = turnText(turn);
     const previousFeedback = turn.meta?.feedback;
     const optimisticFeedback = {
@@ -3415,7 +4185,7 @@ export default function App() {
     if (currentConn?.runtimeId && currentRuntimeAppName) {
       upsertCachedAgentFeedbackCase({
         runtimeId: currentConn.runtimeId,
-        region: currentConn.region ?? "cn-beijing",
+        region: currentConn.region ?? defaultCloudRegion(cloudProvider),
         appName: currentRuntimeAppName,
         userId,
         sessionId: sid,
@@ -3460,7 +4230,7 @@ export default function App() {
       if (currentConn?.runtimeId && currentRuntimeAppName) {
         upsertCachedAgentFeedbackCase({
           runtimeId: currentConn.runtimeId,
-          region: currentConn.region ?? "cn-beijing",
+          region: currentConn.region ?? defaultCloudRegion(cloudProvider),
           appName: currentRuntimeAppName,
           userId,
           sessionId: sid,
@@ -3475,7 +4245,7 @@ export default function App() {
         });
         refreshAgentFeedbackCases({
           runtimeId: currentConn.runtimeId,
-          region: currentConn.region ?? "cn-beijing",
+          region: currentConn.region ?? defaultCloudRegion(cloudProvider),
           appName: currentRuntimeAppName,
           pageSize: 100,
         });
@@ -3491,7 +4261,7 @@ export default function App() {
       if (currentConn?.runtimeId && currentRuntimeAppName) {
         upsertCachedAgentFeedbackCase({
           runtimeId: currentConn.runtimeId,
-          region: currentConn.region ?? "cn-beijing",
+          region: currentConn.region ?? defaultCloudRegion(cloudProvider),
           appName: currentRuntimeAppName,
           userId,
           sessionId: sid,
@@ -3564,8 +4334,12 @@ export default function App() {
     setError("");
   };
 
-  const connectMyAgent = async (agent: MyAgentCardData, rethrow = false) => {
-    if (!agent.runtime) return;
+  const connectRuntimeForUser = async (
+    agent: MyAgentCardData,
+    source: AgentConnectSource,
+  ): Promise<string> => {
+    if (!agent.runtime) throw new Error("缺少 Runtime 信息，无法连接智能体。");
+    const startedAt = Date.now();
     try {
       const agentId = await connectRuntime(
         agent.runtime.runtimeId,
@@ -3573,11 +4347,40 @@ export default function App() {
         agent.runtime.region,
         agent.runtime.currentVersion,
       );
+      trackAgentConnectSucceeded({
+        kind: "runtime",
+        source,
+        durationMs: Date.now() - startedAt,
+        runtimeRegion: agent.runtime.region,
+        runtimeIsMine: agent.isMine,
+      });
+      return agentId;
+    } catch (error) {
+      trackAgentConnectFailed({
+        kind: "runtime",
+        source,
+        durationMs: Date.now() - startedAt,
+        error,
+      });
+      throw error;
+    }
+  };
+
+  const connectMyAgent = async (
+    agent: MyAgentCardData,
+    options: { rethrow?: boolean; source?: AgentConnectSource } = {},
+  ) => {
+    if (!agent.runtime) return;
+    try {
+      const agentId = await connectRuntimeForUser(
+        agent,
+        options.source ?? "my_agents",
+      );
       await refreshCurrentAgentAndStartNewChat(agentId);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       setError(message);
-      if (rethrow) throw new Error(message);
+      if (options.rethrow) throw new Error(message);
     }
   };
 
@@ -3602,6 +4405,7 @@ export default function App() {
   };
 
   const openMyAgentsPage = () => {
+    setPlatformFeedbackOrigin(null);
     if (sandboxSession) exitSandboxSession();
     viewSidRef.current = "";
     setSessionId("");
@@ -3617,11 +4421,13 @@ export default function App() {
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId("");
     setMyAgents(true);
+    setSystemInfo(false);
     setApplicationsView(null);
     setError("");
   };
 
   const openApplicationsPage = () => {
+    setPlatformFeedbackOrigin(null);
     if (sandboxSession) exitSandboxSession();
     viewSidRef.current = "";
     setSessionId("");
@@ -3635,6 +4441,7 @@ export default function App() {
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
+    setSystemInfo(false);
     setApplicationsView("catalog");
     setError("");
   };
@@ -3643,15 +4450,28 @@ export default function App() {
     setFeedbackCaseReturnAgentId("");
     setFeedbackTargetEventId("");
     if (agent.runtimeId && agent.id.startsWith("detail:")) {
+      const startedAt = Date.now();
       try {
         const agentId = await connectRuntime(
           agent.runtimeId,
           agent.label,
-          agent.region ?? "cn-beijing",
+          agent.region ?? defaultCloudRegion(cloudProvider),
           agent.currentVersion,
         );
+        trackAgentConnectSucceeded({
+          kind: "runtime",
+          source: "agent_workspace",
+          durationMs: Date.now() - startedAt,
+          runtimeRegion: agent.region,
+        });
         await refreshCurrentAgentAndStartNewChat(agentId);
       } catch (cause) {
+        trackAgentConnectFailed({
+          kind: "runtime",
+          source: "agent_workspace",
+          durationMs: Date.now() - startedAt,
+          error: cause,
+        });
         setError(cause instanceof Error ? cause.message : String(cause));
       }
       return;
@@ -3679,28 +4499,52 @@ export default function App() {
       }
     : null;
 
-  const sidebarActivePage: SidebarPage = applicationsView
-    ? "applications"
-    : searchView
-      ? "search"
-    : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
-      ? "agents"
-      : sessionId || createView || skillCenter || addAgent || addMenu
+  const sidebarActivePage: SidebarPage = platformFeedbackOrigin !== null
+    ? "feedback"
+    : skillCenter
+      ? "skills"
+      : systemInfo
         ? null
-        : "new-chat";
+        : applicationsView
+          ? "applications"
+          : searchView
+            ? "search"
+            : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
+              ? "agents"
+              : sessionId || createView || skillCenter || addAgent || addMenu
+                ? null
+                : "new-chat";
 
   return (
     <div className="layout">
       <Sidebar
         branding={siteBranding}
+        cloudProvider={cloudProvider}
         access={access}
         features={features}
         sessions={sessions}
         currentSessionId={sessionId}
         activePage={sidebarActivePage}
         streamingSids={streamingSids}
+        evaluatingSids={evaluatingSids}
+        sandboxHistory={sandboxSession
+          ? {
+              threads: sandboxCommands.threads,
+              currentThreadId: sandboxSession.threadId,
+              loading: sandboxCommands.threadsLoading,
+              error: sandboxCommands.threadsError,
+              hasMore: sandboxCommands.threadsHasMore,
+              busyThreadId: sandboxCommands.threadActionId,
+              newDisabled: sandboxBusy || sandboxCommands.commandBusy,
+              onNew: () => void sandboxCommands.newThread(),
+              onSelect: (threadId) => void sandboxCommands.resumeThread(threadId),
+              onLoadMore: () => void sandboxCommands.loadMoreThreads(),
+              onDelete: setSandboxThreadDeleteTarget,
+            }
+          : undefined}
         onNewChat={openNewChat}
         onSearch={() => {
+          setPlatformFeedbackOrigin(null);
           if (sandboxSession) exitSandboxSession();
           setCreateView(null);
           setSkillCenter(false);
@@ -3711,6 +4555,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setSystemInfo(false);
           setApplicationsView(null);
           setSearchView(true);
           setError("");
@@ -3732,10 +4577,11 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setSystemInfo(false);
           setApplicationsView(null);
           setCreateView(null);
           setImportedDraft(null);
-          setNewRuntimeRegion("cn-beijing");
+          setNewRuntimeRegion(defaultCloudRegion(cloudProvider));
           setAddMenu(true);
           setError("");
         }}
@@ -3750,7 +4596,9 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setSystemInfo(false);
           setApplicationsView(null);
+          setSkillCenterLaunch(null);
           setSkillCenter(true);
           setError("");
         }}
@@ -3769,6 +4617,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setSystemInfo(false);
           setApplicationsView(null);
           setSessionId("");
           setAddMenu(false);
@@ -3777,7 +4626,11 @@ export default function App() {
         }}
         onMyAgents={openMyAgentsPage}
         onApplications={openApplicationsPage}
-        onPickSession={(id) => {
+        onSystemInfo={() => {
+          setPlatformFeedbackOrigin(null);
+          if (sandboxSession) exitSandboxSession();
+          viewSidRef.current = "";
+          setSessionId("");
           setCreateView(null);
           setSkillCenter(false);
           setAddAgent(false);
@@ -3789,12 +4642,41 @@ export default function App() {
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
           setApplicationsView(null);
+          setSystemInfo(true);
+          setError("");
+        }}
+        onIssueFeedback={() => {
+          if (platformFeedbackOrigin !== null) return;
+          setSystemInfo(false);
+          setPlatformFeedbackOrigin(
+            sidebarActivePage ??
+              (sandboxSession
+                ? "sandbox"
+                : sessionId
+                  ? "conversation"
+                  : "workspace"),
+          );
+          setError("");
+        }}
+        onPickSession={(id) => {
+          setPlatformFeedbackOrigin(null);
+          setCreateView(null);
+          setSkillCenter(false);
+          setAddAgent(false);
+          setAddMenu(false);
+          setSearchView(false);
+          setManageAgents(false);
+          setAgentDetailTarget(null);
+          setSandboxAgentDetailTarget(null);
+          setSandboxAgentWorkspace(null);
+          setMyAgents(false);
+          setSystemInfo(false);
+          setApplicationsView(null);
           setError("");
           pickSession(id);
         }}
         onDeleteSession={removeSession}
         userInfo={userInfo}
-        version={version}
         onLogout={onLogout}
       />
 
@@ -3855,65 +4737,62 @@ export default function App() {
               />
             ) : (
               <Composer
-              sessionId={sessionId}
-              sessionInitializing={initializingSession}
-              appName={appName}
-              agentName={appName ? labelOf(appName) : "Agent"}
-              value={input}
-              onChange={setInput}
-              onSubmit={() => {
-                if (!sandboxSession && newChatMode === "skill-create") {
-                  const prompt = input.trim();
-                  if (!prompt || skillCreating) return;
-                  const provisionalJob: SkillCreationJob = {
-                    id: `pending-${Date.now()}`,
-                    prompt,
-                    status: "provisioning",
-                    candidates: SKILL_MODELS.map((model, index) => ({
-                      id: `pending-${index}`,
-                      model,
-                      modelLabel: model,
-                      status: "queued",
-                      stage: "provisioning",
-                      files: [],
-                      activities: [{
-                        id: "provisioning",
-                        kind: "status",
-                        text: "正在拉起 Sandbox",
-                        status: "running",
-                      }],
-                    })),
-                  };
-                  setSkillCreating(true);
-                  const creationRun = ++skillCreationRunRef.current;
-                  setError("");
-                  setSkillJob(provisionalJob);
-                  setInput("");
-                  void createSkillJob(prompt, (job) => {
-                    if (skillCreationRunRef.current === creationRun) {
-                      setSkillJob(job);
+                cloudProvider={cloudProvider}
+                sessionId={sessionId}
+                sessionInitializing={initializingSession}
+                appName={appName}
+                agentName={appName ? labelOf(appName) : "Agent"}
+                value={input}
+                onChange={setInput}
+                videoTask={videoTask}
+                onOpenVideoTask={() => {
+                  if (videoTaskRef.current) setVideoTaskDialogOpen(true);
+                }}
+                onVideoSubmit={startVideoTask}
+                onSubmit={() => {
+                const text = input;
+                if (
+                  !sandboxSession &&
+                  turns.length === 0 &&
+                  newChatWorkspaceMode === "skill"
+                ) {
+                  if (!text.trim()) return;
+                  let launch: SkillCenterWorkspaceLaunch;
+                  if (newChatSkillAction === "create") {
+                    launch = {
+                      operation: "create",
+                      initialIntent: text.trim(),
+                      selectPublishSpace: true,
+                    };
+                  } else {
+                    const target = newChatSkillTarget;
+                    if (!target) {
+                      setError("请先选择需要优化的 Skill。");
+                      return;
                     }
-                  })
-                    .then((job) => {
-                      if (skillCreationRunRef.current === creationRun) {
-                        setSkillJob(job);
-                      }
-                    })
-                    .catch((cause) => {
-                      if (skillCreationRunRef.current === creationRun) {
-                        setSkillJob(null);
-                        setInput(prompt);
-                        setError(cause instanceof Error ? cause.message : String(cause));
-                      }
-                    })
-                    .finally(() => {
-                      if (skillCreationRunRef.current === creationRun) {
-                        setSkillCreating(false);
-                      }
-                    });
+                    launch = {
+                      operation: "optimize",
+                      initialIntent: text.trim(),
+                      space: target.space,
+                      source: {
+                        kind: "skill-center",
+                        skillId: target.skill.skillId,
+                        version: target.skill.version,
+                        region: target.space.region || defaultCloudRegion(cloudProvider),
+                        projectName: target.space.projectName,
+                        skillSpaceId: target.space.id,
+                        skillSpaceName: target.space.name,
+                        name: target.skill.skillName || target.skill.skillId,
+                        description: target.skill.skillDescription,
+                      },
+                    };
+                  }
+                  setInput("");
+                  setError("");
+                  setSkillCenterLaunch(launch);
+                  setSkillCenter(true);
                   return;
                 }
-                const text = input;
                 setInput("");
                 if (sandboxSession) {
                   void sendSandboxMessage(text);
@@ -3931,14 +4810,17 @@ export default function App() {
                   ? false
                   : !userId ||
                     newChatMode === "temporary" ||
-                    (newChatMode === "agent" && !appName)
+                    (newChatWorkspaceMode === "agent" &&
+                      newChatMode === "agent" &&
+                      !appName) ||
+                    (newChatWorkspaceMode === "skill" &&
+                      newChatSkillAction === "optimize" &&
+                      !newChatSkillTarget)
               }
               busy={
                 sandboxSession
                   ? sandboxBusy
-                  : newChatMode === "skill-create"
-                    ? skillCreating
-                    : conversationBusy
+                  : conversationBusy
               }
               showMeta={turns.length > 0 && !sandboxSession}
               attachments={sandboxSession ? [] : attachments}
@@ -3951,48 +4833,66 @@ export default function App() {
               onAddFiles={addFiles}
               onRemoveAttachment={removeDraftAttachment}
               newChatMode={sandboxSession ? "agent" : newChatMode}
+              newChatWorkspaceMode={sandboxSession ? "agent" : newChatWorkspaceMode}
+              newChatSkillAction={newChatSkillAction}
+              newChatSkillTarget={newChatSkillTarget}
+              skillCustomizationEnabled={
+                newChatCapabilitiesReady &&
+                newChatCapabilities.skillCustomizationEnabled === true
+              }
               newChatTask={sandboxSession ? null : newChatTask}
-              newChatLayout={!sandboxSession && turns.length === 0 && skillJob === null}
+              newChatLayout={!sandboxSession && turns.length === 0}
+              showWorkspaceTabs={!sandboxSession && turns.length === 0}
               showAgentPicker={
                 !sandboxSession &&
                 turns.length === 0 &&
-                skillJob === null &&
+                newChatWorkspaceMode === "agent" &&
                 newChatMode === "agent"
               }
               agentPickerDisabled={!userId || conversationBusy}
               selectedRuntimeId={currentRuntime?.runtimeId}
               runtimeScope={access.capabilities.runtimeScope}
               onSelectRuntime={async (runtime) => {
-                await connectMyAgent({
-                  id: runtime.runtimeId,
-                  name: runtime.name,
-                  description: runtime.description?.trim() || "暂无描述",
-                  createdAt: runtime.createdAt ?? "",
-                  specificationLabel: "地域",
-                  specification:
-                    runtime.region === "cn-shanghai" ? "上海" : "北京",
-                  isMine: runtime.isMine,
-                  runtime: {
-                    runtimeId: runtime.runtimeId,
-                    region: runtime.region,
-                    currentVersion: runtime.currentVersion,
-                    canDelete: runtime.canDelete,
+                await connectMyAgent(
+                  {
+                    id: runtime.runtimeId,
+                    name: runtime.name,
+                    description: runtime.description?.trim() || "暂无描述",
+                    createdAt: runtime.createdAt ?? "",
+                    specificationLabel: "地域",
+                    specification: formatCloudRegion(
+                      runtime.region,
+                      cloudProvider,
+                    ),
+                    isMine: runtime.isMine,
+                    runtime: {
+                      runtimeId: runtime.runtimeId,
+                      region: runtime.region,
+                      currentVersion: runtime.currentVersion,
+                      canDelete: runtime.canDelete,
+                    },
                   },
-                }, true);
+                  { rethrow: true, source: "new_chat_picker" },
+                );
               }}
-              onSelectSandboxSession={openSandboxAgent}
+              onSelectSandboxSession={(session) =>
+                openSandboxAgent(session, "new_chat_picker")
+              }
               showModeSelector={false}
+              onWorkspaceModeChange={(mode) => {
+                setNewChatWorkspaceMode(mode);
+                if (mode !== "agent") setNewChatTask(null);
+                setError("");
+              }}
+              onSkillActionChange={setNewChatSkillAction}
+              onSkillTargetChange={setNewChatSkillTarget}
               temporaryEnabled={newChatCapabilitiesReady && newChatCapabilities.temporaryEnabled}
-              skillCreateEnabled={newChatCapabilitiesReady && newChatCapabilities.skillCreateEnabled}
               harnessEnabled={newChatCapabilitiesReady && newChatCapabilities.harnessEnabled}
               builtinTools={
                 newChatCapabilitiesReady ? newChatCapabilities.builtinTools : []
               }
               onModeChange={(mode) => {
-                if (
-                  (mode === "temporary" && !newChatCapabilities.temporaryEnabled) ||
-                  (mode === "skill-create" && !newChatCapabilities.skillCreateEnabled)
-                ) return;
+                if (mode === "temporary" && !newChatCapabilities.temporaryEnabled) return;
                 if (mode === "temporary") {
                   setNewChatTask(null);
                   setNewChatMode(mode);
@@ -4002,20 +4902,6 @@ export default function App() {
                 setNewChatMode(mode);
                 if (mode !== "agent") setNewChatTask(null);
                 setError("");
-                if (mode === "skill-create") {
-                  setInvocation(emptyInvocation());
-                  const abandonedSession =
-                    sessionId && persistentTurns.length === 0 && attachments.length > 0
-                      ? sessionId
-                      : "";
-                  discardDraftAttachments(attachments);
-                  setAttachments([]);
-                  if (abandonedSession) {
-                    viewSidRef.current = "";
-                    setSessionId("");
-                    void abandonDraftSession(abandonedSession);
-                  }
-                }
               }}
               onTaskChange={setNewChatTask}
               />
@@ -4051,7 +4937,22 @@ export default function App() {
                 </div>
               )}
 
-            {applicationsView === "feishu" ? (
+            {platformFeedbackOrigin !== null ? (
+              <PlatformFeedback
+                initialModule={issueFeedbackModuleForPage(platformFeedbackOrigin)}
+                onSubmit={submitPlatformIssueFeedback}
+              />
+            ) : systemInfo ? (
+              <SystemInfo
+                version={version}
+                localMode={agentsSource === "local"}
+                role={access?.role ?? "user"}
+              />
+            ) : applicationsView === "coding-agents" ? (
+              <CodingAgentsIntegration
+                onBack={() => setApplicationsView("catalog")}
+              />
+            ) : applicationsView === "feishu" ? (
               <FeishuBotIntegration
                 onBack={() => setApplicationsView("catalog")}
               />
@@ -4071,18 +4972,25 @@ export default function App() {
               <SandboxAgentDetails
                 session={sandboxAgentDetailTarget}
                 onBack={openMyAgentsPage}
-                onOpen={() => openSandboxAgent(sandboxAgentDetailTarget)}
+                onOpen={() =>
+                  openSandboxAgent(sandboxAgentDetailTarget, "sandbox_detail")
+                }
                 onDelete={() => deleteSandboxAgent(sandboxAgentDetailTarget)}
               />
             ) : myAgents ? (
               <MyAgents
+                cloudProvider={cloudProvider}
                 canCreate={canCreateAgents}
                 runtimeScope={access.capabilities.runtimeScope}
                 onCreateAgent={openAgentCreateFromMyAgents}
-                onUseAgent={connectMyAgent}
+                onUseAgent={(agent) =>
+                  connectMyAgent(agent, { source: "my_agents" })
+                }
                 onViewAgentDetails={openMyAgentDetails}
                 onCreateSandboxAgent={openSandboxAgentCreate}
-                onUseSandboxAgent={openSandboxAgent}
+                onUseSandboxAgent={(session) =>
+                  openSandboxAgent(session, "my_agents")
+                }
                 onViewSandboxAgentDetails={openSandboxAgentDetails}
                 sandboxRefreshKey={sandboxAgentRefreshKey}
                 connectedRuntimeId={connectedRuntimeId}
@@ -4094,6 +5002,7 @@ export default function App() {
                 onEditDraft={(item) => {
                   setMyAgents(false);
                   setImportedDraft(item.draft);
+                  setCustomCreateMode("custom");
                   setEditingDraftId(item.id);
                   editingDraftBaselineRef.current = item;
                   setRuntimeUpdateTarget(item.deploymentTarget ?? null);
@@ -4143,7 +5052,7 @@ export default function App() {
                   setCreateView(null);
                   setImportedDraft(null);
                   setRuntimeUpdateTarget(null);
-                  setNewRuntimeRegion("cn-beijing");
+                  setNewRuntimeRegion(defaultCloudRegion(cloudProvider));
                   setEditingDraftId("");
                   editingDraftBaselineRef.current = null;
                   setFocusedDeploymentTaskId("");
@@ -4171,8 +5080,23 @@ export default function App() {
                     setError("Runtime 缺少智能体名称，无法更新。");
                     return;
                   }
+                  const runtimeEnvValues = Object.fromEntries(
+                    capability.runtime.envs.map(({ key, value }) => [key, value]),
+                  );
+                  const hydratedDraft: AgentDraft = {
+                    ...nextDraft,
+                    deployment: {
+                      ...(nextDraft.deployment ?? { feishuEnabled: false }),
+                      network: capability.runtime.network,
+                      envValues: {
+                        ...runtimeEnvValues,
+                        ...(nextDraft.deployment?.envValues ?? {}),
+                      },
+                    },
+                  };
                   setManageAgents(false);
-                  setImportedDraft(nextDraft);
+                  setImportedDraft(hydratedDraft);
+                  setCustomCreateMode("custom");
                   const nextDraftId = `runtime-${capability.runtime.runtimeId}`;
                   setEditingDraftId(nextDraftId);
                   editingDraftBaselineRef.current =
@@ -4192,6 +5116,7 @@ export default function App() {
                 onEditDraft={(item) => {
                   setManageAgents(false);
                   setImportedDraft(item.draft);
+                  setCustomCreateMode("custom");
                   setEditingDraftId(item.id);
                   editingDraftBaselineRef.current = item;
                   setRuntimeUpdateTarget(item.deploymentTarget ?? null);
@@ -4258,7 +5183,11 @@ export default function App() {
                 onCancel={() => setAddAgent(false)}
               />
             ) : skillCenter ? (
-              <SkillCenterView />
+              <SkillCenterView
+                cloudProvider={cloudProvider}
+                initialWorkspace={skillCenterLaunch}
+                onInitialWorkspaceConsumed={() => setSkillCenterLaunch(null)}
+              />
             ) : visibleCreateView !== null && !hasCreds ? (
               <div
                 style={{
@@ -4274,13 +5203,24 @@ export default function App() {
                 }}
               >
                 <div style={{ fontSize: 18, fontWeight: 600 }}>
-                  需要配置火山引擎 AK/SK
+                  需要配置{cloudProvider === "byteplus" ? "BytePlus" : "火山引擎"} AK/SK
                 </div>
                 <div style={{ maxWidth: 420, lineHeight: 1.6 }}>
-                  智能体工作台需要 Volcengine 凭据才能使用。请在运行环境中设置
-                  {" "}
-                  <code>VOLCENGINE_ACCESS_KEY</code> 与{" "}
-                  <code>VOLCENGINE_SECRET_KEY</code> 后重试。
+                  智能体工作台需要
+                  {cloudProvider === "byteplus" ? " BytePlus " : " Volcengine "}
+                  凭据才能使用。请在运行环境中设置{" "}
+                  <code>
+                    {cloudProvider === "byteplus"
+                      ? "BYTEPLUS_ACCESS_KEY"
+                      : "VOLCENGINE_ACCESS_KEY"}
+                  </code>{" "}
+                  与{" "}
+                  <code>
+                    {cloudProvider === "byteplus"
+                      ? "BYTEPLUS_SECRET_KEY"
+                      : "VOLCENGINE_SECRET_KEY"}
+                  </code>{" "}
+                  后重试。
                 </div>
               </div>
             ) : visibleCreateView === "menu" ? (
@@ -4290,6 +5230,7 @@ export default function App() {
                   setRuntimeUpdateTarget(null);
                   setFocusedDeploymentTaskId("");
                   setFocusedWorkspaceAgentId("");
+                  if (k === "custom") setCustomCreateMode("custom");
                   setEditingDraftId(
                     k === "custom" ? `draft-${Date.now().toString(36)}` : "",
                   );
@@ -4298,6 +5239,7 @@ export default function App() {
                 }}
                 onImport={(d) => {
                   setImportedDraft(d);
+                  setCustomCreateMode("yaml_import");
                   setRuntimeUpdateTarget(null);
                   setFocusedDeploymentTaskId("");
                   setFocusedWorkspaceAgentId("");
@@ -4309,6 +5251,7 @@ export default function App() {
             ) : visibleCreateView === "intelligent" ? (
               <IntelligentCreate
                 userId={userId}
+                cloudProvider={cloudProvider}
                 onBack={() => setCreateView("menu")}
                 onCreate={onCreate}
                 onAgentAdded={onAgentAdded}
@@ -4317,12 +5260,14 @@ export default function App() {
             ) : visibleCreateView === "custom" ? (
               <CustomCreate
                 key={editingDraftId || "custom"}
+                cloudProvider={cloudProvider}
                 initialDraft={importedDraft ?? undefined}
                 onBack={() => setCreateView("menu")}
                 onCreate={onCreate}
                 onAgentAdded={onAgentAdded}
                 features={features}
                 onDeploymentTaskChange={updateDeploymentTask}
+                createMode={customCreateMode}
                 deploymentTarget={runtimeUpdateTarget ?? undefined}
                 initialDeployRegion={newRuntimeRegion}
                 onDraftChange={(draft, dirty) => {
@@ -4354,11 +5299,20 @@ export default function App() {
                 onDeploymentComplete={finishDeployment}
               />
             ) : visibleCreateView === "template" ? (
-              <TemplateCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
+              <TemplateCreate
+                cloudProvider={cloudProvider}
+                onBack={() => setCreateView("menu")}
+                onCreate={onCreate}
+              />
             ) : visibleCreateView === "workflow" ? (
-              <WorkflowCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
+              <WorkflowCreate
+                cloudProvider={cloudProvider}
+                onBack={() => setCreateView("menu")}
+                onCreate={onCreate}
+              />
             ) : visibleCreateView === "package" ? (
               <CodePackageCreate
+                cloudProvider={cloudProvider}
                 onBack={() => {
                   setCreateView(null);
                   setAddMenu(true);
@@ -4369,8 +5323,6 @@ export default function App() {
                 onDeploymentComplete={finishDeployment}
                 initialDeployRegion={newRuntimeRegion}
               />
-            ) : turns.length === 0 && skillJob ? (
-              <SkillCreateWorkspace initialJob={skillJob} />
             ) : turns.length === 0 && !newChatCapabilitiesReady ? (
               <div className="session-loading">
                 <Loader2 className="icon spin" /> 正在检查 Agent 能力…
@@ -4386,14 +5338,11 @@ export default function App() {
                     <h1 className="welcome-title">
                       {sandboxSession
                         ? "让灵感自由生长"
-                        : newChatMode === "skill-create"
-                          ? "想创建一个什么 Skill？"
-                          : greeting}
+                        : greeting}
                     </h1>
                   </div>
                   {composer}
                 </div>
-                <NewChatFeatureCarousel />
               </div>
             ) : (
               <>
@@ -4593,13 +5542,33 @@ export default function App() {
                             </>
                           )}
                           {!sandboxSession && (
-                            <button
-                              className="icon-btn"
-                              title="Tracing 火焰图"
-                              onClick={() => setTraceOpen(true)}
-                            >
-                              <TraceIcon />
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                className="icon-btn"
+                                aria-label="问题反馈"
+                                title="问题反馈"
+                                onClick={() => setIssueFeedbackTarget({
+                                  turn,
+                                  input: previousUserTurnText(turns, i),
+                                })}
+                              >
+                                <IssueFeedbackIcon className="icon" />
+                              </button>
+                              <button
+                                type="button"
+                                className="icon-btn"
+                                title="Tracing 火焰图"
+                                onClick={() => {
+                                  setTraceEndTimeMs(
+                                    turn.meta?.ts ? turn.meta.ts * 1000 : Date.now(),
+                                  );
+                                  setTraceOpen(true);
+                                }}
+                              >
+                                <TraceIcon />
+                              </button>
+                            </>
                           )}
                           <CopyButton text={turnText(turn)} />
                         </div>
@@ -4638,10 +5607,18 @@ export default function App() {
         );
       })()}
 
+      {issueFeedbackTarget && sessionId && (
+        <IssueFeedbackDialog
+          onClose={() => setIssueFeedbackTarget(null)}
+          onSubmit={submitIssueFeedbackForTurn}
+        />
+      )}
+
       {traceOpen && sessionId && (
         <TraceDrawer
           appName={appName}
           sessionId={sessionId}
+          endTimeMs={traceEndTimeMs}
           onClose={() => setTraceOpen(false)}
         />
       )}
@@ -4652,8 +5629,29 @@ export default function App() {
         agentKind={sandboxLaunchKind}
         error={sandboxLaunchError}
         onCancel={cancelSandboxLaunch}
-        onConfirm={(displayName) => void launchSandboxSession(displayName)}
+        onConfirm={(displayName, persistent) =>
+          void launchSandboxSession(displayName, persistent)
+        }
       />
+
+      {sandboxThreadDeleteTarget ? (
+        <StudioConfirmDialog
+          title="删除 Codex 历史会话"
+          description={`将删除“${
+            sandboxThreadDeleteTarget.name ||
+            sandboxThreadDeleteTarget.preview ||
+            `Thread ${sandboxThreadDeleteTarget.id.slice(0, 8)}`
+          }”，并从历史会话中移除。`}
+          confirmLabel="确认删除"
+          variant="danger"
+          busy={sandboxCommands.threadActionId === sandboxThreadDeleteTarget.id}
+          onCancel={() => {
+            if (sandboxCommands.threadActionId) return;
+            setSandboxThreadDeleteTarget(null);
+          }}
+          onConfirm={() => void confirmSandboxThreadDelete()}
+        />
+      ) : null}
 
       {sandboxSession ? (
         <>
@@ -4722,6 +5720,14 @@ export default function App() {
         checking={authRecoveryChecking}
         error={authRecoveryError}
         onLogin={() => void recoverAuthentication()}
+      />
+
+      <NewChatVideoTaskDialog
+        open={videoTaskDialogOpen}
+        task={videoTask}
+        onClose={() => setVideoTaskDialogOpen(false)}
+        onRetry={retryVideoTask}
+        onDownload={() => void downloadCurrentVideoTask()}
       />
 
       {confirmLeave && (

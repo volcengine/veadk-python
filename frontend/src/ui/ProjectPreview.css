@@ -838,6 +838,19 @@
     0 8px 28px hsl(var(--foreground) / 0.045);
 }
 
+.pp-config-section:has(.pp-network-region) {
+  overflow: visible;
+}
+
+.pp-config-section:has(.pp-network-region.is-open) {
+  position: relative;
+  z-index: 70;
+}
+
+.pp-config-section:has(.pp-network-region) > .pp-config-label {
+  border-radius: 17px 17px 0 0;
+}
+
 .pp-env-section,
 .pp-progress-section,
 .pp-deploy-result,
@@ -850,7 +863,7 @@
   margin: 0 -18px 12px;
   padding: 13px 18px;
   border-bottom: 1px solid hsl(var(--border) / 0.68);
-  background: hsl(var(--muted) / 0.34);
+  background: transparent;
   color: hsl(var(--foreground));
   font-size: 14px;
   font-weight: 620;
@@ -861,7 +874,7 @@
   margin: 0 -18px 12px;
   padding: 13px 18px;
   border-bottom: 1px solid hsl(var(--border) / 0.68);
-  background: hsl(var(--muted) / 0.34);
+  background: transparent;
 }
 
 .pp-env-head .pp-config-label {
@@ -982,15 +995,55 @@
   top: calc(100% + 6px);
   right: 0;
   left: 0;
-  max-height: 224px;
-  overflow-y: auto;
+  max-height: 238px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 4px;
   border: 1px solid hsl(var(--border));
   border-radius: 6px;
   background: hsl(var(--background));
   color: hsl(var(--foreground));
   box-shadow: 0 8px 24px hsl(var(--foreground) / 0.08);
+}
+
+.pp-deployment-select-search {
+  flex-shrink: 0;
+  padding: 2px 2px 6px;
+}
+
+.pp-deployment-select-search > input {
+  width: 100%;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 9px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  outline: none;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+}
+
+.pp-deployment-select-search > input:focus-visible {
+  border-color: hsl(var(--ring) / 0.55);
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.08);
+}
+
+.pp-deployment-select-options {
+  min-height: 0;
+  overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+.pp-deployment-select-state {
+  flex-shrink: 0;
+  padding: 9px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  line-height: 1.45;
+  text-align: center;
 }
 
 .pp-deployment-select-option {
@@ -1387,6 +1440,10 @@
   font-size: 12.5px;
 }
 
+.pp-network-region.is-open {
+  z-index: 80;
+}
+
 .pp-region-trigger {
   width: 100%;
   height: 36px;
@@ -1417,6 +1474,18 @@
   box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12);
 }
 
+.pp-region-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+  background: hsl(var(--muted) / 0.32);
+}
+
+.pp-region-help {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .pp-region-chevron {
   width: 15px;
   height: 15px;
@@ -1433,7 +1502,7 @@
   top: calc(100% + 6px);
   right: 0;
   left: 0;
-  z-index: 31;
+  z-index: 81;
   padding: 5px;
   border: 1px solid hsl(var(--border));
   border-radius: 10px;

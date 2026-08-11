@@ -14,6 +14,7 @@
 """Tests for the VeFaaS-hosted Studio self-update service."""
 
 import hashlib
+import json
 import time
 import zipfile
 from pathlib import Path
@@ -25,7 +26,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from veadk.cli.frontend_branding import SiteLogo
-from veadk.cli.studio_release import StudioReleaseError, StudioReleaseManifest
+from veadk.cli.studio_package import STUDIO_RELEASE_ENVIRONMENT_FILENAME
+from veadk.cli.studio_release import (
+    STUDIO_RELEASE_REGION,
+    StudioReleaseError,
+    StudioReleaseManifest,
+)
 from veadk.cli.studio_self_update import (
     StudioSelfUpdater,
     StudioUpdateSettings,
@@ -35,6 +41,7 @@ from veadk.cli.studio_self_update import (
     extract_studio_bundle,
     mount_studio_update_routes,
 )
+from veadk.utils.cloud_provider import CloudProvider
 
 
 def test_studio_release_version_defaults_to_bundled(
@@ -79,21 +86,66 @@ def _manifest() -> StudioReleaseManifest:
     )
 
 
-def _settings() -> StudioUpdateSettings:
+def _settings(
+    *,
+    deployment_region: str = "cn-beijing",
+    provider: CloudProvider = "volcengine",
+) -> StudioUpdateSettings:
     return StudioUpdateSettings(
         bucket="studio-releases",
-        region="cn-beijing",
+        deployment_region=deployment_region,
         prefix="veadk/studio/main",
         application_id="application-id",
         function_id="function-id",
         project="default",
+        provider=provider,
     )
 
 
-def _bundle(path: Path, *, unsafe_name: str | None = None) -> None:
+def test_shanghai_studio_uses_beijing_release_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _Store:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setenv("VEADK_STUDIO_DEPLOY_REGION", "cn-shanghai")
+    monkeypatch.setenv("VEADK_STUDIO_UPDATE_REGION", "cn-shanghai")
+    monkeypatch.setattr("veadk.cli.studio_self_update.StudioReleaseStore", _Store)
+    updater = StudioSelfUpdater(
+        settings=StudioUpdateSettings.from_env(),
+        credential_resolver=lambda: ("ak", "sk", "token"),
+        branding_logo=None,
+    )
+
+    updater._store("ak", "sk", "token")
+
+    assert updater._settings.deployment_region == "cn-shanghai"
+    assert captured["region"] == STUDIO_RELEASE_REGION
+
+
+def test_studio_update_settings_keep_active_provider() -> None:
+    settings = StudioUpdateSettings.from_env(provider="byteplus")
+
+    assert settings.provider == "byteplus"
+
+
+def _bundle(
+    path: Path,
+    *,
+    unsafe_name: str | None = None,
+    release_environment: dict[str, str] | None = None,
+) -> None:
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("run.sh", "#!/bin/bash\n")
         archive.writestr("requirements.txt", "veadk-python\n")
+        if release_environment:
+            archive.writestr(
+                STUDIO_RELEASE_ENVIRONMENT_FILENAME,
+                json.dumps(release_environment),
+            )
         if unsafe_name:
             archive.writestr(unsafe_name, "unsafe")
 
@@ -110,7 +162,7 @@ def test_self_update_preserves_deployed_branding_logo(tmp_path: Path) -> None:
     package = tmp_path / "package"
     package.mkdir()
     updater = StudioSelfUpdater(
-        settings=_settings(),
+        settings=_settings(provider="byteplus"),
         credential_resolver=lambda: ("ak", "sk", "token"),
         branding_logo=SiteLogo(
             content=b"logo",
@@ -119,12 +171,12 @@ def test_self_update_preserves_deployed_branding_logo(tmp_path: Path) -> None:
         ),
     )
 
-    updater._preserve_branding(package)
+    updater._prepare_package(package)
 
     assert (package / "site-logo.png").read_bytes() == b"logo"
-    assert '--site-logo "$ROOT_DIR/site-logo.png"' in (package / "run.sh").read_text(
-        encoding="utf-8"
-    )
+    run_script = (package / "run.sh").read_text(encoding="utf-8")
+    assert '--site-logo "$ROOT_DIR/site-logo.png"' in run_script
+    assert "--provider byteplus" in run_script
 
 
 def test_submit_latest_uses_fixed_deployment_ids_and_sts(
@@ -132,7 +184,13 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     tmp_path: Path,
 ) -> None:
     archive = tmp_path / "source.zip"
-    _bundle(archive)
+    _bundle(
+        archive,
+        release_environment={
+            "VEADK_STUDIO_APMPLUS_AID": "12345",
+            "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
+        },
+    )
     content = archive.read_bytes()
     manifest = StudioReleaseManifest(
         version="20260724153045",
@@ -159,20 +217,41 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     class _VeFaaS:
         def __init__(self, **kwargs: str) -> None:
             captured["credentials"] = kwargs
+            self.client = object()
 
         def submit_application_code_bundle_update(self, **kwargs: Any) -> None:
             package = Path(str(kwargs["path"]))
-            assert (package / "run.sh").is_file()
+            assert "--provider byteplus" in (package / "run.sh").read_text(
+                encoding="utf-8"
+            )
             assert (package / "requirements.txt").is_file()
+            assert not (package / STUDIO_RELEASE_ENVIRONMENT_FILENAME).exists()
             captured["update"] = kwargs
 
+    def _resources(**kwargs: Any) -> dict[str, str]:
+        captured["resource_request"] = kwargs
+        return {
+            "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
+            "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
+            "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
+            "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
+            "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",
+        }
+
     updater = StudioSelfUpdater(
-        settings=_settings(),
+        settings=_settings(
+            deployment_region="ap-southeast-1",
+            provider="byteplus",
+        ),
         credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
         branding_logo=None,
     )
     monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.reconcile_studio_update_resources",
+        _resources,
+    )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
 
     assert updater.submit_latest() == manifest
@@ -181,15 +260,32 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
         "access_key": "sts-ak",
         "secret_key": "sts-sk",
         "session_token": "sts-token",
-        "region": "cn-beijing",
+        "region": "ap-southeast-1",
         "project_name": "default",
+        "provider": "byteplus",
     }
     update = captured["update"]
     assert update["application_id"] == "application-id"
     assert update["function_id"] == "function-id"
     assert update["environment_overrides"] == {
-        "VEADK_STUDIO_RELEASE_VERSION": manifest.version
+        "VEADK_STUDIO_RELEASE_VERSION": manifest.version,
+        "CLOUD_PROVIDER": "byteplus",
+        "AGENTKIT_CLOUD_PROVIDER": "byteplus",
+        "BYTEPLUS_REGION": "ap-southeast-1",
+        "VEADK_STUDIO_APMPLUS_AID": "12345",
+        "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
+        "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
+        "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
+        "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
+        "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
+        "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",
     }
+    resource_request = captured["resource_request"]
+    assert resource_request["provider"] == "byteplus"
+    assert resource_request["region"] == "ap-southeast-1"
+    assert resource_request["application_id"] == "application-id"
+    assert resource_request["function_id"] == "function-id"
+    assert resource_request["function_client"] is not None
     status = updater.status()
     assert status["state"] == "updating"
     assert status["progressStage"] == "publishing"
@@ -228,7 +324,7 @@ def test_submit_latest_reports_missing_vefaas_permissions(
 
     class _VeFaaS:
         def __init__(self, **_kwargs: str) -> None:
-            pass
+            self.client = object()
 
         def submit_application_code_bundle_update(self, **_kwargs: Any) -> None:
             raise RuntimeError(
@@ -243,6 +339,10 @@ def test_submit_latest_reports_missing_vefaas_permissions(
     )
     monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.reconcile_studio_update_resources",
+        lambda **_kwargs: {},
+    )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
 
     with pytest.raises(StudioReleaseError, match="Studio 更新权限不足"):
@@ -265,14 +365,172 @@ def test_submit_latest_reports_missing_vefaas_permissions(
     )
 
 
-def test_vefaas_update_logs_use_revision_cache_and_redaction(
+def test_submit_latest_stops_before_upload_when_resource_migration_fails(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    calls: list[dict[str, Any]] = []
+    archive = tmp_path / "source.zip"
+    _bundle(archive)
+    content = archive.read_bytes()
+    manifest = StudioReleaseManifest(
+        version="20260724153045",
+        git_sha="a" * 40,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size=len(content),
+        created_at="2026-07-24T15:30:45+08:00",
+    )
+    submitted = False
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def download_bundle(
+            self, release: StudioReleaseManifest, destination: Path
+        ) -> None:
+            assert release == manifest
+            destination.write_bytes(content)
 
     class _VeFaaS:
         def __init__(self, **_kwargs: str) -> None:
-            pass
+            self.client = object()
+
+        def submit_application_code_bundle_update(self, **_kwargs: Any) -> None:
+            nonlocal submitted
+            submitted = True
+
+    def _fail_resource_migration(**_kwargs: Any) -> dict[str, str]:
+        raise RuntimeError("snapshot tool provisioning failed")
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.reconcile_studio_update_resources",
+        _fail_resource_migration,
+    )
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+
+    with pytest.raises(StudioReleaseError, match="Studio 更新提交失败"):
+        updater.submit_latest()
+
+    status = updater.status()
+    assert submitted is False
+    assert status["errorStage"] == "provisioning"
+    assert "snapshot tool provisioning failed" in status["errorLog"]
+
+
+def test_byteplus_console_url_uses_byteplus_domain() -> None:
+    updater = StudioSelfUpdater(
+        settings=_settings(
+            provider="byteplus",
+            deployment_region="ap-southeast-1",
+        ),
+        credential_resolver=lambda: ("ak", "sk", ""),
+        branding_logo=None,
+    )
+
+    assert updater._console_url() == (
+        "https://console.byteplus.com/vefaas/"
+        "region:vefaas+ap-southeast-1/function/detail/function-id"
+    )
+
+
+def test_application_status_uses_current_function_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _Client:
+        def get_function(self, request: Any) -> SimpleNamespace:
+            captured["function_id"] = request.id
+            return SimpleNamespace(
+                envs=[
+                    SimpleNamespace(
+                        key="VEADK_STUDIO_RELEASE_VERSION",
+                        value="20260810201000",
+                    )
+                ],
+                last_update_time="2026-08-10 13:34:01.333 +0000 UTC",
+            )
+
+    class _VeFaaS:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+            self.client = _Client()
+
+        def _get_application_status(self, application_id: str) -> tuple[str, dict]:
+            captured["application_id"] = application_id
+            return (
+                "deploy_success",
+                {
+                    "Result": {
+                        "CloudResource": json.dumps(
+                            {
+                                "framework": {
+                                    "function": {
+                                        "Envs": [
+                                            {
+                                                "Key": "VEADK_STUDIO_RELEASE_VERSION",
+                                                "Value": "bundled",
+                                            }
+                                        ],
+                                        "LastUpdateTime": (
+                                            "2026-08-10 13:30:00.000 +0000 UTC"
+                                        ),
+                                    }
+                                }
+                            }
+                        ),
+                        "StableRevisionNumber": 4,
+                        "UpdateTime": "2026-08-10T13:34:50.417Z",
+                    }
+                },
+            )
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    updater = StudioSelfUpdater(
+        settings=_settings(
+            provider="byteplus",
+            deployment_region="ap-southeast-1",
+        ),
+        credential_resolver=lambda: ("ak", "sk", "token"),
+        branding_logo=None,
+    )
+
+    assert updater._application_status() == (
+        "deploy_success",
+        "20260810201000",
+        4,
+        False,
+    )
+    assert captured["provider"] == "byteplus"
+    assert captured["function_id"] == "function-id"
+    assert captured["application_id"] == "application-id"
+
+
+@pytest.mark.parametrize(
+    ("provider", "deployment_region"),
+    [
+        ("volcengine", "cn-beijing"),
+        ("byteplus", "ap-southeast-1"),
+    ],
+)
+def test_vefaas_update_logs_use_provider_revision_cache_and_redaction(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: CloudProvider,
+    deployment_region: str,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    clients: list[dict[str, str]] = []
+
+    class _VeFaaS:
+        def __init__(self, **kwargs: str) -> None:
+            clients.append(kwargs)
 
         def _get_application_logs(self, app_id: str, **kwargs: Any) -> list[str]:
             calls.append({"app_id": app_id, **kwargs})
@@ -283,7 +541,10 @@ def test_vefaas_update_logs_use_revision_cache_and_redaction(
             ]
 
     updater = StudioSelfUpdater(
-        settings=_settings(),
+        settings=_settings(
+            deployment_region=deployment_region,
+            provider=provider,
+        ),
         credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
         branding_logo=None,
     )
@@ -294,6 +555,8 @@ def test_vefaas_update_logs_use_revision_cache_and_redaction(
 
     assert first == second
     assert len(calls) == 1
+    assert clients[0]["provider"] == provider
+    assert clients[0]["region"] == deployment_region
     assert calls[0] == {
         "app_id": "application-id",
         "revision_number": 7,
@@ -464,6 +727,47 @@ def test_status_recovers_update_from_vefaas_control_plane(
         assert status["errorId"]
         assert status["errorStage"] == "publishing"
         assert "deploy_fail" in status["errorLog"]
+
+
+def test_status_streams_vefaas_logs_during_local_publish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest()
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+    updater._target_version = manifest.version
+    updater._started_at = 123456
+    updater._set_progress("publishing", "已提交，正在等待新 Revision 发布")
+    monkeypatch.setattr(
+        updater,
+        "_load_vefaas_logs",
+        lambda revision: [f"revision={revision}", "Function installing dependencies"],
+    )
+
+    status = updater.status(
+        target_version=manifest.version,
+        started_at=123456,
+    )
+
+    assert status["state"] == "updating"
+    assert status["progressStage"] == "publishing"
+    assert status["updateLogs"][-2:] == [
+        "revision=0",
+        "Function installing dependencies",
+    ]
 
 
 def test_status_rejects_stale_deploy_success_for_unsubmitted_target(
@@ -691,7 +995,7 @@ def test_retry_clears_previous_failure_diagnostics(
 
     class _VeFaaS:
         def __init__(self, **_kwargs: str) -> None:
-            pass
+            self.client = object()
 
         def submit_application_code_bundle_update(self, **_kwargs: Any) -> None:
             nonlocal attempts
@@ -706,6 +1010,10 @@ def test_retry_clears_previous_failure_diagnostics(
     )
     monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.reconcile_studio_update_resources",
+        lambda **_kwargs: {},
+    )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
 
     with pytest.raises(StudioReleaseError, match="Studio 更新提交失败"):

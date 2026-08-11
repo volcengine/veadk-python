@@ -26,6 +26,10 @@ const skillHubPickerSource = readFileSync(
   new URL("../src/create/SkillHubPicker.tsx", import.meta.url),
   "utf8",
 );
+const skillHubSource = readFileSync(
+  new URL("../src/create/skills/skillhub.ts", import.meta.url),
+  "utf8",
+);
 const skillSpacePickerSource = readFileSync(
   new URL("../src/create/SkillSpacePicker.tsx", import.meta.url),
   "utf8",
@@ -191,6 +195,17 @@ test("build workspace uses a narrow 60-percent canvas and grouped configuration 
   assert.doesNotMatch(toggleRule, /border-bottom:/);
 });
 
+test("lets searchable configuration menus escape rounded sections", () => {
+  assert.match(
+    createStyles,
+    /\.cw-section:has\(\.cw-a2a-space-picker\)\s*\{[^}]*overflow:\s*visible;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-section:has\(\.cw-a2a-space-picker\) > \.cw-sec-head\s*\{[^}]*border-radius:\s*17px 17px 0 0;/,
+  );
+});
+
 test("build-stage intelligent generation sits before next in the footer", () => {
   assert.match(createSource, /assistant\?: React\.ReactNode/);
   assert.match(
@@ -256,11 +271,11 @@ test("debug variants configure and deploy their own model, description, and prom
   );
   assert.match(
     createSource,
-    /const releaseDraft = releaseVariant[\s\S]*?modelName: releaseVariant\.modelName \|\| draft\.modelName,[\s\S]*?description: releaseVariant\.description,[\s\S]*?instruction: releaseVariant\.instruction/,
+    /const releaseDraft = releaseVariant[\s\S]*?\.\.\.providerDraft[\s\S]*?modelName: releaseVariant\.modelName \|\| providerDraft\.modelName,[\s\S]*?description: releaseVariant\.description,[\s\S]*?instruction: releaseVariant\.instruction/,
   );
   assert.match(
     createSource,
-    /const variantDraft: AgentDraft = \{[\s\S]*?description: variant\.description,[\s\S]*?instruction: variant\.instruction/,
+    /const variantDraft: AgentDraft = \{[\s\S]*?\.\.\.providerDraft[\s\S]*?description: variant\.description,[\s\S]*?instruction: variant\.instruction/,
   );
   assert.match(
     createSource,
@@ -275,7 +290,7 @@ test("baseline debug config defaults to the first configured Agent model", () =>
   );
   assert.match(
     createSource,
-    /id: "baseline",[\s\S]*?modelName: defaultDebugModelName\(initialDraft \?\? emptyDraft\(\)\)/,
+    /const initialProviderDraft = draftForCloudProvider\([\s\S]*?initialDraft \?\? emptyDraft\(cloudProvider\),[\s\S]*?cloudProvider,[\s\S]*?\);[\s\S]*?id: "baseline",[\s\S]*?modelName: defaultDebugModelName\(initialProviderDraft\)/,
   );
   assert.match(
     createSource,
@@ -283,7 +298,7 @@ test("baseline debug config defaults to the first configured Agent model", () =>
   );
   assert.match(
     createSource,
-    /variant\.id === "baseline"[\s\S]*?modelName: baselineModelEditedRef\.current[\s\S]*?variant\.modelName[\s\S]*?defaultDebugModelName\(draft\)/,
+    /variant\.id === "baseline"[\s\S]*?modelName: baselineModelEditedRef\.current[\s\S]*?variant\.modelName[\s\S]*?defaultDebugModelName\(providerDraft\)/,
   );
 });
 
@@ -460,7 +475,10 @@ test("debug workspace compares multiple configurations behind one shared input",
     /const removeDebugVariant = async \(id: string\) => \{[\s\S]*?await cleanupDebugVariantRun\(id\);[\s\S]*?current\.filter\(\(variant\) => variant\.id !== id\)[\s\S]*?setSelectedVariantId\("baseline"\)/,
   );
   assert.match(createSource, /targets\.map\(async \(variant\)/);
-  assert.match(createSource, /modelName: variant\.modelName \|\| draft\.modelName/);
+  assert.match(
+    createSource,
+    /modelName: variant\.modelName \|\| providerDraft\.modelName/,
+  );
   assert.match(createSource, /variants\.length < 3/);
   assert.doesNotMatch(createSource, /name="debug-release-variant"|发布候选/);
   assert.match(
@@ -566,10 +584,18 @@ test("advanced model connection settings use an accessible disclosure", () => {
 });
 
 test("built-in tools adapt columns and scroll after six rows", () => {
-  assert.match(createSource, /items=\{CREATE_BUILTIN_TOOLS\}[\s\S]*?scrollRows=\{6\}/);
+  assert.match(createSource, /items=\{createBuiltinTools\}[\s\S]*?scrollRows=\{6\}/);
   assert.match(
     catalogSource,
     /HIDDEN_CREATE_TOOL_IDS = new Set\(\[[\s\S]*?"web_scraper"[\s\S]*?"text_to_speech"[\s\S]*?"vesearch"/,
+  );
+  assert.match(
+    catalogSource,
+    /BYTEPLUS_HIDDEN_CREATE_TOOL_IDS = new Set\(\[[\s\S]*?"web_search"[\s\S]*?"parallel_web_search"/,
+  );
+  assert.match(
+    catalogSource,
+    /cloudProvider === "byteplus"[\s\S]*?BYTEPLUS_HIDDEN_CREATE_TOOL_IDS[\s\S]*?return CREATE_BUILTIN_TOOLS\.filter\(\(tool\) => !hidden\.has\(tool\.id\)\)/,
   );
   assert.match(
     createStyles,
@@ -647,7 +673,7 @@ test("root Agent exposes a confirmed custom clear action", () => {
   assert.match(createSource, /function ClearAgentIcon/);
   assert.match(createSource, /aria-label="清空根 Agent"/);
   assert.match(createSource, /window\.confirm\("清空根 Agent/);
-  assert.match(createSource, /setDraft\(emptyDraft\(\)\)/);
+  assert.match(createSource, /setDraft\(emptyDraft\(cloudProvider\)\)/);
 });
 
 test("skill sources open in a fixed-height dialog above a six-row selected list", () => {
@@ -658,6 +684,8 @@ test("skill sources open in a fixed-height dialog above a six-row selected list"
   assert.match(createSource, /label: "AgentKit Skills 中心"/);
   assert.doesNotMatch(createSource, /label: "SkillSpace"/);
   assert.match(createSource, /label: "火山 Find Skill 技能广场"/);
+  assert.match(skillHubSource, /const SEARCH_BASE = "\/harness\/skills\/findskill"/);
+  assert.match(skillHubSource, /const DOWNLOAD_BASE = "\/skillhub\/v1\/skills"/);
   assert.match(createSource, /function AgentKitSkillsIcon/);
   assert.match(
     createSource,

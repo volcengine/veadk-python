@@ -28,17 +28,27 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from veadk.cli.cli_frontend import _run_frontend_server
+from veadk.cli.frontend_skill_creator import _sandbox_model_config
 
 
-def _create_frontend_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FastAPI:
+def _create_frontend_app(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    provider: str = "volcengine",
+) -> FastAPI:
     captured: dict[str, Any] = {}
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         "uvicorn.run",
         lambda app, **kwargs: captured.setdefault("app", app),
     )
-    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "ak")
-    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "sk")
+    if provider == "byteplus":
+        monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "ak")
+        monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "sk")
+    else:
+        monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "ak")
+        monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "sk")
 
     _run_frontend_server(
         agents_dir=str(tmp_path),
@@ -59,6 +69,7 @@ def _create_frontend_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Fas
         auth_mode="frontend",
         generated_agent_test_run_ttl=60,
         open_browser=False,
+        provider=provider,
     )
     return captured["app"]
 
@@ -317,6 +328,94 @@ def test_list_skill_spaces_keeps_cross_region_defaults(
     assert all(request.project_name is None for _, request in calls)
 
 
+@pytest.mark.parametrize(
+    ("provider", "region", "expected_host"),
+    [
+        ("volcengine", "cn-beijing", "open.volcengineapi.com"),
+        (
+            "byteplus",
+            "ap-southeast-1",
+            "agentkit.ap-southeast-1.byteplusapi.com",
+        ),
+    ],
+)
+def test_skill_clients_use_provider_specific_hosts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: str,
+    region: str,
+    expected_host: str,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path, provider=provider)
+    hosts: list[str] = []
+
+    def list_skill_spaces(client: Any, request: Any) -> SimpleNamespace:
+        del request
+        hosts.append(client.service_info.host)
+        return SimpleNamespace(total_count=0, items=[])
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient.list_skill_spaces",
+        list_skill_spaces,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/web/skill-spaces", params={"region": region})
+
+    assert response.status_code == 200
+    assert hosts == [expected_host]
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected_region", "expected_host"),
+    [
+        ("volcengine", "cn-beijing", "open.volcengineapi.com"),
+        (
+            "byteplus",
+            "ap-southeast-1",
+            "agentkit.ap-southeast-1.byteplusapi.com",
+        ),
+    ],
+)
+def test_skill_workbench_tool_uses_provider_specific_region_and_host(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: str,
+    expected_region: str,
+    expected_host: str,
+) -> None:
+    monkeypatch.setenv("SANDBOX_DEV", "tool-1")
+    app = _create_frontend_app(monkeypatch, tmp_path, provider=provider)
+    calls: list[tuple[str, str]] = []
+    _, base_url = _sandbox_model_config(provider)
+
+    def get_tool(client: Any, request: Any) -> SimpleNamespace:
+        assert request.tool_id == "tool-1"
+        calls.append((client.region, client.service_info.host))
+        return SimpleNamespace(
+            tool_type="DevEnv",
+            status="Ready",
+            image_url="",
+            envs=[
+                SimpleNamespace(key="CODEX_MODEL", value="model-a"),
+                SimpleNamespace(key="CODEX_API_KEY", value="secret"),
+                SimpleNamespace(key="CODEX_BASE_URL", value=base_url),
+            ],
+        )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.tools.client.AgentkitToolsClient.get_tool",
+        get_tool,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/web/skill-workbench/capabilities")
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is True
+    assert calls == [(expected_region, expected_host)]
+
+
 def test_list_skills_maps_existing_dto_and_pagination(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -381,7 +480,7 @@ def test_list_skills_maps_existing_dto_and_pagination(
     assert request.page_size == 5
 
 
-def test_skill_space_errors_do_not_expose_sdk_details(
+def test_skill_space_errors_preserve_sdk_details(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
@@ -403,9 +502,18 @@ def test_skill_space_errors_do_not_expose_sdk_details(
 
     assert response.status_code == 502
     assert response.json() == {
-        "detail": "暂时无法加载 AgentKit Skill Space，请稍后重试。"
+        "detail": {
+            "code": "SKILL_SERVICE_UNAVAILABLE",
+            "message": "暂时无法访问 AgentKit Skills。",
+            "retryable": True,
+            "originalError": {
+                "type": "builtins.RuntimeError",
+                "message": "upstream failure: signed-token-value",
+                "repr": "RuntimeError('upstream failure: signed-token-value')",
+            },
+        }
     }
-    assert "signed-token-value" not in response.text
+    assert "signed-token-value" in response.text
 
 
 def test_get_skill_detail_runs_sdk_call_off_event_loop(

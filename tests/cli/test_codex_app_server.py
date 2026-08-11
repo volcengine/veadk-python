@@ -146,6 +146,15 @@ class _FakeWebSocket:
                 "thread": {
                     "id": thread_id,
                     "cwd": "/workspace",
+                },
+                "cwd": "/workspace",
+                "model": "gpt-test",
+            }
+        elif method == "thread/read":
+            result = {
+                "thread": {
+                    "id": message["params"]["threadId"],
+                    "cwd": "/workspace",
                     "turns": [
                         {
                             "startedAt": 20,
@@ -292,6 +301,28 @@ class _FakeWebSocket:
     async def close(self) -> None:
         self.closed = True
         await self.queue.put(None)
+
+
+class _MissingRolloutWebSocket(_FakeWebSocket):
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        if (
+            message.get("method") == "thread/resume"
+            and message.get("params", {}).get("threadId") == "thread-empty"
+        ):
+            self.messages.append(message)
+            await self.queue.put(
+                json.dumps(
+                    {
+                        "id": message["id"],
+                        "error": {
+                            "message": ("no rollout found for thread id thread-empty")
+                        },
+                    }
+                )
+            )
+            return
+        await super().send(raw)
 
 
 @pytest.mark.asyncio
@@ -506,6 +537,9 @@ async def test_thread_commands_restore_sanitized_history() -> None:
 
     threads, cursor = await session.list_threads(search_term="older")
     snapshot = await session.resume_thread("thread-old")
+    workspace_locked_after_resume = session.workspace_locked
+    deleted_inactive = await session.delete_thread("thread-other")
+    replacement = await session.delete_thread("thread-old")
     fork = await session.fork_thread()
     await session.compact_thread()
 
@@ -513,12 +547,81 @@ async def test_thread_commands_restore_sanitized_history() -> None:
     assert threads[0].public_dict()["status"] == "idle"
     assert snapshot.thread.id == "thread-old"
     assert snapshot.workspace_locked is True
+    assert workspace_locked_after_resume is True
     assert snapshot.messages[0].content == "inspect this"
     assert snapshot.messages[0].skill_names == ("review",)
     assert snapshot.messages[1].content == "Looks good."
+    assert deleted_inactive is None
+    assert replacement is not None
+    assert replacement.thread.id == "thread-1"
     assert fork.thread.id == "thread-fork"
+    list_request = next(
+        message
+        for message in websocket.messages
+        if message.get("method") == "thread/list"
+    )
+    assert list_request["params"]["sourceKinds"] == [
+        "appServer",
+        "cli",
+        "vscode",
+    ]
+    read_request = next(
+        message
+        for message in websocket.messages
+        if message.get("method") == "thread/read"
+    )
+    assert read_request["params"] == {
+        "threadId": "thread-old",
+        "includeTurns": True,
+    }
+    assert [
+        message["params"]["threadId"]
+        for message in websocket.messages
+        if message.get("method") == "thread/archive"
+    ] == ["thread-other", "thread-old"]
+    assert [
+        message["params"]["threadId"]
+        for message in websocket.messages
+        if message.get("method") == "thread/unsubscribe"
+    ] == ["thread-other", "thread-old"]
+    second_archive_index = next(
+        index
+        for index, message in enumerate(websocket.messages)
+        if message.get("method") == "thread/archive"
+        and message["params"]["threadId"] == "thread-old"
+    )
+    replacement_index = min(
+        index
+        for index, message in enumerate(
+            websocket.messages[second_archive_index + 1 :],
+            second_archive_index + 1,
+        )
+        if message.get("method") == "thread/start"
+    )
+    assert second_archive_index < replacement_index
     assert any(
         message.get("method") == "thread/compact/start"
+        for message in websocket.messages
+    )
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_delete_inactive_thread_without_rollout_is_idempotent() -> None:
+    websocket = _MissingRolloutWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    deleted = await session.delete_thread("thread-empty")
+
+    assert deleted is None
+    assert session.thread_id == "thread-1"
+    assert not any(
+        message.get("method") in {"thread/unsubscribe", "thread/archive"}
+        and message.get("params", {}).get("threadId") == "thread-empty"
         for message in websocket.messages
     )
     await session.close()

@@ -1,4 +1,5 @@
 import type { AgentDraft } from "./types";
+import { prepareMcpAuth } from "./mcpAuth";
 
 const WORKSPACE_DRAFT_STORAGE_VERSION = 1;
 
@@ -43,32 +44,20 @@ export function workspaceDraftsKey(userId: string): string {
 }
 
 export function sanitizeAgentDraftForStorage(draft: AgentDraft): AgentDraft {
-  const mcpTools = draft.mcpTools?.map((tool) => {
-    const sanitized = { ...tool };
-    delete sanitized.authToken;
-    return sanitized;
-  });
-  const deployment = draft.deployment
-    ? { ...draft.deployment }
-    : undefined;
-  if (deployment) delete deployment.envValues;
-
+  const prepared = prepareMcpAuth(draft);
+  const envValues = {
+    ...(prepared.draft.deployment?.envValues ?? {}),
+    ...prepared.envValues,
+  };
+  if (!prepared.draft.deployment && Object.keys(envValues).length === 0) {
+    return prepared.draft;
+  }
   return {
-    ...draft,
-    subAgents: draft.subAgents.map(sanitizeAgentDraftForStorage),
-    ...(mcpTools ? { mcpTools } : {}),
-    ...(deployment ? { deployment } : {}),
-    ...(draft.workflow
-      ? {
-          workflow: {
-            ...draft.workflow,
-            nodes: draft.workflow.nodes.map((node) => ({
-              ...node,
-              agent: sanitizeAgentDraftForStorage(node.agent),
-            })),
-          },
-        }
-      : {}),
+    ...prepared.draft,
+    deployment: {
+      ...(prepared.draft.deployment ?? { feishuEnabled: false }),
+      envValues,
+    },
   };
 }
 

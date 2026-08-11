@@ -28,6 +28,20 @@ logger = get_logger(__name__)
 _SESSION_READY_TIMEOUT = 120.0
 _SESSION_POLL_INTERVAL = 1.0
 _SESSION_TERMINAL_STATUSES = frozenset({"failed", "terminating", "terminated"})
+_AGENTKIT_REQUEST_CONNECT_TIMEOUT = 10.0
+_AGENTKIT_REQUEST_MIN_READ_TIMEOUT = 60.0
+_AGENTKIT_REQUEST_TIMEOUT_BUFFER = 30.0
+
+
+def _agentkit_request_timeout(operation_timeout: int) -> tuple[float, float]:
+    """Keep the synchronous request alive longer than the tool operation."""
+    return (
+        _AGENTKIT_REQUEST_CONNECT_TIMEOUT,
+        max(
+            _AGENTKIT_REQUEST_MIN_READ_TIMEOUT,
+            float(operation_timeout) + _AGENTKIT_REQUEST_TIMEOUT_BUFFER,
+        ),
+    )
 
 
 def resolve_agentkit_tool_id(*preferred_env_names: str) -> str:
@@ -158,6 +172,7 @@ def invoke_agentkit_run_code(
         host=host,
         header=header,
         scheme=scheme,
+        timeout=_agentkit_request_timeout(timeout),
     )
 
 
@@ -200,6 +215,8 @@ def invoke_agentkit_exec_bash(
     if ttl is not None:
         request_body["Ttl"] = ttl
 
+    operation_timeout = max(timeout, hard_timeout or timeout)
+
     return ve_request(
         request_body=request_body,
         action="InvokeTool",
@@ -211,6 +228,7 @@ def invoke_agentkit_exec_bash(
         host=host,
         header=header,
         scheme=scheme,
+        timeout=_agentkit_request_timeout(operation_timeout),
     )
 
 

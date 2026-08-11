@@ -18,6 +18,10 @@ const connectionsSource = readFileSync(
   new URL("../src/adk/connections.ts", import.meta.url),
   "utf8",
 );
+const clientSource = readFileSync(
+  new URL("../src/adk/client.ts", import.meta.url),
+  "utf8",
+);
 const manageStyles = readFileSync(
   new URL("../src/ui/ManageAgents.css", import.meta.url),
   "utf8",
@@ -38,7 +42,10 @@ test("managed runtimes connect through the Agent page", () => {
 
 test("runtime connection probing is shared with the Agent selector", () => {
   assert.match(connectionsSource, /export async function connectRuntime/);
-  assert.match(connectionsSource, /RUNTIME_REGION_FALLBACKS = \["cn-beijing", "cn-shanghai"\]/);
+  assert.match(clientSource, /VOLCENGINE_RUNTIME_REGION_FALLBACKS = \["cn-beijing", "cn-shanghai"\]/);
+  assert.match(clientSource, /activeCloudProvider === "byteplus"[\s\S]*?BYTEPLUS_DEFAULT_REGION/);
+  assert.match(clientSource, /setClientCloudProvider\(provider\)/);
+  assert.match(connectionsSource, /runtimeRegionCandidates,/);
   assert.match(connectionsSource, /for \(const candidate of runtimeRegionCandidates\(region\)\)/);
   assert.match(connectionsSource, /probeRuntimeApps\(runtimeId, candidate,[\s\S]*?retryProbe: true/);
   assert.match(connectionsSource, /resolvedRegion = candidate/);
@@ -47,10 +54,24 @@ test("runtime connection probing is shared with the Agent selector", () => {
   assert.match(connectionsSource, /return remoteAppId\(connection\.id, apps\[0\]\)/);
 });
 
-test("management defaults to Beijing without trailing list whitespace", () => {
-  assert.match(manageSource, /useState<string>\("cn-beijing"\)/);
-  assert.match(manageSource, /\{ value: "cn-beijing", label: "北京" \}/);
-  assert.match(manageSource, /\{ value: "cn-shanghai", label: "上海" \}/);
+test("fresh deployments wait for the Runtime network to become reachable", () => {
+  assert.match(connectionsSource, /DEPLOYED_RUNTIME_CONNECT_INTERVAL_MS = 3_000/);
+  assert.match(connectionsSource, /DEPLOYED_RUNTIME_CONNECT_TIMEOUT_MS = 60_000/);
+  assert.match(connectionsSource, /waitForReady\?: boolean/);
+  assert.match(
+    connectionsSource,
+    /while \(true\)[\s\S]*?connectRuntimeOnce\([\s\S]*?error instanceof RuntimeProbeError[\s\S]*?error\.retryable[\s\S]*?waitForRuntimeProbe\(delayMs\)/,
+  );
+  assert.match(
+    appSource,
+    /const finishDeployment = useCallback[\s\S]*?connectRuntime\([\s\S]*?\{ waitForReady: true \}/,
+  );
+});
+
+test("management defaults to the active provider region without trailing list whitespace", () => {
+  assert.match(manageSource, /defaultCloudRegion\(cloudProvider\)/);
+  assert.match(manageSource, /cloudRegionOptions\(cloudProvider\)/);
+  assert.match(manageSource, /formatCloudRegion\(regionFilter, cloudProvider\)/);
   assert.doesNotMatch(manageSource, /value: "all"/);
   assert.match(manageSource, /role="listbox" aria-label="区域"/);
   assert.match(manageSource, /role="option"[\s\S]*?aria-selected=\{selected\}/);

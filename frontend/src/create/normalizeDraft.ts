@@ -5,7 +5,8 @@ import {
   type CustomTool,
   type SelectedSkill,
 } from "./types";
-import { CREATE_BUILTIN_TOOLS, DEFAULT_KB_BACKEND } from "./veadkCatalog";
+import { createBuiltinToolsForProvider, DEFAULT_KB_BACKEND } from "./veadkCatalog";
+import type { CloudProvider } from "../adk/cloudProvider";
 
 const STM_IDS = new Set(["local", "sqlite", "mysql", "postgresql"]);
 const LTM_IDS = new Set([
@@ -16,7 +17,7 @@ const LTM_IDS = new Set([
   "openviking",
   "mem0",
 ]);
-const KB_IDS = new Set(["opensearch", "viking", "context_search"]);
+const KB_IDS = new Set(["opensearch", "viking", "context_search", "openviking"]);
 const EXPORTER_IDS = new Set(["apmplus", "cozeloop", "tls"]);
 const TOOL_IDS = new Set([
   "web_search",
@@ -30,7 +31,6 @@ const TOOL_IDS = new Set([
   "run_code",
   "vesearch",
 ]);
-const GENERATED_TOOL_IDS = new Set(CREATE_BUILTIN_TOOLS.map((tool) => tool.id));
 const AGENT_TYPES = new Set(["llm", "sequential", "parallel", "loop", "a2a"]);
 
 function asString(v: unknown, fallback = ""): string {
@@ -43,6 +43,15 @@ function asBool(v: unknown): boolean {
 
 function asStringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
+
+function asStringRecord(v: unknown): Record<string, string> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  return Object.fromEntries(
+    Object.entries(v).filter((entry): entry is [string, string] =>
+      typeof entry[1] === "string",
+    ),
+  );
 }
 
 function asCustomTools(v: unknown): CustomTool[] {
@@ -69,6 +78,10 @@ function asAgentType(v: unknown): NonNullable<AgentDraft["agentType"]> {
     : "llm";
 }
 
+function asCloudProvider(v: unknown): NonNullable<AgentDraft["cloudProvider"]> {
+  return v === "byteplus" ? "byteplus" : "volcengine";
+}
+
 function asMaxIterations(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 3;
 }
@@ -84,10 +97,14 @@ function asA2aRegistry(v: unknown): A2aRegistryConfig {
   };
 }
 
-function parseSubAgents(v: unknown): AgentDraft[] {
+function parseSubAgents(
+  v: unknown,
+  cloudProvider: NonNullable<AgentDraft["cloudProvider"]> = "volcengine",
+): AgentDraft[] {
   if (!Array.isArray(v)) return [];
   return v.map((s) => {
     const so = (s && typeof s === "object" ? s : {}) as Record<string, unknown>;
+    const childCloudProvider = asCloudProvider(so.cloudProvider ?? cloudProvider);
     const mem = (
       so.memory && typeof so.memory === "object" ? so.memory : {}
     ) as Record<string, unknown>;
@@ -96,7 +113,8 @@ function parseSubAgents(v: unknown): AgentDraft[] {
     const agentType =
       a2aRegistry.enabled && parsedType === "llm" ? "a2a" : parsedType;
     return {
-      ...emptyDraft(),
+      ...emptyDraft(childCloudProvider),
+      cloudProvider: childCloudProvider,
       name: asString(so.name),
       description: asString(so.description),
       instruction: asString(so.instruction),
@@ -125,7 +143,7 @@ function parseSubAgents(v: unknown): AgentDraft[] {
       ),
       a2aRegistry:
         agentType === "a2a" ? { ...a2aRegistry, enabled: true } : a2aRegistry,
-      subAgents: parseSubAgents(so.subAgents),
+      subAgents: parseSubAgents(so.subAgents, childCloudProvider),
       selectedSkills: parseSelectedSkills(so),
     };
   });
@@ -201,10 +219,12 @@ export function normalizeDraft(raw: unknown): AgentDraft {
   const deployment = (
     o.deployment && typeof o.deployment === "object" ? o.deployment : {}
   ) as Record<string, unknown>;
+  const deploymentEnvValues = asStringRecord(deployment.envValues);
   const a2aRegistry = asA2aRegistry(o.a2aRegistry);
   const parsedType = asAgentType(o.agentType);
   const agentType =
     a2aRegistry.enabled && parsedType === "llm" ? "a2a" : parsedType;
+  const cloudProvider = asCloudProvider(o.cloudProvider);
 
   const mcpTools = Array.isArray(o.mcpTools)
     ? (o.mcpTools as unknown[])
@@ -216,6 +236,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
             transport: transport as "http" | "stdio",
             url: asString(mo.url),
             authToken: asString(mo.authToken),
+            authTokenEnv: asString(mo.authTokenEnv),
             command: asString(mo.command),
             args: asStringArray(mo.args),
           };
@@ -224,7 +245,8 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     : [];
 
   return {
-    ...emptyDraft(),
+    ...emptyDraft(cloudProvider),
+    cloudProvider,
     name: asString(o.name) || "my_agent",
     description: asString(o.description),
     instruction: asString(o.instruction) || "You are a helpful assistant.",
@@ -250,17 +272,29 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     tracingExporters: asStringArray(o.tracingExporters).filter((e) =>
       EXPORTER_IDS.has(e),
     ),
-    deployment: { feishuEnabled: asBool(deployment.feishuEnabled) },
-    subAgents: parseSubAgents(o.subAgents),
+    deployment: {
+      feishuEnabled: asBool(deployment.feishuEnabled),
+      ...(Object.keys(deploymentEnvValues).length > 0
+        ? { envValues: deploymentEnvValues }
+        : {}),
+    },
+    subAgents: parseSubAgents(o.subAgents, cloudProvider),
     selectedSkills: parseSelectedSkills(o),
   };
 }
 
-export function sanitizeGeneratedDraftCapabilities(draft: AgentDraft): AgentDraft {
+export function sanitizeGeneratedDraftCapabilities(
+  draft: AgentDraft,
+  inheritedCloudProvider: CloudProvider = draft.cloudProvider ?? "volcengine",
+): AgentDraft {
+  const cloudProvider = draft.cloudProvider ?? inheritedCloudProvider;
+  const generatedToolIds = new Set(
+    createBuiltinToolsForProvider(cloudProvider).map((tool) => tool.id),
+  );
   return {
     ...draft,
     builtinTools: (draft.builtinTools ?? []).filter((toolId) =>
-      GENERATED_TOOL_IDS.has(toolId),
+      generatedToolIds.has(toolId),
     ),
     tracing: false,
     tracingExporters: [],
@@ -271,6 +305,8 @@ export function sanitizeGeneratedDraftCapabilities(draft: AgentDraft): AgentDraf
     knowledgebase: false,
     knowledgebaseBackend: DEFAULT_KB_BACKEND,
     knowledgebaseIndex: "",
-    subAgents: draft.subAgents.map(sanitizeGeneratedDraftCapabilities),
+    subAgents: draft.subAgents.map((child) =>
+      sanitizeGeneratedDraftCapabilities(child, cloudProvider),
+    ),
   };
 }

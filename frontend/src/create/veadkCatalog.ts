@@ -5,6 +5,8 @@
 // Each option carries enough metadata to (a) render a picker and (b) emit
 // runnable Python + a complete .env.example.
 
+import type { CloudProvider } from "../adk/cloudProvider";
+
 export interface EnvVar {
   key: string;
   /** Whether the feature is non-functional without it (still emitted, but flagged). */
@@ -82,6 +84,13 @@ const OPENVIKING_DEFAULT_URL =
   "https://api.vikingdb.cn-beijing.volces.com/openviking";
 const OPENVIKING_MEMORY_POLICY_PLACEHOLDER =
   '{\n  "self": {"enabled": true},\n  "peer": {"enabled": true},\n  "working_memory": {"enabled": true},\n  "memory_types": null\n}';
+
+const VIKING_KB_ENV: EnvVar[] = [
+  { key: "DATABASE_VIKING_PROJECT", required: false, placeholder: "default" },
+  { key: "DATABASE_VIKING_REGION", required: false },
+  { key: "DATABASE_VIKING_COLLECTION_KIND", required: false },
+  { key: "DATABASE_VIKING_RESOURCE_ID", required: false },
+];
 
 /** Feishu Channel runtime credentials. */
 export const FEISHU_ENV: EnvVar[] = [
@@ -243,9 +252,25 @@ const HIDDEN_CREATE_TOOL_IDS = new Set([
   "text_to_speech",
   "vesearch",
 ]);
+
+const BYTEPLUS_HIDDEN_CREATE_TOOL_IDS = new Set([
+  "web_search",
+  "parallel_web_search",
+]);
+
 export const CREATE_BUILTIN_TOOLS = BUILTIN_TOOLS.filter(
   (tool) => !HIDDEN_CREATE_TOOL_IDS.has(tool.id),
 );
+
+export function createBuiltinToolsForProvider(
+  cloudProvider: CloudProvider = "volcengine",
+): ToolOption[] {
+  const hidden =
+    cloudProvider === "byteplus"
+      ? BYTEPLUS_HIDDEN_CREATE_TOOL_IDS
+      : new Set<string>();
+  return CREATE_BUILTIN_TOOLS.filter((tool) => !hidden.has(tool.id));
+}
 
 /* ------------------------------------------------------------------ *
  * Short-term memory backends.
@@ -319,7 +344,7 @@ export const LTM_BACKENDS: BackendOption[] = [
   {
     id: "viking",
     label: "VikingDB Memory",
-    desc: "火山 VikingDB 记忆库（支持用户画像）。",
+    desc: "VikingDB 记忆库（支持用户画像）。",
     env: VOLC_ENV,
   },
   {
@@ -380,8 +405,8 @@ export const KB_BACKENDS: BackendOption[] = [
   {
     id: "viking",
     label: "VikingDB Knowledge",
-    desc: "火山 VikingDB 知识库。",
-    env: VOLC_ENV,
+    desc: "VikingDB 知识库。",
+    env: VIKING_KB_ENV,
   },
   {
     id: "opensearch",
@@ -406,6 +431,40 @@ export const KB_BACKENDS: BackendOption[] = [
       { key: "DATABASE_CONTEXT_SEARCH_ENGINE_ID", required: true },
       { key: "DATABASE_CONTEXT_SEARCH_ENGINE_ENDPOINT", required: true },
       { key: "DATABASE_CONTEXT_SEARCH_ENGINE_APIKEY", required: true },
+    ],
+  },
+  {
+    id: "openviking",
+    label: "OpenViking Knowledge",
+    desc: "OpenViking 资源目录知识库，无需向量化模型配置。",
+    env: [
+      {
+        key: "DATABASE_OPENVIKING_URL",
+        required: true,
+        placeholder: OPENVIKING_DEFAULT_URL,
+        comment: "OpenViking 服务地址",
+        link: OPENVIKING_CONSOLE_LINK,
+      },
+      {
+        key: "DATABASE_OPENVIKING_API_KEY",
+        required: true,
+        comment: "OpenViking API Key",
+        link: OPENVIKING_CONSOLE_LINK,
+      },
+      {
+        key: "DATABASE_OPENVIKING_USER_ID",
+        required: false,
+        placeholder: "default",
+        comment: "知识库归属 ID",
+        help: "未配置资源目录时用于默认路径 viking://user/<此值>/resources/<知识库索引>/，默认 default。",
+      },
+      {
+        key: "DATABASE_OPENVIKING_TARGET_URI",
+        required: false,
+        placeholder: "viking://user/default/resources/<index>/",
+        comment: "知识库资源目录",
+        help: "留空时由 KnowledgeBase index 自动生成；填写后直接检索该 OpenViking 资源目录,优先级最高。",
+      },
     ],
   },
 ];

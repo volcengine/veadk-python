@@ -1,0 +1,252 @@
+.system-info-page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 32px 32px 0;
+  background: hsl(var(--background));
+  font-family: inherit;
+}
+
+.system-info-page-header {
+  flex: 0 0 auto;
+}
+
+.system-info-page-header h1 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 21px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.system-info-page-header p {
+  margin: 6px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.system-info-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  margin-top: 24px;
+  padding-bottom: 56px;
+}
+
+.system-info-section {
+  min-width: 0;
+  padding: 20px;
+  border-radius: 12px;
+  background: hsl(var(--secondary) / 0.72);
+}
+
+.system-info-section h2 {
+  margin: 0 0 16px;
+  color: hsl(var(--foreground));
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.system-info-summary,
+.system-info-tool,
+.system-info-pool dl {
+  margin: 0;
+}
+
+.system-info-summary > div,
+.system-info-tool > div {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.36fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+}
+
+.system-info-summary dt,
+.system-info-tool dt,
+.system-info-pool dt {
+  color: hsl(var(--muted-foreground));
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.system-info-summary dd,
+.system-info-tool dd,
+.system-info-pool dd {
+  min-width: 0;
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.system-info-tool-list {
+  display: grid;
+  gap: 8px;
+}
+
+.system-info-pool-list {
+  display: grid;
+  gap: 16px;
+}
+
+.system-info-pool {
+  min-width: 0;
+  padding: 4px 0;
+}
+
+.system-info-empty {
+  color: hsl(var(--muted-foreground));
+  font-weight: 400;
+}
+
+.system-info-tool {
+  min-width: 0;
+  padding: 4px 0;
+}
+
+.system-info-tool-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.system-info-tool-badge {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid hsl(44 88% 43% / 0.3);
+  border-radius: 999px;
+  background: hsl(47 96% 52% / 0.18);
+  color: hsl(39 91% 31%);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.system-info-pool header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.system-info-pool h3 {
+  min-width: 0;
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.system-info-pool header span {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.system-info-pool dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(120px, 0.5fr);
+  gap: 16px;
+}
+
+.system-info-pool dl > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.system-info-loading {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+}
+
+.system-info-error {
+  min-height: 72px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 20px;
+  border-radius: 12px;
+  background: hsl(var(--panel));
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  text-align: center;
+}
+
+.system-info-error p,
+.system-info-empty {
+  margin: 0;
+}
+
+.system-info-error button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 7px;
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.system-info-error button:hover {
+  background: hsl(var(--muted));
+}
+
+.system-info-error button:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+
+.system-info-empty {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+@media (max-width: 760px) {
+  .system-info-page {
+    padding: 24px 20px 0;
+  }
+
+  .system-info-pool dl {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
+
+@media (max-width: 520px) {
+  .system-info-summary > div,
+  .system-info-tool > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}

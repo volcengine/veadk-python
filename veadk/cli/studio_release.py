@@ -32,6 +32,7 @@ from zoneinfo import ZoneInfo
 _VERSION_PATTERN = re.compile(r"^\d{14}$")
 _GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+STUDIO_RELEASE_REGION = "cn-beijing"
 DEFAULT_RELEASE_PREFIX = "veadk/studio/main"
 MAX_STUDIO_BUNDLE_BYTES = 300 * 1024 * 1024
 MAX_STUDIO_RELEASES = 50
@@ -347,6 +348,7 @@ def build_studio_release(
     from veadk.cli.studio_package import (
         build_frontend_assets,
         build_local_studio_requirements,
+        studio_release_environment_from_env,
         write_studio_package,
     )
 
@@ -369,11 +371,18 @@ def build_studio_release(
             package_dir,
             frontend_assets=resolved_frontend_assets,
             dependency_wheels=dependency_wheels,
+            provider="byteplus",
         )
+        try:
+            release_environment = studio_release_environment_from_env()
+        except ValueError as error:
+            raise StudioReleaseError(str(error)) from error
         write_studio_package(
             package_dir,
             requirements=requirements,
             site_logo=None,
+            release_environment=release_environment,
+            provider=None,
         )
         bundle = output_dir / f"studio-bundle-{version}.zip"
         _zip_directory(package_dir, bundle)
@@ -438,7 +447,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", required=True)
     parser.add_argument("--git-sha", required=True)
     parser.add_argument("--bucket", required=True)
-    parser.add_argument("--region", default="cn-beijing")
+    parser.add_argument("--region", default=STUDIO_RELEASE_REGION)
     parser.add_argument("--prefix", default=DEFAULT_RELEASE_PREFIX)
     parser.add_argument("--changelog", action="append", default=[])
     parser.add_argument("--frontend-assets", type=Path)
