@@ -1,14 +1,27 @@
 import { useRef, type KeyboardEvent } from "react";
 import { motion } from "motion/react";
+import { ToolsSkills } from "@openai/apps-sdk-ui/components/Icon";
 import { AgentFaceIcon } from "../AgentFaceIcon";
 import { VideoGenerateIcon } from "../builtin-tools/icons";
-import { SkillIcon } from "../icons/SkillIcon";
 import type { NewChatWorkspaceMode } from "./types";
 import "./new-chat-workspace.css";
 
+function AnimatedSkillIcon({ className = "" }: { className?: string }) {
+  return (
+    <span
+      className={`${className} new-chat-workspace-tabs__skill-icon`}
+      aria-hidden="true"
+    >
+      <ToolsSkills className="new-chat-workspace-tabs__skill-shape is-triangle" />
+      <ToolsSkills className="new-chat-workspace-tabs__skill-shape is-circle" />
+      <ToolsSkills className="new-chat-workspace-tabs__skill-shape is-square" />
+    </span>
+  );
+}
+
 const WORKSPACE_MODES = [
   { value: "agent", label: "智能体", icon: AgentFaceIcon },
-  { value: "skill", label: "技能定制", icon: SkillIcon },
+  { value: "skill", label: "技能定制", icon: AnimatedSkillIcon },
   { value: "video", label: "视频创作", icon: VideoGenerateIcon },
 ] as const;
 

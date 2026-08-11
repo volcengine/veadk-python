@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AgentIdentityIcon } from "../AgentIdentityIcon";
+import { AgentFaceIcon } from "../AgentFaceIcon";
 import {
   SandboxAgentIcon,
   type SandboxAgentIconKind,
@@ -50,7 +50,7 @@ function ModeIcon({ mode }: { mode: NewChatMode }) {
       </svg>
     );
   }
-  return <AgentIdentityIcon className="new-chat-mode__agent-icon" />;
+  return <AgentFaceIcon className="new-chat-mode__agent-icon" />;
 }
 
 function NestedChevron() {
