@@ -19,7 +19,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 
 def _load_run_sandbox_agent_module():
@@ -346,7 +346,42 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         self.assertEqual(60, get_timeout)
         self.assertEqual("tasks/get", get_payload["method"])
         self.assertEqual("task-1", get_payload["params"]["id"])
-        sleep.assert_called_once()
+        sleep.assert_called_once_with(2.0)
+
+    def test_a2a_task_polling_uses_capped_exponential_backoff(self):
+        states = ["working", "working", "working", "working", "working", "completed"]
+
+        def fake_post_a2a_jsonrpc(**_kwargs):
+            state = states.pop(0)
+            return {
+                "jsonrpc": "2.0",
+                "result": {
+                    "kind": "task",
+                    "id": "task-1",
+                    "status": {
+                        "state": state,
+                        "message": {"parts": [{"kind": "text", "text": "done"}]},
+                    },
+                },
+            }
+
+        module = _load_execute_skills_module()
+        with (
+            patch.object(module, "_post_a2a_jsonrpc", fake_post_a2a_jsonrpc),
+            patch.object(module.time, "sleep") as sleep,
+        ):
+            result = module._execute_skills_via_a2a(
+                workflow_prompt="do work",
+                endpoint="https://sandbox.test",
+                tool_context=self._tool_context(),
+                timeout=1800,
+            )
+
+        self.assertEqual("done", result)
+        self.assertEqual(
+            [call(2.0), call(4.0), call(8.0), call(16.0), call(16.0)],
+            sleep.call_args_list,
+        )
 
     def test_a2a_forwards_custom_timeout_to_requests(self):
         captured_timeouts = []

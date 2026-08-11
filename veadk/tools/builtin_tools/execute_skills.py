@@ -30,6 +30,7 @@ from veadk.tools.builtin_tools._agentkit import (
 
 _SKILL_API_TIMEOUT = 1800
 _A2A_POLL_INTERVAL = 2.0
+_A2A_MAX_POLL_INTERVAL = 16.0
 _A2A_REQUEST_TIMEOUT = 60
 _A2A_HISTORY_LENGTH = 20
 _A2A_RETRY_STATUS_CODES = frozenset({502, 503, 504})
@@ -298,12 +299,13 @@ def _execute_skills_via_a2a(
         ),
     )
     task_id = _a2a_task_id(task)
+    poll_interval = _A2A_POLL_INTERVAL
 
     while _a2a_task_state(task) not in _A2A_TERMINAL_STATES:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(f"Timed out while waiting for A2A task {task_id}")
-        time.sleep(min(_A2A_POLL_INTERVAL, remaining))
+        time.sleep(min(poll_interval, remaining))
         task = _a2a_result_task(
             "A2AGetTask",
             _post_a2a_jsonrpc(
@@ -321,6 +323,7 @@ def _execute_skills_via_a2a(
                 retry_until=deadline,
             ),
         )
+        poll_interval = min(poll_interval * 2, _A2A_MAX_POLL_INTERVAL)
 
     state = _a2a_task_state(task)
     if state != "completed":
