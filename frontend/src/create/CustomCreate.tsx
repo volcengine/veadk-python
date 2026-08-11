@@ -1,7 +1,9 @@
 import {
   type CSSProperties,
   type ComponentType,
+  Fragment,
   lazy,
+  type ReactNode,
   Suspense,
   useEffect,
   useMemo,
@@ -506,10 +508,12 @@ function RuntimeEnvFields({
   env,
   values,
   onChange,
+  renderAfterField,
 }: {
   env: EnvVar[];
   values: Record<string, string>;
   onChange: (key: string, value: string) => void;
+  renderAfterField?: (item: EnvVar) => ReactNode;
 }) {
   if (env.length === 0) {
     return <p className="cw-env-empty">此后端无需额外运行参数。</p>;
@@ -521,70 +525,114 @@ function RuntimeEnvFields({
         const jsonError = runtimeEnvJsonError(item, values);
         const controlId = `cw-env-${item.key}`;
         return (
-          <label className="cw-env-field" key={item.key} htmlFor={controlId}>
-            <span className="cw-env-field-head">
-              <span className="cw-env-field-title">
-                <span className="cw-env-field-label">
-                  {item.comment || item.key}
-                  {item.required && <span className="cw-req">*</span>}
-                </span>
-                {item.help && (
-                  <span
-                    className="cw-env-help"
-                    tabIndex={0}
-                    data-help={item.help}
-                    aria-label={`${item.comment || item.key}说明：${item.help}`}
-                  >
-                    ?
-                    <span className="cw-env-help-popover" role="tooltip">
-                      {item.help}
-                    </span>
+          <Fragment key={item.key}>
+            <label className="cw-env-field" htmlFor={controlId}>
+              <span className="cw-env-field-head">
+                <span className="cw-env-field-title">
+                  <span className="cw-env-field-label">
+                    {item.comment || item.key}
+                    {item.required && <span className="cw-req">*</span>}
                   </span>
-                )}
-                {item.link && (
-                  <a
-                    className="cw-env-link"
-                    href={item.link.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={`打开 OpenViking ${item.link.label}`}
-                    aria-label={`打开 OpenViking ${item.link.label}`}
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    <ExternalLink aria-hidden="true" />
-                  </a>
-                )}
+                  {item.help && (
+                    <span
+                      className="cw-env-help"
+                      tabIndex={0}
+                      data-help={item.help}
+                      aria-label={`${item.comment || item.key}说明：${item.help}`}
+                    >
+                      ?
+                      <span className="cw-env-help-popover" role="tooltip">
+                        {item.help}
+                      </span>
+                    </span>
+                  )}
+                  {item.link && (
+                    <a
+                      className="cw-env-link"
+                      href={item.link.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`打开 OpenViking ${item.link.label}`}
+                      aria-label={`打开 OpenViking ${item.link.label}`}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <ExternalLink aria-hidden="true" />
+                    </a>
+                  )}
+                </span>
+                {item.comment && <code title={item.key}>{item.key}</code>}
               </span>
-              {item.comment && <code title={item.key}>{item.key}</code>}
-            </span>
-            {item.multiline || item.format === "json" ? (
-              <textarea
-                id={controlId}
-                className="cw-input cw-env-textarea"
-                value={value}
-                placeholder={item.placeholder || "请输入参数值"}
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={!!jsonError}
-                onChange={(event) => onChange(item.key, event.currentTarget.value)}
-              />
-            ) : (
-              <input
-                id={controlId}
-                className="cw-input"
-                type={isSensitiveEnv(item.key) ? "password" : "text"}
-                value={value}
-                placeholder={item.placeholder || "请输入参数值"}
-                autoComplete="off"
-                aria-invalid={!!jsonError}
-                onChange={(event) => onChange(item.key, event.currentTarget.value)}
-              />
-            )}
-            {jsonError && <span className="cw-env-error">{jsonError}</span>}
-          </label>
+              {item.multiline || item.format === "json" ? (
+                <textarea
+                  id={controlId}
+                  className="cw-input cw-env-textarea"
+                  value={value}
+                  placeholder={item.placeholder || "请输入参数值"}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-invalid={!!jsonError}
+                  onChange={(event) => onChange(item.key, event.currentTarget.value)}
+                />
+              ) : (
+                <input
+                  id={controlId}
+                  className="cw-input"
+                  type={isSensitiveEnv(item.key) ? "password" : "text"}
+                  value={value}
+                  placeholder={item.placeholder || "请输入参数值"}
+                  autoComplete="off"
+                  aria-invalid={!!jsonError}
+                  onChange={(event) => onChange(item.key, event.currentTarget.value)}
+                />
+              )}
+              {jsonError && <span className="cw-env-error">{jsonError}</span>}
+            </label>
+            {renderAfterField?.(item)}
+          </Fragment>
         );
       })}
     </div>
+  );
+}
+
+const OPENVIKING_KNOWLEDGE_INDEX_HELP =
+  "默认值：留空；生成项目时使用 Agent 名自动生成，例如 my_agent_kb。未配置 DATABASE_OPENVIKING_TARGET_URI 时，默认 URI 拼接为 viking://user/{知识库归属 ID，未填则 default}/resources/{资源索引}/；如果填写了 DATABASE_OPENVIKING_TARGET_URI，则直接使用该完整 URI。";
+
+function OpenVikingKnowledgeIndexField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (index: string) => void;
+}) {
+  const controlId = "cw-openviking-knowledge-index";
+  return (
+    <label className="cw-env-field" htmlFor={controlId}>
+      <span className="cw-env-field-head">
+        <span className="cw-env-field-title">
+          <span className="cw-env-field-label">OpenViking 资源索引</span>
+          <span
+            className="cw-env-help"
+            tabIndex={0}
+            data-help={OPENVIKING_KNOWLEDGE_INDEX_HELP}
+            aria-label={`OpenViking 资源索引说明：${OPENVIKING_KNOWLEDGE_INDEX_HELP}`}
+          >
+            ?
+            <span className="cw-env-help-popover" role="tooltip">
+              {OPENVIKING_KNOWLEDGE_INDEX_HELP}
+            </span>
+          </span>
+        </span>
+      </span>
+      <input
+        id={controlId}
+        className="cw-input"
+        value={value}
+        placeholder=""
+        autoComplete="off"
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+    </label>
   );
 }
 
@@ -4006,7 +4054,7 @@ export function CustomCreate({
                             patch({
                               knowledgebaseBackend: id,
                               knowledgebaseIndex:
-                                id === "viking"
+                                id === "viking" || id === "openviking"
                                   ? node.knowledgebaseIndex
                                   : "",
                             })
@@ -4059,6 +4107,20 @@ export function CustomCreate({
                           }
                           values={draft.deployment?.envValues ?? {}}
                           onChange={patchDeploymentEnv}
+                          renderAfterField={
+                            (node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND) ===
+                            "openviking"
+                              ? (item) =>
+                                  item.key === "DATABASE_OPENVIKING_USER_ID" ? (
+                                    <OpenVikingKnowledgeIndexField
+                                      value={node.knowledgebaseIndex ?? ""}
+                                      onChange={(knowledgebaseIndex) =>
+                                        patch({ knowledgebaseIndex })
+                                      }
+                                    />
+                                  ) : null
+                              : undefined
+                          }
                         />
                       </div>
                     )}

@@ -433,6 +433,40 @@ export const KB_BACKENDS: BackendOption[] = [
       { key: "DATABASE_CONTEXT_SEARCH_ENGINE_APIKEY", required: true },
     ],
   },
+  {
+    id: "openviking",
+    label: "OpenViking Knowledge",
+    desc: "OpenViking 资源目录知识库，无需向量化模型配置。",
+    env: [
+      {
+        key: "DATABASE_OPENVIKING_URL",
+        required: true,
+        placeholder: OPENVIKING_DEFAULT_URL,
+        comment: "OpenViking 服务地址",
+        link: OPENVIKING_CONSOLE_LINK,
+      },
+      {
+        key: "DATABASE_OPENVIKING_API_KEY",
+        required: true,
+        comment: "OpenViking API Key",
+        link: OPENVIKING_CONSOLE_LINK,
+      },
+      {
+        key: "DATABASE_OPENVIKING_USER_ID",
+        required: false,
+        placeholder: "default",
+        comment: "知识库归属 ID",
+        help: "未配置资源目录时用于默认路径 viking://user/<此值>/resources/<知识库索引>/，默认 default。",
+      },
+      {
+        key: "DATABASE_OPENVIKING_TARGET_URI",
+        required: false,
+        placeholder: "viking://user/default/resources/<index>/",
+        comment: "知识库资源目录",
+        help: "留空时由 KnowledgeBase index 自动生成；填写后直接检索该 OpenViking 资源目录,优先级最高。",
+      },
+    ],
+  },
 ];
 
 /* ------------------------------------------------------------------ *
