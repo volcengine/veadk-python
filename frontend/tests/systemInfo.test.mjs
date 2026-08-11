@@ -16,7 +16,7 @@ test("account menu navigates to the system information page", () => {
   assert.match(appSource, /setVersion\(cfg\.version\)/);
   assert.match(
     appSource,
-    /<SystemInfo version=\{version\} localMode=\{agentsSource === "local"\} \/>/,
+    /<SystemInfo[\s\S]*?version=\{version\}[\s\S]*?localMode=\{agentsSource === "local"\}[\s\S]*?role=\{access\?\.role \?\? "user"\}/,
   );
   assert.match(appSource, /const \[systemInfo, setSystemInfo\] = useState\(false\)/);
   assert.match(
@@ -33,6 +33,9 @@ test("system information page lists sandbox tools and the current identity user 
   assert.match(clientSource, /\/web\/system-info/);
   assert.match(systemInfoSource, /当前版本/);
   assert.match(systemInfoSource, />通用</);
+  assert.match(systemInfoSource, />存储</);
+  assert.match(systemInfoSource, /TOS 地址/);
+  assert.match(systemInfoSource, /tosAddress/);
   assert.match(systemInfoSource, />沙箱信息</);
   assert.match(systemInfoSource, /用户池/);
   assert.match(systemInfoSource, /listIdentityUserPools/);
@@ -45,6 +48,9 @@ test("system information page lists sandbox tools and the current identity user 
   assert.match(systemInfoSource, /本地模式未配置用户池/);
   assert.match(systemInfoSource, /当前 Studio 未配置用户池/);
   assert.match(systemInfoSource, /Volcengine credentials not found/);
+  assert.match(systemInfoSource, /const isAdmin = role === "admin"/);
+  assert.match(systemInfoSource, /if \(!isAdmin\)/);
+  assert.match(systemInfoSource, /\{isAdmin \? \(/);
   assert.match(systemInfoStylesSource, /\.system-info-page\s*\{[^}]*padding:\s*32px 32px 0;/);
   assert.match(systemInfoStylesSource, /font-family:\s*inherit/);
   assert.doesNotMatch(

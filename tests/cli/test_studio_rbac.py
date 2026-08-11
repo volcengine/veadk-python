@@ -217,25 +217,35 @@ def test_system_info_lists_configured_sandbox_tool_ids(
     monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW", "tool-openclaw")
     monkeypatch.setenv("SANDBOX_CHAT_HERMES", "tool-hermes")
     monkeypatch.setenv("SANDBOX_DEV", "tool-dev")
+    monkeypatch.setenv("VEADK_STUDIO_TOS_BUCKET", "teststudio")
+    monkeypatch.setenv("VEADK_STUDIO_TOS_REGION", "cn-beijing")
     app = _create_studio_app(
         monkeypatch,
         tmp_path,
         auth_mode="gateway",
+        admins="admin",
         developers="developer",
     )
 
     with TestClient(app) as client:
         response = client.get(
             "/web/system-info",
+            headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'admin'})}"},
+        )
+        developer_denied = client.get(
+            "/web/system-info",
             headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'developer'})}"},
         )
-        denied = client.get(
+        user_denied = client.get(
             "/web/system-info",
             headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'viewer'})}"},
         )
 
     assert response.status_code == 200
     assert response.json() == {
+        "storage": {
+            "tosAddress": "teststudio.tos-cn-beijing.volces.com",
+        },
         "sandboxTools": [
             {
                 "kind": "codex",
@@ -253,9 +263,10 @@ def test_system_info_lists_configured_sandbox_tool_ids(
                 "toolId": "tool-hermes",
             },
             {"kind": "dev", "label": "Dev Sandbox", "toolId": "tool-dev"},
-        ]
+        ],
     }
-    assert denied.status_code == 403
+    assert developer_denied.status_code == 403
+    assert user_denied.status_code == 403
 
 
 def test_current_user_pool_deployment_forwards_studio_jwt_to_run_sse(

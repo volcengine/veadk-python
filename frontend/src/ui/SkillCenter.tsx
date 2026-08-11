@@ -460,11 +460,23 @@ function AddSkillDialog({
   );
 }
 
+export interface SkillCenterWorkspaceLaunch {
+  operation: "create" | "optimize";
+  initialIntent?: string;
+  space?: SkillSpaceRef;
+  source?: SkillCenterOptimizationSource;
+  selectPublishSpace?: boolean;
+}
+
 /** Native AgentKit Skill space browser. */
 export function SkillCenterView({
   cloudProvider = "volcengine",
+  initialWorkspace = null,
+  onInitialWorkspaceConsumed,
 }: {
   cloudProvider?: CloudProvider;
+  initialWorkspace?: SkillCenterWorkspaceLaunch | null;
+  onInitialWorkspaceConsumed?: () => void;
 }) {
   const spaceRegions = useMemo(
     () => cloudRegionOptions(cloudProvider).map((option) => option.value),
@@ -474,7 +486,7 @@ export function SkillCenterView({
   const [spaceRegionState, setSpaceRegionState] = useState<Record<string, SpaceRegionLoadState>>({});
   const [spacesLoading, setSpacesLoading] = useState(false);
   const [spaceQuery, setSpaceQuery] = useState("");
-  const [selectedSpace, setSelectedSpace] = useState<SkillSpaceRef | null>(null);
+  const [selectedSpace, setSelectedSpace] = useState<SkillSpaceRef | null>(initialWorkspace?.space ?? null);
   const [skills, setSkills] = useState<SkillSpaceSkill[]>([]);
   const [skillPage, setSkillPage] = useState(1);
   const [skillTotal, setSkillTotal] = useState(0);
@@ -497,10 +509,7 @@ export function SkillCenterView({
   const [deletingSpaceId, setDeletingSpaceId] = useState("");
   const [openSpaceMenuId, setOpenSpaceMenuId] = useState("");
   const [actionError, setActionError] = useState<Error | null>(null);
-  const [workspace, setWorkspace] = useState<{
-    operation: "create" | "optimize";
-    source?: SkillCenterOptimizationSource;
-  } | null>(null);
+  const [workspace, setWorkspace] = useState<SkillCenterWorkspaceLaunch | null>(initialWorkspace);
   const detailRequest = useRef(0);
   const spaceRequest = useRef(0);
   const spaceLoading = useRef(false);
@@ -510,6 +519,10 @@ export function SkillCenterView({
   const spaceMenuRef = useRef<HTMLDivElement | null>(null);
   const deferredSpaceQuery = useDeferredValue(spaceQuery);
   const deferredSkillQuery = useDeferredValue(skillQuery);
+
+  useEffect(() => {
+    if (initialWorkspace) onInitialWorkspaceConsumed?.();
+  }, [initialWorkspace, onInitialWorkspaceConsumed]);
   const visibleSpaces = useMemo(() => {
     const query = deferredSpaceQuery.trim().toLocaleLowerCase();
     if (!query) return spaces;
@@ -864,12 +877,15 @@ export function SkillCenterView({
     }
   };
 
-  if (workspace && selectedSpace) {
+  if (workspace && (selectedSpace || workspace.selectPublishSpace)) {
     return (
       <SkillGenerationWorkspace
         operation={workspace.operation}
         cloudProvider={cloudProvider}
-        space={selectedSpace}
+        space={selectedSpace ?? undefined}
+        availableSpaces={spaces}
+        spacesLoading={spacesLoading}
+        initialIntent={workspace.initialIntent}
         source={workspace.source}
         onBack={() => setWorkspace(null)}
         onPublished={() => {

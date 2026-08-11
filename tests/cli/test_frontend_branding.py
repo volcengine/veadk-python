@@ -148,6 +148,14 @@ def test_studio_deploy_bundles_logo_and_optional_title(
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
+        "frontend.server.storage.provisioning.resolve_studio_storage_for_deploy",
+        lambda **kwargs: SimpleNamespace(
+            bucket="veadk-studio-test",
+            region=kwargs["region"],
+            object_host=f"veadk-studio-test.tos-{kwargs['region']}.volces.com",
+        ),
+    )
+    monkeypatch.setattr(
         "veadk.cli.studio_deploy_serverless_iam.ensure_serverless_application_role",
         lambda *_, **__: False,
     )

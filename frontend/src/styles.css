@@ -2365,6 +2365,7 @@ body {
   background: hsl(var(--background));
 }
 .composer--new-chat .composer-box {
+  z-index: 2;
   display: block;
   min-height: 136px;
   padding: 10px;

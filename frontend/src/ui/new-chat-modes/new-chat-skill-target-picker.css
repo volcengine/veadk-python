@@ -1,0 +1,72 @@
+.new-chat-skill-target-picker {
+  position: relative;
+  min-width: 0;
+  flex: 0 1 220px;
+}
+
+.new-chat-skill-target-picker__trigger {
+  max-width: 100%;
+}
+
+.new-chat-skill-target-picker__menus.is-above {
+  top: auto;
+  bottom: calc(100% + 7px);
+}
+
+.new-chat-skill-target-picker__menus > .new-chat-agent-picker__menu,
+.new-chat-skill-target-picker__submenu {
+  max-height: var(--new-chat-skill-menu-max-height, 286px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.new-chat-skill-target-picker__space {
+  grid-template-columns: minmax(0, 1fr) 16px;
+}
+
+.new-chat-skill-target-picker__space > span,
+.new-chat-skill-target-picker__skill > span,
+.new-chat-skill-target-picker__skill > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-chat-skill-target-picker__space.is-previewed {
+  background: hsl(var(--accent));
+}
+
+.new-chat-skill-target-picker__skill {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+}
+
+.new-chat-skill-target-picker__skill > span {
+  grid-column: 1;
+  font-weight: 400;
+}
+
+.new-chat-skill-target-picker__skill > small {
+  grid-column: 1;
+}
+
+.new-chat-skill-target-picker__skill > .new-chat-agent-picker__check {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.new-chat-skill-target-picker__empty {
+  display: grid;
+  min-height: 76px;
+  place-items: center;
+  padding: 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-chat-skill-target-picker__spinner {
+    animation: none;
+  }
+}

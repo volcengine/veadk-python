@@ -16,24 +16,29 @@ const capabilitySource = readFileSync(
   "utf8",
 );
 
-test("loads temporary-session and Harness capabilities independently", () => {
+test("loads temporary-session, Skill, and Harness capabilities independently", () => {
   assert.match(capabilitySource, /\/web\/sandbox\/capabilities/);
   assert.match(capabilitySource, /export async function getSandboxCapability/);
   assert.doesNotMatch(capabilitySource, /skill-creator/);
   assert.match(capabilitySource, /enabled:\s*boolean/);
   assert.match(appSource, /getSandboxCapability/);
+  assert.match(appSource, /getSkillWorkbenchCapability/);
   assert.match(appSource, /Promise\.allSettled/);
   assert.match(appSource, /listSessionBuiltinTools\(agentId\)/);
-  assert.match(appSource, /harnessEnabled:\s*harnessResult\.status === "fulfilled"/);
+  assert.match(
+    appSource,
+    /harnessEnabled:\s*!!agentId && harnessResult\.status === "fulfilled"/,
+  );
   assert.match(appSource, /newChatCapabilities\.agentId === appName/);
   assert.match(
     appSource,
-    /const newChatCapabilitiesReady =\s*!appName \|\|/,
-    "an empty Agent selection must not wait for a capability probe",
+    /agentId \? listSessionBuiltinTools\(agentId\) : Promise\.resolve<string\[\]>\(\[\]\)/,
+    "an empty Agent selection still checks global modes without probing Harness",
   );
   assert.match(appSource, /ready:\s*true/);
   assert.match(appSource, /正在检查 Agent 能力/);
   assert.match(appSource, /temporaryEnabled/);
+  assert.match(appSource, /skillCustomizationEnabled/);
   assert.doesNotMatch(appSource, /skillCreateEnabled/);
   assert.match(
     appSource,
