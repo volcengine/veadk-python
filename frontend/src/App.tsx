@@ -148,6 +148,7 @@ import {
   sandboxClient,
   type SandboxApproval,
   type SandboxApprovalDecision,
+  type SandboxAgentResource,
   type SandboxAgentKind,
   type SandboxAgentWorkspace as SandboxAgentWorkspaceData,
   type SandboxPermissions,
@@ -834,7 +835,7 @@ export default function App() {
   const [sandboxLaunchFromAgents, setSandboxLaunchFromAgents] = useState(false);
   const [sandboxAgentRefreshKey, setSandboxAgentRefreshKey] = useState(0);
   const [sandboxAgentDetailTarget, setSandboxAgentDetailTarget] =
-    useState<SandboxSessionInfo | null>(null);
+    useState<SandboxAgentResource | null>(null);
   const [sandboxAgentWorkspace, setSandboxAgentWorkspace] =
     useState<SandboxAgentWorkspaceData | null>(null);
   const [sandboxThreadDeleteTarget, setSandboxThreadDeleteTarget] =
@@ -2788,16 +2789,22 @@ export default function App() {
   }
 
   async function openSandboxAgent(
-    session: SandboxSessionInfo,
+    resource: SandboxAgentResource,
     source: AgentConnectSource = "my_agents",
   ) {
     setError("");
     const operation = beginAgentConnect({
-      targetId: String(session.id),
-      agentKind: session.toolName,
+      targetId: String(resource.id),
+      agentKind: resource.toolName,
       connectSource: source,
     });
     try {
+      const session = resource.resourceType === "snapshot"
+        ? await sandboxClient.resumeSnapshot(resource.toolName, resource.snapshotId)
+        : resource;
+      if (resource.resourceType === "snapshot") {
+        setSandboxAgentRefreshKey((current) => current + 1);
+      }
       if (session.toolName === "codex") {
         const connected = await sandboxClient.connectSession(session.id);
         operation.succeed({
@@ -2835,7 +2842,7 @@ export default function App() {
     }
   }
 
-  function openSandboxAgentDetails(session: SandboxSessionInfo) {
+  function openSandboxAgentDetails(session: SandboxAgentResource) {
     setSandboxAgentDetailTarget(session);
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
@@ -2843,12 +2850,16 @@ export default function App() {
     setError("");
   }
 
-  async function deleteSandboxAgent(session: SandboxSessionInfo) {
-    if (sandboxSession?.id === session.id) exitSandboxSession();
-    if (session.toolName === "codex") {
-      await sandboxClient.deleteSession(session.id);
+  async function deleteSandboxAgent(session: SandboxAgentResource) {
+    if (session.resourceType === "snapshot") {
+      await sandboxClient.deleteSnapshot(session.toolName, session.snapshotId);
     } else {
-      await sandboxClient.deleteAgentSession(session.toolName, session.id);
+      if (sandboxSession?.id === session.id) exitSandboxSession();
+      if (session.toolName === "codex") {
+        await sandboxClient.deleteSession(session.id);
+      } else {
+        await sandboxClient.deleteAgentSession(session.toolName, session.id);
+      }
     }
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);

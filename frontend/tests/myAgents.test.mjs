@@ -105,16 +105,17 @@ test("agent cards show the archived metadata hierarchy and two-action footer", (
   assert.match(pageSource, /<h3>\{agent\.name\}<\/h3>/);
   assert.match(pageSource, /<dt>\{agent\.draft \? "更新时间" : "创建时间"\}<\/dt>/);
   assert.match(pageSource, /<dt>\{agent\.specificationLabel\}<\/dt>[\s\S]*?<dd>\{agent\.specification\}<\/dd>/);
-  assert.match(pageSource, /className="my-agent-session-id"[\s\S]*?\{agent\.sandbox\.id\}/);
+  assert.match(pageSource, /const sandboxResourceId = agent\.sandbox\?\.resourceType === "snapshot"[\s\S]*?agent\.sandbox\.sourceSessionId \|\| agent\.sandbox\.snapshotId[\s\S]*?: agent\.sandbox\?\.id/);
+  assert.match(pageSource, /className="my-agent-session-id"[\s\S]*?\{sandboxResourceId\}/);
   assert.doesNotMatch(pageSource, /Session ID：/);
   assert.match(pageSource, /className="my-agent-status-label"[\s\S]*?\{agent\.description\}/);
   assert.doesNotMatch(pageSource, /<dt>工具<\/dt>|<dt>技能<\/dt>/);
   assert.match(pageSource, /className="my-agent-description">\{agent\.description\}/);
   assert.match(pageSource, /className="my-agent-actions"/);
-  assert.match(pageSource, /aria-label=\{connected \? `\$\{agent\.name\} 已连接` : `使用 \$\{agent\.name\}`\}/);
+  assert.match(pageSource, /aria-label=\{connected[\s\S]*?\? `\$\{agent\.name\} 已连接`[\s\S]*?: wakeable[\s\S]*?\? `唤醒 \$\{agent\.name\}`[\s\S]*?: `使用 \$\{agent\.name\}`\}/);
   assert.match(pageSource, /: onViewDetails\?\.\(agent\)/);
   assert.match(pageSource, /deploymentTask \? "查看进度" : "查看详情"/);
-  assert.match(pageSource, /connected \? "已连接" : "使用"/);
+  assert.match(pageSource, /connected \? "已连接" : wakeable \? "唤醒" : "使用"/);
   assert.ok(pageSource.indexOf("my-agent-details") < pageSource.indexOf("my-agent-use"));
   assert.doesNotMatch(pageSource, /<small|<code/);
   assert.doesNotMatch(pageStyles, /font-family/);
@@ -177,7 +178,7 @@ test("aligns sandbox names with status and formats creation time to seconds", ()
   assert.match(pageStyles, /\.my-agent-card-title\s*\{[\s\S]*?justify-content: space-between/);
   assert.match(pageStyles, /\.my-agent-session-id\s*\{/);
   assert.match(pageSource, /hour: "2-digit"[\s\S]*?minute: "2-digit"[\s\S]*?second: "2-digit"/);
-  assert.match(pageSource, /agent\.sandbox \? \([\s\S]*?\{agent\.sandbox\.id\}/);
+  assert.match(pageSource, /agent\.sandbox \? \([\s\S]*?\{sandboxResourceId\}/);
 });
 
 test("shows aligned lifetime metadata for persistent and non-persistent Sandbox agents", async () => {
@@ -476,9 +477,10 @@ test("shows connecting progress and preserves the connected Runtime state", () =
   );
   assert.match(pageSource, /aria-busy=\{connecting \|\| undefined\}/);
   assert.match(pageSource, /my-agent-use-spinner/);
-  assert.match(pageSource, /<span>连接中<\/span>/);
+  assert.match(pageSource, /const wakeable = agent\.sandbox\?\.resourceType === "snapshot"/);
+  assert.match(pageSource, /<span>\{wakeable \? "唤醒中" : "连接中"\}<\/span>/);
   assert.doesNotMatch(pageSource, /ConnectIcon/);
-  assert.match(pageSource, /const actionable = Boolean\(agent\.runtime \|\| agent\.sandbox\)/);
+  assert.match(pageSource, /const actionable = Boolean\([\s\S]*?agent\.runtime \|\| sandboxStatus === "ready" \|\| sandboxStatus === "wakeable"/);
   assert.match(pageSource, /disabled=\{!actionable \|\| connecting \|\| connected\}/);
   assert.match(appSource, /connectedRuntimeId=\{connectedRuntimeId\}/);
   assert.match(pageStyles, /\.my-agent-loading-mark[\s\S]*?border-right-color: transparent/);
