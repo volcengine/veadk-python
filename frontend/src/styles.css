@@ -2795,7 +2795,15 @@ body {
   cursor: pointer;
   transition: opacity 0.15s, transform 0.1s;
 }
+.comp-send .icon {
+  width: 20px;
+  height: 20px;
+}
 .comp-send:hover:not(:disabled) { opacity: 0.85; }
+.comp-send:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
 .comp-send:active:not(:disabled) { transform: scale(0.94); }
 .comp-send:disabled { opacity: 0.3; cursor: default; }
 
