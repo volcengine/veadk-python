@@ -37,9 +37,6 @@ _GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _MAX_STUDIO_BUNDLE_BYTES = 300 * 1024 * 1024
 _MAX_STUDIO_RELEASES = 50
-_RELEASE_ENVIRONMENT_FILENAME = ".studio-release-environment.json"
-_APMPLUS_AID_ENV = "VEADK_STUDIO_APMPLUS_AID"
-_APMPLUS_TOKEN_ENV = "VEADK_STUDIO_APMPLUS_TOKEN"
 
 
 class StudioPublisherError(ValueError):
@@ -389,18 +386,6 @@ def _studio_run_script() -> str:
     )
 
 
-def _release_environment(environ: Mapping[str, str]) -> dict[str, str]:
-    aid = str(environ.get(_APMPLUS_AID_ENV, "") or "").strip()
-    token = str(environ.get(_APMPLUS_TOKEN_ENV, "") or "").strip()
-    if bool(aid) != bool(token):
-        raise StudioPublisherError(
-            "Studio APMPlus release environment requires both aid and token."
-        )
-    if not aid:
-        return {}
-    return {_APMPLUS_AID_ENV: aid, _APMPLUS_TOKEN_ENV: token}
-
-
 def _zip_directory(source: Path, destination: Path) -> None:
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(source.rglob("*")):
@@ -443,12 +428,6 @@ def build_studio_release(
         )
         (package_dir / "run.sh").write_text(_studio_run_script(), encoding="utf-8")
         (package_dir / "requirements.txt").write_text(requirements, encoding="utf-8")
-        release_environment = _release_environment(env)
-        if release_environment:
-            (package_dir / _RELEASE_ENVIRONMENT_FILENAME).write_text(
-                json.dumps(release_environment, ensure_ascii=True, sort_keys=True),
-                encoding="utf-8",
-            )
         bundle = output_dir / f"studio-bundle-{version}.zip"
         _zip_directory(package_dir, bundle)
     content = bundle.read_bytes()

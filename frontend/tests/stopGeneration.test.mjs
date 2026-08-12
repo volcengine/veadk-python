@@ -42,7 +42,7 @@ test("aborts only the active standard conversation stream", () => {
   );
   assert.match(
     sendSource,
-    /if \(!ctrl\.signal\.aborted && trackRuntimeMessage\) \{[\s\S]*?trackAgentMessageSucceeded/,
+    /if \(trackRuntimeMessage && ctrl\.signal\.aborted\) \{[\s\S]*?messageOperation\?\.fail\(\{[\s\S]*?errorKind: "abort"[\s\S]*?\}\);[\s\S]*?\} else if \(trackRuntimeMessage\) \{[\s\S]*?messageOperation\?\.succeed/,
   );
   assert.match(
     sendSource,
@@ -85,11 +85,11 @@ test("aborts only an active Sandbox agent response", () => {
   );
   assert.match(
     sendSource,
-    /controller\.signal\.aborted \|\|[\s\S]*?sandboxMessageAbortRef\.current !== controller[\s\S]*?return;[\s\S]*?trackAgentMessageSucceeded/,
+    /controller\.signal\.aborted \|\|[\s\S]*?sandboxMessageAbortRef\.current !== controller[\s\S]*?operation\.fail\(\{[\s\S]*?errorKind: "abort"[\s\S]*?\}\);\s*return;\s*\}[\s\S]*?operation\.succeed/,
   );
   assert.match(
     sendSource,
-    /if \(\(messageError as Error\)\?\.name === "AbortError"\) \{\s*return;\s*\}[\s\S]*?trackAgentMessageFailed/,
+    /catch \(messageError\) \{[\s\S]*?operation\.fail\(\{[\s\S]*?classifyTelemetryError\(messageError\)[\s\S]*?\}\);[\s\S]*?if \(\(messageError as Error\)\?\.name === "AbortError"\) \{\s*return;\s*\}/,
   );
   assert.match(
     sendSource,
@@ -103,7 +103,7 @@ test("aborts only an active Sandbox agent response", () => {
   );
   assert.doesNotMatch(
     abortBranch,
-    /setSandboxTurns\(|filter\(|setInput\(|trackAgentMessageFailed|setError\(/,
+    /setSandboxTurns\(|filter\(|setInput\(|operation\.succeed|setError\(/,
   );
 });
 

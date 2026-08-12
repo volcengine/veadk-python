@@ -12,24 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
-
-from veadk.cli.studio_telemetry import (
-    StudioTelemetryConfigurationError,
-    normalize_studio_apmplus_release_environment,
-    studio_apmplus_environment_from_options,
-    studio_apmplus_release_environment_from_env,
-    studio_telemetry_config,
-)
-from veadk.consts import STUDIO_APMPLUS_DOMAIN, STUDIO_APMPLUS_ENV
+from veadk.cli.studio_telemetry import studio_telemetry_config
 
 
 def test_studio_telemetry_config_builds_ui_payload_from_environment() -> None:
     config = studio_telemetry_config(
         "20260805120000",
+        enabled=True,
         environ={
-            "VEADK_STUDIO_APMPLUS_AID": "12345",
-            "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
             "VEADK_STUDIO_DEPLOY_ID": "stddep_123",
             "VEADK_STUDIO_USER_POOL_ID": "pool-id",
             "VEADK_STUDIO_APPLICATION_ID": "app-id",
@@ -41,13 +31,6 @@ def test_studio_telemetry_config_builds_ui_payload_from_environment() -> None:
 
     assert config == {
         "enabled": True,
-        "provider": "apmplus",
-        "apmplus": {
-            "aid": 12345,
-            "token": "client-token",
-            "domain": STUDIO_APMPLUS_DOMAIN,
-            "env": STUDIO_APMPLUS_ENV,
-        },
         "studio": {
             "deployId": "stddep_123",
             "userPoolId": "pool-id",
@@ -58,59 +41,3 @@ def test_studio_telemetry_config_builds_ui_payload_from_environment() -> None:
             "version": "20260805120000",
         },
     }
-
-
-def test_studio_apmplus_environment_from_options_requires_aid_and_token() -> None:
-    with pytest.raises(
-        StudioTelemetryConfigurationError,
-        match="requires both --apmplus-aid",
-    ):
-        studio_apmplus_environment_from_options(
-            apmplus_aid="",
-            apmplus_token="client-token",
-            apmplus_domain="",
-            apmplus_env="",
-            environ={},
-        )
-
-
-def test_studio_apmplus_environment_from_options_uses_fixed_defaults() -> None:
-    assert studio_apmplus_environment_from_options(
-        apmplus_aid="12345",
-        apmplus_token="client-token",
-        apmplus_domain="",
-        apmplus_env="",
-        environ={},
-    ) == {
-        "VEADK_STUDIO_APMPLUS_AID": "12345",
-        "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
-        "VEADK_STUDIO_APMPLUS_DOMAIN": STUDIO_APMPLUS_DOMAIN,
-        "VEADK_STUDIO_APMPLUS_ENV": STUDIO_APMPLUS_ENV,
-    }
-
-
-def test_release_environment_carries_only_aid_and_token() -> None:
-    assert studio_apmplus_release_environment_from_env(
-        environ={
-            "VEADK_STUDIO_APMPLUS_AID": "12345",
-            "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
-            "VEADK_STUDIO_APMPLUS_DOMAIN": "apmplus.example.com",
-        },
-    ) == {
-        "VEADK_STUDIO_APMPLUS_AID": "12345",
-        "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
-    }
-
-
-def test_release_environment_rejects_unknown_internal_keys() -> None:
-    with pytest.raises(
-        StudioTelemetryConfigurationError,
-        match="Unsupported Studio release environment key",
-    ):
-        normalize_studio_apmplus_release_environment(
-            {
-                "VEADK_STUDIO_APMPLUS_AID": "12345",
-                "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
-                "VEADK_STUDIO_APMPLUS_DOMAIN": "apmplus.example.com",
-            }
-        )

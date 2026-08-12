@@ -31,9 +31,9 @@ import {
 } from "../adk/client";
 import { connectRuntime } from "../adk/connections";
 import {
-  trackAgentConnectFailed,
-  trackAgentConnectSucceeded,
-} from "../adk/telemetryEvents";
+  beginAgentConnect,
+  classifyTelemetryError,
+} from "../telemetry";
 import { AgentFaceIcon } from "./AgentFaceIcon";
 import { SkillCapabilityIcon, ToolCapabilityIcon } from "./CapabilityIcons";
 import { RuntimeIdentityIcon } from "./RuntimeIdentityIcon";
@@ -283,27 +283,23 @@ export function AgentSelector({
     (pageCache[page + 1] !== undefined || tokens[page + 1] !== undefined);
 
   function connect(rt: CloudRuntime) {
-    const startedAt = Date.now();
+    const operation = beginAgentConnect({
+      targetId: String(rt.runtimeId),
+      agentKind: "runtime",
+      connectSource: "navbar_picker",
+    });
     setConnecting(rt.runtimeId);
     connectRuntime(rt.runtimeId, rt.name, rt.region)
       .then(async (agentId) => {
         await onSelect(agentId);
-        trackAgentConnectSucceeded({
-          kind: "runtime",
-          source: "navbar_picker",
-          durationMs: Date.now() - startedAt,
+        operation.succeed({
           runtimeRegion: rt.region,
-          runtimeIsMine: rt.isMine,
+          runtimeIsMine: rt.isMine ? 1 : 0,
         });
         onClose();
       })
       .catch((error) => {
-        trackAgentConnectFailed({
-          kind: "runtime",
-          source: "navbar_picker",
-          durationMs: Date.now() - startedAt,
-          error,
-        });
+        operation.fail(classifyTelemetryError(error));
         if (error instanceof RuntimeAccessDeniedError) {
           setError(error.message);
           return;
@@ -321,22 +317,17 @@ export function AgentSelector({
   }
 
   async function selectLocalApp(app: string) {
-    const startedAt = Date.now();
+    const operation = beginAgentConnect({
+      targetId: String(app),
+      agentKind: "local",
+      connectSource: "navbar_picker",
+    });
     try {
       await onSelect(app);
-      trackAgentConnectSucceeded({
-        kind: "local",
-        source: "navbar_picker",
-        durationMs: Date.now() - startedAt,
-      });
+      operation.succeed({});
       onClose();
     } catch (error) {
-      trackAgentConnectFailed({
-        kind: "local",
-        source: "navbar_picker",
-        durationMs: Date.now() - startedAt,
-        error,
-      });
+      operation.fail(classifyTelemetryError(error));
       setError(error instanceof Error ? error.message : String(error));
     }
   }

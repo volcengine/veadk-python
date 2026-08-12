@@ -582,13 +582,6 @@ class StudioReleaseBuilder:
                 "npm_config_replace_registry_host": "always",
             }
         )
-        if request.studio_apmplus is not None:
-            env.update(
-                {
-                    "VEADK_STUDIO_APMPLUS_AID": request.studio_apmplus.aid,
-                    "VEADK_STUDIO_APMPLUS_TOKEN": request.studio_apmplus.token,
-                }
-            )
         log_path = output_dir.parent / "publisher.log"
         with log_path.open("wb") as output:
             completed = subprocess.run(

@@ -192,31 +192,6 @@ def _request(request_id: str = "12345-1") -> ReleaseRequest:
     )
 
 
-def test_release_request_accepts_studio_apmplus_config() -> None:
-    request = ReleaseRequest(
-        repository="volcengine/veadk-python",
-        gitSha="a" * 40,
-        requestId="12345-1",
-        changelog=("发布 Studio 更新",),
-        studioApmplus={"aid": " 12345 ", "token": " client-token "},
-    )
-
-    assert request.studio_apmplus is not None
-    assert request.studio_apmplus.aid == "12345"
-    assert request.studio_apmplus.token == "client-token"
-
-
-def test_release_request_rejects_invalid_studio_apmplus_config() -> None:
-    with pytest.raises(ValueError, match="Studio APMPlus aid"):
-        ReleaseRequest(
-            repository="volcengine/veadk-python",
-            gitSha="a" * 40,
-            requestId="12345-1",
-            changelog=("发布 Studio 更新",),
-            studioApmplus={"aid": "not-an-aid", "token": "client-token"},
-        )
-
-
 def _service() -> ReleaseService:
     settings = _settings()
     source_store = _MemorySourceStore()
@@ -452,16 +427,10 @@ def test_builder_prefers_domestic_source_and_node_mirrors() -> None:
     )
 
 
-def test_builder_passes_studio_apmplus_to_publisher_environment(
+def test_builder_passes_only_publisher_runtime_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    request = ReleaseRequest(
-        repository="volcengine/veadk-python",
-        gitSha="a" * 40,
-        requestId="12345-1",
-        changelog=("发布 Studio 更新",),
-        studioApmplus={"aid": "12345", "token": "client-token"},
-    )
+    request = _request()
     captured: dict[str, Any] = {}
 
     monkeypatch.setattr(
@@ -493,8 +462,8 @@ def test_builder_passes_studio_apmplus_to_publisher_environment(
         dependency_wheels=tmp_path,
     )
 
-    assert captured["env"]["VEADK_STUDIO_APMPLUS_AID"] == "12345"
-    assert captured["env"]["VEADK_STUDIO_APMPLUS_TOKEN"] == "client-token"
+    assert "VEADK_STUDIO_APMPLUS_AID" not in captured["env"]
+    assert "VEADK_STUDIO_APMPLUS_TOKEN" not in captured["env"]
     assert captured["env"]["VOLCENGINE_ACCESS_KEY"] == "release-ak"
     assert captured["command"][1].endswith("studio_release_server/publisher.py")
     assert "veadk.cli.studio_release" not in captured["command"]
@@ -539,21 +508,14 @@ def test_standalone_publisher_builds_bundle_from_source_files(
         changelog=("发布 Studio 更新",),
         frontend_assets=frontend_assets,
         dependency_wheels=dependency_wheels,
-        env={
-            "PATH": os.environ["PATH"],
-            "VEADK_STUDIO_APMPLUS_AID": "12345",
-            "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
-        },
+        env={"PATH": os.environ["PATH"]},
     )
 
     with zipfile.ZipFile(bundle) as archive:
         assert archive.read("requirements.txt").decode() == (
             "./dependency-1.0-py3-none-any.whl\n./veadk_python-1.0.0-py3-none-any.whl\n"
         )
-        assert json.loads(archive.read(".studio-release-environment.json")) == {
-            "VEADK_STUDIO_APMPLUS_AID": "12345",
-            "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
-        }
+        assert ".studio-release-environment.json" not in archive.namelist()
         assert (
             b'--provider "${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}"'
             in archive.read("run.sh")

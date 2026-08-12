@@ -44,12 +44,7 @@ from pydantic import BaseModel, Field
 
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
-from veadk.cli.studio_telemetry import (
-    StudioTelemetryConfigurationError,
-    studio_apmplus_environment_from_options,
-    studio_telemetry_config,
-)
-from veadk.consts import STUDIO_APMPLUS_ENV
+from veadk.cli.studio_telemetry import studio_telemetry_config
 from veadk.utils.cloud_provider import (
     DEFAULT_BYTEPLUS_REGION,
     DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION,
@@ -1821,7 +1816,7 @@ def _run_frontend_server(
                 "generatedAgentTestRunDisabledReason": "",
             },
             "defaultView": "chat",
-            "telemetry": studio_telemetry_config(version),
+            "telemetry": studio_telemetry_config(version, enabled=studio),
         }
 
     @app.get("/web/system-info")
@@ -7714,30 +7709,6 @@ def _resolve_studio_cloud_credentials(
     envvar="VEADK_STUDIO_UPDATE_PREFIX",
     help="TOS object prefix for the Studio main release channel.",
 )
-@click.option(
-    "--apmplus-aid",
-    default="",
-    envvar="VEADK_STUDIO_APMPLUS_AID",
-    help="APMPlus Client aid for Studio frontend telemetry.",
-)
-@click.option(
-    "--apmplus-token",
-    default="",
-    envvar="VEADK_STUDIO_APMPLUS_TOKEN",
-    help="APMPlus Client token for Studio frontend telemetry.",
-)
-@click.option(
-    "--apmplus-domain",
-    default="",
-    envvar="VEADK_STUDIO_APMPLUS_DOMAIN",
-    help="APMPlus Client reporting domain. Default: apmplus.volces.com.",
-)
-@click.option(
-    "--apmplus-env",
-    default="",
-    envvar="VEADK_STUDIO_APMPLUS_ENV",
-    help=f"APMPlus environment name. Default: {STUDIO_APMPLUS_ENV}.",
-)
 def frontend_deploy(
     user_pool_id: str | None,
     allowed_client_id: str | None,
@@ -7773,10 +7744,6 @@ def frontend_deploy(
     sandbox_chat_hermes_snapshot_tool_id: str | None,
     studio_update_bucket: str,
     studio_update_prefix: str,
-    apmplus_aid: str,
-    apmplus_token: str,
-    apmplus_domain: str,
-    apmplus_env: str,
 ) -> None:
     """Deploy the SSO web frontend to VeFaaS.
 
@@ -7813,16 +7780,6 @@ def frontend_deploy(
         branding_logo = resolve_site_logo(site_logo)
     except ValueError as error:
         raise click.ClickException(str(error)) from error
-    try:
-        apmplus_environment = studio_apmplus_environment_from_options(
-            apmplus_aid=apmplus_aid,
-            apmplus_token=apmplus_token,
-            apmplus_domain=apmplus_domain,
-            apmplus_env=apmplus_env,
-        )
-    except StudioTelemetryConfigurationError as error:
-        raise click.ClickException(str(error)) from error
-
     ak, sk, session_token = _resolve_studio_cloud_credentials(
         byteplus_access_key if provider_id == "byteplus" else volcengine_access_key,
         byteplus_secret_key if provider_id == "byteplus" else volcengine_secret_key,
@@ -8181,7 +8138,6 @@ def frontend_deploy(
     veadk_environments["VEADK_STUDIO_USER_POOL_ID"] = user_pool_id
     veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] = region
     veadk_environments.update(studio_storage_environment)
-    veadk_environments.update(apmplus_environment)
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 
@@ -8329,7 +8285,6 @@ def frontend_deploy(
                 ],
                 "VEADK_STUDIO_DEPLOY_REGION": region,
             }
-            release_environment.update(apmplus_environment)
             if studio_update_bucket:
                 release_environment.update(
                     {
@@ -8615,6 +8570,25 @@ def frontend_update(
             current_env = {
                 item.key: item.value for item in (getattr(function, "envs", None) or [])
             }
+            user_pool_id = str(
+                current_env.get("VEADK_STUDIO_USER_POOL_ID")
+                or current_env.get("OAUTH2_USER_POOL_ID")
+                or ""
+            ).strip()
+            if user_pool_id:
+                environment_overrides.update(
+                    {
+                        "VEADK_STUDIO_DEPLOY_ID": str(
+                            current_env.get("VEADK_STUDIO_DEPLOY_ID")
+                            or _new_studio_deploy_id()
+                        ).strip(),
+                        "VEADK_STUDIO_USER_POOL_ID": user_pool_id,
+                        "VEADK_STUDIO_APPLICATION_ID": target.application_id,
+                        "VEADK_STUDIO_FUNCTION_ID": target.function_id,
+                        "VEADK_STUDIO_DEPLOY_REGION": target.region,
+                        "VEADK_STUDIO_PROJECT": target.project,
+                    }
+                )
 
         snapshot_tool_ids = {
             "codex_snapshot": sandbox_chat_codex_snapshot_tool_id

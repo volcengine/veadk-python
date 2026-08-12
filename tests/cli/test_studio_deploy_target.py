@@ -34,14 +34,7 @@ from veadk.cli.cli_frontend import (
     _validate_distinct_sandbox_tool_ids,
     studio,
 )
-from veadk.cli.studio_telemetry import (
-    studio_apmplus_environment_from_options,
-)
 from veadk.config import veadk_environments
-from veadk.consts import (
-    STUDIO_APMPLUS_DOMAIN,
-    STUDIO_APMPLUS_ENV,
-)
 from veadk.integrations.ve_identity.identity_client import IdentityClient
 
 
@@ -808,7 +801,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert callback["skip_consent_enabled"] is True
 
 
-def test_studio_deploy_persists_telemetry_environment(
+def test_studio_deploy_persists_studio_context_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -872,14 +865,6 @@ def test_studio_deploy_persists_telemetry_environment(
             "ak-for-deployer",
             "--volcengine-secret-key",
             "sk-for-deployer",
-            "--apmplus-aid",
-            "12345",
-            "--apmplus-token",
-            "client-token",
-            "--apmplus-domain",
-            "apmplus.example.com",
-            "--apmplus-env",
-            "test",
         ],
     )
 
@@ -888,10 +873,6 @@ def test_studio_deploy_persists_telemetry_environment(
     assert deploy_id.startswith("stddep_")
     assert veadk_environments["VEADK_STUDIO_USER_POOL_ID"] == "pool-id"
     assert veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] == "cn-beijing"
-    assert veadk_environments["VEADK_STUDIO_APMPLUS_AID"] == "12345"
-    assert veadk_environments["VEADK_STUDIO_APMPLUS_TOKEN"] == "client-token"
-    assert veadk_environments["VEADK_STUDIO_APMPLUS_DOMAIN"] == ("apmplus.example.com")
-    assert veadk_environments["VEADK_STUDIO_APMPLUS_ENV"] == "test"
 
     assert captured["release_function_id"] == "function-id"
     release_environment = captured["release_environment"]
@@ -901,67 +882,8 @@ def test_studio_deploy_persists_telemetry_environment(
     )
     assert release_environment["VEADK_STUDIO_DEPLOY_ID"] == deploy_id
     assert release_environment["VEADK_STUDIO_USER_POOL_ID"] == "pool-id"
-    assert release_environment["VEADK_STUDIO_APMPLUS_AID"] == "12345"
     assert release_environment["VEADK_STUDIO_APPLICATION_ID"] == "app-id"
     assert release_environment["VEADK_STUDIO_FUNCTION_ID"] == "function-id"
-
-
-def test_studio_apmplus_options_are_empty_without_token(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_AID", raising=False)
-    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_TOKEN", raising=False)
-    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_DOMAIN", raising=False)
-    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_ENV", raising=False)
-
-    values = studio_apmplus_environment_from_options(
-        apmplus_aid="",
-        apmplus_token="",
-        apmplus_domain="",
-        apmplus_env="",
-    )
-
-    assert values == {}
-
-
-def test_studio_apmplus_options_require_aid_with_token(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_AID", raising=False)
-    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_TOKEN", raising=False)
-    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_DOMAIN", raising=False)
-    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_ENV", raising=False)
-
-    with pytest.raises(Exception, match="requires both --apmplus-aid"):
-        studio_apmplus_environment_from_options(
-            apmplus_aid="",
-            apmplus_token="client-token",
-            apmplus_domain="",
-            apmplus_env="",
-        )
-
-
-def test_studio_apmplus_options_use_fixed_domain_and_production_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_AID", raising=False)
-    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_TOKEN", raising=False)
-    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_DOMAIN", raising=False)
-    monkeypatch.delenv("VEADK_STUDIO_APMPLUS_ENV", raising=False)
-
-    values = studio_apmplus_environment_from_options(
-        apmplus_aid="12345",
-        apmplus_token="client-token",
-        apmplus_domain="",
-        apmplus_env="",
-    )
-
-    assert values == {
-        "VEADK_STUDIO_APMPLUS_AID": "12345",
-        "VEADK_STUDIO_APMPLUS_TOKEN": "client-token",
-        "VEADK_STUDIO_APMPLUS_DOMAIN": STUDIO_APMPLUS_DOMAIN,
-        "VEADK_STUDIO_APMPLUS_ENV": STUDIO_APMPLUS_ENV,
-    }
 
 
 def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
