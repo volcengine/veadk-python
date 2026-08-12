@@ -355,6 +355,7 @@ def trace_call_llm(
     event_id: str,
     llm_request: LlmRequest,
     llm_response: LlmResponse,
+    span: Span | None = None,
     *args,
     **kwargs,
 ) -> None:
@@ -378,8 +379,13 @@ def trace_call_llm(
         event_id: Unique identifier for this LLM call event
         llm_request: The request object sent to the language model
         llm_response: The response object received from the language model
+        span: The owning call_llm span supplied by newer ADK releases
     """
-    span: Span = trace.get_current_span()  # type: ignore
+    # Newer ADK releases pass the owning ``call_llm`` span explicitly because
+    # the current span is the nested model-instrumentation span at this point.
+    # Older ADK releases only pass the original four arguments.
+    if span is None:
+        span = trace.get_current_span()  # type: ignore
 
     from veadk.agent import Agent
 
