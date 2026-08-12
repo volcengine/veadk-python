@@ -24,6 +24,7 @@ import type {
   RuntimeScope,
 } from "../adk/client";
 import type { CloudProvider } from "../adk/cloudProvider";
+import type { SessionTokenUsage } from "../adk/tokenUsage";
 import { getVideoCapabilities, type VideoCapabilities } from "../adk/video";
 import type { SandboxSession } from "../adk/sandbox";
 import { InvocationChips } from "./InvocationChips";
@@ -58,6 +59,7 @@ import type {
 } from "./new-chat-modes/types";
 import { NEW_CHAT_TASK_TOOLS } from "./new-chat-modes/taskTools";
 import { VideoGenerateIcon } from "./builtin-tools/icons";
+import { TokenUsageIndicator } from "./TokenUsageIndicator";
 
 interface CompletionTrigger {
   kind: "skill" | "agent";
@@ -135,6 +137,9 @@ export interface ComposerProps {
   agents: AgentTarget[];
   invocation: FrontendInvocation;
   capabilitiesLoading?: boolean;
+  modelName: string;
+  tokenUsage: SessionTokenUsage;
+  systemTokenEstimate: number | null;
   allowAttachments?: boolean;
   onInvocationChange: (value: FrontendInvocation) => void;
   onAddFiles: (files: FileList | File[]) => void;
@@ -185,6 +190,9 @@ export function Composer({
   agents,
   invocation,
   capabilitiesLoading = false,
+  modelName,
+  tokenUsage,
+  systemTokenEstimate,
   allowAttachments = true,
   onInvocationChange,
   onAddFiles,
@@ -867,30 +875,40 @@ export function Composer({
             </span>
           ) : null}
         </div>
-        <motion.button
-          type="button"
-          className="comp-send"
-          disabled={canStop ? false : !canSend}
-          onClick={canStop ? onStop : submitComposer}
-          aria-label={
-            canStop
-              ? "停止生成"
-              : videoTaskRunning || canOpenVideoTask
-                ? "查看视频生成进度"
-                : "发送"
-          }
-          title={canStop ? "停止生成" : videoCapabilitiesError || undefined}
-          whileTap={canStop || canSend ? { scale: 0.9 } : undefined}
-          transition={{ type: "spring", stiffness: 600, damping: 22 }}
-        >
-          {canStop ? (
-            <ComposerStopIcon className="icon" />
-          ) : busy || videoTaskRunning ? (
-            <Loader2 className="icon spin" />
-          ) : (
-            <ComposerSendIcon className="icon" />
-          )}
-        </motion.button>
+        <div className="composer-submit-actions">
+          {sessionId && appName && newChatWorkspaceMode === "agent" ? (
+            <TokenUsageIndicator
+              cloudProvider={cloudProvider}
+              modelName={modelName}
+              usage={tokenUsage}
+              systemTokenEstimate={systemTokenEstimate}
+            />
+          ) : null}
+          <motion.button
+            type="button"
+            className="comp-send"
+            disabled={canStop ? false : !canSend}
+            onClick={canStop ? onStop : submitComposer}
+            aria-label={
+              canStop
+                ? "停止生成"
+                : videoTaskRunning || canOpenVideoTask
+                  ? "查看视频生成进度"
+                  : "发送"
+            }
+            title={canStop ? "停止生成" : videoCapabilitiesError || undefined}
+            whileTap={canStop || canSend ? { scale: 0.9 } : undefined}
+            transition={{ type: "spring", stiffness: 600, damping: 22 }}
+          >
+            {canStop ? (
+              <ComposerStopIcon className="icon" />
+            ) : busy || videoTaskRunning ? (
+              <Loader2 className="icon spin" />
+            ) : (
+              <ComposerSendIcon className="icon" />
+            )}
+          </motion.button>
+        </div>
       </div>
 
       <AnimatePresence initial={false}>
