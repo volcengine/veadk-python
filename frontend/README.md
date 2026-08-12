@@ -5,7 +5,10 @@ server that `veadk frontend` launches — no separate backend.
 
 ## Features
 
-- **Streaming chat** over the ADK `/run_sse` event stream.
+- **Streaming chat** over the ADK `/run_sse` event stream. While an Agent is
+  generating, the composer exposes a stop control that cancels only the active
+  response, preserves content already received, and immediately enables the
+  next turn in the same session.
 - **Markdown** rendering for user and assistant messages (GFM + code highlight).
 - **Multimodal messages** with images, TXT/Markdown, PDF, and video attachments,
   including previews and history replay for both user and model media. Chat
