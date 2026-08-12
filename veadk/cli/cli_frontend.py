@@ -5044,8 +5044,16 @@ def _run_frontend_server(
         )
 
     evaluation_automation: EvaluationAutomationService | None = None
+    agent_usage_service: Any | None = None
     if studio:
         from contextlib import asynccontextmanager
+
+        from frontend.server.agent_usage import (
+            create_service as create_agent_usage_service,
+        )
+        from frontend.server.agent_usage import (
+            mount_routes as mount_agent_usage_routes,
+        )
 
         async def _evaluation_automation_openapi_post(
             *,
@@ -5066,18 +5074,26 @@ def _run_frontend_server(
             provider=provider,
             resolve_credentials=_resolve_ve_credentials,
         )
+        agent_usage_service = create_agent_usage_service(
+            provider=provider,
+            resolve_credentials=_resolve_ve_credentials,
+        )
         app.state.evaluation_automation = evaluation_automation
+        app.state.agent_usage = agent_usage_service
         original_lifespan = app.router.lifespan_context
 
         @asynccontextmanager
-        async def _evaluation_automation_lifespan(current_app: Any):
+        async def _studio_services_lifespan(current_app: Any):
             async with original_lifespan(current_app):
                 try:
                     yield
                 finally:
-                    await evaluation_automation.close()
+                    try:
+                        await evaluation_automation.close()
+                    finally:
+                        await agent_usage_service.close()
 
-        app.router.lifespan_context = _evaluation_automation_lifespan
+        app.router.lifespan_context = _studio_services_lifespan
         mount_evaluation_automation_routes(
             app,
             evaluation_automation,
@@ -5087,6 +5103,25 @@ def _run_frontend_server(
                 region,
                 coded_access_error=True,
             ),
+        )
+
+        def _authorize_agent_usage(
+            request: Request,
+            runtime_id: str,
+            region: str,
+        ) -> Any:
+            _require_agent_management(request)
+            return _authorized_runtime(
+                request,
+                runtime_id,
+                region,
+                coded_access_error=True,
+            )
+
+        mount_agent_usage_routes(
+            app,
+            agent_usage_service,
+            _authorize_agent_usage,
         )
 
     @app.api_route(
@@ -5152,6 +5187,8 @@ def _run_frontend_server(
         )
         body = await request.body()
         run_sse_activity: RunSseActivity | None = None
+        run_sse_principal: StudioPrincipal | None = None
+        usage_invocation_id = ""
         if request.method == "POST" and path in {"run_sse", "harness/run_sse"}:
             try:
                 payload = json.loads(body)
@@ -5172,7 +5209,17 @@ def _run_frontend_server(
                 ) from error
             except ValueError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
-            if evaluation_automation is not None:
+            if agent_usage_service is not None:
+                run_sse_principal = _current_principal(request)
+                if run_sse_principal is None:
+                    logger.info(
+                        "agent usage skipped runtime_id=%s path=%s reason=no_principal",
+                        runtime_id,
+                        path,
+                    )
+                else:
+                    usage_invocation_id = str(uuid4())
+            if evaluation_automation is not None or run_sse_principal is not None:
                 try:
                     run_sse_activity = RunSseActivity.from_proxy(
                         payload,
@@ -5186,13 +5233,15 @@ def _run_frontend_server(
                     )
                 except ValueError as error:
                     logger.info(
-                        "automatic evaluation skipped runtime_id=%s path=%s reason=%s",
+                        "run_sse completion tracking skipped runtime_id=%s "
+                        "path=%s reason=%s",
                         runtime_id,
                         path,
                         error,
                     )
                 else:
-                    evaluation_automation.session_started(run_sse_activity)
+                    if evaluation_automation is not None:
+                        evaluation_automation.session_started(run_sse_activity)
 
         from fastapi.responses import StreamingResponse
 
@@ -5334,16 +5383,36 @@ def _run_frontend_server(
             else None
         )
 
+        def _run_sse_completed(activity: RunSseActivity) -> None:
+            if evaluation_automation is not None:
+                evaluation_automation.session_completed(activity)
+            if agent_usage_service is None or run_sse_principal is None:
+                return
+            try:
+                agent_usage_service.record_success(
+                    invocation_id=usage_invocation_id,
+                    runtime_id=runtime_id,
+                    app_name=activity.app_name,
+                    user_id=run_sse_principal.owner_id,
+                    display_name=run_sse_principal.display_name,
+                )
+            except Exception:
+                logger.exception(
+                    "agent usage record failed runtime_id=%s app_name=%s",
+                    runtime_id,
+                    activity.app_name,
+                )
+
         async def _body():
             try:
-                if observation is None or evaluation_automation is None:
+                if observation is None:
                     async for chunk in upstream.aiter_raw():
                         yield chunk
                 else:
                     async for chunk in observed_sse_stream(
                         upstream.aiter_raw(),
                         observation,
-                        evaluation_automation.session_completed,
+                        _run_sse_completed,
                     ):
                         yield chunk
             finally:

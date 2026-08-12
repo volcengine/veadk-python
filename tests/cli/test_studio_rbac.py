@@ -1402,6 +1402,90 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
     assert deleted == ["runtime-developer", "runtime-other"]
 
 
+def test_agent_usage_requires_management_role_and_runtime_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtimes = {
+        "runtime-developer": _runtime("runtime-developer", "developer"),
+        "runtime-viewer": _runtime("runtime-viewer", "viewer"),
+        "runtime-other": _runtime("runtime-other", "someone-else"),
+    }
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, request: runtimes[request.runtime_id],
+    )
+
+    class _UsageSummary:
+        def model_dump(self, **_: Any) -> dict[str, Any]:
+            return {
+                "totalInvocations": 2,
+                "totalUsers": 1,
+                "users": [],
+                "page": 1,
+                "pageSize": 20,
+            }
+
+    class _UsageService:
+        def __init__(self) -> None:
+            self.queries: list[tuple[str, str]] = []
+
+        async def get_summary(self, **kwargs: Any) -> _UsageSummary:
+            self.queries.append((kwargs["runtime_id"], kwargs["app_name"]))
+            return _UsageSummary()
+
+        async def close(self) -> None:
+            pass
+
+    usage = _UsageService()
+    monkeypatch.setattr(
+        "frontend.server.agent_usage.create_service",
+        lambda **_: usage,
+    )
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        admins="admin",
+        developers="developer",
+    )
+    params = {"region": "cn-beijing", "appName": "agent"}
+
+    with TestClient(app) as client:
+        developer_own = client.get(
+            "/web/agent-usage",
+            params={**params, "runtimeId": "runtime-developer"},
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        viewer_own = client.get(
+            "/web/agent-usage",
+            params={**params, "runtimeId": "runtime-viewer"},
+            headers={"X-VeADK-Local-User": "viewer"},
+        )
+        developer_other = client.get(
+            "/web/agent-usage",
+            params={**params, "runtimeId": "runtime-other"},
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        admin_other = client.get(
+            "/web/agent-usage",
+            params={**params, "runtimeId": "runtime-other"},
+            headers={"X-VeADK-Local-User": "admin"},
+        )
+
+    assert developer_own.status_code == 200
+    assert viewer_own.status_code == 403
+    assert developer_other.status_code == 404
+    assert developer_other.json()["detail"] == "runtime_access_denied"
+    assert admin_other.status_code == 200
+    assert usage.queries == [
+        ("runtime-developer", "agent"),
+        ("runtime-other", "agent"),
+    ]
+
+
 def test_runtime_trace_reads_apmplus_and_explains_missing_observability(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

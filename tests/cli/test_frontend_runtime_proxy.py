@@ -1131,9 +1131,26 @@ def test_studio_runtime_proxy_only_schedules_successful_completed_sse(
             self.closed = True
 
     automation = _Automation()
+
+    class _UsageService:
+        def __init__(self) -> None:
+            self.recorded: list[dict[str, Any]] = []
+            self.closed = False
+
+        def record_success(self, **kwargs: Any) -> None:
+            self.recorded.append(kwargs)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    usage = _UsageService()
     monkeypatch.setattr(
         "frontend.server.evaluation_automation.create_service",
         lambda **kwargs: automation,
+    )
+    monkeypatch.setattr(
+        "frontend.server.agent_usage.create_service",
+        lambda **kwargs: usage,
     )
     app = _create_frontend_app(monkeypatch, tmp_path, studio=True)
 
@@ -1195,7 +1212,7 @@ def test_studio_runtime_proxy_only_schedules_successful_completed_sse(
             headers={"X-VeADK-Local-User": "user-1"},
             json={
                 "app_name": "agent",
-                "user_id": "user-1",
+                "user_id": "untrusted-body-user",
                 "session_id": "session-1",
                 "new_message": {
                     "role": "user",
@@ -1219,6 +1236,14 @@ def test_studio_runtime_proxy_only_schedules_successful_completed_sse(
     assert len(automation.started) == 1
     assert len(automation.completed) == expected_completions
     assert automation.closed
+    assert usage.closed
+    assert len(usage.recorded) == expected_completions
+    if usage.recorded:
+        assert usage.recorded[0]["runtime_id"] == "runtime-1"
+        assert usage.recorded[0]["app_name"] == "agent"
+        assert usage.recorded[0]["user_id"] == "user-1"
+        assert usage.recorded[0]["display_name"] == "user-1"
+        assert usage.recorded[0]["invocation_id"]
     assert automation.started[0].project_name == "support"
     assert automation.started[0].runtime_authorization.get_secret_value() == (
         "Bearer runtime-api-key"

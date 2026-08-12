@@ -25,6 +25,7 @@ import {
   getCachedAgentFeedbackCases,
   getCachedRuntimeAgentInfo,
   getCachedRuntimeDetail,
+  getAgentUsage,
   getAgentFeedbackCases,
   getAgentOptimizations,
   getRuntimeAgentInfo,
@@ -45,6 +46,7 @@ import {
   type AgentOptimizationGroup,
   type AgentOptimizationModule,
   type AgentOptimizationPriority,
+  type AgentUsageResponse,
   type RuntimeA2aIntegration,
   RuntimeProbeError,
   type RuntimeDetail,
@@ -58,10 +60,11 @@ import { BUILTIN_TOOLS } from "../create/veadkCatalog";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
 import { Markdown } from "./Markdown";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
+import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./AgentWorkspace.css";
 
 type WorkspaceView = "library" | "evaluation";
-type AgentSection = "basic" | "evaluations" | "optimizations" | "integrations";
+type AgentSection = "basic" | "usage" | "evaluations" | "optimizations" | "integrations";
 type IntegrationProtocol = "api-server" | "a2a";
 type EvaluationSection = "config" | "history";
 type CaseKind = "good" | "bad";
@@ -233,10 +236,28 @@ const DEFAULT_EVALUATION_GROUPS: EvaluationGroup[] = [
 
 const AGENT_SECTIONS: Array<{ id: AgentSection; label: string }> = [
   { id: "basic", label: "基本信息" },
+  { id: "usage", label: "用量统计" },
   { id: "evaluations", label: "评测集" },
   { id: "optimizations", label: "优化项" },
   { id: "integrations", label: "接入方法" },
 ];
+
+const AGENT_USAGE_PAGE_SIZE = 20;
+const AGENT_USAGE_DATE_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+function formatAgentUsageTime(value: string): string {
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp)
+    ? "暂未提供"
+    : AGENT_USAGE_DATE_FORMATTER.format(timestamp);
+}
 
 const INTEGRATION_PROTOCOLS: Array<{
   id: IntegrationProtocol;
@@ -1006,6 +1027,14 @@ export function AgentWorkspace({
   const [optimizationsLoading, setOptimizationsLoading] = useState(false);
   const [optimizationsError, setOptimizationsError] = useState("");
   const [optimizationsReloadToken, setOptimizationsReloadToken] = useState(0);
+  const [agentUsage, setAgentUsage] = useState<{
+    requestKey: string;
+    value: AgentUsageResponse;
+  } | null>(null);
+  const [agentUsagePage, setAgentUsagePage] = useState(1);
+  const [agentUsageLoading, setAgentUsageLoading] = useState(false);
+  const [agentUsageError, setAgentUsageError] = useState("");
+  const [agentUsageReloadToken, setAgentUsageReloadToken] = useState(0);
   const [caseSelectionMode, setCaseSelectionMode] = useState(false);
   const [selectedCaseIds, setSelectedCaseIds] = useState<Set<string>>(() => new Set());
   const [deletingCases, setDeletingCases] = useState(false);
@@ -1017,6 +1046,7 @@ export function AgentWorkspace({
   const caseTableRef = useRef<HTMLDivElement | null>(null);
   const updateCapabilityRequestRef = useRef(0);
   const apiKeyRequestRef = useRef(0);
+  const agentUsageRequestRef = useRef(0);
   const [evaluationGroups, setEvaluationGroups] = useState(DEFAULT_EVALUATION_GROUPS);
   const [activeEvaluationGroupId, setActiveEvaluationGroupId] = useState("");
 
@@ -1120,6 +1150,18 @@ export function AgentWorkspace({
       : null;
   const selectedAgentAppName =
     selectedAgentInfo?.appName || selectedAgent?.runtimeApp || selectedAgent?.app || "";
+  const visibleAgentSections = selectedAgent?.runtimeId
+    ? AGENT_SECTIONS
+    : AGENT_SECTIONS.filter((item) => item.id !== "usage");
+  const agentUsageRequestKey = JSON.stringify([
+    selectedAgent?.runtimeId ?? "",
+    selectedAgent?.region ?? "cn-beijing",
+    selectedAgentAppName,
+    agentUsagePage,
+  ]);
+  const selectedAgentUsage = agentUsage?.requestKey === agentUsageRequestKey
+    ? agentUsage.value
+    : null;
   const integrationRequestKey = `${selectedAgent?.region ?? "cn-beijing"}:${selectedAgent?.runtimeId ?? ""}`;
   const selectedRevealedApiKey =
     revealedApiKey?.requestKey === integrationRequestKey
@@ -1501,6 +1543,77 @@ export function AgentWorkspace({
     detailAgentInfoResolved,
     detailOnly,
     optimizationsReloadToken,
+    section,
+    selectedAgentAppName,
+    selectedAgent?.region,
+    selectedAgent?.runtimeId,
+  ]);
+
+  useEffect(() => {
+    setAgentUsagePage(1);
+  }, [selectedAgent?.runtimeId, selectedAgentAppName]);
+
+  useEffect(() => {
+    const requestId = agentUsageRequestRef.current + 1;
+    agentUsageRequestRef.current = requestId;
+    const runtimeId = selectedAgent?.runtimeId ?? "";
+    const region = selectedAgent?.region ?? "cn-beijing";
+    const appName = selectedAgentAppName;
+    setAgentUsageError("");
+    if (section !== "usage" || !runtimeId) {
+      setAgentUsageLoading(false);
+      return;
+    }
+    if (!appName) {
+      setAgentUsageLoading(detailOnly && !detailAgentInfoResolved);
+      return;
+    }
+
+    const controller = new AbortController();
+    setAgentUsageLoading(true);
+    void getAgentUsage({
+      runtimeId,
+      region,
+      appName,
+      page: agentUsagePage,
+      pageSize: AGENT_USAGE_PAGE_SIZE,
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (requestId !== agentUsageRequestRef.current) return;
+        if (
+          response.runtimeId !== runtimeId ||
+          response.appName !== appName ||
+          response.page !== agentUsagePage
+        ) {
+          setAgentUsageError("用量响应与当前 Agent 不匹配，请重试。");
+          return;
+        }
+        setAgentUsage({ requestKey: agentUsageRequestKey, value: response });
+      })
+      .catch((cause: unknown) => {
+        if (
+          requestId !== agentUsageRequestRef.current ||
+          controller.signal.aborted
+        ) return;
+        setAgentUsageError(
+          cause instanceof Error ? cause.message : "加载 Agent 用量失败。",
+        );
+      })
+      .finally(() => {
+        if (requestId === agentUsageRequestRef.current) {
+          setAgentUsageLoading(false);
+        }
+      });
+    return () => {
+      controller.abort();
+    };
+  }, [
+    agentUsagePage,
+    agentUsageReloadToken,
+    agentUsageRequestKey,
+    detailAgentInfoResolved,
+    detailOnly,
     section,
     selectedAgentAppName,
     selectedAgent?.region,
@@ -2537,7 +2650,7 @@ export function AgentWorkspace({
               aria-label="智能体详情"
               role="tablist"
             >
-              {AGENT_SECTIONS.map((item) => (
+              {visibleAgentSections.map((item) => (
                 <button
                   type="button"
                   key={item.id}
@@ -2551,16 +2664,16 @@ export function AgentWorkspace({
                   onKeyDown={(event) => {
                     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
                     event.preventDefault();
-                    const currentIndex = AGENT_SECTIONS.findIndex(
+                    const currentIndex = visibleAgentSections.findIndex(
                       (sectionItem) => sectionItem.id === item.id,
                     );
                     const nextIndex = event.key === "Home"
                       ? 0
                       : event.key === "End"
-                        ? AGENT_SECTIONS.length - 1
-                        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + AGENT_SECTIONS.length)
-                          % AGENT_SECTIONS.length;
-                    const nextSection = AGENT_SECTIONS[nextIndex];
+                        ? visibleAgentSections.length - 1
+                        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + visibleAgentSections.length)
+                          % visibleAgentSections.length;
+                    const nextSection = visibleAgentSections[nextIndex];
                     setSection(nextSection.id);
                     document.getElementById(`agent-${nextSection.id}-tab`)?.focus();
                   }}
@@ -2671,6 +2784,122 @@ export function AgentWorkspace({
                     </dl>
                   </section>
                 </div>
+              )}
+              {section === "usage" && selectedAgent?.runtimeId && (
+                <section
+                  className="aw-usage"
+                  aria-busy={agentUsageLoading}
+                >
+                  <div className="aw-usage-intro">
+                    <h3>使用概览</h3>
+                  </div>
+                  {agentUsageLoading && !selectedAgentUsage && (
+                    <div className="aw-usage-state" role="status" aria-live="polite">
+                      <TextShimmer as="span">正在加载用量统计</TextShimmer>
+                    </div>
+                  )}
+                  {agentUsageError && (
+                    <div className="aw-usage-state is-error" role="alert">
+                      <span>{agentUsageError}</span>
+                      <button
+                        type="button"
+                        onClick={() => setAgentUsageReloadToken((value) => value + 1)}
+                      >
+                        重试
+                      </button>
+                    </div>
+                  )}
+                  {!agentUsageLoading &&
+                    !agentUsageError &&
+                    !selectedAgentUsage &&
+                    !selectedAgentAppName && (
+                      <div className="aw-usage-state">
+                        当前 Runtime 未返回可用的 Agent 应用名称，暂时无法读取用量。
+                      </div>
+                    )}
+                  {selectedAgentUsage && (
+                    <>
+                      <dl className="aw-usage-summary" aria-label="Agent 用量摘要">
+                        <div>
+                          <dt>总调用次数</dt>
+                          <dd>{selectedAgentUsage.totalInvocations.toLocaleString("zh-CN")}</dd>
+                        </div>
+                        <div>
+                          <dt>使用用户数</dt>
+                          <dd>{selectedAgentUsage.totalUsers.toLocaleString("zh-CN")}</dd>
+                        </div>
+                      </dl>
+                      <div className="aw-usage-users-head">
+                        <h3>用户明细</h3>
+                        {agentUsageLoading && (
+                          <TextShimmer as="span" role="status" aria-live="polite">
+                            正在刷新
+                          </TextShimmer>
+                        )}
+                      </div>
+                      {selectedAgentUsage.users.length === 0 ? (
+                        <div className="aw-usage-state">
+                          暂无使用记录。用户成功调用后将在这里显示。
+                        </div>
+                      ) : (
+                        <div className="aw-usage-table-wrap">
+                          <table className="aw-usage-table">
+                            <caption>当前 Agent 的使用用户列表</caption>
+                            <thead>
+                              <tr>
+                                <th scope="col">用户</th>
+                                <th scope="col">调用次数</th>
+                                <th scope="col">最近使用</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {selectedAgentUsage.users.map((user) => (
+                                <tr key={user.userId}>
+                                  <td>
+                                    <strong>{user.displayName || user.userId || "未知用户"}</strong>
+                                    {user.displayName && user.userId && (
+                                      <small title={user.userId}>{user.userId}</small>
+                                    )}
+                                  </td>
+                                  <td>{user.invocationCount.toLocaleString("zh-CN")}</td>
+                                  <td>
+                                    <time dateTime={user.lastUsedAt}>
+                                      {formatAgentUsageTime(user.lastUsedAt)}
+                                    </time>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                      {selectedAgentUsage.totalPages > 1 && (
+                        <nav className="aw-usage-pagination" aria-label="用量用户列表分页">
+                          <button
+                            type="button"
+                            disabled={agentUsageLoading || selectedAgentUsage.page <= 1}
+                            onClick={() => setAgentUsagePage((page) => Math.max(1, page - 1))}
+                          >
+                            上一页
+                          </button>
+                          <span aria-live="polite">
+                            第 {selectedAgentUsage.page} / {selectedAgentUsage.totalPages} 页
+                          </span>
+                          <button
+                            type="button"
+                            disabled={
+                              agentUsageLoading ||
+                              selectedAgentUsage.page >= selectedAgentUsage.totalPages
+                            }
+                            onClick={() => setAgentUsagePage((page) => page + 1)}
+                          >
+                            下一页
+                          </button>
+                        </nav>
+                      )}
+                    </>
+                  )}
+                </section>
               )}
               {section === "integrations" && (
                 <div className="aw-integration-stack">
