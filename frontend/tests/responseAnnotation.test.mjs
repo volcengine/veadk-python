@@ -98,5 +98,9 @@ test("submits the annotation as a bad-case feedback sample", () => {
     /const turnIsStreaming = isLast && \([\s\S]*?activeConversationBusy \|\| presentingStream/,
   );
   assert.match(appSource, /!turnIsStreaming/);
-  assert.match(clientSource, /comment: args\.comment \?\? ""/);
+  assert.match(clientSource, /const comment = args\.comment \?\? ""/);
+  assert.match(clientSource, /const isAnnotatedBadCase = args\.rating === "bad"/);
+  assert.match(clientSource, /source: "user"/);
+  assert.match(clientSource, /score: isAnnotatedBadCase \? 0 : null/);
+  assert.match(clientSource, /reason: isAnnotatedBadCase \? comment : ""/);
 });

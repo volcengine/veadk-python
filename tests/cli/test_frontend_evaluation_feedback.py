@@ -527,6 +527,8 @@ def test_message_feedback_uncheck_deletes_case_by_stable_item_key(
 def test_feedback_cases_list_agentkit_dataset_items(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    annotation_comment = "选中片段：回答\n\n批注：事实错误"
+
     class _Automation:
         async def get_optimizations(self, runtime_id: str, app_name: str) -> None:
             del runtime_id, app_name
@@ -719,6 +721,16 @@ def test_feedback_cases_list_agentkit_dataset_items(
                                                     "Key": "user_id",
                                                     "Content": {"Text": "user-1"},
                                                 },
+                                                {
+                                                    "Key": "feedback_comment",
+                                                    "Content": {
+                                                        "Text": (
+                                                            annotation_comment
+                                                            if rating == "bad"
+                                                            else ""
+                                                        )
+                                                    },
+                                                },
                                             ]
                                         }
                                     ],
@@ -754,7 +766,13 @@ def test_feedback_cases_list_agentkit_dataset_items(
     manual_items = [item for item in payload["items"] if item["source"] == "user"]
     automatic_items = [item for item in payload["items"] if item["source"] == "auto"]
     assert len(manual_items) == 2
-    assert all(item["score"] is None and item["reason"] == "" for item in manual_items)
+    manual_good = next(item for item in manual_items if item["kind"] == "good")
+    manual_bad = next(item for item in manual_items if item["kind"] == "bad")
+    assert manual_good["score"] is None
+    assert manual_good["reason"] == ""
+    assert manual_bad["score"] == 0
+    assert manual_bad["reason"] == annotation_comment
+    assert manual_bad["comment"] == annotation_comment
     assert len(automatic_items) == 1
     assert automatic_items[0]["score"] == 0.82
     assert automatic_items[0]["reason"] == "回答完整。"

@@ -1911,6 +1911,7 @@ def _run_frontend_server(
                 "history": True,
                 "addAgent": True,
                 "manageAgents": True,
+                "agentUsage": studio,
                 "addAgentkit": True,
                 "generatedAgentTestRun": True,
                 "generatedAgentTestRunDisabledReason": "",
@@ -6501,6 +6502,8 @@ def _run_frontend_server(
                 )
                 for item in items:
                     fields = item.fields
+                    comment = fields.get("feedback_comment", "")
+                    is_annotated_bad_case = rating == "bad" and bool(comment.strip())
                     response_items.append(
                         {
                             "id": item.id or item.item_key,
@@ -6509,7 +6512,7 @@ def _run_frontend_server(
                             "input": fields.get("input", ""),
                             "output": fields.get("output", ""),
                             "referenceOutput": fields.get("reference_output", ""),
-                            "comment": fields.get("feedback_comment", ""),
+                            "comment": comment,
                             "agentName": fields.get("agent_name", agent_name),
                             "sessionId": fields.get("session_id", ""),
                             "messageId": fields.get("message_id", ""),
@@ -6521,8 +6524,8 @@ def _run_frontend_server(
                             "evaluationSetName": evaluation_set.name,
                             "workspaceId": evaluation_set.workspace_id,
                             "source": "user",
-                            "score": None,
-                            "reason": "",
+                            "score": 0 if is_annotated_bad_case else None,
+                            "reason": comment if is_annotated_bad_case else "",
                         }
                     )
             if studio:

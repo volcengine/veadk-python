@@ -1334,6 +1334,7 @@ export default function App() {
     history: true,
     addAgent: true,
     manageAgents: true,
+    agentUsage: false,
     addAgentkit: true,
   });
   const [agentsSource, setAgentsSource] = useState<"local" | "cloud">("cloud");
@@ -4226,6 +4227,7 @@ export default function App() {
 
   const canCreateAgents = access.capabilities.createAgents;
   const canManageAgents = access.capabilities.manageAgents;
+  const canViewAgentUsage = features.agentUsage && canManageAgents;
   const visibleCreateView = canCreateAgents ? createView : null;
   const showAddMenu = canCreateAgents && addMenu;
   const showAddAgent = canCreateAgents && addAgent;
@@ -5271,6 +5273,7 @@ export default function App() {
                 loadingAgentInfo={capabilitiesLoading}
                 canCreate={canCreateAgents}
                 canUpdate={canCreateAgents || canManageAgents}
+                canViewUsage={canViewAgentUsage}
                 loadingAgents={agentLibraryLoading}
                 agentsError={agentLibraryError}
                 deploymentTasks={deploymentTasks}

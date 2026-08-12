@@ -915,6 +915,8 @@ export function upsertCachedAgentFeedbackCase(args: {
   referenceOutput?: string;
   createdAt?: string;
 }): void {
+  const comment = args.comment ?? "";
+  const isAnnotatedBadCase = args.rating === "bad" && Boolean(comment.trim());
   for (const [key, entry] of feedbackCasesCache.entries()) {
     const value = entry.value;
     if (
@@ -925,7 +927,7 @@ export function upsertCachedAgentFeedbackCase(args: {
     const withoutCurrent = value.items.filter((item) =>
       item.sessionId !== args.sessionId || item.messageId !== args.messageId
     );
-    const items = args.rating
+    const items: AgentFeedbackCase[] = args.rating
       ? [
           {
             id: `local:${args.runtimeId}:${args.sessionId}:${args.messageId}`,
@@ -934,7 +936,7 @@ export function upsertCachedAgentFeedbackCase(args: {
             input: args.input,
             output: args.output,
             referenceOutput: args.referenceOutput ?? args.output,
-            comment: args.comment ?? "",
+            comment,
             agentName: args.appName,
             sessionId: args.sessionId,
             messageId: args.messageId,
@@ -945,6 +947,9 @@ export function upsertCachedAgentFeedbackCase(args: {
             evaluationSetId: "",
             evaluationSetName: "",
             workspaceId: "",
+            source: "user",
+            score: isAnnotatedBadCase ? 0 : null,
+            reason: isAnnotatedBadCase ? comment : "",
           },
           ...withoutCurrent,
         ]
@@ -2281,6 +2286,7 @@ export interface UiFeatures {
   history: boolean;
   addAgent: boolean;
   manageAgents: boolean;
+  agentUsage: boolean;
   addAgentkit: boolean;
   generatedAgentTestRun?: boolean;
   generatedAgentTestRunDisabledReason?: string;
@@ -2340,6 +2346,7 @@ const DEFAULT_UI_CONFIG: UiConfig = {
     history: true,
     addAgent: true,
     manageAgents: true,
+    agentUsage: false,
     addAgentkit: true,
     generatedAgentTestRun: true,
   },
@@ -2578,7 +2585,25 @@ export async function getAgentUsage({
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, "加载 Agent 用量失败"));
   }
-  return (await res.json()) as AgentUsageResponse;
+  const contentType = res.headers.get("content-type") || "未提供";
+  const normalizedContentType = contentType.toLowerCase();
+  if (
+    !normalizedContentType.includes("application/json") &&
+    !normalizedContentType.includes("+json")
+  ) {
+    throw new Error(
+      `加载 Agent 用量失败：服务端返回非 JSON 响应（HTTP ${res.status}，Content-Type: ${contentType}）。` +
+      "请确认当前服务以 Studio 模式启动，并检查代理或网关配置。",
+    );
+  }
+  try {
+    return (await res.json()) as AgentUsageResponse;
+  } catch {
+    throw new Error(
+      `加载 Agent 用量失败：服务端返回了无法解析的 JSON（HTTP ${res.status}，Content-Type: ${contentType}）。` +
+      "请稍后重试；若问题持续，请检查代理或网关配置。",
+    );
+  }
 }
 
 /** One AgentKit runtime as listed by `/web/runtimes` (control-plane). */
