@@ -4,8 +4,10 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type MouseEventHandler,
   type WheelEvent,
 } from "react";
+import { Share } from "@openai/apps-sdk-ui/components/Icon";
 import {
   ArrowLeft,
   Check,
@@ -214,6 +216,10 @@ interface IssueFeedbackTarget {
   input: string;
 }
 
+interface ShareMessageTarget {
+  targetTurn: HTMLElement;
+}
+
 function issueFeedbackModuleForPage(page: string): IssueFeedbackModule {
   if (page === "agents") return "agents";
   if (page === "applications") return "applications";
@@ -325,6 +331,7 @@ import { TraceDrawer } from "./ui/TraceDrawer";
 import { LoginPage } from "./ui/LoginPage";
 import { AuthExpiredDialog } from "./ui/AuthExpiredDialog";
 import { IssueFeedbackDialog } from "./ui/IssueFeedbackDialog";
+import { ShareMessageDialog } from "./ui/ShareMessageDialog";
 import { PlatformFeedback } from "./ui/PlatformFeedback";
 import { Markdown } from "./ui/Markdown";
 import {
@@ -622,6 +629,24 @@ function CopyButton({ text }: { text: string }) {
       }}
     >
       {copied ? <Check className="icon" /> : <Copy className="icon" />}
+    </button>
+  );
+}
+
+function ShareMessageButton({
+  onClick,
+}: {
+  onClick: MouseEventHandler<HTMLButtonElement>;
+}) {
+  return (
+    <button
+      type="button"
+      className="icon-btn"
+      aria-label="分享为图片"
+      title="分享为图片"
+      onClick={onClick}
+    >
+      <Share className="icon" aria-hidden="true" />
     </button>
   );
 }
@@ -1261,6 +1286,8 @@ export default function App() {
   );
   const [issueFeedbackTarget, setIssueFeedbackTarget] =
     useState<IssueFeedbackTarget | null>(null);
+  const [shareMessageTarget, setShareMessageTarget] =
+    useState<ShareMessageTarget | null>(null);
   const [platformFeedbackOrigin, setPlatformFeedbackOrigin] =
     useState<string | null>(null);
   const [traceOpen, setTraceOpen] = useState(false);
@@ -5533,7 +5560,10 @@ export default function App() {
                       <Markdown text={text} />
                     </div>
                   )}
-                  <div className="turn-actions turn-actions--right">
+                  <div
+                    className="turn-actions turn-actions--right"
+                    data-share-image-exclude="true"
+                  >
                     {turn.meta?.ts && <span className="meta-text">{fmtTime(turn.meta.ts)}</span>}
                     <CopyButton text={text} />
                   </div>
@@ -5567,6 +5597,7 @@ export default function App() {
             return (
               <motion.div
                 key={i}
+                data-share-message-source="true"
                 ref={(node) => {
                   if (!feedbackEventId) return;
                   if (node) {
@@ -5626,7 +5657,7 @@ export default function App() {
                         thinking/streaming or waiting on an OAuth card; reveal it
                         only once the reply is done. */}
                     {!(isLast && activeConversationBusy) && !turnAwaitingAuth(turn) && (
-                      <div className="turn-meta">
+                      <div className="turn-meta" data-share-image-exclude="true">
                         {sandboxSession && turn.meta?.sandboxUsage ? (
                           <SandboxTokenUsageRow usage={turn.meta.sandboxUsage} />
                         ) : null}
@@ -5711,6 +5742,14 @@ export default function App() {
                             </>
                           )}
                           <CopyButton text={turnText(turn)} />
+                          <ShareMessageButton
+                            onClick={(event) => {
+                              const targetTurn = event.currentTarget.closest<HTMLElement>(
+                                "[data-share-message-source]",
+                              );
+                              if (targetTurn) setShareMessageTarget({ targetTurn });
+                            }}
+                          />
                         </div>
                         {turn.meta && <span className="meta-text">{fmtMeta(turn.meta)}</span>}
                       </div>
@@ -5751,6 +5790,13 @@ export default function App() {
         <IssueFeedbackDialog
           onClose={() => setIssueFeedbackTarget(null)}
           onSubmit={submitIssueFeedbackForTurn}
+        />
+      )}
+
+      {shareMessageTarget && (
+        <ShareMessageDialog
+          targetTurn={shareMessageTarget.targetTurn}
+          onClose={() => setShareMessageTarget(null)}
         />
       )}
 
