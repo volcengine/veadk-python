@@ -69,10 +69,11 @@ def test_build_frontend_assets_runs_clean_install_and_production_build(
     commands: list[list[str]] = []
 
     def _run(
-        command: list[str], *, cwd: Path, check: bool
+        command: list[str], *, cwd: Path, env: dict[str, str], check: bool
     ) -> subprocess.CompletedProcess:
         commands.append(command)
         assert cwd == frontend_root
+        assert json.loads(env["VITE_STUDIO_RELEASE_CHANGELOG"]) == []
         assert check is True
         if "build" in command:
             output_dir.mkdir()
