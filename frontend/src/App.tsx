@@ -3050,6 +3050,10 @@ export default function App() {
     setAttachments((current) => current.filter((item) => item.id !== id));
   }
 
+  function stopSandboxGeneration() {
+    sandboxMessageAbortRef.current?.abort();
+  }
+
   async function sendSandboxMessage(
     text: string,
     messageAttachments: Attachment[] = [],
@@ -3142,18 +3146,27 @@ export default function App() {
         {
           signal: controller.signal,
           onApproval: (approval) => {
-            if (sandboxMessageAbortRef.current !== controller) return;
+            if (
+              controller.signal.aborted ||
+              sandboxMessageAbortRef.current !== controller
+            ) return;
             setSandboxApprovalError("");
             setSandboxApproval(approval);
           },
           onApprovalResolved: (approvalId) => {
-            if (sandboxMessageAbortRef.current !== controller) return;
+            if (
+              controller.signal.aborted ||
+              sandboxMessageAbortRef.current !== controller
+            ) return;
             setSandboxApproval((current) =>
               current?.id === approvalId ? null : current,
             );
           },
           onBlocks: (blocks) => {
-            if (sandboxMessageAbortRef.current !== controller) return;
+            if (
+              controller.signal.aborted ||
+              sandboxMessageAbortRef.current !== controller
+            ) return;
             setSandboxTurns((current) => {
               const next = current.slice();
               const assistantIndex = next.findIndex(
@@ -3167,7 +3180,10 @@ export default function App() {
             });
           },
           onUsage: (update) => {
-            if (sandboxMessageAbortRef.current !== controller) return;
+            if (
+              controller.signal.aborted ||
+              sandboxMessageAbortRef.current !== controller
+            ) return;
             setSandboxTurns((current) => {
               const next = current.slice();
               const assistantIndex = next.findIndex(
@@ -3188,7 +3204,10 @@ export default function App() {
           },
         },
       );
-      if (sandboxMessageAbortRef.current !== controller) return;
+      if (
+        controller.signal.aborted ||
+        sandboxMessageAbortRef.current !== controller
+      ) return;
       trackAgentMessageSucceeded({
         kind: activeSession.toolName,
         source: "composer",
@@ -3869,6 +3888,11 @@ export default function App() {
       setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
       setExecPathBySession((m) => ({ ...m, [sid]: [] }));
     }
+  }
+
+  function stopCurrentGeneration() {
+    if (!sessionId) return;
+    streamAbortsRef.current.get(sessionId)?.abort();
   }
 
   function onAction(action: A2uiAction | undefined, node: A2uiComponent) {
@@ -4703,6 +4727,7 @@ export default function App() {
                 value={input}
                 onChange={setInput}
                 onSubmit={(value) => void submitSandboxInput(value)}
+                onStop={sandboxBusy ? stopSandboxGeneration : undefined}
                 disabled={false}
                 busy={sandboxBusy || sandboxCommands.commandBusy}
                 attachments={attachments}
@@ -4805,6 +4830,7 @@ export default function App() {
                 send(text, atts, selectedInvocation);
                 releaseAttachmentPreviews(atts);
               }}
+              onStop={busy ? stopCurrentGeneration : undefined}
               disabled={
                 sandboxSession
                   ? false

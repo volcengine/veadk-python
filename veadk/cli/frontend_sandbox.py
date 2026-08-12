@@ -2266,15 +2266,6 @@ def mount_sandbox_routes(
                     }
                     yield f"event: activity\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 yield "event: done\ndata: {}\n\n"
-            except asyncio.CancelledError:
-                try:
-                    await asyncio.shield(service.close(session_id, owner_id))
-                except SandboxError:
-                    logger.warning(
-                        "Failed to disconnect cancelled Sandbox Session %s",
-                        session_id,
-                    )
-                raise
             except SandboxError as error:
                 payload = {
                     "code": error.code,

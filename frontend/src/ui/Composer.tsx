@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ComponentType, SVGProps } from "react";
 import {
-  ArrowUp,
   AtSign,
   Bot,
   Check,
@@ -30,6 +29,7 @@ import type { SandboxSession } from "../adk/sandbox";
 import { InvocationChips } from "./InvocationChips";
 import { MediaGroup } from "./Media";
 import { isImeCompositionEvent } from "./composerKeyboard";
+import { ComposerSendIcon, ComposerStopIcon } from "./icons/ComposerIcons";
 import { NewChatModeSelector } from "./new-chat-modes/NewChatModeSelector";
 import { NewChatAgentPicker } from "./new-chat-modes/NewChatAgentPicker";
 import { NewChatSkillControls } from "./new-chat-modes/NewChatSkillControls";
@@ -119,6 +119,7 @@ export interface ComposerProps {
   value: string;
   onChange: (v: string) => void;
   onSubmit: () => void;
+  onStop?: () => void;
   onVideoSubmit?: (
     prompt: string,
     config: NewChatVideoConfig,
@@ -172,6 +173,7 @@ export function Composer({
   value,
   onChange,
   onSubmit,
+  onStop,
   onVideoSubmit,
   videoTask = null,
   onOpenVideoTask,
@@ -308,6 +310,7 @@ export function Composer({
         : null;
   const videoTaskRunning = isVideoTaskRunning(videoTask);
   const canOpenVideoTask = videoMode && Boolean(videoTask) && !value.trim();
+  const canStop = busy && Boolean(onStop);
   const canSend = videoMode
     ? videoTaskRunning ||
       canOpenVideoTask ||
@@ -867,19 +870,25 @@ export function Composer({
         <motion.button
           type="button"
           className="comp-send"
-          disabled={!canSend}
-          onClick={submitComposer}
+          disabled={canStop ? false : !canSend}
+          onClick={canStop ? onStop : submitComposer}
           aria-label={
-            videoTaskRunning || canOpenVideoTask ? "查看视频生成进度" : "发送"
+            canStop
+              ? "停止生成"
+              : videoTaskRunning || canOpenVideoTask
+                ? "查看视频生成进度"
+                : "发送"
           }
-          title={videoCapabilitiesError || undefined}
-          whileTap={canSend ? { scale: 0.9 } : undefined}
+          title={canStop ? "停止生成" : videoCapabilitiesError || undefined}
+          whileTap={canStop || canSend ? { scale: 0.9 } : undefined}
           transition={{ type: "spring", stiffness: 600, damping: 22 }}
         >
-          {busy || videoTaskRunning ? (
+          {canStop ? (
+            <ComposerStopIcon className="icon" />
+          ) : busy || videoTaskRunning ? (
             <Loader2 className="icon spin" />
           ) : (
-            <ArrowUp className="icon" />
+            <ComposerSendIcon className="icon" />
           )}
         </motion.button>
       </div>

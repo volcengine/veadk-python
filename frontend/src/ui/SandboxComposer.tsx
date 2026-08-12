@@ -27,6 +27,7 @@ import {
   SandboxSendIcon,
   SandboxSparkIcon,
   SandboxSpinnerIcon,
+  SandboxStopIcon,
   SandboxTerminalIcon,
   SandboxVideoIcon,
   SandboxWorkspaceIcon,
@@ -58,6 +59,7 @@ export interface SandboxComposerProps {
   value: string;
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
+  onStop?: () => void;
   disabled: boolean;
   busy: boolean;
   attachments: Attachment[];
@@ -82,6 +84,7 @@ export function SandboxComposer({
   value,
   onChange,
   onSubmit,
+  onStop,
   disabled,
   busy,
   attachments,
@@ -180,6 +183,7 @@ export function SandboxComposer({
   const uploadPending = attachments.some(
     (attachment) => attachment.status !== "ready",
   );
+  const canStop = busy && Boolean(onStop);
   const canSend =
     !disabled &&
     !busy &&
@@ -533,11 +537,14 @@ export function SandboxComposer({
         <button
           type="button"
           className="comp-send"
-          disabled={!canSend}
-          onClick={() => onSubmit(value)}
-          aria-label="发送"
+          disabled={canStop ? false : !canSend}
+          onClick={canStop ? onStop : () => onSubmit(value)}
+          aria-label={canStop ? "停止生成" : "发送"}
+          title={canStop ? "停止生成" : undefined}
         >
-          {busy ? (
+          {canStop ? (
+            <SandboxStopIcon className="icon" />
+          ) : busy ? (
             <SandboxSpinnerIcon className="icon spin" />
           ) : (
             <SandboxSendIcon className="icon" />

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import AsyncIterator
 from dataclasses import replace
@@ -709,6 +710,91 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
     assert disconnected.json() == {"disconnected": True}
     assert gateway.deleted == []
     assert session_id == "remote-1"
+
+
+@pytest.mark.asyncio
+async def test_sandbox_client_disconnect_interrupts_only_the_active_turn() -> None:
+    class _CancellableCodex(_FakeCodex):
+        def __init__(self, turns: list[str]) -> None:
+            super().__init__(turns)
+            self.partial_sent = asyncio.Event()
+            self.cancelled = asyncio.Event()
+
+        async def stream_turn(
+            self, prompt: str, skill_ids: tuple[str, ...] = ()
+        ) -> AsyncIterator[CodexAppServerEvent]:
+            if prompt != "first":
+                yield CodexAppServerEvent(kind="text", text=f"reply:{prompt}")
+                return
+            self.active = True
+            self.workspace_locked = True
+            try:
+                yield CodexAppServerEvent(kind="text", text="partial")
+                self.partial_sent.set()
+                await asyncio.Event().wait()
+            finally:
+                self.active = False
+                self.cancelled.set()
+
+    class _CancellableGateway(_FakeGateway):
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            del session
+            connection = _CancellableCodex(self.thread_ids)
+            self.connections.append(connection)
+            return connection
+
+    gateway = _CancellableGateway()
+    service = SandboxConversationService(gateway, tool_id="tool-studio")
+    app = FastAPI()
+    mount_sandbox_routes(app, service, lambda _request: "alice")
+    await service.connect("remote-existing", "alice")
+    connection = gateway.connections[0]
+    request_sent = False
+    response_messages: list[dict[str, object]] = []
+
+    async def receive() -> dict[str, object]:
+        nonlocal request_sent
+        if not request_sent:
+            request_sent = True
+            return {
+                "type": "http.request",
+                "body": json.dumps({"message": "first"}).encode(),
+                "more_body": False,
+            }
+        await connection.partial_sent.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, object]) -> None:
+        response_messages.append(message)
+
+    await app(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/web/sandbox/sessions/remote-existing/messages",
+            "raw_path": b"/web/sandbox/sessions/remote-existing/messages",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "root_path": "",
+        },
+        receive,
+        send,
+    )
+
+    await asyncio.wait_for(connection.cancelled.wait(), timeout=1)
+    assert any(b"partial" in message.get("body", b"") for message in response_messages)
+    assert connection.active is False
+    assert connection.closed is False
+    follow_up = [
+        event
+        async for event in service.stream_message("remote-existing", "alice", "again")
+    ]
+    assert [event.text for event in follow_up] == ["reply:again"]
 
 
 def test_sandbox_routes_select_and_resolve_both_tool_variants() -> None:
