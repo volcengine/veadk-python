@@ -9,6 +9,10 @@ server that `veadk frontend` launches — no separate backend.
   generating, the composer exposes a stop control that cancels only the active
   response, preserves content already received, and immediately enables the
   next turn in the same session.
+- **Context usage meter** beside Send uses provider-specific model windows and
+  a 100-cell hover/focus map for estimated system/tool overhead, input/history,
+  output/reasoning, and remaining capacity. System/tool usage is explicitly
+  marked as an estimate because ADK usage metadata does not report it separately.
 - **Markdown** rendering for user and assistant messages (GFM + code highlight).
 - **Multimodal messages** with images, TXT/Markdown, PDF, and video attachments,
   including previews and history replay for both user and model media. Chat

@@ -62,6 +62,13 @@ import {
   type UiFeatures,
 } from "./adk/client";
 import {
+  addTokenUsage,
+  aggregateTokenUsage,
+  EMPTY_SESSION_TOKEN_USAGE,
+  estimateSystemContextTokens,
+  type SessionTokenUsage,
+} from "./adk/tokenUsage";
+import {
   issueFeedbackToolCalls,
   traceForInvocation,
   type IssueFeedbackIssue,
@@ -787,6 +794,10 @@ function videoTaskFileName(taskId: string, outputFormat: "mp4" | "mov"): string 
   return `video-${safeId || "result"}.${outputFormat}`;
 }
 
+function sessionUsageKey(app: string, session: string): string {
+  return `${app}\u0001${session}`;
+}
+
 export default function App() {
   const [apps, setApps] = useState<string[]>([]);
   const [appName, setAppName] = useState("");
@@ -867,10 +878,17 @@ export default function App() {
   const [turnsBySession, setTurnsBySession] = useState<Record<string, Turn[]>>(
     {},
   );
+  const [tokenUsageBySession, setTokenUsageBySession] = useState<
+    Record<string, SessionTokenUsage>
+  >({});
   const persistentTurns = sessionId
     ? turnsBySession[sessionId] ?? []
     : pendingTurns;
   const turns = sandboxSession ? sandboxTurns : persistentTurns;
+  const activeTokenUsage = sessionId
+    ? tokenUsageBySession[sessionUsageKey(appName, sessionId)] ??
+      EMPTY_SESSION_TOKEN_USAGE
+    : EMPTY_SESSION_TOKEN_USAGE;
   const setTurnsFor = (
     sid: string,
     updater: Turn[] | ((prev: Turn[]) => Turn[]),
@@ -879,6 +897,19 @@ export default function App() {
       ...m,
       [sid]: typeof updater === "function" ? updater(m[sid] ?? []) : updater,
     }));
+
+  const addTokenUsageFor = (
+    app: string,
+    sid: string,
+    event: AdkEvent,
+  ) => {
+    const key = sessionUsageKey(app, sid);
+    setTokenUsageBySession((current) => {
+      const previous = current[key] ?? EMPTY_SESSION_TOKEN_USAGE;
+      const next = addTokenUsage(previous, event);
+      return next === previous ? current : { ...current, [key]: next };
+    });
+  };
 
   function appendSandboxActivity(
     activeSessionId: string,
@@ -1341,6 +1372,21 @@ export default function App() {
   const availableAgents = rootCapabilityNode
     ? mentionableDescendants(rootCapabilityNode)
     : [];
+  const systemInstruction =
+    rootCapabilityNode?.instruction ?? agentInfo?.draft?.instruction;
+  const systemTokenEstimate = agentInfo && systemInstruction !== undefined
+    ? estimateSystemContextTokens({
+        instruction: systemInstruction,
+        tools: [
+          ...new Set([
+            ...(rootCapabilityNode?.tools ?? agentInfo.tools),
+            ...(sessionCapabilities?.tools.map((tool) => tool.name) ?? []),
+            ...sessionBuiltinTools,
+          ]),
+        ],
+        skills: rootCapabilityNode?.skills ?? agentInfo.skills,
+      })
+    : null;
 
   function discardDraftAttachments(items: Attachment[]) {
     releaseAttachmentPreviews(items);
@@ -2617,6 +2663,15 @@ export default function App() {
       const hydrated = results.flatMap((result) =>
         result.status === "fulfilled" ? [result.value] : [],
       );
+      setTokenUsageBySession((current) => {
+        const next = { ...current };
+        for (const session of hydrated) {
+          next[sessionUsageKey(app, session.id)] = aggregateTokenUsage(
+            session.events ?? [],
+          );
+        }
+        return next;
+      });
       setSessions(hydrated);
       return hydrated;
     } catch (e) {
@@ -3425,6 +3480,12 @@ export default function App() {
         const { [id]: _drop, ...rest } = m;
         return rest;
       });
+      setTokenUsageBySession((current) => {
+        const key = sessionUsageKey(appName, id);
+        if (!(key in current)) return current;
+        const { [key]: _drop, ...rest } = current;
+        return rest;
+      });
       if (id === sessionId) startNewChat();
       await refreshSessions(appName);
     } catch (e) {
@@ -3453,6 +3514,10 @@ export default function App() {
     try {
       const s = await getSession(appName, userId, id);
       setTurnsFor(id, eventsToTurns(s.events ?? [], s.state));
+      setTokenUsageBySession((current) => ({
+        ...current,
+        [sessionUsageKey(appName, id)]: aggregateTokenUsage(s.events ?? []),
+      }));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -3857,6 +3922,7 @@ export default function App() {
         }
         acc = applyEvent(acc, event);
         const usage = event.usageMetadata ?? event.usage_metadata;
+        addTokenUsageFor(appName, sid, event);
         if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
         if (event.timestamp) ts = event.timestamp;
         if (event.id) eventId = event.id;
@@ -4021,6 +4087,7 @@ export default function App() {
         }
         acc = applyEvent(acc, event);
         const usage = event.usageMetadata ?? event.usage_metadata;
+        addTokenUsageFor(appName, sid, event);
         if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
         if (event.timestamp) ts = event.timestamp;
         if (event.id) eventId = event.id;
@@ -4887,6 +4954,9 @@ export default function App() {
               agents={sandboxSession ? [] : availableAgents}
               invocation={sandboxSession ? emptyInvocation() : invocation}
               capabilitiesLoading={!sandboxSession && capabilitiesLoading}
+              modelName={agentInfo?.model?.trim() || activeTokenUsage.modelName}
+              tokenUsage={activeTokenUsage}
+              systemTokenEstimate={systemTokenEstimate}
               allowAttachments={!sandboxSession}
               onInvocationChange={setInvocation}
               onAddFiles={addFiles}
