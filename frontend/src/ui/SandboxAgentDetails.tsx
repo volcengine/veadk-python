@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { sandboxStatusLabel, type SandboxSession } from "../adk/sandbox";
+import { sandboxStatusLabel, type SandboxAgentResource } from "../adk/sandbox";
 import "./SandboxAgentDetails.css";
 
 const AGENT_LABELS = {
@@ -29,7 +29,7 @@ export function SandboxAgentDetails({
   onOpen,
   onDelete,
 }: {
-  session: SandboxSession;
+  session: SandboxAgentResource;
   onBack: () => void;
   onOpen: () => Promise<void>;
   onDelete: () => Promise<void>;
@@ -39,6 +39,10 @@ export function SandboxAgentDetails({
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
   const label = AGENT_LABELS[session.toolName];
+  const wakeable = session.resourceType === "snapshot";
+  const resourceId = wakeable
+    ? session.sourceSessionId || session.snapshotId
+    : session.id;
 
   const openAgent = async () => {
     if (opening || deleting) return;
@@ -95,10 +99,22 @@ export function SandboxAgentDetails({
           <div><dt>智能体类型</dt><dd>{label}</dd></div>
           <div><dt>状态</dt><dd>{sandboxStatusLabel(session.status)}</dd></div>
           <div><dt>创建人</dt><dd>{session.createdBy || "—"}</dd></div>
-          <div><dt>工具类型</dt><dd>{session.toolType || "—"}</dd></div>
+          <div>
+            <dt>{wakeable ? "快照状态" : "工具类型"}</dt>
+            <dd>{wakeable ? session.snapshotStatus || "—" : session.toolType || "—"}</dd>
+          </div>
           <div><dt>创建时间</dt><dd>{formatDate(session.createdAt)}</dd></div>
-          <div><dt>过期时间</dt><dd>{formatDate(session.expireAt)}</dd></div>
-          <div className="is-wide"><dt>Session ID</dt><dd>{session.id}</dd></div>
+          <div>
+            <dt>{wakeable ? "快照原因" : "过期时间"}</dt>
+            <dd>{wakeable ? session.reason || "—" : formatDate(session.expireAt)}</dd>
+          </div>
+          <div className="is-wide">
+            <dt>{wakeable ? "Snapshot ID" : "Session ID"}</dt>
+            <dd>{wakeable ? session.snapshotId : resourceId}</dd>
+          </div>
+          {wakeable && session.sourceSessionId ? (
+            <div className="is-wide"><dt>来源 Session ID</dt><dd>{session.sourceSessionId}</dd></div>
+          ) : null}
         </dl>
         <footer>
           <button
@@ -116,7 +132,7 @@ export function SandboxAgentDetails({
             aria-busy={opening || undefined}
             onClick={() => void openAgent()}
           >
-            {opening ? "打开中…" : "打开智能体"}
+            {opening ? (wakeable ? "唤醒中…" : "打开中…") : wakeable ? "唤醒智能体" : "打开智能体"}
           </button>
         </footer>
       </div>
@@ -132,7 +148,7 @@ export function SandboxAgentDetails({
           >
             <div className="confirm-title" id="sandbox-agent-delete-title">删除智能体？</div>
             <div className="confirm-text">
-              将删除“{session.displayName || `${label} 智能体`}”及其 AgentKit Session，此操作无法撤销。
+              将删除“{session.displayName || `${label} 智能体`}”及其 AgentKit {wakeable ? "Snapshot" : "Session"}，此操作无法撤销。
             </div>
             <div className="confirm-actions">
               <button

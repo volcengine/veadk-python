@@ -9,7 +9,7 @@ import {
 import {
   sandboxClient,
   sandboxStatusLabel,
-  type SandboxSession,
+  type SandboxAgentResource,
 } from "../../adk/sandbox";
 import { formatRequestError } from "../../adk/requestError";
 import { AgentFaceIcon } from "../AgentFaceIcon";
@@ -41,7 +41,7 @@ export interface NewChatAgentPickerProps {
   runtimeScope: RuntimeScope;
   disabled?: boolean;
   onSelectRuntime: (runtime: CloudRuntime) => Promise<void>;
-  onSelectSandboxSession: (session: SandboxSession) => Promise<void>;
+  onSelectSandboxSession: (session: SandboxAgentResource) => Promise<void>;
 }
 
 function ChevronIcon(props: SVGProps<SVGSVGElement>) {
@@ -100,7 +100,7 @@ export function NewChatAgentPicker({
   const [keyboardPanel, setKeyboardPanel] = useState<"types" | "runtimes">("types");
   const [keyboardNavigating, setKeyboardNavigating] = useState(false);
   const [runtimes, setRuntimes] = useState<CloudRuntime[]>([]);
-  const [sandboxSessions, setSandboxSessions] = useState<SandboxSession[]>([]);
+  const [sandboxSessions, setSandboxSessions] = useState<SandboxAgentResource[]>([]);
   const [loadedSandboxType, setLoadedSandboxType] = useState<Exclude<AgentType, "general"> | null>(null);
   const [nextToken, setNextToken] = useState("");
   const [loading, setLoading] = useState(false);
@@ -300,7 +300,7 @@ export function NewChatAgentPicker({
     }
   }
 
-  async function chooseSandboxSession(session: SandboxSession) {
+  async function chooseSandboxSession(session: SandboxAgentResource) {
     if (connectingRuntimeId) return;
     setConnectingRuntimeId(session.id);
     setError("");
@@ -462,6 +462,7 @@ export function NewChatAgentPicker({
               <div className="new-chat-agent-picker__runtime-list">
                 {sandboxSessions.map((session, index) => {
                   const connecting = connectingRuntimeId === session.id;
+                  const wakeable = session.resourceType === "snapshot";
                   return (
                     <button
                       key={session.id}
@@ -480,7 +481,11 @@ export function NewChatAgentPicker({
                         className="new-chat-agent-picker__runtime-icon"
                       />
                       <span>{session.displayName || activeTypeLabel}</span>
-                      <small>{connecting ? "正在打开" : sandboxStatusLabel(session.status)}</small>
+                      <small>
+                        {connecting
+                          ? (wakeable ? "正在唤醒" : "正在打开")
+                          : sandboxStatusLabel(session.status)}
+                      </small>
                     </button>
                   );
                 })}

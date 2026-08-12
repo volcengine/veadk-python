@@ -1574,17 +1574,20 @@ def _run_frontend_server(
     sandbox_service = SandboxConversationService(
         sandbox_gateway,
         tool_id=sandbox_chat_codex_tool_id,
+        snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,
     )
     sandbox_agent_services = {
         "openclaw": SandboxAgentSessionService(
             sandbox_gateway,
             kind="openclaw",
             tool_id=sandbox_chat_openclaw_tool_id,
+            snapshot_tool_id=sandbox_chat_openclaw_snapshot_tool_id,
         ),
         "hermes": SandboxAgentSessionService(
             sandbox_gateway,
             kind="hermes",
             tool_id=sandbox_chat_hermes_tool_id,
+            snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,
         ),
     }
 
