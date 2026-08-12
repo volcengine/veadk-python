@@ -94,6 +94,7 @@ export type AgentFeedbackSource = "user" | "auto";
 
 export interface MessageFeedbackState {
   rating: MessageFeedbackRating | null;
+  comment?: string;
   evaluationSetId?: string | null;
   evaluationSetName?: string | null;
   workspaceId?: string | null;
@@ -910,6 +911,7 @@ export function upsertCachedAgentFeedbackCase(args: {
   rating: MessageFeedbackRating | null;
   input: string;
   output: string;
+  comment?: string;
   referenceOutput?: string;
   createdAt?: string;
 }): void {
@@ -932,7 +934,7 @@ export function upsertCachedAgentFeedbackCase(args: {
             input: args.input,
             output: args.output,
             referenceOutput: args.referenceOutput ?? args.output,
-            comment: "",
+            comment: args.comment ?? "",
             agentName: args.appName,
             sessionId: args.sessionId,
             messageId: args.messageId,

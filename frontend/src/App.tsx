@@ -220,6 +220,14 @@ interface ShareMessageTarget {
   targetTurn: HTMLElement;
 }
 
+interface ResponseAnnotationTarget {
+  turn: Turn;
+  input: string;
+  eventId: string;
+  selectedText: string;
+  anchor: ResponseAnnotationAnchor;
+}
+
 function issueFeedbackModuleForPage(page: string): IssueFeedbackModule {
   if (page === "agents") return "agents";
   if (page === "applications") return "applications";
@@ -332,6 +340,12 @@ import { LoginPage } from "./ui/LoginPage";
 import { AuthExpiredDialog } from "./ui/AuthExpiredDialog";
 import { IssueFeedbackDialog } from "./ui/IssueFeedbackDialog";
 import { ShareMessageDialog } from "./ui/ShareMessageDialog";
+import { ResponseAnnotationPopover } from "./ui/ResponseAnnotationPopover";
+import {
+  formatResponseAnnotationComment,
+  responseSelectionWithin,
+  type ResponseAnnotationAnchor,
+} from "./ui/responseAnnotation";
 import { PlatformFeedback } from "./ui/PlatformFeedback";
 import { Markdown } from "./ui/Markdown";
 import {
@@ -1288,8 +1302,14 @@ export default function App() {
     useState<IssueFeedbackTarget | null>(null);
   const [shareMessageTarget, setShareMessageTarget] =
     useState<ShareMessageTarget | null>(null);
+  const [responseAnnotationTarget, setResponseAnnotationTarget] =
+    useState<ResponseAnnotationTarget | null>(null);
   const [platformFeedbackOrigin, setPlatformFeedbackOrigin] =
     useState<string | null>(null);
+
+  useEffect(() => {
+    setResponseAnnotationTarget(null);
+  }, [appName, sessionId]);
   const [traceOpen, setTraceOpen] = useState(false);
   const [traceEndTimeMs, setTraceEndTimeMs] = useState<number>();
   const [greeting, setGreeting] = useState(pickGreeting);
@@ -4331,16 +4351,23 @@ export default function App() {
     turn: Turn,
     rating: MessageFeedbackRating | null,
     input = "",
-  ) => {
+    comment = "",
+    reportGlobalError = true,
+  ): Promise<string | null> => {
     const eventId = turn.meta?.eventId;
     const sid = sessionId;
-    if (!eventId || !sid || !currentRuntime) return;
-    if (cloudProvider === "byteplus") return;
+    if (!eventId || !sid || !currentRuntime) {
+      return "当前回复暂不支持加入评测集";
+    }
+    if (cloudProvider === "byteplus") {
+      return "BytePlus 暂不支持 AgentKit 评测集";
+    }
     const output = turnText(turn);
     const previousFeedback = turn.meta?.feedback;
     const optimisticFeedback = {
       ...previousFeedback,
       rating,
+      comment,
       syncStatus: "syncing" as const,
       updatedAt: Date.now() / 1000,
     };
@@ -4364,6 +4391,7 @@ export default function App() {
         rating,
         input,
         output,
+        comment,
         createdAt: turn.meta?.ts
           ? new Date(turn.meta.ts * 1000).toISOString()
           : undefined,
@@ -4376,6 +4404,7 @@ export default function App() {
         sessionId: sid,
         eventId,
         rating,
+        comment,
       });
       setTurnsFor(sid, (current) =>
         current.map((item) =>
@@ -4409,6 +4438,7 @@ export default function App() {
           rating: feedback.rating,
           input,
           output,
+          comment,
           createdAt: turn.meta?.ts
             ? new Date(turn.meta.ts * 1000).toISOString()
             : undefined,
@@ -4421,6 +4451,9 @@ export default function App() {
         });
       }
     } catch (feedbackError) {
+      const feedbackErrorMessage = feedbackError instanceof Error
+        ? feedbackError.message
+        : String(feedbackError);
       setTurnsFor(sid, (current) =>
         current.map((item) =>
           item.meta?.eventId === eventId
@@ -4440,18 +4473,16 @@ export default function App() {
           rating: previousFeedback?.rating ?? null,
           input,
           output,
+          comment: previousFeedback?.comment ?? "",
           createdAt: turn.meta?.ts
             ? new Date(turn.meta.ts * 1000).toISOString()
             : undefined,
         });
       }
-      if (viewSidRef.current === sid) {
-        setError(
-          feedbackError instanceof Error
-            ? feedbackError.message
-            : String(feedbackError),
-        );
+      if (reportGlobalError && viewSidRef.current === sid) {
+        setError(feedbackErrorMessage);
       }
+      return feedbackErrorMessage;
     } finally {
       setFeedbackPendingIds((current) => {
         const next = new Set(current);
@@ -4459,6 +4490,54 @@ export default function App() {
         return next;
       });
     }
+    return null;
+  };
+
+  const openResponseAnnotation = (
+    enabled: boolean,
+    turn: Turn,
+    input: string,
+    eventId: string,
+  ) => {
+    if (!enabled) return;
+    const container = turnNodeRefs.current.get(eventId);
+    if (!container) return;
+    const selected = responseSelectionWithin(container, window.getSelection());
+    if (!selected) return;
+    setResponseAnnotationTarget({
+      turn,
+      input,
+      eventId,
+      selectedText: selected.text,
+      anchor: selected.anchor,
+    });
+  };
+
+  const queueResponseAnnotation = (
+    enabled: boolean,
+    turn: Turn,
+    input: string,
+    eventId: string,
+  ) => {
+    // Chromium-based webviews can finalize the DOM selection immediately
+    // after React's mouseup handler. Read it on the next frame so the selected
+    // text and range geometry are stable.
+    window.requestAnimationFrame(() => {
+      openResponseAnnotation(enabled, turn, input, eventId);
+    });
+  };
+
+  const submitResponseAnnotation = async (note: string) => {
+    const target = responseAnnotationTarget;
+    if (!target) return;
+    const errorMessage = await rateAssistantTurn(
+      target.turn,
+      "bad",
+      target.input,
+      formatResponseAnnotationComment(target.selectedText, note),
+      false,
+    );
+    if (errorMessage) throw new Error(errorMessage);
   };
 
   // Refresh the selected Agent before leaving the current page, then open a
@@ -5594,6 +5673,15 @@ export default function App() {
               currentRuntime && feedbackEventId && turnText(turn),
             );
             const feedbackInput = canRate ? previousUserTurnText(turns, i) : "";
+            const turnIsStreaming = isLast && (
+              activeConversationBusy || presentingStream
+            );
+            const canAnnotate = Boolean(
+              canRate &&
+              cloudProvider !== "byteplus" &&
+              !turnIsStreaming &&
+              !turnAwaitingAuth(turn),
+            );
             return (
               <motion.div
                 key={i}
@@ -5612,6 +5700,22 @@ export default function App() {
                   feedbackTargetEventId &&
                   feedbackTargetEventId === feedbackEventId ? "is-feedback-target" : "",
                 ].filter(Boolean).join(" ")}
+                tabIndex={canAnnotate ? 0 : undefined}
+                aria-label={canAnnotate
+                  ? "模型回复；选中文字后可添加批注"
+                  : undefined}
+                onMouseUp={() => queueResponseAnnotation(
+                  canAnnotate,
+                  turn,
+                  feedbackInput,
+                  feedbackEventId,
+                )}
+                onKeyUp={() => queueResponseAnnotation(
+                  canAnnotate,
+                  turn,
+                  feedbackInput,
+                  feedbackEventId,
+                )}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}
@@ -5797,6 +5901,16 @@ export default function App() {
         <ShareMessageDialog
           targetTurn={shareMessageTarget.targetTurn}
           onClose={() => setShareMessageTarget(null)}
+        />
+      )}
+
+      {responseAnnotationTarget && sessionId && (
+        <ResponseAnnotationPopover
+          key={`${responseAnnotationTarget.eventId}:${responseAnnotationTarget.selectedText}`}
+          anchor={responseAnnotationTarget.anchor}
+          selectedText={responseAnnotationTarget.selectedText}
+          onClose={() => setResponseAnnotationTarget(null)}
+          onSubmit={submitResponseAnnotation}
         />
       )}
 

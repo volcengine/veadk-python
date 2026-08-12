@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -120,12 +121,21 @@ def test_studio_findskill_route_uses_session_skillhub_search(
     assert response.json()["items"][0]["slug"] == "clawhub/pdf-reader"
 
 
+@pytest.mark.parametrize(
+    ("agent_info_status", "expected_agent_name"),
+    [(200, "客服助手"), (404, "agent")],
+    ids=["agent-info", "legacy-runtime-fallback"],
+)
 def test_message_feedback_writes_dataset_and_session_state(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    agent_info_status: int,
+    expected_agent_name: str,
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
     openapi_calls: list[dict[str, Any]] = []
     session_patches: list[dict[str, Any]] = []
+    annotation_comment = "选中片段：回答\n\n批注：事实错误"
 
     class _FakeRuntimeClient:
         def __init__(self, **kwargs: Any) -> None:
@@ -180,7 +190,10 @@ def test_message_feedback_writes_dataset_and_session_state(
                     }
                 )
             if method == "GET" and "/web/agent-info/agent" in url:
-                return _FakeResponse({"name": "客服助手"})
+                return _FakeResponse(
+                    {"name": "客服助手"} if agent_info_status == 200 else {},
+                    status_code=agent_info_status,
+                )
             if method == "PATCH" and "/sessions/session-1" in url:
                 session_patches.append(kwargs["json"])
                 return _FakeResponse({}, status_code=404)
@@ -203,7 +216,7 @@ def test_message_feedback_writes_dataset_and_session_state(
                             "EvaluationSets": [
                                 {
                                     "Id": "set-1",
-                                    "Name": "客服助手_good_case",
+                                    "Name": f"{expected_agent_name}_good_case",
                                     "WorkspaceId": "workspace-1",
                                 }
                             ]
@@ -244,12 +257,15 @@ def test_message_feedback_writes_dataset_and_session_state(
                 "sessionId": "session-1",
                 "eventId": "assistant-event",
                 "rating": "good",
+                "comment": annotation_comment,
             },
         )
 
     assert response.status_code == 200
     assert response.json()["rating"] == "good"
+    assert response.json()["comment"] == annotation_comment
     assert response.json()["evaluationItemId"] == "item-1"
+    assert response.json()["evaluationSetName"] == (f"{expected_agent_name}_good_case")
     assert response.json()["statePersistence"] == "browser"
     assert [call["action"] for call in openapi_calls] == [
         "ListEvaluationSets",
@@ -262,7 +278,17 @@ def test_message_feedback_writes_dataset_and_session_state(
     assert openapi_calls[1]["params"]["WorkspaceId"] == "workspace-1"
     state = session_patches[0]["state_delta"]["veadk_feedback:assistant-event"]
     assert state["rating"] == "good"
+    assert state["comment"] == annotation_comment
     assert state["evaluationItemId"] == "item-1"
+    create_item_call = next(
+        call
+        for call in openapi_calls
+        if call["action"] == "BatchCreateEvaluationSetItems"
+    )
+    create_item_payload = json.loads(create_item_call["body"])
+    field_data = create_item_payload["Items"][0]["Turns"][0]["FieldDataList"]
+    fields = {field["Key"]: field["Content"]["Text"] for field in field_data}
+    assert fields["feedback_comment"] == annotation_comment
 
 
 def test_message_feedback_byteplus_is_noop(
