@@ -21,7 +21,7 @@ from opentelemetry.sdk import trace as trace_sdk
 from veadk.config import settings
 from veadk.tracing.telemetry import telemetry
 from veadk.tracing.telemetry.content_tracing import should_trace_content
-from veadk.tracing.telemetry.exporters.apmplus_exporter import MeterUploader
+from veadk.tracing.telemetry.portal_metrics import PortalMetricRecorder
 
 
 @dataclass
@@ -143,10 +143,6 @@ def _event_names(span):
     return [event.name for event in span.events]
 
 
-def setup_function():
-    telemetry.meter_uploader = None
-
-
 def test_trace_call_llm_records_content_by_default(monkeypatch):
     monkeypatch.delenv("OBSERVABILITY_OPENTELEMETRY_TRACE_CONTENT", raising=False)
 
@@ -217,19 +213,19 @@ def test_trace_tool_call_skips_content_when_env_false(monkeypatch):
 
 
 def test_apmplus_tool_metrics_skip_token_usage_when_tool_content_missing():
-    meter_uploader = object.__new__(MeterUploader)
-    meter_uploader.apmplus_span_latency = _FakeMetricRecorder()
-    meter_uploader.apmplus_tool_token_usage = _FakeMetricRecorder()
+    metric_recorder = object.__new__(PortalMetricRecorder)
+    metric_recorder.apmplus_span_latency = _FakeMetricRecorder()
+    metric_recorder.apmplus_tool_token_usage = _FakeMetricRecorder()
 
     with _start_test_span("execute_tool lookup"):
-        meter_uploader.record_tool_call(
+        metric_recorder.record_tool_call(
             _FakeTool(),
             {"query": "tool input secret"},
             _ExplodingFunctionResponseEvent(),
         )
 
-    assert len(meter_uploader.apmplus_span_latency.records) == 1
-    assert meter_uploader.apmplus_tool_token_usage.records == []
+    assert len(metric_recorder.apmplus_span_latency.records) == 1
+    assert metric_recorder.apmplus_tool_token_usage.records == []
 
 
 def test_agent_root_span_skips_content_when_env_false(monkeypatch):
