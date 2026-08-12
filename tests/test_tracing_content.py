@@ -162,6 +162,26 @@ def test_trace_call_llm_records_content_by_default(monkeypatch):
         assert "gen_ai.choice" in _event_names(span)
 
 
+def test_trace_call_llm_prefers_explicit_adk_span(monkeypatch):
+    """ADK 1.24+ calls the hook while a nested inference span is current."""
+    monkeypatch.delenv("OBSERVABILITY_OPENTELEMETRY_TRACE_CONTENT", raising=False)
+
+    provider = trace_sdk.TracerProvider()
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span("call_llm") as call_llm_span:
+        with tracer.start_as_current_span("generate_content") as inference_span:
+            telemetry.trace_call_llm(
+                _FakeInvocationContext(),
+                "event-id",
+                _FakeLlmRequest(),
+                _FakeLlmResponse(),
+                call_llm_span,
+            )
+
+    assert call_llm_span.attributes["gen_ai.request.model"] == "test-model"
+    assert "gen_ai.request.model" not in inference_span.attributes
+
+
 def test_content_tracing_uses_veadk_config_when_env_missing(monkeypatch):
     monkeypatch.delenv("OBSERVABILITY_OPENTELEMETRY_TRACE_CONTENT", raising=False)
     monkeypatch.setattr(settings.opentelemetry_config, "trace_content", False)
