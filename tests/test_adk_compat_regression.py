@@ -33,16 +33,80 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata as im
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
+from opentelemetry import context as context_api
 from packaging.version import Version
 
 import veadk.utils.adk_compat as adk_compat
+from veadk.utils.patches import patch_google_adk_telemetry
 from veadk.tracing.telemetry.attributes.extractors.tool_attributes_extractors import (
     tool_gen_ai_tool_output,
 )
 from veadk.tracing.telemetry.attributes.extractors.types import ToolAttributesParams
+
+
+def test_adk_native_telemetry_is_suppressed_only_inside_veadk_context(monkeypatch):
+    """Capability patch leaves plain ADK runs unchanged and is idempotent."""
+    from google.adk.telemetry import tracing as adk_tracing
+
+    monkeypatch.setattr(
+        adk_tracing, "_should_emit_native_telemetry", lambda agent: True
+    )
+
+    patch_google_adk_telemetry()
+    wrapped = adk_tracing._should_emit_native_telemetry
+    patch_google_adk_telemetry()
+
+    assert adk_tracing._should_emit_native_telemetry is wrapped
+    assert wrapped(object()) is True
+
+    token = context_api.attach(
+        context_api.set_value("suppress_language_model_instrumentation", True)
+    )
+    try:
+        assert wrapped(object()) is False
+    finally:
+        context_api.detach(token)
+
+
+@pytest.mark.asyncio
+async def test_legacy_adk_inference_span_is_suppressed_inside_veadk_context(
+    monkeypatch,
+):
+    """ADK 1.34-2.1 uses the inference context manager without a gate."""
+    from google.adk.telemetry import tracing as adk_tracing
+
+    calls = []
+
+    @asynccontextmanager
+    async def use_inference_span(*args, **kwargs):
+        calls.append((args, kwargs))
+        yield "native-span"
+
+    monkeypatch.delattr(adk_tracing, "_should_emit_native_telemetry", raising=False)
+    monkeypatch.setattr(adk_tracing, "use_inference_span", use_inference_span)
+
+    patch_google_adk_telemetry()
+    wrapped = adk_tracing.use_inference_span
+    patch_google_adk_telemetry()
+
+    assert adk_tracing.use_inference_span is wrapped
+    async with wrapped("request", "context", "event") as span:
+        assert span == "native-span"
+    assert len(calls) == 1
+
+    token = context_api.attach(
+        context_api.set_value("suppress_language_model_instrumentation", True)
+    )
+    try:
+        async with wrapped("request", "context", "event") as span:
+            assert span is None
+    finally:
+        context_api.detach(token)
+    assert len(calls) == 1
 
 
 # ---------------------------------------------------------------------------

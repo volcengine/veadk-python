@@ -174,6 +174,12 @@ class _InMemorySpanProcessor(export.SimpleSpanProcessor):
             span.set_attribute("gen_ai.span.kind", "agent")
 
             ctx = set_value("agent_run_span_instance", span, context=parent_context)
+            # ADK telemetry schema v2 may omit the legacy ``invocation`` span.
+            # Carry the suppression flag on the agent span as well so native
+            # inference spans and metrics remain deduplicated across versions.
+            ctx = set_value(
+                "suppress_language_model_instrumentation", True, context=ctx
+            )
             token = attach(ctx)
             setattr(span, "_agent_run_token", token)  # for later detach
 
