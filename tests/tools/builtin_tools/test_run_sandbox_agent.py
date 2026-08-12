@@ -213,9 +213,8 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
             _invocation_context=invocation_context,
         )
 
-    def test_prefers_new_skill_execute_api_when_endpoint_is_available(self):
+    def test_execute_skills_posts_a2a_message_send_and_returns_artifact_text(self):
         captured_requests = []
-        health_endpoints = []
         session_kwargs = []
 
         class FakeResponse:
@@ -226,7 +225,20 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
                 return None
 
             def read(self):
-                return b'{"content": "api result"}'
+                return json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "req",
+                        "result": {
+                            "kind": "task",
+                            "id": "task-1",
+                            "status": {"state": "completed"},
+                            "artifacts": [
+                                {"parts": [{"kind": "text", "text": "a2a result"}]}
+                            ],
+                        },
+                    }
+                ).encode()
 
         def fake_urlopen(request, timeout=None):
             captured_requests.append((request, timeout))
@@ -236,26 +248,30 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
             ensure_agentkit_session_endpoint=lambda **kwargs: (
                 session_kwargs.append(kwargs) or "https://sandbox.test"
             ),
-            wait_for_skill_api_health=lambda **kwargs: health_endpoints.append(
-                kwargs["endpoint"]
-            ),
         )
 
         with patch.object(module.request, "urlopen", fake_urlopen):
             result = module.execute_skills("do work", tool_context=self._tool_context())
 
-        self.assertEqual(result, "api result")
+        self.assertEqual(result, "a2a result")
         self.assertTrue(session_kwargs[0]["wait_until_ready"])
-        self.assertEqual(["https://sandbox.test"], health_endpoints)
+        self.assertEqual("test-tool", session_kwargs[0]["tool_id"])
+        self.assertEqual(
+            "agent_user_session-1", session_kwargs[0]["tool_user_session_id"]
+        )
         self.assertEqual(1, len(captured_requests))
         request_obj, timeout = captured_requests[0]
-        self.assertEqual("https://sandbox.test/v1/skills/execute", request_obj.full_url)
-        self.assertEqual(900, timeout)
+        payload = json.loads(request_obj.data.decode())
+        self.assertEqual("https://sandbox.test/a2a", request_obj.full_url)
+        self.assertEqual(60, timeout)
         self.assertEqual("POST", request_obj.get_method())
-        self.assertEqual("tip-from-state", request_obj.headers["X-tip-token-key"])
-        self.assertIn(b'"prompt": "do work"', request_obj.data)
+        self.assertEqual("message/send", payload["method"])
+        self.assertEqual("do work", payload["params"]["message"]["parts"][0]["text"])
+        self.assertFalse(payload["params"]["configuration"]["blocking"])
+        self.assertEqual("user", payload["params"]["metadata"]["user_id"])
+        self.assertEqual("session-1", payload["params"]["metadata"]["session_id"])
 
-    def test_health_check_retries_502_until_upstream_is_ready(self):
+    def test_a2a_retries_502_until_upstream_is_ready(self):
         attempts = []
 
         class HealthyResponse:
@@ -265,6 +281,22 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
             def __exit__(self, *_args):
                 return None
 
+            def read(self):
+                return json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "req",
+                        "result": {
+                            "kind": "task",
+                            "id": "task-1",
+                            "status": {"state": "completed"},
+                            "artifacts": [
+                                {"parts": [{"kind": "text", "text": "ready"}]}
+                            ],
+                        },
+                    }
+                ).encode()
+
         class ErrorResponse:
             def read(self):
                 return b"bad gateway"
@@ -272,7 +304,9 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
             def close(self):
                 return None
 
-        module = _load_execute_skills_module(wait_for_skill_api_health=None)
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
 
         def fake_urlopen(req, **_kwargs):
             attempts.append((req.full_url, req.get_method()))
@@ -290,113 +324,94 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
             patch.object(module.request, "urlopen", fake_urlopen),
             patch.object(module.time, "sleep") as sleep,
         ):
-            module._wait_for_skill_api_health(endpoint="https://sandbox.test")
+            result = module.execute_skills("do work", tool_context=self._tool_context())
 
+        self.assertEqual(result, "ready")
         self.assertEqual(
             [
-                ("https://sandbox.test/v1/skills/healthz", "GET"),
-                ("https://sandbox.test/v1/skills/healthz", "GET"),
+                ("https://sandbox.test/a2a", "POST"),
+                ("https://sandbox.test/a2a", "POST"),
             ],
             attempts,
         )
-        sleep.assert_called_once_with(1.0)
+        sleep.assert_called_once_with(2.0)
 
-    def test_health_check_allows_images_without_health_endpoint(self):
-        class NotFoundResponse:
-            def read(self):
-                return b"not found"
+    def test_env_vars_are_rejected_for_a2a_execution(self):
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: self.fail(
+                "env_vars must be rejected before endpoint resolution"
+            ),
+        )
 
-            def close(self):
-                return None
-
-        module = _load_execute_skills_module(wait_for_skill_api_health=None)
-
-        def fake_urlopen(req, **_kwargs):
-            raise module.error.HTTPError(
-                url=req.full_url,
-                code=404,
-                msg="Not Found",
-                hdrs={},
-                fp=NotFoundResponse(),
+        with self.assertRaisesRegex(ValueError, "env_vars is not supported"):
+            module.execute_skills(
+                "do work",
+                tool_context=self._tool_context(),
+                env_vars={"CUSTOM_VALUE": "custom"},
             )
 
-        with patch.object(module.request, "urlopen", fake_urlopen):
-            module._wait_for_skill_api_health(endpoint="https://sandbox.test")
+    def test_a2a_polls_task_until_completed_and_returns_status_message_text(self):
+        captured_requests = []
+        responses = [
+            {
+                "jsonrpc": "2.0",
+                "id": "send",
+                "result": {
+                    "kind": "task",
+                    "id": "task-1",
+                    "status": {"state": "working"},
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": "get",
+                "result": {
+                    "kind": "task",
+                    "id": "task-1",
+                    "status": {
+                        "state": "completed",
+                        "message": {"parts": [{"kind": "text", "text": "poll result"}]},
+                    },
+                },
+            },
+        ]
 
-    def test_env_vars_use_legacy_runcode_execution(self):
-        captured_kwargs = {}
+        class FakeResponse:
+            def __enter__(self):
+                return self
 
-        def fake_run_sandbox_agent(**kwargs):
-            captured_kwargs.update(kwargs)
-            return "legacy result"
+            def __exit__(self, *_args):
+                return None
 
-        module = _load_execute_skills_module(
-            ensure_agentkit_session_endpoint=lambda **_kwargs: self.fail(
-                "Skill API must not be used when env_vars are provided"
-            ),
-            run_sandbox_agent=fake_run_sandbox_agent,
-        )
+            def read(self):
+                return json.dumps(responses.pop(0)).encode()
 
-        result = module.execute_skills(
-            "do work",
-            tool_context=self._tool_context(),
-            env_vars={"CUSTOM_VALUE": "custom", "TOS_SKILLS_DIR": ""},
-        )
-
-        self.assertEqual(result, "legacy result")
-        self.assertEqual(
-            {"CUSTOM_VALUE": "custom", "TOS_SKILLS_DIR": ""},
-            captured_kwargs["extra_env_vars"],
-        )
-
-    def test_python_agent_mode_uses_legacy_runcode_execution(self):
-        captured_kwargs = {}
-
-        def fake_run_sandbox_agent(**kwargs):
-            captured_kwargs.update(kwargs)
-            return "legacy result"
-
-        module = _load_execute_skills_module(
-            ensure_agentkit_session_endpoint=lambda **_kwargs: self.fail(
-                "Session endpoint must not be used in python_agent mode"
-            ),
-            run_sandbox_agent=fake_run_sandbox_agent,
-        )
-
-        result = module.execute_skills(
-            "do work",
-            tool_context=self._tool_context(),
-            invocation_mode="python_agent",
-        )
-
-        self.assertEqual(result, "legacy result")
-        self.assertEqual("do work", captured_kwargs["workflow_prompt"])
-        self.assertEqual("test-tool", captured_kwargs["tool_id"])
-
-    def test_invocation_mode_can_be_read_from_environment(self):
-        captured_kwargs = {}
-
-        def fake_run_sandbox_agent(**kwargs):
-            captured_kwargs.update(kwargs)
-            return "legacy result"
+        def fake_urlopen(request, timeout=None):
+            captured_requests.append((request, timeout))
+            return FakeResponse()
 
         module = _load_execute_skills_module(
-            ensure_agentkit_session_endpoint=lambda **_kwargs: self.fail(
-                "Session endpoint must not be used in python_agent mode"
-            ),
-            run_sandbox_agent=fake_run_sandbox_agent,
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
         )
 
-        with patch.dict(
-            module.os.environ,
-            {"AGENTKIT_SKILL_INVOCATION_MODE": "python_agent"},
+        with (
+            patch.object(module.request, "urlopen", fake_urlopen),
+            patch.object(module.time, "sleep") as sleep,
         ):
             result = module.execute_skills("do work", tool_context=self._tool_context())
 
-        self.assertEqual(result, "legacy result")
-        self.assertEqual("do work", captured_kwargs["workflow_prompt"])
+        self.assertEqual(result, "poll result")
+        self.assertEqual(2, len(captured_requests))
+        send_request, _send_timeout = captured_requests[0]
+        get_request, _get_timeout = captured_requests[1]
+        send_payload = json.loads(send_request.data.decode())
+        get_payload = json.loads(get_request.data.decode())
+        self.assertEqual("message/send", send_payload["method"])
+        self.assertEqual("tasks/get", get_payload["method"])
+        self.assertEqual("task-1", get_payload["params"]["id"])
+        sleep.assert_called_once_with(2.0)
 
-    def test_run_sse_mode_posts_run_sse_and_aggregates_event_text(self):
+    def test_a2a_returns_history_text_when_artifacts_and_status_are_empty(self):
         captured_requests = []
 
         class FakeResponse:
@@ -407,11 +422,29 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
                 return None
 
             def read(self):
-                return (
-                    b'data: {"content":{"parts":[{"text":"hello "}]}}\n\n'
-                    b'data: {"content":{"parts":[{"text":"world"}]}}\n\n'
-                    b"data: [DONE]\n\n"
-                )
+                return json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "req",
+                        "result": {
+                            "kind": "task",
+                            "id": "task-1",
+                            "status": {"state": "completed"},
+                            "history": [
+                                {
+                                    "role": "user",
+                                    "parts": [{"kind": "text", "text": "do work"}],
+                                },
+                                {
+                                    "role": "agent",
+                                    "parts": [
+                                        {"kind": "text", "text": "history result"}
+                                    ],
+                                },
+                            ],
+                        },
+                    }
+                ).encode()
 
         def fake_urlopen(request, timeout=None):
             captured_requests.append((request, timeout))
@@ -422,23 +455,18 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         )
 
         with patch.object(module.request, "urlopen", fake_urlopen):
-            result = module.execute_skills(
-                "do work",
-                tool_context=self._tool_context(),
-                invocation_mode="run_sse",
-            )
+            result = module.execute_skills("do work", tool_context=self._tool_context())
 
-        self.assertEqual(result, "hello world")
+        self.assertEqual(result, "history result")
         request_obj, timeout = captured_requests[0]
-        self.assertEqual("https://sandbox.test/run_sse", request_obj.full_url)
-        self.assertEqual(900, timeout)
-        self.assertIn(b'"app_name": "agent"', request_obj.data)
-        self.assertIn(b'"session_id": "session-1"', request_obj.data)
-        self.assertIn(b'"text": "do work"', request_obj.data)
+        payload = json.loads(request_obj.data.decode())
+        self.assertEqual("https://sandbox.test/a2a", request_obj.full_url)
+        self.assertEqual(60, timeout)
+        self.assertEqual("message/send", payload["method"])
+        self.assertEqual("do work", payload["params"]["message"]["parts"][0]["text"])
+        self.assertFalse(payload["params"]["configuration"]["blocking"])
 
-    def test_a2a_mode_posts_message_send_and_returns_text(self):
-        captured_requests = []
-
+    def test_a2a_rejects_non_task_message_send_response(self):
         class FakeResponse:
             def __enter__(self):
                 return self
@@ -459,42 +487,28 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
                     }
                 ).encode()
 
-        def fake_urlopen(request, timeout=None):
-            captured_requests.append((request, timeout))
-            return FakeResponse()
-
         module = _load_execute_skills_module(
             ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
         )
 
-        with patch.object(module.request, "urlopen", fake_urlopen):
-            result = module.execute_skills(
-                "do work",
-                tool_context=self._tool_context(),
-                invocation_mode="a2a",
-            )
+        with patch.object(
+            module.request, "urlopen", lambda *_args, **_kwargs: FakeResponse()
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError, "A2ASendMessage response result is not an A2A task"
+            ):
+                module.execute_skills("do work", tool_context=self._tool_context())
 
-        self.assertEqual(result, "a2a result")
-        request_obj, timeout = captured_requests[0]
-        payload = json.loads(request_obj.data.decode())
-        self.assertEqual("https://sandbox.test/a2a", request_obj.full_url)
-        self.assertEqual(900, timeout)
-        self.assertEqual("message/send", payload["method"])
-        self.assertEqual("do work", payload["params"]["message"]["parts"][0]["text"])
-        self.assertTrue(payload["params"]["configuration"]["blocking"])
-
-    def test_unsupported_invocation_mode_raises_value_error(self):
+    def test_timeout_must_be_within_a2a_execution_limit(self):
         module = _load_execute_skills_module(
             ensure_agentkit_session_endpoint=lambda **_kwargs: self.fail(
-                "Invalid mode must be rejected before endpoint resolution"
+                "Invalid timeout must be rejected before endpoint resolution"
             ),
         )
 
-        with self.assertRaisesRegex(ValueError, "Unsupported AgentKit Skill"):
+        with self.assertRaisesRegex(ValueError, "between 1 and 1800 seconds"):
             module.execute_skills(
-                "do work",
-                tool_context=self._tool_context(),
-                invocation_mode="stream",
+                "do work", tool_context=self._tool_context(), timeout=0
             )
 
     def test_skill_api_url_preserves_agentkit_endpoint_query_auth(self):
@@ -510,7 +524,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
             ),
         )
 
-    def test_requires_sandbox_upgrade_when_skill_api_returns_404(self):
+    def test_a2a_http_404_is_not_swallowed(self):
         class NotFoundResponse:
             def read(self):
                 return b"not found"
@@ -520,7 +534,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
 
         def fake_urlopen(_request, **_kwargs):
             raise module.error.HTTPError(
-                url="https://sandbox.test/v1/skills/execute",
+                url="https://sandbox.test/a2a",
                 code=404,
                 msg="Not Found",
                 hdrs={},
@@ -534,11 +548,11 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         with patch.object(module.request, "urlopen", fake_urlopen):
             with self.assertRaisesRegex(
                 RuntimeError,
-                r"HTTP 404.*(?:升级|upgrade).*Skill",
+                r"AgentKit Skill /a2a request failed with HTTP 404: not found",
             ):
                 module.execute_skills("do work", tool_context=self._tool_context())
 
-    def test_requires_sandbox_upgrade_when_skill_api_returns_405(self):
+    def test_a2a_http_405_is_not_swallowed(self):
         class MethodNotAllowedResponse:
             def read(self):
                 return b"method not allowed"
@@ -548,7 +562,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
 
         def fake_urlopen(_request, **_kwargs):
             raise module.error.HTTPError(
-                url="https://sandbox.test/v1/skills/execute",
+                url="https://sandbox.test/a2a",
                 code=405,
                 msg="Method Not Allowed",
                 hdrs={},
@@ -562,7 +576,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         with patch.object(module.request, "urlopen", fake_urlopen):
             with self.assertRaisesRegex(
                 RuntimeError,
-                r"HTTP 405.*(?:升级|upgrade).*Skill",
+                r"AgentKit Skill /a2a request failed with HTTP 405: method not allowed",
             ):
                 module.execute_skills("do work", tool_context=self._tool_context())
 
@@ -589,7 +603,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"tool_context is required"):
             module.execute_skills("do work", tool_context=None)
 
-    def test_non_compatibility_skill_api_http_error_is_not_swallowed(self):
+    def test_a2a_http_500_is_not_swallowed(self):
         class ServerErrorResponse:
             def read(self):
                 return b"internal error"
@@ -599,7 +613,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
 
         def fake_urlopen(_request, **_kwargs):
             raise module.error.HTTPError(
-                url="https://sandbox.test/v1/skills/execute",
+                url="https://sandbox.test/a2a",
                 code=500,
                 msg="Internal Server Error",
                 hdrs={},
