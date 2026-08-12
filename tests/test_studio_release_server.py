@@ -483,6 +483,43 @@ def test_standalone_publisher_starts_without_importing_veadk() -> None:
     assert completed.returncode == 0, completed.stderr
 
 
+def test_standalone_publisher_exposes_release_changelog_to_vite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_dir = tmp_path / "frontend-output"
+    captured: list[str] = []
+
+    monkeypatch.setattr(
+        release_publisher, "_validate_source_checkout", lambda _root: None
+    )
+    monkeypatch.setattr(
+        release_publisher.shutil,
+        "which",
+        lambda _name, path=None: "/bin/npm",
+    )
+
+    def _run(command: list[str], **kwargs: Any) -> None:
+        environment = kwargs["env"]
+        captured.append(environment["VITE_STUDIO_RELEASE_CHANGELOG"])
+        if "build" in command:
+            output_dir.mkdir()
+            (output_dir / "index.html").write_text("studio", encoding="utf-8")
+
+    monkeypatch.setattr(release_publisher.subprocess, "run", _run)
+
+    release_publisher._build_frontend_assets(
+        tmp_path,
+        output_dir,
+        {"PATH": os.environ["PATH"]},
+        changelog=("新增能力;修复问题", "优化体验"),
+    )
+
+    assert captured == [
+        '["新增能力;修复问题", "优化体验"]',
+        '["新增能力;修复问题", "优化体验"]',
+    ]
+
+
 def test_standalone_publisher_builds_bundle_from_source_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

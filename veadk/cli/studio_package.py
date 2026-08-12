@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
 import sys
@@ -68,18 +70,30 @@ def studio_run_script(
     )
 
 
-def build_frontend_assets(source_root: Path, output_dir: Path) -> None:
+def build_frontend_assets(
+    source_root: Path,
+    output_dir: Path,
+    *,
+    changelog: tuple[str, ...] = (),
+) -> None:
     """Build the checkout's React frontend into an isolated directory."""
     _validate_source_checkout(source_root)
     npm = shutil.which("npm")
     if npm is None:
         raise ValueError("npm is required to build the Studio frontend.")
+    build_environment = os.environ.copy()
+    build_environment["VITE_STUDIO_RELEASE_CHANGELOG"] = json.dumps(
+        list(changelog), ensure_ascii=False
+    )
     frontend_root = source_root / "frontend"
     try:
-        subprocess.run([npm, "ci"], cwd=frontend_root, check=True)
+        subprocess.run(
+            [npm, "ci"], cwd=frontend_root, env=build_environment, check=True
+        )
         subprocess.run(
             [npm, "run", "build", "--", "--outDir", str(output_dir)],
             cwd=frontend_root,
+            env=build_environment,
             check=True,
         )
     except subprocess.CalledProcessError as error:

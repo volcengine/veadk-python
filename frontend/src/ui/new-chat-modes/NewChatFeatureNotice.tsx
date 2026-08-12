@@ -1,19 +1,18 @@
 import { StudioUpdateControl } from "../StudioUpdateControl";
+import { parseReleaseNotes } from "../releaseNotes";
 
-const FEATURES = [
-  {
-    title: "多地域智能体",
-    description: "并行加载北京与上海 Runtime，列表下滑即可继续加载。",
-  },
-  {
-    title: "会话内切换",
-    description: "在输入框旁选择智能体，并直接开启一段新会话。",
-  },
-  {
-    title: "可视化执行画布",
-    description: "通过横向画布查看多智能体结构，并支持全屏浏览。",
-  },
+const DEFAULT_RELEASE_NOTES = [
+  "多地域智能体：并行加载北京与上海 Runtime，列表下滑即可继续加载。",
+  "会话内切换：在输入框旁选择智能体，并直接开启一段新会话。",
+  "可视化执行画布：通过横向画布查看多智能体结构，并支持全屏浏览。",
 ] as const;
+
+const bundledReleaseNotes = parseReleaseNotes(
+  import.meta.env.VITE_STUDIO_RELEASE_CHANGELOG,
+);
+const releaseNotes = bundledReleaseNotes.length
+  ? bundledReleaseNotes
+  : DEFAULT_RELEASE_NOTES;
 
 export function NewChatFeatureNotice({ canUpdate = false }: { canUpdate?: boolean }) {
   return (
@@ -34,11 +33,8 @@ export function NewChatFeatureNotice({ canUpdate = false }: { canUpdate?: boolea
       >
         <strong>本次更新</strong>
         <ul>
-          {FEATURES.map((feature) => (
-            <li key={feature.title}>
-              <span>{feature.title}</span>
-              <p>{feature.description}</p>
-            </li>
+          {releaseNotes.map((note) => (
+            <li key={note}>{note}</li>
           ))}
         </ul>
       </section>

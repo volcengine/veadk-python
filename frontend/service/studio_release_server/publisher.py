@@ -280,16 +280,27 @@ def _build_frontend_assets(
     source_root: Path,
     output_dir: Path,
     env: Mapping[str, str],
+    *,
+    changelog: tuple[str, ...] = (),
 ) -> None:
     npm = shutil.which("npm", path=env.get("PATH"))
     if npm is None:
         raise StudioPublisherError("npm is required to build the Studio frontend.")
+    build_environment = dict(env)
+    build_environment["VITE_STUDIO_RELEASE_CHANGELOG"] = json.dumps(
+        list(changelog), ensure_ascii=False
+    )
     try:
-        subprocess.run([npm, "ci"], cwd=source_root / "frontend", env=env, check=True)
+        subprocess.run(
+            [npm, "ci"],
+            cwd=source_root / "frontend",
+            env=build_environment,
+            check=True,
+        )
         subprocess.run(
             [npm, "run", "build", "--", "--outDir", str(output_dir)],
             cwd=source_root / "frontend",
-            env=env,
+            env=build_environment,
             check=True,
         )
     except subprocess.CalledProcessError as error:
@@ -412,7 +423,12 @@ def build_studio_release(
         resolved_frontend = frontend_assets
         if resolved_frontend is None:
             resolved_frontend = workspace / "frontend"
-            _build_frontend_assets(source_root, resolved_frontend, env)
+            _build_frontend_assets(
+                source_root,
+                resolved_frontend,
+                env,
+                changelog=changelog,
+            )
         elif not (resolved_frontend / "index.html").is_file():
             raise StudioPublisherError(
                 "Prepared Studio frontend assets contain no index.html."
