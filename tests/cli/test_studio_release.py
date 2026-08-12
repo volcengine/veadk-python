@@ -26,7 +26,7 @@ from veadk.cli.studio_dependencies import (
     stage_studio_dependency_wheels,
     write_studio_dependency_manifest,
 )
-from veadk.cli.studio_package import studio_run_script
+from veadk.cli.studio_package import build_frontend_assets, studio_run_script
 from veadk.cli.studio_release import (
     StudioReleaseError,
     StudioReleaseManifest,
@@ -94,6 +94,41 @@ def test_manifest_round_trip_uses_public_field_names() -> None:
     assert payload["gitSha"] == "a" * 40
     assert payload["changelog"] == ["新增版本选择", "修复自更新权限"]
     assert StudioReleaseManifest.from_json(manifest.to_json()) == manifest
+
+
+def test_frontend_build_exposes_release_changelog_to_vite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_dir = tmp_path / "frontend-output"
+    captured: list[str] = []
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_package._validate_source_checkout", lambda _root: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.shutil.which", lambda _name: "/bin/npm"
+    )
+
+    def _run(command: list[str], **kwargs: object) -> None:
+        environment = kwargs["env"]
+        assert isinstance(environment, dict)
+        captured.append(str(environment["VITE_STUDIO_RELEASE_CHANGELOG"]))
+        if "build" in command:
+            output_dir.mkdir()
+            (output_dir / "index.html").write_text("studio", encoding="utf-8")
+
+    monkeypatch.setattr("veadk.cli.studio_package.subprocess.run", _run)
+
+    build_frontend_assets(
+        tmp_path,
+        output_dir,
+        changelog=("新增能力;修复问题", "优化体验"),
+    )
+
+    assert captured == [
+        '["新增能力;修复问题", "优化体验"]',
+        '["新增能力;修复问题", "优化体验"]',
+    ]
 
 
 @pytest.mark.parametrize("version", ["20260724", "20261324153045", "latest"])

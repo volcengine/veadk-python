@@ -1235,27 +1235,23 @@ body {
   font-weight: 600;
 }
 .welcome-feature-popover ul {
-  display: grid;
-  gap: 12px;
+  display: block;
+  max-height: min(220px, 32vh);
   margin: 0;
-  padding: 0;
-  list-style: none;
+  padding: 0 4px 0 18px;
+  overflow-y: auto;
+  list-style: disc outside;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 .welcome-feature-popover li {
-  display: grid;
-  gap: 3px;
-}
-.welcome-feature-popover li span {
-  color: hsl(var(--foreground));
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.4;
-}
-.welcome-feature-popover p {
-  margin: 0;
+  display: list-item;
   color: hsl(var(--muted-foreground));
   font-size: 12px;
   line-height: 1.55;
+}
+.welcome-feature-popover li + li {
+  margin-top: 8px;
 }
 @media (max-width: 900px) {
   .welcome-feature-popover {

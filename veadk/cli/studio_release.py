@@ -359,7 +359,11 @@ def build_studio_release(
         resolved_frontend_assets = frontend_assets
         if resolved_frontend_assets is None:
             resolved_frontend_assets = workspace / "frontend"
-            build_frontend_assets(source_root, resolved_frontend_assets)
+            build_frontend_assets(
+                source_root,
+                resolved_frontend_assets,
+                changelog=changelog,
+            )
         elif not (resolved_frontend_assets / "index.html").is_file():
             raise StudioReleaseError(
                 "Prepared Studio frontend assets contain no index.html."
