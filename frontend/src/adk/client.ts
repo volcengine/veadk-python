@@ -2287,13 +2287,6 @@ export interface SiteBranding {
   logoUrl: string;
 }
 
-export interface StudioTelemetryApmplusConfig {
-  aid: number;
-  token: string;
-  domain: string;
-  env: string;
-}
-
 export interface StudioTelemetryContext {
   deployId: string;
   userPoolId: string;
@@ -2306,8 +2299,6 @@ export interface StudioTelemetryContext {
 
 export interface StudioTelemetryConfig {
   enabled: boolean;
-  provider?: "apmplus";
-  apmplus?: StudioTelemetryApmplusConfig;
   studio?: StudioTelemetryContext;
 }
 
@@ -2356,31 +2347,16 @@ const DEFAULT_UI_CONFIG: UiConfig = {
 function normalizeStudioTelemetryConfig(value: unknown): StudioTelemetryConfig {
   if (!value || typeof value !== "object") return DISABLED_STUDIO_TELEMETRY;
   const config = value as Partial<StudioTelemetryConfig>;
-  if (!config.enabled) return DISABLED_STUDIO_TELEMETRY;
-  const apmplus = config.apmplus;
   if (
-    !apmplus ||
-    typeof apmplus.aid !== "number" ||
-    !Number.isFinite(apmplus.aid) ||
-    typeof apmplus.token !== "string" ||
-    !apmplus.token
+    config.enabled !== true ||
+    !config.studio ||
+    typeof config.studio !== "object"
   ) {
     return DISABLED_STUDIO_TELEMETRY;
   }
-  const studio = (config.studio ?? {}) as Partial<StudioTelemetryContext>;
+  const studio = config.studio as Partial<StudioTelemetryContext>;
   return {
     enabled: true,
-    provider: config.provider === "apmplus" ? "apmplus" : undefined,
-    apmplus: {
-      aid: apmplus.aid,
-      token: apmplus.token,
-      domain: typeof apmplus.domain === "string" && apmplus.domain
-        ? apmplus.domain
-        : "apmplus.volces.com",
-      env: typeof apmplus.env === "string" && apmplus.env
-        ? apmplus.env
-        : "production",
-    },
     studio: {
       deployId: typeof studio.deployId === "string" ? studio.deployId : "",
       userPoolId: typeof studio.userPoolId === "string"

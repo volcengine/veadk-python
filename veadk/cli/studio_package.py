@@ -16,21 +16,14 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from veadk.cli.studio_dependencies import stage_studio_dependency_wheels
-from veadk.cli.studio_telemetry import (
-    normalize_studio_apmplus_release_environment,
-    studio_apmplus_release_environment_from_env,
-)
 from veadk.cli.frontend_branding import SiteLogo
+from veadk.cli.studio_dependencies import stage_studio_dependency_wheels
 from veadk.utils.cloud_provider import DEFAULT_CLOUD_PROVIDER, CloudProvider
-
-STUDIO_RELEASE_ENVIRONMENT_FILENAME = ".studio-release-environment.json"
 
 
 def stage_studio_provider_requirements(
@@ -102,7 +95,6 @@ def write_studio_package(
     *,
     requirements: str,
     site_logo: SiteLogo | None,
-    release_environment: dict[str, str] | None = None,
     provider: CloudProvider | None = DEFAULT_CLOUD_PROVIDER,
 ) -> None:
     """Write the Studio entrypoint, requirements, and optional logo."""
@@ -116,38 +108,6 @@ def write_studio_package(
     if site_logo is not None and logo_filename is not None:
         (package_dir / logo_filename).write_bytes(site_logo.content)
     (package_dir / "requirements.txt").write_text(requirements, encoding="utf-8")
-    environment = normalize_studio_apmplus_release_environment(
-        release_environment or {}
-    )
-    if environment:
-        (package_dir / STUDIO_RELEASE_ENVIRONMENT_FILENAME).write_text(
-            json.dumps(environment, ensure_ascii=True, sort_keys=True),
-            encoding="utf-8",
-        )
-
-
-def studio_release_environment_from_env() -> dict[str, str]:
-    """Return release-time Studio environment defaults from the publisher env."""
-    return studio_apmplus_release_environment_from_env()
-
-
-def read_studio_release_environment(
-    package_dir: Path,
-    *,
-    remove: bool = False,
-) -> dict[str, str]:
-    """Read release-time Studio environment defaults from an extracted bundle."""
-    path = package_dir / STUDIO_RELEASE_ENVIRONMENT_FILENAME
-    if not path.is_file():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        raise ValueError("Studio release environment is not valid JSON.") from error
-    environment = normalize_studio_apmplus_release_environment(payload)
-    if remove:
-        path.unlink(missing_ok=True)
-    return environment
 
 
 def build_local_studio_requirements(
