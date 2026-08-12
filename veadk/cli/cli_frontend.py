@@ -1573,12 +1573,26 @@ def _run_frontend_server(
             session_token=session_token or "",
         )
 
-    mount_skill_workbench_routes(
+    skill_workbench_service = mount_skill_workbench_routes(
         app,
         lambda request: _skill_identity(request).author,
         lambda request: _skill_identity(request).author,
         tools_client_factory=_skill_workbench_tools_client,
         skills_client_factory=_skill_workbench_skills_client,
+    )
+
+    from frontend.server.vibe_task import mount_vibe_task_routes
+
+    def _vibe_owner(request: Request) -> str:
+        principal = _require_agent_management(request)
+        return principal.owner_id if principal is not None else "local"
+
+    from frontend.server.vibe_task import VibeTaskService
+
+    mount_vibe_task_routes(
+        app,
+        _vibe_owner,
+        service=VibeTaskService(dev_env=skill_workbench_service),
     )
 
     from veadk.cli.frontend_coding_agents import mount_coding_agent_routes

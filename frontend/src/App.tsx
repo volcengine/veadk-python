@@ -5406,6 +5406,29 @@ export default function App() {
                 if (
                   !sandboxSession &&
                   turns.length === 0 &&
+                  newChatWorkspaceMode === "vibe"
+                ) {
+                  if (!text.trim()) return;
+                  void (async () => {
+                    setError("");
+                    try {
+                      const { vibeClient } = await import("./adk/vibe");
+                      const task = await vibeClient.create(text.trim());
+                      setInput("");
+                      setError(
+                        `Vibe Task ${task.taskId} 已创建。正在准备 8H Dev Sandbox。`,
+                      );
+                    } catch (error) {
+                      setError(
+                        error instanceof Error ? error.message : "Vibe Task 创建失败",
+                      );
+                    }
+                  })();
+                  return;
+                }
+                if (
+                  !sandboxSession &&
+                  turns.length === 0 &&
                   newChatWorkspaceMode === "skill"
                 ) {
                   if (!text.trim()) return;

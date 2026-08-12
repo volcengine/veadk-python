@@ -19,8 +19,27 @@ function AnimatedSkillIcon({ className = "" }: { className?: string }) {
   );
 }
 
+function VibeTaskIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M5 5.5h14v13H5z" />
+      <path d="m8 9 2 2-2 2M12.5 13H16" />
+    </svg>
+  );
+}
+
 const WORKSPACE_MODES = [
   { value: "agent", label: "智能体", icon: AgentFaceIcon },
+  { value: "vibe", label: "Vibe 创建", icon: VibeTaskIcon },
   { value: "skill", label: "技能定制", icon: AnimatedSkillIcon },
   { value: "video", label: "视频创作", icon: VideoGenerateIcon },
 ] as const;

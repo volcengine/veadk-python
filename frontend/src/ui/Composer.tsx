@@ -355,7 +355,9 @@ export function Composer({
         : "描述你想生成的技能…"
       : newChatWorkspaceMode === "video"
         ? "描述你想创作的视频…"
-        : `向 ${agentName} 发消息…`;
+        : newChatWorkspaceMode === "vibe"
+          ? "描述你想构建并完成云端验证的 VeADK Agent…"
+          : `向 ${agentName} 发消息…`;
   const placeholderText =
     disabled && newChatWorkspaceMode === "agent"
       ? "请先选择智能体"
