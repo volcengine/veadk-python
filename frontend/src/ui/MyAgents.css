@@ -365,6 +365,12 @@
   color: hsl(142 55% 28%);
 }
 
+.my-agent-status-label[data-wakeable] {
+  border-color: hsl(43 90% 48% / 0.3);
+  background: hsl(45 96% 52% / 0.14);
+  color: hsl(38 78% 36%);
+}
+
 .my-agent-meta,
 .my-agent-meta dt,
 .my-agent-meta dd {

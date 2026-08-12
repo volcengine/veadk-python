@@ -15,6 +15,7 @@
 """Tests for shared local Sandbox serve options."""
 
 import os
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -120,6 +121,34 @@ def test_local_sandbox_tool_options_fall_back_to_environment(
         "hermes-snapshot-from-env"
     )
     assert "sandbox_skill_creator_tool_id" not in captured
+
+
+def test_local_studio_mounts_snapshot_tools_into_sandbox_services() -> None:
+    source = Path("veadk/cli/cli_frontend.py").read_text(encoding="utf-8")
+
+    assert (
+        "SandboxConversationService(\n"
+        "        sandbox_gateway,\n"
+        "        tool_id=sandbox_chat_codex_tool_id,\n"
+        "        snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,\n"
+        "    )"
+    ) in source
+    assert (
+        "SandboxAgentSessionService(\n"
+        "            sandbox_gateway,\n"
+        '            kind="openclaw",\n'
+        "            tool_id=sandbox_chat_openclaw_tool_id,\n"
+        "            snapshot_tool_id=sandbox_chat_openclaw_snapshot_tool_id,\n"
+        "        )"
+    ) in source
+    assert (
+        "SandboxAgentSessionService(\n"
+        "            sandbox_gateway,\n"
+        '            kind="hermes",\n'
+        "            tool_id=sandbox_chat_hermes_tool_id,\n"
+        "            snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,\n"
+        "        )"
+    ) in source
 
 
 @pytest.mark.parametrize("command", [frontend, studio])

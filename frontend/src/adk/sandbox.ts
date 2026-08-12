@@ -19,6 +19,8 @@ export function sandboxStatusLabel(status: string): string {
   switch (status.trim().toLowerCase()) {
     case "ready":
       return "就绪";
+    case "wakeable":
+      return "可唤醒";
     case "creating":
       return "创建中";
     case "starting":
@@ -182,6 +184,7 @@ export interface SandboxStartOptions extends SandboxRequestOptions {
 }
 
 export interface SandboxSession {
+  resourceType: "session";
   id: string;
   toolName: "codex" | SandboxAgentKind;
   userSessionId: string;
@@ -199,6 +202,23 @@ export interface SandboxSession {
   model?: string;
   permissions: SandboxPermissions;
 }
+
+export interface SandboxSnapshot {
+  resourceType: "snapshot";
+  id: string;
+  snapshotId: string;
+  sourceSessionId: string;
+  toolName: "codex" | SandboxAgentKind;
+  userSessionId: string;
+  displayName: string;
+  status: string;
+  snapshotStatus: string;
+  reason: string;
+  createdAt: string;
+  createdBy: string;
+}
+
+export type SandboxAgentResource = SandboxSession | SandboxSnapshot;
 
 export interface SandboxAgentWorkspace {
   session: SandboxSession;
@@ -219,12 +239,12 @@ export interface SandboxReply {
 }
 
 export interface AgentKitSandboxClient {
-  listSessions(options?: SandboxRequestOptions): Promise<SandboxSession[]>;
+  listSessions(options?: SandboxRequestOptions): Promise<SandboxAgentResource[]>;
   startSession(options?: SandboxStartOptions): Promise<SandboxSession>;
   listAgentSessions(
     kind: SandboxAgentKind,
     options?: SandboxRequestOptions,
-  ): Promise<SandboxSession[]>;
+  ): Promise<SandboxAgentResource[]>;
   startAgentSession(
     kind: SandboxAgentKind,
     options?: SandboxStartOptions,
@@ -242,6 +262,16 @@ export interface AgentKitSandboxClient {
   deleteAgentSession(
     kind: SandboxAgentKind,
     sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<void>;
+  resumeSnapshot(
+    kind: "codex" | SandboxAgentKind,
+    snapshotId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxSession>;
+  deleteSnapshot(
+    kind: "codex" | SandboxAgentKind,
+    snapshotId: string,
     options?: SandboxRequestOptions,
   ): Promise<void>;
   connectSession(
@@ -379,6 +409,19 @@ interface SessionResponse {
 
 interface ListSessionsResponse {
   sessions?: SessionResponse[];
+  snapshots?: SnapshotResponse[];
+}
+
+interface SnapshotResponse {
+  snapshotId: string;
+  sessionId?: string;
+  userSessionId?: string;
+  displayName?: string;
+  status: string;
+  snapshotStatus?: string;
+  reason?: string;
+  createdAt?: string;
+  createdBy?: string;
 }
 
 interface SandboxErrorPayload {
@@ -448,6 +491,7 @@ function parseSession(
     throw new Error("AgentKit 沙箱返回了无效的 Session 信息。");
   }
   return {
+    resourceType: "session",
     id: data.sessionId,
     toolName,
     userSessionId: data.userSessionId ?? "",
@@ -464,6 +508,29 @@ function parseSession(
     busy: data.busy === true,
     ...(typeof data.model === "string" ? { model: data.model } : {}),
     permissions: parsePermissions(data.permissions),
+  };
+}
+
+function parseSnapshot(
+  data: SnapshotResponse,
+  toolName: SandboxSession["toolName"] = "codex",
+): SandboxSnapshot {
+  if (!data.snapshotId || !data.status) {
+    throw new Error("AgentKit 沙箱返回了无效的 Snapshot 信息。");
+  }
+  return {
+    resourceType: "snapshot",
+    id: data.snapshotId,
+    snapshotId: data.snapshotId,
+    sourceSessionId: data.sessionId ?? "",
+    toolName,
+    userSessionId: data.userSessionId ?? "",
+    displayName: data.displayName ?? "",
+    status: data.status,
+    snapshotStatus: data.snapshotStatus ?? "Unknown",
+    reason: data.reason ?? "",
+    createdAt: data.createdAt ?? "",
+    createdBy: data.createdBy ?? "",
   };
 }
 
@@ -856,7 +923,13 @@ export const sandboxClient: AgentKitSandboxClient = {
     if (!Array.isArray(data.sessions)) {
       throw new Error("AgentKit 沙箱返回了无效的 Session 列表。");
     }
-    return data.sessions.map((session) => parseSession(session));
+    if (data.snapshots !== undefined && !Array.isArray(data.snapshots)) {
+      throw new Error("AgentKit 沙箱返回了无效的 Snapshot 列表。");
+    }
+    return [
+      ...data.sessions.map((session) => parseSession(session)),
+      ...(data.snapshots ?? []).map((snapshot) => parseSnapshot(snapshot)),
+    ];
   },
 
   async startSession(options = {}) {
@@ -888,7 +961,13 @@ export const sandboxClient: AgentKitSandboxClient = {
     if (!Array.isArray(data.sessions)) {
       throw new Error(`AgentKit 返回了无效的 ${kind} Session 列表。`);
     }
-    return data.sessions.map((session) => parseSession(session, kind));
+    if (data.snapshots !== undefined && !Array.isArray(data.snapshots)) {
+      throw new Error(`AgentKit 返回了无效的 ${kind} Snapshot 列表。`);
+    }
+    return [
+      ...data.sessions.map((session) => parseSession(session, kind)),
+      ...(data.snapshots ?? []).map((snapshot) => parseSnapshot(snapshot, kind)),
+    ];
   },
 
   async startAgentSession(kind, options = {}) {
@@ -971,6 +1050,39 @@ export const sandboxClient: AgentKitSandboxClient = {
     );
     if (!response.ok && response.status !== 404) {
       throw await responseError(response, `无法删除 ${kind} 智能体。`);
+    }
+  },
+
+  async resumeSnapshot(kind, snapshotId, options = {}) {
+    if (!snapshotId) throw new Error("缺少要唤醒的 AgentKit Snapshot。");
+    const base = kind === "codex" ? "/web/sandbox" : `/web/${kind}`;
+    const response = await fetch(
+      withAuth(`${base}/snapshots/${encodeURIComponent(snapshotId)}/resume`),
+      {
+        method: "POST",
+        headers: sandboxHeaders(),
+        signal: requestSignal(options.signal, START_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok) {
+      throw await responseError(response, "无法从快照唤醒智能体，请稍后重试。");
+    }
+    return parseSession((await response.json()) as SessionResponse, kind);
+  },
+
+  async deleteSnapshot(kind, snapshotId, options = {}) {
+    if (!snapshotId) return;
+    const base = kind === "codex" ? "/web/sandbox" : `/web/${kind}`;
+    const response = await fetch(
+      withAuth(`${base}/snapshots/${encodeURIComponent(snapshotId)}`),
+      {
+        method: "DELETE",
+        headers: sandboxHeaders(),
+        signal: requestSignal(options.signal, CLOSE_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok && response.status !== 404) {
+      throw await responseError(response, "无法删除智能体快照。");
     }
   },
 

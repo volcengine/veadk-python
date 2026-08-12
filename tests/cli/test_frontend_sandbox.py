@@ -44,6 +44,7 @@ from veadk.cli.frontend_sandbox import (
     STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH,
     AgentkitSandboxGateway,
     SandboxAgentSessionService,
+    SandboxCloudSnapshot,
     SandboxCloudSession,
     SandboxConfigurationError,
     SandboxConversationService,
@@ -268,6 +269,7 @@ class _FakeGateway:
         self.usernames: list[str | None] = []
         self.creator_names: list[str] = []
         self.deleted: list[SandboxCloudSession] = []
+        self.deleted_snapshots: list[SandboxCloudSnapshot] = []
         self.thread_ids: list[str] = []
         self.connections: list[_FakeCodex] = []
         self.sessions: dict[str, SandboxCloudSession] = {
@@ -284,6 +286,7 @@ class _FakeGateway:
                 created_by="alice",
             )
         }
+        self.snapshots: dict[str, SandboxCloudSnapshot] = {}
 
     async def list_sessions(
         self, tool_id: str, username: str | None = None
@@ -295,6 +298,15 @@ class _FakeGateway:
             for session in self.sessions.values()
             if session.tool_id == tool_id
             and (username is None or session.created_by == username)
+        ]
+
+    async def list_snapshots(self, tool_id: str) -> list[SandboxCloudSnapshot]:
+        self.tool_ids.append(tool_id)
+        self.usernames.append(None)
+        return [
+            snapshot
+            for snapshot in self.snapshots.values()
+            if snapshot.tool_id == tool_id
         ]
 
     async def get_session(self, tool_id: str, session_id: str) -> SandboxCloudSession:
@@ -335,6 +347,29 @@ class _FakeGateway:
     async def delete_session(self, session: SandboxCloudSession) -> None:
         self.deleted.append(session)
         self.sessions.pop(session.instance_id, None)
+
+    async def resume_snapshot(
+        self, snapshot: SandboxCloudSnapshot
+    ) -> SandboxCloudSession:
+        session = SandboxCloudSession(
+            tool_id=snapshot.tool_id,
+            instance_id=f"resumed-{snapshot.snapshot_id}",
+            user_session_id=snapshot.user_session_id,
+            endpoint="https://sandbox.example/resumed?Authorization=secret",
+            region=snapshot.region,
+            status="Ready",
+            created_at="2026-08-06T10:00:00Z",
+            expire_at="2026-08-06T18:00:00Z",
+            tool_type="CodeEnv",
+            display_name=snapshot.display_name,
+            created_by=snapshot.created_by,
+        )
+        self.sessions[session.instance_id] = session
+        return session
+
+    async def delete_snapshot(self, snapshot: SandboxCloudSnapshot) -> None:
+        self.deleted_snapshots.append(snapshot)
+        self.snapshots.pop(snapshot.snapshot_id, None)
 
     async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
         del session
@@ -574,6 +609,69 @@ def test_managed_agent_persistent_create_requires_snapshot_tool(
     assert "快照" in missing.text
     assert temporary.status_code == 200
     assert temporary.json()["persistent"] is False
+
+
+def test_managed_agent_snapshot_is_listed_resumed_and_deleted() -> None:
+    gateway = _FakeGateway()
+    gateway.snapshots["snapshot-alice"] = SandboxCloudSnapshot(
+        tool_id="tool-openclaw-snapshot",
+        snapshot_id="snapshot-alice",
+        session_id="expired-alice",
+        user_session_id="studio-01234567-89ab-cdef-0123-456789abcdef",
+        region="cn-beijing",
+        status="Ready",
+        reason="Expired",
+        created_at="2026-08-06T09:00:00Z",
+        display_name="Alice Agent",
+        created_by="alice",
+    )
+    gateway.snapshots["snapshot-bob"] = SandboxCloudSnapshot(
+        tool_id="tool-openclaw-snapshot",
+        snapshot_id="snapshot-bob",
+        session_id="expired-bob",
+        user_session_id="studio-fedcba98-7654-3210-fedc-ba9876543210",
+        region="cn-beijing",
+        status="Ready",
+        reason="Expired",
+        created_at="2026-08-05T09:00:00Z",
+        display_name="Bob Agent",
+        created_by="bob",
+    )
+
+    with TestClient(_agent_app(gateway)) as client:
+        alice_list = client.get(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+        admin_list = client.get(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
+        )
+        denied = client.post(
+            "/web/openclaw/snapshots/snapshot-alice/resume",
+            headers={"X-Test-User": "bob"},
+        )
+        resumed = client.post(
+            "/web/openclaw/snapshots/snapshot-alice/resume",
+            headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
+        )
+        deleted = client.delete(
+            "/web/openclaw/snapshots/snapshot-bob",
+            headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
+        )
+
+    assert alice_list.status_code == 200
+    assert "snapshots" not in alice_list.json()
+    assert {item["snapshotId"] for item in admin_list.json()["snapshots"]} == {
+        "snapshot-alice",
+        "snapshot-bob",
+    }
+    assert {item["status"] for item in admin_list.json()["snapshots"]} == {"Wakeable"}
+    assert denied.status_code == 404
+    assert resumed.status_code == 200
+    assert resumed.json()["sessionId"] == "resumed-snapshot-alice"
+    assert deleted.status_code == 200
+    assert [item.snapshot_id for item in gateway.deleted_snapshots] == ["snapshot-bob"]
 
 
 def test_managed_agent_routes_enforce_username_scope() -> None:
@@ -840,7 +938,10 @@ def test_sandbox_routes_select_and_resolve_both_tool_variants() -> None:
     assert deleted_temporary.json() == {"deleted": True}
 
 
-def test_sandbox_persistent_create_requires_snapshot_tool() -> None:
+def test_sandbox_persistent_create_requires_snapshot_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SANDBOX_CHAT_CODEX_SNAPSHOT", raising=False)
     gateway = _FakeGateway()
     with TestClient(_app(gateway, snapshot_tool_id=None)) as client:
         missing = client.post(
@@ -857,6 +958,78 @@ def test_sandbox_persistent_create_requires_snapshot_tool() -> None:
     assert "快照" in missing.text
     assert temporary.status_code == 200
     assert temporary.json()["persistent"] is False
+
+
+def test_sandbox_snapshot_is_wakeable_for_admin_only() -> None:
+    gateway = _FakeGateway()
+    gateway.snapshots["snapshot-alice"] = SandboxCloudSnapshot(
+        tool_id="tool-studio-snapshot",
+        snapshot_id="snapshot-alice",
+        session_id="expired-alice",
+        user_session_id="studio-01234567-89ab-cdef-0123-456789abcdef",
+        region="cn-beijing",
+        status="Ready",
+        reason="Expired",
+        created_at="2026-08-06T09:00:00Z",
+        display_name="Alice Codex",
+        created_by="alice",
+    )
+    gateway.snapshots["snapshot-bob"] = SandboxCloudSnapshot(
+        tool_id="tool-studio-snapshot",
+        snapshot_id="snapshot-bob",
+        session_id="expired-bob",
+        user_session_id="studio-fedcba98-7654-3210-fedc-ba9876543210",
+        region="cn-beijing",
+        status="Ready",
+        reason="Expired",
+        created_at="2026-08-05T09:00:00Z",
+        display_name="Bob Codex",
+        created_by="bob",
+    )
+    gateway.snapshots["snapshot-failed"] = SandboxCloudSnapshot(
+        tool_id="tool-studio-snapshot",
+        snapshot_id="snapshot-failed",
+        session_id="failed-session",
+        user_session_id="studio-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        region="cn-beijing",
+        status="Failed",
+        reason="Create failed",
+        created_at="2026-08-06T10:00:00Z",
+        display_name="Failed Codex",
+        created_by="bob",
+    )
+
+    with TestClient(_app(gateway)) as client:
+        alice_list = client.get(
+            "/web/sandbox/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+        admin_list = client.get(
+            "/web/sandbox/sessions",
+            headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
+        )
+        resumed = client.post(
+            "/web/sandbox/snapshots/snapshot-alice/resume",
+            headers={"X-Test-User": "alice"},
+        )
+        admin_resumed = client.post(
+            "/web/sandbox/snapshots/snapshot-alice/resume",
+            headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
+        )
+        deleted = client.delete(
+            "/web/sandbox/snapshots/snapshot-bob",
+            headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
+        )
+
+    assert "snapshots" not in alice_list.json()
+    assert {item["snapshotId"] for item in admin_list.json()["snapshots"]} == {
+        "snapshot-alice",
+        "snapshot-bob",
+    }
+    assert resumed.status_code == 404
+    assert admin_resumed.json()["sessionId"] == "resumed-snapshot-alice"
+    assert admin_resumed.json()["persistent"] is True
+    assert deleted.json() == {"deleted": True}
 
 
 def test_sandbox_list_scope_follows_user_role() -> None:
@@ -896,7 +1069,15 @@ def test_sandbox_list_scope_follows_user_role() -> None:
         "alice",
         "bob",
     }
-    assert gateway.usernames[-6:] == ["alice", "alice", "bob", "bob", None, None]
+    assert gateway.usernames[-7:] == [
+        "alice",
+        "alice",
+        "bob",
+        "bob",
+        None,
+        None,
+        None,
+    ]
 
 
 def test_sandbox_admin_can_delete_another_users_session() -> None:
@@ -1200,6 +1381,7 @@ async def test_sandbox_start_requires_preconfigured_chat_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("SANDBOX_CHAT_CODEX", raising=False)
+    monkeypatch.delenv("SANDBOX_CHAT_CODEX_SNAPSHOT", raising=False)
     gateway = _FakeGateway()
     service = SandboxConversationService(gateway)
 
