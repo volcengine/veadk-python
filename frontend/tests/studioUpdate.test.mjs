@@ -26,6 +26,10 @@ const featureNoticeSource = readFileSync(
   new URL("../src/ui/new-chat-modes/NewChatFeatureNotice.tsx", import.meta.url),
   "utf8",
 );
+const releaseNotesSource = readFileSync(
+  new URL("../src/ui/releaseNotes.ts", import.meta.url),
+  "utf8",
+);
 
 test("only administrators see an available Studio update as an immediate action", () => {
   assert.match(
@@ -102,7 +106,8 @@ test("Studio explains the update restart window", () => {
   assert.match(controlSource, /预计约 3–5 分钟完成更新与发布/);
   assert.match(controlSource, /登录态不会受到影响/);
   assert.match(controlSource, /<span>选择版本<\/span>/);
-  assert.match(controlSource, /targetRelease\.changelog\.map/);
+  assert.match(controlSource, /splitReleaseNotes\(targetRelease\?\.changelog \?\? \[\]\)/);
+  assert.match(controlSource, /targetReleaseNotes\.map/);
   assert.match(controlSource, /暂无更新说明/);
   assert.match(
     controlStyleSource,
@@ -113,6 +118,17 @@ test("Studio explains the update restart window", () => {
     /\.studio-update-changelog li\s*\{[\s\S]*?display:\s*list-item;/,
   );
   assert.match(controlStyleSource, /background: #1664ff/);
+});
+
+test("current and target release notes share semicolon bullet rendering", () => {
+  assert.match(releaseNotesSource, /RELEASE_NOTE_SEPARATOR = \/\[;；\]\//);
+  assert.match(featureNoticeSource, /VITE_STUDIO_RELEASE_CHANGELOG/);
+  assert.match(featureNoticeSource, /parseReleaseNotes/);
+  assert.match(featureNoticeSource, /releaseNotes\.map/);
+  assert.match(
+    stylesSource,
+    /\.welcome-feature-popover ul\s*\{[\s\S]*?list-style:\s*disc outside;/,
+  );
 });
 
 test("Studio exposes detailed update stages that can be reopened", () => {

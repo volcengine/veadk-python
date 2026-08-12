@@ -5,6 +5,7 @@ import {
   startStudioUpdate,
   type StudioUpdateStatus,
 } from "../adk/client";
+import { splitReleaseNotes } from "./releaseNotes";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./StudioUpdateControl.css";
 
@@ -312,6 +313,7 @@ export function StudioUpdateControl({
   const targetRelease = releases.find(
     (release) => release.version === targetVersion,
   );
+  const targetReleaseNotes = splitReleaseNotes(targetRelease?.changelog ?? []);
 
   const beginUpdate = async () => {
     targetVersionRef.current = targetVersion;
@@ -588,9 +590,9 @@ export function StudioUpdateControl({
                 </dl>
                 <section className="studio-update-changelog" aria-labelledby="studio-update-changelog-title">
                   <div id="studio-update-changelog-title">更新内容</div>
-                  {targetRelease?.changelog.length ? (
+                  {targetReleaseNotes.length ? (
                     <ul>
-                      {targetRelease.changelog.map((item) => (
+                      {targetReleaseNotes.map((item) => (
                         <li key={item}>{item}</li>
                       ))}
                     </ul>
