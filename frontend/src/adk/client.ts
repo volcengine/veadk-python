@@ -39,6 +39,8 @@ export interface AdkEvent {
   id?: string;
   invocationId?: string;
   invocation_id?: string;
+  modelVersion?: string;
+  model_version?: string;
   author?: string;
   partial?: boolean;
   timestamp?: number;

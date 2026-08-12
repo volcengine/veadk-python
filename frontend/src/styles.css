@@ -2785,6 +2785,14 @@ body {
   transition: background 0.12s, color 0.12s;
 }
 .comp-icon:hover { background: hsl(var(--accent)); color: hsl(var(--foreground)); }
+.composer-submit-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  flex-shrink: 0;
+}
+.composer--new-chat .composer-submit-actions { display: contents; }
 .comp-send {
   flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
@@ -2806,6 +2814,236 @@ body {
 }
 .comp-send:active:not(:disabled) { transform: scale(0.94); }
 .comp-send:disabled { opacity: 0.3; cursor: default; }
+
+.token-usage-indicator {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  border-radius: 999px;
+  color: hsl(var(--muted-foreground));
+  cursor: default;
+  outline: none;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+.token-usage-indicator:hover {
+  background: hsl(var(--muted) / 0.72);
+  color: hsl(var(--foreground) / 0.68);
+}
+.token-usage-indicator:focus-visible {
+  color: hsl(var(--foreground) / 0.68);
+  outline: 2px solid hsl(var(--ring) / 0.45);
+  outline-offset: 1px;
+}
+.token-usage-ring {
+  width: 16px;
+  height: 16px;
+  overflow: visible;
+}
+.token-usage-ring__track,
+.token-usage-ring__value {
+  fill: none;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+}
+.token-usage-ring__track {
+  stroke: hsl(var(--muted-foreground) / 0.3);
+  stroke-width: 2.25;
+}
+.token-usage-ring__value {
+  stroke: currentColor;
+  stroke-width: 2.75;
+  stroke-linecap: butt;
+  transition: stroke-dasharray 180ms ease-out;
+}
+.token-usage-tooltip {
+  --token-context-system: hsl(218 10% 34%);
+  --token-context-input: hsl(210 38% 52%);
+  --token-context-output: hsl(32 52% 52%);
+  --token-context-remaining: hsl(var(--muted));
+  position: absolute;
+  right: -42px;
+  bottom: calc(100% + 10px);
+  z-index: 30;
+  width: 360px;
+  padding: 12px 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--panel));
+  box-shadow: 0 10px 30px hsl(var(--foreground) / 0.12);
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition:
+    visibility 0s linear 140ms,
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+.token-usage-indicator:hover .token-usage-tooltip,
+.token-usage-indicator:focus-visible .token-usage-tooltip {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 0s;
+}
+.token-usage-tooltip__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.token-usage-tooltip__header strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.token-usage-tooltip__header span {
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.token-usage-tooltip__title {
+  margin-bottom: 4px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.token-usage-tooltip__unknown {
+  font-size: 13px;
+  font-weight: 550;
+}
+.token-context-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 10px);
+  gap: 4px;
+  align-self: start;
+  padding: 10px;
+  border-radius: 9px;
+  background: hsl(var(--muted) / 0.34);
+}
+.token-context-breakdown {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+}
+.token-context-cell {
+  display: flex;
+  width: 10px;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--token-context-remaining);
+  box-shadow: inset 0 0 0 1px hsl(var(--border) / 0.72);
+}
+.token-context-cell__slice {
+  min-width: 0;
+  height: 100%;
+}
+.token-context-cell__slice.is-system,
+.token-context-swatch.is-system {
+  background: var(--token-context-system);
+}
+.token-context-cell__slice.is-input,
+.token-context-swatch.is-input {
+  background: var(--token-context-input);
+}
+.token-context-cell__slice.is-output,
+.token-context-swatch.is-output {
+  background: var(--token-context-output);
+}
+.token-context-cell__slice.is-remaining,
+.token-context-swatch.is-remaining {
+  background: var(--token-context-remaining);
+}
+.token-context-legend {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 6px 0;
+}
+.token-context-legend > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 6px;
+}
+.token-context-legend dt {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: hsl(var(--muted-foreground));
+  white-space: nowrap;
+}
+.token-context-legend dd {
+  margin: 0;
+  font-weight: 550;
+  white-space: nowrap;
+}
+.token-context-legend em {
+  padding: 1px 4px;
+  border-radius: 999px;
+  background: hsl(var(--muted));
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 500;
+  line-height: 1.35;
+}
+.token-context-summary {
+  display: grid;
+  gap: 2px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+}
+.token-context-summary strong {
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}
+.token-context-swatch {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px hsl(var(--border) / 0.72);
+}
+.token-usage-tooltip__overflow {
+  margin-top: 9px;
+  color: hsl(var(--destructive));
+  font-size: 11px;
+  font-weight: 500;
+}
+.token-usage-tooltip__model {
+  margin-top: 10px;
+  padding-top: 8px;
+  overflow: hidden;
+  border-top: 1px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .token-usage-indicator,
+  .token-usage-ring__value,
+  .token-usage-tooltip {
+    transition: none;
+  }
+}
 
 /* ---------- explicit /skill and @agent invocation context ---------- */
 .invocation-chips {
