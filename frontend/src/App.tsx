@@ -4,10 +4,8 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type MouseEventHandler,
   type WheelEvent,
 } from "react";
-import { Share } from "@openai/apps-sdk-ui/components/Icon";
 import {
   ArrowLeft,
   Check,
@@ -124,15 +122,14 @@ import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
 import { Composer } from "./ui/Composer";
 import { InvocationChips } from "./ui/InvocationChips";
 import { MediaGroup } from "./ui/Media";
+import { QuickCreate, type QuickCreateKind } from "./ui/QuickCreate";
 import { StackCards } from "./ui/AddAgentMenu";
+import { IntelligentCreate } from "./create/IntelligentCreate";
 import { CustomCreate } from "./create/CustomCreate";
+import { TemplateCreate } from "./create/TemplateCreate";
+import { WorkflowCreate } from "./create/WorkflowCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
-import { MigrationWorkspace } from "./migrations/MigrationWorkspace";
 import type { AgentDraft } from "./create/types";
-import {
-  hydrateRuntimeModelSelection,
-  isRuntimeModelSelectionEnv,
-} from "./create/modelSource";
 import {
   loadWorkspaceDrafts,
   workspaceDraftsKey,
@@ -166,10 +163,7 @@ import {
   type SandboxThreadSummary,
   type SandboxToolLaunch,
 } from "./adk/sandbox";
-import {
-  getSandboxAgentCapability,
-  getSandboxCapability,
-} from "./adk/newChatCapabilities";
+import { getSandboxCapability } from "./adk/newChatCapabilities";
 import { getSkillWorkbenchCapability } from "./ui/skill-workbench/api";
 import {
   createVideoTask,
@@ -214,6 +208,8 @@ import { SandboxProjectUploadDialog } from "./ui/SandboxProjectUploadDialog";
 import { sandboxSnapshotTurns } from "./ui/sandboxCommands";
 import { useSandboxCodexCommands } from "./ui/useSandboxCodexCommands";
 import { StudioConfirmDialog } from "./ui/StudioConfirmDialog";
+import { VibeTaskWorkspace } from "./ui/vibe/VibeTaskWorkspace";
+import { vibeClient, type VibeTask } from "./adk/vibe";
 import byteplusLogo from "./assets/byteplus.svg";
 import defaultSiteLogo from "./assets/logo.svg";
 import {
@@ -223,24 +219,6 @@ import {
 } from "./ui/icons/FeedbackIcons";
 
 interface IssueFeedbackTarget {
-  turn: Turn;
-  input: string;
-}
-
-interface ShareMessageTarget {
-  targetTurn: HTMLElement;
-}
-
-interface ResponseAnnotationTarget {
-  selectionId: number;
-  turn: Turn;
-  input: string;
-  selectedText: string;
-  anchor: ResponseAnnotationAnchor;
-}
-
-interface ResponseAnnotationContext {
-  enabled: boolean;
   turn: Turn;
   input: string;
 }
@@ -269,14 +247,8 @@ interface NewChatCapabilitiesState {
 async function probeNewChatCapabilities(
   agentId: string,
 ): Promise<NewChatCapabilitiesState> {
-  const [
-    sandboxResult,
-    deepseekHarnessResult,
-    skillResult,
-    harnessResult,
-  ] = await Promise.allSettled([
+  const [sandboxResult, skillResult, harnessResult] = await Promise.allSettled([
     getSandboxCapability(),
-    getSandboxAgentCapability("deepseek-harness"),
     getSkillWorkbenchCapability(),
     agentId ? listSessionBuiltinTools(agentId) : Promise.resolve<string[]>([]),
   ]);
@@ -298,7 +270,9 @@ async function probeNewChatCapabilities(
   };
 }
 
-type CreateView = "custom" | "package" | "migration" | null;
+type CreateMode = QuickCreateKind | "package";
+
+type CreateView = "menu" | CreateMode | null;
 type CustomCreateMode = "custom" | "yaml_import";
 
 // Persist the last view so a page refresh restores where the user was.
@@ -400,22 +374,14 @@ function mentionableDescendants(node: AgentNode): AgentTarget[] {
 
 function loadView(): CreateView {
   const v = typeof localStorage !== "undefined" ? localStorage.getItem(LS.view) : null;
-  if (["menu", "intelligent", "custom", "template", "workflow"].includes(v ?? "")) {
-    return "custom";
-  }
-  return v === "package" || v === "migration" ? v : null;
+  return v === "menu" || v === "intelligent" || v === "custom" || v === "template" || v === "workflow"
+    ? v
+    : null;
 }
 import { TraceDrawer } from "./ui/TraceDrawer";
 import { LoginPage } from "./ui/LoginPage";
 import { AuthExpiredDialog } from "./ui/AuthExpiredDialog";
 import { IssueFeedbackDialog } from "./ui/IssueFeedbackDialog";
-import { ShareMessageDialog } from "./ui/ShareMessageDialog";
-import { ResponseAnnotationPopover } from "./ui/ResponseAnnotationPopover";
-import {
-  formatResponseAnnotationComment,
-  responseSelectionWithin,
-  type ResponseAnnotationAnchor,
-} from "./ui/responseAnnotation";
 import { PlatformFeedback } from "./ui/PlatformFeedback";
 import { Markdown } from "./ui/Markdown";
 import {
@@ -439,7 +405,6 @@ import {
   identifyTelemetryUser,
   initTelemetry,
   setTelemetryContext,
-  trackStudioEntryViewed,
   trackStudioSessionStarted,
   type AgentConnectStartedProps,
   type AgentConnectSucceededProps,
@@ -714,24 +679,6 @@ function CopyButton({ text }: { text: string }) {
       }}
     >
       {copied ? <Check className="icon" /> : <Copy className="icon" />}
-    </button>
-  );
-}
-
-function ShareMessageButton({
-  onClick,
-}: {
-  onClick: MouseEventHandler<HTMLButtonElement>;
-}) {
-  return (
-    <button
-      type="button"
-      className="icon-btn"
-      aria-label="分享为图片"
-      title="分享为图片"
-      onClick={onClick}
-    >
-      <Share className="icon" aria-hidden="true" />
     </button>
   );
 }
@@ -1083,6 +1030,18 @@ export default function App() {
   const [newChatSkillTarget, setNewChatSkillTarget] =
     useState<NewChatSkillTarget | null>(null);
   const [newChatTask, setNewChatTask] = useState<NewChatTask | null>(null);
+  const [vibeTasks, setVibeTasks] = useState<VibeTask[]>([]);
+  const [selectedVibeTaskId, setSelectedVibeTaskId] = useState("");
+  const selectedVibeTask = vibeTasks.find((task) => task.taskId === selectedVibeTaskId) ?? null;
+  const updateVibeTask = useCallback((next: VibeTask) => {
+    setVibeTasks((current) => {
+      const index = current.findIndex((task) => task.taskId === next.taskId);
+      if (index < 0) return [next, ...current];
+      const updated = [...current];
+      updated[index] = next;
+      return updated;
+    });
+  }, []);
   const [videoTask, setVideoTask] = useState<VideoGenerationTask | null>(null);
   const [videoTaskDialogOpen, setVideoTaskDialogOpen] = useState(false);
   const videoTaskRef = useRef<VideoGenerationTask | null>(null);
@@ -1138,22 +1097,16 @@ export default function App() {
     streamPresentationTimersRef.current.delete(sid);
     setStreamPresentationSids((current) => new Set(current).add(sid));
   };
-  const completeStreamPresentation = (sid: string) => {
-    const timer = streamPresentationTimersRef.current.get(sid);
-    if (timer !== undefined) window.clearTimeout(timer);
-    streamPresentationTimersRef.current.delete(sid);
-    setStreamPresentationSids((current) => {
-      if (!current.has(sid)) return current;
-      const next = new Set(current);
-      next.delete(sid);
-      return next;
-    });
-  };
   const finishStreamPresentation = (sid: string) => {
     const previousTimer = streamPresentationTimersRef.current.get(sid);
     if (previousTimer !== undefined) window.clearTimeout(previousTimer);
     const timer = window.setTimeout(() => {
-      completeStreamPresentation(sid);
+      streamPresentationTimersRef.current.delete(sid);
+      setStreamPresentationSids((current) => {
+        const next = new Set(current);
+        next.delete(sid);
+        return next;
+      });
     }, 2400);
     streamPresentationTimersRef.current.set(sid, timer);
   };
@@ -1405,16 +1358,8 @@ export default function App() {
   );
   const [issueFeedbackTarget, setIssueFeedbackTarget] =
     useState<IssueFeedbackTarget | null>(null);
-  const [shareMessageTarget, setShareMessageTarget] =
-    useState<ShareMessageTarget | null>(null);
-  const [responseAnnotationTarget, setResponseAnnotationTarget] =
-    useState<ResponseAnnotationTarget | null>(null);
   const [platformFeedbackOrigin, setPlatformFeedbackOrigin] =
     useState<string | null>(null);
-
-  useEffect(() => {
-    setResponseAnnotationTarget(null);
-  }, [appName, sessionId]);
   const [traceOpen, setTraceOpen] = useState(false);
   const [traceEndTimeMs, setTraceEndTimeMs] = useState<number>();
   const [greeting, setGreeting] = useState(pickGreeting);
@@ -1439,7 +1384,6 @@ export default function App() {
     history: true,
     addAgent: true,
     manageAgents: true,
-    agentUsage: false,
     addAgentkit: true,
   });
   const [agentsSource, setAgentsSource] = useState<"local" | "cloud">("cloud");
@@ -1447,7 +1391,6 @@ export default function App() {
   const [cloudProvider, setCloudProvider] =
     useState<UiConfig["provider"]>("volcengine");
   const [version, setVersion] = useState("");
-  const [studioRegion, setStudioRegion] = useState("");
   const [uiConfigLoaded, setUiConfigLoaded] = useState(false);
   const [localMode, setLocalMode] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
@@ -2185,10 +2128,10 @@ export default function App() {
       const fallbackRegion = runtimeUpdateTarget?.region ?? newRuntimeRegion;
       const agentId = await connectRuntime(
         result.runtimeId,
-        result.runtimeName,
+        result.agentName,
         result.region ?? fallbackRegion,
         result.version,
-        { waitForReady: true, agentName: result.agentName },
+        { waitForReady: true },
       );
       setConnections(loadConnections());
       setAgentInfoRefreshKey((key) => key + 1);
@@ -2212,88 +2155,6 @@ export default function App() {
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   const turnNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const responseAnnotationSelectionIdRef = useRef(0);
-  const responseAnnotationContextsRef = useRef<
-    Map<number, ResponseAnnotationContext>
-  >(new Map());
-  const responseAnnotationRuntimeAvailable = connections.some(
-    (connection) =>
-      Boolean(connection.runtimeId && connection.region) &&
-      connection.apps.some((app) => remoteAppId(connection.id, app) === appName),
-  );
-  useLayoutEffect(() => {
-    const contexts = new Map<number, ResponseAnnotationContext>();
-    turns.forEach((turn, index) => {
-      const feedbackEventId = turn.meta?.eventId ?? "";
-      const canRate = Boolean(
-        responseAnnotationRuntimeAvailable && feedbackEventId && turnText(turn),
-      );
-      const turnIsStreaming = index === turns.length - 1 && (
-        activeConversationBusy || presentingStream
-      );
-      contexts.set(index, {
-        enabled: Boolean(
-          canRate &&
-          cloudProvider !== "byteplus" &&
-          !turnIsStreaming &&
-          !turnAwaitingAuth(turn)
-        ),
-        turn,
-        input: canRate ? previousUserTurnText(turns, index) : "",
-      });
-    });
-    responseAnnotationContextsRef.current = contexts;
-  }, [
-    activeConversationBusy,
-    cloudProvider,
-    presentingStream,
-    responseAnnotationRuntimeAvailable,
-    turns,
-  ]);
-  const openResponseAnnotation = useCallback(() => {
-    const selection = window.getSelection();
-    const anchorElement = selection?.anchorNode instanceof Element
-      ? selection.anchorNode
-      : selection?.anchorNode?.parentElement;
-    const container = anchorElement?.closest<HTMLDivElement>(".turn--assistant");
-    if (!container) return;
-    const turnIndex = Number(container.dataset.responseAnnotationIndex);
-    if (!Number.isInteger(turnIndex)) return;
-    const context = responseAnnotationContextsRef.current.get(turnIndex);
-    if (!context?.enabled) return;
-    const selected = responseSelectionWithin(container, selection);
-    if (!selected) return;
-    setResponseAnnotationTarget({
-      selectionId: ++responseAnnotationSelectionIdRef.current,
-      turn: context.turn,
-      input: context.input,
-      selectedText: selected.text,
-      anchor: selected.anchor,
-    });
-  }, []);
-  useEffect(() => {
-    let selectionFrame: number | null = null;
-    const queueSelection = (event: MouseEvent | KeyboardEvent) => {
-      if (
-        event.target instanceof Element &&
-        event.target.closest(".response-annotation-popover")
-      ) {
-        return;
-      }
-      if (selectionFrame !== null) window.cancelAnimationFrame(selectionFrame);
-      selectionFrame = window.requestAnimationFrame(() => {
-        selectionFrame = null;
-        openResponseAnnotation();
-      });
-    };
-    document.addEventListener("mouseup", queueSelection, true);
-    document.addEventListener("keyup", queueSelection, true);
-    return () => {
-      if (selectionFrame !== null) window.cancelAnimationFrame(selectionFrame);
-      document.removeEventListener("mouseup", queueSelection, true);
-      document.removeEventListener("keyup", queueSelection, true);
-    };
-  }, [openResponseAnnotation]);
   const conversationAutoFollowRef = useRef(true);
   const conversationSmoothScrollRef = useRef(false);
   const conversationSmoothTimerRef = useRef<number | null>(null);
@@ -2472,6 +2333,33 @@ export default function App() {
 
   useEffect(() => {
     if (authStatus !== "authenticated" || !userId) {
+      setVibeTasks([]);
+      setSelectedVibeTaskId("");
+      return;
+    }
+    const controller = new AbortController();
+    void vibeClient.list(controller.signal)
+      .then((tasks) => {
+        setVibeTasks(tasks);
+        setSelectedVibeTaskId((current) => {
+          if (current && tasks.some((task) => task.taskId === current)) return current;
+          const recoverable = tasks.find(
+            (task) => !["completed", "partial", "blocked", "failed", "cancelled", "expired"].includes(task.state),
+          );
+          return recoverable?.taskId ?? "";
+        });
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+        }
+      })
+;
+    return () => controller.abort();
+  }, [authStatus, userId]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !userId) {
       setNewChatCapabilities({});
       return;
     }
@@ -2548,13 +2436,10 @@ export default function App() {
         studioVersion: studio?.version || cfg.version,
         environment,
         cloudProvider: cfg.provider,
-        accountId: studio?.accountId ?? "",
       });
-      trackStudioEntryViewed({ authState: "anonymous" });
       setFeatures(cfg.features);
       setAgentsSource(cfg.agentsSource);
       setCloudProvider(cfg.provider);
-      setStudioRegion(studio?.region || defaultCloudRegion(cfg.provider));
       setSiteBranding(cfg.branding);
       setVersion(cfg.version);
       setUiConfigLoaded(true);
@@ -2572,7 +2457,6 @@ export default function App() {
     if (!userUniqueId) return;
     identifyTelemetryUser({
       userUniqueId,
-      accountId: access.telemetry.accountId ?? "",
       userRole: access.role === "admin" ? "admin" : "member",
       userSource: localMode ? "local" : "sso",
     });
@@ -3086,7 +2970,7 @@ export default function App() {
     setSandboxLaunchError("");
     if (
       !sandboxSession &&
-      newChatMode !== "agent" &&
+      newChatMode === "temporary" &&
       !sandboxLaunchFromAgents
     ) {
       setNewChatMode("agent");
@@ -3127,40 +3011,7 @@ export default function App() {
         setMyAgents(true);
         return;
       }
-      if (sandboxLaunchKind !== "codex") {
-        const workspace = await sandboxClient.openAgentSession(
-          sandboxLaunchKind,
-          createdSession.id,
-          { signal: controller.signal },
-        );
-        if (sandboxLaunchAbortRef.current !== controller) return;
-        viewSidRef.current = "";
-        setSessionId("");
-        setPendingTurns([]);
-        setInput("");
-        setInvocation(emptyInvocation());
-        setNewChatMode(
-          sandboxLaunchKind === "deepseek-harness" ? "deepseek-harness" : "agent",
-        );
-        discardDraftAttachments(attachments);
-        setAttachments([]);
-        releaseAllSandboxPreviews();
-        setSandboxTurns([]);
-        setSandboxSession(null);
-        setCreateView(null);
-        setSkillCenter(false);
-        setAddAgent(false);
-        setAddMenu(false);
-        setSearchView(false);
-        setManageAgents(false);
-        setAgentDetailTarget(null);
-        setMyAgents(false);
-        setSandboxAgentDetailTarget(null);
-        setSandboxAgentWorkspace(workspace);
-        setSandboxLaunchOpen(false);
-        setSandboxLaunchState("confirm");
-        return;
-      }
+      if (sandboxLaunchKind !== "codex") return;
       const nextSession = await sandboxClient.connectSession(createdSession.id, {
         signal: controller.signal,
       });
@@ -3937,6 +3788,7 @@ export default function App() {
 
   function openNewChat() {
     setPlatformFeedbackOrigin(null);
+    setSelectedVibeTaskId("");
     setCreateView(null);
     setSkillCenter(false);
     setSkillCenterLaunch(null);
@@ -4661,7 +4513,6 @@ export default function App() {
 
   const canCreateAgents = access.capabilities.createAgents;
   const canManageAgents = access.capabilities.manageAgents;
-  const canViewAgentUsage = features.agentUsage && canManageAgents;
   const visibleCreateView = canCreateAgents ? createView : null;
   const showAddMenu = canCreateAgents && addMenu;
   const showAddAgent = canCreateAgents && addAgent;
@@ -4787,23 +4638,16 @@ export default function App() {
     turn: Turn,
     rating: MessageFeedbackRating | null,
     input = "",
-    comment = "",
-    reportGlobalError = true,
-  ): Promise<string | null> => {
+  ) => {
     const eventId = turn.meta?.eventId;
     const sid = sessionId;
-    if (!eventId || !sid || !currentRuntime) {
-      return "当前回复暂不支持加入评测集";
-    }
-    if (cloudProvider === "byteplus") {
-      return "BytePlus 暂不支持 AgentKit 评测集";
-    }
+    if (!eventId || !sid || !currentRuntime) return;
+    if (cloudProvider === "byteplus") return;
     const output = turnText(turn);
     const previousFeedback = turn.meta?.feedback;
     const optimisticFeedback = {
       ...previousFeedback,
       rating,
-      comment,
       syncStatus: "syncing" as const,
       updatedAt: Date.now() / 1000,
     };
@@ -4827,7 +4671,6 @@ export default function App() {
         rating,
         input,
         output,
-        comment,
         createdAt: turn.meta?.ts
           ? new Date(turn.meta.ts * 1000).toISOString()
           : undefined,
@@ -4840,7 +4683,6 @@ export default function App() {
         sessionId: sid,
         eventId,
         rating,
-        comment,
       });
       setTurnsFor(sid, (current) =>
         current.map((item) =>
@@ -4874,7 +4716,6 @@ export default function App() {
           rating: feedback.rating,
           input,
           output,
-          comment,
           createdAt: turn.meta?.ts
             ? new Date(turn.meta.ts * 1000).toISOString()
             : undefined,
@@ -4887,9 +4728,6 @@ export default function App() {
         });
       }
     } catch (feedbackError) {
-      const feedbackErrorMessage = feedbackError instanceof Error
-        ? feedbackError.message
-        : String(feedbackError);
       setTurnsFor(sid, (current) =>
         current.map((item) =>
           item.meta?.eventId === eventId
@@ -4909,16 +4747,18 @@ export default function App() {
           rating: previousFeedback?.rating ?? null,
           input,
           output,
-          comment: previousFeedback?.comment ?? "",
           createdAt: turn.meta?.ts
             ? new Date(turn.meta.ts * 1000).toISOString()
             : undefined,
         });
       }
-      if (reportGlobalError && viewSidRef.current === sid) {
-        setError(feedbackErrorMessage);
+      if (viewSidRef.current === sid) {
+        setError(
+          feedbackError instanceof Error
+            ? feedbackError.message
+            : String(feedbackError),
+        );
       }
-      return feedbackErrorMessage;
     } finally {
       setFeedbackPendingIds((current) => {
         const next = new Set(current);
@@ -4926,20 +4766,6 @@ export default function App() {
         return next;
       });
     }
-    return null;
-  };
-
-  const submitResponseAnnotation = async (note: string) => {
-    const target = responseAnnotationTarget;
-    if (!target) return;
-    const errorMessage = await rateAssistantTurn(
-      target.turn,
-      "bad",
-      target.input,
-      formatResponseAnnotationComment(target.selectedText, note),
-      false,
-    );
-    if (errorMessage) throw new Error(errorMessage);
   };
 
   // Refresh the selected Agent before leaving the current page, then open a
@@ -5335,8 +5161,6 @@ export default function App() {
                 agentName={
                   sandboxSession.toolName === "codex"
                     ? "Codex"
-                    : sandboxSession.toolName === "deepseek-harness"
-                      ? "DeepSeek Harness"
                     : sandboxSession.toolName === "openclaw"
                       ? "OpenClaw"
                       : "Hermes"
@@ -5412,12 +5236,11 @@ export default function App() {
                   void (async () => {
                     setError("");
                     try {
-                      const { vibeClient } = await import("./adk/vibe");
                       const task = await vibeClient.create(text.trim());
+                      updateVibeTask(task);
+                      setSelectedVibeTaskId(task.taskId);
                       setInput("");
-                      setError(
-                        `Vibe Task ${task.taskId} 已创建。正在准备 8H Dev Sandbox。`,
-                      );
+                      setError("");
                     } catch (error) {
                       setError(
                         error instanceof Error ? error.message : "Vibe Task 创建失败",
@@ -5492,7 +5315,6 @@ export default function App() {
                   ? false
                   : !userId ||
                     newChatMode === "temporary" ||
-                    newChatMode === "deepseek-harness" ||
                     (newChatWorkspaceMode === "agent" &&
                       newChatMode === "agent" &&
                       !appName) ||
@@ -5573,10 +5395,6 @@ export default function App() {
               onSkillActionChange={setNewChatSkillAction}
               onSkillTargetChange={setNewChatSkillTarget}
               temporaryEnabled={newChatCapabilitiesReady && newChatCapabilities.temporaryEnabled}
-              deepseekHarnessEnabled={
-                newChatCapabilitiesReady &&
-                newChatCapabilities.deepseekHarnessEnabled
-              }
               harnessEnabled={newChatCapabilitiesReady && newChatCapabilities.harnessEnabled}
               builtinTools={
                 newChatCapabilitiesReady ? newChatCapabilities.builtinTools : []
@@ -5587,16 +5405,6 @@ export default function App() {
                   setNewChatTask(null);
                   setNewChatMode(mode);
                   openSandboxLaunch();
-                  return;
-                }
-                if (
-                  mode === "deepseek-harness" &&
-                  !newChatCapabilities.deepseekHarnessEnabled
-                ) return;
-                if (mode === "deepseek-harness") {
-                  setNewChatTask(null);
-                  setNewChatMode(mode);
-                  openSandboxLaunch("deepseek-harness");
                   return;
                 }
                 setNewChatMode(mode);
@@ -5647,8 +5455,6 @@ export default function App() {
                 version={version}
                 localMode={agentsSource === "local"}
                 role={access?.role ?? "user"}
-                provider={cloudProvider}
-                region={studioRegion || defaultCloudRegion(cloudProvider)}
               />
             ) : applicationsView === "coding-agents" ? (
               <CodingAgentsIntegration
@@ -5730,7 +5536,6 @@ export default function App() {
                 loadingAgentInfo={capabilitiesLoading}
                 canCreate={canCreateAgents}
                 canUpdate={canCreateAgents || canManageAgents}
-                canViewUsage={canViewAgentUsage}
                 loadingAgents={agentLibraryLoading}
                 agentsError={agentLibraryError}
                 deploymentTasks={deploymentTasks}
@@ -5787,29 +5592,19 @@ export default function App() {
                     return;
                   }
                   const runtimeEnvValues = Object.fromEntries(
-                    capability.runtime.envs
-                      .filter(({ key }) => !isRuntimeModelSelectionEnv(key))
-                      .map(({ key, value }) => [key, value]),
+                    capability.runtime.envs.map(({ key, value }) => [key, value]),
                   );
-                  const draftEnvValues = Object.fromEntries(
-                    Object.entries(nextDraft.deployment?.envValues ?? {}).filter(
-                      ([key]) => !isRuntimeModelSelectionEnv(key),
-                    ),
-                  );
-                  const hydratedDraft = hydrateRuntimeModelSelection(
-                    {
-                      ...nextDraft,
-                      deployment: {
-                        ...(nextDraft.deployment ?? { feishuEnabled: false }),
-                        network: capability.runtime.network,
-                        envValues: {
-                          ...runtimeEnvValues,
-                          ...draftEnvValues,
-                        },
+                  const hydratedDraft: AgentDraft = {
+                    ...nextDraft,
+                    deployment: {
+                      ...(nextDraft.deployment ?? { feishuEnabled: false }),
+                      network: capability.runtime.network,
+                      envValues: {
+                        ...runtimeEnvValues,
+                        ...(nextDraft.deployment?.envValues ?? {}),
                       },
                     },
-                    capability.runtime.envs,
-                  );
+                  };
                   setManageAgents(false);
                   setImportedDraft(hydratedDraft);
                   setCustomCreateMode("custom");
@@ -5855,13 +5650,7 @@ export default function App() {
                     onClick: () => {
                       setAddMenu(false);
                       setImportedDraft(null);
-                      setCustomCreateMode("custom");
-                      setRuntimeUpdateTarget(null);
-                      setFocusedDeploymentTaskId("");
-                      setFocusedWorkspaceAgentId("");
-                      setEditingDraftId(`draft-${Date.now().toString(36)}`);
-                      editingDraftBaselineRef.current = null;
-                      setCreateView("custom");
+                      setCreateView("menu");
                     },
                   },
                   {
@@ -5880,11 +5669,9 @@ export default function App() {
                     icon: MigrationIcon,
                     title: "从存量迁移",
                     desc: "从您的 LangChain / Dify 等存量项目迁移至 AgentKit Runtime",
-                    onClick: () => {
-                      setAddMenu(false);
-                      setImportedDraft(null);
-                      setCreateView("migration");
-                    },
+                    status: "敬请期待",
+                    disabled: true,
+                    onClick: () => undefined,
                   },
                 ]}
               />
@@ -5965,15 +5752,46 @@ export default function App() {
                   后重试。
                 </div>
               </div>
+            ) : visibleCreateView === "menu" ? (
+              <QuickCreate
+                onSelect={(k) => {
+                  setImportedDraft(null);
+                  setRuntimeUpdateTarget(null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  if (k === "custom") setCustomCreateMode("custom");
+                  setEditingDraftId(
+                    k === "custom" ? `draft-${Date.now().toString(36)}` : "",
+                  );
+                  editingDraftBaselineRef.current = null;
+                  setCreateView(k);
+                }}
+                onImport={(d) => {
+                  setImportedDraft(d);
+                  setCustomCreateMode("yaml_import");
+                  setRuntimeUpdateTarget(null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setEditingDraftId(`draft-${Date.now().toString(36)}`);
+                  editingDraftBaselineRef.current = null;
+                  setCreateView("custom");
+                }}
+              />
+            ) : visibleCreateView === "intelligent" ? (
+              <IntelligentCreate
+                userId={userId}
+                cloudProvider={cloudProvider}
+                onBack={() => setCreateView("menu")}
+                onCreate={onCreate}
+                onAgentAdded={onAgentAdded}
+                onDeploymentTaskChange={updateDeploymentTask}
+              />
             ) : visibleCreateView === "custom" ? (
               <CustomCreate
                 key={editingDraftId || "custom"}
                 cloudProvider={cloudProvider}
                 initialDraft={importedDraft ?? undefined}
-                onBack={() => {
-                  setCreateView(null);
-                  setAddMenu(true);
-                }}
+                onBack={() => setCreateView("menu")}
                 onCreate={onCreate}
                 onAgentAdded={onAgentAdded}
                 features={features}
@@ -6009,6 +5827,18 @@ export default function App() {
                 onDeploymentStarted={startDeployment}
                 onDeploymentComplete={finishDeployment}
               />
+            ) : visibleCreateView === "template" ? (
+              <TemplateCreate
+                cloudProvider={cloudProvider}
+                onBack={() => setCreateView("menu")}
+                onCreate={onCreate}
+              />
+            ) : visibleCreateView === "workflow" ? (
+              <WorkflowCreate
+                cloudProvider={cloudProvider}
+                onBack={() => setCreateView("menu")}
+                onCreate={onCreate}
+              />
             ) : visibleCreateView === "package" ? (
               <CodePackageCreate
                 cloudProvider={cloudProvider}
@@ -6022,18 +5852,17 @@ export default function App() {
                 onDeploymentComplete={finishDeployment}
                 initialDeployRegion={newRuntimeRegion}
               />
-            ) : visibleCreateView === "migration" ? (
-              <MigrationWorkspace
-                cloudProvider={cloudProvider}
-                onBack={() => {
-                  setCreateView(null);
-                  setAddMenu(true);
+            ) : selectedVibeTask ? (
+              <VibeTaskWorkspace
+                task={selectedVibeTask}
+                tasks={vibeTasks}
+                onSelectTask={(task) => setSelectedVibeTaskId(task.taskId)}
+                onTaskChange={updateVibeTask}
+                onDeleted={(taskId) => {
+                  setVibeTasks((current) => current.filter((task) => task.taskId !== taskId));
+                  setSelectedVibeTaskId("");
+                  setNewChatWorkspaceMode("vibe");
                 }}
-                onAgentAdded={onAgentAdded}
-                onDeploymentTaskChange={updateDeploymentTask}
-                onDeploymentStarted={startDeployment}
-                onDeploymentComplete={finishDeployment}
-                initialDeployRegion={newRuntimeRegion}
               />
             ) : turns.length === 0 && !newChatCapabilitiesReady ? (
               <div className="session-loading">
@@ -6105,10 +5934,7 @@ export default function App() {
                       <Markdown text={text} />
                     </div>
                   )}
-                  <div
-                    className="turn-actions turn-actions--right"
-                    data-share-image-exclude="true"
-                  >
+                  <div className="turn-actions turn-actions--right">
                     {turn.meta?.ts && <span className="meta-text">{fmtTime(turn.meta.ts)}</span>}
                     <CopyButton text={text} />
                   </div>
@@ -6139,20 +5965,9 @@ export default function App() {
               currentRuntime && feedbackEventId && turnText(turn),
             );
             const feedbackInput = canRate ? previousUserTurnText(turns, i) : "";
-            const turnIsStreaming = isLast && (
-              activeConversationBusy || presentingStream
-            );
-            const canAnnotate = Boolean(
-              canRate &&
-              cloudProvider !== "byteplus" &&
-              !turnIsStreaming &&
-              !turnAwaitingAuth(turn),
-            );
             return (
               <motion.div
                 key={i}
-                data-share-message-source="true"
-                data-response-annotation-index={i}
                 ref={(node) => {
                   if (!feedbackEventId) return;
                   if (node) {
@@ -6167,10 +5982,6 @@ export default function App() {
                   feedbackTargetEventId &&
                   feedbackTargetEventId === feedbackEventId ? "is-feedback-target" : "",
                 ].filter(Boolean).join(" ")}
-                tabIndex={canAnnotate ? 0 : undefined}
-                aria-label={canAnnotate
-                  ? "模型回复；选中文字后可添加批注"
-                  : undefined}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}
@@ -6198,11 +6009,6 @@ export default function App() {
                       blocks={turn.blocks}
                       streaming={isLast && (activeConversationBusy || presentingStream)}
                       onStreamFrame={isLast ? followConversationStreamFrame : undefined}
-                      onStreamComplete={
-                        isLast && !activeConversationBusy && presentingStream
-                          ? () => completeStreamPresentation(sessionId)
-                          : undefined
-                      }
                       onAction={onAction}
                       onAuth={onAuth}
                       onArtifactDownload={(filename, version) =>
@@ -6221,7 +6027,7 @@ export default function App() {
                         thinking/streaming or waiting on an OAuth card; reveal it
                         only once the reply is done. */}
                     {!(isLast && activeConversationBusy) && !turnAwaitingAuth(turn) && (
-                      <div className="turn-meta" data-share-image-exclude="true">
+                      <div className="turn-meta">
                         {sandboxSession && turn.meta?.sandboxUsage ? (
                           <SandboxTokenUsageRow usage={turn.meta.sandboxUsage} />
                         ) : null}
@@ -6306,14 +6112,6 @@ export default function App() {
                             </>
                           )}
                           <CopyButton text={turnText(turn)} />
-                          <ShareMessageButton
-                            onClick={(event) => {
-                              const targetTurn = event.currentTarget.closest<HTMLElement>(
-                                "[data-share-message-source]",
-                              );
-                              if (targetTurn) setShareMessageTarget({ targetTurn });
-                            }}
-                          />
                         </div>
                         {turn.meta && <span className="meta-text">{fmtMeta(turn.meta)}</span>}
                       </div>
@@ -6354,27 +6152,6 @@ export default function App() {
         <IssueFeedbackDialog
           onClose={() => setIssueFeedbackTarget(null)}
           onSubmit={submitIssueFeedbackForTurn}
-        />
-      )}
-
-      {shareMessageTarget && (
-        <ShareMessageDialog
-          targetTurn={shareMessageTarget.targetTurn}
-          onClose={() => setShareMessageTarget(null)}
-        />
-      )}
-
-      {responseAnnotationTarget && sessionId && (
-        <ResponseAnnotationPopover
-          key={responseAnnotationTarget.selectionId}
-          anchor={responseAnnotationTarget.anchor}
-          selectedText={responseAnnotationTarget.selectedText}
-          onClose={() => setResponseAnnotationTarget((current) =>
-            current?.selectionId === responseAnnotationTarget.selectionId
-              ? null
-              : current
-          )}
-          onSubmit={submitResponseAnnotation}
         />
       )}
 
@@ -6514,8 +6291,7 @@ export default function App() {
                 className="confirm-btn confirm-btn--danger"
                 onClick={() => {
                   setImportedDraft(null);
-                  setCreateView(null);
-                  setAddMenu(true);
+                  setCreateView("menu");
                   setConfirmLeave(false);
                 }}
               >
