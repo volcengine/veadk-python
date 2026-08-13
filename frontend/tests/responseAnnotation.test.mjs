@@ -90,6 +90,57 @@ test("assistant selections open an accessible Apps SDK annotation popover", () =
   assert.match(componentStyles, /\[data-theme="dark"\]/);
 });
 
+test("repeated selections remount a fresh annotation form after submission", () => {
+  const targetType = appSource.slice(
+    appSource.indexOf("interface ResponseAnnotationTarget"),
+    appSource.indexOf("interface ResponseAnnotationContext"),
+  );
+  const selectionHandler = appSource.slice(
+    appSource.indexOf("const openResponseAnnotation"),
+    appSource.indexOf("const conversationAutoFollowRef"),
+  );
+  const popoverRender = appSource.slice(
+    appSource.indexOf("{responseAnnotationTarget && sessionId && ("),
+    appSource.indexOf("{traceOpen && sessionId && ("),
+  );
+
+  // The form owns submitted/note/error state. Selecting the same text twice
+  // must still create a new component instance instead of reusing the first
+  // submission's success state.
+  assert.match(componentSource, /const \[submitted, setSubmitted\] = useState\(false\)/);
+  assert.match(componentSource, /setSubmitted\(true\)/);
+  assert.match(targetType, /selectionId:\s*number/);
+  assert.match(appSource, /responseAnnotationSelectionIdRef\s*=\s*useRef\(0\)/);
+  assert.match(
+    selectionHandler,
+    /selectionId:\s*\+\+responseAnnotationSelectionIdRef\.current/,
+  );
+  assert.match(
+    popoverRender,
+    /key=\{responseAnnotationTarget\.selectionId\}/,
+  );
+  assert.match(
+    popoverRender,
+    /current\?\.selectionId === responseAnnotationTarget\.selectionId\s*\? null\s*:\s*current/,
+  );
+  assert.doesNotMatch(
+    popoverRender,
+    /key=\{`\$\{responseAnnotationTarget\.eventId\}:\$\{responseAnnotationTarget\.selectedText\}`\}/,
+  );
+  assert.match(
+    appSource,
+    /responseAnnotationContextsRef\s*=\s*useRef<\s*WeakMap<HTMLDivElement, ResponseAnnotationContext>/,
+  );
+  assert.match(
+    selectionHandler,
+    /closest<HTMLDivElement>\("\.turn--assistant"\)/,
+  );
+  assert.doesNotMatch(
+    appSource,
+    /responseAnnotationContextsRef\.current\.delete/,
+  );
+});
+
 test("submits the annotation as a bad-case feedback sample", () => {
   assert.match(appSource, /rateAssistantTurn\(\s*target\.turn,\s*"bad"/);
   assert.match(

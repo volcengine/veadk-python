@@ -221,9 +221,9 @@ interface ShareMessageTarget {
 }
 
 interface ResponseAnnotationTarget {
+  selectionId: number;
   turn: Turn;
   input: string;
-  eventId: string;
   selectedText: string;
   anchor: ResponseAnnotationAnchor;
 }
@@ -2050,26 +2050,28 @@ export default function App() {
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   const turnNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const responseAnnotationSelectionIdRef = useRef(0);
   const responseAnnotationContextsRef = useRef<
-    Map<string, ResponseAnnotationContext>
-  >(new Map());
+    WeakMap<HTMLDivElement, ResponseAnnotationContext>
+  >(new WeakMap());
   const openResponseAnnotation = useCallback(() => {
     const selection = window.getSelection();
-    for (const [eventId, context] of responseAnnotationContextsRef.current) {
-      const container = turnNodeRefs.current.get(eventId);
-      if (!container) continue;
-      const selected = responseSelectionWithin(container, selection);
-      if (!selected) continue;
-      if (!context.enabled) return;
-      setResponseAnnotationTarget({
-        turn: context.turn,
-        input: context.input,
-        eventId,
-        selectedText: selected.text,
-        anchor: selected.anchor,
-      });
-      return;
-    }
+    const anchorElement = selection?.anchorNode instanceof Element
+      ? selection.anchorNode
+      : selection?.anchorNode?.parentElement;
+    const container = anchorElement?.closest<HTMLDivElement>(".turn--assistant");
+    if (!container) return;
+    const context = responseAnnotationContextsRef.current.get(container);
+    if (!context?.enabled) return;
+    const selected = responseSelectionWithin(container, selection);
+    if (!selected) return;
+    setResponseAnnotationTarget({
+      selectionId: ++responseAnnotationSelectionIdRef.current,
+      turn: context.turn,
+      input: context.input,
+      selectedText: selected.text,
+      anchor: selected.anchor,
+    });
   }, []);
   useEffect(() => {
     let selectionFrame: number | null = null;
@@ -5709,14 +5711,13 @@ export default function App() {
                   if (!feedbackEventId) return;
                   if (node) {
                     turnNodeRefs.current.set(feedbackEventId, node);
-                    responseAnnotationContextsRef.current.set(feedbackEventId, {
+                    responseAnnotationContextsRef.current.set(node, {
                       enabled: canAnnotate,
                       turn,
                       input: feedbackInput,
                     });
                   } else {
                     turnNodeRefs.current.delete(feedbackEventId);
-                    responseAnnotationContextsRef.current.delete(feedbackEventId);
                   }
                 }}
                 className={[
@@ -5924,10 +5925,14 @@ export default function App() {
 
       {responseAnnotationTarget && sessionId && (
         <ResponseAnnotationPopover
-          key={`${responseAnnotationTarget.eventId}:${responseAnnotationTarget.selectedText}`}
+          key={responseAnnotationTarget.selectionId}
           anchor={responseAnnotationTarget.anchor}
           selectedText={responseAnnotationTarget.selectedText}
-          onClose={() => setResponseAnnotationTarget(null)}
+          onClose={() => setResponseAnnotationTarget((current) =>
+            current?.selectionId === responseAnnotationTarget.selectionId
+              ? null
+              : current
+          )}
           onSubmit={submitResponseAnnotation}
         />
       )}
