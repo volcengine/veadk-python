@@ -309,7 +309,7 @@ class VibeTaskOrchestrator:
             owner_id,
             task_id,
             step.argv,
-            self._project_root,
+            f"{self._project_root.rstrip('/')}/{task_id}",
             step.timeout,
         )
         await self._emit(
