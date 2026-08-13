@@ -888,6 +888,16 @@
   line-height: 1.5;
 }
 
+.pp-runtime-name-field {
+  display: grid;
+  gap: 6px;
+}
+
+.pp-runtime-name-field > .pp-config-note,
+.pp-runtime-name-field > .pp-runtime-name-error {
+  margin: 0;
+}
+
 .pp-auth-section {
   overflow: visible;
 }

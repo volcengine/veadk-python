@@ -119,12 +119,8 @@ import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
 import { Composer } from "./ui/Composer";
 import { InvocationChips } from "./ui/InvocationChips";
 import { MediaGroup } from "./ui/Media";
-import { QuickCreate, type QuickCreateKind } from "./ui/QuickCreate";
 import { StackCards } from "./ui/AddAgentMenu";
-import { IntelligentCreate } from "./create/IntelligentCreate";
 import { CustomCreate } from "./create/CustomCreate";
-import { TemplateCreate } from "./create/TemplateCreate";
-import { WorkflowCreate } from "./create/WorkflowCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
 import type { AgentDraft } from "./create/types";
 import {
@@ -277,9 +273,7 @@ async function probeNewChatCapabilities(
   };
 }
 
-type CreateMode = QuickCreateKind | "package";
-
-type CreateView = "menu" | CreateMode | null;
+type CreateView = "custom" | "package" | null;
 type CustomCreateMode = "custom" | "yaml_import";
 
 // Persist the last view so a page refresh restores where the user was.
@@ -341,9 +335,10 @@ function mentionableDescendants(node: AgentNode): AgentTarget[] {
 
 function loadView(): CreateView {
   const v = typeof localStorage !== "undefined" ? localStorage.getItem(LS.view) : null;
-  return v === "menu" || v === "intelligent" || v === "custom" || v === "template" || v === "workflow"
-    ? v
-    : null;
+  if (["menu", "intelligent", "custom", "template", "workflow"].includes(v ?? "")) {
+    return "custom";
+  }
+  return v === "package" ? v : null;
 }
 import { TraceDrawer } from "./ui/TraceDrawer";
 import { LoginPage } from "./ui/LoginPage";
@@ -5462,7 +5457,13 @@ export default function App() {
                     onClick: () => {
                       setAddMenu(false);
                       setImportedDraft(null);
-                      setCreateView("menu");
+                      setCustomCreateMode("custom");
+                      setRuntimeUpdateTarget(null);
+                      setFocusedDeploymentTaskId("");
+                      setFocusedWorkspaceAgentId("");
+                      setEditingDraftId(`draft-${Date.now().toString(36)}`);
+                      editingDraftBaselineRef.current = null;
+                      setCreateView("custom");
                     },
                   },
                   {
@@ -5546,46 +5547,15 @@ export default function App() {
                   后重试。
                 </div>
               </div>
-            ) : visibleCreateView === "menu" ? (
-              <QuickCreate
-                onSelect={(k) => {
-                  setImportedDraft(null);
-                  setRuntimeUpdateTarget(null);
-                  setFocusedDeploymentTaskId("");
-                  setFocusedWorkspaceAgentId("");
-                  if (k === "custom") setCustomCreateMode("custom");
-                  setEditingDraftId(
-                    k === "custom" ? `draft-${Date.now().toString(36)}` : "",
-                  );
-                  editingDraftBaselineRef.current = null;
-                  setCreateView(k);
-                }}
-                onImport={(d) => {
-                  setImportedDraft(d);
-                  setCustomCreateMode("yaml_import");
-                  setRuntimeUpdateTarget(null);
-                  setFocusedDeploymentTaskId("");
-                  setFocusedWorkspaceAgentId("");
-                  setEditingDraftId(`draft-${Date.now().toString(36)}`);
-                  editingDraftBaselineRef.current = null;
-                  setCreateView("custom");
-                }}
-              />
-            ) : visibleCreateView === "intelligent" ? (
-              <IntelligentCreate
-                userId={userId}
-                cloudProvider={cloudProvider}
-                onBack={() => setCreateView("menu")}
-                onCreate={onCreate}
-                onAgentAdded={onAgentAdded}
-                onDeploymentTaskChange={updateDeploymentTask}
-              />
             ) : visibleCreateView === "custom" ? (
               <CustomCreate
                 key={editingDraftId || "custom"}
                 cloudProvider={cloudProvider}
                 initialDraft={importedDraft ?? undefined}
-                onBack={() => setCreateView("menu")}
+                onBack={() => {
+                  setCreateView(null);
+                  setAddMenu(true);
+                }}
                 onCreate={onCreate}
                 onAgentAdded={onAgentAdded}
                 features={features}
@@ -5620,18 +5590,6 @@ export default function App() {
                 } : undefined}
                 onDeploymentStarted={startDeployment}
                 onDeploymentComplete={finishDeployment}
-              />
-            ) : visibleCreateView === "template" ? (
-              <TemplateCreate
-                cloudProvider={cloudProvider}
-                onBack={() => setCreateView("menu")}
-                onCreate={onCreate}
-              />
-            ) : visibleCreateView === "workflow" ? (
-              <WorkflowCreate
-                cloudProvider={cloudProvider}
-                onBack={() => setCreateView("menu")}
-                onCreate={onCreate}
               />
             ) : visibleCreateView === "package" ? (
               <CodePackageCreate
@@ -6118,7 +6076,8 @@ export default function App() {
                 className="confirm-btn confirm-btn--danger"
                 onClick={() => {
                   setImportedDraft(null);
-                  setCreateView("menu");
+                  setCreateView(null);
+                  setAddMenu(true);
                   setConfirmLeave(false);
                 }}
               >

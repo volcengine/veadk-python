@@ -2092,11 +2092,14 @@ function Toggle({
   checked,
   onChange,
   title,
+  desc,
+  showDescription = false,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   title: string;
   desc: string;
+  showDescription?: boolean;
   icon: typeof Bot;
 }) {
   return (
@@ -2108,6 +2111,7 @@ function Toggle({
     >
       <span className="cw-toggle-text">
         <span className="cw-toggle-title">{title}</span>
+        {showDescription && <span className="cw-toggle-help">{desc}</span>}
       </span>
       <span className="cw-switch" aria-hidden>
         <motion.span
@@ -5096,7 +5100,8 @@ export function CustomCreate({
                                       })
                                     }
                                     title="短期记忆"
-                                    desc="在单次会话内保留上下文，跨轮次记住对话内容。"
+                                    desc="存储单会话上下文"
+                                    showDescription
                                     icon={Layers}
                                   />
                                   {node.memory.shortTerm && (
@@ -5138,7 +5143,8 @@ export function CustomCreate({
                                       })
                                     }
                                     title="长期记忆"
-                                    desc="跨会话持久化关键信息，让 Agent 记住历史偏好。"
+                                    desc="存储跨会话上下文，通常使用向量化检索"
+                                    showDescription
                                     icon={Database}
                                   />
                                   {node.memory.longTerm && (

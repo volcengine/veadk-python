@@ -2,10 +2,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const quickCreateSource = readFileSync(
-  new URL("../src/ui/QuickCreate.tsx", import.meta.url),
-  "utf8",
-);
 const appSource = readFileSync(
   new URL("../src/App.tsx", import.meta.url),
   "utf8",
@@ -48,7 +44,6 @@ const zipSource = readFileSync(
 );
 
 test("offers code package deployment beside scratch creation", () => {
-  assert.doesNotMatch(quickCreateSource, /QuickCreateKind[\s\S]*?"package"/);
   assert.match(
     appSource,
     /key: "package"[\s\S]*?title: "从代码包添加和部署"/,
@@ -57,6 +52,15 @@ test("offers code package deployment beside scratch creation", () => {
   assert.doesNotMatch(appSource, /import \{ FileArchive \} from "lucide-react"/);
   assert.match(appSource, /import \{ CodePackageCreate \}/);
   assert.match(appSource, /visibleCreateView === "package"/);
+});
+
+test("opens custom creation directly from scratch creation", () => {
+  assert.match(
+    appSource,
+    /key: "scratch"[\s\S]*?setCustomCreateMode\("custom"\)[\s\S]*?setCreateView\("custom"\)/,
+  );
+  assert.doesNotMatch(appSource, /import \{ QuickCreate/);
+  assert.doesNotMatch(appSource, /visibleCreateView === "menu"/);
 });
 
 test("uses thin hand-drawn icons for all add-agent options", () => {
