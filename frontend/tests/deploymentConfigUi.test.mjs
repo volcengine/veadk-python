@@ -55,7 +55,7 @@ test("offers code execution with its sandbox configuration", () => {
   );
   assert.match(
     customCreateSource,
-    /createGeneratedAgentTestRun\([\s\S]*?debugRuntimeDraft\(variantDraft\)[\s\S]*?runtimeId: deploymentTarget\.runtimeId[\s\S]*?region: deploymentTarget\.region/,
+    /createGeneratedAgentTestRun\([\s\S]*?debugRuntimeDraft\(variantDraft, transientModelSecretValues\)[\s\S]*?runtimeId: deploymentTarget\.runtimeId[\s\S]*?region: deploymentTarget\.region/,
   );
   assert.match(
     customCreateSource,
@@ -123,6 +123,14 @@ test("lets the whole publish page scroll with white deployment cards", () => {
   assert.match(
     projectPreviewStyles,
     /\.pp-config-section\s*\{[\s\S]*?border:\s*1px solid[\s\S]*?border-radius:\s*18px;[\s\S]*?\.pp-config-label\s*\{[\s\S]*?background:\s*transparent/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-config-section\s*\{[\s\S]*?box-shadow:\s*none;/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-release-info\s*\{[\s\S]*?box-shadow:\s*none;/,
   );
   assert.match(
     projectPreviewStyles,
@@ -291,7 +299,7 @@ test("offers the AgentKit-backed remote Agent type", () => {
   assert.match(customCreateSource, /AgentKit 智能体中心/);
   assert.match(
     customCreateSource,
-    /remoteTypeDisabled = isRootAgent && t\.id === "a2a"/,
+    /remoteTypeDisabled\s*=\s*isRootAgent && t\.id === "a2a"/,
   );
 });
 
@@ -324,11 +332,19 @@ test("shows the total environment variable count beside the section title", () =
   );
 });
 
-test("keeps deployment environment variable values visible", () => {
-  assert.doesNotMatch(projectPreviewSource, /showEnvValues|EyeOff|隐藏值|显示值/);
+test("keeps ordinary environment values visible while masking secrets", () => {
+  assert.doesNotMatch(projectPreviewSource, /showEnvValues|隐藏全部|显示全部/);
   assert.match(
     projectPreviewSource,
-    /className="pp-env-value"\s*type="text"/,
+    /row\.serverManaged\s*&&\s*row\.key === "MODEL_AGENT_API_KEY"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /type=\{\s*serverManagedModelApiKey\s*\? "text"\s*:\s*row\.secret\s*\? "password"\s*:\s*"text"\s*\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /className="pp-env-value"\s*type="password"[\s\S]*?placeholder="必填，仅用于本次发布"/,
   );
   assert.match(
     projectPreviewSource,

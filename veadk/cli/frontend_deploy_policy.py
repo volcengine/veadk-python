@@ -71,6 +71,7 @@ FRONTEND_DEPLOY_POLICY: dict = {
                 "ark:ListApiKeys",
                 "ark:ListEndpoints",
                 "ark:ListFoundationModelVersions",
+                "ark:ListModelActivations",
                 "ark:ListModelChargeItems",
                 "ark:OpenModelChargeItem",
                 "ark:ListFoundationModels",

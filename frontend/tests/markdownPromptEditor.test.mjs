@@ -198,11 +198,11 @@ test("build workspace uses a narrow 60-percent canvas and grouped configuration 
 test("lets searchable configuration menus escape rounded sections", () => {
   assert.match(
     createStyles,
-    /\.cw-section:has\(\.cw-a2a-space-picker\)\s*\{[^}]*overflow:\s*visible;/,
+    /\.cw-section:has\(\.cw-a2a-space-picker:not\(\.cw-model-picker\)\)\s*\{[^}]*overflow:\s*visible;/,
   );
   assert.match(
     createStyles,
-    /\.cw-section:has\(\.cw-a2a-space-picker\) > \.cw-sec-head\s*\{[^}]*border-radius:\s*17px 17px 0 0;/,
+    /\.cw-section:has\(\.cw-a2a-space-picker:not\(\.cw-model-picker\)\) > \.cw-sec-head\s*\{[^}]*border-radius:\s*17px 17px 0 0;/,
   );
 });
 
@@ -248,7 +248,7 @@ test("build-stage intelligent generation sits before next in the footer", () => 
 test("debug comparison configuration explains duplicate disabled actions", () => {
   assert.match(
     createSource,
-    /className=\{`cw-ab-config-done-wrap\$\{disabledReason \? " is-disabled" : ""\}`\}[\s\S]*?className="cw-ab-config-done"[\s\S]*?disabled=\{[\s\S]*?configurationUnavailable[\s\S]*?className="cw-ab-config-done-tip" role="tooltip"/,
+    /className=\{`cw-ab-config-done-wrap\$\{disabledReason \? " is-disabled" : ""\}`\}[\s\S]*?className="cw-ab-config-done"[\s\S]*?disabled=\{[\s\S]*?configurationUnavailable[\s\S]*?className="cw-ab-config-done-tip"\s*role="tooltip"/,
   );
   assert.match(
     createStyles,
@@ -423,11 +423,11 @@ test("container agents require child agents before debug or publish", () => {
   );
   assert.match(
     createSource,
-    /scrollToSection\(problems\[0\]\.problem === "缺少子 Agent" \? "type" : "basic"\)/,
+    /scrollToSection\(\s*problems\[0\]\.problem === "缺少子 Agent" \? "type" : "basic",?\s*\)/,
   );
   assert.match(
     createSource,
-    /<Section meta=\{metaOf\("type"\)\}>[\s\S]*?className="cw-agent-type-options"[\s\S]*?\{showErrors && orchestrator && node\.subAgents\.length === 0 && \([\s\S]*?<span className="cw-error-text">[\s\S]*?validationProblemMessage\(\{[\s\S]*?typeLabel: agentTypeMeta\(node\.agentType\)\.label,[\s\S]*?problem: "缺少子 Agent"/,
+    /<Section meta=\{metaOf\("type"\)\}>[\s\S]*?className="cw-agent-type-options"[\s\S]*?\{showErrors\s*&&\s*orchestrator\s*&&\s*node\.subAgents\.length === 0\s*&& \([\s\S]*?<span className="cw-error-text">[\s\S]*?validationProblemMessage\(\{[\s\S]*?typeLabel: agentTypeMeta\(node\.agentType\)\s*\.label,[\s\S]*?problem: "缺少子 Agent"/,
   );
   assert.match(
     createSource,
@@ -458,7 +458,10 @@ test("debug workspace compares multiple configurations behind one shared input",
   assert.doesNotMatch(createSource, /快速调试|同一条输入将同时发送到全部对照组/);
   assert.match(createSource, /className="cw-ab-config-trigger"[\s\S]*?测试配置/);
   assert.match(createSource, /cw-ab-card-inner\$\{variant\.configOpen \? " is-flipped" : ""\}/);
-  assert.match(createSource, /checked=\{variant\.optimizations\.includes\(item\.id\)\}/);
+  assert.match(
+    createSource,
+    /checked=\{variant\.optimizations\.includes\(\s*item\.id,?\s*\)\}/,
+  );
   assert.match(createSource, /className="cw-ab-optimizations-disabled"[\s\S]*?<em>待开放<\/em>/);
   assert.match(createSource, /const startDebugVariant = async \(id: string\)/);
   assert.match(
@@ -569,17 +572,11 @@ test("only the configuration panel scrolls between the fixed canvas and footer",
   );
 });
 
-test("advanced model connection settings use an accessible disclosure", () => {
-  assert.match(createSource, /aria-expanded=\{modelAdvancedOpen\}/);
-  assert.match(createSource, /aria-controls=\{modelAdvancedId\}/);
-  assert.match(createSource, /<span>更多选项<\/span>/);
+test("custom model connection settings stay visible without a disclosure", () => {
+  assert.doesNotMatch(createSource, /modelAdvancedOpen/);
   assert.match(
     createSource,
-    /\{modelAdvancedOpen && \([\s\S]*?服务商 Provider[\s\S]*?API Base/,
-  );
-  assert.match(
-    createStyles,
-    /\.cw-more-options-chevron\.is-open\s*\{[\s\S]*?transform:\s*rotate\(90deg\);/,
+    /modelSource === "ark"[\s\S]*?服务商 Provider[\s\S]*?API Base[\s\S]*?API Key/,
   );
 });
 
@@ -824,7 +821,7 @@ test("remote Agent configures only the AgentKit center", () => {
   );
   assert.match(
     createSource,
-    /远程 Agent 的名称、描述和能力来自中心返回的 Agent Card/,
+    /远程 Agent 的名称、描述和能力来自中心返回的\s*Agent Card/,
   );
   assert.match(
     createSource,

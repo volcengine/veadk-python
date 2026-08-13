@@ -8,6 +8,12 @@ export interface RuntimeEnvSpec {
   link?: { label: string; url: string };
   multiline?: boolean;
   format?: "json";
+  /** Render the value as a masked secret in deployment summaries. */
+  secret?: boolean;
+  /** Value is derived from configuration and cannot be edited on deploy. */
+  readOnly?: boolean;
+  /** Secret is resolved by the Studio server and never sent to the browser. */
+  serverManaged?: boolean;
 }
 
 export interface RuntimeEnvSelection {
@@ -63,7 +69,9 @@ export function runtimeEnvDisplayRows(
   const deduped = runtimeEnvConfiguration([{ env: specs }]).specs;
   return deduped.map((spec) => ({
     ...spec,
-    value: runtimeEnvValue(spec, values),
+    value: spec.serverManaged
+      ? spec.placeholder || "由服务端注入"
+      : runtimeEnvValue(spec, values),
   }));
 }
 
@@ -74,6 +82,7 @@ export function runtimeEnvVars(
 ): { key: string; value: string }[] {
   const env = new Map<string, string>();
   for (const spec of specs) {
+    if (spec.serverManaged) continue;
     const value = runtimeEnvValue(spec, values);
     if (value.trim()) env.set(spec.key, value);
   }
@@ -85,7 +94,10 @@ export function firstMissingRuntimeEnv(
   values: Record<string, string>,
 ): RuntimeEnvSpec | undefined {
   return specs.find(
-    (spec) => spec.required && !runtimeEnvValue(spec, values).trim(),
+    (spec) =>
+      spec.required &&
+      !spec.serverManaged &&
+      !runtimeEnvValue(spec, values).trim(),
   );
 }
 

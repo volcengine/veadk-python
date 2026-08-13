@@ -136,12 +136,16 @@ server that `veadk frontend` launches — no separate backend.
   folder or ZIP and detect the format automatically. Component forms omit
   credentials that VeADK can resolve automatically, while the Studio server
   forwards its Volcengine credentials to debug runs and deployed runtimes. A
-  global task list keeps Runtime, region, and progress
-  visible across page switches, follows the actual generated Runtime name, and
-  keeps failed or cancelled drafts available for editing. Successful releases clear
-  their drafts before Studio waits up to 60 seconds for the Runtime endpoint to become
-  reachable. Remote topology and trace requests use the selected
-  Runtime endpoint. The Remote Agent type is available only for child Agents;
+  global task list keeps Runtime, region, and progress visible across page
+  switches and keeps failed or cancelled drafts available for editing. For a
+  new deployment, the default Runtime name is a deterministic normalization of
+  the Root Agent name, without a random suffix. Runtime names must contain
+  4–64 letters, digits, hyphens (`-`), or underscores (`_`). The name can be
+  changed before the first deployment, but it is read-only when updating an
+  existing Runtime. Successful releases clear their drafts before Studio waits
+  up to 60 seconds for the Runtime endpoint to become reachable. Remote
+  topology and trace requests use the selected Runtime endpoint. The Remote
+  Agent type is available only for child Agents;
   its generated internal proxy mounts AgentKit A2A center agents dynamically
   from the center ID, recall count, region, and OpenAPI endpoint. Remote names,
   descriptions, and capabilities come from the returned Agent Cards.

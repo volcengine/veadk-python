@@ -114,13 +114,21 @@ def test_codegen_custom_model_endpoint_reads_agent_specific_key() -> None:
         AgentDraft(
             name="Custom Agent",
             instruction="You are helpful.",
+            modelProvider="openai",
             modelApiBase="https://models.example.com/v1",
         )
     )
     files = {file.path: file.content for file in project.files}
     agent_py = files["agents/custom_agent/agent.py"]
 
+    assert 'model_provider=os.environ["CUSTOM_MODEL_CUSTOM_AGENT_PROVIDER"]' in agent_py
+    assert 'model_api_base=os.environ["CUSTOM_MODEL_CUSTOM_AGENT_API_BASE"]' in agent_py
     assert 'model_api_key=os.environ["CUSTOM_MODEL_CUSTOM_AGENT_API_KEY"]' in agent_py
+    assert "CUSTOM_MODEL_CUSTOM_AGENT_PROVIDER=openai" in files[".env.example"]
+    assert (
+        "CUSTOM_MODEL_CUSTOM_AGENT_API_BASE=https://models.example.com/v1"
+        in files[".env.example"]
+    )
     assert (
         "CUSTOM_MODEL_CUSTOM_AGENT_API_KEY=replace-with-your-own-model-api-key"
         in files[".env.example"]

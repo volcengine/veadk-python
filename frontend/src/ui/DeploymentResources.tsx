@@ -361,6 +361,7 @@ export function deploymentResourcesError(resources: DeployResources): string | n
 export function DeploymentResources({
   value,
   agentName,
+  runtimeName,
   region,
   disabled,
   validationError,
@@ -368,12 +369,14 @@ export function DeploymentResources({
 }: {
   value: DeployResources;
   agentName: string;
+  runtimeName: string;
   region: string;
   disabled: boolean;
   validationError: string | null;
   onChange: (resources: DeployResources) => void;
 }) {
   const resolvedAgentName = agentName.trim() || "agentkit-app";
+  const resolvedRuntimeName = runtimeName.trim() || resolvedAgentName;
   const automaticBucketName =
     region && region !== "cn-beijing"
       ? `agentkit-platform-{账号 ID}-${region.startsWith("cn-") ? region.slice(3) : region}`
@@ -648,10 +651,10 @@ export function DeploymentResources({
                 { label: "Workspace", name: "agentkit-cli-workspace" },
                 {
                   label: "Pipeline",
-                  name: `${resolvedAgentName}-{8 位随机字符}`,
+                  name: resolvedRuntimeName,
                 },
               ]}
-              note="Pipeline 与 Runtime 同名，随机字符在部署时生成。"
+              note="Pipeline 与 Runtime 名称一致。"
             />
           )}
         </div>

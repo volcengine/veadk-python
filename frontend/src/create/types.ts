@@ -68,7 +68,14 @@ export interface A2aRegistryConfig {
 
 export interface DeploymentConfig {
   feishuEnabled: boolean;
+  /** Explicit AgentKit Runtime resource name. */
+  runtimeName?: string;
+  /** Whether the user explicitly edited runtimeName instead of using the Root Agent default. */
+  runtimeNameCustomized?: boolean;
   network?: NetworkConfig;
+  /** Safe Ark API Key metadata used to restore the selection when editing. */
+  modelApiKeyId?: string;
+  modelApiKeyName?: string;
   /** Values entered for feature-specific runtime configuration.
    *  Draft and YAML persistence intentionally preserve these values. */
   envValues?: Record<string, string>;
@@ -96,6 +103,7 @@ export interface AgentDraft {
   a2aUrl?: string;
   model?: string;
   /** Model configuration (optional). Empty values fall back to veadk config/env. */
+  modelSource?: "ark" | "custom";
   modelName?: string;
   modelProvider?: string;
   modelApiBase?: string;
@@ -181,6 +189,7 @@ export function emptyDraft(cloudProvider: CloudProvider = "volcengine"): AgentDr
       registryEndpoint: "",
     },
     modelName: defaultModelName(cloudProvider),
+    modelSource: "ark",
     modelProvider: "",
     modelApiBase: "",
     shortTermBackend: "local",
@@ -190,7 +199,11 @@ export function emptyDraft(cloudProvider: CloudProvider = "volcengine"): AgentDr
     knowledgebaseIndex: "",
     tracingExporters: [],
     selectedSkills: [],
-    deployment: { feishuEnabled: false },
+    deployment: {
+      feishuEnabled: false,
+      modelApiKeyId: "",
+      modelApiKeyName: "",
+    },
   };
 }
 

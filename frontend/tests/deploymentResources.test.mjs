@@ -79,8 +79,9 @@ test("shows AgentKit automatic resource naming rules", () => {
   assert.match(resourceSource, /\{ label: "命名空间", name: "agentkit" \}/);
   assert.match(resourceSource, /\$\{resolvedAgentName\}-\{4 位随机字符\}/);
   assert.match(resourceSource, /agentkit-cli-workspace/);
-  assert.match(resourceSource, /\$\{resolvedAgentName\}-\{8 位随机字符\}/);
-  assert.match(resourceSource, /与 Runtime 同名/);
+  assert.match(resourceSource, /name: resolvedRuntimeName/);
+  assert.match(resourceSource, /Pipeline 与 Runtime 名称一致/);
+  assert.match(projectPreviewSource, /runtimeName=\{/);
 });
 
 test("aligns resource fields on one shared grid without gray card fills", () => {

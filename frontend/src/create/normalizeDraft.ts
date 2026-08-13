@@ -122,6 +122,10 @@ function parseSubAgents(
       maxIterations: asMaxIterations(so.maxIterations),
       a2aUrl: asString(so.a2aUrl),
       modelName: asString(so.modelName),
+      modelSource:
+        so.modelSource === "custom" || so.modelSource === "ark"
+          ? so.modelSource
+          : undefined,
       modelProvider: asString(so.modelProvider),
       modelApiBase: asString(so.modelApiBase),
       builtinTools: asStringArray(so.builtinTools).filter((t) => TOOL_IDS.has(t)),
@@ -254,6 +258,10 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     maxIterations: asMaxIterations(o.maxIterations),
     a2aUrl: asString(o.a2aUrl),
     modelName: asString(o.modelName),
+    modelSource:
+      o.modelSource === "custom" || o.modelSource === "ark"
+        ? o.modelSource
+        : undefined,
     modelProvider: asString(o.modelProvider),
     modelApiBase: asString(o.modelApiBase),
     builtinTools: asStringArray(o.builtinTools).filter((t) => TOOL_IDS.has(t)),
@@ -274,6 +282,12 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     ),
     deployment: {
       feishuEnabled: asBool(deployment.feishuEnabled),
+      runtimeName: asString(deployment.runtimeName),
+      runtimeNameCustomized:
+        asBool(deployment.runtimeNameCustomized) ||
+        !!asString(deployment.runtimeName).trim(),
+      modelApiKeyId: asString(deployment.modelApiKeyId),
+      modelApiKeyName: asString(deployment.modelApiKeyName),
       ...(Object.keys(deploymentEnvValues).length > 0
         ? { envValues: deploymentEnvValues }
         : {}),

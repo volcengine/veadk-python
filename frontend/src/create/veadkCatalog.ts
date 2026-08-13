@@ -18,6 +18,9 @@ export interface EnvVar {
   link?: { label: string; url: string };
   multiline?: boolean;
   format?: "json";
+  secret?: boolean;
+  readOnly?: boolean;
+  serverManaged?: boolean;
 }
 
 export interface ToolOption {

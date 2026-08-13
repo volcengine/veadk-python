@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from veadk.auth.veauth.ark_veauth import get_ark_token
 
@@ -49,7 +50,10 @@ def test_no_name_uses_first_key():
         assert get_ark_token() == "sk-FIRST"
         # Only one ListApiKeys page + one GetRawApiKey; no pagination.
         assert m.call_count == 2
-        assert m.call_args_list[-1].kwargs["request_body"] == {"Id": "id-1"}
+        assert m.call_args_list[-1].kwargs["request_body"] == {
+            "Id": "id-1",
+            "ProjectName": "default",
+        }
 
 
 def test_name_found_on_later_page_paginates_and_stops():
@@ -64,10 +68,15 @@ def test_name_found_on_later_page_paginates_and_stops():
         assert get_ark_token(api_key_name="wanted") == "sk-WANTED"
         # 3 ListApiKeys pages + 1 GetRawApiKey; did not fetch a 4th page.
         assert m.call_count == 4
-        # Pagination is sent as query params, not in the body.
+        # Pagination is sent in the request body; the control plane ignores
+        # PageNumber when it is placed in the query string.
         list_call = m.call_args_list[0]
-        assert list_call.kwargs["query"] == {"PageNumber": "1", "PageSize": "10"}
-        assert m.call_args_list[-1].kwargs["request_body"] == {"Id": "e"}
+        assert list_call.kwargs["request_body"]["PageNumber"] == 1
+        assert list_call.kwargs["request_body"]["PageSize"] == 100
+        assert m.call_args_list[-1].kwargs["request_body"] == {
+            "Id": "e",
+            "ProjectName": "default",
+        }
 
 
 def test_name_not_found_raises_after_full_scan():
@@ -91,6 +100,31 @@ def test_name_found_on_first_page_no_extra_pages():
         ]
         assert get_ark_token(api_key_name="wanted") == "sk-X"
         assert m.call_count == 2  # matched on page 1, no further paging
+
+
+def test_id_resolves_exact_key_without_listing():
+    with patch("veadk.auth.veauth.ark_veauth.ve_request") as request:
+        request.return_value = _raw("sk-SELECTED")
+
+        assert get_ark_token(api_key_id="id-selected") == "sk-SELECTED"
+
+    assert request.call_count == 1
+    assert request.call_args.kwargs["request_body"] == {
+        "Id": "id-selected",
+        "ProjectName": "default",
+    }
+
+
+def test_numeric_id_is_sent_as_control_plane_integer():
+    with patch("veadk.auth.veauth.ark_veauth.ve_request") as request:
+        request.return_value = _raw("sk-SELECTED")
+
+        assert get_ark_token(api_key_id="4028965") == "sk-SELECTED"
+
+    assert request.call_args.kwargs["request_body"] == {
+        "Id": 4028965,
+        "ProjectName": "default",
+    }
 
 
 def test_environment_sts_token_is_used_for_signed_requests(monkeypatch):

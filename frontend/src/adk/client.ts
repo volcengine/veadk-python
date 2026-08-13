@@ -26,6 +26,37 @@ import {
   type CloudProvider,
 } from "./cloudProvider";
 
+export interface ModelOption {
+  id: string;
+  name: string;
+  displayName: string;
+  vendorName: string;
+  activationState: string;
+  lifecycleStatus: string;
+  available: boolean;
+}
+
+export interface ModelOptionsResponse {
+  provider: CloudProvider;
+  selectedApiKeyId?: string;
+  models: ModelOption[];
+}
+
+export interface ModelApiKeyOption {
+  id: string;
+  name: string;
+}
+
+export interface ModelApiKeysResponse {
+  provider: CloudProvider;
+  keys: ModelApiKeyOption[];
+  defaultKeyId?: string;
+}
+
+export interface ModelApiKeyValueResponse {
+  value: string;
+}
+
 /** An ADK event as serialised over `/run_sse` (camelCase, by_alias=True). */
 export interface AdkUsage {
   totalTokenCount?: number;
@@ -469,6 +500,54 @@ async function httpErrorMessage(res: Response, fallback: string): Promise<string
   } catch {
     return `${context}\n原始响应：\n${text}`;
   }
+}
+
+export async function listModelApiKeys(
+  signal?: AbortSignal,
+  refresh = false,
+): Promise<ModelApiKeysResponse> {
+  const res = await apiFetch(
+    `/web/model-api-keys${refresh ? "?refresh=true" : ""}`,
+    { signal, cache: "no-store" },
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "加载 Ark API Key 失败"));
+  }
+  return (await res.json()) as ModelApiKeysResponse;
+}
+
+/** Reveal one server-managed ModelArk API Key only for the current request. */
+export async function revealModelApiKey(
+  apiKeyId: string,
+  signal?: AbortSignal,
+): Promise<ModelApiKeyValueResponse> {
+  const res = await apiFetch(
+    `/web/model-api-keys/${encodeURIComponent(apiKeyId)}/value`,
+    { method: "POST", signal, cache: "no-store" },
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "加载 Ark API Key 失败"));
+  }
+  return (await res.json()) as ModelApiKeyValueResponse;
+}
+
+export async function listModelOptions(options?: {
+  signal?: AbortSignal;
+  apiKeyId?: string;
+  refresh?: boolean;
+}): Promise<ModelOptionsResponse> {
+  const params = new URLSearchParams();
+  if (options?.apiKeyId) params.set("apiKeyId", options.apiKeyId);
+  if (options?.refresh) params.set("refresh", "true");
+  const query = params.toString();
+  const res = await apiFetch(`/web/model-options${query ? `?${query}` : ""}`, {
+    signal: options?.signal,
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "加载模型列表失败"));
+  }
+  return (await res.json()) as ModelOptionsResponse;
 }
 
 export async function listApps(): Promise<string[]> {
@@ -1843,6 +1922,7 @@ export interface DeployAgentkitResult {
   apikey: string;
   url: string;
   agentName: string;
+  runtimeName: string;
   runtimeId?: string;
   consoleUrl?: string;
   region?: string;
@@ -2124,6 +2204,7 @@ export async function deployAgentkitProject(
   opts?: {
     taskId?: string;
     runtimeId?: string;
+    runtimeName?: string;
     appName?: string;
     sessionStorage?: "in-memory" | "persistent";
     minInstance?: number;
@@ -2170,6 +2251,7 @@ export async function deployAgentkitProject(
           config,
           taskId,
           runtimeId: opts?.runtimeId,
+          runtimeName: opts?.runtimeName,
           appName: opts?.appName,
           sessionStorage: opts?.sessionStorage,
           minInstance: opts?.minInstance,
@@ -2225,13 +2307,19 @@ export async function deployAgentkitProject(
   if (!final.runtimeId && !final.url) {
     throw new Error("部署失败：返回缺少 AgentKit 连接信息");
   }
+  // Older Studio servers returned the platform Runtime resource name in
+  // `agentName` and did not send `runtimeName`. The request name is the stable
+  // ADK app name, so normalize both response generations into one contract.
+  const deployedAgentName = final.runtimeName?.trim() ? final.agentName : name;
+  const deployedRuntimeName = final.runtimeName?.trim() || final.agentName;
   // Note: the runtime's data-plane apikey is intentionally NOT persisted in the
   // browser (it's a secret; clear-text localStorage would be XSS-exposed). The
   // "管理 Agent" view shows control-plane detail instead.
   return {
     apikey: final.apikey ?? "",
     url: final.url ?? "",
-    agentName: final.agentName,
+    agentName: deployedAgentName,
+    runtimeName: deployedRuntimeName,
     runtimeId: final.runtimeId,
     consoleUrl: final.consoleUrl,
     region: final.region,
@@ -2772,6 +2860,7 @@ export async function deleteRuntime(
 export interface RuntimeUpdateCapability {
   canUpdate: boolean;
   reason: string;
+  reasonCode?: string;
   runtime: {
     runtimeId: string;
     name: string;
@@ -2791,21 +2880,36 @@ export interface RuntimeUpdateCapability {
 export async function getRuntimeUpdateCapability({
   runtimeId,
   region,
+  appName,
   signal,
 }: {
   runtimeId: string;
   region: string;
+  appName?: string;
   signal?: AbortSignal;
 }): Promise<RuntimeUpdateCapability> {
   const params = new URLSearchParams({ runtimeId, region });
+  if (appName) params.set("appName", appName);
   const res = await apiFetch(
     `/web/runtime-update-capability?${params.toString()}`,
     { signal },
   );
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "检查 Runtime 更新能力失败"));
+    throw new Error(await runtimeUpdateCapabilityErrorMessage(res));
   }
   return (await res.json()) as RuntimeUpdateCapability;
+}
+
+async function runtimeUpdateCapabilityErrorMessage(res: Response): Promise<string> {
+  const payload = await res.json().catch(() => null) as { detail?: unknown } | null;
+  const detail = typeof payload?.detail === "string" ? payload.detail : "";
+  if (res.status === 403) return "当前账号没有管理该 Runtime 的权限。";
+  if (res.status === 404) {
+    return detail === "runtime_not_found"
+      ? "该 Runtime 不存在或已被删除。"
+      : "当前账号无法访问该 Runtime。";
+  }
+  return `检查 Runtime 更新能力失败（HTTP ${res.status}），请稍后重试。`;
 }
 
 /** Control-plane detail for a runtime (GetRuntime), for the 管理 Agent view. */

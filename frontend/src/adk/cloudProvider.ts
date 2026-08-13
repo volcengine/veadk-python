@@ -8,18 +8,27 @@ export interface CloudRegionOption {
 
 export const BYTEPLUS_DEFAULT_REGION = "ap-southeast-1";
 export const VOLCENGINE_DEFAULT_REGION = "cn-beijing";
-export const BYTEPLUS_MODELARK_BASE_URL = "https://ark.ap-southeast.bytepluses.com/api/v3";
-export const VOLCENGINE_MODELARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3/";
+export const BYTEPLUS_MODELARK_BASE_URL =
+  "https://ark.ap-southeast.bytepluses.com/api/v3";
+export const VOLCENGINE_MODELARK_BASE_URL =
+  "https://ark.cn-beijing.volces.com/api/v3/";
+export const BYTEPLUS_MODELARK_ACTIVATION_URL =
+  "https://console.byteplus.com/ark/region:ark+ap-southeast-1/openManagement";
+export const VOLCENGINE_MODELARK_ACTIVATION_URL =
+  "https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement";
 export const BYTEPLUS_DEFAULT_MODEL_NAME = "seed-2-0-lite-260228";
 export const VOLCENGINE_DEFAULT_MODEL_NAME = "doubao-seed-2-1-pro-260628";
-export const BYTEPLUS_DEFAULT_EMBEDDING_NAME = "skylark-embedding-vision-250615";
-export const VOLCENGINE_DEFAULT_EMBEDDING_NAME = "doubao-embedding-vision-250615";
+export const BYTEPLUS_DEFAULT_EMBEDDING_NAME =
+  "skylark-embedding-vision-250615";
+export const VOLCENGINE_DEFAULT_EMBEDDING_NAME =
+  "doubao-embedding-vision-250615";
 export const BYTEPLUS_PLANNER_MODEL_NAME = "seed-2-0-lite-260228";
 export const VOLCENGINE_PLANNER_MODEL_NAME = "doubao-seed-2-0-lite-260428";
 export const BYTEPLUS_DEFAULT_IMAGE_MODEL_NAME = "dola-seedream-5-0-pro-260628";
 export const VOLCENGINE_DEFAULT_IMAGE_MODEL_NAME = "doubao-seedream-5-0-260128";
 export const BYTEPLUS_DEFAULT_IMAGE_EDIT_MODEL_NAME = "seededit-3-0-i2i-250628";
-export const VOLCENGINE_DEFAULT_IMAGE_EDIT_MODEL_NAME = "doubao-seededit-3-0-i2i-250628";
+export const VOLCENGINE_DEFAULT_IMAGE_EDIT_MODEL_NAME =
+  "doubao-seededit-3-0-i2i-250628";
 export const BYTEPLUS_DEFAULT_VIDEO_MODEL_NAME = "dreamina-seedance-2-0-260128";
 export const VOLCENGINE_DEFAULT_VIDEO_MODEL_NAME = "doubao-seedance-2-0-260128";
 
@@ -32,7 +41,9 @@ const BYTEPLUS_REGIONS: CloudRegionOption[] = [
   { value: BYTEPLUS_DEFAULT_REGION, label: BYTEPLUS_DEFAULT_REGION },
 ];
 
-export function cloudRegionOptions(provider: CloudProvider): CloudRegionOption[] {
+export function cloudRegionOptions(
+  provider: CloudProvider,
+): CloudRegionOption[] {
   return provider === "byteplus" ? BYTEPLUS_REGIONS : VOLCENGINE_REGIONS;
 }
 
@@ -50,11 +61,16 @@ export function isSupportedCloudRegion(value: unknown): value is CloudRegion {
   return typeof value === "string" && SUPPORTED_CLOUD_REGIONS.has(value);
 }
 
-export function formatCloudRegion(region: string, provider?: CloudProvider): string {
+export function formatCloudRegion(
+  region: string,
+  provider?: CloudProvider,
+): string {
   const options = provider
     ? cloudRegionOptions(provider)
     : [...VOLCENGINE_REGIONS, ...BYTEPLUS_REGIONS];
-  return options.find((option) => option.value === region)?.label || region || "-";
+  return (
+    options.find((option) => option.value === region)?.label || region || "-"
+  );
 }
 
 export function defaultModelName(provider: CloudProvider): string {
@@ -67,6 +83,12 @@ export function defaultModelApiBase(provider: CloudProvider): string {
   return provider === "byteplus"
     ? BYTEPLUS_MODELARK_BASE_URL
     : VOLCENGINE_MODELARK_BASE_URL;
+}
+
+export function modelActivationConsoleUrl(provider: CloudProvider): string {
+  return provider === "byteplus"
+    ? BYTEPLUS_MODELARK_ACTIVATION_URL
+    : VOLCENGINE_MODELARK_ACTIVATION_URL;
 }
 
 export function defaultEmbeddingModelName(provider: CloudProvider): string {

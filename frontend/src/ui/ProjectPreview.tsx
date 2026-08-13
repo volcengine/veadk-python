@@ -55,6 +55,8 @@ hljs.registerLanguage("dockerfile", dockerfile);
 hljs.registerLanguage("makefile", makefile);
 import type { AgentProject, ProjectFile } from "../create/project";
 import type { AgentDraft, NetworkConfig } from "../create/types";
+import { resolvedModelSource } from "../create/modelSource";
+import { normalizeRuntimeName, runtimeNameProblem } from "../create/runtimeName";
 import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
 import {
   FEISHU_ENV,
@@ -69,6 +71,7 @@ import {
 } from "../create/deploymentEnv";
 import {
   listIdentityUserPools,
+  revealModelApiKey,
   RuntimeProbeError,
   type DeployAuthentication,
   type DeployBuildLogSnapshot,
@@ -131,6 +134,58 @@ function telemetryDeployPhase(
 
 const CodeEditor = lazy(() => import("./CodeEditor"));
 const ignoreCanvasAction = () => undefined;
+
+function ModelApiKeyEyeIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2.75 12s3.35-5.25 9.25-5.25S21.25 12 21.25 12 17.9 17.25 12 17.25 2.75 12 2.75 12Z" />
+      <circle cx="12" cy="12" r="2.5" />
+    </svg>
+  );
+}
+
+function ModelApiKeyEyeOffIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 3l18 18" />
+      <path d="M9.7 6.95A9.7 9.7 0 0 1 12 6.68c5.9 0 9.25 5.32 9.25 5.32a16 16 0 0 1-2.28 2.85" />
+      <path d="M14.35 14.55A3.25 3.25 0 0 1 9.5 10.2" />
+      <path d="M6.25 8.12A16.4 16.4 0 0 0 2.75 12S6.1 17.32 12 17.32c.8 0 1.55-.1 2.25-.27" />
+    </svg>
+  );
+}
+
+interface ModelApiKeyRevealState {
+  status: "hidden" | "loading" | "visible" | "error";
+  apiKeyId: string;
+  value: string;
+  error: string;
+}
+
+const HIDDEN_MODEL_API_KEY_REVEAL: ModelApiKeyRevealState = {
+  status: "hidden",
+  apiKeyId: "",
+  value: "",
+  error: "",
+};
 
 interface DeploymentConfirmDialogProps {
   open: boolean;
@@ -401,6 +456,7 @@ export interface DeployResult {
   apikey: string;
   url: string;
   agentName: string;
+  runtimeName: string;
   runtimeId?: string;
   consoleUrl?: string;
   region?: string;
@@ -473,6 +529,7 @@ function validateRuntimeInstanceRange(
 
 export interface DeployOptions {
   taskId?: string;
+  runtimeName?: string;
   sessionStorage?: "in-memory" | "persistent";
   minInstance?: number;
   maxInstance?: number;
@@ -496,6 +553,8 @@ export interface DeploymentTaskUpdate {
   id: string;
   /** Workspace draft that can be reopened when deployment does not complete. */
   draftId?: string;
+  /** Stable ADK Agent name. Never use the platform Runtime name as identity. */
+  agentName: string;
   runtimeName: string;
   runtimeId?: string;
   region: string;
@@ -554,6 +613,10 @@ export interface ProjectPreviewProps {
   deploymentActionTargetId?: string;
   /** Existing Runtime id when this deployment updates an Agent in place. */
   deploymentRuntimeId?: string;
+  /** Existing platform Runtime resource name when publishing an update. */
+  deploymentRuntimeName?: string;
+  /** Updates the explicit Runtime name for a new deployment. */
+  onDeploymentRuntimeNameChange?: (runtimeName: string) => void;
   /** Opens the persistent Agent detail as soon as deployment starts. */
   onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
   /** Mirrors deployment progress into the app shell so it survives page switches. */
@@ -566,6 +629,9 @@ export interface ProjectPreviewProps {
   deploymentEnv?: EnvVar[];
   /** Required deployment secrets kept only in this mounted publish page. */
   requiredSecretEnv?: Array<{ key: string; label: string }>;
+  /** Optional controlled secret values entered earlier in the configuration flow. */
+  requiredSecretEnvValues?: Record<string, string>;
+  onRequiredSecretEnvChange?: (key: string, value: string) => void;
   /** Deployment-only values entered in each feature's configuration area. */
   deploymentEnvValues?: Record<string, string>;
   onDeploymentEnvChange?: (key: string, value: string) => void;
@@ -694,12 +760,16 @@ export function ProjectPreview({
   deploymentActionLabel = "部署",
   deploymentActionTargetId,
   deploymentRuntimeId,
+  deploymentRuntimeName,
+  onDeploymentRuntimeNameChange,
   onDeploymentStarted,
   onDeploymentTaskChange,
   feishuEnabled = false,
   onFeishuEnabledChange,
   deploymentEnv = [],
   requiredSecretEnv = [],
+  requiredSecretEnvValues,
+  onRequiredSecretEnvChange,
   deploymentEnvValues = {},
   onDeploymentEnvChange,
   network,
@@ -719,8 +789,18 @@ export function ProjectPreview({
   deployDisabled = false,
 }: ProjectPreviewProps) {
   const editable = typeof onChange === "function";
-  const isRuntimeUpdate = deploymentActionLabel.includes("更新");
+  const isRuntimeUpdate = Boolean(deploymentRuntimeId);
   const inMemorySession = usesInMemorySession(agentDraft);
+  const runtimeNameSource =
+    agentName?.trim() || agentDraft?.name || project.name;
+  const effectiveRuntimeName =
+    deploymentRuntimeName ??
+    (isRuntimeUpdate ? runtimeNameSource : normalizeRuntimeName(runtimeNameSource));
+  const runtimeNameError = isRuntimeUpdate
+    ? null
+    : runtimeNameProblem(effectiveRuntimeName);
+  const selectedModelApiKeyId =
+    agentDraft?.deployment?.modelApiKeyId?.trim() ?? "";
 
   // Initialize all hooks BEFORE any conditional returns (React hooks rule)
   const [selected, setSelected] = useState<string | null>(
@@ -741,9 +821,15 @@ export function ProjectPreview({
   const [activePhase, setActivePhase] = useState<string | null>(null);
   const [addingAgent, setAddingAgent] = useState(false);
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
+  const [modelApiKeyRevealState, setModelApiKeyRevealState] =
+    useState<ModelApiKeyRevealState>(HIDDEN_MODEL_API_KEY_REVEAL);
+  const modelApiKeyRevealAbortRef = useRef<AbortController | null>(null);
+  const selectedModelApiKeyIdRef = useRef(selectedModelApiKeyId);
+  selectedModelApiKeyIdRef.current = selectedModelApiKeyId;
   const [secretEnvValues, setSecretEnvValues] = useState<Record<string, string>>(
     {},
   );
+  const effectiveSecretEnvValues = requiredSecretEnvValues ?? secretEnvValues;
   const [secretEnvErrorKey, setSecretEnvErrorKey] = useState<string | null>(null);
   const [deployResources, setDeployResources] = useState<DeployResources>(
     DEFAULT_DEPLOY_RESOURCES,
@@ -752,6 +838,9 @@ export function ProjectPreview({
     useState<string | null>(null);
   const [regionMenuOpen, setRegionMenuOpen] = useState(false);
   const deploymentRegionHelpId = useId();
+  const runtimeNameInputId = useId();
+  const runtimeNameHelpId = useId();
+  const runtimeNameErrorId = useId();
   const [authenticationType, setAuthenticationType] =
     useState<DeployAuthentication["type"]>("api_key");
   const [userPoolUid, setUserPoolUid] = useState("");
@@ -787,17 +876,92 @@ export function ProjectPreview({
     ? [...deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP]
     : deploymentStepsWithInstanceUpdate;
 
+  function clearModelApiKeyReveal() {
+    modelApiKeyRevealAbortRef.current?.abort();
+    modelApiKeyRevealAbortRef.current = null;
+    setModelApiKeyRevealState(HIDDEN_MODEL_API_KEY_REVEAL);
+  }
+
+  async function revealSelectedModelApiKey() {
+    const requestApiKeyId = selectedModelApiKeyIdRef.current;
+    if (!requestApiKeyId) {
+      setModelApiKeyRevealState({
+        status: "error",
+        apiKeyId: "",
+        value: "",
+        error: "请先在模型配置中选择 API Key。",
+      });
+      return;
+    }
+    modelApiKeyRevealAbortRef.current?.abort();
+    const controller = new AbortController();
+    modelApiKeyRevealAbortRef.current = controller;
+    setModelApiKeyRevealState({
+      status: "loading",
+      apiKeyId: requestApiKeyId,
+      value: "",
+      error: "",
+    });
+    try {
+      const response = await revealModelApiKey(
+        requestApiKeyId,
+        controller.signal,
+      );
+      if (
+        controller.signal.aborted ||
+        selectedModelApiKeyIdRef.current !== requestApiKeyId
+      ) {
+        return;
+      }
+      setModelApiKeyRevealState({
+        status: "visible",
+        apiKeyId: requestApiKeyId,
+        value: response.value,
+        error: "",
+      });
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setModelApiKeyRevealState({
+        status: "error",
+        apiKeyId: requestApiKeyId,
+        value: "",
+        error:
+          error instanceof Error
+            ? error.message
+            : "加载 API Key 失败，请重试。",
+      });
+    } finally {
+      if (modelApiKeyRevealAbortRef.current === controller) {
+        modelApiKeyRevealAbortRef.current = null;
+      }
+    }
+  }
+
+  useEffect(() => {
+    clearModelApiKeyReveal();
+  }, [selectedModelApiKeyId]);
+
+  useEffect(() => {
+    window.addEventListener("pagehide", clearModelApiKeyReveal);
+    return () => {
+      window.removeEventListener("pagehide", clearModelApiKeyReveal);
+      clearModelApiKeyReveal();
+    };
+  }, []);
+
   useEffect(() => {
     const allowed = new Set(requiredSecretEnv.map((env) => env.key));
-    setSecretEnvValues((current) =>
-      Object.fromEntries(
-        Object.entries(current).filter(([key]) => allowed.has(key)),
-      ),
-    );
+    if (requiredSecretEnvValues === undefined) {
+      setSecretEnvValues((current) =>
+        Object.fromEntries(
+          Object.entries(current).filter(([key]) => allowed.has(key)),
+        ),
+      );
+    }
     setSecretEnvErrorKey((current) =>
       current && allowed.has(current) ? current : null,
     );
-  }, [requiredSecretEnvSignature]);
+  }, [requiredSecretEnvSignature, requiredSecretEnvValues]);
 
   useEffect(() => {
     if (!onDeployRegionChange || isRuntimeUpdate) return;
@@ -941,12 +1105,28 @@ export function ProjectPreview({
     runtimeNetworkType: networkMode,
     feishuEnabled: feishuEnabled ? 1 as const : 0 as const,
   });
+  const requiredSecretKeys = new Set(requiredSecretEnv.map((env) => env.key));
   const automaticEnvRows = runtimeEnvDisplayRows(
     feishuEnabled ? [...deploymentEnv, ...FEISHU_ENV] : deploymentEnv,
     deploymentEnvValues,
-  );
+  ).filter((env) => !requiredSecretKeys.has(env.key));
   const environmentVariableCount =
     automaticEnvRows.length + requiredSecretEnv.length + envRows.length;
+  const currentModelApiKeyRevealState =
+    modelApiKeyRevealState.apiKeyId === selectedModelApiKeyId
+      ? modelApiKeyRevealState
+      : HIDDEN_MODEL_API_KEY_REVEAL;
+  const modelApiKeyRevealVisible =
+    currentModelApiKeyRevealState.status === "visible";
+  const modelApiKeyRevealLabel = !selectedModelApiKeyId
+    ? "请先选择 API Key"
+    : currentModelApiKeyRevealState.status === "loading"
+      ? "正在显示 API Key"
+      : modelApiKeyRevealVisible
+        ? "隐藏 API Key"
+        : currentModelApiKeyRevealState.status === "error"
+          ? "重试显示 API Key"
+          : "显示 API Key";
 
   function toggleFolder(key: string) {
     setCollapsed((prev) => {
@@ -1043,8 +1223,18 @@ export function ProjectPreview({
       byKey.set(env.key, env.value);
     }
     for (const env of requiredSecretEnv) {
-      const value = secretEnvValues[env.key] ?? "";
+      const value = effectiveSecretEnvValues[env.key] ?? "";
       if (value.trim()) byKey.set(env.key, value);
+    }
+    const usesArkModel = (draft: AgentDraft): boolean =>
+      (draft.agentType === "llm" &&
+        resolvedModelSource(draft, cloudProvider) === "ark") ||
+      draft.subAgents.some(usesArkModel);
+    if (agentDraft && usesArkModel(agentDraft)) {
+      const apiKeyId = agentDraft.deployment?.modelApiKeyId?.trim();
+      const apiKeyName = agentDraft.deployment?.modelApiKeyName?.trim();
+      if (apiKeyId) byKey.set("MODEL_AGENT_API_KEY_ID", apiKeyId);
+      if (apiKeyName) byKey.set("MODEL_AGENT_API_KEY_NAME", apiKeyName);
     }
     return [...byKey].map(([key, value]) => ({ key, value }));
   }
@@ -1068,6 +1258,10 @@ export function ProjectPreview({
 
   async function requestDeploymentConfirmation() {
     if (!onDeploy || deploying || deployDisabled) return;
+    if (runtimeNameError) {
+      setDeployError(runtimeNameError);
+      return;
+    }
     if (!isRuntimeUpdate) {
       const resourceError = deploymentResourcesError(deployResources);
       if (resourceError) {
@@ -1094,7 +1288,7 @@ export function ProjectPreview({
       return;
     }
     const missingSecret = requiredSecretEnv.find(
-      (env) => !(secretEnvValues[env.key] ?? "").trim(),
+      (env) => !(effectiveSecretEnvValues[env.key] ?? "").trim(),
     );
     if (missingSecret) {
       setSecretEnvErrorKey(missingSecret.key);
@@ -1137,6 +1331,11 @@ export function ProjectPreview({
 
   async function performDeployment() {
     if (!onDeploy || deploying) return;
+    if (runtimeNameError) {
+      setDeployConfirmOpen(false);
+      setDeployError(runtimeNameError);
+      return;
+    }
     if (!instanceRange.valid) {
       setDeployConfirmOpen(false);
       setDeployError(instanceRange.error);
@@ -1152,11 +1351,14 @@ export function ProjectPreview({
       setDeploying(true);
     }
     const taskId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    let taskRuntimeName = agentName?.trim() || project.name || "生成中…";
+    const taskAgentName = agentName?.trim() || agentDraft?.name || project.name;
+    const requestedRuntimeName = effectiveRuntimeName.trim();
+    let taskRuntimeName = requestedRuntimeName;
     const taskStartedAt = Date.now();
     const operation = beginAgentDeploy(deploymentTelemetryBase());
     const initialTask: DeploymentTaskUpdate = {
       id: taskId,
+      agentName: taskAgentName,
       runtimeName: taskRuntimeName,
       runtimeId: deploymentRuntimeId,
       region: deployRegion,
@@ -1230,6 +1432,7 @@ export function ProjectPreview({
           }
           onDeploymentTaskChange?.({
             id: taskId,
+            agentName: taskAgentName,
             runtimeName: taskRuntimeName,
             runtimeId: deploymentRuntimeId,
             region: deployRegion,
@@ -1246,6 +1449,7 @@ export function ProjectPreview({
         },
         {
           taskId,
+          runtimeName: requestedRuntimeName,
           sessionStorage: inMemorySession ? "in-memory" : "persistent",
           minInstance: instanceRange.min,
           maxInstance: instanceRange.max,
@@ -1283,7 +1487,8 @@ export function ProjectPreview({
       });
       onDeploymentTaskChange?.({
         id: taskId,
-        runtimeName: result.agentName || taskRuntimeName,
+        agentName: result.agentName || taskAgentName,
+        runtimeName: result.runtimeName || taskRuntimeName,
         runtimeId: result.runtimeId || deploymentRuntimeId,
         region: result.region || deployRegion,
         startedAt: taskStartedAt,
@@ -1299,7 +1504,8 @@ export function ProjectPreview({
         if (!(error instanceof RuntimeProbeError)) throw error;
         onDeploymentTaskChange?.({
           id: taskId,
-          runtimeName: result.agentName || taskRuntimeName,
+          agentName: result.agentName || taskAgentName,
+          runtimeName: result.runtimeName || taskRuntimeName,
           runtimeId: result.runtimeId || deploymentRuntimeId,
           region: result.region || deployRegion,
           startedAt: taskStartedAt,
@@ -1323,6 +1529,7 @@ export function ProjectPreview({
         }
         onDeploymentTaskChange?.({
           id: taskId,
+          agentName: taskAgentName,
           runtimeName: taskRuntimeName,
           runtimeId: deploymentRuntimeId,
           region: deployRegion,
@@ -1342,6 +1549,7 @@ export function ProjectPreview({
       });
       onDeploymentTaskChange?.({
         id: taskId,
+        agentName: taskAgentName,
         runtimeName: taskRuntimeName,
         runtimeId: deploymentRuntimeId,
         region: deployRegion,
@@ -1386,7 +1594,7 @@ export function ProjectPreview({
           })) ?? [];
         conn = addRuntimeConnection(
           deployResult.runtimeId,
-          deployResult.agentName,
+          deployResult.runtimeName,
           region,
           apps,
           apps.length > 0
@@ -1763,6 +1971,42 @@ export function ProjectPreview({
 
               {!deploymentPrimaryPane && (
                 <section className="pp-config-section">
+                  <label className="pp-config-label" htmlFor={runtimeNameInputId}>
+                    Runtime 名称
+                  </label>
+                  <input
+                    id={runtimeNameInputId}
+                    className="pp-runtime-name-input"
+                    value={effectiveRuntimeName}
+                    disabled={deploying || isRuntimeUpdate}
+                    maxLength={64}
+                    autoComplete="off"
+                    aria-label="Runtime 名称"
+                    aria-invalid={Boolean(runtimeNameError)}
+                    aria-describedby={`${runtimeNameHelpId}${runtimeNameError ? ` ${runtimeNameErrorId}` : ""}`}
+                    onChange={(event) =>
+                      onDeploymentRuntimeNameChange?.(event.currentTarget.value)
+                    }
+                  />
+                  <p id={runtimeNameHelpId} className="pp-config-note">
+                    {isRuntimeUpdate
+                      ? "更新时保持现有 Runtime 名称不变。"
+                      : "默认根据 Root Agent 名称生成。支持 4-64 位字母、数字、连字符和下划线。"}
+                  </p>
+                  {runtimeNameError && (
+                    <p
+                      id={runtimeNameErrorId}
+                      className="pp-runtime-name-error"
+                      role="alert"
+                    >
+                      {runtimeNameError}
+                    </p>
+                  )}
+                </section>
+              )}
+
+              {!deploymentPrimaryPane && (
+                <section className="pp-config-section">
                   <div className="pp-config-label">发布区域</div>
                   {deploymentRegionPicker(false)}
                 </section>
@@ -2039,6 +2283,7 @@ export function ProjectPreview({
                   <DeploymentResources
                     value={deployResources}
                     agentName={agentName || project.name || "agentkit-app"}
+                    runtimeName={effectiveRuntimeName}
                     region={deployRegion}
                     disabled={deploying}
                     validationError={deployResourcesValidationError}
@@ -2084,7 +2329,16 @@ export function ProjectPreview({
                           <small>{automaticEnvRows.length} 项</small>
                         </div>
                         {automaticEnvRows.map((row) => {
-                          const fixed = row.key.startsWith("ENABLE_");
+                          const fixed =
+                            row.readOnly || row.key.startsWith("ENABLE_");
+                          const serverManagedModelApiKey =
+                            row.serverManaged &&
+                            row.key === "MODEL_AGENT_API_KEY";
+                          const displayedValue = serverManagedModelApiKey
+                            ? modelApiKeyRevealVisible
+                              ? currentModelApiKeyRevealState.value
+                              : "由所选 API Key 注入"
+                            : row.value;
                           const jsonError = runtimeEnvJsonError(
                             row,
                             deploymentEnvValues,
@@ -2151,31 +2405,93 @@ export function ProjectPreview({
                                     }
                                   />
                                 ) : (
-                                  <input
-                                    className="pp-env-value"
-                                    type="text"
-                                    value={row.value}
-                                    placeholder={
-                                      row.required ? "必填，尚未填写" : "可选，尚未填写"
+                                  <div
+                                    className={
+                                      serverManagedModelApiKey
+                                        ? "pp-env-secret-control"
+                                        : undefined
                                     }
-                                    readOnly={fixed}
-                                    disabled={
-                                      deploying || (!fixed && !onDeploymentEnvChange)
-                                    }
-                                    autoComplete="off"
-                                    aria-invalid={!!jsonError}
-                                    aria-label={`${row.key} 环境变量值`}
-                                    onChange={(event) =>
-                                      onDeploymentEnvChange?.(
-                                        row.key,
-                                        event.currentTarget.value,
-                                      )
-                                    }
-                                  />
+                                  >
+                                    <input
+                                      className="pp-env-value"
+                                      type={
+                                        serverManagedModelApiKey
+                                          ? "text"
+                                          : row.secret
+                                            ? "password"
+                                            : "text"
+                                      }
+                                      value={displayedValue}
+                                      placeholder={
+                                        row.required
+                                          ? "必填，尚未填写"
+                                          : "可选，尚未填写"
+                                      }
+                                      readOnly={fixed}
+                                      disabled={
+                                        deploying ||
+                                        (!fixed && !onDeploymentEnvChange)
+                                      }
+                                      autoComplete={
+                                        row.secret ? "new-password" : "off"
+                                      }
+                                      spellCheck={row.secret ? false : undefined}
+                                      aria-invalid={!!jsonError}
+                                      aria-label={`${row.key} 环境变量值`}
+                                      onChange={(event) =>
+                                        onDeploymentEnvChange?.(
+                                          row.key,
+                                          event.currentTarget.value,
+                                        )
+                                      }
+                                    />
+                                    {serverManagedModelApiKey && (
+                                      <button
+                                        type="button"
+                                        className="pp-env-secret-toggle"
+                                        aria-label={modelApiKeyRevealLabel}
+                                        title={modelApiKeyRevealLabel}
+                                        aria-pressed={modelApiKeyRevealVisible}
+                                        disabled={
+                                          currentModelApiKeyRevealState.status ===
+                                            "loading" || !selectedModelApiKeyId
+                                        }
+                                        onClick={() => {
+                                          if (modelApiKeyRevealVisible) {
+                                            clearModelApiKeyReveal();
+                                          } else {
+                                            void revealSelectedModelApiKey();
+                                          }
+                                        }}
+                                      >
+                                        {currentModelApiKeyRevealState.status ===
+                                        "loading" ? (
+                                          <Loader2
+                                            className="pp-env-secret-spinner"
+                                            aria-hidden="true"
+                                          />
+                                        ) : modelApiKeyRevealVisible ? (
+                                          <ModelApiKeyEyeOffIcon />
+                                        ) : (
+                                          <ModelApiKeyEyeIcon />
+                                        )}
+                                      </button>
+                                    )}
+                                  </div>
                                 )}
                                 {jsonError && (
                                   <span className="pp-env-error">{jsonError}</span>
                                 )}
+                                {serverManagedModelApiKey &&
+                                  currentModelApiKeyRevealState.status ===
+                                    "error" && (
+                                    <span
+                                      className="pp-env-reveal-error"
+                                      role="alert"
+                                    >
+                                      {currentModelApiKeyRevealState.error}
+                                    </span>
+                                  )}
                               </div>
                               <span className="pp-env-source">
                                 {fixed ? "自动" : "同步"}
@@ -2211,7 +2527,7 @@ export function ProjectPreview({
                                   id={env.key}
                                   className="pp-env-value"
                                   type="password"
-                                  value={secretEnvValues[env.key] ?? ""}
+                                  value={effectiveSecretEnvValues[env.key] ?? ""}
                                   placeholder="必填，仅用于本次发布"
                                   disabled={deploying}
                                   autoComplete="new-password"
@@ -2221,10 +2537,14 @@ export function ProjectPreview({
                                   aria-label={env.label}
                                   onChange={(event) => {
                                     const value = event.currentTarget.value;
-                                    setSecretEnvValues((current) => ({
-                                      ...current,
-                                      [env.key]: value,
-                                    }));
+                                    if (onRequiredSecretEnvChange) {
+                                      onRequiredSecretEnvChange(env.key, value);
+                                    } else {
+                                      setSecretEnvValues((current) => ({
+                                        ...current,
+                                        [env.key]: value,
+                                      }));
+                                    }
                                     if (invalid && value.trim()) {
                                       setSecretEnvErrorKey(null);
                                       setDeployError(null);
@@ -2375,6 +2695,10 @@ export function ProjectPreview({
                       <code>{deployResult.agentName}</code>
                     </div>
                     <div className="pp-deploy-result-field">
+                      <label>Runtime 名称</label>
+                      <code>{deployResult.runtimeName}</code>
+                    </div>
+                    <div className="pp-deploy-result-field">
                       <label>API 端点</label>
                       <code className="pp-deploy-result-url">{deployResult.url}</code>
                     </div>
@@ -2421,9 +2745,10 @@ export function ProjectPreview({
                         deploying ||
                         feishuUpdating ||
                         deployDisabled ||
-                        !!deployDisabledReason
+                        !!deployDisabledReason ||
+                        Boolean(runtimeNameError)
                       }
-                      title={deployDisabledReason}
+                      title={deployDisabledReason || runtimeNameError || undefined}
                     >
                       {deploying
                         ? `${deploymentActionLabel}中…`
@@ -2438,8 +2763,14 @@ export function ProjectPreview({
                 type="button"
                 className="pp-deploy studio-update-action"
                 onClick={requestDeploymentConfirmation}
-                disabled={deploying || feishuUpdating || deployDisabled || !!deployDisabledReason}
-                title={deployDisabledReason}
+                disabled={
+                  deploying ||
+                  feishuUpdating ||
+                  deployDisabled ||
+                  !!deployDisabledReason ||
+                  Boolean(runtimeNameError)
+                }
+                title={deployDisabledReason || runtimeNameError || undefined}
               >
                 {deploying
                   ? `${deploymentActionLabel}中…`

@@ -21,17 +21,18 @@ from veadk.utils.volcengine_sign import ve_request
 logger = get_logger(__name__)
 
 
-# ARK ListApiKeys caps the page size at 10 server-side (a larger PageSize is
-# ignored), so a specific key may sit on any page. We page through until we
-# either match by name or exhaust the list.
+# A specific key may sit on any page. We page through until we either match by
+# name or exhaust the list.
 _ARK_PROJECT_NAME = "default"
-_ARK_PAGE_SIZE = 10
+_ARK_PAGE_SIZE = 100
 
 
 def get_ark_token(
     region: str = "cn-beijing",
     api_key_name: str | None = None,
     *,
+    api_key_id: str | None = None,
+    cloud_provider: str | None = None,
     access_key: str | None = None,
     secret_key: str | None = None,
     session_token: str | None = None,
@@ -44,6 +45,9 @@ def get_ark_token(
         api_key_name: When given, resolve the key whose ``Name`` matches exactly.
             Raises ``ValueError`` if no key with that name exists. When omitted,
             the first key in the account's list is used (legacy behavior).
+        api_key_id: When given, resolve this exact key ID without selecting a
+            different key. Takes precedence over ``api_key_name``.
+        cloud_provider: Optional explicit provider routing override.
         access_key: Optional Volcengine access key. Defaults to the environment.
         secret_key: Optional Volcengine secret key. Defaults to the environment.
         session_token: Optional STS session token. Defaults to the environment.
@@ -68,22 +72,21 @@ def get_ark_token(
         secret_key = cred.secret_access_key
         session_token = cred.session_token
 
-    provider = os.getenv("CLOUD_PROVIDER")
+    provider = cloud_provider or os.getenv("CLOUD_PROVIDER")
     host = "open.volcengineapi.com"
     if provider and provider.lower() == "byteplus":
         region = "ap-southeast-1"
         host = "open.byteplusapi.com"
 
     def _list_api_keys(page_number: int) -> dict:
-        # Pagination goes in the query string; putting PageNumber/PageSize in the
-        # request body makes the ARK gateway 504.
         res = ve_request(
             request_body={
                 "ProjectName": _ARK_PROJECT_NAME,
                 "Filter": {"AllowAll": True},
+                "PageNumber": page_number,
+                "PageSize": _ARK_PAGE_SIZE,
             },
             header={"X-Security-Token": session_token},
-            query={"PageNumber": str(page_number), "PageSize": str(_ARK_PAGE_SIZE)},
             action="ListApiKeys",
             ak=access_key,
             sk=secret_key,
@@ -97,7 +100,10 @@ def get_ark_token(
         except KeyError as error:
             raise ValueError("Failed to get ARK API key list.") from error
 
-    if api_key_name:
+    if api_key_id:
+        target_id = api_key_id
+        logger.info("Using the requested ARK API Key ID.")
+    elif api_key_name:
         target_id = None
         page = 1
         scanned = 0
@@ -130,8 +136,13 @@ def get_ark_token(
         logger.info("Fetching the first ARK API Key returned by ListApiKeys.")
 
     # get raw api key
+    request_key_id = (
+        int(target_id)
+        if isinstance(target_id, str) and target_id.isdigit()
+        else target_id
+    )
     res = ve_request(
-        request_body={"Id": target_id},
+        request_body={"Id": request_key_id, "ProjectName": _ARK_PROJECT_NAME},
         header={"X-Security-Token": session_token},
         action="GetRawApiKey",
         ak=access_key,

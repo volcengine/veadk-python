@@ -1172,6 +1172,117 @@ def test_access_endpoint_resolves_local_roles_and_blocks_user_management(
     assert legacy_skill_creator.status_code == 404
 
 
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+def test_model_api_key_value_requires_agent_management_role(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: str,
+) -> None:
+    resolved_ids: list[str] = []
+    list_key_calls: list[bool] = []
+    list_option_calls: list[tuple[str | None, bool]] = []
+
+    async def resolve_raw_key(_self: object, key_id: str) -> str:
+        resolved_ids.append(key_id)
+        return "raw-secret-value"
+
+    async def list_api_keys(
+        _self: object,
+        *,
+        force_refresh: bool = False,
+    ) -> dict[str, object]:
+        list_key_calls.append(force_refresh)
+        return {
+            "provider": "volcengine",
+            "keys": [{"id": "key-1", "name": "first-key"}],
+            "defaultKeyId": "key-1",
+        }
+
+    async def list_options(
+        _self: object,
+        *,
+        api_key_id: str | None = None,
+        force_refresh: bool = False,
+    ) -> dict[str, object]:
+        list_option_calls.append((api_key_id, force_refresh))
+        return {
+            "provider": "volcengine",
+            "selectedApiKeyId": "key-1",
+            "models": [],
+        }
+
+    monkeypatch.setattr(
+        "frontend.server.model_catalog.service.ModelCatalogService.resolve_raw_key",
+        resolve_raw_key,
+    )
+    monkeypatch.setattr(
+        "frontend.server.model_catalog.service.ModelCatalogService.list_api_keys",
+        list_api_keys,
+    )
+    monkeypatch.setattr(
+        "frontend.server.model_catalog.service.ModelCatalogService.list_options",
+        list_options,
+    )
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        admins="admin",
+        developers="developer",
+        provider=provider,
+    )
+
+    with TestClient(app) as client:
+        unauthenticated = client.post("/web/model-api-keys/key-1/value")
+        user = client.post(
+            "/web/model-api-keys/key-1/value",
+            headers={"X-VeADK-Local-User": "reader"},
+        )
+        developer = client.post(
+            "/web/model-api-keys/key-1/value",
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        admin = client.post(
+            "/web/model-api-keys/key-1/value",
+            headers={"X-VeADK-Local-User": "admin"},
+        )
+        unauthenticated_keys = client.get("/web/model-api-keys")
+        user_keys = client.get(
+            "/web/model-api-keys",
+            headers={"X-VeADK-Local-User": "reader"},
+        )
+        developer_keys = client.get(
+            "/web/model-api-keys",
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        unauthenticated_models = client.get("/web/model-options")
+        user_models = client.get(
+            "/web/model-options",
+            headers={"X-VeADK-Local-User": "reader"},
+        )
+        developer_models = client.get(
+            "/web/model-options",
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert unauthenticated.status_code == 401
+    assert user.status_code == 403
+    assert developer.status_code == 200
+    assert admin.status_code == 200
+    assert resolved_ids == ["key-1", "key-1"]
+    for response in (unauthenticated, user, developer, admin):
+        assert response.headers["cache-control"] == "no-store"
+    for response in (unauthenticated, user):
+        assert "raw-secret-value" not in response.text
+    assert unauthenticated_keys.status_code == 401
+    assert user_keys.status_code == 403
+    assert developer_keys.status_code == 200
+    assert unauthenticated_models.status_code == 401
+    assert user_models.status_code == 403
+    assert developer_models.status_code == 200
+    assert list_key_calls == [False]
+    assert list_option_calls == [(None, False)]
+
+
 def test_gateway_role_uses_jwt_and_ignores_local_identity_header(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1573,6 +1684,23 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
         _runtime("runtime-unmanaged", "developer", managed=False)
     )
     runtime.current_version_number = 7
+    runtime.envs = [
+        SimpleNamespace(key="MODEL_AGENT_API_KEY", value="must-not-reach-browser"),
+        SimpleNamespace(key="MODEL_AGENT_API_KEY_ID", value="ark-key-id"),
+        SimpleNamespace(key="MODEL_AGENT_API_KEY_NAME", value="ark-key-name"),
+    ]
+    legacy_runtime = _runtime_with_public_endpoint(
+        _runtime("runtime-legacy", "developer", managed=False)
+    )
+    legacy_runtime.envs = [
+        SimpleNamespace(key="MODEL_AGENT_API_KEY", value="legacy-secret"),
+        SimpleNamespace(key="MODEL_AGENT_NAME", value="legacy-model"),
+        SimpleNamespace(key="MODEL_AGENT_PROVIDER", value="openai"),
+        SimpleNamespace(
+            key="MODEL_AGENT_API_BASE",
+            value="https://legacy-model.example.com/v1",
+        ),
+    ]
     runtime.network_configurations.append(
         SimpleNamespace(
             endpoint="https://runtime.internal.example.com",
@@ -1589,6 +1717,8 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
     def get_runtime(_self: Any, request: Any) -> SimpleNamespace:
         if request.runtime_id == "runtime-missing":
             raise RuntimeError("InvalidResource.NotFound")
+        if request.runtime_id == legacy_runtime.runtime_id:
+            return legacy_runtime
         return runtime
 
     class RuntimeAsyncClient:
@@ -1645,6 +1775,14 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
             },
             headers={"X-VeADK-Local-User": "developer"},
         )
+        legacy = client.get(
+            "/web/runtime-update-capability",
+            params={
+                "runtimeId": legacy_runtime.runtime_id,
+                "region": "cn-beijing",
+            },
+            headers={"X-VeADK-Local-User": "developer"},
+        )
         forbidden = client.get(
             "/web/runtime-update-capability",
             params={
@@ -1685,7 +1823,10 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
             "region": "cn-beijing",
             "currentVersion": 7,
             "managed": False,
-            "envs": [],
+            "envs": [
+                {"key": "MODEL_AGENT_API_KEY_ID", "value": "ark-key-id"},
+                {"key": "MODEL_AGENT_API_KEY_NAME", "value": "ark-key-name"},
+            ],
             "network": {
                 "mode": "both",
                 "vpcId": "vpc-existing",
@@ -1708,6 +1849,21 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
     assert missing_app.json()["reasonCode"] == "runtime_app_not_found"
     assert missing_app.json()["reason"] == "该 Runtime 中不存在当前 Agent，无法更新。"
     assert missing_app.json()["agent"] == {"appName": "missing-agent"}
+    assert legacy.status_code == 200
+    legacy_envs = legacy.json()["runtime"]["envs"]
+    assert legacy_envs == [
+        {"key": "MODEL_AGENT_NAME", "value": "legacy-model"},
+        {"key": "MODEL_AGENT_PROVIDER", "value": "openai"},
+        {
+            "key": "MODEL_AGENT_API_BASE",
+            "value": "https://legacy-model.example.com/v1",
+        },
+    ]
+    assert not any(
+        item["key"] in {"MODEL_AGENT_API_KEY_ID", "MODEL_AGENT_API_KEY_NAME"}
+        for item in legacy_envs
+    )
+    assert "legacy-secret" not in legacy.text
     assert forbidden.status_code == 404
     assert forbidden.json()["detail"] == "runtime_access_denied"
     assert no_permission.status_code == 403
@@ -1755,14 +1911,32 @@ def test_runtime_update_capability_distinguishes_incompatible_and_network_errors
                         status_code=404,
                         text="Not Found",
                     )
+                if mode == "forbidden":
+                    return _RuntimeJsonResponse(
+                        {},
+                        status_code=403,
+                        text='{"detail":"Forbidden"}',
+                    )
+                if mode == "server-error":
+                    return _RuntimeJsonResponse(
+                        {},
+                        status_code=500,
+                        text='{"error_code":"internal_server_error"}',
+                    )
                 if mode == "empty":
                     return _RuntimeJsonResponse([])
                 if mode == "multiple":
                     return _RuntimeJsonResponse(["selected-agent", "other-agent"])
                 return _RuntimeJsonResponse(["selected-agent"])
             assert url.endswith("/web/agent-info/selected-agent")
-            assert mode == "agent-unsupported"
-            return _RuntimeJsonResponse({}, status_code=404, text="Not Found")
+            if mode == "agent-unsupported":
+                return _RuntimeJsonResponse({}, status_code=404, text="Not Found")
+            assert mode == "agent-server-error"
+            return _RuntimeJsonResponse(
+                {},
+                status_code=500,
+                text='{"error_code":"internal_server_error"}',
+            )
 
     monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
     app = _create_studio_app(
@@ -1806,6 +1980,40 @@ def test_runtime_update_capability_distinguishes_incompatible_and_network_errors
             params=params,
             headers={"X-VeADK-Local-User": "developer"},
         )
+        network_without_app = client.get(
+            "/web/runtime-update-capability",
+            params={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-beijing",
+            },
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        mode = "server-error"
+        server_error = client.get(
+            "/web/runtime-update-capability",
+            params=params,
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        server_error_without_app = client.get(
+            "/web/runtime-update-capability",
+            params={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-beijing",
+            },
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        mode = "agent-server-error"
+        agent_server_error = client.get(
+            "/web/runtime-update-capability",
+            params=params,
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        mode = "forbidden"
+        forbidden = client.get(
+            "/web/runtime-update-capability",
+            params=params,
+            headers={"X-VeADK-Local-User": "developer"},
+        )
 
     assert incompatible.status_code == 200
     assert incompatible.json()["canUpdate"] is False
@@ -1827,8 +2035,31 @@ def test_runtime_update_capability_distinguishes_incompatible_and_network_errors
     assert multiple_apps.json()["reason"] == (
         "该 Runtime 包含多个 Agent，暂不支持原地更新。"
     )
-    assert network_error.status_code == 502
-    assert network_error.json()["detail"] == "runtime_json_connect_error"
+    assert network_error.status_code == 200
+    assert network_error.json()["canUpdate"] is True
+    assert network_error.json()["agent"] == {"appName": "selected-agent"}
+    assert network_without_app.status_code == 200
+    assert network_without_app.json()["canUpdate"] is False
+    assert network_without_app.json()["reasonCode"] == "runtime_list_apps_unavailable"
+    assert network_without_app.json()["reason"] == (
+        "暂时无法读取该 Runtime 的 Agent 信息，请稍后重试。"
+    )
+    assert "connect" not in network_without_app.json()["reason"].lower()
+    assert server_error.status_code == 200
+    assert server_error.json()["canUpdate"] is True
+    assert server_error.json()["agent"] == {"appName": "selected-agent"}
+    assert server_error_without_app.status_code == 200
+    assert server_error_without_app.json()["canUpdate"] is False
+    assert server_error_without_app.json()["reasonCode"] == (
+        "runtime_list_apps_unavailable"
+    )
+    assert "internal_server_error" not in server_error_without_app.json()["reason"]
+    assert agent_server_error.status_code == 200
+    assert agent_server_error.json()["canUpdate"] is True
+    assert agent_server_error.json()["agent"] == {"appName": "selected-agent"}
+    assert forbidden.status_code == 403
+    assert forbidden.json()["detail"] == "runtime_update_capability_failed"
+    assert "Forbidden" not in forbidden.text
 
 
 @pytest.mark.parametrize(
@@ -1891,10 +2122,14 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
             value="preserved-secret",
         ),
         SimpleNamespace(key="REPLACED_ENV", value="old-value"),
+        SimpleNamespace(key="MODEL_AGENT_API_KEY", value="old-raw-model-key"),
+        SimpleNamespace(key="MODEL_AGENT_API_KEY_ID", value="old-key-id"),
+        SimpleNamespace(key="MODEL_AGENT_API_KEY_NAME", value="old-key-name"),
     ]
     captured_config: dict[str, Any] = {}
     get_calls = 0
     evaluation_set_calls: list[dict[str, Any]] = []
+    resolved_model_keys: list[dict[str, Any]] = []
 
     def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
         nonlocal get_calls
@@ -1911,7 +2146,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
                 endpoint_url="https://runtime.example.com",
                 metadata={
                     "runtime_id": runtime.runtime_id,
-                    "runtime_name": runtime.name,
+                    "runtime_name": "sdk-renamed-runtime",
                     "runtime_endpoint": "https://runtime.example.com",
                     "runtime_apikey": "secret",
                 },
@@ -1943,6 +2178,15 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
 
     monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
     monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+
+    def resolve_model_key(**kwargs: Any) -> str:
+        resolved_model_keys.append(kwargs)
+        return "new-raw-model-key"
+
+    monkeypatch.setattr(
+        "veadk.auth.veauth.ark_veauth.get_ark_token",
+        resolve_model_key,
+    )
 
     async def initialize_evaluation_sets(**kwargs: Any) -> list[str]:
         evaluation_set_calls.append(kwargs)
@@ -1989,7 +2233,14 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
                 "files": [{"path": "app.py", "content": "app = object()\n"}],
                 "config": {"region": region, "projectName": "default"},
                 "authentication": {"type": "api_key"},
-                "envs": [{"key": "REPLACED_ENV", "value": "new-value"}],
+                "envs": [
+                    {"key": "REPLACED_ENV", "value": "new-value"},
+                    {"key": "MODEL_AGENT_API_KEY_ID", "value": "new-key-id"},
+                    {
+                        "key": "MODEL_AGENT_API_KEY_NAME",
+                        "value": "new-key-name",
+                    },
+                ],
                 "resources": {
                     "tos": {"mode": "create", "bucket": "request-bucket"},
                     "cr": {
@@ -2015,6 +2266,8 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert response.status_code == 200
     assert frames[-1]["success"] is True
     assert frames[-1]["runtimeId"] == runtime.runtime_id
+    assert frames[-1]["agentName"] == "updated-agent"
+    assert frames[-1]["runtimeName"] == runtime.name
     assert frames[-1]["version"] == 4
     evaluation_frames = [
         frame for frame in frames if frame.get("phase") == "evaluation"
@@ -2063,6 +2316,16 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         "preserved-secret"
     )
     assert cloud["runtime_envs"]["REPLACED_ENV"] == "new-value"
+    assert cloud["runtime_envs"]["MODEL_AGENT_API_KEY_ID"] == "new-key-id"
+    assert cloud["runtime_envs"]["MODEL_AGENT_API_KEY_NAME"] == "new-key-name"
+    assert cloud["runtime_envs"]["MODEL_AGENT_API_KEY"] == "new-raw-model-key"
+    assert "old-key-name" not in cloud["runtime_envs"].values()
+    assert "old-key-id" not in cloud["runtime_envs"].values()
+    assert "old-raw-model-key" not in cloud["runtime_envs"].values()
+    assert len(resolved_model_keys) == 1
+    assert resolved_model_keys[0]["api_key_id"] == "new-key-id"
+    assert resolved_model_keys[0]["api_key_name"] == "new-key-name"
+    assert resolved_model_keys[0]["cloud_provider"] == provider
     assert "runtime_network" not in cloud
     if has_resource_tags:
         assert cloud["tos_bucket"] == "tagged-bucket"
@@ -2130,7 +2393,7 @@ def test_new_deployment_only_updates_non_default_instance_range(
                 endpoint_url="https://runtime.example.com",
                 metadata={
                     "runtime_id": created.runtime_id,
-                    "runtime_name": "demo-agent",
+                    "runtime_name": "generated-runtime-name",
                     "runtime_endpoint": "https://runtime.example.com",
                     "runtime_apikey": "secret",
                 },
@@ -2150,6 +2413,7 @@ def test_new_deployment_only_updates_non_default_instance_range(
             headers={"X-VeADK-Local-User": "developer"},
             json={
                 "name": "demo-agent",
+                "runtimeName": "stable-runtime-name",
                 "sessionStorage": session_storage,
                 "minInstance": min_instance,
                 "maxInstance": max_instance,
@@ -2166,6 +2430,11 @@ def test_new_deployment_only_updates_non_default_instance_range(
 
     assert response.status_code == 200
     assert frames[-1]["success"] is True
+    assert frames[-1]["agentName"] == "demo-agent"
+    assert frames[-1]["runtimeName"] == "generated-runtime-name"
+    assert captured_config["launch_types"]["cloud"]["runtime_name"] == (
+        "stable-runtime-name"
+    )
     assert create_requests[0].apmplus_enable is True
     assert {
         item.key: item.value

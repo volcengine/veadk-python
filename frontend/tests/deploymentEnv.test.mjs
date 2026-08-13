@@ -123,6 +123,22 @@ test("derives distinct transient credential names for custom model agents", () =
   );
 });
 
+test("does not request custom credentials for Ark-backed agents", () => {
+  assert.deepEqual(
+    customModelCredentialRequirements(
+      {
+        name: "Ark Agent",
+        agentType: "llm",
+        modelSource: "ark",
+        modelApiBase: "https://models.example.com/v1",
+        subAgents: [],
+      },
+      "https://ark.cn-beijing.volces.com/api/v3/",
+    ),
+    [],
+  );
+});
+
 test("keeps custom model credentials transient on the publish page", () => {
   assert.match(
     customCreateSource,
@@ -138,6 +154,43 @@ test("keeps custom model credentials transient on the publish page", () => {
   );
   assert.match(projectPreviewSource, /role="alert"/);
   assert.doesNotMatch(customCreateSource, /envValues:\s*customModelCredentials/);
+});
+
+test("shows the selected ModelArk API key as a server-managed read-only value", () => {
+  assert.match(
+    customCreateSource,
+    /MODEL_AGENT_API_KEY[\s\S]*?secret:\s*true[\s\S]*?readOnly:\s*true[\s\S]*?serverManaged:\s*true/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /serverManagedModelApiKey\s*\? "text"\s*:\s*row\.secret\s*\? "password"/,
+  );
+  assert.match(projectPreviewSource, /const fixed =\s*row\.readOnly/);
+  assert.doesNotMatch(customCreateSource, /arkModelApiKeyEnvValues/);
+});
+
+test("server-managed secrets are displayed but excluded from browser deploy payloads", () => {
+  const specs = [
+    {
+      key: "MODEL_AGENT_API_KEY",
+      required: true,
+      placeholder: "由所选 API Key 注入",
+      secret: true,
+      readOnly: true,
+      serverManaged: true,
+    },
+  ];
+  assert.deepEqual(runtimeEnvDisplayRows(specs, {}), [
+    { ...specs[0], value: "由所选 API Key 注入" },
+  ]);
+  assert.deepEqual(
+    runtimeEnvDisplayRows(specs, {
+      MODEL_AGENT_API_KEY: "legacy-value-must-not-reach-the-browser",
+    }),
+    [{ ...specs[0], value: "由所选 API Key 注入" }],
+  );
+  assert.deepEqual(runtimeEnvVars(specs, {}), []);
+  assert.equal(firstMissingRuntimeEnv(specs, {}), undefined);
 });
 
 test("defaults knowledgebase creation to VikingDB collections", () => {
@@ -467,10 +520,13 @@ test("declares the OpenViking knowledge runtime configuration", () => {
     ],
   );
   assert.match(customCreateSource, /OpenViking 资源索引/);
-  assert.match(customCreateSource, /id === "viking" \|\| id === "openviking"/);
   assert.match(
     customCreateSource,
-    /item\.key === "DATABASE_OPENVIKING_USER_ID"[\s\S]*<OpenVikingKnowledgeIndexField/,
+    /id === "viking"\s*\|\|\s*id === "openviking"/,
+  );
+  assert.match(
+    customCreateSource,
+    /item\.key\s*===\s*"DATABASE_OPENVIKING_USER_ID"[\s\S]*<OpenVikingKnowledgeIndexField/,
   );
   assert.match(
     customCreateSource,
@@ -568,7 +624,7 @@ test("normalizes generated project drafts to the selected cloud provider", () =>
   );
   assert.match(
     customCreateSource,
-    /const variantDraft: AgentDraft = \{[\s\S]*?\.\.\.providerDraft[\s\S]*?debugRuntimeDraft\(variantDraft\)/,
+    /const variantDraft: AgentDraft = \{[\s\S]*?\.\.\.providerDraft[\s\S]*?debugRuntimeDraft\(variantDraft, transientModelSecretValues\)/,
   );
 });
 

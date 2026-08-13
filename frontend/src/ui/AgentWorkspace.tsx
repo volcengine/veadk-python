@@ -522,6 +522,7 @@ function graphNodeToDraft(node: AgentNode): AgentDraft {
   const builtinToolNames = new Set(builtinTools.flatMap((tool) => tool.toolNames));
   return {
     ...emptyDraft(),
+    modelSource: undefined,
     name: node.name,
     description: node.description,
     instruction: node.instruction || emptyDraft().instruction,
@@ -539,6 +540,7 @@ function infoToDraft(info: AgentInfo | null, fallbackName: string): AgentDraft {
   if (info?.graph) return graphNodeToDraft(info.graph);
   return {
     ...emptyDraft(),
+    modelSource: undefined,
     name: info?.name || fallbackName,
     description: info?.description || "暂无描述",
     agentType: info?.type ?? "llm",
@@ -1185,6 +1187,7 @@ export function AgentWorkspace({
   const updateCapabilityRequestKey = JSON.stringify([
     selectedAgent?.runtimeId ?? "",
     selectedAgent?.region ?? "",
+    selectedAgentAppName,
   ]);
   const selectedUpdateCapability =
     updateCapability?.requestKey === updateCapabilityRequestKey
@@ -1208,12 +1211,15 @@ export function AgentWorkspace({
     void getRuntimeUpdateCapability({
       runtimeId,
       region,
+      appName: selectedAgentAppName,
       signal: controller.signal,
     }).then((value) => {
       if (requestId !== updateCapabilityRequestRef.current) return;
       if (
         value.runtime.runtimeId !== runtimeId ||
         value.runtime.region !== region ||
+        (selectedAgentAppName &&
+          value.agent?.appName !== selectedAgentAppName) ||
         (value.canUpdate && !value.agent?.appName)
       ) {
         setUpdateCapabilityError("Runtime 更新能力响应与当前选择不匹配。");
@@ -1237,7 +1243,13 @@ export function AgentWorkspace({
       }
     });
     return () => controller.abort();
-  }, [canUpdate, selectedAgent?.region, selectedAgent?.runtimeId, updateCapabilityRequestKey]);
+  }, [
+    canUpdate,
+    selectedAgent?.region,
+    selectedAgent?.runtimeId,
+    selectedAgentAppName,
+    updateCapabilityRequestKey,
+  ]);
   const listedAgents = useMemo(() => {
     const originalOrder = new Map(agents.map((agent, index) => [agent.id, index]));
     const savedOrder = new Map(agentOrder.map((id, index) => [id, index]));
@@ -1263,7 +1275,8 @@ export function AgentWorkspace({
     selectedAgent?.label ||
     selectedAgentInfo?.name ||
     selectedDraft?.draft.name ||
-    selectedPendingTask?.runtimeName ||
+    selectedPendingTask?.agentName ||
+    selectedPendingTask?.agentDraft?.name ||
     "未选择智能体";
   const selectedEvaluationGroup = evaluationGroups.find(
     (group) => group.id === activeEvaluationGroupId,
@@ -1283,9 +1296,13 @@ export function AgentWorkspace({
       selectedPendingTask?.agentDraft ??
       selectedDraft?.draft ??
       selectedAgentUpdateDraft?.draft ??
-      infoToDraft(selectedAgentInfo, selectedAgent?.label ?? "agent"),
+      infoToDraft(
+        selectedAgentInfo,
+        selectedAgentAppName || selectedAgent?.label || "agent",
+      ),
     [
       selectedAgentInfo,
+      selectedAgentAppName,
       selectedAgent?.label,
       selectedAgentUpdateDraft?.draft,
       selectedDraft?.draft,
@@ -1351,7 +1368,7 @@ export function AgentWorkspace({
         .filter(
           (task) =>
             task.agentDraft?.name === selectedDraft.draft.name ||
-            task.runtimeName === selectedDraft.draft.name ||
+            task.agentName === selectedDraft.draft.name ||
             (!!selectedDraft.deploymentTarget?.runtimeId &&
               task.runtimeId === selectedDraft.deploymentTarget.runtimeId),
         )
@@ -1362,7 +1379,7 @@ export function AgentWorkspace({
       .filter(
         (task) =>
           (!!selectedAgent.runtimeId && task.runtimeId === selectedAgent.runtimeId) ||
-          task.runtimeName === selectedAgent.label,
+          task.agentName === selectedAgent.label,
       )
       .sort((left, right) => right.startedAt - left.startedAt)[0];
   }, [deploymentTasks, selectedAgent, selectedDraft, selectedPendingTask]);
@@ -2356,7 +2373,7 @@ export function AgentWorkspace({
                     .filter(
                       (candidate) =>
                         candidate.agentDraft?.name === item.draft.name ||
-                        candidate.runtimeName === item.draft.name ||
+                        candidate.agentName === item.draft.name ||
                         (!!item.deploymentTarget?.runtimeId &&
                           candidate.runtimeId === item.deploymentTarget.runtimeId),
                     )
