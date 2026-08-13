@@ -151,6 +151,7 @@ class TaskStatus(VibeModel):
     last_sequence: int = Field(default=0, ge=0)
     credentials_configured: bool = False
     intent_revision: int = Field(default=0, ge=0)
+    sandbox_session_id: str = ""
     validation_runtime_id: str = ""
     validation_runtime_status: str = ""
     artifact: ArtifactInfo | None = None
