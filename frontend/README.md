@@ -114,7 +114,13 @@ server that `veadk frontend` launches — no separate backend.
 - **Custom-agent workbench**: configure an agent with a rich Markdown
   system-prompt editor (including heading and list shortcuts), then debug with
   expandable, copyable runner error details, per-result Trace inspection, and
-  review. In-progress drafts are stored only in the current browser and scoped
+  review. Debugging is optional: creators can enter comparison debugging or
+  publish directly after architecture configuration. Comparison results keep
+  the baseline and candidates side by side, while one focused configuration
+  panel preserves edits when switching Agent or dimension. The baseline exposes
+  a read-only model, prompt, and Skills summary; candidate model changes support
+  Model ID, Provider, API Base, and temporary API Key values. In-progress drafts
+  are stored only in the current browser and scoped
   to the signed-in user. MCP tokens are converted to Runtime environment
   variables: generated source retains only the `${ENV_NAME}` reference, while
   YAML and browser drafts preserve the corresponding environment value.
@@ -122,7 +128,13 @@ server that `veadk frontend` launches — no separate backend.
   environment values visible to users who can view the Agent. Entering a
   replacement Token overrides the previous value. Long descriptions and prompts
   scroll within bounded editors, while the sidebar stays pinned to the
-  viewport. On narrow desktop windows, the structure, configuration, and debug
+  viewport. Changing the group set or any candidate model, prompt, credential,
+  or Skill configuration makes the previous comparison Session read-only.
+  Studio keeps the old transcript visible until the user confirms a new Session,
+  then starts all valid groups with one new comparison ID without replaying prior
+  inputs. If any group fails to start, Studio cleans the newly staged runs and
+  preserves the previous evidence. On narrow desktop windows, the structure,
+  configuration, and debug
   panels stack vertically instead of squeezing the form. The deployment page
   pairs an inspectable Agent topology with a vertically aligned action rail for
   YAML export, source download, and the code browser/editor dialog, while keeping
@@ -431,6 +443,38 @@ routes to the remote runtime.
 Deleting a draft attachment deletes its object. Deleting a session deletes all
 media scoped to that session from either backend. Because `/tmp` may be cleared
 at any time, use TOS when attachments must survive process or host replacement.
+
+## Multi-scheme debug comparison
+
+The Custom Agent editor can compare its read-only baseline with up to three
+candidate schemes in one debug workspace. A candidate may change multiple
+Agents and dimensions together. The supported dimensions are system prompt,
+model, and skills. Model changes treat Model ID, provider, and API Base as one
+atomic configuration.
+
+Model API keys are temporary debug credentials. A key entered while creating a
+Custom Agent may be left blank so the Studio server resolves its configured
+credential. A candidate with a custom API Base must provide a temporary key.
+The browser keeps these keys outside the persisted draft and comparison
+history; the server injects them only into the selected debug environment.
+Applying a candidate copies configuration and in-memory credential state, but
+never writes a key into generated source, the Draft, or local storage.
+
+All running schemes receive the same initial text input. Interactive A2UI
+actions are broadcast only when every running scheme exposes the same action;
+otherwise the affected runs are marked as input-diverged. Changing any scheme
+makes the previous Session read-only. Starting a new Session requires explicit
+confirmation, starts all schemes atomically, and never replays prior inputs. If
+any environment fails to start, Studio cleans the newly staged runs and keeps
+the previous Session evidence available.
+
+The workspace reports first visible text latency, total latency, completed tool
+calls, and total tokens. Cost is shown as unavailable until a shared accounting
+contract exists. Trace alignment uses exact invocation or tool-call identifiers
+and leaves unmatched events explicit. Human verdicts and reasons are stored in
+the local comparison record; applying a candidate requires an explicit
+`Adopt candidate` verdict. Scenario evaluation remains disabled until its API is
+available.
 
 ## Skills and sub-agents
 

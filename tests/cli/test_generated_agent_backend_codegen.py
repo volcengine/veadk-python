@@ -342,6 +342,51 @@ def test_debug_policy_rejects_nested_subagent_custom_model_api_base() -> None:
         validate_debug_policy(draft, managed_cloud_provider="volcengine")
 
 
+def test_debug_policy_allows_custom_model_api_base_with_temporary_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+    draft = AgentDraft(
+        name="workflow",
+        instruction="Coordinate the sub-agent.",
+        agentType="sequential",
+        subAgents=[
+            AgentDraft(
+                name="custom-model-agent",
+                instruction="You are helpful.",
+                modelApiBase="https://gateway.example.com/v1",
+            )
+        ],
+    )
+
+    validate_debug_policy(
+        draft,
+        managed_cloud_provider="volcengine",
+        custom_model_credential_paths={(0,)},
+    )
+
+
+def test_debug_policy_rejects_private_custom_model_api_base_with_credential() -> None:
+    draft = AgentDraft(
+        name="demo",
+        instruction="You are helpful.",
+        modelApiBase="https://169.254.169.254/v1",
+    )
+
+    with pytest.raises(DebugPolicyError, match="invalid IP|private or reserved"):
+        validate_debug_policy(
+            draft,
+            managed_cloud_provider="volcengine",
+            custom_model_credential_paths={()},
+        )
+
+
 def test_project_policy_still_allows_custom_model_api_base() -> None:
     draft = AgentDraft(
         name="demo",

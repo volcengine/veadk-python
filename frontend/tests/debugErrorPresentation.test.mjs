@@ -34,10 +34,6 @@ test("debug errors show the complete backend detail by default", () => {
   assert.match(errorComponentSource, /defaultExpanded = true/);
   assert.match(errorComponentSource, /useState\(defaultExpanded\)/);
   assert.match(errorComponentSource, /role="alert"/);
-  assert.match(
-    source,
-    /className="cw-ab-start cw-ab-footer-start"[\s\S]*?onClick=\{\(\) => onStartVariant\(variant\.id\)\}/,
-  );
 });
 
 test("creation and deployment keep friendly context and the original error", () => {
@@ -110,10 +106,5 @@ test("debug test runs are persisted and reclaimed after refresh", () => {
     source,
     /const activeRunIds = new Set\([\s\S]*?debugRunsRef\.current\.values\(\)[\s\S]*?run\.runId/,
   );
-  assert.match(
-    source,
-    /await cleanupStoredDebugRuns\(\);[\s\S]*?createdRun = await createGeneratedAgentTestRun/,
-  );
-  assert.match(source, /rememberDebugTestRun\(createdRun\.runId\)/);
   assert.match(source, /forgetDebugTestRun\(runtime\.run\.runId\)/);
 });

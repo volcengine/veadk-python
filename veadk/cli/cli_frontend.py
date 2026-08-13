@@ -340,9 +340,16 @@ def _cp_metadata_from_reporter_message(message: object) -> dict[str, str]:
     return {}
 
 
-def _redact_debug_text(text: str) -> str:
+def _redact_debug_text(
+    text: str,
+    *,
+    secret_values: Iterable[str | None] = (),
+) -> str:
     """Redact credentials before debug details leave the server process."""
     redacted = text
+    for value in secret_values:
+        if value:
+            redacted = redacted.replace(value, "***")
     for key, value in os.environ.items():
         upper = key.upper()
         if (
@@ -2267,6 +2274,7 @@ def _run_frontend_server(
     from dataclasses import dataclass
     from pathlib import Path as PathlibPath
     from urllib.parse import quote
+
     from pydantic import ValidationError
 
     from veadk.cli.generated_agent_codegen import (
@@ -2275,33 +2283,35 @@ def _run_frontend_server(
         GeneratedAgentTestRunRequest,
         GeneratedFile,
         GeneratedProject,
+        debug_model_credential_bindings,
         debug_runtime_env_from_draft,
         generate_project_from_draft,
         normalize_and_validate_draft,
-    )
-    from veadk.cli.generated_agent_security import (
-        DebugPolicyError,
-        trusted_debug_model_api_base,
-        validate_debug_policy,
-        validate_project_policy,
-    )
-    from veadk.cli.generated_agent_planner import (
-        GeneratedAgentDraftRequest,
-        generate_agent_draft,
     )
     from veadk.cli.generated_agent_mcp import (
         McpDebugConnectionError,
         resolve_debug_mcp_endpoints,
     )
+    from veadk.cli.generated_agent_planner import (
+        GeneratedAgentDraftRequest,
+        generate_agent_draft,
+    )
+    from veadk.cli.generated_agent_security import (
+        DebugPolicyError,
+        validate_debug_policy,
+        validate_project_policy,
+    )
     from veadk.cli.generated_agent_skills import (
         _files_from_zip,
         materialize_selected_skills,
     )
+    from veadk.cli.studio_model_catalog import modelark_base_url
 
     _TEST_RUN_MAX_FILES = 300
     _TEST_RUN_MAX_FILE_BYTES = 256 * 1024
     _TEST_RUN_MAX_TOTAL_BYTES = 2 * 1024 * 1024
-    _TEST_RUN_MAX_ACTIVE = 3
+    _TEST_RUN_MAX_ACTIVE = 4
+    _TEST_RUN_MAX_ACTIVE_DURING_COMPARISON_SWAP = 8
     _TEST_RUN_READY_TIMEOUT = 30.0
 
     @dataclass
@@ -2313,10 +2323,65 @@ def _run_frontend_server(
         process: subprocess.Popen
         expires_at: float
         owner_id: str
+        comparison_id: str = ""
+        redaction_secrets: tuple[str, ...] = ()
 
     _test_runs: dict[str, _GeneratedAgentTestRun] = {}
     _test_runs_creating: dict[str, int] = {}
+    _comparison_test_runs_creating: dict[tuple[str, str], int] = {}
     _test_runs_lock = _test_threading.Lock()
+    _comparison_skill_snapshots: dict[tuple[str, str], list[GeneratedFile]] = {}
+    _comparison_skill_snapshot_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+    def _skill_snapshot_signature(draft: AgentDraft) -> str:
+        selected: list[dict[str, Any]] = []
+
+        def visit(node: AgentDraft) -> None:
+            selected.extend(
+                skill.model_dump(mode="json") for skill in node.selectedSkills
+            )
+            for child in node.subAgents:
+                visit(child)
+
+        visit(draft)
+        return json.dumps(selected, ensure_ascii=False, sort_keys=True)
+
+    async def _materialize_debug_skills_once(
+        comparison_id: str,
+        draft: AgentDraft,
+        project: GeneratedProject,
+    ) -> None:
+        if not comparison_id:
+            await materialize_selected_skills(
+                draft,
+                project,
+                resolve_skillspace_detail=_resolve_skillspace_skill_materialization,
+            )
+            return
+        key = (comparison_id, _skill_snapshot_signature(draft))
+        lock = _comparison_skill_snapshot_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            cached = _comparison_skill_snapshots.get(key)
+            if cached is None:
+                await materialize_selected_skills(
+                    draft,
+                    project,
+                    resolve_skillspace_detail=(
+                        _resolve_skillspace_skill_materialization
+                    ),
+                )
+                cached = [
+                    file.model_copy(deep=True)
+                    for file in project.files
+                    if file.path.startswith("skills/")
+                ]
+                if len(_comparison_skill_snapshots) >= 128:
+                    oldest = next(iter(_comparison_skill_snapshots))
+                    _comparison_skill_snapshots.pop(oldest, None)
+                    _comparison_skill_snapshot_locks.pop(oldest, None)
+                _comparison_skill_snapshots[key] = cached
+            else:
+                project.files.extend(file.model_copy(deep=True) for file in cached)
 
     def _terminate_test_run(run: _GeneratedAgentTestRun) -> None:
         if run.process.poll() is None:
@@ -2466,7 +2531,12 @@ def _run_frontend_server(
         """Keep Runtime env from replacing the Studio model credential bundle."""
         return key.startswith("MODEL_AGENT_") or key in _DEBUG_PROTECTED_MODEL_ENV_KEYS
 
-    def _read_runner_log_tail(path: PathlibPath, max_chars: int = 6000) -> str:
+    def _read_runner_log_tail(
+        path: PathlibPath,
+        max_chars: int = 6000,
+        *,
+        secret_values: Iterable[str | None] = (),
+    ) -> str:
         try:
             with path.open("rb") as f:
                 f.seek(0, os.SEEK_END)
@@ -2475,16 +2545,27 @@ def _run_frontend_server(
                 text = f.read().decode("utf-8", "replace")
         except OSError:
             return ""
-        return _redact_debug_text(text[-max_chars:].strip())
+        return _redact_debug_text(
+            text[-max_chars:].strip(),
+            secret_values=secret_values,
+        )
 
     def _runner_log_detail(
         prefix: str,
         stdout_path: PathlibPath,
         stderr_path: PathlibPath,
+        *,
+        secret_values: Iterable[str | None] = (),
     ) -> str:
         parts = [prefix]
-        stderr_tail = _read_runner_log_tail(stderr_path)
-        stdout_tail = _read_runner_log_tail(stdout_path)
+        stderr_tail = _read_runner_log_tail(
+            stderr_path,
+            secret_values=secret_values,
+        )
+        stdout_tail = _read_runner_log_tail(
+            stdout_path,
+            secret_values=secret_values,
+        )
         if stderr_tail:
             parts.append(f"stderr:\n{stderr_tail}")
         if stdout_tail:
@@ -2493,10 +2574,21 @@ def _run_frontend_server(
             parts.append("No runner logs were captured.")
         return "\n\n".join(parts)
 
-    def _unexpected_debug_error_detail(prefix: str, exc: Exception) -> str:
+    def _unexpected_debug_error_detail(
+        prefix: str,
+        exc: Exception,
+        *,
+        secret_values: Iterable[str | None] = (),
+    ) -> str:
         """Log an unexpected error and return a safe, traceable UI summary."""
         error_id = secrets.token_hex(4)
-        message = _redact_debug_text(str(exc).strip()) or "No error message"
+        message = (
+            _redact_debug_text(
+                str(exc).strip(),
+                secret_values=secret_values,
+            )
+            or "No error message"
+        )
         logger.exception(
             "Generated-agent debug error %s (%s): %s",
             error_id,
@@ -2515,6 +2607,7 @@ def _run_frontend_server(
             prefix,
             temp_dir / "runner.stdout.log",
             temp_dir / "runner.stderr.log",
+            secret_values=run.redaction_secrets,
         )
 
     def _runner_response_error_detail(
@@ -2523,7 +2616,10 @@ def _run_frontend_server(
         status_code: int,
         response_text: str,
     ) -> str:
-        response_detail = _redact_debug_text(response_text.strip())
+        response_detail = _redact_debug_text(
+            response_text.strip(),
+            secret_values=run.redaction_secrets,
+        )
         prefix = f"{operation}失败（临时运行环境返回 HTTP {status_code}）"
         if response_detail and response_detail.lower() != "internal server error":
             prefix += f"\n响应：{response_detail[:2000]}"
@@ -2724,6 +2820,7 @@ def _run_frontend_server(
         return draft.model_copy(
             deep=True,
             update={
+                "autoSaveSession": False,
                 "mcpTools": [
                     tool for tool in draft.mcpTools if tool.transport != "stdio"
                 ],
@@ -2737,14 +2834,18 @@ def _run_frontend_server(
         data: dict,
         *,
         debug: bool,
-    ) -> tuple[GeneratedProject, AgentDraft]:
+        debug_cache_namespace: str = "",
+    ) -> tuple[GeneratedProject, AgentDraft, dict[str, str]]:
         try:
             if debug:
                 req = GeneratedAgentTestRunRequest.model_validate(data)
             else:
                 req = GeneratedAgentProjectRequest.model_validate(data)
             draft = normalize_and_validate_draft(req.draft)
+            model_api_key_env_by_path: dict[tuple[int, ...], str] = {}
+            credential_env: dict[str, str] = {}
             if debug:
+                assert isinstance(req, GeneratedAgentTestRunRequest)
                 draft = _draft_for_debug_run(draft)
                 validate_debug_policy(
                     draft,
@@ -2752,17 +2853,46 @@ def _run_frontend_server(
                         generated_agent_test_run_allows_local_resources
                     ),
                     managed_cloud_provider=provider,
+                    custom_model_credential_paths=set(
+                        tuple(item.agentPath) for item in req.modelCredentials
+                    ),
                 )
+                try:
+                    model_api_key_env_by_path, credential_env = (
+                        debug_model_credential_bindings(
+                            draft,
+                            req.modelCredentials,
+                        )
+                    )
+                except ValueError as error:
+                    raise HTTPException(status_code=422, detail=str(error)) from error
                 draft = await resolve_debug_mcp_endpoints(draft)
             else:
                 validate_project_policy(draft)
-            project = generate_project_from_draft(draft)
-            await materialize_selected_skills(
+            project = generate_project_from_draft(
                 draft,
-                project,
-                resolve_skillspace_detail=_resolve_skillspace_skill_materialization,
+                model_api_key_env_by_path=model_api_key_env_by_path,
             )
-            return project, draft
+            if debug:
+                assert isinstance(req, GeneratedAgentTestRunRequest)
+                await _materialize_debug_skills_once(
+                    (
+                        f"{debug_cache_namespace}:{req.comparisonId}"
+                        if req.comparisonId
+                        else ""
+                    ),
+                    draft,
+                    project,
+                )
+            else:
+                await materialize_selected_skills(
+                    draft,
+                    project,
+                    resolve_skillspace_detail=(
+                        _resolve_skillspace_skill_materialization
+                    ),
+                )
+            return project, draft, credential_env
         except ValidationError as e:
             raise HTTPException(status_code=422, detail=e.errors()) from e
         except DebugPolicyError as e:
@@ -2775,7 +2905,7 @@ def _run_frontend_server(
         *,
         debug: bool,
     ) -> GeneratedProject:
-        project, _ = await _generate_project_and_draft_from_request(
+        project, _, _ = await _generate_project_and_draft_from_request(
             data,
             debug=debug,
         )
@@ -2875,6 +3005,8 @@ def _run_frontend_server(
         proc: subprocess.Popen,
         stdout_path: PathlibPath,
         stderr_path: PathlibPath,
+        *,
+        secret_values: Iterable[str | None] = (),
     ) -> None:
         import asyncio
 
@@ -2890,6 +3022,7 @@ def _run_frontend_server(
                             f"(exit code {proc.returncode}).",
                             stdout_path,
                             stderr_path,
+                            secret_values=secret_values,
                         ),
                     )
                 try:
@@ -2906,6 +3039,7 @@ def _run_frontend_server(
                 f"Debug runner did not become ready: {last_error}",
                 stdout_path,
                 stderr_path,
+                secret_values=secret_values,
             ),
         )
 
@@ -2944,30 +3078,74 @@ def _run_frontend_server(
         owner_id = principal.owner_id if principal else ""
         _cleanup_expired_test_runs()
         data = await request.json()
+        comparison_id_value = data.get("comparisonId", "")
+        comparison_id = (
+            comparison_id_value if isinstance(comparison_id_value, str) else ""
+        )
 
         reserved = False
+        comparison_reservation_key = (owner_id, comparison_id)
         with _test_runs_lock:
             active_count = sum(
                 1 for run in _test_runs.values() if run.owner_id == owner_id
             ) + _test_runs_creating.get(owner_id, 0)
-            if active_count >= _TEST_RUN_MAX_ACTIVE:
-                raise HTTPException(
-                    status_code=429,
-                    detail=(
+            active_comparison_count = sum(
+                1
+                for run in _test_runs.values()
+                if run.owner_id == owner_id and run.comparison_id == comparison_id
+            ) + _comparison_test_runs_creating.get(
+                comparison_reservation_key,
+                0,
+            )
+            if active_comparison_count >= _TEST_RUN_MAX_ACTIVE:
+                if comparison_id:
+                    detail = (
+                        "本轮对照调试环境已达上限 "
+                        f"({active_comparison_count}/{_TEST_RUN_MAX_ACTIVE})，"
+                        "请减少测试组后重试。"
+                    )
+                else:
+                    detail = (
                         "调试环境并发数已达上限 "
                         f"({active_count}/{_TEST_RUN_MAX_ACTIVE})，"
                         "请稍后重试或关闭不再使用的调试页面。"
+                    )
+                raise HTTPException(
+                    status_code=429,
+                    detail=detail,
+                )
+            active_limit = (
+                _TEST_RUN_MAX_ACTIVE_DURING_COMPARISON_SWAP
+                if comparison_id
+                else _TEST_RUN_MAX_ACTIVE
+            )
+            if active_count >= active_limit:
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "调试环境临时并发数已达上限 "
+                        f"({active_count}/{active_limit})，"
+                        "请等待上一 Session 清理完成后重试。"
                     ),
                 )
             _test_runs_creating[owner_id] = _test_runs_creating.get(owner_id, 0) + 1
+            _comparison_test_runs_creating[comparison_reservation_key] = (
+                _comparison_test_runs_creating.get(comparison_reservation_key, 0) + 1
+            )
             reserved = True
 
         temp_dir = ""
         proc = None
+        credential_env: dict[str, str] = {}
         try:
-            project, draft = await _generate_project_and_draft_from_request(
+            (
+                project,
+                draft,
+                credential_env,
+            ) = await _generate_project_and_draft_from_request(
                 data,
                 debug=True,
+                debug_cache_namespace=owner_id,
             )
             runtime_envs: dict[str, str] = {}
             runtime_id = str(data.get("runtimeId") or "").strip()
@@ -3008,13 +3186,11 @@ def _run_frontend_server(
             runner_env = _safe_runner_env()
             runner_env.update(runtime_envs)
             runner_env.update(debug_runtime_env_from_draft(draft))
-            runner_env["MODEL_AGENT_API_BASE"] = trusted_debug_model_api_base(
-                draft,
-                managed_cloud_provider=provider,
-            )
+            runner_env["MODEL_AGENT_API_BASE"] = modelark_base_url(provider)
             runner_env.pop("MODEL_AGENT_BASE_URL", None)
             runner_env["CLOUD_PROVIDER"] = provider
             runner_env["AGENTKIT_CLOUD_PROVIDER"] = provider
+            runner_env.update(credential_env)
             with stdout_path.open("w", encoding="utf-8") as stdout_file:
                 with stderr_path.open("w", encoding="utf-8") as stderr_file:
                     proc = subprocess.Popen(
@@ -3030,6 +3206,7 @@ def _run_frontend_server(
                 proc,
                 stdout_path,
                 stderr_path,
+                secret_values=credential_env.values(),
             )
 
             run_id = "tr_" + secrets.token_urlsafe(18)
@@ -3042,6 +3219,8 @@ def _run_frontend_server(
                 process=proc,
                 expires_at=expires_at,
                 owner_id=owner_id,
+                comparison_id=comparison_id,
+                redaction_secrets=tuple(credential_env.values()),
             )
             with _test_runs_lock:
                 _test_runs[run_id] = run
@@ -3065,6 +3244,7 @@ def _run_frontend_server(
                 detail=_unexpected_debug_error_detail(
                     "创建调试环境失败",
                     exc,
+                    secret_values=credential_env.values(),
                 ),
             ) from exc
         finally:
@@ -3074,6 +3254,23 @@ def _run_frontend_server(
                         0,
                         _test_runs_creating.get(owner_id, 0) - 1,
                     )
+                    comparison_creating_count = max(
+                        0,
+                        _comparison_test_runs_creating.get(
+                            comparison_reservation_key,
+                            0,
+                        )
+                        - 1,
+                    )
+                    if comparison_creating_count:
+                        _comparison_test_runs_creating[comparison_reservation_key] = (
+                            comparison_creating_count
+                        )
+                    else:
+                        _comparison_test_runs_creating.pop(
+                            comparison_reservation_key,
+                            None,
+                        )
                     if creating_count:
                         _test_runs_creating[owner_id] = creating_count
                     else:

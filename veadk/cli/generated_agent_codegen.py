@@ -18,8 +18,16 @@ from __future__ import annotations
 
 import re
 from typing import Any, Literal
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 from veadk.cli.generated_agent_catalog import (
     A2A_REGISTRY_ENV,
@@ -230,16 +238,99 @@ class GeneratedAgentProjectRequest(BaseModel):
     draft: AgentDraft
 
 
+class DebugModelCredential(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agentPath: list[int] = Field(default_factory=list, max_length=16)
+    apiKey: SecretStr = Field(min_length=1, max_length=16384)
+
+    @field_validator("agentPath")
+    @classmethod
+    def validate_agent_path(cls, value: list[int]) -> list[int]:
+        if any(index < 0 for index in value):
+            raise ValueError("Agent path indexes must be non-negative.")
+        return value
+
+
 class GeneratedAgentTestRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     draft: AgentDraft
     runtimeId: str = ""
     runtimeRegion: str = "cn-beijing"
+    comparisonId: str = Field(default="", max_length=80, pattern=r"^[A-Za-z0-9_-]*$")
+    modelCredentials: list[DebugModelCredential] = Field(
+        default_factory=list,
+        max_length=64,
+    )
+
+    @model_validator(mode="after")
+    def validate_model_credentials(self) -> GeneratedAgentTestRunRequest:
+        paths = [tuple(item.agentPath) for item in self.modelCredentials]
+        if len(paths) != len(set(paths)):
+            raise ValueError("Duplicate model credential agent path.")
+        return self
+
+
+def debug_model_credential_bindings(
+    draft: AgentDraft,
+    credentials: list[DebugModelCredential],
+    *,
+    studio_api_base: str = "",
+) -> tuple[dict[tuple[int, ...], str], dict[str, str]]:
+    env_by_path: dict[tuple[int, ...], str] = {}
+    env_values: dict[str, str] = {}
+    for credential in credentials:
+        path = tuple(credential.agentPath)
+        node = draft
+        for index in path:
+            if index >= len(node.subAgents):
+                raise ValueError("Model credential Agent path does not exist.")
+            node = node.subAgents[index]
+        if node.agentType != "llm":
+            raise ValueError("Model credentials can only target local LLM Agents.")
+        suffix = "ROOT" if not path else "_".join(str(index) for index in path)
+        env_name = f"VEADK_DEBUG_MODEL_API_KEY_{suffix}"
+        env_by_path[path] = env_name
+        env_values[env_name] = credential.apiKey.get_secret_value()
+
+    normalized_studio_base = studio_api_base.strip().rstrip("/")
+
+    def validate_connection(node: AgentDraft, path: tuple[int, ...]) -> None:
+        if node.agentType == "llm" and node.modelApiBase.strip():
+            api_base = node.modelApiBase.strip()
+            parsed = urlparse(api_base)
+            if parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise ValueError(
+                    "Model API Base must not contain credentials, query parameters, "
+                    "or fragments."
+                )
+            if parsed.scheme != "https":
+                raise ValueError("Debug API Base must use HTTPS.")
+            uses_studio_endpoint = is_provider_modelark_base_url(
+                draft.cloudProvider,
+                api_base,
+            ) or (
+                bool(normalized_studio_base)
+                and api_base.rstrip("/") == normalized_studio_base
+            )
+            if not uses_studio_endpoint and path not in env_by_path:
+                raise ValueError(
+                    f"Custom API Base {parsed.netloc} requires a temporary API key."
+                )
+        for index, child in enumerate(node.subAgents):
+            validate_connection(child, (*path, index))
+
+    validate_connection(draft, ())
+    return env_by_path, env_values
 
 
 class _Acc:
-    def __init__(self, cloud_provider: str = "volcengine") -> None:
+    def __init__(
+        self,
+        cloud_provider: str = "volcengine",
+        model_api_key_env_by_path: dict[tuple[int, ...], str] | None = None,
+    ) -> None:
         self.cloud_provider = cloud_provider
         self.imports: list[str] = []
         self.pre_lines: list[str] = []
@@ -248,6 +339,7 @@ class _Acc:
         self.used_names: set[str] = set()
         self.used_env_names: set[str] = set()
         self.agent_display_names: dict[str, str] = {}
+        self.model_api_key_env_by_path = model_api_key_env_by_path or {}
 
 
 def normalize_and_validate_draft(raw: Any) -> AgentDraft:
@@ -439,7 +531,12 @@ def _emit_tool_stub(acc: _Acc, name: str, description: str) -> str:
     return fn
 
 
-def _build_orchestrator(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
+def _build_orchestrator(
+    acc: _Acc,
+    draft: AgentDraft,
+    var_name: str,
+    path: tuple[int, ...],
+) -> str:
     cls = {
         "parallel": "ParallelAgent",
         "loop": "LoopAgent",
@@ -450,7 +547,7 @@ def _build_orchestrator(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
     sub_vars: list[str] = []
     for idx, sub in enumerate(draft.subAgents):
         child_var = f"{var_name}_sub_{idx + 1}"
-        _build_agent(acc, sub, child_var)
+        _build_agent(acc, sub, child_var, (*path, idx))
         sub_vars.append(child_var)
 
     kwargs = [
@@ -504,17 +601,23 @@ def _append_a2a_registry_tools(acc: _Acc, var_name: str) -> tuple[str, str]:
     return registry_var, tools_var
 
 
-def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
+def _build_agent(
+    acc: _Acc,
+    draft: AgentDraft,
+    var_name: str,
+    path: tuple[int, ...] = (),
+) -> str:
     if draft.agentType == "a2a":
         if draft.a2aRegistry.enabled:
             return _build_agent(
                 acc,
                 AgentDraft(agentType="llm", a2aRegistry=draft.a2aRegistry),
                 var_name,
+                path,
             )
         return _build_a2a(acc, draft, var_name)
     if draft.agentType != "llm":
-        return _build_orchestrator(acc, draft, var_name)
+        return _build_orchestrator(acc, draft, var_name, path)
 
     tool_exprs: list[str] = []
 
@@ -649,26 +752,32 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
         kwargs.append(f"model_provider={_py_str(draft.modelProvider.strip())}")
     if draft.modelApiBase.strip():
         kwargs.append(f"model_api_base={_py_str(draft.modelApiBase.strip())}")
-        if not is_provider_modelark_base_url(
-            acc.cloud_provider,
-            draft.modelApiBase,
-        ):
-            _add_import(acc, "import os")
-            agent_segment = _env_segment(draft.name, _env_segment(var_name, "AGENT"))
-            env_name = _next_env_name(
-                f"CUSTOM_MODEL_{agent_segment}_API_KEY",
-                acc.used_env_names,
+    model_api_key_env = acc.model_api_key_env_by_path.get(path)
+    if model_api_key_env:
+        if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", model_api_key_env):
+            raise ValueError("Invalid model API key environment variable name.")
+        _add_import(acc, "import os")
+        kwargs.append(f"model_api_key=os.environ[{_py_str(model_api_key_env)}]")
+    elif draft.modelApiBase.strip() and not is_provider_modelark_base_url(
+        acc.cloud_provider,
+        draft.modelApiBase,
+    ):
+        _add_import(acc, "import os")
+        agent_segment = _env_segment(draft.name, _env_segment(var_name, "AGENT"))
+        env_name = _next_env_name(
+            f"CUSTOM_MODEL_{agent_segment}_API_KEY",
+            acc.used_env_names,
+        )
+        acc.used_env_names.add(env_name)
+        acc.env.append(
+            EnvVar(
+                env_name,
+                True,
+                "replace-with-your-own-model-api-key",
+                f"{draft.name.strip() or 'Custom model'} API Key",
             )
-            acc.used_env_names.add(env_name)
-            acc.env.append(
-                EnvVar(
-                    env_name,
-                    True,
-                    "replace-with-your-own-model-api-key",
-                    f"{draft.name.strip() or 'Custom model'} API Key",
-                )
-            )
-            kwargs.append(f"model_api_key=os.environ[{_py_str(env_name)}]")
+        )
+        kwargs.append(f"model_api_key=os.environ[{_py_str(env_name)}]")
 
     if draft.memory.shortTerm:
         backend = STM_BY_ID.get(draft.shortTermBackend or "local")
@@ -742,7 +851,7 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
         if _is_registry_backed_a2a(sub):
             continue
         child_var = f"{var_name}_sub_{idx + 1}"
-        _build_agent(acc, sub, child_var)
+        _build_agent(acc, sub, child_var, (*path, idx))
         sub_vars.append(child_var)
     if sub_vars:
         kwargs.append(f"sub_agents=[{', '.join(sub_vars)}]")
@@ -1382,13 +1491,17 @@ def _materialize_a2a_registry_env(env: list[EnvVar], draft: AgentDraft) -> list[
     ]
 
 
-def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
+def generate_project_from_draft(
+    draft: AgentDraft,
+    *,
+    model_api_key_env_by_path: dict[tuple[int, ...], str] | None = None,
+) -> GeneratedProject:
     if draft.agentType == "a2a":
         raise ValueError("Remote Agent cannot be the root Agent.")
 
     draft = prepare_mcp_auth(draft)
     pkg = ident(draft.name, "my_agent")
-    acc = _Acc(draft.cloudProvider)
+    acc = _Acc(draft.cloudProvider, model_api_key_env_by_path)
     feishu_channel_enabled = bool(draft.deployment.feishuEnabled)
     if feishu_channel_enabled:
         acc.env.extend(

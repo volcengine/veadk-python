@@ -79,12 +79,18 @@ function Fallback({ node }: { node: A2uiComponent }) {
 export interface SurfaceViewProps {
   surface: SurfaceState;
   onAction: (action: A2uiAction | undefined, node: A2uiComponent) => void;
+  readOnly?: boolean;
 }
 
 /** Render a single surface starting at its root component. */
-export function SurfaceView({ surface, onAction }: SurfaceViewProps) {
+export function SurfaceView({
+  surface,
+  onAction,
+  readOnly = false,
+}: SurfaceViewProps) {
   const ctx: RenderContext = {
     surface,
+    readOnly,
     resolve: (v: DynamicValue) => resolveValue(v, surface.dataModel),
     resolveString: (v: DynamicValue) => resolveStr(v, surface.dataModel),
     dispatchAction: onAction,

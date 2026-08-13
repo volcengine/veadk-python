@@ -2959,15 +2959,21 @@ export async function generateAgentDraftFromRequirement(
 
 export async function createGeneratedAgentTestRun(
   draft: AgentDraft,
-  runtime?: { runtimeId: string; region: string },
+  options: {
+    runtime?: { runtimeId: string; region: string };
+    modelCredentials?: Array<{ agentPath: number[]; apiKey: string }>;
+    comparisonId?: string;
+  } = {},
 ): Promise<GeneratedAgentTestRun> {
   const res = await apiFetch("/web/generated-agent-test-runs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       draft,
-      runtimeId: runtime?.runtimeId,
-      runtimeRegion: runtime?.region,
+      runtimeId: options.runtime?.runtimeId,
+      runtimeRegion: options.runtime?.region,
+      modelCredentials: options.modelCredentials ?? [],
+      comparisonId: options.comparisonId ?? "",
     }),
   });
   if (!res.ok) {

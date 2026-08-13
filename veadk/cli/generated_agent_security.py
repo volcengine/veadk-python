@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+from collections.abc import Collection
 from urllib.parse import urlparse
 
 from veadk.cli.generated_agent_catalog import (
@@ -79,10 +80,12 @@ def validate_debug_policy(
     *,
     allow_local_runtime_resources: bool = False,
     managed_cloud_provider: str | None = None,
+    custom_model_credential_paths: Collection[tuple[int, ...]] = (),
 ) -> None:
     trusted_debug_model_api_base(
         draft,
         managed_cloud_provider=managed_cloud_provider,
+        custom_model_credential_paths=custom_model_credential_paths,
     )
     total = _validate_node(
         draft,
@@ -98,13 +101,14 @@ def trusted_debug_model_api_base(
     draft: AgentDraft,
     *,
     managed_cloud_provider: str | None = None,
+    custom_model_credential_paths: Collection[tuple[int, ...]] = (),
 ) -> str:
-    """Return the only model endpoint allowed to receive Studio credentials.
+    """Return the model endpoint allowed to receive Studio credentials.
 
     Generated debug runners have one Studio-managed model credential. Keep that
     credential bound to the current Studio provider's canonical Ark endpoint;
-    custom endpoints remain supported by generated projects and deployments,
-    where users can supply their own endpoint-specific credential.
+    a custom endpoint is allowed only when its Agent path has an explicit,
+    endpoint-specific temporary credential.
     """
     provider = (managed_cloud_provider or draft.cloudProvider or "volcengine").lower()
     if provider not in SUPPORTED_CLOUD_PROVIDERS:
@@ -115,18 +119,29 @@ def trusted_debug_model_api_base(
             "调试配置的云环境与当前 Studio 不一致，请切换到当前环境后重试。"
         )
 
-    def visit(node: AgentDraft) -> None:
-        if node.agentType == "llm" and node.modelApiBase.strip():
-            if not is_provider_modelark_base_url(provider, node.modelApiBase):
+    credential_paths = set(custom_model_credential_paths)
+
+    def visit(node: AgentDraft, path: tuple[int, ...]) -> None:
+        if (
+            node.agentType == "llm"
+            and node.modelApiBase.strip()
+            and not is_provider_modelark_base_url(provider, node.modelApiBase)
+        ):
+            if path in credential_paths:
+                validate_url_not_private(
+                    node.modelApiBase,
+                    field_name="modelApiBase",
+                )
+            else:
                 raise DebugPolicyError(
                     "自定义模型地址不能使用 Studio 提供的 Ark API Key 在线调试。"
-                    "请改用当前云环境的官方 Ark 地址，或在部署页填写该 Agent "
-                    "自己的模型 API Key。"
+                    "请为该 Agent 输入临时 API Key，或改用当前云环境的官方 "
+                    "Ark 地址。"
                 )
-        for sub_agent in node.subAgents:
-            visit(sub_agent)
+        for index, sub_agent in enumerate(node.subAgents):
+            visit(sub_agent, (*path, index))
 
-    visit(draft)
+    visit(draft, ())
     return trusted
 
 

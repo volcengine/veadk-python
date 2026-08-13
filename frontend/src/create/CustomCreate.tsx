@@ -6,6 +6,7 @@ import {
   type ReactNode,
   Suspense,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -23,11 +24,12 @@ import {
   ExternalLink,
   FolderUp,
   Globe,
+  Eye,
+  EyeOff,
   Info,
   Layers,
   Loader2,
   Plus,
-  RefreshCw,
   Rocket,
   Shapes,
   Sparkles,
@@ -107,6 +109,7 @@ import { DeploymentErrorMessage } from "../ui/DeploymentErrorMessage";
 import { StudioConfirmDialog } from "../ui/StudioConfirmDialog";
 import { TraceDrawer } from "../ui/TraceDrawer";
 import { isImeCompositionEvent } from "../ui/composerKeyboard";
+import type { A2uiAction, A2uiComponent } from "../a2ui/types";
 import {
   createGeneratedAgentTestRun,
   createGeneratedAgentTestSession,
@@ -139,6 +142,52 @@ import {
 } from "../adk/cloudProvider";
 import { applyEvent, emptyAcc, type Block } from "../blocks";
 import { customModelCredentialRequirements } from "./customModelCredentials";
+import { validateModelConnection } from "./comparison/modelCredentials";
+import {
+  previewDebugChangeSummary,
+  removeDebugChange,
+  summarizeDebugChanges,
+  switchPrimaryDebugChange,
+  updateDebugVariantConfiguration as preserveDebugVariantEvidence,
+} from "./comparison/debugVariantState";
+import {
+  buildCandidateDraft,
+  applyCandidateAtomically,
+  effectiveComparisonOverrides,
+  fingerprintDraft,
+  firstConfigurableAgent,
+  listConfigurableAgents,
+  type AgentComparisonOverride,
+  type ComparisonDimension,
+} from "./comparison/draftComparison";
+import {
+  persistComparisonRecord,
+  readComparisonRecords,
+  type ComparisonHistoryRecord,
+} from "./comparison/comparisonHistory";
+import {
+  ComparisonTraceDrawer,
+  type ComparisonTraceTarget,
+} from "./comparison/ComparisonTraceDrawer";
+import { ComparisonDrawer } from "./comparison/ComparisonDrawer";
+import {
+  beginComparisonSession,
+  comparisonSessionStatus,
+  completeComparisonSession,
+  createComparisonSessionState,
+  failComparisonSession,
+  markComparisonConfigurationChanged,
+  resetComparisonSessionState,
+  type ComparisonSessionState,
+} from "./comparison/comparisonSessionState";
+import {
+  comparisonSessionViewModel,
+} from "./comparison/comparisonSessionViewModel";
+import { ComparisonSessionActionSlot } from "./comparison/ComparisonSessionControls";
+import {
+  debugRuntimeFailureMessage,
+  stageComparisonRuntimes,
+} from "./comparison/comparisonSessionRuntime";
 import "./CustomCreate.css";
 
 const MarkdownPromptEditor = lazy(() => import("./MarkdownPromptEditor"));
@@ -266,27 +315,6 @@ function ClearAgentIcon({ className }: { className?: string }) {
       <path d="m12.7 10.3 4 4" />
       <path d="M6.3 19h12.4" />
       <path d="m5.5 8.2.5-1.4 1.4-.5L6 5.8l-.5-1.4L5 5.8l-1.4.5 1.4.5.5 1.4Z" />
-    </svg>
-  );
-}
-
-/** Debug-run mark: a play head breaking through two lightweight motion rails. */
-function DebugRunIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M9 7.15v9.7a1.15 1.15 0 0 0 1.78.96l7.2-4.85a1.15 1.15 0 0 0 0-1.92l-7.2-4.85A1.15 1.15 0 0 0 9 7.15Z" />
-      <path d="M5.75 8.25v7.5" opacity="0.8" />
-      <path d="M3 10v4" opacity="0.45" />
-      <path d="M17.9 5.25v2.2M19 6.35h-2.2" strokeWidth="1.55" />
     </svg>
   );
 }
@@ -1353,6 +1381,9 @@ function SkillsSourceTabs({
   onChange: (next: SelectedSkill[]) => void;
   cloudProvider: CloudProvider;
 }) {
+  const pickerId = useId();
+  const dialogTitleId = `${pickerId}-title`;
+  const tabPanelId = `${pickerId}-panel`;
   const [active, setActive] = useState<SkillSource>("local");
   const [open, setOpen] = useState(false);
   const activeIndex = SKILL_SOURCES.findIndex((source) => source.id === active);
@@ -1417,14 +1448,14 @@ function SkillsSourceTabs({
               className="cw-skill-dialog"
               role="dialog"
               aria-modal="true"
-              aria-labelledby="cw-skill-dialog-title"
+              aria-labelledby={dialogTitleId}
               initial={{ opacity: 0, y: 10, scale: 0.985 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 6, scale: 0.99 }}
               transition={{ duration: 0.18, ease: "easeOut" }}
             >
               <div className="cw-skill-dialog-head">
-                <h3 id="cw-skill-dialog-title">添加 Skill</h3>
+                <h3 id={dialogTitleId}>添加 Skill</h3>
                 <button
                   type="button"
                   className="cw-skill-dialog-close"
@@ -1453,8 +1484,8 @@ function SkillsSourceTabs({
                       key={id}
                       type="button"
                       role="tab"
-                      id={`cw-skill-tab-${id}`}
-                      aria-controls="cw-skill-tabpanel"
+                      id={`${pickerId}-tab-${id}`}
+                      aria-controls={tabPanelId}
                       aria-selected={active === id}
                       className={`cw-skill-pickertab ${active === id ? "is-on" : ""}`}
                       onClick={() => setActive(id)}
@@ -1466,10 +1497,10 @@ function SkillsSourceTabs({
                 </div>
 
                 <div
-                  id="cw-skill-tabpanel"
+                  id={tabPanelId}
                   className="cw-skill-tabbody"
                   role="tabpanel"
-                  aria-labelledby={`cw-skill-tab-${active}`}
+                  aria-labelledby={`${pickerId}-tab-${active}`}
                 >
                   {active === "skillhub" && (
                     <SkillHubPicker selected={selected} onChange={onChange} />
@@ -1540,6 +1571,9 @@ function Toggle({
  * addressed by an array of child indices; [] is the root.
  * ================================================================ */
 type NodePath = number[];
+
+const nodePathKey = (path: NodePath) =>
+  path.length === 0 ? "root" : path.join(".");
 
 const samePath = (a: NodePath, b: NodePath) =>
   a.length === b.length && a.every((v, i) => v === b[i]);
@@ -1974,7 +2008,13 @@ export function TreeNode({
   );
 }
 
-type DebugPhase = "idle" | "starting" | "ready" | "sending" | "error";
+type DebugPhase =
+  | "idle"
+  | "starting"
+  | "ready"
+  | "sending"
+  | "canceled"
+  | "error";
 
 type WorkspaceMode = "build" | "validate" | "publish";
 interface DebugMessage {
@@ -1984,13 +2024,47 @@ interface DebugMessage {
   error?: string;
 }
 
+interface DebugVariantChange {
+  id: string;
+  modelName: string;
+  modelProvider: string;
+  modelApiBase: string;
+  apiKey: string;
+  apiKeyLocked: boolean;
+  apiKeyVisible: boolean;
+  instruction: string;
+  selectedSkills: SelectedSkill[];
+  agentKey: string;
+  dimension: ComparisonDimension;
+}
+
 interface DebugVariant {
   id: string;
   name: string;
   modelName: string;
-  description: string;
+  modelProvider: string;
+  modelApiBase: string;
+  apiKey: string;
+  apiKeyLocked: boolean;
+  apiKeyVisible: boolean;
   instruction: string;
-  optimizations: string[];
+  selectedSkills: SelectedSkill[];
+  agentKey: string;
+  dimension: ComparisonDimension;
+  additionalChanges: DebugVariantChange[];
+  verdict:
+    | ""
+    | "采用候选"
+    | "保留基线"
+    | "持平"
+    | "各有取舍"
+    | "证据不足";
+  verdictReason: string;
+  ttftMs: number | null;
+  latencyMs: number | null;
+  toolCalls: number | null;
+  tokens: number | null;
+  inputDiverged: boolean;
   configOpen: boolean;
   phase: DebugPhase;
   runtimeSnapshot: string;
@@ -2059,6 +2133,27 @@ function draftForCloudProvider(
   };
 }
 
+type DebugActionConfirm =
+  | { kind: "new-session"; variantCount: number }
+  | { kind: "delete"; variantId: string; variantName: string }
+  | { kind: "baseline-failed-apply"; variantId: string };
+
+interface PreparedDebugRuntime {
+  runtime: { run: GeneratedAgentTestRun; sessionId: string };
+  runtimeSnapshot: string;
+  credentialAgentPaths: number[][];
+}
+
+class DebugRuntimePreparationError extends Error {
+  constructor(
+    readonly stage: "run" | "session",
+    message: string,
+  ) {
+    super(message);
+    this.name = "DebugRuntimePreparationError";
+  }
+}
+
 function codegenDraft(draft: AgentDraft): AgentDraft {
   const prepared = prepareMcpAuth(draft).draft;
   return {
@@ -2107,80 +2202,1149 @@ function debugVariantSnapshot(
   draftSnapshot: string,
   variant: Pick<
     DebugVariant,
-    "modelName" | "description" | "instruction" | "optimizations"
+    | "modelName"
+    | "modelProvider"
+    | "modelApiBase"
+    | "instruction"
+    | "selectedSkills"
+    | "agentKey"
+    | "dimension"
+    | "additionalChanges"
   >,
 ): string {
   return JSON.stringify({
     draftSnapshot,
     modelName: variant.modelName,
-    description: variant.description,
+    modelProvider: variant.modelProvider,
+    modelApiBase: variant.modelApiBase,
     instruction: variant.instruction,
-    optimizations: variant.optimizations,
+    selectedSkills: variant.selectedSkills,
+    agentKey: variant.agentKey,
+    dimension: variant.dimension,
+    additionalChanges: variant.additionalChanges.map(debugChangeConfiguration),
   });
 }
 
 function debugVariantConfigurationKey(
-  variant: Pick<
-    DebugVariant,
-    "modelName" | "description" | "instruction" | "optimizations"
-  >,
+  draft: AgentDraft,
+  variant: DebugVariant,
 ): string {
-  return JSON.stringify({
-    modelName: variant.modelName.trim(),
-    description: variant.description.trim(),
-    instruction: variant.instruction.trim(),
-    optimizations: variant.optimizations,
-  });
+  if (variant.id === "baseline") return "[]";
+  return JSON.stringify(
+    effectiveDebugChanges(draft, variant)
+      .map(debugChangeConfiguration)
+      .sort((left, right) =>
+        `${left.agentKey}:${left.dimension}`.localeCompare(
+          `${right.agentKey}:${right.dimension}`,
+        ),
+      ),
+  );
+}
+
+function primaryDebugChange(variant: DebugVariant): DebugVariantChange {
+  return {
+    id: "primary",
+    modelName: variant.modelName,
+    modelProvider: variant.modelProvider,
+    modelApiBase: variant.modelApiBase,
+    apiKey: variant.apiKey,
+    apiKeyLocked: variant.apiKeyLocked,
+    apiKeyVisible: variant.apiKeyVisible,
+    instruction: variant.instruction,
+    selectedSkills: variant.selectedSkills,
+    agentKey: variant.agentKey,
+    dimension: variant.dimension,
+  };
+}
+
+function debugChangesForVariant(variant: DebugVariant): DebugVariantChange[] {
+  return [primaryDebugChange(variant), ...variant.additionalChanges];
+}
+
+function debugChangeConfiguration(change: DebugVariantChange) {
+  return {
+    modelName: change.modelName.trim(),
+    modelProvider: change.modelProvider.trim(),
+    modelApiBase: change.modelApiBase.trim(),
+    instruction: change.instruction.trim(),
+    selectedSkills: change.selectedSkills,
+    agentKey: change.agentKey,
+    dimension: change.dimension,
+  };
+}
+
+function debugVariantConfigurationProblem(
+  draft: AgentDraft,
+  variant: DebugVariant,
+): string {
+  if (variant.id === "baseline") return "";
+  const seen = new Set<string>();
+  for (const change of debugChangesForVariant(variant)) {
+    const key = `${change.agentKey}:${change.dimension}`;
+    if (seen.has(key)) return "同一 Agent 的同一维度只能配置一次";
+    seen.add(key);
+    if (change.dimension === "model" && !change.modelName.trim()) {
+      return "请填写 Model ID";
+    }
+    if (change.dimension === "instruction" && !change.instruction.trim()) {
+      return "请填写系统提示词";
+    }
+  }
+  if (effectiveDebugChanges(draft, variant).length === 0) {
+    return "请至少修改一个配置项";
+  }
+  return "";
+}
+
+function baselineDebugChange(
+  draft: AgentDraft,
+  baselineApiKeys: Record<string, string>,
+  agentKey: string,
+  dimension: ComparisonDimension,
+): DebugVariantChange | null {
+  const agent = listConfigurableAgents(draft).find(
+    (item) => item.key === agentKey,
+  );
+  if (!agent) return null;
+  const target = getNode(draft, agent.path);
+  return {
+    id: `${agentKey}:${dimension}`,
+    modelName: target.modelName ?? "",
+    modelProvider: target.modelProvider ?? "",
+    modelApiBase: target.modelApiBase ?? "",
+    apiKey: baselineApiKeys[agentKey] ?? "",
+    apiKeyLocked: false,
+    apiKeyVisible: false,
+    instruction: target.instruction,
+    selectedSkills: structuredClone(target.selectedSkills ?? []),
+    agentKey,
+    dimension,
+  };
+}
+
+function debugApiKeyForAgent(
+  variant: DebugVariant,
+  agentKey: string,
+  baselineApiKeys: Record<string, string>,
+): string {
+  if (variant.id === "baseline") return baselineApiKeys[agentKey] ?? "";
+  const modelChange = debugChangesForVariant(variant).find(
+    (change) =>
+      change.agentKey === agentKey && change.dimension === "model",
+  );
+  return modelChange?.apiKey ?? baselineApiKeys[agentKey] ?? "";
+}
+
+const COMPARISON_DIFF_PREVIEW_LIMIT = 3;
+
+interface DebugConfigurationDiffLine {
+  label: string;
+  baseline: string;
+  candidate: string;
+  long?: boolean;
+}
+
+function debugDimensionLabel(dimension: ComparisonDimension): string {
+  return dimension === "model"
+    ? "模型"
+    : dimension === "instruction"
+      ? "系统提示词"
+      : "Skills";
+}
+
+function debugSkillListLabel(skills: SelectedSkill[]): string {
+  return skills.length
+    ? skills
+        .map(
+          (skill) =>
+            `${skill.name || skill.folder}${skill.version ? `@${skill.version}` : ""}`,
+        )
+        .join("、")
+    : "无 Skill";
+}
+
+function debugCredentialLabel(change: DebugVariantChange): string {
+  return change.apiKeyLocked || change.apiKey
+    ? "临时凭据已配置"
+    : "服务端凭据";
+}
+
+function debugChangeDiffLines(
+  baseline: DebugVariantChange,
+  change: DebugVariantChange,
+): DebugConfigurationDiffLine[] {
+  if (change.dimension === "model") {
+    const lines: DebugConfigurationDiffLine[] = [
+      {
+        label: "Model ID",
+        baseline: baseline.modelName || "Studio 默认 Model ID",
+        candidate: change.modelName || "Studio 默认 Model ID",
+      },
+      {
+        label: "Provider",
+        baseline: baseline.modelProvider || "Studio 默认 Provider",
+        candidate: change.modelProvider || "Studio 默认 Provider",
+      },
+      {
+        label: "API Base",
+        baseline: baseline.modelApiBase || "Studio 默认 API Base",
+        candidate: change.modelApiBase || "Studio 默认 API Base",
+        long: true,
+      },
+      {
+        label: "凭据",
+        baseline: debugCredentialLabel(baseline),
+        candidate: debugCredentialLabel(change),
+      },
+    ];
+    return lines.filter((line) => line.baseline !== line.candidate);
+  }
+  if (change.dimension === "instruction") {
+    return [
+      {
+        label: "提示词内容",
+        baseline: baseline.instruction || "空提示词",
+        candidate: change.instruction || "空提示词",
+        long: true,
+      },
+    ];
+  }
+  return [
+    {
+      label: "Skills 列表",
+      baseline: debugSkillListLabel(baseline.selectedSkills),
+      candidate: debugSkillListLabel(change.selectedSkills),
+      long: true,
+    },
+  ];
+}
+
+function debugChangeDiffText(
+  draft: AgentDraft,
+  change: DebugVariantChange,
+): string {
+  const agent = listConfigurableAgents(draft).find(
+    (item) => item.key === change.agentKey,
+  );
+  if (!agent) return "Agent 已不在当前 Draft 中";
+  const baseline = getNode(draft, agent.path);
+  if (change.dimension === "model") {
+    const before = [
+      baseline.modelName || "Studio 默认 Model ID",
+      baseline.modelProvider || "Studio 默认 Provider",
+      baseline.modelApiBase || "Studio 默认 API Base",
+    ].join(" / ");
+    const after = [
+      change.modelName || "Studio 默认 Model ID",
+      change.modelProvider || "Studio 默认 Provider",
+      change.modelApiBase || "Studio 默认 API Base",
+    ].join(" / ");
+    return `${before} → ${after}`;
+  }
+  if (change.dimension === "instruction") {
+    return `系统提示词 ${baseline.instruction.length} 字 → ${change.instruction.length} 字`;
+  }
+  return `${debugSkillListLabel(baseline.selectedSkills ?? [])} → ${debugSkillListLabel(change.selectedSkills)}`;
+}
+
+function debugVariantHasA2uiAction(
+  variant: DebugVariant,
+  actionName: string,
+  nodeId: string,
+): boolean {
+  return variant.messages.some((message) =>
+    (message.blocks ?? []).some(
+      (block) =>
+        block.kind === "a2ui" &&
+        block.messages.some((a2uiMessage) => {
+          const update = (
+            a2uiMessage as {
+              updateComponents?: { components?: A2uiComponent[] };
+            }
+          ).updateComponents;
+          const components = Array.isArray(update?.components)
+            ? update.components
+            : [];
+          return Boolean(
+            components.some((component) => {
+              const componentAction = component.action as
+                | A2uiAction
+                | undefined;
+              return (
+                component.id === nodeId &&
+                (componentAction?.event?.name ?? component.id) === actionName
+              );
+            }),
+          );
+        }),
+    ),
+  );
+}
+
+function draftForDebugVariant(
+  baseline: AgentDraft,
+  variant: DebugVariant,
+): AgentDraft {
+  if (variant.id === "baseline") return baseline;
+  return buildCandidateDraft(baseline, debugOverridesForVariant(variant));
+}
+
+function debugOverridesForVariant(
+  variant: DebugVariant,
+): AgentComparisonOverride[] {
+  return debugChangesForVariant(variant).map((change) => ({
+      agentKey: change.agentKey,
+      dimensions: [change.dimension],
+      model:
+        change.dimension === "model"
+          ? {
+              modelName: change.modelName,
+              modelProvider: change.modelProvider,
+              modelApiBase: change.modelApiBase,
+            }
+          : undefined,
+      instruction:
+        change.dimension === "instruction" ? change.instruction : undefined,
+      selectedSkills:
+        change.dimension === "skills" ? change.selectedSkills : undefined,
+    }));
+}
+
+function effectiveDebugChanges(
+  draft: AgentDraft,
+  variant: DebugVariant,
+): DebugVariantChange[] {
+  if (variant.id === "baseline") return [];
+  const effective = new Set(
+    effectiveComparisonOverrides(draft, debugOverridesForVariant(variant)).flatMap(
+      (override) =>
+        override.dimensions.map(
+          (dimension) => `${override.agentKey}:${dimension}`,
+        ),
+    ),
+  );
+  return debugChangesForVariant(variant).filter((change) =>
+    effective.has(`${change.agentKey}:${change.dimension}`),
+  );
+}
+
+function debugComparisonSessionProblem(
+  draft: AgentDraft,
+  variants: DebugVariant[],
+  baselineApiKeys: Record<string, string>,
+): string {
+  if (variants.length < 2) return "请至少添加一个对照组";
+  if (variants.length > 4) return "测试组最多为 4 个";
+
+  for (const variant of variants) {
+    if (variant.configOpen) return `请先保存「${variant.name}」的配置`;
+  }
+  for (const variant of variants) {
+    if (variant.phase === "starting" || variant.phase === "sending") {
+      return `请等待「${variant.name}」完成当前操作`;
+    }
+  }
+  for (const variant of variants) {
+    const problem = debugVariantConfigurationProblem(draft, variant);
+    if (problem) return `请先完成「${variant.name}」的配置：${problem}`;
+  }
+
+  const seenConfigurations = new Set<string>();
+  for (const variant of variants) {
+    const configurationKey = debugVariantConfigurationKey(draft, variant);
+    if (seenConfigurations.has(configurationKey)) {
+      return `「${variant.name}」的配置与已有测试组相同`;
+    }
+    seenConfigurations.add(configurationKey);
+  }
+
+  for (const variant of variants) {
+    let variantDraft: AgentDraft;
+    try {
+      variantDraft = draftForDebugVariant(draft, variant);
+    } catch {
+      return `「${variant.name}」的配置已失效，请重新选择 Agent`;
+    }
+    for (const { path, key } of listConfigurableAgents(variantDraft)) {
+      const modelNode = getNode(variantDraft, path);
+      const validation = validateModelConnection({
+        modelName: modelNode.modelName ?? "",
+        modelProvider: modelNode.modelProvider ?? "",
+        modelApiBase: modelNode.modelApiBase ?? "",
+        apiKey: debugApiKeyForAgent(variant, key, baselineApiKeys),
+        studioApiBase: defaultModelApiBase(
+          draft.cloudProvider ?? "volcengine",
+        ),
+      });
+      if (!validation.ok) {
+        return `请先完成「${variant.name}」的模型连接配置：${validation.reason}`;
+      }
+    }
+  }
+  return "";
+}
+
+function DebugVariantDifferenceSummary({
+  draft,
+  baselineApiKeys,
+  changes,
+  configurableAgents,
+  variantName,
+}: {
+  draft: AgentDraft;
+  baselineApiKeys: Record<string, string>;
+  changes: DebugVariantChange[];
+  configurableAgents: ReturnType<typeof listConfigurableAgents>;
+  variantName: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const titleId = useId();
+  const contentId = useId();
+  const groups = summarizeDebugChanges(
+    changes,
+    configurableAgents.map((agent) => agent.key),
+    "",
+    "model",
+  );
+  const totalCount = changes.length;
+  const visible = expanded
+    ? { groups, hiddenCount: 0 }
+    : previewDebugChangeSummary(groups, COMPARISON_DIFF_PREVIEW_LIMIT);
+
+  return (
+    <section className="cw-comparison-diff-summary" aria-labelledby={titleId}>
+      <header className="cw-comparison-diff-head">
+        <h3 id={titleId}>与基准组的配置差异</h3>
+        <span>{totalCount} 项</span>
+      </header>
+      <div id={contentId} className="cw-comparison-diff-groups">
+        {visible.groups.map((group) => {
+          const agentName =
+            configurableAgents.find((agent) => agent.key === group.agentKey)
+              ?.name ?? group.agentKey;
+          const groupTotalCount =
+            groups.find((item) => item.agentKey === group.agentKey)?.changes
+              .length ?? group.changes.length;
+          return (
+            <section className="cw-comparison-diff-group" key={group.agentKey}>
+              <h4>
+                <span title={agentName}>{agentName}</span>
+                <span>{groupTotalCount} 项变化</span>
+              </h4>
+              {group.changes.map(({ change }) => {
+                const baseline = baselineDebugChange(
+                  draft,
+                  baselineApiKeys,
+                  change.agentKey,
+                  change.dimension,
+                );
+                if (!baseline) return null;
+                return (
+                  <section
+                    className="cw-comparison-diff-item"
+                    key={`${change.agentKey}:${change.dimension}`}
+                  >
+                    <strong>{debugDimensionLabel(change.dimension)}</strong>
+                    <dl>
+                      {debugChangeDiffLines(baseline, change).map((line) => (
+                        <div key={line.label}>
+                          <dt>{line.label}</dt>
+                          <dd>
+                            <span className="cw-comparison-diff-value">
+                              <small>基准</small>
+                              <span
+                                className={
+                                  line.long ? "cw-comparison-diff-long" : ""
+                                }
+                                title={line.baseline}
+                                tabIndex={line.long ? 0 : undefined}
+                              >
+                                {line.baseline}
+                              </span>
+                            </span>
+                            <span
+                              className="cw-comparison-diff-arrow"
+                              aria-hidden="true"
+                            >
+                              →
+                            </span>
+                            <span className="cw-comparison-diff-value">
+                              <small>本组</small>
+                              <span
+                                className={
+                                  line.long ? "cw-comparison-diff-long" : ""
+                                }
+                                title={line.candidate}
+                                tabIndex={line.long ? 0 : undefined}
+                              >
+                                {line.candidate}
+                              </span>
+                            </span>
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </section>
+                );
+              })}
+            </section>
+          );
+        })}
+      </div>
+      {totalCount > COMPARISON_DIFF_PREVIEW_LIMIT ? (
+        <button
+          type="button"
+          className="cw-comparison-diff-toggle"
+          aria-label={
+            expanded
+              ? `收起${variantName}的配置差异，仅显示前 ${COMPARISON_DIFF_PREVIEW_LIMIT} 项`
+              : `查看${variantName}全部 ${totalCount} 项配置差异`
+          }
+          aria-expanded={expanded}
+          aria-controls={contentId}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded
+            ? `收起，仅显示前 ${COMPARISON_DIFF_PREVIEW_LIMIT} 项`
+            : `查看全部 ${totalCount} 项`}
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
+type DebugChangeField =
+  | "agentKey"
+  | "dimension"
+  | "modelName"
+  | "modelProvider"
+  | "modelApiBase"
+  | "apiKey"
+  | "instruction";
+
+function DebugVariantConfigurationPanel({
+  variant,
+  variants,
+  draft,
+  busy,
+  onClose,
+  onRemoveVariant,
+  onCompleteConfig,
+  onSelectChange,
+  onRemoveChange,
+  onConfigChange,
+  onSkillsChange,
+  onToggleApiKey,
+}: {
+  variant: DebugVariant;
+  variants: DebugVariant[];
+  draft: AgentDraft;
+  busy: boolean;
+  onClose: () => void;
+  onRemoveVariant: (id: string) => void;
+  onCompleteConfig: (id: string) => void;
+  onSelectChange: (
+    id: string,
+    agentKey: string,
+    dimension: ComparisonDimension,
+  ) => void;
+  onRemoveChange: (
+    id: string,
+    agentKey: string,
+    dimension: ComparisonDimension,
+  ) => void;
+  onConfigChange: (
+    id: string,
+    field: DebugChangeField,
+    value: string,
+  ) => void;
+  onSkillsChange: (id: string, skills: SelectedSkill[]) => void;
+  onToggleApiKey: (id: string) => void;
+}) {
+  const configurableAgents = listConfigurableAgents(draft);
+  const configurationKey = debugVariantConfigurationKey(draft, variant);
+  const variantIndex = variants.findIndex((item) => item.id === variant.id);
+  const duplicateConfiguration = variants.findIndex(
+    (item) => debugVariantConfigurationKey(draft, item) === configurationKey,
+  ) !== variantIndex;
+  const configurationProblem = debugVariantConfigurationProblem(draft, variant);
+  const disabledReason =
+    configurationProblem ||
+    (duplicateConfiguration ? "该配置与已有测试组相同" : "");
+  const summaryTitleId = useId();
+  const effectiveChanges = effectiveDebugChanges(draft, variant);
+  const changeSummary = summarizeDebugChanges(
+    effectiveChanges,
+    configurableAgents.map((agent) => agent.key),
+    variant.agentKey,
+    variant.dimension,
+  );
+  const changeCountByAgent = new Map(
+    changeSummary.map((group) => [group.agentKey, group.changes.length]),
+  );
+  const changedDimensions = new Set(
+    effectiveChanges.map(
+      (change) => `${change.agentKey}:${change.dimension}`,
+    ),
+  );
+  const dimensionLabel = (dimension: ComparisonDimension) =>
+    dimension === "model"
+      ? "模型"
+      : dimension === "instruction"
+        ? "系统提示词"
+        : "Skills";
+
+  return (
+    <ComparisonDrawer
+      title={`测试配置 · ${variant.name}`}
+      description="选择 Agent 与维度后修改。切换维度会保留当前编辑，临时凭据仅注入调试环境。"
+      width="wide"
+      busy={busy}
+      closeLabel={`关闭${variant.name}测试配置`}
+      onClose={onClose}
+      footer={
+        <div className="cw-comparison-drawer-footer">
+          <button
+            type="button"
+            className="cw-comparison-danger-action"
+            disabled={busy}
+            onClick={() => onRemoveVariant(variant.id)}
+          >
+            删除测试组
+          </button>
+          <span>
+            <button
+              type="button"
+              className="is-primary"
+              disabled={busy}
+              onClick={() => onCompleteConfig(variant.id)}
+            >
+              保存配置
+            </button>
+          </span>
+        </div>
+      }
+    >
+      <fieldset
+        className="cw-comparison-config-panel"
+        aria-label={`${variant.name}测试配置`}
+        disabled={busy}
+      >
+        <aside className="cw-comparison-agent-nav" aria-label="选择 Agent">
+          <strong>Agent</strong>
+          {configurableAgents.map((agent) => {
+            const changeCount = changeCountByAgent.get(agent.key) ?? 0;
+            const agentName = agent.name || agent.key;
+            return (
+              <button
+                key={agent.key}
+                type="button"
+                className={agent.key === variant.agentKey ? "is-active" : ""}
+                aria-label={`${agentName}，${changeCount} 项变化`}
+                aria-pressed={agent.key === variant.agentKey}
+                disabled={busy}
+                onClick={() =>
+                  onSelectChange(variant.id, agent.key, variant.dimension)
+                }
+              >
+                <span>{agentName}</span>
+                <span className="cw-comparison-agent-change-count">
+                  · {changeCount}
+                </span>
+              </button>
+            );
+          })}
+        </aside>
+
+        <div className="cw-comparison-config-main">
+        <div
+          className="cw-comparison-dimension-tabs"
+          role="tablist"
+          aria-label="选择对照维度"
+        >
+          {(["model", "instruction", "skills"] as ComparisonDimension[]).map(
+            (dimension) => {
+              const changed = changedDimensions.has(
+                `${variant.agentKey}:${dimension}`,
+              );
+              return (
+                <button
+                  key={dimension}
+                  type="button"
+                  role="tab"
+                  aria-label={`${dimensionLabel(dimension)}${changed ? "，已修改" : ""}`}
+                  aria-selected={variant.dimension === dimension}
+                  disabled={busy}
+                  onClick={() =>
+                    onSelectChange(variant.id, variant.agentKey, dimension)
+                  }
+                >
+                  <span>{dimensionLabel(dimension)}</span>
+                  {changed && (
+                    <span className="cw-comparison-dimension-status">
+                      已修改
+                    </span>
+                  )}
+                </button>
+              );
+            },
+          )}
+        </div>
+
+        {disabledReason && (
+          <p className="cw-comparison-config-problem" role="alert">
+            {disabledReason}
+          </p>
+        )}
+
+        <div className="cw-ab-config">
+          {variant.dimension === "model" && (
+            <>
+              <label>
+                <span>Model ID</span>
+                <input
+                  value={variant.modelName}
+                  disabled={busy}
+                  onChange={(event) =>
+                    onConfigChange(variant.id, "modelName", event.target.value)
+                  }
+                />
+              </label>
+              <label>
+                <span>Provider</span>
+                <input
+                  value={variant.modelProvider}
+                  placeholder="留空使用 Studio 默认值"
+                  disabled={busy}
+                  onChange={(event) =>
+                    onConfigChange(
+                      variant.id,
+                      "modelProvider",
+                      event.target.value,
+                    )
+                  }
+                />
+              </label>
+              <label>
+                <span>API Base</span>
+                <input
+                  value={variant.modelApiBase}
+                  placeholder="留空使用 Studio 默认值"
+                  disabled={busy}
+                  onChange={(event) =>
+                    onConfigChange(
+                      variant.id,
+                      "modelApiBase",
+                      event.target.value,
+                    )
+                  }
+                />
+              </label>
+              <label>
+                <span>临时 API Key</span>
+                {variant.apiKeyLocked ? (
+                  <div className="cw-model-secret-configured">
+                    <span role="status">已配置临时凭据</span>
+                    <button
+                      type="button"
+                      className="cw-link-btn"
+                      disabled={busy}
+                      onClick={() => onConfigChange(variant.id, "apiKey", "")}
+                    >
+                      清除并重新输入
+                    </button>
+                  </div>
+                ) : (
+                  <div className="cw-model-secret-input">
+                    <input
+                      className="cw-input"
+                      type={variant.apiKeyVisible ? "text" : "password"}
+                      value={variant.apiKey}
+                      autoComplete="off"
+                      placeholder="可留空；自定义 API Base 时必填"
+                      disabled={busy}
+                      onChange={(event) =>
+                        onConfigChange(variant.id, "apiKey", event.target.value)
+                      }
+                    />
+                    <button
+                      type="button"
+                      className="cw-model-secret-toggle"
+                      aria-label={
+                        variant.apiKeyVisible ? "隐藏 API Key" : "显示 API Key"
+                      }
+                      aria-pressed={variant.apiKeyVisible}
+                      disabled={busy}
+                      onClick={() => onToggleApiKey(variant.id)}
+                    >
+                      {variant.apiKeyVisible ? (
+                        <EyeOff className="cw-i cw-i-sm" />
+                      ) : (
+                        <Eye className="cw-i cw-i-sm" />
+                      )}
+                    </button>
+                  </div>
+                )}
+              </label>
+            </>
+          )}
+          {variant.dimension === "instruction" && (
+            <label>
+              <span>系统提示词</span>
+              <textarea
+                rows={12}
+                value={variant.instruction}
+                disabled={busy}
+                onChange={(event) =>
+                  onConfigChange(variant.id, "instruction", event.target.value)
+                }
+              />
+            </label>
+          )}
+          {variant.dimension === "skills" && (
+            <div className="cw-comparison-skills">
+              <span>本轮 Skills</span>
+              <SkillsSourceTabs
+                selected={variant.selectedSkills}
+                onChange={(next) => onSkillsChange(variant.id, next)}
+                cloudProvider={draft.cloudProvider ?? "volcengine"}
+              />
+              <small>
+                可从 SkillHub、SkillSpace 或本地新增；在 SkillSpace 中选择目标版本即可进行版本对照。
+              </small>
+            </div>
+          )}
+        </div>
+
+        {changeSummary.length > 0 && (
+          <section
+            className="cw-comparison-change-summary"
+            aria-labelledby={summaryTitleId}
+          >
+            <h3 id={summaryTitleId}>
+              本方案全部变化（{effectiveChanges.length}）
+            </h3>
+            <div className="cw-comparison-change-groups">
+              {changeSummary.map((group) => {
+                const agentName =
+                  configurableAgents.find(
+                    (agent) => agent.key === group.agentKey,
+                  )?.name ?? group.agentKey;
+                return (
+                  <section
+                    key={group.agentKey}
+                    className="cw-comparison-change-group"
+                  >
+                    <h4>
+                      <span>{agentName}</span>
+                      <span>{group.changes.length} 项变化</span>
+                    </h4>
+                    <ul>
+                      {group.changes.map(({ change, active }) => (
+                        <li
+                          key={`${change.agentKey}:${change.dimension}`}
+                          className={active ? "is-active" : ""}
+                        >
+                          <div className="cw-comparison-change-detail">
+                            <strong>{dimensionLabel(change.dimension)}</strong>
+                            <span>{debugChangeDiffText(draft, change)}</span>
+                          </div>
+                          <div className="cw-comparison-change-actions">
+                            {active ? (
+                              <span
+                                className="cw-comparison-change-editing"
+                                aria-current="true"
+                              >
+                                正在编辑
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="cw-link-btn"
+                                disabled={busy}
+                                onClick={() =>
+                                  onSelectChange(
+                                    variant.id,
+                                    change.agentKey,
+                                    change.dimension,
+                                  )
+                                }
+                              >
+                                编辑
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="cw-link-btn"
+                              disabled={busy}
+                              onClick={() =>
+                                onRemoveChange(
+                                  variant.id,
+                                  change.agentKey,
+                                  change.dimension,
+                                )
+                              }
+                            >
+                              移除
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                );
+              })}
+            </div>
+          </section>
+        )}
+        <p className="cw-comparison-locked-note">
+          Tools、Knowledge、Memory、拓扑、Handoff 与部署配置在本轮保持锁定。
+        </p>
+        </div>
+      </fieldset>
+    </ComparisonDrawer>
+  );
 }
 
 function DebugComparisonWorkspace({
   enabled,
   disabledReason,
+  draft,
   variants,
   draftSnapshot,
   input,
   onInput,
   onSend,
-  onStartVariant,
+  comparisonSessionState,
+  sessionProblem,
+  onStartSession,
+  onStopVariant,
+  onStopAll,
   onDeployVariant,
   onAddVariant,
   onRemoveVariant,
   onToggleConfig,
   onCompleteConfig,
+  onSelectChange,
+  baselineApiKeys,
+  onRemoveChange,
   onConfigChange,
+  onSkillsChange,
+  onToggleApiKey,
+  onVerdictChange,
+  canUndo,
+  onUndo,
+  history,
   onOpenTrace,
+  onOpenComparisonTrace,
+  onVariantAction,
 }: {
   enabled: boolean;
   disabledReason: string;
+  draft: AgentDraft;
   variants: DebugVariant[];
   draftSnapshot: string;
   input: string;
   onInput: (v: string) => void;
   onSend: () => void;
-  onStartVariant: (id: string) => void;
+  comparisonSessionState: ComparisonSessionState;
+  sessionProblem: string;
+  onStartSession: () => void;
+  onStopVariant: (id: string) => void;
+  onStopAll: () => void;
   onDeployVariant: (id: string) => void;
   onAddVariant: () => void;
   onRemoveVariant: (id: string) => void;
   onToggleConfig: (id: string) => void;
   onCompleteConfig: (id: string) => void;
+  onSelectChange: (
+    id: string,
+    agentKey: string,
+    dimension: ComparisonDimension,
+  ) => void;
+  baselineApiKeys: Record<string, string>;
+  onRemoveChange: (
+    id: string,
+    agentKey: string,
+    dimension: ComparisonDimension,
+  ) => void;
   onConfigChange: (
     id: string,
-    field: "modelName" | "description" | "instruction",
+    field: DebugChangeField,
     value: string,
   ) => void;
+  onSkillsChange: (id: string, skills: SelectedSkill[]) => void;
+  onToggleApiKey: (id: string) => void;
+  onVerdictChange: (
+    id: string,
+    verdict: DebugVariant["verdict"],
+    reason: string,
+  ) => void;
+  canUndo: boolean;
+  onUndo: () => void;
+  history: ComparisonHistoryRecord[];
   onOpenTrace: (id: string) => void;
+  onOpenComparisonTrace: () => void;
+  onVariantAction: (
+    id: string,
+    action: A2uiAction | undefined,
+    node: A2uiComponent,
+  ) => void;
 }) {
+  const configurableAgents = listConfigurableAgents(draft);
+  const [narrowVariantId, setNarrowVariantId] = useState("baseline");
+  const [safetyExpanded, setSafetyExpanded] = useState(true);
+  const [baselineDrawerOpen, setBaselineDrawerOpen] = useState(false);
+  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
+  useEffect(() => {
+    if (!variants.some((variant) => variant.id === narrowVariantId)) {
+      setNarrowVariantId(variants[0]?.id ?? "baseline");
+    }
+  }, [narrowVariantId, variants]);
   const runningVariants = variants.filter((variant) => {
-    if (variant.phase !== "ready") return false;
+    if (variant.phase !== "ready" || variant.configOpen) return false;
     return (
       variant.runtimeSnapshot === debugVariantSnapshot(draftSnapshot, variant)
     );
   });
   const sending = variants.some((variant) => variant.phase === "sending");
-  const canSend = runningVariants.length > 0 && !sending;
+  const sessionPresentation = comparisonSessionViewModel(
+    comparisonSessionState,
+    {
+      problem: sessionProblem || (!enabled ? disabledReason : ""),
+      canSendReadySession: runningVariants.length > 0 && !sending,
+      readyComposerPlaceholder:
+        "输入测试消息，将发送到所有已启动测试组...",
+    },
+  );
+  const canSend = !sessionPresentation.composerDisabled;
+  const { sessionReady, sessionStarting } = sessionPresentation;
+  const baselineVariant = variants.find((variant) => variant.id === "baseline");
+  const comparisonTraceAvailable = Boolean(
+    baselineVariant?.messages.some((message) => message.role === "assistant") &&
+      variants.some(
+        (variant) =>
+          variant.id !== "baseline" &&
+          variant.messages.some((message) => message.role === "assistant"),
+      ),
+  );
+  const baselineFailed = Boolean(
+    baselineVariant?.error ||
+      [...(baselineVariant?.messages ?? [])]
+        .reverse()
+        .find((message) => message.role === "assistant")?.error,
+  );
+  const editingVariant = variants.find(
+    (variant) => variant.id !== "baseline" && variant.configOpen,
+  );
 
   return (
-    <section className="cw-ab-workspace" aria-label="A/B 调试工作台">
+    <section className="cw-ab-workspace" aria-label="多维对照调试工作台">
+      <div className="cw-comparison-safety" role="note">
+        <div className="cw-comparison-safety-head">
+          <strong>真实外部操作风险</strong>
+          <span>
+            {canUndo ? (
+              <button
+                type="button"
+                className="cw-link-btn"
+                disabled={sessionStarting}
+                onClick={onUndo}
+              >
+                撤销刚才采用的候选
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="cw-comparison-collapse-trigger"
+              aria-expanded={safetyExpanded}
+              aria-controls="cw-comparison-safety-content"
+              onClick={() => setSafetyExpanded((expanded) => !expanded)}
+            >
+              {safetyExpanded ? "收起" : "展开"}
+            </button>
+          </span>
+        </div>
+        {safetyExpanded ? (
+          <p id="cw-comparison-safety-content">
+            每个测试组都会独立执行一次真实 Agent。同一输入可能重复发送消息、创建任务或审批、写入外部系统，并分别产生模型和工具调用费用。开始前请确认使用测试账号、测试数据，且这些外部操作可以安全重复执行。
+          </p>
+        ) : null}
+      </div>
+      <div className="cw-comparison-toolbar" aria-label="对照调试操作">
+        <div>
+          <strong>方案对照</strong>
+          <span>{variants.length} 个测试组，基准组固定在左侧</span>
+        </div>
+        <div className="cw-comparison-toolbar-actions">
+          <button
+            type="button"
+            className="cw-btn cw-btn-soft"
+            onClick={() => setHistoryDrawerOpen(true)}
+          >
+            最近对照记录{history.length ? ` (${history.length})` : ""}
+          </button>
+          <button
+            type="button"
+            className="cw-btn cw-btn-soft"
+            disabled={!comparisonTraceAvailable || sessionStarting}
+            title={
+              comparisonTraceAvailable
+                ? "按精确调用标识或稳定调用路径对齐基线与候选 Trace"
+                : "完成基线和至少一个候选运行后可对齐 Trace"
+            }
+            onClick={onOpenComparisonTrace}
+          >
+            对齐 Trace
+          </button>
+          {sessionReady &&
+          variants.some((variant) =>
+            ["starting", "ready", "sending"].includes(variant.phase),
+          ) ? (
+            <button
+              type="button"
+              className="cw-btn cw-btn-soft is-danger"
+              onClick={onStopAll}
+            >
+              停止全部
+            </button>
+          ) : null}
+          {variants.length < 4 ? (
+            <button
+              type="button"
+              className="cw-btn cw-btn-soft"
+              disabled={!enabled || sessionStarting}
+              onClick={onAddVariant}
+            >
+              <Plus className="cw-i" />
+              添加对照组
+            </button>
+          ) : null}
+          <ComparisonSessionActionSlot
+            placement="toolbar"
+            viewModel={sessionPresentation}
+            onStartSession={onStartSession}
+          />
+        </div>
+      </div>
+      <ComparisonSessionActionSlot
+        placement="alert"
+        viewModel={sessionPresentation}
+        onStartSession={onStartSession}
+      />
+      <div className="cw-comparison-tabs" role="tablist" aria-label="调试方案">
+        {variants.map((variant) => (
+          <button
+            key={variant.id}
+            type="button"
+            role="tab"
+            aria-selected={narrowVariantId === variant.id}
+            onClick={() => setNarrowVariantId(variant.id)}
+          >
+            {variant.name}
+          </button>
+        ))}
+      </div>
       <div className="cw-ab-stage">
         {!enabled ? (
           <div className="cw-debug-empty">{disabledReason}</div>
@@ -2193,84 +3357,87 @@ function DebugComparisonWorkspace({
               } as CSSProperties
             }
           >
-            {variants.map((variant, variantIndex) => {
-              const modelName = variant.modelName.trim();
-              const description = variant.description.trim();
-              const instruction = variant.instruction.trim();
-              const configurationKey = debugVariantConfigurationKey(variant);
-              const duplicateConfiguration = Boolean(
-                modelName && description && instruction &&
-                  variants.findIndex(
-                    (item) =>
-                      debugVariantConfigurationKey(item) === configurationKey,
-                  ) !== variantIndex,
-              );
-              const configurationUnavailable =
-                !modelName || !description || !instruction || duplicateConfiguration;
-              const stale = Boolean(
-                variant.runtimeSnapshot &&
-                  variant.runtimeSnapshot !==
-                    debugVariantSnapshot(draftSnapshot, variant),
-              );
+            {variants.map((variant) => {
+              const effectiveChanges = effectiveDebugChanges(draft, variant);
               const starting = variant.phase === "starting";
-              const ready = variant.phase === "ready" && !stale;
+              const ready = sessionReady && variant.phase === "ready";
               const busy = starting || variant.phase === "sending";
               const traceAvailable =
-                ready &&
-                variant.phase !== "sending" &&
+                !sessionStarting &&
+                (sessionReady || sessionPresentation.transcriptReadOnly) &&
                 variant.messages.some((message) => message.role === "assistant");
-              const startDisabled =
-                busy || variant.configOpen || configurationUnavailable;
-              const disabledReason = !modelName
-                ? "请先选择模型"
-                : !description
-                  ? "请填写描述"
-                  : !instruction
-                    ? "请填写系统提示词"
-                    : duplicateConfiguration
-                      ? "该配置与已有测试组相同"
-                      : "";
-              const startLabel = starting
-                ? "正在启动"
-                : stale
-                  ? "应用配置并重启"
-                  : ready
-                    ? "重新启动环境"
-                    : variant.phase === "error"
-                      ? "重新启动环境"
-                      : "启动环境";
+              const latestAssistant = [...variant.messages]
+                .reverse()
+                .find((message) => message.role === "assistant");
+              const hasLatestSuccess = Boolean(
+                latestAssistant &&
+                  !latestAssistant.error &&
+                  (latestAssistant.content || latestAssistant.blocks?.length),
+              );
               return (
                 <article
                   key={variant.id}
-                  className="cw-ab-card"
+                  className={`cw-ab-card${narrowVariantId === variant.id ? " is-narrow-selected" : ""}`}
                 >
-                  <div
-                    className={`cw-ab-card-inner${variant.configOpen ? " is-flipped" : ""}`}
-                  >
-                    <section
-                      className="cw-ab-card-face cw-ab-card-front"
-                      aria-hidden={variant.configOpen}
-                    >
                       <header className="cw-ab-card-head">
                         <div className="cw-ab-card-title">
                           <strong>{variant.name}</strong>
-                          <span>{variant.modelName || "默认模型"}</span>
+                          <span>
+                            {variant.id === "baseline"
+                              ? "当前 Draft（只读）"
+                              : effectiveChanges.length === 0
+                                ? "尚未修改配置"
+                                : effectiveChanges.length > 1 ||
+                                    variant.inputDiverged
+                                  ? `${new Set(effectiveChanges.map((change) => change.agentKey)).size} 个 Agent · ${effectiveChanges.length} 项变化 · 方案级结论`
+                                  : `${configurableAgents.find((item) => item.key === effectiveChanges[0].agentKey)?.name ?? effectiveChanges[0].agentKey} · ${
+                                    effectiveChanges[0].dimension === "model"
+                                      ? "模型"
+                                      : effectiveChanges[0].dimension === "instruction"
+                                        ? "系统提示词"
+                                        : "Skills"
+                                  } · 维度级归因`}
+                          </span>
+                          <em
+                            className={`cw-comparison-status ${sessionPresentation.cardStatusLabel ? "is-read-only" : `is-${variant.phase}`}`}
+                          >
+                            {sessionPresentation.cardStatusLabel ??
+                              (variant.phase === "starting"
+                                ? "正在启动"
+                                : variant.phase === "ready"
+                                  ? "环境就绪"
+                                  : variant.phase === "sending"
+                                    ? "正在运行"
+                                    : variant.phase === "error"
+                                      ? "运行失败"
+                                    : variant.phase === "canceled"
+                                        ? "已停止"
+                                        : "未启动")}
+                          </em>
+                          {baselineFailed && variant.id !== "baseline" && hasLatestSuccess ? (
+                            <em className="cw-comparison-repair-badge">故障修复证据</em>
+                          ) : null}
+                          {variant.inputDiverged ? (
+                            <em className="cw-comparison-diverged-badge">
+                              互动输入已分叉
+                            </em>
+                          ) : null}
                         </div>
                         <div className="cw-ab-card-actions">
-                          <button
+                          {variant.id !== "baseline" && <button
                             type="button"
                             className="cw-ab-config-trigger"
-                            disabled={variant.configOpen || busy}
+                            disabled={variant.configOpen || busy || sessionStarting}
                             onClick={() => onToggleConfig(variant.id)}
                           >
                             测试配置
-                          </button>
+                          </button>}
                           {variant.id !== "baseline" && (
                             <button
                               type="button"
                               className="cw-ab-remove"
                               aria-label={`删除${variant.name}`}
-                              disabled={variant.configOpen || busy}
+                              disabled={variant.configOpen || busy || sessionStarting}
                               onClick={() => onRemoveVariant(variant.id)}
                             >
                               <DebugVariantDeleteIcon className="cw-i" />
@@ -2279,6 +3446,57 @@ function DebugComparisonWorkspace({
                         </div>
                       </header>
 
+                      {variant.id !== "baseline" &&
+                        effectiveChanges.length > 0 && (
+                          <DebugVariantDifferenceSummary
+                            draft={draft}
+                            baselineApiKeys={baselineApiKeys}
+                            changes={effectiveChanges}
+                            configurableAgents={configurableAgents}
+                            variantName={variant.name}
+                          />
+                        )}
+
+                      {variant.id === "baseline" && (
+                        <section className="cw-comparison-baseline-config">
+                          <div className="cw-comparison-baseline-head">
+                            <h3>基准配置</h3>
+                            <button
+                              type="button"
+                              className="cw-link-btn"
+                              onClick={() => setBaselineDrawerOpen(true)}
+                            >
+                              查看全部配置
+                            </button>
+                          </div>
+                          {configurableAgents.map((agent) => {
+                            const agentDraft = getNode(draft, agent.path);
+                            return (
+                              <div
+                                className="cw-comparison-baseline-agent"
+                                key={agent.key}
+                              >
+                                <strong title={agent.name || agent.key}>
+                                  {agent.name || agent.key}
+                                </strong>
+                                <span
+                                  title={[
+                                    agentDraft.modelName || "Studio 默认 Model ID",
+                                    agentDraft.modelProvider || "Studio 默认 Provider",
+                                    agentDraft.modelApiBase || "Studio 默认 API Base",
+                                  ].join(" · ")}
+                                >
+                                  {agentDraft.modelName || "Studio 默认 Model ID"} · {agentDraft.modelProvider || "默认 Provider"}
+                                </span>
+                                <small>
+                                  提示词 {agentDraft.instruction.length} 字 · Skills {(agentDraft.selectedSkills ?? []).length} 个 · {baselineApiKeys[agent.key] ? "临时凭据已配置" : "服务端凭据"}
+                                </small>
+                              </div>
+                            );
+                          })}
+                        </section>
+                      )}
+
                       <div className="cw-ab-conversation">
                         {variant.error ? (
                           <DeploymentErrorMessage
@@ -2286,14 +3504,13 @@ function DebugComparisonWorkspace({
                             className="cw-debug-error-detail"
                             defaultExpanded
                           />
-                        ) : starting ? (
+                        ) : (starting ||
+                            (sessionStarting &&
+                              !sessionPresentation.transcriptReadOnly)) &&
+                          variant.messages.length === 0 ? (
                           <div className="cw-ab-empty cw-ab-starting">
                             <Loader2 className="cw-i cw-spin" />
                             <span>正在创建独立测试环境</span>
-                          </div>
-                        ) : stale ? (
-                          <div className="cw-ab-empty cw-ab-launch">
-                            <span>配置已变更，请重新启动此环境</span>
                           </div>
                         ) : variant.messages.length === 0 ? (
                           <div className="cw-ab-empty cw-ab-launch">
@@ -2306,7 +3523,7 @@ function DebugComparisonWorkspace({
                               </>
                             ) : (
                               <span className="cw-ab-launch-hint">
-                                {disabledReason || "启动环境后即可加入本轮测试"}
+                                开启 Session 后即可加入本轮测试
                               </span>
                             )}
                           </div>
@@ -2326,7 +3543,13 @@ function DebugComparisonWorkspace({
                                     defaultExpanded
                                   />
                                 ) : message.blocks && message.blocks.length > 0 ? (
-                                  <Blocks blocks={message.blocks} onAction={() => {}} />
+                                  <Blocks
+                                    blocks={message.blocks}
+                                    readOnly={sessionPresentation.transcriptReadOnly}
+                                    onAction={(action, node) =>
+                                      onVariantAction(variant.id, action, node)
+                                    }
+                                  />
                                 ) : message.content ? (
                                   message.content
                                 ) : index === variant.messages.length - 1 &&
@@ -2339,13 +3562,77 @@ function DebugComparisonWorkspace({
                         )}
                       </div>
 
+                      <dl className="cw-comparison-metrics" aria-label={`${variant.name}运行指标`}>
+                        <div>
+                          <dt>首字耗时</dt>
+                          <dd>{variant.ttftMs == null ? "—" : `${variant.ttftMs} ms`}</dd>
+                        </div>
+                        <div>
+                          <dt>总耗时</dt>
+                          <dd>{variant.latencyMs == null ? "—" : `${variant.latencyMs} ms`}</dd>
+                        </div>
+                        <div>
+                          <dt>Tools</dt>
+                          <dd>{variant.toolCalls == null ? "—" : variant.toolCalls}</dd>
+                        </div>
+                        <div>
+                          <dt>Tokens</dt>
+                          <dd>{variant.tokens == null ? "—" : variant.tokens.toLocaleString()}</dd>
+                        </div>
+                      </dl>
+
+                      {variant.id !== "baseline" && (
+                        <div className="cw-comparison-verdict">
+                          <label>
+                            <span>人工判定</span>
+                            <select
+                              value={variant.verdict}
+                              disabled={!sessionPresentation.verdictEditable}
+                              onChange={(event) =>
+                                sessionPresentation.verdictEditable &&
+                                  onVerdictChange(
+                                    variant.id,
+                                    event.target.value as DebugVariant["verdict"],
+                                    variant.verdictReason,
+                                  )
+                              }
+                            >
+                              <option value="">请选择</option>
+                              <option value="采用候选">采用候选</option>
+                              <option value="保留基线">保留基线</option>
+                              <option value="持平">持平</option>
+                              <option value="各有取舍">各有取舍</option>
+                              <option value="证据不足">证据不足</option>
+                            </select>
+                          </label>
+                          <label>
+                            <span>理由</span>
+                            <input
+                              value={variant.verdictReason}
+                              placeholder="采用候选前必填"
+                              disabled={!sessionPresentation.verdictEditable}
+                              onChange={(event) =>
+                                sessionPresentation.verdictEditable &&
+                                  onVerdictChange(
+                                    variant.id,
+                                    variant.verdict,
+                                    event.target.value,
+                                  )
+                              }
+                            />
+                          </label>
+                        </div>
+                      )}
+
                       <footer className="cw-ab-deploy-footer">
                         <button
                           type="button"
                           className="cw-ab-trace"
                           disabled={!traceAvailable}
                           title={
-                            traceAvailable
+                            sessionStarting
+                              ? "正在开启新 Session，完成后可查看调用链路"
+                              : traceAvailable
                               ? `查看${variant.name}调用链路`
                               : "完成一次调试后可查看调用链路"
                           }
@@ -2353,143 +3640,32 @@ function DebugComparisonWorkspace({
                         >
                           调用链路
                         </button>
-                        <button
-                          type="button"
-                          className="cw-ab-start cw-ab-footer-start"
-                          disabled={startDisabled}
-                          title={disabledReason || undefined}
-                          onClick={() => onStartVariant(variant.id)}
-                        >
-                          {ready || stale || variant.phase === "error" ? (
-                            <RefreshCw className="cw-i" />
-                          ) : (
-                            <DebugRunIcon className="cw-i cw-debug-run-icon" />
-                          )}
-                          {startLabel}
-                        </button>
-                        <button
+                        {(ready || busy) && (
+                          <button
+                            type="button"
+                            className="cw-ab-trace"
+                            disabled={!sessionReady}
+                            onClick={() => onStopVariant(variant.id)}
+                          >
+                            停止
+                          </button>
+                        )}
+                        {variant.id !== "baseline" && <button
                           type="button"
                           className="cw-ab-deploy"
-                          disabled={busy || !modelName}
+                          disabled={
+                            !sessionReady ||
+                            busy ||
+                            variant.id === "baseline" ||
+                            variant.verdict !== "采用候选" ||
+                            !variant.verdictReason.trim() ||
+                            !hasLatestSuccess
+                          }
                           onClick={() => onDeployVariant(variant.id)}
                         >
-                          部署该配置
-                        </button>
+                          采用候选
+                        </button>}
                       </footer>
-
-                    </section>
-
-                    <section
-                      className="cw-ab-card-face cw-ab-card-back"
-                      aria-hidden={!variant.configOpen}
-                    >
-                      <header className="cw-ab-config-head">
-                        <div>
-                          <strong>测试配置</strong>
-                          <span>{variant.name}</span>
-                        </div>
-                        <div className="cw-ab-config-head-actions">
-                          {variant.id !== "baseline" && (
-                            <button
-                              type="button"
-                              className="cw-icon-btn cw-icon-danger cw-ab-config-remove"
-                              aria-label={`删除${variant.name}`}
-                              title="删除配置组"
-                              disabled={busy}
-                              onClick={() => onRemoveVariant(variant.id)}
-                            >
-                              <DebugVariantDeleteIcon className="cw-i cw-i-sm" />
-                            </button>
-                          )}
-                          <span
-                            className={`cw-ab-config-done-wrap${disabledReason ? " is-disabled" : ""}`}
-                            tabIndex={disabledReason ? 0 : undefined}
-                          >
-                            <button
-                              type="button"
-                              className="cw-ab-config-done"
-                              disabled={
-                                !variant.configOpen || configurationUnavailable
-                              }
-                              onClick={() => onCompleteConfig(variant.id)}
-                            >
-                              {variant.id === "baseline" ? "完成配置" : "完成并启动"}
-                            </button>
-                            {disabledReason && (
-                              <span className="cw-ab-config-done-tip" role="tooltip">
-                                {disabledReason}
-                              </span>
-                            )}
-                          </span>
-                        </div>
-                      </header>
-                      <div className="cw-ab-config">
-                        <label>
-                          <span>模型</span>
-                          <input
-                            value={variant.modelName}
-                            placeholder="使用 Agent 当前模型"
-                            disabled={!variant.configOpen}
-                            onChange={(event) =>
-                              onConfigChange(
-                                variant.id,
-                                "modelName",
-                                event.target.value,
-                              )
-                            }
-                          />
-                        </label>
-                        <label>
-                          <span>描述</span>
-                          <textarea
-                            rows={2}
-                            value={variant.description}
-                            disabled={!variant.configOpen}
-                            onChange={(event) =>
-                              onConfigChange(
-                                variant.id,
-                                "description",
-                                event.target.value,
-                              )
-                            }
-                          />
-                        </label>
-                        <label>
-                          <span>系统提示词</span>
-                          <textarea
-                            rows={5}
-                            value={variant.instruction}
-                            disabled={!variant.configOpen}
-                            onChange={(event) =>
-                              onConfigChange(
-                                variant.id,
-                                "instruction",
-                                event.target.value,
-                              )
-                            }
-                          />
-                        </label>
-                        <fieldset className="cw-ab-optimizations-disabled">
-                          <legend>
-                            <span>优化选项</span>
-                            <em>待开放</em>
-                          </legend>
-                          <div className="cw-ab-optimization-list">
-                            {DEBUG_OPTIMIZATIONS.map((item) => (
-                              <Checkbox
-                                key={item.id}
-                                checked={variant.optimizations.includes(item.id)}
-                                disabled
-                                label={item.label}
-                                className="cw-ab-optimization-checkbox"
-                              />
-                            ))}
-                          </div>
-                        </fieldset>
-                        <p>设置完成后返回正面，再启动当前测试环境。</p>
-                      </div>
-                    </section>
-                  </div>
                 </article>
               );
             })}
@@ -2504,12 +3680,13 @@ function DebugComparisonWorkspace({
             className="cw-debug-input"
             rows={1}
             value={input}
-            placeholder={
-              canSend
-                ? "输入测试消息，将发送到所有已启动测试组..."
-                : "请先启动至少一个测试组"
+            placeholder={sessionPresentation.composerPlaceholder}
+            disabled={sessionPresentation.composerDisabled}
+            aria-describedby={
+              sessionPresentation.showAlert
+                ? "cw-comparison-session-warning"
+                : undefined
             }
-            disabled={!canSend}
             onChange={(e) => onInput(e.target.value)}
             onKeyDown={(e) => {
               if (isImeCompositionEvent(e.nativeEvent)) return;
@@ -2533,17 +3710,94 @@ function DebugComparisonWorkspace({
             )}
           </button>
         </div>
-        {enabled && variants.length < 3 && (
-          <button
-            type="button"
-            className="cw-btn cw-btn-soft cw-ab-add"
-            onClick={onAddVariant}
-          >
-            <Plus className="cw-i" />
-            添加对照组
-          </button>
-        )}
       </div>
+      {editingVariant ? (
+        <DebugVariantConfigurationPanel
+          variant={editingVariant}
+          variants={variants}
+          draft={draft}
+          busy={
+            sessionStarting ||
+            ["starting", "sending"].includes(editingVariant.phase)
+          }
+          onClose={() => onToggleConfig(editingVariant.id)}
+          onRemoveVariant={onRemoveVariant}
+          onCompleteConfig={onCompleteConfig}
+          onSelectChange={onSelectChange}
+          onRemoveChange={onRemoveChange}
+          onConfigChange={onConfigChange}
+          onSkillsChange={onSkillsChange}
+          onToggleApiKey={onToggleApiKey}
+        />
+      ) : null}
+      {baselineDrawerOpen ? (
+        <ComparisonDrawer
+          title="基准配置"
+          description="当前 Draft 的只读快照。凭据只展示来源状态，不显示明文。"
+          width="wide"
+          closeLabel="关闭基准配置"
+          onClose={() => setBaselineDrawerOpen(false)}
+        >
+          <div className="cw-comparison-baseline-detail">
+            {configurableAgents.map((agent) => {
+              const agentDraft = getNode(draft, agent.path);
+              return (
+                <section key={agent.key}>
+                  <h3>{agent.name || agent.key}</h3>
+                  <dl>
+                    <div><dt>Model ID</dt><dd>{agentDraft.modelName || "Studio 默认值"}</dd></div>
+                    <div><dt>Provider</dt><dd>{agentDraft.modelProvider || "Studio 默认值"}</dd></div>
+                    <div><dt>API Base</dt><dd>{agentDraft.modelApiBase || "Studio 默认值"}</dd></div>
+                    <div><dt>API Key</dt><dd>{baselineApiKeys[agent.key] ? "已配置临时凭据" : "由 Studio 服务端凭据解析"}</dd></div>
+                    <div className="is-long"><dt>系统提示词</dt><dd>{agentDraft.instruction || "未配置"}</dd></div>
+                    <div className="is-long"><dt>Skills</dt><dd>{(agentDraft.selectedSkills ?? []).length ? (agentDraft.selectedSkills ?? []).map((skill) => `${skill.name || skill.folder}${skill.version ? `@${skill.version}` : ""}`).join("、") : "未配置"}</dd></div>
+                  </dl>
+                </section>
+              );
+            })}
+          </div>
+        </ComparisonDrawer>
+      ) : null}
+      {historyDrawerOpen ? (
+        <ComparisonDrawer
+          title="最近对照记录"
+          description="最多保留当前 Draft 最近 20 条判断摘要。调试环境释放后，Trace 证据可能不可打开。"
+          width="wide"
+          closeLabel="关闭最近对照记录"
+          onClose={() => setHistoryDrawerOpen(false)}
+        >
+          {history.length ? (
+            <div className="cw-comparison-history-table-wrap">
+              <table className="cw-comparison-history-table">
+                <thead>
+                  <tr>
+                    <th>时间</th>
+                    <th>候选</th>
+                    <th>判定</th>
+                    <th>Tokens</th>
+                    <th>证据</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map((record) => (
+                    <tr key={`${record.timestamp}:${record.runId}`}>
+                      <td>{new Date(record.timestamp).toLocaleString()}</td>
+                      <td title={record.reason}>{record.candidateName}</td>
+                      <td>{record.verdict}</td>
+                      <td>{record.metrics.tokens ?? "—"}</td>
+                      <td>{record.traceId || record.sessionId ? "运行时可用" : "不可用"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="cw-comparison-drawer-empty">
+              完成候选判断并采用后，这里会保存对照摘要。
+            </div>
+          )}
+        </ComparisonDrawer>
+      ) : null}
     </section>
   );
 }
@@ -2556,29 +3810,6 @@ const WORKSPACE_MODES: Array<{
   { id: "validate", label: "调试" },
   { id: "publish", label: "发布" },
 ];
-
-const DEBUG_OPTIMIZATIONS = [
-  {
-    id: "context",
-    label: "上下文优化",
-    description: "压缩历史对话，保留与当前任务相关的信息",
-  },
-  {
-    id: "grounding",
-    label: "幻觉抑制",
-    description: "对不确定内容要求依据，并明确表达未知",
-  },
-  {
-    id: "tools",
-    label: "工具调用优化",
-    description: "减少重复调用，优先复用可信的工具结果",
-  },
-  {
-    id: "latency",
-    label: "响应加速",
-    description: "缓存稳定上下文，降低重复推理开销",
-  },
-] as const;
 
 function WorkspaceHeader({ mode }: { mode: WorkspaceMode }) {
   const title =
@@ -2627,7 +3858,26 @@ function WorkspaceLifecycleFooter({
         {assistant ? (
           <div className="cw-workspace-ai-slot">{assistant}</div>
         ) : null}
-        {mode === "publish" ? (
+        {mode === "build" ? (
+          <div className="cw-workspace-build-actions">
+            <button
+              type="button"
+              className="cw-workspace-nav-button"
+              disabled={busy}
+              onClick={() => onChange("validate")}
+            >
+              进入调试
+            </button>
+            <button
+              type="button"
+              className="cw-workspace-nav-button is-primary"
+              disabled={busy}
+              onClick={() => onChange("publish")}
+            >
+              跳过调试，直接发布
+            </button>
+          </div>
+        ) : mode === "publish" ? (
           <div
             id="cw-publish-primary-action"
             className="cw-publish-action-slot"
@@ -2777,9 +4027,23 @@ export function CustomCreate({
         id: "baseline",
         name: "基准组",
         modelName: defaultDebugModelName(initialProviderDraft),
-        description: initialProviderDraft.description,
+        modelProvider: initialProviderDraft.modelProvider ?? "",
+        modelApiBase: initialProviderDraft.modelApiBase ?? "",
+        apiKey: "",
+        apiKeyLocked: false,
+        apiKeyVisible: false,
         instruction: initialProviderDraft.instruction,
-        optimizations: [],
+        selectedSkills: initialProviderDraft.selectedSkills ?? [],
+        agentKey: "root",
+        dimension: "model",
+        additionalChanges: [],
+        verdict: "",
+        verdictReason: "",
+        ttftMs: null,
+        latencyMs: null,
+        toolCalls: null,
+        tokens: null,
+        inputDiverged: false,
         configOpen: false,
         phase: "idle",
         runtimeSnapshot: "",
@@ -2789,8 +4053,28 @@ export function CustomCreate({
     ];
   });
   const [selectedVariantId, setSelectedVariantId] = useState("baseline");
+  const [comparisonFingerprint, setComparisonFingerprint] = useState("");
+  const [comparisonSessionState, setComparisonSessionState] =
+    useState<ComparisonSessionState>(() => createComparisonSessionState());
+  const comparisonSessionStateRef = useRef(comparisonSessionState);
+  comparisonSessionStateRef.current = comparisonSessionState;
+  const comparisonSessionAttemptRef = useRef(0);
+  const comparisonSessionStatusValue = comparisonSessionStatus(
+    comparisonSessionState,
+  );
+  const sessionReadOnly =
+    comparisonSessionState.activeSessionRevision !== null &&
+    comparisonSessionStatusValue !== "ready";
+  const comparisonRoundIdRef = useRef("");
+  const undoDraftRef = useRef<AgentDraft | null>(null);
+  const undoModelApiKeysRef = useRef<Record<string, string> | null>(null);
+  const [canUndoCandidate, setCanUndoCandidate] = useState(false);
+  const [comparisonHistoryRevision, setComparisonHistoryRevision] = useState(0);
+  const comparisonHistory = useMemo(
+    () => readComparisonRecords(draft.name || "untitled-draft"),
+    [draft.name, comparisonHistoryRevision],
+  );
   const debugVariantSequenceRef = useRef(1);
-  const baselineModelEditedRef = useRef(false);
   const debugRunsRef = useRef(
     new Map<string, { run: GeneratedAgentTestRun; sessionId: string }>(),
   );
@@ -2798,12 +4082,23 @@ export function CustomCreate({
   const [debugInput, setDebugInput] = useState("");
   const [debugTraceTarget, setDebugTraceTarget] =
     useState<DebugTraceTarget | null>(null);
+  const [debugComparisonTraceTargets, setDebugComparisonTraceTargets] =
+    useState<ComparisonTraceTarget[] | null>(null);
   const [debugLeaveConfirmOpen, setDebugLeaveConfirmOpen] = useState(false);
   const [debugLeaveCleaning, setDebugLeaveCleaning] = useState(false);
+  const [debugActionConfirm, setDebugActionConfirm] =
+    useState<DebugActionConfirm | null>(null);
   const debugLeaveConfirmResolverRef =
     useRef<((confirmed: boolean) => void) | null>(null);
   const [buildErr, setBuildErr] = useState("");
   const [modelAdvancedOpen, setModelAdvancedOpen] = useState(false);
+  const [modelApiKeys, setModelApiKeys] = useState<Record<string, string>>({});
+  const [revealedModelApiKeys, setRevealedModelApiKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [lockedModelApiKeys, setLockedModelApiKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [a2aRegistryAdvancedOpen, setA2aRegistryAdvancedOpen] =
     useState(false);
 
@@ -2836,6 +4131,7 @@ export function CustomCreate({
   useEffect(() => {
     void cleanupStoredDebugRuns();
     return () => {
+      comparisonSessionAttemptRef.current += 1;
       for (const { run } of debugRunsRef.current.values()) {
         deleteGeneratedAgentTestRun(run.runId)
           .then(() => forgetDebugTestRun(run.runId))
@@ -2884,6 +4180,14 @@ export function CustomCreate({
   // removed the previously-selected node). `patch` always edits this node.
   const safePath = pathExists(draft, selectedPath) ? selectedPath : [];
   const node = getNode(draft, safePath);
+  const selectedModelSecretKey = nodePathKey(safePath);
+  const selectedModelApiKey = modelApiKeys[selectedModelSecretKey] ?? "";
+  const selectedModelApiKeyLocked = lockedModelApiKeys.has(
+    selectedModelSecretKey,
+  );
+  const selectedModelApiKeyRevealed = revealedModelApiKeys.has(
+    selectedModelSecretKey,
+  );
   const isRootAgent = safePath.length === 0;
   const modelAdvancedId = `cw-model-advanced-${safePath.join("-") || "root"}`;
   const a2aRegistryAdvancedId = `cw-a2a-registry-advanced-${
@@ -3135,7 +4439,13 @@ export function CustomCreate({
   };
 
   const cleanupDebugRuns = async () => {
+    comparisonSessionAttemptRef.current += 1;
+    comparisonRoundIdRef.current = "";
+    const resetSessionState = resetComparisonSessionState();
+    comparisonSessionStateRef.current = resetSessionState;
+    setComparisonSessionState(resetSessionState);
     setDebugTraceTarget(null);
+    setDebugComparisonTraceTargets(null);
     const runs = [...debugRunsRef.current.values()];
     debugRunsRef.current.clear();
     setActiveDebugRunCount(0);
@@ -3184,6 +4494,31 @@ export function CustomCreate({
     });
   };
 
+  const openDebugComparisonTrace = () => {
+    const targets = debugVariants.flatMap((variant) => {
+      const runtime = debugRunsRef.current.get(variant.id);
+      const hasAssistant = variant.messages.some(
+        (message) => message.role === "assistant",
+      );
+      return runtime && hasAssistant
+        ? [
+            {
+              id: variant.id,
+              name: variant.name,
+              runId: runtime.run.runId,
+              sessionId: runtime.sessionId,
+            },
+          ]
+        : [];
+    });
+    if (
+      targets.some((target) => target.id === "baseline") &&
+      targets.some((target) => target.id !== "baseline")
+    ) {
+      setDebugComparisonTraceTargets(targets);
+    }
+  };
+
   const resolveDebugLeaveConfirm = (confirmed: boolean) => {
     const resolve = debugLeaveConfirmResolverRef.current;
     debugLeaveConfirmResolverRef.current = null;
@@ -3209,7 +4544,10 @@ export function CustomCreate({
   };
 
   const confirmLeaveDebug = async () => {
-    if (workspaceMode !== "validate" || activeDebugRunCount === 0) return true;
+    if (workspaceMode !== "validate") return true;
+    const pendingSessionStart =
+      comparisonSessionStateRef.current.pendingSessionRevision !== null;
+    if (activeDebugRunCount === 0 && !pendingSessionStart) return true;
     if (debugLeaveConfirmResolverRef.current) return false;
     return new Promise<boolean>((resolve) => {
       debugLeaveConfirmResolverRef.current = resolve;
@@ -3242,12 +4580,7 @@ export function CustomCreate({
         : selectedDebugVariant;
       if (releaseVariant) setSelectedVariantId(releaseVariant.id);
       const releaseDraft = releaseVariant
-        ? {
-            ...providerDraft,
-            modelName: releaseVariant.modelName || providerDraft.modelName,
-            description: releaseVariant.description,
-            instruction: releaseVariant.instruction,
-          }
+        ? draftForDebugVariant(providerDraft, releaseVariant)
         : providerDraft;
       const generated = await generateAgentProject(codegenDraft(releaseDraft));
       if (releaseDraft !== draft) setDraft(releaseDraft);
@@ -3260,126 +4593,301 @@ export function CustomCreate({
     }
   };
 
-  const startDebugVariant = async (id: string) => {
-    if (!debugEnabled || building) return;
-    if (!requireCompleteDraft()) return;
-    const variant = debugVariants.find((item) => item.id === id);
-    if (!variant || variant.phase === "starting" || variant.phase === "sending") {
-      return;
-    }
-    const modelName = variant.modelName.trim();
-    const description = variant.description.trim();
-    const instruction = variant.instruction.trim();
-    const configurationKey = debugVariantConfigurationKey(variant);
-    const variantIndex = debugVariants.findIndex((item) => item.id === id);
-    const firstMatchingIndex = debugVariants.findIndex(
-      (item) => debugVariantConfigurationKey(item) === configurationKey,
-    );
-    if (
-      !modelName ||
-      !description ||
-      !instruction ||
-      firstMatchingIndex !== variantIndex
-    ) return;
+  const markComparisonConfigChanged = (changed = true) => {
+    if (!changed) return;
+    setComparisonSessionState((current) => {
+      const next = markComparisonConfigurationChanged(current, true);
+      comparisonSessionStateRef.current = next;
+      return next;
+    });
+  };
 
-    const snapshot = debugVariantSnapshot(currentDebugSnapshot, variant);
-    setDebugVariants((current) =>
-      current.map((item) =>
-        item.id === id
-          ? {
-              ...item,
-              configOpen: false,
-              phase: "starting",
-              messages: [],
-              error: null,
-            }
-          : item,
-      ),
-    );
-    setDebugInput("");
+  const comparisonSessionProblem = () =>
+    debugComparisonSessionProblem(draft, debugVariants, modelApiKeys);
 
-    let createdRun: GeneratedAgentTestRun | null = null;
-    let failedPhase: AgentDebugFailedProps["failedPhase"] = "unknown";
-    const variantType = id === "baseline" ? "baseline" : "comparison";
+  const createDebugVariantRuntime = async (
+    variant: DebugVariant,
+    comparisonId: string,
+  ): Promise<PreparedDebugRuntime> => {
     const operation = beginAgentDebug({
       agentId: String(providerDraft.name || "unknown"),
-      variantType,
+      variantType: variant.id === "baseline" ? "baseline" : "comparison",
     });
+    let failedPhase: AgentDebugFailedProps["failedPhase"] = "create_test_run";
+    let run: GeneratedAgentTestRun | null = null;
+
     try {
-      await cleanupDebugVariantRun(id);
-      await cleanupStoredDebugRuns();
-      const variantDraft: AgentDraft = {
-        ...providerDraft,
-        modelName: variant.modelName || providerDraft.modelName,
-        description: variant.description,
-        instruction: variant.instruction,
-      };
-      failedPhase = "create_test_run";
-      createdRun = await createGeneratedAgentTestRun(
-        debugRuntimeDraft(variantDraft),
-        deploymentTarget
-          ? {
-              runtimeId: deploymentTarget.runtimeId,
-              region: deploymentTarget.region,
-            }
-          : undefined,
+      const variantDraft = draftForDebugVariant(providerDraft, variant);
+      const configurableAgents = listConfigurableAgents(variantDraft);
+      const modelCredentials = configurableAgents
+        .map(({ path, key }) => ({
+          agentPath: path,
+          apiKey: debugApiKeyForAgent(variant, key, modelApiKeys),
+        }))
+        .filter(({ apiKey }) => apiKey.trim().length > 0);
+      const runtimeSnapshot = debugVariantSnapshot(
+        currentDebugSnapshot,
+        variant,
       );
-      rememberDebugTestRun(createdRun.runId);
-      failedPhase = "create_test_session";
-      const sessionId = await createGeneratedAgentTestSession(
-        createdRun.runId,
-        "test_user",
-      );
-      debugRunsRef.current.set(id, { run: createdRun, sessionId });
-      setActiveDebugRunCount(debugRunsRef.current.size);
-      setDebugVariants((current) =>
-        current.map((item) =>
-          item.id === id
-            ? { ...item, phase: "ready", runtimeSnapshot: snapshot }
-            : item,
-        ),
-      );
-      operation.succeed({ debugRunId: String(createdRun.runId) });
-    } catch (err) {
-      if (createdRun) {
-        try {
-          await deleteGeneratedAgentTestRun(createdRun.runId);
-          forgetDebugTestRun(createdRun.runId);
-        } catch (cleanupError) {
-          console.warn("清理调试运行失败", cleanupError);
+
+      for (const { path, key } of configurableAgents) {
+        const modelNode = getNode(variantDraft, path);
+        const validation = validateModelConnection({
+          modelName: modelNode.modelName ?? "",
+          modelProvider: modelNode.modelProvider ?? "",
+          modelApiBase: modelNode.modelApiBase ?? "",
+          apiKey: debugApiKeyForAgent(variant, key, modelApiKeys),
+          studioApiBase: defaultModelApiBase(
+            variantDraft.cloudProvider ?? cloudProvider,
+          ),
+        });
+        if (!validation.ok) {
+          throw new DebugRuntimePreparationError("run", validation.reason);
         }
       }
-      setDebugVariants((current) =>
-        current.map((item) =>
-          item.id === id
-            ? {
-                ...item,
-                phase: "error",
-                runtimeSnapshot: "",
-                error: err instanceof Error ? err.message : String(err),
-              }
-            : item,
+
+      try {
+        run = await createGeneratedAgentTestRun(
+          debugRuntimeDraft(variantDraft),
+          {
+            runtime: deploymentTarget
+              ? {
+                  runtimeId: deploymentTarget.runtimeId,
+                  region: deploymentTarget.region,
+                }
+              : undefined,
+            modelCredentials,
+            comparisonId,
+          },
+        );
+      } catch (error) {
+        throw new DebugRuntimePreparationError(
+          "run",
+          debugRuntimeFailureMessage(error),
+        );
+      }
+      rememberDebugTestRun(run.runId);
+
+      failedPhase = "create_test_session";
+      let sessionId: string;
+      try {
+        sessionId = await createGeneratedAgentTestSession(
+          run.runId,
+          "test_user",
+        );
+      } catch {
+        try {
+          await deleteGeneratedAgentTestRun(run.runId);
+        } catch {
+          console.warn("清理调试运行失败");
+        } finally {
+          forgetDebugTestRun(run.runId);
+        }
+        throw new DebugRuntimePreparationError(
+          "session",
+          "创建 ADK Session 失败，请稍后重试。",
+        );
+      }
+
+      operation.succeed({ debugRunId: String(run.runId) });
+      return {
+        runtime: { run, sessionId },
+        runtimeSnapshot,
+        credentialAgentPaths: modelCredentials.map(
+          ({ agentPath }) => agentPath,
         ),
-      );
+      };
+    } catch (error) {
       operation.fail({
         failedPhase,
-        ...classifyTelemetryError(err, { phase: failedPhase }),
+        ...classifyTelemetryError(error, { phase: failedPhase }),
       });
+      throw error;
     }
   };
 
-  const sendDebugMessage = async () => {
-    const text = debugInput.trim();
-    const targets = debugVariants.filter(
-      (variant) =>
-        variant.phase === "ready" &&
-        variant.runtimeSnapshot ===
-          debugVariantSnapshot(currentDebugSnapshot, variant) &&
-        debugRunsRef.current.has(variant.id),
-    );
-    if (!text || targets.length === 0) return;
+  const cleanupPreparedDebugRuntime = async (
+    prepared: PreparedDebugRuntime,
+  ) => {
+    try {
+      await deleteGeneratedAgentTestRun(prepared.runtime.run.runId);
+    } finally {
+      forgetDebugTestRun(prepared.runtime.run.runId);
+    }
+  };
 
+  const startNewComparisonSession = async (confirmed = false) => {
+    if (
+      !debugEnabled ||
+      building ||
+      comparisonSessionStatusValue === "starting" ||
+      comparisonSessionStateRef.current.pendingSessionRevision !== null
+    ) {
+      return;
+    }
+    if (!requireCompleteDraft() || comparisonSessionProblem()) return;
+    if (
+      comparisonSessionState.activeSessionRevision !== null &&
+      !confirmed
+    ) {
+      setDebugActionConfirm({
+        kind: "new-session",
+        variantCount: debugVariants.length,
+      });
+      return;
+    }
+
+    const attemptedRevision = comparisonSessionState.configurationRevision;
+    const attemptId = ++comparisonSessionAttemptRef.current;
+    const nextComparisonId = globalThis.crypto.randomUUID();
+    setComparisonSessionState((current) => {
+      const next = beginComparisonSession(current);
+      comparisonSessionStateRef.current = next;
+      return next;
+    });
+
+    const staged = await stageComparisonRuntimes(
+      debugVariants,
+      (variant) => createDebugVariantRuntime(variant, nextComparisonId),
+      cleanupPreparedDebugRuntime,
+    );
+
+    const latestSessionState = comparisonSessionStateRef.current;
+    const attemptIsObsolete =
+      attemptId !== comparisonSessionAttemptRef.current ||
+      latestSessionState.pendingSessionRevision !== attemptedRevision ||
+      latestSessionState.configurationRevision !== attemptedRevision;
+
+    if (!staged.ok) {
+      if (attemptIsObsolete) return;
+      const failedVariant = debugVariants.find(
+        (variant) => variant.id === staged.failedTargetId,
+      );
+      const preparationError =
+        staged.error instanceof DebugRuntimePreparationError
+          ? staged.error
+          : new DebugRuntimePreparationError(
+              "run",
+              "调试环境启动失败，请稍后重试。",
+            );
+      setComparisonSessionState((current) => {
+        const next = failComparisonSession(current, attemptedRevision, {
+          variantId: staged.failedTargetId,
+          variantName: failedVariant?.name ?? staged.failedTargetId,
+          stage: preparationError.stage,
+          message: preparationError.message,
+        });
+        comparisonSessionStateRef.current = next;
+        return next;
+      });
+      setDebugActionConfirm(null);
+      return;
+    }
+
+    if (attemptIsObsolete) {
+      await Promise.allSettled(
+        [...staged.runtimes.values()].map(cleanupPreparedDebugRuntime),
+      );
+      return;
+    }
+
+    const oldRuntimes = debugRunsRef.current;
+    const preparedByVariant = staged.runtimes;
+    debugRunsRef.current = new Map(
+      [...preparedByVariant].map(([variantId, prepared]) => [
+        variantId,
+        prepared.runtime,
+      ]),
+    );
+    setActiveDebugRunCount(debugRunsRef.current.size);
+    comparisonRoundIdRef.current = nextComparisonId;
+    setDebugTraceTarget(null);
+    setDebugComparisonTraceTargets(null);
+
+    const credentialPathKeys = new Set(
+      [...preparedByVariant.values()].flatMap((prepared) =>
+        prepared.credentialAgentPaths.map(nodePathKey),
+      ),
+    );
+    setLockedModelApiKeys(new Set(credentialPathKeys));
+    setRevealedModelApiKeys((current) => {
+      const next = new Set(current);
+      credentialPathKeys.forEach((pathKey) => next.delete(pathKey));
+      return next;
+    });
+    setDebugVariants((current) =>
+      current.map((variant) => {
+        const prepared = preparedByVariant.get(variant.id);
+        if (!prepared) return variant;
+        const variantDraft = draftForDebugVariant(draft, variant);
+        const agentPaths = new Map(
+          listConfigurableAgents(variantDraft).map(({ key, path }) => [
+            key,
+            nodePathKey(path),
+          ]),
+        );
+        const preparedCredentialPaths = new Set(
+          prepared.credentialAgentPaths.map(nodePathKey),
+        );
+        const credentialWasUsed = (change: DebugVariantChange) =>
+          change.dimension === "model" &&
+          preparedCredentialPaths.has(agentPaths.get(change.agentKey) ?? "");
+        return {
+          ...variant,
+          configOpen: false,
+          phase: "ready",
+          runtimeSnapshot: prepared.runtimeSnapshot,
+          apiKeyLocked: credentialWasUsed(primaryDebugChange(variant)),
+          apiKeyVisible: false,
+          additionalChanges: variant.additionalChanges.map((change) => ({
+            ...change,
+            apiKeyLocked: credentialWasUsed(change),
+            apiKeyVisible: false,
+          })),
+          messages: [],
+          ttftMs: null,
+          latencyMs: null,
+          toolCalls: null,
+          tokens: null,
+          error: null,
+          verdict: "",
+          verdictReason: "",
+          inputDiverged: false,
+        };
+      }),
+    );
     setDebugInput("");
+    setComparisonSessionState((current) => {
+      const next = completeComparisonSession(current, attemptedRevision);
+      comparisonSessionStateRef.current = next;
+      return next;
+    });
+    setDebugActionConfirm(null);
+
+    const cleanupResults = await Promise.allSettled(
+      [...oldRuntimes.values()].map(async ({ run }) => {
+        try {
+          await deleteGeneratedAgentTestRun(run.runId);
+        } finally {
+          forgetDebugTestRun(run.runId);
+        }
+      }),
+    );
+    if (cleanupResults.some((result) => result.status === "rejected")) {
+      console.warn("清理调试运行失败");
+    }
+  };
+
+  const sendDebugText = async (text: string, targets: DebugVariant[]) => {
+    if (
+      !text ||
+      targets.length === 0 ||
+      sessionReadOnly ||
+      comparisonSessionStatusValue !== "ready"
+    ) {
+      return;
+    }
+
     const targetIds = new Set(targets.map((variant) => variant.id));
     setDebugVariants((current) =>
       current.map((variant) =>
@@ -3387,6 +4895,10 @@ export function CustomCreate({
           ? {
               ...variant,
               phase: "sending",
+              ttftMs: null,
+              latencyMs: null,
+              toolCalls: null,
+              tokens: null,
               messages: [
                 ...variant.messages,
                 { role: "user", content: text },
@@ -3399,10 +4911,12 @@ export function CustomCreate({
 
     await Promise.all(
       targets.map(async (variant) => {
+        const startedAt = performance.now();
         const runtime = debugRunsRef.current.get(variant.id);
         if (!runtime) return;
         try {
           let acc = emptyAcc();
+          let firstVisibleAt: number | null = null;
           for await (const event of runGeneratedAgentTestSSE({
             runId: runtime.run.runId,
             userId: "test_user",
@@ -3411,7 +4925,17 @@ export function CustomCreate({
           })) {
             const eventError =
               event.error || event.errorMessage || event.error_message;
+            const usage = event.usageMetadata ?? event.usage_metadata;
             if (!eventError) acc = applyEvent(acc, event);
+            if (
+              !eventError &&
+              firstVisibleAt == null &&
+              acc.blocks.some(
+                (block) => block.kind === "text" && block.text.length > 0,
+              )
+            ) {
+              firstVisibleAt = performance.now();
+            }
             setDebugVariants((current) =>
               current.map((item) => {
                 if (item.id !== variant.id) return item;
@@ -3427,7 +4951,18 @@ export function CustomCreate({
                   last.blocks = acc.blocks;
                 }
                 messages[messages.length - 1] = last;
-                return { ...item, messages };
+                return {
+                  ...item,
+                  messages,
+                  ttftMs:
+                    firstVisibleAt == null
+                      ? item.ttftMs
+                      : Math.round(firstVisibleAt - startedAt),
+                  toolCalls: acc.blocks.filter(
+                    (block) => block.kind === "tool" && block.done,
+                  ).length,
+                  tokens: usage?.totalTokenCount ?? item.tokens,
+                };
               }),
             );
             if (eventError) break;
@@ -3446,7 +4981,15 @@ export function CustomCreate({
         } finally {
           setDebugVariants((current) =>
             current.map((item) =>
-              item.id === variant.id ? { ...item, phase: "ready" } : item,
+              item.id === variant.id
+                ? item.phase === "canceled"
+                  ? item
+                  : {
+                    ...item,
+                    phase: "ready",
+                    latencyMs: Math.round(performance.now() - startedAt),
+                  }
+                : item,
             ),
           );
         }
@@ -3454,20 +4997,91 @@ export function CustomCreate({
     );
   };
 
+  const sendDebugMessage = async () => {
+    if (sessionReadOnly || comparisonSessionStatusValue !== "ready") return;
+    const text = debugInput.trim();
+    const targets = debugVariants.filter(
+      (variant) =>
+        variant.phase === "ready" &&
+        !variant.configOpen &&
+        variant.runtimeSnapshot ===
+          debugVariantSnapshot(currentDebugSnapshot, variant) &&
+        debugRunsRef.current.has(variant.id),
+    );
+    if (!text || targets.length === 0) return;
+    setDebugInput("");
+    await sendDebugText(text, targets);
+  };
+
+  const handleDebugVariantAction = (
+    variantId: string,
+    action: A2uiAction | undefined,
+    node: A2uiComponent,
+  ) => {
+    if (sessionReadOnly || comparisonSessionStatusValue !== "ready") return;
+    const actionName = action?.event?.name ?? node.id;
+    const text = `[ui-action] ${actionName}: ${JSON.stringify(action?.event?.context ?? {})}`;
+    const runningTargets = debugVariants.filter(
+      (variant) =>
+        variant.phase === "ready" &&
+        !variant.configOpen &&
+        variant.runtimeSnapshot ===
+          debugVariantSnapshot(currentDebugSnapshot, variant) &&
+        debugRunsRef.current.has(variant.id),
+    );
+    const matchingTargets = runningTargets.filter((variant) =>
+      debugVariantHasA2uiAction(variant, actionName, node.id),
+    );
+    const shareAction =
+      runningTargets.length > 0 &&
+      matchingTargets.length === runningTargets.length;
+    const targets = shareAction
+      ? runningTargets
+      : runningTargets.filter((variant) => variant.id === variantId);
+    if (!shareAction) {
+      const runningIds = new Set(runningTargets.map((variant) => variant.id));
+      setDebugVariants((current) =>
+        current.map((variant) =>
+          runningIds.has(variant.id)
+            ? { ...variant, inputDiverged: true }
+            : variant,
+        ),
+      );
+    }
+    void sendDebugText(text, targets);
+  };
+
   const addDebugVariant = () => {
+    if (debugVariants.length >= 4) return;
+    const initialAgent = firstConfigurableAgent(draft);
+    if (!initialAgent) return;
+    const sequence = debugVariantSequenceRef.current++;
+    const id = `variant-${sequence}`;
+    const initialTarget = getNode(draft, initialAgent.path);
     setDebugVariants((current) => {
-      if (current.length >= 3) return current;
-      const sequence = debugVariantSequenceRef.current++;
-      const id = `variant-${sequence}`;
       return [
-        ...current,
+        ...current.map((variant) => ({ ...variant, configOpen: false })),
         {
           id,
           name: `对照组 ${sequence}`,
-          modelName: draft.modelName ?? "",
-          description: draft.description,
-          instruction: draft.instruction,
-          optimizations: [],
+          modelName: initialTarget.modelName ?? "",
+          modelProvider: initialTarget.modelProvider ?? "",
+          modelApiBase: initialTarget.modelApiBase ?? "",
+          apiKey: modelApiKeys[initialAgent.key] ?? "",
+          apiKeyLocked: false,
+          apiKeyVisible: false,
+          instruction: initialTarget.instruction,
+          selectedSkills: structuredClone(initialTarget.selectedSkills ?? []),
+          agentKey: initialAgent.key,
+          dimension: "model",
+          additionalChanges: [],
+          verdict: "",
+          verdictReason: "",
+          ttftMs: null,
+          latencyMs: null,
+          toolCalls: null,
+          tokens: null,
+          inputDiverged: false,
           configOpen: true,
           phase: "idle",
           runtimeSnapshot: "",
@@ -3476,12 +5090,149 @@ export function CustomCreate({
         },
       ];
     });
+    markComparisonConfigChanged();
   };
 
-  const removeDebugVariant = async (id: string) => {
+  const removeDebugVariant = (id: string) => {
+    const variant = debugVariants.find((item) => item.id === id);
+    if (!variant || variant.id === "baseline") return;
+    setDebugVariants((current) =>
+      current.map((item) =>
+        item.id === id ? { ...item, configOpen: false } : item,
+      ),
+    );
+    setDebugActionConfirm({
+      kind: "delete",
+      variantId: id,
+      variantName: variant.name,
+    });
+  };
+
+  const stopDebugVariant = async (id: string) => {
     await cleanupDebugVariantRun(id);
-    setDebugVariants((current) => current.filter((variant) => variant.id !== id));
-    if (selectedVariantId === id) setSelectedVariantId("baseline");
+    patchDebugVariant(id, {
+      phase: "canceled",
+      error: null,
+      ttftMs: null,
+      latencyMs: null,
+      toolCalls: null,
+      tokens: null,
+    });
+  };
+
+  const stopAllDebugVariants = async () => {
+    await Promise.all(
+      debugVariants
+        .filter((variant) =>
+          ["starting", "ready", "sending"].includes(variant.phase),
+        )
+        .map((variant) => stopDebugVariant(variant.id)),
+    );
+  };
+
+  const applyDebugVariant = async (
+    id: string,
+    baselineFailureConfirmed = false,
+  ) => {
+    if (sessionReadOnly || comparisonSessionStatusValue !== "ready") return;
+    const variant = debugVariants.find((item) => item.id === id);
+    const runtime = debugRunsRef.current.get(id);
+    const latestAssistant = [...(variant?.messages ?? [])]
+      .reverse()
+      .find((message) => message.role === "assistant");
+    if (
+      !variant ||
+      variant.id === "baseline" ||
+      variant.phase !== "ready" ||
+      !runtime ||
+      !latestAssistant ||
+      latestAssistant.error ||
+      variant.verdict !== "采用候选" ||
+      !variant.verdictReason.trim() ||
+      !comparisonFingerprint
+    ) {
+      return;
+    }
+
+    const baseline = debugVariants.find((item) => item.id === "baseline");
+    const baselineLatestAssistant = [...(baseline?.messages ?? [])]
+      .reverse()
+      .find((message) => message.role === "assistant");
+    const baselineFailed = Boolean(
+      baseline?.error || baselineLatestAssistant?.error,
+    );
+    if (baselineFailed && !baselineFailureConfirmed) {
+      setDebugActionConfirm({
+        kind: "baseline-failed-apply",
+        variantId: id,
+      });
+      return;
+    }
+
+    const result = await applyCandidateAtomically(
+      draft,
+      comparisonFingerprint,
+      debugOverridesForVariant(variant),
+    );
+    if (!result.ok) {
+      patchDebugVariant(id, { error: result.reason });
+      return;
+    }
+    const nextFingerprint = await fingerprintDraft(result.draft);
+
+    undoDraftRef.current = structuredClone(draft);
+    undoModelApiKeysRef.current = { ...modelApiKeys };
+    setDraft(result.draft);
+    setModelApiKeys((current) => {
+      const next = { ...current };
+      debugChangesForVariant(variant)
+        .filter((change) => change.dimension === "model")
+        .forEach((change) => {
+          next[change.agentKey] = change.apiKey;
+        });
+      return next;
+    });
+    setComparisonFingerprint(nextFingerprint);
+    markComparisonConfigChanged();
+    setCanUndoCandidate(true);
+    setSelectedVariantId(id);
+    persistComparisonRecord(draft.name || "untitled-draft", {
+      timestamp: Date.now(),
+      fingerprint: comparisonFingerprint,
+      candidateName: variant.name,
+      configDiffs: effectiveDebugChanges(draft, variant).map((change) => ({
+        agentKey: change.agentKey,
+        dimension: change.dimension,
+      })),
+      metrics: {
+        ttftMs: variant.ttftMs,
+        latencyMs: variant.latencyMs,
+        toolCalls: variant.toolCalls,
+        tokens: variant.tokens,
+      },
+      verdict: variant.verdict,
+      reason: variant.verdictReason.trim(),
+      inputDiverged: variant.inputDiverged,
+      runId: runtime.run.runId,
+      sessionId: runtime.sessionId,
+      traceId: runtime.sessionId,
+    });
+    setComparisonHistoryRevision((revision) => revision + 1);
+  };
+
+  const undoAppliedCandidate = async () => {
+    const previous = undoDraftRef.current;
+    if (!previous) return;
+    setDraft(previous);
+    if (undoModelApiKeysRef.current) {
+      setModelApiKeys(undoModelApiKeysRef.current);
+    }
+    setComparisonFingerprint(await fingerprintDraft(previous));
+    markComparisonConfigChanged();
+    undoDraftRef.current = null;
+    undoModelApiKeysRef.current = null;
+    setCanUndoCandidate(false);
+    setSelectedVariantId("baseline");
   };
 
   const patchDebugVariant = (id: string, patch: Partial<DebugVariant>) =>
@@ -3491,41 +5242,177 @@ export function CustomCreate({
       ),
     );
 
+  const patchDebugVariantConfiguration = (
+    id: string,
+    patch: Partial<DebugVariant>,
+  ) =>
+    setDebugVariants((current) =>
+      current.map((variant) =>
+        variant.id === id
+          ? preserveDebugVariantEvidence(variant, patch)
+          : variant,
+      ),
+    );
+
+  const selectDebugVariantChange = (
+    id: string,
+    agentKey: string,
+    dimension: ComparisonDimension,
+  ) => {
+    if (id === "baseline") return;
+    const selected = debugVariants.find((variant) => variant.id === id);
+    if (
+      !selected ||
+      (selected.agentKey === agentKey && selected.dimension === dimension)
+    ) {
+      return;
+    }
+    const currentBaseline = baselineDebugChange(
+      draft,
+      modelApiKeys,
+      selected.agentKey,
+      selected.dimension,
+    );
+    const targetBaseline = baselineDebugChange(
+      draft,
+      modelApiKeys,
+      agentKey,
+      dimension,
+    );
+    if (!currentBaseline || !targetBaseline) return;
+    setDebugVariants((current) =>
+      current.map((variant) => {
+        if (variant.id !== id) return variant;
+        return preserveDebugVariantEvidence(
+          variant,
+          switchPrimaryDebugChange(
+            variant,
+            currentBaseline,
+            targetBaseline,
+          ),
+        );
+      }),
+    );
+    markComparisonConfigChanged();
+  };
+
+  const removeDebugVariantChange = (
+    id: string,
+    agentKey: string,
+    dimension: ComparisonDimension,
+  ) => {
+    if (id === "baseline") return;
+    const variant = debugVariants.find((item) => item.id === id);
+    const hasExistingChange = Boolean(
+      variant &&
+        effectiveDebugChanges(draft, variant).some(
+          (change) =>
+            change.agentKey === agentKey && change.dimension === dimension,
+        ),
+    );
+    if (!variant || !hasExistingChange) return;
+    const targetBaseline = baselineDebugChange(
+      draft,
+      modelApiKeys,
+      agentKey,
+      dimension,
+    );
+    if (!targetBaseline) return;
+    setDebugVariants((current) =>
+      current.map((variant) =>
+        variant.id === id
+          ? preserveDebugVariantEvidence(
+              variant,
+              removeDebugChange(variant, targetBaseline),
+            )
+          : variant,
+      ),
+    );
+    markComparisonConfigChanged();
+  };
+
   const updateDebugVariantConfig = (
     id: string,
-    field: "modelName" | "description" | "instruction",
+    field:
+      | "agentKey"
+      | "dimension"
+      | "modelName"
+      | "modelProvider"
+      | "modelApiBase"
+      | "apiKey"
+      | "instruction",
     value: string,
   ) => {
-    if (id === "baseline" && field === "modelName") {
-      baselineModelEditedRef.current = true;
+    if (id === "baseline") return;
+    const variant = debugVariants.find((item) => item.id === id);
+    if (!variant) return;
+    if (field === "agentKey") {
+      selectDebugVariantChange(id, value, variant.dimension);
+      return;
     }
-    patchDebugVariant(id, { [field]: value });
+    if (field === "dimension") {
+      selectDebugVariantChange(
+        id,
+        variant.agentKey,
+        value as ComparisonDimension,
+      );
+      return;
+    }
+    if (field === "modelProvider" || field === "modelApiBase") {
+      if (variant[field] === value) return;
+      patchDebugVariantConfiguration(id, {
+        [field]: value,
+        apiKey: "",
+        apiKeyLocked: false,
+        apiKeyVisible: false,
+      });
+      markComparisonConfigChanged();
+      return;
+    }
+    if (field === "apiKey") {
+      if (variant.apiKey === value) return;
+      patchDebugVariantConfiguration(id, {
+        apiKey: value,
+        apiKeyLocked: false,
+        ...(value ? {} : { apiKeyVisible: false }),
+      });
+      markComparisonConfigChanged();
+      return;
+    }
+    if (variant[field] === value) return;
+    patchDebugVariantConfiguration(id, {
+      [field]: value,
+    } as Partial<DebugVariant>);
+    markComparisonConfigChanged();
     if (selectedVariantId !== id || id === "baseline") return;
     setSelectedVariantId("baseline");
   };
 
   const completeDebugVariantConfig = (id: string) => {
-    const variant = debugVariants.find((item) => item.id === id);
-    if (!variant) return;
-    const modelName = variant.modelName.trim();
-    const description = variant.description.trim();
-    const instruction = variant.instruction.trim();
-    const configurationKey = debugVariantConfigurationKey(variant);
-    const variantIndex = debugVariants.findIndex((item) => item.id === id);
-    const firstMatchingIndex = debugVariants.findIndex(
-      (item) => debugVariantConfigurationKey(item) === configurationKey,
-    );
-    if (
-      !modelName ||
-      !description ||
-      !instruction ||
-      firstMatchingIndex !== variantIndex
-    ) return;
-    if (id === "baseline") {
-      patchDebugVariant(id, { configOpen: false });
+    if (!debugVariants.some((variant) => variant.id === id)) return;
+    patchDebugVariant(id, { configOpen: false });
+  };
+
+  const confirmDebugAction = () => {
+    const action = debugActionConfirm;
+    if (!action) return;
+    if (action.kind === "new-session") {
+      void startNewComparisonSession(true);
       return;
     }
-    void startDebugVariant(id);
+    setDebugActionConfirm(null);
+    if (action.kind === "baseline-failed-apply") {
+      void applyDebugVariant(action.variantId, true);
+      return;
+    }
+    setDebugVariants((current) =>
+      current.filter((variant) => variant.id !== action.variantId),
+    );
+    if (selectedVariantId === action.variantId) {
+      setSelectedVariantId("baseline");
+    }
+    markComparisonConfigChanged();
+    void cleanupDebugVariantRun(action.variantId);
   };
 
   const handleDeploy = async (
@@ -3561,18 +5448,24 @@ export function CustomCreate({
     );
   };
 
-  const openValidation = () => {
+  const openValidation = async () => {
     if (!requireCompleteDraft()) return;
+    setComparisonFingerprint(await fingerprintDraft(draft));
+    undoDraftRef.current = null;
+    undoModelApiKeysRef.current = null;
+    setCanUndoCandidate(false);
     setDebugVariants((current) =>
       current.map((variant) =>
         variant.id === "baseline" && !debugRunsRef.current.has(variant.id)
           ? {
               ...variant,
-              modelName: baselineModelEditedRef.current
-                ? variant.modelName
-                : defaultDebugModelName(providerDraft),
-              description: providerDraft.description,
+              modelName: defaultDebugModelName(providerDraft),
+              modelProvider: providerDraft.modelProvider ?? "",
+              modelApiBase: providerDraft.modelApiBase ?? "",
               instruction: providerDraft.instruction,
+              selectedSkills: structuredClone(
+                providerDraft.selectedSkills ?? [],
+              ),
             }
           : variant,
       ),
@@ -3588,9 +5481,11 @@ export function CustomCreate({
       return;
     }
     if (nextMode === "validate") {
-      openValidation();
+      await openValidation();
       return;
     }
+    undoDraftRef.current = null;
+    setCanUndoCandidate(false);
     if (!(await confirmLeaveDebug())) return;
     setWorkspaceMode(nextMode);
   };
@@ -4039,9 +5934,92 @@ export function CustomCreate({
                               }
                             />
                             <span className="cw-help cw-dependency-hint">
-                                    留空或使用当前云的官方 Ark 地址时，Studio
-                                    会提供 Ark API Key。填写自定义地址后，发布页会
-                                    要求填写该 Agent 自己的模型 API Key。
+                              留空或使用当前云的官方 Ark 地址时，Studio
+                              会提供服务端凭据；填写自定义 API Base
+                              时，需要在下方输入临时 API Key。
+                            </span>
+                          </div>
+                          <div className="cw-field">
+                            <label className="cw-label">
+                              调试 API Key（临时）
+                            </label>
+                            {selectedModelApiKeyLocked ? (
+                              <div className="cw-model-secret-configured">
+                                <span role="status">已配置临时凭据</span>
+                                <button
+                                  type="button"
+                                  className="cw-link-btn"
+                                  onClick={() => {
+                                    setModelApiKeys((current) => ({
+                                      ...current,
+                                      [selectedModelSecretKey]: "",
+                                    }));
+                                    setLockedModelApiKeys((current) => {
+                                      const next = new Set(current);
+                                      next.delete(selectedModelSecretKey);
+                                      return next;
+                                    });
+                                  }}
+                                >
+                                  清除并重新输入
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="cw-model-secret-input">
+                                <input
+                                  className="cw-input"
+                                  type={
+                                    selectedModelApiKeyRevealed
+                                      ? "text"
+                                      : "password"
+                                  }
+                                  value={selectedModelApiKey}
+                                  autoComplete="off"
+                                  placeholder="可留空"
+                                  aria-label="模型 API Key"
+                                  onChange={(event) =>
+                                    setModelApiKeys((current) => ({
+                                      ...current,
+                                      [selectedModelSecretKey]:
+                                        event.target.value,
+                                    }))
+                                  }
+                                />
+                                <button
+                                  type="button"
+                                  className="cw-model-secret-toggle"
+                                  aria-label={
+                                    selectedModelApiKeyRevealed
+                                      ? "隐藏 API Key"
+                                      : "显示 API Key"
+                                  }
+                                  aria-pressed={selectedModelApiKeyRevealed}
+                                  onClick={() =>
+                                    setRevealedModelApiKeys((current) => {
+                                      const next = new Set(current);
+                                      if (next.has(selectedModelSecretKey)) {
+                                        next.delete(selectedModelSecretKey);
+                                      } else {
+                                        next.add(selectedModelSecretKey);
+                                      }
+                                      return next;
+                                    })
+                                  }
+                                >
+                                  {selectedModelApiKeyRevealed ? (
+                                    <EyeOff className="cw-i cw-i-sm" />
+                                  ) : (
+                                    <Eye className="cw-i cw-i-sm" />
+                                  )}
+                                </button>
+                              </div>
+                            )}
+                            <span className="cw-help cw-dependency-hint">
+                              可留空；留空时使用 Studio 服务端凭据。自定义 API
+                              Base 必须输入临时 Key。Key
+                              仅保存在当前页面内存并注入调试环境，不写入
+                              Draft、源码或部署配置，也不会自动带入发布页。发布
+                              自定义模型时需在发布页重新确认 API Key。
                             </span>
                           </div>
                         </motion.div>
@@ -4327,22 +6305,62 @@ export function CustomCreate({
             <DebugComparisonWorkspace
               enabled={debugEnabled}
               disabledReason={debugDisabledReason}
+              draft={draft}
               variants={debugVariants}
               draftSnapshot={currentDebugSnapshot}
               input={debugInput}
               onInput={setDebugInput}
               onSend={sendDebugMessage}
-              onStartVariant={startDebugVariant}
-              onDeployVariant={(id) => void openPublishPreview(id)}
+              comparisonSessionState={comparisonSessionState}
+              sessionProblem={comparisonSessionProblem()}
+              onStartSession={() => void startNewComparisonSession()}
+              onStopVariant={(id) => void stopDebugVariant(id)}
+              onStopAll={() => void stopAllDebugVariants()}
+              onDeployVariant={(id) => void applyDebugVariant(id)}
               onAddVariant={addDebugVariant}
               onRemoveVariant={removeDebugVariant}
               onToggleConfig={(id) => {
-                const variant = debugVariants.find((item) => item.id === id);
-                if (variant) patchDebugVariant(id, { configOpen: !variant.configOpen });
+                setDebugVariants((current) => {
+                  const selected = current.find((item) => item.id === id);
+                  if (!selected) return current;
+                  const nextOpen = !selected.configOpen;
+                  return current.map((variant) => ({
+                    ...variant,
+                    configOpen: variant.id === id ? nextOpen : false,
+                  }));
+                });
               }}
               onCompleteConfig={completeDebugVariantConfig}
+              onSelectChange={selectDebugVariantChange}
+              baselineApiKeys={modelApiKeys}
+              onRemoveChange={removeDebugVariantChange}
               onConfigChange={updateDebugVariantConfig}
+              onSkillsChange={(id, selectedSkills) => {
+                const variant = debugVariants.find((item) => item.id === id);
+                if (
+                  !variant ||
+                  JSON.stringify(variant.selectedSkills) ===
+                    JSON.stringify(selectedSkills)
+                ) {
+                  return;
+                }
+                patchDebugVariantConfiguration(id, { selectedSkills });
+                markComparisonConfigChanged();
+              }}
+              onToggleApiKey={(id) => {
+                const variant = debugVariants.find((item) => item.id === id);
+                if (!variant || variant.apiKeyLocked) return;
+                patchDebugVariant(id, { apiKeyVisible: !variant.apiKeyVisible });
+              }}
+              onVerdictChange={(id, verdict, verdictReason) =>
+                patchDebugVariant(id, { verdict, verdictReason })
+              }
+              canUndo={canUndoCandidate}
+              onUndo={() => void undoAppliedCandidate()}
+              history={comparisonHistory}
               onOpenTrace={openDebugTrace}
+              onOpenComparisonTrace={openDebugComparisonTrace}
+              onVariantAction={handleDebugVariantAction}
             />
           </div>
         </div>
@@ -4358,26 +6376,6 @@ export function CustomCreate({
               agentDraft={draft}
               agentName={draft.name || "未命名 Agent"}
               agentCount={countDraftAgents(draft)}
-              releaseConfiguration={
-                selectedDebugVariant
-                  ? {
-                      modelName:
-                        selectedDebugVariant.modelName ||
-                        draft.modelName ||
-                        "默认模型",
-                      description: selectedDebugVariant.description,
-                      instruction: selectedDebugVariant.instruction,
-                      optimizations: selectedDebugVariant.optimizations.flatMap(
-                        (id) => {
-                          const option = DEBUG_OPTIMIZATIONS.find(
-                            (item) => item.id === id,
-                          );
-                          return option ? [option.label] : [];
-                        },
-                      ),
-                    }
-                  : undefined
-              }
               onChange={setProject}
               onDeploy={handleDeploy}
               onAgentAdded={onAgentAdded}
@@ -4454,6 +6452,52 @@ export function CustomCreate({
           onClose={() => setDebugTraceTarget(null)}
         />
       )}
+      {debugComparisonTraceTargets && (
+        <ComparisonTraceDrawer
+          targets={debugComparisonTraceTargets}
+          onClose={() => setDebugComparisonTraceTargets(null)}
+        />
+      )}
+      {debugActionConfirm ? (
+        <StudioConfirmDialog
+          variant={
+            debugActionConfirm.kind === "new-session" ||
+            debugActionConfirm.kind === "delete"
+              ? "danger"
+              : "warning"
+          }
+          title={
+            debugActionConfirm.kind === "new-session"
+              ? "开启新的对照 Session？"
+              : debugActionConfirm.kind === "delete"
+              ? `删除测试组 · ${debugActionConfirm.variantName}`
+              : "基线失败，仍采用候选？"
+          }
+          description={
+            debugActionConfirm.kind === "new-session"
+              ? `将清空 ${debugActionConfirm.variantCount} 个测试组在上一 Session 中的对话、运行指标和人工判定，并停止旧测试环境。所有已保存配置会保留，新 Session 不会重放历史输入。`
+              : debugActionConfirm.kind === "delete"
+              ? "删除后将清除该测试组的配置、调试消息、临时环境变量、临时凭据和未保留的 Trace 证据，并释放对应调试环境。此操作无法恢复。"
+              : "候选成功只能证明它在本次输入下可以运行，无法证明整体优于失败的基线。继续后会直接替换当前 Draft 中对应配置，并保留一次撤销机会。"
+          }
+          confirmLabel={
+            debugActionConfirm.kind === "new-session"
+              ? comparisonSessionStatusValue === "starting"
+                ? "正在开启..."
+                : "清空并开启"
+              : debugActionConfirm.kind === "delete"
+              ? "删除测试组"
+              : "仍然采用"
+          }
+          closeLabel="关闭调试操作确认"
+          onCancel={() => setDebugActionConfirm(null)}
+          onConfirm={confirmDebugAction}
+          busy={
+            debugActionConfirm.kind === "new-session" &&
+            comparisonSessionStatusValue === "starting"
+          }
+        />
+      ) : null}
       {debugLeaveConfirmOpen && (
         <StudioConfirmDialog
           variant="warning"

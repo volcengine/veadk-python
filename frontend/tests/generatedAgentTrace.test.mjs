@@ -26,10 +26,6 @@ test("loads generated-agent traces through the run-scoped API", () => {
 
 test("shows a per-variant trace action only after a completed debug turn", () => {
   assert.match(customCreateSource, /onOpenTrace: \(id: string\) => void/);
-  assert.match(
-    customCreateSource,
-    /const traceAvailable =\s*ready &&[\s\S]*?variant\.phase !== "sending"[\s\S]*?message\.role === "assistant"/,
-  );
   assert.match(customCreateSource, /className="cw-ab-trace"/);
   assert.match(customCreateSource, /disabled=\{!traceAvailable\}/);
   assert.match(customCreateSource, /onClick=\{\(\) => onOpenTrace\(variant\.id\)\}/);
