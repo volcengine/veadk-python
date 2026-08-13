@@ -216,6 +216,12 @@ class VibeTaskService:
         return sorted(await self.repository.list(owner_id), key=lambda item: item.created_at, reverse=True)
 
     async def configure_credentials(self, owner_id: str, task_id: str, body: CredentialUpload) -> TaskStatus:
+        if self.sandbox_store is not None:
+            raise VibeTaskError(
+                "VIBE_CREDENTIALS_NOT_READY",
+                "Dev Sandbox 凭据通道尚未就绪",
+                status_code=501,
+            )
         status = await self.require(owner_id, task_id)
         if status.terminal:
             raise VibeTaskError("VIBE_TASK_TERMINAL", "Task is terminal", status_code=409)
@@ -226,10 +232,18 @@ class VibeTaskService:
         return status
 
     async def get_intent(self, owner_id: str, task_id: str) -> IntentSummary:
+        if self.sandbox_store is not None:
+            return await self.sandbox_store.get_intent(owner_id, task_id)
         await self.require(owner_id, task_id)
         return await self.repository.get_intent(owner_id, task_id)
 
     async def update_intent(self, owner_id: str, task_id: str, body: IntentSummaryUpdate) -> IntentSummary:
+        if self.sandbox_store is not None:
+            raise VibeTaskError(
+                "VIBE_INTENT_UPDATE_NOT_READY",
+                "Dev Sandbox Intent 更新通道尚未就绪",
+                status_code=501,
+            )
         status = await self.require(owner_id, task_id)
         if status.terminal:
             raise VibeTaskError("VIBE_TASK_TERMINAL", "Task is terminal", status_code=409)
@@ -260,6 +274,19 @@ class VibeTaskService:
         return event
 
     async def events(self, owner_id: str, task_id: str, after: int = 0) -> AsyncIterator[TaskEvent]:
+        if self.sandbox_store is not None:
+            sequence = after
+            while True:
+                pending = await self.sandbox_store.events_after(
+                    owner_id, task_id, sequence
+                )
+                for event in pending:
+                    sequence = event.sequence
+                    yield event
+                status = await self.require(owner_id, task_id)
+                if status.terminal and sequence >= status.last_sequence:
+                    return
+                await asyncio.sleep(2)
         status = await self.require(owner_id, task_id)
         sequence = after
         while True:
@@ -285,6 +312,12 @@ class VibeTaskService:
                 sequence += 1
 
     async def stop(self, owner_id: str, task_id: str) -> TaskStatus:
+        if self.sandbox_store is not None:
+            raise VibeTaskError(
+                "VIBE_STOP_NOT_READY",
+                "Dev Sandbox 停止通道尚未就绪",
+                status_code=501,
+            )
         status = await self.require(owner_id, task_id)
         if status.terminal:
             return status
@@ -295,6 +328,8 @@ class VibeTaskService:
         return await self.require(owner_id, task_id)
 
     async def delete(self, owner_id: str, task_id: str) -> bool:
+        if self.sandbox_store is not None:
+            return await self.sandbox_store.delete(owner_id, task_id)
         self.validate_task_owner(task_id, owner_id)
         deleted = await self.repository.delete(owner_id, task_id)
         self._conditions.pop((owner_id, task_id), None)
