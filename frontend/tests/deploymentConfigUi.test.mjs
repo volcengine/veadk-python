@@ -138,6 +138,26 @@ test("lets the whole publish page scroll with white deployment cards", () => {
   );
 });
 
+test("keeps Runtime name help and errors below the input", () => {
+  assert.match(
+    projectPreviewSource,
+    /className="pp-runtime-name-field"[\s\S]*?className="pp-runtime-name-input"[\s\S]*?className="pp-config-note"[\s\S]*?className="pp-runtime-name-error"/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-runtime-name-field\s*\{[\s\S]*?display:\s*grid;[\s\S]*?gap:\s*6px;/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-runtime-name-field > \.pp-config-note,[\s\S]*?\.pp-runtime-name-field > \.pp-runtime-name-error\s*\{[\s\S]*?margin:\s*0;/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /默认根据 Root Agent 名称生成，支持 4-64 位字母、数字、连字符和下划线/,
+  );
+  assert.doesNotMatch(projectPreviewSource, /默认根据 Root Agent 名称生成。支持/);
+});
+
 test("lets deployment dropdowns escape rounded configuration cards", () => {
   assert.match(
     projectPreviewStyles,

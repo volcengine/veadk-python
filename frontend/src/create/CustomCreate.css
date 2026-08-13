@@ -3506,7 +3506,7 @@
 }
 .cw-toggle {
   display: grid;
-  grid-template-columns: minmax(124px, 0.34fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
   width: 100%;
@@ -3543,7 +3543,7 @@
   font-size: 14px;
   font-weight: 600;
 }
-.cw-toggle-desc {
+.cw-toggle-help {
   font-size: 12.5px;
   line-height: 1.5;
   color: hsl(var(--muted-foreground));
