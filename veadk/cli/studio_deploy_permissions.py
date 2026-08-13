@@ -19,6 +19,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
+import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -513,19 +514,36 @@ def _table_lines(
         for result in rows
     ]
     widths = [
-        max(len(headers[index]), *(len(row[index]) for row in rendered))
+        max(
+            _terminal_width(headers[index]),
+            *(_terminal_width(row[index]) for row in rendered),
+        )
         for index in range(3)
     ]
 
     def line(row: tuple[str, str, str]) -> str:
         return (
             "| "
-            + " | ".join(value.ljust(widths[index]) for index, value in enumerate(row))
+            + " | ".join(
+                value + " " * (widths[index] - _terminal_width(value))
+                for index, value in enumerate(row)
+            )
             + " |"
         )
 
     separator = "|-" + "-|-".join("-" * width for width in widths) + "-|"
     return [line(headers), separator, *(line(row) for row in rendered)]
+
+
+def _terminal_width(value: str) -> int:
+    """Return the number of terminal columns occupied by plain table text."""
+    width = 0
+    for character in value:
+        category = unicodedata.category(character)
+        if category in {"Cf", "Mn", "Me"}:
+            continue
+        width += 2 if unicodedata.east_asian_width(character) in {"F", "W"} else 1
+    return width
 
 
 def render_permission_results(

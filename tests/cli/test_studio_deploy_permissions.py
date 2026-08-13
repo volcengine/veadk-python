@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import pytest
 from click.testing import CliRunner
 
 from veadk.cli import studio_deploy_permissions as permissions
@@ -138,6 +139,47 @@ def test_renderer_localizes_volcengine_and_prints_every_status(capsys) -> None:
     assert "✅" in output
     assert "❌" in output
     assert permissions.IAM_CONFIG_URLS["volcengine"] in output
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [
+        (
+            "volcengine",
+            [
+                "| 权限名称 | 作用 | 是否满足 |",
+                "|----------|------|----------|",
+                "| iam:X    | 中文 | ✅       |",
+                "| iam:Long | A    | ❌       |",
+            ],
+        ),
+        (
+            "byteplus",
+            [
+                "| IAM Action | Purpose | Satisfied |",
+                "|------------|---------|-----------|",
+                "| iam:X      | A       | ✅        |",
+                "| iam:Long   | Long    | ❌        |",
+            ],
+        ),
+    ],
+)
+def test_renderer_aligns_wide_text_and_status_symbols(provider, expected) -> None:
+    specs = [
+        permissions.PermissionSpec("iam:X", "中文", "A"),
+        permissions.PermissionSpec("iam:Long", "A", "Long"),
+    ]
+
+    assert (
+        permissions._table_lines(
+            provider,
+            [
+                permissions.PermissionResult(spec=specs[0], satisfied=True),
+                permissions.PermissionResult(spec=specs[1], satisfied=False),
+            ],
+        )
+        == expected
+    )
 
 
 def test_renderer_localizes_byteplus_purposes_and_summary(capsys) -> None:
