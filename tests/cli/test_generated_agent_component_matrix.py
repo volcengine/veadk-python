@@ -86,6 +86,12 @@ EXPECTED_KB_EXTRAS = {
     "openviking": set(),
 }
 
+DEFAULT_ARK_DEBUG_ENV = {
+    item.key: item.placeholder
+    for item in MODEL_ENV
+    if item.key in {"MODEL_AGENT_PROVIDER", "MODEL_AGENT_API_BASE"}
+}
+
 
 def test_component_catalog_does_not_request_auto_resolved_credentials() -> None:
     component_env_keys = _catalog_env_keys(
@@ -160,11 +166,12 @@ def test_debug_runtime_forwards_active_component_env(
 
     result = debug_runtime_env_from_draft(draft)
 
-    assert result == {
+    expected_component_env = {
         key: value
         for key, value in env_values.items()
         if key != "UNSELECTED_COMPONENT_ENV"
     }
+    assert result == {**DEFAULT_ARK_DEBUG_ENV, **expected_component_env}
 
 
 @pytest.mark.parametrize("exporter", TRACING_EXPORTERS, ids=lambda item: item.id)
@@ -180,6 +187,7 @@ def test_debug_runtime_forwards_active_tracing_env_and_enable_flag(
     )
 
     assert debug_runtime_env_from_draft(draft) == {
+        **DEFAULT_ARK_DEBUG_ENV,
         **env_values,
         exporter.enable_flag: "true",
     }
@@ -199,7 +207,8 @@ def test_debug_runtime_materializes_mcp_token_env_without_mutating_draft() -> No
     )
 
     assert debug_runtime_env_from_draft(draft) == {
-        "MCP_DEBUG_AGENT_ORDERS_AUTH_TOKEN": "debug-secret"
+        **DEFAULT_ARK_DEBUG_ENV,
+        "MCP_DEBUG_AGENT_ORDERS_AUTH_TOKEN": "debug-secret",
     }
     assert draft.mcpTools[0].authToken == "debug-secret"
 
@@ -220,6 +229,7 @@ def test_debug_runtime_materializes_nested_a2a_registry_defaults() -> None:
     )
 
     assert debug_runtime_env_from_draft(draft) == {
+        **DEFAULT_ARK_DEBUG_ENV,
         "REGISTRY_SPACE_ID": "space-debug",
         "REGISTRY_TOP_K": "3",
         "REGISTRY_REGION": "cn-beijing",
