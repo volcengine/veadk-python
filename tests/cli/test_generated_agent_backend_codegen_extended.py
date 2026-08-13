@@ -77,10 +77,10 @@ _MINIMAL_FRONTEND_GOLDEN = {
 _FULL_FRONTEND_GOLDEN = {
     "app.py": "56183a125e505c543294356fc9c7662a5eedb3b8661070f6be1df9b579e35ed4",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
-    "agents/full_agent/agent.py": "cc2b0b6be7f781573fbbd744becdf2608b8ebff881b9e58a979fe695485ffe30",
+    "agents/full_agent/agent.py": "7cdba9abb0ba50bc8a3471b785d935f9c2b48e34aa426d2036a3772b9a449d5a",
     "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/full_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
-    ".env.example": "3e6a5c1ee1c96ed7394240f9c0503c295552cb497ad51c68dd867dd4945f750b",
+    ".env.example": "58c8b3da90b8cbe71edf6825e4e92cc870bcc45e0761c9d2156bb7d9c326c6ba",
     "requirements.txt": "4a941e1bf7efb43d57f608649ac238f2e5ea833f9e0aae92f8bc3fef67b8874e",
     "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
 }
@@ -960,6 +960,27 @@ def test_generated_project_and_debug_run_api_lifecycle(
         tags=[],
         envs=[
             SimpleNamespace(
+                key="MODEL_AGENT_API_BASE",
+                value="https://runtime-controlled.example/v1",
+            ),
+            SimpleNamespace(key="MODEL_AGENT_API_KEY", value="runtime-model-key"),
+            SimpleNamespace(
+                key="MODEL_AGENT_API_KEY_NAME",
+                value="runtime-model-key-name",
+            ),
+            SimpleNamespace(
+                key="MODEL_AGENT_BASE_URL",
+                value="https://runtime-controlled.example/v1",
+            ),
+            SimpleNamespace(key="ARK_API_KEY", value="runtime-ark-key"),
+            SimpleNamespace(key="OPENAI_API_KEY", value="runtime-openai-key"),
+            SimpleNamespace(
+                key="OPENAI_BASE_URL",
+                value="https://runtime-controlled.example/v1",
+            ),
+            SimpleNamespace(key="CLOUD_PROVIDER", value="byteplus"),
+            SimpleNamespace(key="AGENTKIT_CLOUD_PROVIDER", value="byteplus"),
+            SimpleNamespace(
                 key="MCP_DEMO_AGENT_ORDERS_AUTH_TOKEN",
                 value="runtime-mcp-token",
             ),
@@ -1039,6 +1060,20 @@ def test_generated_project_and_debug_run_api_lifecycle(
         )
         assert old_shape_response.status_code == 422
 
+        process_count = len(_FakeProcess.created)
+        custom_model_response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": {
+                    **draft,
+                    "modelApiBase": "https://user-controlled.example/v1",
+                }
+            },
+        )
+        assert custom_model_response.status_code == 400
+        assert "自定义模型地址" in custom_model_response.json()["detail"]
+        assert len(_FakeProcess.created) == process_count
+
         run_response = client.post(
             "/web/generated-agent-test-runs",
             json={
@@ -1078,6 +1113,17 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert process.env["BYTEPLUS_REGION"] == "ap-southeast-1"
         assert process.env["AGENTKIT_CLOUD_PROVIDER"] == "volcengine"
         assert process.env["CLOUD_PROVIDER"] == "volcengine"
+        assert process.env["MODEL_AGENT_API_BASE"] == (
+            "https://ark.cn-beijing.volces.com/api/v3"
+        )
+        assert process.env.get("MODEL_AGENT_API_KEY") != "runtime-model-key"
+        assert process.env.get("MODEL_AGENT_API_KEY_NAME") != ("runtime-model-key-name")
+        assert "MODEL_AGENT_BASE_URL" not in process.env
+        assert process.env.get("ARK_API_KEY") != "runtime-ark-key"
+        assert process.env.get("OPENAI_API_KEY") != "runtime-openai-key"
+        assert process.env.get("OPENAI_BASE_URL") != (
+            "https://runtime-controlled.example/v1"
+        )
         assert process.env["AGENTKIT_TOOL_ID"] == "t-debug"
         assert process.env["AGENTKIT_TOOL_REGION"] == "cn-shanghai"
         assert process.env["MCP_DEMO_AGENT_ORDERS_AUTH_TOKEN"] == "runtime-mcp-token"

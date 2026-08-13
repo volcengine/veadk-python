@@ -28,6 +28,11 @@ from veadk.cli.generated_agent_catalog import (
     TOOL_BY_ID,
 )
 from veadk.cli.generated_agent_codegen import AgentDraft
+from veadk.cli.studio_model_catalog import (
+    SUPPORTED_CLOUD_PROVIDERS,
+    is_provider_modelark_base_url,
+    modelark_base_url,
+)
 
 
 class DebugPolicyError(ValueError):
@@ -73,7 +78,12 @@ def validate_debug_policy(
     draft: AgentDraft,
     *,
     allow_local_runtime_resources: bool = False,
+    managed_cloud_provider: str | None = None,
 ) -> None:
+    trusted_debug_model_api_base(
+        draft,
+        managed_cloud_provider=managed_cloud_provider,
+    )
     total = _validate_node(
         draft,
         depth=0,
@@ -82,6 +92,42 @@ def validate_debug_policy(
     )
     if total > MAX_SUBAGENTS + 1:
         raise DebugPolicyError(f"Too many agents: {total}")
+
+
+def trusted_debug_model_api_base(
+    draft: AgentDraft,
+    *,
+    managed_cloud_provider: str | None = None,
+) -> str:
+    """Return the only model endpoint allowed to receive Studio credentials.
+
+    Generated debug runners have one Studio-managed model credential. Keep that
+    credential bound to the current Studio provider's canonical Ark endpoint;
+    custom endpoints remain supported by generated projects and deployments,
+    where users can supply their own endpoint-specific credential.
+    """
+    provider = (managed_cloud_provider or draft.cloudProvider or "volcengine").lower()
+    if provider not in SUPPORTED_CLOUD_PROVIDERS:
+        raise DebugPolicyError(f"Unsupported cloud provider: {provider}")
+    trusted = modelark_base_url(provider)
+    if managed_cloud_provider and draft.cloudProvider != provider:
+        raise DebugPolicyError(
+            "调试配置的云环境与当前 Studio 不一致，请切换到当前环境后重试。"
+        )
+
+    def visit(node: AgentDraft) -> None:
+        if node.agentType == "llm" and node.modelApiBase.strip():
+            if not is_provider_modelark_base_url(provider, node.modelApiBase):
+                raise DebugPolicyError(
+                    "自定义模型地址不能使用 Studio 提供的 Ark API Key 在线调试。"
+                    "请改用当前云环境的官方 Ark 地址，或在部署页填写该 Agent "
+                    "自己的模型 API Key。"
+                )
+        for sub_agent in node.subAgents:
+            visit(sub_agent)
+
+    visit(draft)
+    return trusted
 
 
 def _validate_node(

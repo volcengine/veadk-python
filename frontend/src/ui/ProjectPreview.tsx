@@ -564,6 +564,8 @@ export interface ProjectPreviewProps {
   onFeishuEnabledChange?: (enabled: boolean) => void | Promise<void>;
   /** Environment variables required by the selected memory/knowledge backends. */
   deploymentEnv?: EnvVar[];
+  /** Required deployment secrets kept only in this mounted publish page. */
+  requiredSecretEnv?: Array<{ key: string; label: string }>;
   /** Deployment-only values entered in each feature's configuration area. */
   deploymentEnvValues?: Record<string, string>;
   onDeploymentEnvChange?: (key: string, value: string) => void;
@@ -697,6 +699,7 @@ export function ProjectPreview({
   feishuEnabled = false,
   onFeishuEnabledChange,
   deploymentEnv = [],
+  requiredSecretEnv = [],
   deploymentEnvValues = {},
   onDeploymentEnvChange,
   network,
@@ -738,6 +741,10 @@ export function ProjectPreview({
   const [activePhase, setActivePhase] = useState<string | null>(null);
   const [addingAgent, setAddingAgent] = useState(false);
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
+  const [secretEnvValues, setSecretEnvValues] = useState<Record<string, string>>(
+    {},
+  );
+  const [secretEnvErrorKey, setSecretEnvErrorKey] = useState<string | null>(null);
   const [deployResources, setDeployResources] = useState<DeployResources>(
     DEFAULT_DEPLOY_RESOURCES,
   );
@@ -761,6 +768,9 @@ export function ProjectPreview({
   const [deploymentActionTarget, setDeploymentActionTarget] =
     useState<HTMLElement | null>(null);
   const mountedRef = useRef(true);
+  const requiredSecretEnvSignature = requiredSecretEnv
+    .map((env) => `${env.key}:${env.label}`)
+    .join("|");
   const previousDeployRegionRef = useRef(deployRegion);
   const instanceRange = validateRuntimeInstanceRange(minInstance, maxInstance);
   const needsInstanceUpdate =
@@ -776,6 +786,18 @@ export function ProjectPreview({
   const deploymentSteps = effectiveCreateEvaluationSets
     ? [...deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP]
     : deploymentStepsWithInstanceUpdate;
+
+  useEffect(() => {
+    const allowed = new Set(requiredSecretEnv.map((env) => env.key));
+    setSecretEnvValues((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([key]) => allowed.has(key)),
+      ),
+    );
+    setSecretEnvErrorKey((current) =>
+      current && allowed.has(current) ? current : null,
+    );
+  }, [requiredSecretEnvSignature]);
 
   useEffect(() => {
     if (!onDeployRegionChange || isRuntimeUpdate) return;
@@ -923,7 +945,8 @@ export function ProjectPreview({
     feishuEnabled ? [...deploymentEnv, ...FEISHU_ENV] : deploymentEnv,
     deploymentEnvValues,
   );
-  const environmentVariableCount = automaticEnvRows.length + envRows.length;
+  const environmentVariableCount =
+    automaticEnvRows.length + requiredSecretEnv.length + envRows.length;
 
   function toggleFolder(key: string) {
     setCollapsed((prev) => {
@@ -1019,6 +1042,10 @@ export function ProjectPreview({
     for (const env of runtimeEnvVars(featureEnv, deploymentEnvValues)) {
       byKey.set(env.key, env.value);
     }
+    for (const env of requiredSecretEnv) {
+      const value = secretEnvValues[env.key] ?? "";
+      if (value.trim()) byKey.set(env.key, value);
+    }
     return [...byKey].map(([key, value]) => ({ key, value }));
   }
 
@@ -1066,6 +1093,15 @@ export function ProjectPreview({
       setDeployError("使用 VPC 网络时，请填写 VPC ID。");
       return;
     }
+    const missingSecret = requiredSecretEnv.find(
+      (env) => !(secretEnvValues[env.key] ?? "").trim(),
+    );
+    if (missingSecret) {
+      setSecretEnvErrorKey(missingSecret.key);
+      setDeployError(`请填写 ${missingSecret.label}，用于访问对应的自定义模型地址。`);
+      return;
+    }
+    setSecretEnvErrorKey(null);
     const missingFeatureEnv = firstMissingRuntimeEnv(
       deploymentEnv,
       deploymentEnvValues,
@@ -2037,7 +2073,9 @@ export function ProjectPreview({
                   <Plus className="pp-ic" />
                   添加变量
                 </button>
-                {(automaticEnvRows.length > 0 || envRows.length > 0) && (
+                {(automaticEnvRows.length > 0 ||
+                  requiredSecretEnv.length > 0 ||
+                  envRows.length > 0) && (
                   <div className="pp-env-table">
                     {automaticEnvRows.length > 0 && (
                       <div className="pp-env-group">
@@ -2142,6 +2180,68 @@ export function ProjectPreview({
                               <span className="pp-env-source">
                                 {fixed ? "自动" : "同步"}
                               </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {requiredSecretEnv.length > 0 && (
+                      <div className="pp-env-group">
+                        <div className="pp-env-group-head">
+                          <span>自定义模型凭据</span>
+                          <small>{requiredSecretEnv.length} 项</small>
+                        </div>
+                        {requiredSecretEnv.map((env) => {
+                          const invalid = secretEnvErrorKey === env.key;
+                          const errorId = `${env.key.toLowerCase()}-error`;
+                          return (
+                            <div
+                              className="pp-env-row pp-env-row-derived"
+                              key={env.key}
+                            >
+                              <label
+                                className="pp-env-key-fixed pp-env-key-cell"
+                                htmlFor={env.key}
+                                title={env.label}
+                              >
+                                <span>{env.key}</span>
+                              </label>
+                              <div className="pp-env-value-wrap">
+                                <input
+                                  id={env.key}
+                                  className="pp-env-value"
+                                  type="password"
+                                  value={secretEnvValues[env.key] ?? ""}
+                                  placeholder="必填，仅用于本次发布"
+                                  disabled={deploying}
+                                  autoComplete="new-password"
+                                  spellCheck={false}
+                                  aria-invalid={invalid}
+                                  aria-describedby={invalid ? errorId : undefined}
+                                  aria-label={env.label}
+                                  onChange={(event) => {
+                                    const value = event.currentTarget.value;
+                                    setSecretEnvValues((current) => ({
+                                      ...current,
+                                      [env.key]: value,
+                                    }));
+                                    if (invalid && value.trim()) {
+                                      setSecretEnvErrorKey(null);
+                                      setDeployError(null);
+                                    }
+                                  }}
+                                />
+                                {invalid && (
+                                  <span
+                                    id={errorId}
+                                    className="pp-env-error"
+                                    role="alert"
+                                  >
+                                    请填写此模型地址对应的 API Key。
+                                  </span>
+                                )}
+                              </div>
+                              <span className="pp-env-source">本次发布</span>
                             </div>
                           );
                         })}
