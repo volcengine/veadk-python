@@ -1924,6 +1924,8 @@ def _run_frontend_server(
     )
     from frontend.server.sandbox_remote import SandboxRemoteTransport
     from frontend.server.vibe_task import VibeTaskService, mount_vibe_task_routes
+    from frontend.server.vibe_task.orchestrator import VibeTaskOrchestrator
+    from frontend.server.vibe_task.remote_executor import VibeRemoteExecutor
     from frontend.server.vibe_task.runtime_manager import VibeTaskRuntimeManager
     from frontend.server.vibe_task.sandbox import VibeSandboxStore
 
@@ -1949,7 +1951,34 @@ def _run_frontend_server(
     app.state.vibe_task_runtime_manager = vibe_runtime_manager
     app.router.on_shutdown.append(vibe_runtime_manager.close_all)
     vibe_store.runtime_manager = vibe_runtime_manager
+
+    async def _vibe_transition(owner_id: str, task_id: str, transition: Any) -> None:
+        await vibe_store.transition(
+            owner_id,
+            task_id,
+            transition.event_type,
+            transition.stage,
+            payload=transition.payload,
+            projection=transition.projection,
+        )
+
+    async def _vibe_artifact(owner_id: str, task_id: str) -> bool:
+        # Remote packaging is wired after cloud evidence exists; fail closed meanwhile.
+        del owner_id, task_id
+        return False
+
+    vibe_orchestrator = VibeTaskOrchestrator(
+        vibe_runtime_manager,
+        vibe_store,
+        _vibe_transition,
+        VibeRemoteExecutor(vibe_store),
+        _vibe_artifact,
+        project_root="/home/gem/workspace",
+    )
+    app.state.vibe_task_orchestrator = vibe_orchestrator
+    app.router.on_shutdown.append(vibe_orchestrator.close)
     vibe_service = VibeTaskService(sandbox_store=vibe_store)
+    vibe_service.orchestrator = vibe_orchestrator
     mount_vibe_task_routes(app, _vibe_owner, service=vibe_service)
 
     sandbox_service = SandboxConversationService(

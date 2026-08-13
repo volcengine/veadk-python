@@ -157,7 +157,7 @@ class VibeTaskOrchestrator:
 
             policy = validation_policy(
                 runtime_name=task_id,
-                project_root=self._project_root,
+                project_root=f"{self._project_root.rstrip('/')}/{task_id}",
             )
             local_ok = await self._run_local(owner_id, task_id, policy.local_steps)
             if not local_ok:
