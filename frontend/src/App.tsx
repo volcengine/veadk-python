@@ -2346,7 +2346,7 @@ export default function App() {
           const recoverable = tasks.find(
             (task) => !["completed", "partial", "blocked", "failed", "cancelled", "expired"].includes(task.state),
           );
-          return recoverable?.taskId ?? "";
+          return recoverable?.taskId ?? tasks[0]?.taskId ?? "";
         });
       })
       .catch((cause) => {
