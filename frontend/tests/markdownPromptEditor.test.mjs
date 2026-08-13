@@ -245,45 +245,132 @@ test("build-stage intelligent generation sits before next in the footer", () => 
   );
 });
 
-test("debug comparison configuration explains duplicate disabled actions", () => {
+test("debug comparison configuration exposes blocking problems inline", () => {
   assert.match(
     createSource,
-    /className=\{`cw-ab-config-done-wrap\$\{disabledReason \? " is-disabled" : ""\}`\}[\s\S]*?className="cw-ab-config-done"[\s\S]*?disabled=\{[\s\S]*?configurationUnavailable[\s\S]*?className="cw-ab-config-done-tip" role="tooltip"/,
+    /className="cw-comparison-config-problem" role="alert"[\s\S]*?disabledReason/,
   );
   assert.match(
     createStyles,
     /\.cw-ab-config-done:disabled\s*\{[\s\S]*?background:[\s\S]*?color:[\s\S]*?cursor:\s*not-allowed/,
   );
+  assert.match(createStyles, /\.cw-comparison-config-problem\s*\{/);
+});
+
+test("debug candidates compare one Agent dimension with an atomic model triple", () => {
   assert.match(
-    createStyles,
-    /\.cw-ab-config-done-wrap\.is-disabled:hover \.cw-ab-config-done-tip/,
+    createSource,
+    /interface DebugVariant \{[\s\S]*?modelName: string;[\s\S]*?modelProvider: string;[\s\S]*?modelApiBase: string;[\s\S]*?agentKey: string;[\s\S]*?dimension: ComparisonDimension;/,
+  );
+  assert.match(
+    createSource,
+    /\(\["model", "instruction", "skills"\] as ComparisonDimension\[\]\)\.map/,
+  );
+  assert.match(
+    createSource,
+    /<span>Model ID<\/span>[\s\S]*?<span>Provider<\/span>[\s\S]*?<span>API Base<\/span>/,
+  );
+  assert.match(
+    createSource,
+    /function draftForDebugVariant[\s\S]*?buildCandidateDraft\(baseline, debugOverridesForVariant\(variant\)\)/,
+  );
+  assert.match(
+    createSource,
+    /function debugOverridesForVariant[\s\S]*?modelName: change\.modelName,[\s\S]*?modelProvider: change\.modelProvider,[\s\S]*?modelApiBase: change\.modelApiBase/,
   );
 });
 
-test("debug variants configure and deploy their own model, description, and prompt", () => {
+test("debug candidates can reveal temporary credentials and add or change Skills", () => {
   assert.match(
     createSource,
-    /interface DebugVariant \{[\s\S]*?modelName: string;[\s\S]*?description: string;[\s\S]*?instruction: string;/,
+    /apiKeyVisible: boolean;[\s\S]*?<span>临时 API Key<\/span>[\s\S]*?type=\{variant\.apiKeyVisible \? "text" : "password"\}[\s\S]*?onToggleApiKey\(variant\.id\)/,
   );
   assert.match(
     createSource,
-    /<span>描述<\/span>[\s\S]*?value=\{variant\.description\}[\s\S]*?<span>系统提示词<\/span>[\s\S]*?value=\{variant\.instruction\}/,
+    /variant\.dimension === "skills"[\s\S]*?<SkillsSourceTabs[\s\S]*?selected=\{variant\.selectedSkills\}[\s\S]*?onChange=\{\(next\) => onSkillsChange\(variant\.id, next\)\}/,
   );
-  assert.match(
+  assert.doesNotMatch(
     createSource,
-    /const releaseDraft = releaseVariant[\s\S]*?\.\.\.providerDraft[\s\S]*?modelName: releaseVariant\.modelName \|\| providerDraft\.modelName,[\s\S]*?description: releaseVariant\.description,[\s\S]*?instruction: releaseVariant\.instruction/,
-  );
-  assert.match(
-    createSource,
-    /const variantDraft: AgentDraft = \{[\s\S]*?\.\.\.providerDraft[\s\S]*?description: variant\.description,[\s\S]*?instruction: variant\.instruction/,
-  );
-  assert.match(
-    createSource,
-    /function debugVariantConfigurationKey[\s\S]*?modelName: variant\.modelName\.trim\(\)[\s\S]*?description: variant\.description\.trim\(\)[\s\S]*?instruction: variant\.instruction\.trim\(\)/,
+    /该 Agent 当前没有 Skill。请先在架构页配置可比较的 Skill。/,
   );
 });
 
-test("baseline debug config defaults to the first configured Agent model", () => {
+test("one candidate can change multiple Agents and dimensions as one scheme", () => {
+  assert.match(
+    createSource,
+    /interface DebugVariantChange \{[\s\S]*?agentKey: string;[\s\S]*?dimension: ComparisonDimension;[\s\S]*?\}/,
+  );
+  assert.match(
+    createSource,
+    /interface DebugVariant \{[\s\S]*?additionalChanges: DebugVariantChange\[\];/,
+  );
+  assert.match(
+    createSource,
+    /function debugChangesForVariant[\s\S]*?variant\.additionalChanges/,
+  );
+  assert.match(
+    createSource,
+    /function debugOverridesForVariant[\s\S]*?debugChangesForVariant\(variant\)\.map/,
+  );
+  assert.match(
+    createSource,
+    /本方案全部变化[\s\S]*?正在编辑[\s\S]*?onRemoveChange/,
+  );
+  assert.match(
+    createSource,
+    /summarizeDebugChanges[\s\S]*?changeCountByAgent[\s\S]*?changedDimensions/,
+  );
+  assert.doesNotMatch(createSource, /方案中的其他变化/);
+  assert.match(createSource, /方案级结论|维度级归因/);
+});
+
+test("debug metrics include first output latency and completed tool calls", () => {
+  assert.match(
+    createSource,
+    /ttftMs: number \| null;[\s\S]*?toolCalls: number \| null;/,
+  );
+  assert.match(
+    createSource,
+    /let firstVisibleAt: number \| null = null;[\s\S]*?block\.kind === "text"[\s\S]*?firstVisibleAt = performance\.now\(\)/,
+  );
+  assert.match(
+    createSource,
+    /<dt>首字耗时<\/dt>[\s\S]*?<dt>总耗时<\/dt>[\s\S]*?<dt>Tools<\/dt>[\s\S]*?<dt>Tokens<\/dt>/,
+  );
+  assert.doesNotMatch(createSource, /<dt>成本<\/dt>/);
+});
+
+test("A2UI actions are shared only while every running scheme has the same interaction", () => {
+  assert.match(
+    createSource,
+    /inputDiverged: boolean;[\s\S]*?function debugVariantHasA2uiAction/,
+  );
+  assert.match(
+    createSource,
+    /const handleDebugVariantAction[\s\S]*?matchingTargets\.length === runningTargets\.length[\s\S]*?inputDiverged: true[\s\S]*?sendDebugText/,
+  );
+  assert.match(
+    createSource,
+    /<Blocks[\s\S]*?onAction=\{\(action, node\) =>[\s\S]*?onVariantAction\(variant\.id, action, node\)/,
+  );
+  assert.match(createSource, /互动输入已分叉/);
+});
+
+test("applying a successful candidate warns when the baseline failed", () => {
+  const start = createSource.indexOf("const applyDebugVariant = async (");
+  const end = createSource.indexOf("const undoAppliedCandidate", start);
+  const applyDebugVariant = createSource.slice(start, end);
+  assert.match(
+    applyDebugVariant,
+    /baselineFailed[\s\S]*?setDebugActionConfirm\(\{[\s\S]*?kind: "baseline-failed-apply"[\s\S]*?return;/,
+  );
+  assert.match(
+    createSource,
+    /基线失败，仍采用候选？[\s\S]*?候选成功只能证明它在本次输入下可以运行[\s\S]*?无法证明整体优于失败的基线/,
+  );
+});
+
+test("baseline debug config is a read-only snapshot of the current Draft", () => {
   assert.match(
     createSource,
     /function defaultDebugModelName\(draft: AgentDraft\): string \{[\s\S]*?draft\.modelName\?\.trim\(\)[\s\S]*?for \(const child of draft\.subAgents\)[\s\S]*?defaultDebugModelName\(child\)/,
@@ -292,27 +379,23 @@ test("baseline debug config defaults to the first configured Agent model", () =>
     createSource,
     /const initialProviderDraft = draftForCloudProvider\([\s\S]*?initialDraft \?\? emptyDraft\(cloudProvider\),[\s\S]*?cloudProvider,[\s\S]*?\);[\s\S]*?id: "baseline",[\s\S]*?modelName: defaultDebugModelName\(initialProviderDraft\)/,
   );
-  assert.match(
-    createSource,
-    /if \(id === "baseline" && field === "modelName"\)[\s\S]*?baselineModelEditedRef\.current = true/,
-  );
-  assert.match(
-    createSource,
-    /variant\.id === "baseline"[\s\S]*?modelName: baselineModelEditedRef\.current[\s\S]*?variant\.modelName[\s\S]*?defaultDebugModelName\(providerDraft\)/,
-  );
+  assert.match(createSource, /variant\.id === "baseline"[\s\S]*?"当前 Draft（只读）"/);
+  assert.match(createSource, /\{variant\.id !== "baseline" && <button[\s\S]*?测试配置/);
+  assert.match(createSource, /if \(id === "baseline"\) return;/);
+  assert.doesNotMatch(createSource, /baselineModelEditedRef/);
 });
 
 test("debug streaming applies each event outside the React state updater", () => {
-  const start = createSource.indexOf("const sendDebugMessage = async () =>");
-  const end = createSource.indexOf("const updateDebugVariantConfig", start);
-  const sendDebugMessage = createSource.slice(start, end);
-  const applyIndex = sendDebugMessage.indexOf("acc = applyEvent(acc, event)");
-  const updateIndex = sendDebugMessage.indexOf("setDebugVariants((current) =>", applyIndex);
+  const start = createSource.indexOf("const sendDebugText = async");
+  const end = createSource.indexOf("const sendDebugMessage = async () =>", start);
+  const sendDebugText = createSource.slice(start, end);
+  const applyIndex = sendDebugText.indexOf("acc = applyEvent(acc, event)");
+  const updateIndex = sendDebugText.indexOf("setDebugVariants((current) =>", applyIndex);
 
   assert.ok(applyIndex >= 0);
   assert.ok(updateIndex > applyIndex);
   assert.doesNotMatch(
-    sendDebugMessage.slice(updateIndex),
+    sendDebugText.slice(updateIndex),
     /acc = applyEvent\(acc, event\)/,
   );
 });
@@ -384,21 +467,17 @@ test("configuration checkboxes use Apps SDK UI controls", () => {
     createSource,
     /function Checklist[\s\S]*?<Checkbox[\s\S]*?checked=\{on\}[\s\S]*?onCheckedChange=/,
   );
-  assert.match(
-    createSource,
-    /className="cw-ab-optimization-checkbox"/,
-  );
-  assert.doesNotMatch(createSource, /type="checkbox"/);
+  assert.match(createSource, /function Checklist[\s\S]*?<Checkbox/);
 });
 
-test("build workspace has a validated primary path into debugging", () => {
+test("build workspace makes comparison debugging optional", () => {
   assert.match(
     createSource,
-    /const openValidation = \(\) => \{[\s\S]*?if \(!requireCompleteDraft\(\)\) return;[\s\S]*?setWorkspaceMode\("validate"\);/,
+    /const openValidation = async \(\) => \{[\s\S]*?if \(!requireCompleteDraft\(\)\) return;[\s\S]*?setComparisonFingerprint\(await fingerprintDraft\(draft\)\);[\s\S]*?setWorkspaceMode\("validate"\);/,
   );
   assert.match(
     createSource,
-    /function WorkspaceLifecycleFooter[\s\S]*?className="cw-workspace-nav-button is-primary"[\s\S]*?>[\s\S]*?下一步/,
+    /function WorkspaceLifecycleFooter[\s\S]*?进入调试[\s\S]*?跳过调试，直接发布/,
   );
   assert.match(
     createStyles,
@@ -444,52 +523,44 @@ test("container agents require child agents before debug or publish", () => {
 });
 
 test("debug workspace compares multiple configurations behind one shared input", () => {
-  assert.match(createSource, /label: "上下文优化"/);
-  assert.match(createSource, /label: "幻觉抑制"/);
-  assert.doesNotMatch(createSource, /className="cw-optimization-panel"/);
   assert.match(
     createSource,
-    /function DebugComparisonWorkspace[\s\S]*?aria-label="A\/B 调试工作台"/,
+    /function DebugComparisonWorkspace[\s\S]*?aria-label="多维对照调试工作台"/,
   );
   assert.match(
     createSource,
-    /className="cw-ab-composer"[\s\S]*?className="cw-btn cw-btn-soft cw-ab-add"[\s\S]*?添加对照组/,
+    /className="cw-comparison-toolbar"[\s\S]*?className="cw-btn cw-btn-soft"[\s\S]*?添加对照组[\s\S]*?className="cw-ab-composer"/,
   );
-  assert.doesNotMatch(createSource, /快速调试|同一条输入将同时发送到全部对照组/);
+  assert.match(createSource, /每个测试组都会独立执行一次真实 Agent/);
   assert.match(createSource, /className="cw-ab-config-trigger"[\s\S]*?测试配置/);
-  assert.match(createSource, /cw-ab-card-inner\$\{variant\.configOpen \? " is-flipped" : ""\}/);
-  assert.match(createSource, /checked=\{variant\.optimizations\.includes\(item\.id\)\}/);
-  assert.match(createSource, /className="cw-ab-optimizations-disabled"[\s\S]*?<em>待开放<\/em>/);
-  assert.match(createSource, /const startDebugVariant = async \(id: string\)/);
+  assert.match(createSource, /className="cw-comparison-config-panel"/);
+  assert.match(createSource, /<ComparisonDrawer[\s\S]*?title=\{`测试配置 · \$\{variant\.name\}`\}/);
+  assert.match(createSource, /基准配置/);
+  assert.doesNotMatch(createSource, /is-flipped|cw-ab-card-back/);
+  assert.match(createSource, /Tools、Knowledge、Memory、拓扑、Handoff 与部署配置在本轮保持锁定/);
+  assert.match(createSource, />\s*保存配置\s*<\/button>/);
+  assert.doesNotMatch(createSource, /保存并启动/);
   assert.match(
     createSource,
-    /const completeDebugVariantConfig = \(id: string\) => \{[\s\S]*?if \(id === "baseline"\)[\s\S]*?void startDebugVariant\(id\);/,
-  );
-  assert.match(createSource, /完成并启动/);
-  assert.match(
-    createSource,
-    /className="cw-ab-config-head-actions"[\s\S]*?className="cw-icon-btn cw-icon-danger cw-ab-config-remove"[\s\S]*?aria-label=\{`删除\$\{variant\.name\}`\}[\s\S]*?onClick=\{\(\) => onRemoveVariant\(variant\.id\)\}/,
+    /className="cw-comparison-danger-action"[\s\S]*?onClick=\{\(\) => onRemoveVariant\(variant\.id\)\}[\s\S]*?删除测试组/,
   );
   assert.match(
     createSource,
-    /const removeDebugVariant = async \(id: string\) => \{[\s\S]*?await cleanupDebugVariantRun\(id\);[\s\S]*?current\.filter\(\(variant\) => variant\.id !== id\)[\s\S]*?setSelectedVariantId\("baseline"\)/,
+    /const removeDebugVariant = \(id: string\) => \{[\s\S]*?setDebugActionConfirm\(\{[\s\S]*?kind: "delete"/,
+  );
+  assert.match(
+    createSource,
+    /const confirmDebugAction = \(\) => \{[\s\S]*?current\.filter\(\(variant\) => variant\.id !== action\.variantId\)[\s\S]*?setSelectedVariantId\("baseline"\)[\s\S]*?void cleanupDebugVariantRun\(action\.variantId\)/,
   );
   assert.match(createSource, /targets\.map\(async \(variant\)/);
-  assert.match(
-    createSource,
-    /modelName: variant\.modelName \|\| providerDraft\.modelName/,
-  );
-  assert.match(createSource, /variants\.length < 3/);
+  assert.match(createSource, /draftForDebugVariant\(providerDraft, variant\)/);
+  assert.match(createSource, /variants\.length < 4/);
   assert.doesNotMatch(createSource, /name="debug-release-variant"|发布候选/);
   assert.match(
     createSource,
-    /className="cw-ab-deploy"[\s\S]*?onClick=\{\(\) => onDeployVariant\(variant\.id\)\}[\s\S]*?部署该配置/,
+    /className="cw-ab-deploy"[\s\S]*?onClick=\{\(\) => onDeployVariant\(variant\.id\)\}[\s\S]*?采用候选/,
   );
   assert.match(createSource, /className="cw-ab-ready-title"[\s\S]*?已就绪/);
-  assert.match(
-    createSource,
-    /className="cw-ab-start cw-ab-footer-start"[\s\S]*?onClick=\{\(\) => onStartVariant\(variant\.id\)\}[\s\S]*?\{startLabel\}/,
-  );
   assert.doesNotMatch(createSource, /下一步：部署发布|>部署发布</);
   assert.doesNotMatch(createSource, />验证中心</);
   assert.doesNotMatch(createSource, /className="cw-debug-deploy"/);
@@ -497,10 +568,10 @@ test("debug workspace compares multiple configurations behind one shared input",
   assert.match(createStyles, /\.cw-ab-ready-title\s*\{[\s\S]*?font-size:\s*20px;/);
   assert.match(createStyles, /\.cw-ab-footer-start\s*\{/);
   assert.match(createStyles, /\.cw-ab-deploy\s*\{[\s\S]*?background:\s*#111;[\s\S]*?color:\s*#fff;/);
-  assert.match(createStyles, /\.cw-ab-card-face\s*\{[\s\S]*?border:\s*1px dashed/);
+  assert.match(createStyles, /\.cw-ab-card\s*\{[\s\S]*?border:\s*1px solid hsl\(var\(--border\)\)/);
   assert.match(
     createStyles,
-    /\.cw-ab-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(var\(--cw-ab-column-count\), minmax\(0, 1fr\)\)/,
+    /\.cw-ab-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(var\(--cw-ab-column-count\), minmax\(280px, 1fr\)\)/,
   );
   assert.match(
     createSource,
@@ -508,21 +579,18 @@ test("debug workspace compares multiple configurations behind one shared input",
   );
   assert.match(
     createStyles,
-    /\.cw-root\.is-validate\s*\{[\s\S]*?--cw-workspace-width:\s*min\(88%, 1440px\)/,
+    /\.cw-root\.is-validate\s*\{[\s\S]*?--cw-workspace-width:\s*min\(1260px, calc\(100% - 32px\)\)/,
   );
-  assert.match(createStyles, /\.cw-ab-card-inner\.is-flipped\s*\{[\s\S]*?rotateY\(180deg\)/);
-  assert.match(createStyles, /\.cw-ab-config\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.doesNotMatch(createStyles, /rotateY\(180deg\)|preserve-3d/);
+  assert.match(createStyles, /\.cw-comparison-config-panel\s*\{[\s\S]*?grid-template-columns:/);
+  assert.doesNotMatch(createStyles, /cw-ab-config-done-tip/);
   assert.match(
     createStyles,
-    /\.cw-ab-config-head \.cw-ab-config-done-tip\s*\{[\s\S]*?background:\s*hsl\(var\(--foreground\)\);[\s\S]*?color:\s*#fff;/,
-  );
-  assert.match(
-    createStyles,
-    /\.cw-ab-workspace\s*\{[\s\S]*?display:\s*grid;[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\) auto;/,
+    /\.cw-ab-workspace\s*\{[\s\S]*?display:\s*grid;[\s\S]*?grid-template-rows:\s*auto auto auto auto minmax\(0, 1fr\) auto;/,
   );
   assert.match(
     createStyles,
-    /\.cw-ab-composer\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) auto;/,
+    /\.cw-ab-composer\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\);/,
   );
   assert.doesNotMatch(
     createSource,
@@ -652,28 +720,10 @@ test("leaving debug confirms and cleans every temporary environment", () => {
   assert.match(createSource, /if \(!\(await confirmLeaveDebug\(\)\)\) return;/);
 });
 
-test("debug environment uses a dedicated hand-drawn run icon", () => {
-  assert.match(createSource, /function DebugRunIcon/);
-  assert.match(
-    createSource,
-    /<DebugRunIcon className="cw-i cw-debug-run-icon" \/>[\s\S]*?\{startLabel\}/,
-  );
-  assert.doesNotMatch(createSource, /<Bug className="cw-i" \/>/);
-  assert.match(
-    createStyles,
-    /\.cw-debug-start\s*\{[\s\S]*?background:\s*#111;[\s\S]*?box-shadow:\s*none;[\s\S]*?color:\s*#fff;/,
-  );
-  assert.match(
-    createStyles,
-    /\.cw-debug-start:hover:not\(:disabled\)\s*\{[\s\S]*?background:\s*#29292b;[\s\S]*?box-shadow:\s*0 7px 18px hsl\(0 0% 0% \/ 0\.16\);\s*\}/,
-  );
-});
-
 test("root Agent exposes a confirmed custom clear action", () => {
   assert.match(createSource, /function ClearAgentIcon/);
   assert.match(createSource, /aria-label="清空根 Agent"/);
   assert.match(createSource, /window\.confirm\("清空根 Agent/);
-  assert.match(createSource, /setDraft\(emptyDraft\(cloudProvider\)\)/);
 });
 
 test("skill sources open in a fixed-height dialog above a six-row selected list", () => {
@@ -701,7 +751,8 @@ test("skill sources open in a fixed-height dialog above a six-row selected list"
     /className="cw-skill-add"[\s\S]*?<span>添加 Skill<\/span>/,
   );
   assert.match(createSource, /role="dialog"[\s\S]*?aria-modal="true"/);
-  assert.match(createSource, /id="cw-skill-dialog-title">添加 Skill<\/h3>/);
+  assert.match(createSource, /const pickerId = useId\(\)/);
+  assert.match(createSource, /<h3 id=\{dialogTitleId\}>添加 Skill<\/h3>/);
   assert.match(
     createSource,
     /className="cw-skill-sourcetabs"[\s\S]*?role="tablist"/,

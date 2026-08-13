@@ -423,9 +423,11 @@ function ArtifactCard({
 function AuthCard({
   block,
   onAuth,
+  readOnly,
 }: {
   block: AuthBlock;
   onAuth?: (block: AuthBlock) => Promise<void>;
+  readOnly: boolean;
 }) {
   const [status, setStatus] = useState<"idle" | "authorizing" | "done" | "error">(
     block.done ? "done" : "idle",
@@ -496,7 +498,7 @@ function AuthCard({
       <button
         className="auth-card-btn"
         onClick={go}
-        disabled={status === "authorizing" || !block.authUri}
+        disabled={readOnly || status === "authorizing" || !block.authUri}
       >
         {status === "authorizing" ? (
           <>
@@ -518,6 +520,7 @@ export interface BlocksProps {
   blocks: Block[];
   appName?: string;
   streaming?: boolean;
+  readOnly?: boolean;
   onStreamFrame?: () => void;
   onStreamComplete?: () => void;
   onAction: (action: A2uiAction | undefined, node: A2uiComponent) => void;
@@ -531,6 +534,7 @@ export function Blocks({
   blocks,
   appName = "",
   streaming = false,
+  readOnly = false,
   onStreamFrame,
   onStreamComplete,
   onAction,
@@ -589,7 +593,14 @@ export function Blocks({
           case "agent-transfer":
             return null;
           case "auth":
-            return <AuthCard key={i} block={b} onAuth={onAuth} />;
+            return (
+              <AuthCard
+                key={i}
+                block={b}
+                onAuth={onAuth}
+                readOnly={readOnly}
+              />
+            );
           case "a2ui":
             // Skip surfaces with no renderable root (e.g. a createSurface that
             // was never followed by updateComponents) so we don't emit an empty box.
@@ -602,7 +613,11 @@ export function Blocks({
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 transition={{ type: "spring", stiffness: 380, damping: 30 }}
               >
-                <SurfaceView surface={s} onAction={onAction} />
+                <SurfaceView
+                  surface={s}
+                  onAction={onAction}
+                  readOnly={readOnly}
+                />
               </motion.div>
             ));
           default:

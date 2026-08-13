@@ -9,6 +9,7 @@ export function Button({ node, ctx }: ComponentRendererProps) {
       className={`a2ui-button a2ui-button--${variant}`}
       data-a2ui-id={node.id}
       data-a2ui-component={node.component}
+      disabled={ctx.readOnly}
       onClick={() => ctx.dispatchAction(node.action as A2uiAction | undefined, node)}
     >
       {ctx.render(node.child as string)}

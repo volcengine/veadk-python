@@ -11,6 +11,7 @@ import type { A2uiAction, A2uiComponent, DynamicValue, SurfaceState } from "./ty
 
 export interface RenderContext {
   surface: SurfaceState;
+  readOnly: boolean;
   /** Render a child component by id. */
   render: (id: string | undefined) => ReactNode;
   /** Resolve a dynamic value against the surface data model. */

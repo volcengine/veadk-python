@@ -27,7 +27,7 @@ from typing import Any, ClassVar, Literal
 import pytest
 import yaml
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from veadk.cli.cli_frontend import (
     _redact_debug_text,
@@ -38,6 +38,7 @@ from veadk.cli.cli_frontend import (
 from veadk.cli.generated_agent_codegen import (
     AgentDraft,
     CustomTool,
+    DebugModelCredential,
     DeploymentConfig,
     GeneratedAgentProjectRequest,
     GeneratedFile,
@@ -45,12 +46,13 @@ from veadk.cli.generated_agent_codegen import (
     McpTool,
     MemoryConfig,
     SelectedSkill,
+    debug_model_credential_bindings,
     generate_project_from_draft,
 )
 from veadk.cli.generated_agent_security import (
-    DebugPolicyError,
     MAX_DEPTH,
     MAX_ITERATIONS,
+    DebugPolicyError,
     validate_debug_policy,
     validate_project_policy,
     validate_url_not_private,
@@ -95,6 +97,96 @@ def _content_hashes(project: GeneratedProject) -> dict[str, str]:
         path: hashlib.sha256(content.encode("utf-8")).hexdigest()
         for path, content in _file_map(project).items()
     }
+
+
+def test_debug_model_credentials_are_read_from_per_agent_environment_variables() -> (
+    None
+):
+    draft = AgentDraft(
+        name="root",
+        modelName="root-model",
+        subAgents=[AgentDraft(name="worker", modelName="worker-model")],
+    )
+
+    project = generate_project_from_draft(
+        draft,
+        model_api_key_env_by_path={
+            (): "VEADK_DEBUG_MODEL_API_KEY_ROOT",
+            (0,): "VEADK_DEBUG_MODEL_API_KEY_0",
+        },
+    )
+    source = _file_map(project)["agents/root/agent.py"]
+
+    assert "import os" in source
+    assert 'model_api_key=os.environ["VEADK_DEBUG_MODEL_API_KEY_ROOT"]' in source
+    assert 'model_api_key=os.environ["VEADK_DEBUG_MODEL_API_KEY_0"]' in source
+    assert "api-key-secret" not in source
+
+
+def test_custom_debug_api_base_requires_a_temporary_credential() -> None:
+    custom = AgentDraft(
+        name="root",
+        modelName="model-a",
+        modelApiBase="https://gateway.example.com/v1",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Custom API Base gateway.example.com requires a temporary API key",
+    ):
+        debug_model_credential_bindings(
+            custom,
+            [],
+            studio_api_base="https://ark.example.com/api/v3",
+        )
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "http://gateway.example.com/v1",
+        "http://127.0.0.1:8000/v1",
+    ],
+)
+def test_debug_api_base_requires_https(api_base: str) -> None:
+    insecure = AgentDraft(
+        name="root",
+        modelName="model-a",
+        modelApiBase=api_base,
+    )
+
+    with pytest.raises(ValueError, match="Debug API Base must use HTTPS"):
+        debug_model_credential_bindings(
+            insecure,
+            [DebugModelCredential(agentPath=[], apiKey=SecretStr("temporary-key"))],
+            studio_api_base="",
+        )
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://user:secret@gateway.example.com/v1",
+        "https://gateway.example.com/v1?api_key=secret",
+        "https://gateway.example.com/v1#credential",
+    ],
+)
+def test_debug_api_base_rejects_embedded_credentials(api_base: str) -> None:
+    unsafe = AgentDraft(
+        name="root",
+        modelName="model-a",
+        modelApiBase=api_base,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="must not contain credentials, query parameters, or fragments",
+    ):
+        debug_model_credential_bindings(
+            unsafe,
+            [DebugModelCredential(agentPath=[], apiKey=SecretStr("temporary-key"))],
+            studio_api_base="",
+        )
 
 
 def _full_draft() -> AgentDraft:
@@ -915,6 +1007,12 @@ def test_debug_text_redacts_environment_and_inline_markers(
     assert "authToken=***" in redacted
     assert "Bearer ***" in redacted
 
+    temporary_model_key = "temporary-model-key-without-label"
+    assert temporary_model_key not in _redact_debug_text(
+        f"upstream echoed {temporary_model_key}",
+        secret_values=[temporary_model_key],
+    )
+
 
 def test_model_error_detail_preserves_cause_and_redacts_credentials() -> None:
     api_key = "model-api-key-123456"
@@ -952,6 +1050,17 @@ def test_generated_project_and_debug_run_api_lifecycle(
     monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "byteplus-sk")
     monkeypatch.setenv("BYTEPLUS_SESSION_TOKEN", "byteplus-token")
     monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-1")
+    monkeypatch.setenv(
+        "VEADK_STUDIO_DEBUG_MODEL_HOST_ALLOWLIST",
+        "user-controlled.example",
+    )
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ],
+    )
 
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
@@ -1038,6 +1147,9 @@ def test_generated_project_and_debug_run_api_lifecycle(
         "description": "Demo agent",
         "instruction": "Always answer with hello.",
         "builtinTools": ["run_code"],
+        "memory": {"shortTerm": False, "longTerm": True},
+        "longTermBackend": "local",
+        "autoSaveSession": True,
         "deployment": {
             "envValues": {
                 "AGENTKIT_TOOL_ID": "t-debug",
@@ -1060,6 +1172,18 @@ def test_generated_project_and_debug_run_api_lifecycle(
         )
         assert old_shape_response.status_code == 422
 
+        validation_secret = "validation-secret-sentinel-" + "x" * 16384
+        invalid_credential_response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": draft,
+                "modelCredentials": [{"agentPath": [], "apiKey": validation_secret}],
+            },
+        )
+        assert invalid_credential_response.status_code == 422
+        assert validation_secret not in invalid_credential_response.text
+        assert "validation-secret-sentinel" not in invalid_credential_response.text
+
         process_count = len(_FakeProcess.created)
         custom_model_response = client.post(
             "/web/generated-agent-test-runs",
@@ -1074,12 +1198,40 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert "自定义模型地址" in custom_model_response.json()["detail"]
         assert len(_FakeProcess.created) == process_count
 
+        allowlisted_custom_response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": {
+                    **draft,
+                    "modelApiBase": "https://user-controlled.example/v1",
+                },
+                "modelCredentials": [
+                    {"agentPath": [], "apiKey": "allowlisted-temporary-key"}
+                ],
+            },
+        )
+        assert allowlisted_custom_response.status_code == 200
+        allowlisted_custom_run = allowlisted_custom_response.json()
+        allowlisted_custom_process = _FakeProcess.created[-1]
+        assert (
+            allowlisted_custom_process.env["VEADK_DEBUG_MODEL_API_KEY_ROOT"]
+            == "allowlisted-temporary-key"
+        )
+        assert (
+            client.delete(
+                f"/web/generated-agent-test-runs/{allowlisted_custom_run['runId']}"
+            ).status_code
+            == 200
+        )
+
+        temporary_model_key = "temporary-model-api-key-123"
         run_response = client.post(
             "/web/generated-agent-test-runs",
             json={
                 "draft": draft,
                 "runtimeId": "runtime-debug",
                 "runtimeRegion": "cn-shanghai",
+                "modelCredentials": [{"agentPath": [], "apiKey": temporary_model_key}],
             },
         )
         assert run_response.status_code == 200
@@ -1105,6 +1257,22 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert not (Path(reserved_process.cwd) / "agents/abc").exists()
 
         process = _FakeProcess.created[-2]
+        assert process.env["VEADK_DEBUG_MODEL_API_KEY_ROOT"] == temporary_model_key
+        generated_agent_source = (
+            Path(process.cwd) / "agents/demo_agent/agent.py"
+        ).read_text(encoding="utf-8")
+        exported_agent_source = next(
+            file["content"]
+            for file in project["files"]
+            if file["path"] == "agents/demo_agent/agent.py"
+        )
+        assert "auto_save_session=True" in exported_agent_source
+        assert "auto_save_session=True" not in generated_agent_source
+        assert temporary_model_key not in generated_agent_source
+        assert (
+            'model_api_key=os.environ["VEADK_DEBUG_MODEL_API_KEY_ROOT"]'
+            in generated_agent_source
+        )
         assert process.env["VOLCENGINE_ACCESS_KEY"] == "test-ak"
         assert process.env["VOLCENGINE_SECRET_KEY"] == "test-sk"
         assert process.env["BYTEPLUS_ACCESS_KEY"] == "byteplus-ak"
@@ -1135,9 +1303,10 @@ def test_generated_project_and_debug_run_api_lifecycle(
             for path in Path(process.cwd).rglob("*")
             if path.is_file() and not path.name.startswith("runner.")
         }
-        assert generated_files == {
-            file["path"]: file["content"] for file in project["files"]
-        }
+        exported_files = {file["path"]: file["content"] for file in project["files"]}
+        generated_files.pop("agents/demo_agent/agent.py")
+        exported_files.pop("agents/demo_agent/agent.py")
+        assert generated_files == exported_files
 
         session_response = client.post(
             f"/web/generated-agent-test-runs/{run['runId']}/sessions",
@@ -1410,6 +1579,124 @@ def test_generated_agent_debug_allows_large_skill_projects(
     assert run_response.status_code == 200
     assert run_response.json()["appName"] == "large_skill_project"
     assert _FakeProcess.created[-1].cmd
+
+
+def test_comparison_replacement_stages_four_new_environments_before_old_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, Any] = {}
+    _FakeProcess.created.clear()
+    _FakeAsyncClient.listed_apps = ["comparison_agent"]
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "uvicorn.run",
+        lambda app, **kwargs: captured.setdefault("app", app),
+    )
+
+    _run_frontend_server(
+        agents_dir=str(tmp_path),
+        frontend_dir=None,
+        site_logo=None,
+        site_title=None,
+        host="127.0.0.1",
+        port=8765,
+        dev=True,
+        vite=True,
+        oauth2_user_pool=None,
+        oauth2_user_pool_client=None,
+        oauth2_user_pool_uid=None,
+        oauth2_user_pool_client_uid=None,
+        oauth2_redirect_uri=None,
+        oauth2_provider=None,
+        oauth2_provider_label=None,
+        auth_mode="frontend",
+        generated_agent_test_run_ttl=60,
+        open_browser=False,
+    )
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    real_socket = socket.socket
+    monkeypatch.setattr(
+        "socket.socket",
+        lambda *args, **kwargs: (
+            real_socket(*args, **kwargs)
+            if len(args) >= 4 or "fileno" in kwargs
+            else _FakeSocket(*args, **kwargs)
+        ),
+    )
+    draft = {
+        "name": "comparison-agent",
+        "description": "Comparison capacity test",
+        "instruction": "Answer briefly.",
+    }
+
+    created_run_ids: list[str] = []
+    with TestClient(captured["app"]) as client:
+        for comparison_id in ("old-round", "new-round"):
+            for _ in range(4):
+                response = client.post(
+                    "/web/generated-agent-test-runs",
+                    json={"draft": draft, "comparisonId": comparison_id},
+                )
+                assert response.status_code == 200
+                created_run_ids.append(response.json()["runId"])
+
+        same_round_overflow = client.post(
+            "/web/generated-agent-test-runs",
+            json={"draft": draft, "comparisonId": "new-round"},
+        )
+        assert same_round_overflow.status_code == 429
+        assert (
+            same_round_overflow.json()["detail"]
+            == "本轮对照调试环境已达上限 (4/4)，请减少测试组后重试。"
+        )
+
+        swap_overflow = client.post(
+            "/web/generated-agent-test-runs",
+            json={"draft": draft, "comparisonId": "overflow-round"},
+        )
+        if swap_overflow.status_code == 200:
+            client.delete(
+                f"/web/generated-agent-test-runs/{swap_overflow.json()['runId']}"
+            )
+        assert swap_overflow.status_code == 429
+        assert (
+            swap_overflow.json()["detail"]
+            == "调试环境临时并发数已达上限 (8/8)，请等待上一 Session 清理完成后重试。"
+        )
+
+        for run_id in created_run_ids:
+            assert (
+                client.delete(f"/web/generated-agent-test-runs/{run_id}").status_code
+                == 200
+            )
+
+        ordinary_run_ids: list[str] = []
+        for _ in range(4):
+            response = client.post(
+                "/web/generated-agent-test-runs",
+                json={"draft": draft},
+            )
+            assert response.status_code == 200
+            ordinary_run_ids.append(response.json()["runId"])
+        ordinary_overflow = client.post(
+            "/web/generated-agent-test-runs",
+            json={"draft": draft},
+        )
+        assert ordinary_overflow.status_code == 429
+        assert (
+            ordinary_overflow.json()["detail"]
+            == "调试环境并发数已达上限 (4/4)，请稍后重试或关闭不再使用的调试页面。"
+        )
+        for run_id in ordinary_run_ids:
+            assert (
+                client.delete(f"/web/generated-agent-test-runs/{run_id}").status_code
+                == 200
+            )
 
 
 def test_studio_deploy_run_script_allows_generated_agent_debug() -> None:
