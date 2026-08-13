@@ -12,6 +12,13 @@ export type VibeTaskState =
   | "cancelled"
   | "expired";
 
+export interface VibeArtifactInfo {
+  revision: number;
+  sha256: string;
+  size: number;
+  filename: string;
+}
+
 export interface VibeTask {
   taskId: string;
   displayName: string;
@@ -24,10 +31,22 @@ export interface VibeTask {
   lastSequence: number;
   credentialsConfigured: boolean;
   intentRevision: number;
+  sandboxSessionId: string;
   validationRuntimeId: string;
   validationRuntimeStatus: string;
+  artifact: VibeArtifactInfo | null;
   warnings: string[];
   error: string;
+}
+
+export interface VibeCapabilities {
+  enabled: boolean;
+  reason?: string;
+  sandboxTtlSeconds: number;
+  maxCloudAttempts: number;
+  intentSummaryPath: string;
+  evaluationEnabled: boolean;
+  stateSource: string;
 }
 
 export interface VibeIntentSummary {
@@ -52,6 +71,15 @@ export interface VibeTaskEvent {
   payload: Record<string, unknown>;
 }
 
+const TERMINAL_STATES = new Set<VibeTaskState>([
+  "completed",
+  "partial",
+  "blocked",
+  "failed",
+  "cancelled",
+  "expired",
+]);
+
 async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(withAuth(path), {
     ...init,
@@ -68,9 +96,10 @@ async function errorDetail(response: Response): Promise<string> {
       if (typeof message === "string") return message;
     }
   } catch {
-    // Fall back to the status text for non-JSON responses.
+    // Fall back to the HTTP metadata for non-JSON responses.
   }
-  return response.statusText || `HTTP ${response.status}`;
+  const contentType = response.headers.get("content-type") || "unknown content type";
+  return `${response.statusText || `HTTP ${response.status}`} (${contentType})`;
 }
 
 async function checked<T>(response: Response): Promise<T> {
@@ -78,54 +107,92 @@ async function checked<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
+function jsonHeaders(): HeadersInit {
+  return { "Content-Type": "application/json", Accept: "application/json" };
+}
+
 export const vibeClient = {
+  async capabilities(signal?: AbortSignal): Promise<VibeCapabilities> {
+    return checked(await apiFetch("/web/vibe/capabilities", { signal }));
+  },
+
   async create(goal: string, requestId = crypto.randomUUID()): Promise<VibeTask> {
     return checked(
       await apiFetch("/web/vibe/tasks", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: jsonHeaders(),
         body: JSON.stringify({ goal, requestId }),
       }),
     );
   },
 
-  async list(): Promise<VibeTask[]> {
+  async list(signal?: AbortSignal): Promise<VibeTask[]> {
     const payload = await checked<{ tasks: VibeTask[] }>(
-      await apiFetch("/web/vibe/tasks"),
+      await apiFetch("/web/vibe/tasks", { signal }),
     );
     return payload.tasks;
   },
 
-  async get(taskId: string): Promise<VibeTask> {
-    return checked(await apiFetch(`/web/vibe/tasks/${encodeURIComponent(taskId)}`));
+  async get(taskId: string, signal?: AbortSignal): Promise<VibeTask> {
+    return checked(
+      await apiFetch(`/web/vibe/tasks/${encodeURIComponent(taskId)}`, { signal }),
+    );
   },
 
   async credentials(
     taskId: string,
     accessKeyId: string,
     secretAccessKey: string,
+    sessionToken = "",
+    commandId = crypto.randomUUID(),
   ): Promise<VibeTask> {
     return checked(
       await apiFetch(`/web/vibe/tasks/${encodeURIComponent(taskId)}/credentials`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accessKeyId, secretAccessKey }),
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          commandId,
+          accessKeyId,
+          secretAccessKey,
+          ...(sessionToken ? { sessionToken } : {}),
+        }),
       }),
     );
   },
 
-  async intent(taskId: string): Promise<VibeIntentSummary> {
+  async intent(taskId: string, signal?: AbortSignal): Promise<VibeIntentSummary> {
     return checked(
-      await apiFetch(
-        `/web/vibe/tasks/${encodeURIComponent(taskId)}/intent-summary`,
-      ),
+      await apiFetch(`/web/vibe/tasks/${encodeURIComponent(taskId)}/intent-summary`, {
+        signal,
+      }),
     );
   },
 
-  async stop(taskId: string): Promise<VibeTask> {
+  async updateIntent(
+    taskId: string,
+    summary: VibeIntentSummary,
+    expectedRevision = summary.revision,
+    commandId = crypto.randomUUID(),
+  ): Promise<VibeIntentSummary> {
+    return checked(
+      await apiFetch(`/web/vibe/tasks/${encodeURIComponent(taskId)}/intent-summary`, {
+        method: "PUT",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ commandId, expectedRevision, summary }),
+      }),
+    );
+  },
+
+  async stop(
+    taskId: string,
+    reason = "",
+    commandId = crypto.randomUUID(),
+  ): Promise<VibeTask> {
     return checked(
       await apiFetch(`/web/vibe/tasks/${encodeURIComponent(taskId)}/stop`, {
         method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ commandId, reason }),
       }),
     );
   },
@@ -138,20 +205,92 @@ export const vibeClient = {
   },
 };
 
-export function parseVibeSse(text: string): VibeTaskEvent[] {
-  const events: VibeTaskEvent[] = [];
-  for (const frame of text.replace(/\r\n/g, "\n").split("\n\n")) {
-    let data = "";
-    for (const line of frame.split("\n")) {
-      if (line.startsWith("data: ")) data += line.slice(6);
-    }
-    if (!data) continue;
-    try {
-      const value = JSON.parse(data) as VibeTaskEvent;
-      if (typeof value.sequence === "number" && value.eventType) events.push(value);
-    } catch {
-      // Ignore incomplete frames; reconnect uses the last valid sequence.
-    }
+function parseFrame(frame: string): VibeTaskEvent | null {
+  const data: string[] = [];
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
   }
-  return events;
+  if (data.length === 0) return null;
+  try {
+    const value = JSON.parse(data.join("\n")) as VibeTaskEvent;
+    return typeof value.sequence === "number" && typeof value.eventType === "string"
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function consumeVibeSse(
+  chunk: string,
+  remainder = "",
+): { events: VibeTaskEvent[]; remainder: string } {
+  const normalized = (remainder + chunk).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const frames = normalized.split("\n\n");
+  const nextRemainder = frames.pop() ?? "";
+  return {
+    events: frames.map(parseFrame).filter((event): event is VibeTaskEvent => event !== null),
+    remainder: nextRemainder,
+  };
+}
+
+export function parseVibeSse(text: string): VibeTaskEvent[] {
+  const parsed = consumeVibeSse(`${text}\n\n`);
+  return parsed.events;
+}
+
+function reconnectDelay(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(resolve, 750);
+    signal.addEventListener(
+      "abort",
+      () => {
+        window.clearTimeout(timer);
+        reject(new DOMException("Aborted", "AbortError"));
+      },
+      { once: true },
+    );
+  });
+}
+
+export async function* streamVibeEvents(
+  taskId: string,
+  options: { after?: number; signal: AbortSignal },
+): AsyncGenerator<VibeTaskEvent> {
+  let lastSequence = Math.max(0, options.after ?? 0);
+  while (!options.signal.aborted) {
+    const response = await apiFetch(`/web/vibe/tasks/${encodeURIComponent(taskId)}/events`, {
+      headers: { Accept: "text/event-stream", "Last-Event-ID": String(lastSequence) },
+      signal: options.signal,
+    });
+    if (!response.ok) throw new Error(await errorDetail(response));
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.toLowerCase().includes("text/event-stream")) {
+      throw new Error(`事件流返回了非 SSE 响应（${contentType || "Content-Type 缺失"}）`);
+    }
+    if (!response.body) throw new Error("事件流响应没有可读取的内容。");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let remainder = "";
+    try {
+      while (!options.signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const parsed = consumeVibeSse(decoder.decode(value, { stream: true }), remainder);
+        remainder = parsed.remainder;
+        for (const event of parsed.events) {
+          if (event.sequence <= lastSequence) continue;
+          lastSequence = event.sequence;
+          yield event;
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const status = await vibeClient.get(taskId, options.signal);
+    if (TERMINAL_STATES.has(status.state)) return;
+    await reconnectDelay(options.signal);
+  }
 }
