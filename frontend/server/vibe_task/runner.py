@@ -170,16 +170,32 @@ def validation_policy(*, runtime_name: str, project_root: str) -> ValidationPoli
     )
     cloud_steps = (
         ValidationStep(
-            "deploy-config", ("ak", "deploy", "config", "--force"), "cloud", 120
+            "deploy-config",
+            (
+                "ak",
+                "config",
+                "--runtime_name",
+                target,
+            ),
+            "cloud",
+            120,
         ),
-        ValidationStep("deploy-build", ("ak", "deploy", "build"), "cloud", 1_800),
-        ValidationStep("deploy-apply", ("ak", "deploy", "apply"), "cloud", 900),
+        ValidationStep("deploy-build", ("ak", "build"), "cloud", 1_800),
+        ValidationStep("deploy-apply", ("ak", "deploy"), "cloud", 900),
         ValidationStep(
             "runtime-ready", ("ak", "runtime", "show", target, "--json"), "cloud", 120
         ),
         ValidationStep(
             "invoke",
-            ("ak", "invoke", target, "--message", "VIBE_VALIDATION_SMOKE", "--json"),
+            (
+                "ak",
+                "invoke",
+                "run",
+                "VIBE_VALIDATION_SMOKE",
+                "--config-file",
+                "agentkit.yaml",
+                "--raw",
+            ),
             "cloud",
             300,
         ),

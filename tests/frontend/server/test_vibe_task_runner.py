@@ -65,14 +65,16 @@ def test_validation_policy_separates_typed_argv_steps() -> None:
     assert all(
         isinstance(step.argv, tuple) for step in policy.local_steps + policy.cloud_steps
     )
-    assert ("ak", "deploy", "build") in (step.argv for step in policy.cloud_steps)
+    assert ("ak", "build") in (step.argv for step in policy.cloud_steps)
+    assert ("ak", "deploy") in (step.argv for step in policy.cloud_steps)
     assert (
         "ak",
         "invoke",
-        "vibe-task-a1b2c3",
-        "--message",
+        "run",
         "VIBE_VALIDATION_SMOKE",
-        "--json",
+        "--config-file",
+        "agentkit.yaml",
+        "--raw",
     ) in (step.argv for step in policy.cloud_steps)
     assert not any(
         "eval" in argument.lower()

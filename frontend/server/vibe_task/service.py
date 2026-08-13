@@ -32,6 +32,7 @@ from .models import (
     IntentSummary,
     IntentSummaryUpdate,
     TaskEvent,
+    StopTaskRequest,
     TaskStage,
     TaskState,
     TaskStatus,
@@ -217,11 +218,7 @@ class VibeTaskService:
 
     async def configure_credentials(self, owner_id: str, task_id: str, body: CredentialUpload) -> TaskStatus:
         if self.sandbox_store is not None:
-            raise VibeTaskError(
-                "VIBE_CREDENTIALS_NOT_READY",
-                "Dev Sandbox 凭据通道尚未就绪",
-                status_code=501,
-            )
+            return await self.sandbox_store.configure_credentials(owner_id, task_id, body)
         status = await self.require(owner_id, task_id)
         if status.terminal:
             raise VibeTaskError("VIBE_TASK_TERMINAL", "Task is terminal", status_code=409)
@@ -239,11 +236,7 @@ class VibeTaskService:
 
     async def update_intent(self, owner_id: str, task_id: str, body: IntentSummaryUpdate) -> IntentSummary:
         if self.sandbox_store is not None:
-            raise VibeTaskError(
-                "VIBE_INTENT_UPDATE_NOT_READY",
-                "Dev Sandbox Intent 更新通道尚未就绪",
-                status_code=501,
-            )
+            return await self.sandbox_store.update_intent(owner_id, task_id, body)
         status = await self.require(owner_id, task_id)
         if status.terminal:
             raise VibeTaskError("VIBE_TASK_TERMINAL", "Task is terminal", status_code=409)
@@ -311,13 +304,15 @@ class VibeTaskService:
                 )
                 sequence += 1
 
-    async def stop(self, owner_id: str, task_id: str) -> TaskStatus:
+    async def stop(
+        self,
+        owner_id: str,
+        task_id: str,
+        body: StopTaskRequest | None = None,
+    ) -> TaskStatus:
+        body = body or StopTaskRequest()
         if self.sandbox_store is not None:
-            raise VibeTaskError(
-                "VIBE_STOP_NOT_READY",
-                "Dev Sandbox 停止通道尚未就绪",
-                status_code=501,
-            )
+            return await self.sandbox_store.stop(owner_id, task_id, body)
         status = await self.require(owner_id, task_id)
         if status.terminal:
             return status

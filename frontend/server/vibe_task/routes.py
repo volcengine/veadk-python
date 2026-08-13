@@ -21,7 +21,12 @@ from typing import Any
 from fastapi import HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
-from .models import CredentialUpload, CreateTaskRequest, IntentSummaryUpdate
+from .models import (
+    CredentialUpload,
+    CreateTaskRequest,
+    IntentSummaryUpdate,
+    StopTaskRequest,
+)
 from .service import VibeTaskError, VibeTaskService
 
 
@@ -101,9 +106,13 @@ def mount_vibe_task_routes(
         return StreamingResponse(stream(), media_type="text/event-stream")
 
     @app.post("/web/vibe/tasks/{task_id}/stop")
-    async def stop(task_id: str, request: Request) -> dict[str, object]:
+    async def stop(
+        task_id: str, request: Request, body: StopTaskRequest | None = None
+    ) -> dict[str, object]:
         try:
-            return (await service.stop(owner_resolver(request), task_id)).model_dump(by_alias=True)
+            return (
+                await service.stop(owner_resolver(request), task_id, body)
+            ).model_dump(by_alias=True)
         except VibeTaskError as error:
             raise handle(error) from error
 

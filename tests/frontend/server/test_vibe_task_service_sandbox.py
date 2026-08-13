@@ -32,6 +32,15 @@ class SandboxStore:
             return [TaskEvent(sequence=1, eventType="task.created", stage=TaskStage.DONE, timestamp="now")]
         return []
 
+    async def configure_credentials(self, owner, task_id, body):
+        return self._status()
+
+    async def update_intent(self, owner, task_id, body):
+        return body.summary.model_copy(update={"revision": body.expected_revision + 1})
+
+    async def stop(self, owner, task_id, body):
+        return self._status()
+
     async def delete(self, owner, task_id):
         self.deleted.append((owner, task_id))
         return True
@@ -63,26 +72,22 @@ async def test_sandbox_service_reads_only_remote_boundary() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("operation", "code"),
-    [
-        ("credentials", "VIBE_CREDENTIALS_NOT_READY"),
-        ("intent", "VIBE_INTENT_UPDATE_NOT_READY"),
-        ("stop", "VIBE_STOP_NOT_READY"),
-    ],
-)
-async def test_sandbox_mutations_fail_explicitly_until_control_channel(
-    operation, code
-) -> None:
+async def test_sandbox_mutations_use_remote_control_boundary() -> None:
+    from frontend.server.vibe_task.models import CredentialUpload, IntentSummaryUpdate
+
     service = VibeTaskService(sandbox_store=SandboxStore())
-    with pytest.raises(VibeTaskError) as captured:
-        if operation == "credentials":
-            from frontend.server.vibe_task.models import CredentialUpload
-            await service.configure_credentials("owner", "task", CredentialUpload(accessKeyId="ak", secretAccessKey="sk"))
-        elif operation == "intent":
-            from frontend.server.vibe_task.models import IntentSummaryUpdate
-            await service.update_intent("owner", "task", IntentSummaryUpdate(expectedRevision=1, summary=IntentSummary(goal="Build")))
-        else:
-            await service.stop("owner", "task")
-    assert captured.value.code == code
-    assert captured.value.status_code == 501
+    status = await service.configure_credentials(
+        "owner", "task", CredentialUpload(accessKeyId="ak", secretAccessKey="sk")
+    )
+    updated = await service.update_intent(
+        "owner",
+        "task",
+        IntentSummaryUpdate(
+            expectedRevision=1, summary=IntentSummary(goal="Build")
+        ),
+    )
+    stopped = await service.stop("owner", "task")
+
+    assert status.state is TaskState.COMPLETED
+    assert updated.revision == 2
+    assert stopped.state is TaskState.COMPLETED

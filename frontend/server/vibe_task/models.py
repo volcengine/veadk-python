@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
@@ -90,12 +90,15 @@ class CreateTaskRequest(VibeModel):
 
 
 class CredentialUpload(VibeModel):
+    command_id: UUID = Field(default_factory=uuid4)
     access_key_id: SecretStr = Field(repr=False)
     secret_access_key: SecretStr = Field(repr=False)
     session_token: SecretStr | None = Field(default=None, repr=False)
 
     def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        kwargs.setdefault("exclude", {"access_key_id", "secret_access_key", "session_token"})
+        kwargs.setdefault(
+            "exclude", {"command_id", "access_key_id", "secret_access_key", "session_token"}
+        )
         return super().model_dump(*args, **kwargs)
 
 
@@ -122,8 +125,14 @@ class IntentSummary(VibeModel):
 
 
 class IntentSummaryUpdate(VibeModel):
+    command_id: UUID = Field(default_factory=uuid4)
     expected_revision: int = Field(ge=0)
     summary: IntentSummary
+
+
+class StopTaskRequest(VibeModel):
+    command_id: UUID = Field(default_factory=uuid4)
+    reason: str = Field(default="", max_length=500)
 
 
 class TaskEvent(VibeModel):
