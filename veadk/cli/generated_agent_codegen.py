@@ -32,6 +32,7 @@ from veadk.cli.generated_agent_catalog import (
     env_for_provider,
     model_env_for_provider,
 )
+from veadk.cli.studio_model_catalog import is_provider_modelark_base_url
 
 _PYTHON_LICENSE_HEADER = """# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
 #
@@ -245,6 +246,7 @@ class _Acc:
         self.env: list[EnvVar] = list(model_env_for_provider(cloud_provider))
         self.extras: set[str] = set()
         self.used_names: set[str] = set()
+        self.used_env_names: set[str] = set()
         self.agent_display_names: dict[str, str] = {}
 
 
@@ -647,6 +649,26 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
         kwargs.append(f"model_provider={_py_str(draft.modelProvider.strip())}")
     if draft.modelApiBase.strip():
         kwargs.append(f"model_api_base={_py_str(draft.modelApiBase.strip())}")
+        if not is_provider_modelark_base_url(
+            acc.cloud_provider,
+            draft.modelApiBase,
+        ):
+            _add_import(acc, "import os")
+            agent_segment = _env_segment(draft.name, _env_segment(var_name, "AGENT"))
+            env_name = _next_env_name(
+                f"CUSTOM_MODEL_{agent_segment}_API_KEY",
+                acc.used_env_names,
+            )
+            acc.used_env_names.add(env_name)
+            acc.env.append(
+                EnvVar(
+                    env_name,
+                    True,
+                    "replace-with-your-own-model-api-key",
+                    f"{draft.name.strip() or 'Custom model'} API Key",
+                )
+            )
+            kwargs.append(f"model_api_key=os.environ[{_py_str(env_name)}]")
 
     if draft.memory.shortTerm:
         backend = STM_BY_ID.get(draft.shortTermBackend or "local")

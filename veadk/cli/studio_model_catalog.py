@@ -16,8 +16,12 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 VOLCENGINE_MODELARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 BYTEPLUS_MODELARK_BASE_URL = "https://ark.ap-southeast.bytepluses.com/api/v3"
+
+SUPPORTED_CLOUD_PROVIDERS = frozenset({"volcengine", "byteplus"})
 
 VOLCENGINE_STUDIO_AGENT_MODEL_NAME = "doubao-seed-2-1-pro-260628"
 BYTEPLUS_STUDIO_AGENT_MODEL_NAME = "seed-2-0-lite-260228"
@@ -102,6 +106,40 @@ def modelark_base_url(provider: str) -> str:
         BYTEPLUS_MODELARK_BASE_URL
         if _provider_id(provider) == "byteplus"
         else VOLCENGINE_MODELARK_BASE_URL
+    )
+
+
+def normalize_modelark_base_url(raw_url: str) -> str:
+    """Normalize a strict HTTPS ModelArk endpoint for exact comparison."""
+    try:
+        parsed = urlparse((raw_url or "").strip())
+        port = parsed.port
+    except ValueError:
+        return ""
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in {None, 443}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        return ""
+    path = "/" + parsed.path.strip("/")
+    if path != "/api/v3":
+        return ""
+    return f"https://{parsed.hostname.lower()}{path}"
+
+
+def is_provider_modelark_base_url(provider: str, raw_url: str) -> bool:
+    """Return whether ``raw_url`` is exactly the provider's official endpoint."""
+    normalized_provider = _provider_id(provider)
+    if normalized_provider not in SUPPORTED_CLOUD_PROVIDERS:
+        return False
+    return normalize_modelark_base_url(raw_url) == normalize_modelark_base_url(
+        modelark_base_url(normalized_provider)
     )
 
 

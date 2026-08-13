@@ -21,6 +21,10 @@ const {
   runtimeEnvVars,
 } = await loadTypeScriptModule("../src/create/deploymentEnv.ts");
 const {
+  customModelCredentialRequirements,
+  isProviderModelApiBase,
+} = await loadTypeScriptModule("../src/create/customModelCredentials.ts");
+const {
   A2A_REGISTRY_DEFAULTS,
   A2A_REGISTRY_ENV,
   BUILTIN_TOOLS,
@@ -61,6 +65,80 @@ const vikingKnowledgebasesSource = readFileSync(
   new URL("../src/create/vikingKnowledgebases.ts", import.meta.url),
   "utf8",
 );
+
+test("recognizes only the selected cloud's exact official model endpoint", () => {
+  assert.equal(
+    isProviderModelApiBase(
+      "https://ark.cn-beijing.volces.com/api/v3/",
+      "https://ark.cn-beijing.volces.com/api/v3/",
+    ),
+    true,
+  );
+  assert.equal(
+    isProviderModelApiBase(
+      "https://ark.ap-southeast.bytepluses.com/api/v3",
+      "https://ark.ap-southeast.bytepluses.com/api/v3",
+    ),
+    true,
+  );
+  assert.equal(
+    isProviderModelApiBase(
+      "https://ark.ap-southeast.bytepluses.com/api/v3",
+      "https://ark.cn-beijing.volces.com/api/v3/",
+    ),
+    false,
+  );
+  assert.equal(
+    isProviderModelApiBase(
+      "https://ark.cn-beijing.volces.com/api/v3?target=custom",
+      "https://ark.cn-beijing.volces.com/api/v3/",
+    ),
+    false,
+  );
+});
+
+test("derives distinct transient credential names for custom model agents", () => {
+  const draft = {
+    name: "Agent",
+    agentType: "llm",
+    modelApiBase: "https://models.example.com/v1",
+    subAgents: [
+      {
+        name: "Agent",
+        agentType: "llm",
+        modelApiBase: "https://other-models.example.com/v1",
+        subAgents: [],
+      },
+    ],
+  };
+  assert.deepEqual(
+    customModelCredentialRequirements(
+      draft,
+      "https://ark.cn-beijing.volces.com/api/v3/",
+    ),
+    [
+      { key: "CUSTOM_MODEL_AGENT_API_KEY", label: "Agent 模型 API Key" },
+      { key: "CUSTOM_MODEL_AGENT_API_KEY_2", label: "Agent 模型 API Key" },
+    ],
+  );
+});
+
+test("keeps custom model credentials transient on the publish page", () => {
+  assert.match(
+    customCreateSource,
+    /requiredSecretEnv=\{customModelCredentials\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /const \[secretEnvValues, setSecretEnvValues\]/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /requiredSecretEnv\.map[\s\S]*?type="password"[\s\S]*?仅用于本次发布/,
+  );
+  assert.match(projectPreviewSource, /role="alert"/);
+  assert.doesNotMatch(customCreateSource, /envValues:\s*customModelCredentials/);
+});
 
 test("defaults knowledgebase creation to VikingDB collections", () => {
   assert.equal(DEFAULT_KB_BACKEND, "viking");

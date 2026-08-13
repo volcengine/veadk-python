@@ -2281,6 +2281,7 @@ def _run_frontend_server(
     )
     from veadk.cli.generated_agent_security import (
         DebugPolicyError,
+        trusted_debug_model_api_base,
         validate_debug_policy,
         validate_project_policy,
     )
@@ -2450,6 +2451,20 @@ def _run_frontend_server(
             f"{repo_root}{os.pathsep}{pythonpath}" if pythonpath else repo_root
         )
         return env
+
+    _DEBUG_PROTECTED_MODEL_ENV_KEYS = frozenset(
+        {
+            "ARK_API_KEY",
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "CLOUD_PROVIDER",
+            "AGENTKIT_CLOUD_PROVIDER",
+        }
+    )
+
+    def _is_debug_protected_model_env(key: str) -> bool:
+        """Keep Runtime env from replacing the Studio model credential bundle."""
+        return key.startswith("MODEL_AGENT_") or key in _DEBUG_PROTECTED_MODEL_ENV_KEYS
 
     def _read_runner_log_tail(path: PathlibPath, max_chars: int = 6000) -> str:
         try:
@@ -2736,6 +2751,7 @@ def _run_frontend_server(
                     allow_local_runtime_resources=(
                         generated_agent_test_run_allows_local_resources
                     ),
+                    managed_cloud_provider=provider,
                 )
                 draft = await resolve_debug_mcp_endpoints(draft)
             else:
@@ -2970,6 +2986,7 @@ def _run_frontend_server(
                     str(item.key): str(item.value or "")
                     for item in (getattr(runtime, "envs", None) or [])
                     if getattr(item, "key", None)
+                    and not _is_debug_protected_model_env(str(item.key))
                 }
             temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
             app_name = _write_generated_project(project, temp_dir)
@@ -2991,6 +3008,13 @@ def _run_frontend_server(
             runner_env = _safe_runner_env()
             runner_env.update(runtime_envs)
             runner_env.update(debug_runtime_env_from_draft(draft))
+            runner_env["MODEL_AGENT_API_BASE"] = trusted_debug_model_api_base(
+                draft,
+                managed_cloud_provider=provider,
+            )
+            runner_env.pop("MODEL_AGENT_BASE_URL", None)
+            runner_env["CLOUD_PROVIDER"] = provider
+            runner_env["AGENTKIT_CLOUD_PROVIDER"] = provider
             with stdout_path.open("w", encoding="utf-8") as stdout_file:
                 with stderr_path.open("w", encoding="utf-8") as stderr_file:
                     proc = subprocess.Popen(

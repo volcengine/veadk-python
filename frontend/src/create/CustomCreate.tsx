@@ -138,6 +138,7 @@ import {
   type CloudProvider,
 } from "../adk/cloudProvider";
 import { applyEvent, emptyAcc, type Block } from "../blocks";
+import { customModelCredentialRequirements } from "./customModelCredentials";
 import "./CustomCreate.css";
 
 const MarkdownPromptEditor = lazy(() => import("./MarkdownPromptEditor"));
@@ -3103,6 +3104,14 @@ export function CustomCreate({
     () => collectDeploymentEnv(providerDraft),
     [providerDraft],
   );
+  const customModelCredentials = useMemo(
+    () =>
+      customModelCredentialRequirements(
+        providerDraft,
+        defaultModelApiBase(cloudProvider),
+      ),
+    [cloudProvider, providerDraft],
+  );
 
   // Smooth-scroll to the first invalid section during validation.
   const scrollToSection = (id: StepId) => {
@@ -4030,9 +4039,9 @@ export function CustomCreate({
                               }
                             />
                             <span className="cw-help cw-dependency-hint">
-                                    留空则使用 VeADK 默认模型配置；Ark API Key
-                                    会由 Studio 服务端凭据自动获取。其他服务商的
-                                    Key 可在部署页添加。
+                                    留空或使用当前云的官方 Ark 地址时，Studio
+                                    会提供 Ark API Key。填写自定义地址后，发布页会
+                                    要求填写该 Agent 自己的模型 API Key。
                             </span>
                           </div>
                         </motion.div>
@@ -4390,6 +4399,7 @@ export function CustomCreate({
                 setDraft(nextDraft);
               }}
               deploymentEnv={deploymentEnv.specs}
+              requiredSecretEnv={customModelCredentials}
               deploymentEnvValues={{
                 ...providerDraft.deployment?.envValues,
                 ...deploymentEnv.fixedValues,
