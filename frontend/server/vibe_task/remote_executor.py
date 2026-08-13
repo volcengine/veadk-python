@@ -34,9 +34,12 @@ class VibeRemoteExecutor:
             raise ValueError("validation argv is invalid")
         encoded = base64.b64encode(json.dumps(argv).encode()).decode()
         source = (
-            "import base64,json,subprocess;"
+            "import base64,json,os,subprocess;"
             f"argv=json.loads(base64.b64decode({encoded!r}));"
-            f"r=subprocess.run(argv,cwd={cwd!r},capture_output=True,text=True,"
+            "env=os.environ.copy();secret='/home/gem/.vibe/task/secrets/active.json';"
+            "data=json.load(open(secret,encoding='utf-8')) if os.path.isfile(secret) else {};"
+            "env.update({k:v for k,v in {'VOLCENGINE_ACCESS_KEY':data.get('accessKeyId'),'VOLCENGINE_SECRET_KEY':data.get('secretAccessKey'),'VOLCENGINE_SESSION_TOKEN':data.get('sessionToken')}.items() if v});"
+            f"r=subprocess.run(argv,cwd={cwd!r},env=env,capture_output=True,text=True,"
             f"timeout={timeout!r},check=False);"
             "print(json.dumps({'exitCode':r.returncode,'stdout':r.stdout,'stderr':r.stderr},ensure_ascii=False))"
         )
