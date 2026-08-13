@@ -73,6 +73,36 @@ def test_routes_cover_capabilities_task_intent_credentials_and_delete() -> None:
         assert client.delete(f"/web/vibe/tasks/{task_id}", headers={"x-owner": "owner"}).status_code == 404
 
 
+def test_artifact_download_requires_revision_digest_and_sets_attachment_header() -> None:
+    class Store:
+        async def download_artifact(
+            self, owner_id, task_id, *, expected_revision, expected_sha256
+        ):
+            assert (owner_id, task_id) == ("owner", "task")
+            assert expected_revision == 1
+            assert expected_sha256 == "a" * 64
+            return b"PK artifact"
+
+    app = FastAPI()
+
+    def owner(request: Request) -> str:
+        return request.headers["x-owner"]
+
+    mount_vibe_task_routes(app, owner, service=VibeTaskService(sandbox_store=Store()))
+    with TestClient(app) as client:
+        missing = client.get("/web/vibe/tasks/task/download", headers={"x-owner": "owner"})
+        assert missing.status_code == 422
+        response = client.get(
+            "/web/vibe/tasks/task/download",
+            headers={"x-owner": "owner"},
+            params={"expected_revision": 1, "expected_sha256": "a" * 64},
+        )
+    assert response.status_code == 200
+    assert response.content == b"PK artifact"
+    assert response.headers["content-type"] == "application/zip"
+    assert response.headers["content-disposition"] == 'attachment; filename="artifact.zip"'
+
+
 def test_sse_replays_ids_and_terminal_event() -> None:
     app, _ = _app()
     with TestClient(app) as client:

@@ -31,6 +31,9 @@ from ..sandbox_remote import SandboxRemoteTransport
 
 ARTIFACT_ROOT = "/home/gem/.vibe/task/artifacts"
 ARTIFACT_FILENAME = "artifact.zip"
+ARTIFACT_DESCRIPTOR_FILENAME = "descriptor.json"
+ARTIFACT_WORKER_PATH = "/home/gem/.vibe/task/artifact-worker.py"
+ARTIFACT_REQUEST_PATH = "/home/gem/.vibe/task/artifact-request.json"
 MANIFEST_FILENAME = "artifact-manifest.json"
 MAX_ARTIFACT_BYTES = 20 * 1024 * 1024
 MAX_ARTIFACT_FILES = 2_000
@@ -60,6 +63,192 @@ _EXCLUDED_DIR_NAMES = frozenset(
 )
 _EXCLUDED_FILE_NAMES = frozenset({".env", ".env.local", ".env.production"})
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+
+# This worker is uploaded because production Sandboxes do not contain this package.
+# Keep it dependency-free and self-contained; its request is host-authored, but every
+# path and limit is still validated before filesystem access.
+REMOTE_ARTIFACT_WORKER_SOURCE = r'''import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import stat
+import sys
+import tempfile
+import zipfile
+
+ROOT = "/home/gem/.vibe/task/artifacts"
+WORKSPACES = "/home/gem/workspace"
+FILENAME = "artifact.zip"
+DESCRIPTOR = "descriptor.json"
+MANIFEST = "artifact-manifest.json"
+MAX_BYTES = 20 * 1024 * 1024
+MAX_FILES = 2000
+MAX_FILE_BYTES = 5 * 1024 * 1024
+EXCLUDED_DIRS = frozenset((".cache", ".codex", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".venv", ".vibe", "__pycache__", "cache", "caches", "node_modules", "secrets", "venv"))
+EXCLUDED_FILES = frozenset((".env", ".env.local", ".env.production"))
+SENSITIVE = re.compile(rb"(?im)^\s*(?:export\s+)?(?:[A-Z0-9_]*(?:API[_-]?KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE[_-]?KEY|ACCESS[_-]?KEY)[A-Z0-9_]*)\s*[:=]\s*[^\s#]{4,}")
+HASH = re.compile(r"^[0-9a-f]{64}$")
+TASK = re.compile(r"^vt-[0-9a-f]{12}-[0-9a-f]{24}$")
+TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+
+def fail(message):
+    raise ValueError(message)
+
+def canonical(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+
+def excluded(relative, is_directory):
+    if any(part in EXCLUDED_DIRS for part in relative.parts):
+        return True
+    name = relative.name
+    return False if is_directory else name in EXCLUDED_FILES or name.startswith(".env.") or name.endswith(".log")
+
+def collect(root):
+    files = []
+    total = 0
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = sorted(os.scandir(directory), key=lambda item: item.name)
+        except OSError as error:
+            raise ValueError("Project directory cannot be read") from error
+        for entry in entries:
+            relative_path = Path(entry.path).relative_to(root)
+            relative = PurePosixPath(*relative_path.parts).as_posix()
+            try:
+                metadata = entry.stat(follow_symlinks=False)
+            except OSError as error:
+                raise ValueError("Project entry cannot be inspected: " + relative) from error
+            if stat.S_ISLNK(metadata.st_mode):
+                fail("Symlinks are not allowed: " + relative)
+            is_directory = stat.S_ISDIR(metadata.st_mode)
+            if excluded(relative_path, is_directory):
+                continue
+            if is_directory:
+                pending.append(Path(entry.path))
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                fail("Non-regular files are not allowed: " + relative)
+            if metadata.st_size > MAX_FILE_BYTES:
+                fail("Project file exceeds the size limit: " + relative)
+            try:
+                Path(entry.path).resolve(strict=True).relative_to(root)
+            except (OSError, ValueError) as error:
+                raise ValueError("Project entry escapes its root: " + relative) from error
+            if relative == MANIFEST:
+                fail("Reserved artifact path is present: " + relative)
+            files.append((relative, Path(entry.path), metadata.st_size))
+            total += metadata.st_size
+            if len(files) > MAX_FILES:
+                fail("Project exceeds the file count limit")
+            if total > MAX_BYTES:
+                fail("Project exceeds the size limit")
+    return sorted(files, key=lambda item: item[0])
+
+def read_file(path, relative, expected_size):
+    descriptor = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != expected_size:
+            fail("Project file changed during packaging: " + relative)
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            content = stream.read(expected_size + 1)
+        if len(content) != expected_size:
+            fail("Project file changed during packaging: " + relative)
+        return content
+    except ValueError:
+        raise
+    except OSError as error:
+        raise ValueError("Project file cannot be read safely: " + relative) from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+def write_member(archive, name, content):
+    info = zipfile.ZipInfo(name, TIMESTAMP)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.create_system = 3
+    info.external_attr = (stat.S_IFREG | 0o644) << 16
+    archive.writestr(info, content, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+
+def atomic_json(path, value):
+    temporary = path.with_name("." + path.name + ".tmp")
+    with open(temporary, "wb") as stream:
+        stream.write(canonical(value) + b"\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1] != "/home/gem/.vibe/task/artifact-request.json":
+        fail("Artifact request path is invalid")
+    request = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    if set(request) != {"taskId", "manifest"}:
+        fail("Artifact request has unexpected fields")
+    task_id = request["taskId"]
+    manifest = request["manifest"]
+    if not isinstance(task_id, str) or TASK.fullmatch(task_id) is None:
+        fail("Task identity is invalid")
+    if set(manifest) != {"schemaVersion", "revision", "intentRevision", "evaluationPerformed", "hashes"}:
+        fail("Artifact manifest has unexpected fields")
+    hashes = manifest.get("hashes")
+    if manifest.get("schemaVersion") != 1 or manifest.get("revision") != 1 or isinstance(manifest.get("intentRevision"), bool) or not isinstance(manifest.get("intentRevision"), int) or manifest["intentRevision"] < 0 or manifest.get("evaluationPerformed") is not False or not isinstance(hashes, dict) or set(hashes) != {"runtime", "status", "invoke", "log"} or any(not isinstance(value, str) or HASH.fullmatch(value) is None for value in hashes.values()):
+        fail("Artifact manifest is invalid")
+    root = Path(WORKSPACES) / task_id
+    try:
+        root = root.resolve(strict=True)
+        root.relative_to(Path(WORKSPACES))
+    except (OSError, ValueError) as error:
+        raise ValueError("Project directory is unavailable") from error
+    if not root.is_dir() or root != Path(WORKSPACES) / task_id:
+        fail("Project path is invalid")
+    captured = []
+    total = 0
+    for relative, path, expected_size in collect(root):
+        content = read_file(path, relative, expected_size)
+        if SENSITIVE.search(content):
+            fail("Sensitive assignment found in project file: " + relative)
+        captured.append((relative, content))
+        total += len(content)
+        if total > MAX_BYTES:
+            fail("Project exceeds the size limit")
+    output_dir = Path(ROOT) / "1"
+    output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=output_dir, delete=False) as temporary:
+            temporary_path = Path(temporary.name)
+            with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+                write_member(archive, MANIFEST, canonical(manifest) + b"\n")
+                for relative, content in captured:
+                    write_member(archive, relative, content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            size = temporary.tell()
+        if size > MAX_BYTES:
+            fail("Artifact exceeds the size limit")
+        digest = hashlib.sha256(temporary_path.read_bytes()).hexdigest()
+        final_path = output_dir / FILENAME
+        os.replace(temporary_path, final_path)
+        temporary_path = None
+        descriptor = {"revision": 1, "path": str(final_path), "sha256": digest, "size": size}
+        atomic_json(output_dir / DESCRIPTOR, descriptor)
+        directory_fd = os.open(output_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        print(json.dumps(descriptor, sort_keys=True, separators=(",", ":")))
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+if __name__ == "__main__":
+    main()
+'''
 
 
 class ArtifactError(ValueError):
@@ -133,6 +322,17 @@ def artifact_path(revision: int) -> str:
     if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
         raise ArtifactError("Artifact revision is invalid")
     return f"{ARTIFACT_ROOT}/{revision}/{ARTIFACT_FILENAME}"
+
+
+def artifact_descriptor_path(revision: int) -> str:
+    artifact_path(revision)
+    return f"{ARTIFACT_ROOT}/{revision}/{ARTIFACT_DESCRIPTOR_FILENAME}"
+
+
+def remote_artifact_request(task_id: str, manifest: ArtifactManifest) -> bytes:
+    if re.fullmatch(r"vt-[0-9a-f]{12}-[0-9a-f]{24}", task_id) is None:
+        raise ArtifactError("Task identity is invalid")
+    return _canonical_json({"taskId": task_id, "manifest": manifest.as_dict()}) + b"\n"
 
 
 def package_project(

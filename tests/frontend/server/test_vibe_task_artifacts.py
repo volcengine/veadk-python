@@ -4,6 +4,8 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import subprocess
+import sys
 import zipfile
 
 import pytest
@@ -16,6 +18,8 @@ from frontend.server.vibe_task.artifacts import (
     artifact_path,
     download_and_validate_artifact,
     package_project,
+    remote_artifact_request,
+    REMOTE_ARTIFACT_WORKER_SOURCE,
 )
 
 
@@ -74,6 +78,49 @@ def test_packages_project_with_manifest_and_exclusions(tmp_path: Path) -> None:
             "log": "4" * 64,
         },
     }
+
+
+def test_remote_worker_is_dependency_free_and_request_is_canonical() -> None:
+    compile(REMOTE_ARTIFACT_WORKER_SOURCE, "artifact-worker.py", "exec")
+    assert "frontend.server" not in REMOTE_ARTIFACT_WORKER_SOURCE
+    request = remote_artifact_request("vt-" + "a" * 12 + "-" + "b" * 24, manifest(1))
+    assert request.endswith(b"\n")
+    assert json.loads(request)["manifest"]["hashes"]["runtime"] == "1" * 64
+
+
+def test_remote_worker_packages_expected_fixed_paths(tmp_path: Path) -> None:
+    home = tmp_path / "home" / "gem"
+    task_id = "vt-" + "a" * 12 + "-" + "b" * 24
+    project = home / "workspace" / task_id
+    project.mkdir(parents=True)
+    (project / "agent.py").write_text("pass\n")
+    task_root = home / ".vibe" / "task"
+    task_root.mkdir(parents=True)
+    worker = task_root / "artifact-worker.py"
+    request_path = task_root / "artifact-request.json"
+    source = REMOTE_ARTIFACT_WORKER_SOURCE.replace(
+        'ROOT = "/home/gem/.vibe/task/artifacts"', f"ROOT = {str(task_root / 'artifacts')!r}"
+    ).replace('WORKSPACES = "/home/gem/workspace"', f"WORKSPACES = {str(home / 'workspace')!r}")
+    source = source.replace(
+        'sys.argv[1] != "/home/gem/.vibe/task/artifact-request.json"',
+        f"sys.argv[1] != {str(request_path)!r}",
+    )
+    worker.write_text(source)
+    request_path.write_bytes(remote_artifact_request(task_id, manifest(1)))
+
+    completed = subprocess.run(
+        [sys.executable, str(worker), str(request_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    descriptor = json.loads(completed.stdout)
+    output = task_root / "artifacts" / "1" / "artifact.zip"
+    assert descriptor["sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
+    assert json.loads((output.parent / "descriptor.json").read_text()) == descriptor
+    with zipfile.ZipFile(output) as archive:
+        assert archive.namelist() == [MANIFEST_FILENAME, "agent.py"]
 
 
 def test_package_is_deterministic_across_source_mtimes(tmp_path: Path) -> None:

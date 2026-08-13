@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import shlex
-from typing import Protocol
+from typing import Mapping, Protocol
 
 from veadk.cli.agentkit_session_metadata import (
     SESSION_SCHEMA_VERSION_METADATA_KEY,
@@ -31,6 +31,17 @@ from veadk.cli.frontend_sandbox import (
 )
 
 from ..sandbox_remote import SandboxRemoteError, SandboxRemoteTransport
+from .artifacts import (
+    ARTIFACT_REQUEST_PATH,
+    ARTIFACT_WORKER_PATH,
+    REMOTE_ARTIFACT_WORKER_SOURCE,
+    ArtifactDescriptor,
+    ArtifactError,
+    ArtifactManifest,
+    artifact_descriptor_path,
+    download_and_validate_artifact,
+    remote_artifact_request,
+)
 from .control import (
     CredentialsMarkerCommand,
     IntentUpdateCommand,
@@ -40,6 +51,7 @@ from .control import (
     build_control_command,
 )
 from .models import (
+    ArtifactInfo,
     CredentialUpload,
     CreateTaskRequest,
     DEV_SANDBOX_TTL_SECONDS,
@@ -370,6 +382,113 @@ class VibeSandboxStore:
         )
         status, _, _ = await self._execute_control(session, command)
         return status
+
+    async def package_artifact(
+        self,
+        owner_id: str,
+        task_id: str,
+        evidence_hashes: Mapping[str, str],
+    ) -> ArtifactInfo:
+        session = await self.find(owner_id, task_id)
+        status, intent, _ = await self._snapshot(session)
+        if status.terminal:
+            raise VibeTaskError("VIBE_TASK_TERMINAL", "Task is terminal", status_code=409)
+        expected = {"runtime", "status", "invoke", "log"}
+        if set(evidence_hashes) != expected:
+            raise VibeTaskError(
+                "VIBE_ARTIFACT_EVIDENCE_INVALID",
+                "Artifact evidence hashes are invalid",
+                status_code=400,
+            )
+        try:
+            manifest = ArtifactManifest(
+                revision=1,
+                intent_revision=intent.revision,
+                runtime_sha256=evidence_hashes["runtime"],
+                status_sha256=evidence_hashes["status"],
+                invoke_sha256=evidence_hashes["invoke"],
+                log_sha256=evidence_hashes["log"],
+            )
+            request = remote_artifact_request(task_id, manifest)
+        except (ArtifactError, KeyError, TypeError) as error:
+            raise VibeTaskError(
+                "VIBE_ARTIFACT_EVIDENCE_INVALID",
+                "Artifact evidence hashes are invalid",
+                status_code=400,
+            ) from error
+        transport = SandboxRemoteTransport(session.endpoint)
+        await transport.upload(
+            ARTIFACT_WORKER_PATH,
+            REMOTE_ARTIFACT_WORKER_SOURCE.encode(),
+            media_type="text/x-python",
+        )
+        await transport.upload(
+            ARTIFACT_REQUEST_PATH, request, media_type="application/json"
+        )
+        try:
+            value = await transport.exec_json(
+                f"python3 {ARTIFACT_WORKER_PATH} {ARTIFACT_REQUEST_PATH}", timeout=120
+            )
+            descriptor = ArtifactDescriptor.from_mapping(value)
+        except (ArtifactError, SandboxRemoteError, ValueError, TypeError) as error:
+            raise VibeTaskError(
+                "VIBE_ARTIFACT_PACKAGE_FAILED",
+                "Artifact packaging failed",
+                status_code=502,
+            ) from error
+        return ArtifactInfo(
+            revision=descriptor.revision,
+            sha256=descriptor.sha256,
+            size=descriptor.size,
+            filename="artifact.zip",
+        )
+
+    async def download_artifact(
+        self,
+        owner_id: str,
+        task_id: str,
+        *,
+        expected_revision: int,
+        expected_sha256: str,
+    ) -> bytes:
+        session = await self.find(owner_id, task_id)
+        status, _, _ = await self._snapshot(session)
+        artifact = status.artifact
+        if (
+            artifact is None
+            or artifact.revision != expected_revision
+            or artifact.sha256 != expected_sha256
+        ):
+            raise VibeTaskError(
+                "VIBE_ARTIFACT_VERSION_CONFLICT",
+                "Artifact revision or digest is stale",
+                status_code=409,
+            )
+        transport = SandboxRemoteTransport(session.endpoint)
+        try:
+            descriptor_value = json.loads(
+                (
+                    await transport.download(
+                        artifact_descriptor_path(expected_revision), max_bytes=1024
+                    )
+                ).decode("utf-8")
+            )
+            if not isinstance(descriptor_value, dict):
+                raise ArtifactError("Artifact descriptor is invalid")
+            descriptor = ArtifactDescriptor.from_mapping(descriptor_value)
+            if (
+                descriptor.revision != artifact.revision
+                or descriptor.sha256 != artifact.sha256
+                or descriptor.size != artifact.size
+            ):
+                raise ArtifactError("Artifact descriptor does not match projection")
+            return await download_and_validate_artifact(transport, descriptor)
+        except (ArtifactError, SandboxRemoteError, UnicodeDecodeError, ValueError) as error:
+            raise VibeTaskError(
+                "VIBE_ARTIFACT_INVALID",
+                "Artifact failed integrity validation",
+                status_code=502,
+            ) from error
 
     async def delete(self, owner_id: str, task_id: str) -> bool:
         session = await self.find(owner_id, task_id)
