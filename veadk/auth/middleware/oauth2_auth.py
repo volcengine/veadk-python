@@ -1318,24 +1318,93 @@ class OAuth2Handler:
         return OAuth2Handler._base64url_encode(digest)
 
 
+_REDIRECT_MAX_DECODE_ROUNDS = 5
+
+
+def _has_unsafe_redirect_text(value: str) -> bool:
+    if value != value.strip():
+        return True
+
+    decoded = value
+    for _ in range(_REDIRECT_MAX_DECODE_ROUNDS):
+        if decoded.startswith("//") or any(
+            character == "\\" or ord(character) < 0x20 or ord(character) == 0x7F
+            for character in decoded
+        ):
+            return True
+        try:
+            next_decoded = urllib.parse.unquote(decoded, errors="strict")
+        except UnicodeDecodeError:
+            return True
+        if next_decoded == decoded:
+            return False
+        decoded = next_decoded
+
+    # Reject inputs that require excessive decoding to reach their final form.
+    return True
+
+
+def _is_safe_local_redirect(value: str) -> bool:
+    if _has_unsafe_redirect_text(value) or not value.startswith("/"):
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(value)
+    except ValueError:
+        return False
+    return not parsed.scheme and not parsed.netloc
+
+
+def _normalized_http_origin(
+    value: urllib.parse.SplitResult,
+) -> Optional[tuple[str, str, int]]:
+    scheme = value.scheme.lower()
+    if scheme not in {"http", "https"} or value.username or value.password:
+        return None
+
+    hostname = value.hostname
+    if not hostname:
+        return None
+    try:
+        hostname = hostname.encode("idna").decode("ascii").lower()
+        port = value.port
+    except (UnicodeError, ValueError):
+        return None
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return scheme, hostname, port
+
+
 def _resolve_redirect_after_auth(request: Request, redirect: Optional[str]) -> str:
-    """Resolve a safe redirect URL after login."""
-    if not redirect:
+    """Resolve a safe, origin-relative redirect URL after login."""
+    if not isinstance(redirect, str) or not redirect:
         return "/"
 
-    redirect = redirect.strip()
-    if redirect.startswith("/"):
-        return redirect
+    if not _has_unsafe_redirect_text(redirect):
+        try:
+            parsed = urllib.parse.urlsplit(redirect)
+        except ValueError:
+            parsed = None
 
-    parsed = urllib.parse.urlparse(redirect)
-    if not parsed.scheme and not parsed.netloc:
-        return f"/{redirect.lstrip('/')}"
+        if parsed is not None:
+            if not parsed.scheme and not parsed.netloc:
+                local_redirect = (
+                    redirect if redirect.startswith("/") else f"/{redirect}"
+                )
+                if _is_safe_local_redirect(local_redirect):
+                    return local_redirect
+            else:
+                target_origin = _normalized_http_origin(parsed)
+                current_origin = _normalized_http_origin(
+                    urllib.parse.urlsplit(str(request.url))
+                )
+                if target_origin is not None and target_origin == current_origin:
+                    local_redirect = urllib.parse.urlunsplit(
+                        ("", "", parsed.path or "/", parsed.query, parsed.fragment)
+                    )
+                    if _is_safe_local_redirect(local_redirect):
+                        return local_redirect
 
-    current = urllib.parse.urlparse(str(request.url))
-    if parsed.scheme == current.scheme and parsed.netloc == current.netloc:
-        return redirect
-
-    logger.warning("Unsafe redirect ignored: %s", redirect)
+    logger.warning("Unsafe redirect ignored: %r", redirect)
     return "/"
 
 
@@ -1401,7 +1470,9 @@ def register_oauth2_routes(
             # Create session cookie for subsequent requests.
             session_cookie_params = oauth2_handler.create_session_cookie(session)
 
-            redirect_url = state_data.get("redirect_after_auth") or "/"
+            redirect_url = _resolve_redirect_after_auth(
+                request, state_data.get("redirect_after_auth")
+            )
             response = RedirectResponse(url=redirect_url, status_code=302)
             response.set_cookie(**session_cookie_params)
 
