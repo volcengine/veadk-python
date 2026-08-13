@@ -146,14 +146,36 @@ class VibeTaskService:
     def __init__(
         self,
         repository: TaskRepository | None = None,
+        *,
+        sandbox_store: object | None = None,
     ) -> None:
         self.repository = repository or InMemoryTaskRepository()
+        self.sandbox_store = sandbox_store
         self._conditions: dict[tuple[str, str], asyncio.Condition] = {}
 
+    def capabilities(self) -> dict[str, object]:
+        if self.sandbox_store is None:
+            return {
+                "enabled": False,
+                "reason": "Dev Sandbox 尚未配置",
+                "sandboxTtlSeconds": DEV_SANDBOX_TTL_SECONDS,
+                "maxCloudAttempts": 3,
+                "intentSummaryPath": INTENT_SUMMARY_PATH,
+                "evaluationEnabled": False,
+                "stateSource": "unavailable",
+            }
+        return self.sandbox_store.capabilities()
+
     @staticmethod
-    def _task_id(owner_id: str) -> str:
+    def _task_id(owner_id: str, request_id: object | None = None) -> str:
         owner_hash = hashlib.sha256(owner_id.encode()).hexdigest()[:12]
-        return f"vt-{owner_hash}-{secrets.token_hex(12)}"
+        if request_id is None:
+            suffix = secrets.token_hex(12)
+        else:
+            suffix = hashlib.sha256(
+                f"{owner_id}\0{request_id}".encode()
+            ).hexdigest()[:24]
+        return f"vt-{owner_hash}-{suffix}"
 
     @staticmethod
     def validate_task_owner(task_id: str, owner_id: str) -> None:
@@ -162,9 +184,11 @@ class VibeTaskService:
             raise VibeTaskError("VIBE_TASK_NOT_FOUND", "Task not found", status_code=404)
 
     async def create(self, owner_id: str, body: CreateTaskRequest) -> TaskStatus:
+        if self.sandbox_store is not None:
+            return await self.sandbox_store.create(owner_id, body)
         now = datetime.now(timezone.utc)
         status = TaskStatus(
-            task_id=self._task_id(owner_id),
+            task_id=self._task_id(owner_id, body.request_id),
             display_name=body.display_name or "Vibe Task",
             goal=body.goal,
             state=TaskState.READY,
@@ -178,6 +202,8 @@ class VibeTaskService:
         return await self.require(owner_id, status.task_id)
 
     async def require(self, owner_id: str, task_id: str) -> TaskStatus:
+        if self.sandbox_store is not None:
+            return await self.sandbox_store.get(owner_id, task_id)
         self.validate_task_owner(task_id, owner_id)
         status = await self.repository.get(owner_id, task_id)
         if status is None:
@@ -185,6 +211,8 @@ class VibeTaskService:
         return status
 
     async def list(self, owner_id: str) -> list[TaskStatus]:
+        if self.sandbox_store is not None:
+            return await self.sandbox_store.list(owner_id)
         return sorted(await self.repository.list(owner_id), key=lambda item: item.created_at, reverse=True)
 
     async def configure_credentials(self, owner_id: str, task_id: str, body: CredentialUpload) -> TaskStatus:

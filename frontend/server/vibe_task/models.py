@@ -17,6 +17,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
@@ -75,6 +76,7 @@ TERMINAL_STATES = {
 
 
 class CreateTaskRequest(VibeModel):
+    request_id: UUID
     goal: str = Field(min_length=1, max_length=20_000)
     display_name: str = Field(default="", max_length=80)
 

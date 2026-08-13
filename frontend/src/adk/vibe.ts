@@ -79,12 +79,12 @@ async function checked<T>(response: Response): Promise<T> {
 }
 
 export const vibeClient = {
-  async create(goal: string): Promise<VibeTask> {
+  async create(goal: string, requestId = crypto.randomUUID()): Promise<VibeTask> {
     return checked(
       await apiFetch("/web/vibe/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ goal }),
+        body: JSON.stringify({ goal, requestId }),
       }),
     );
   },

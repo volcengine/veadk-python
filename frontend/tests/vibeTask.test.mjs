@@ -50,10 +50,15 @@ test("Vibe client never persists credentials and parses replay events", async (t
   };
   t.after(() => delete globalThis.__apiFetch);
   const { vibeClient, parseVibeSse } = await loadVibe();
+  await vibeClient.create("build", "12345678-1234-5678-9234-567812345678");
+  assert.deepEqual(JSON.parse(requests[0].init.body), {
+    goal: "build",
+    requestId: "12345678-1234-5678-9234-567812345678",
+  });
   await vibeClient.credentials("vt-1", "ak-value", "sk-value");
-  assert.equal(requests[0].url, "/web/vibe/tasks/vt-1/credentials");
-  assert.equal("localStorage" in requests[0].init, false);
-  assert.match(requests[0].init.body, /accessKeyId/);
+  assert.equal(requests[1].url, "/web/vibe/tasks/vt-1/credentials");
+  assert.equal("localStorage" in requests[1].init, false);
+  assert.match(requests[1].init.body, /accessKeyId/);
 
   const events = parseVibeSse(
     'id: 2\nevent: task.completed\ndata: {"sequence":2,"eventType":"task.completed","stage":"done","timestamp":"now","payload":{}}\n\n',

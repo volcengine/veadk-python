@@ -29,13 +29,15 @@ def test_routes_cover_capabilities_task_intent_credentials_and_delete() -> None:
         assert client.get("/web/vibe/capabilities").status_code == 401
         assert client.get("/web/vibe/capabilities", headers={"x-owner": "user"}).status_code == 403
         capabilities = client.get("/web/vibe/capabilities", headers={"x-owner": "owner"}).json()
+        assert capabilities["enabled"] is False
+        assert capabilities["stateSource"] == "unavailable"
         assert capabilities["sandboxTtlSeconds"] == 28_800
         assert capabilities["evaluationEnabled"] is False
 
         response = client.post(
             "/web/vibe/tasks",
             headers={"x-owner": "owner"},
-            json={"goal": "Build an Agent"},
+            json={"requestId": "12345678-1234-5678-9234-567812345678", "goal": "Build an Agent"},
         )
         assert response.status_code == 200
         task = response.json()
@@ -75,7 +77,7 @@ def test_sse_replays_ids_and_terminal_event() -> None:
     app, _ = _app()
     with TestClient(app) as client:
         task = client.post(
-            "/web/vibe/tasks", headers={"x-owner": "owner"}, json={"goal": "Build"}
+            "/web/vibe/tasks", headers={"x-owner": "owner"}, json={"requestId": "22345678-1234-5678-9234-567812345678", "goal": "Build"}
         ).json()
         task_id = task["taskId"]
         client.post(f"/web/vibe/tasks/{task_id}/stop", headers={"x-owner": "owner"})
