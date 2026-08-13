@@ -228,6 +228,12 @@ interface ResponseAnnotationTarget {
   anchor: ResponseAnnotationAnchor;
 }
 
+interface ResponseAnnotationContext {
+  enabled: boolean;
+  turn: Turn;
+  input: string;
+}
+
 function issueFeedbackModuleForPage(page: string): IssueFeedbackModule {
   if (page === "agents") return "agents";
   if (page === "applications") return "applications";
@@ -1046,16 +1052,22 @@ export default function App() {
     streamPresentationTimersRef.current.delete(sid);
     setStreamPresentationSids((current) => new Set(current).add(sid));
   };
+  const completeStreamPresentation = (sid: string) => {
+    const timer = streamPresentationTimersRef.current.get(sid);
+    if (timer !== undefined) window.clearTimeout(timer);
+    streamPresentationTimersRef.current.delete(sid);
+    setStreamPresentationSids((current) => {
+      if (!current.has(sid)) return current;
+      const next = new Set(current);
+      next.delete(sid);
+      return next;
+    });
+  };
   const finishStreamPresentation = (sid: string) => {
     const previousTimer = streamPresentationTimersRef.current.get(sid);
     if (previousTimer !== undefined) window.clearTimeout(previousTimer);
     const timer = window.setTimeout(() => {
-      streamPresentationTimersRef.current.delete(sid);
-      setStreamPresentationSids((current) => {
-        const next = new Set(current);
-        next.delete(sid);
-        return next;
-      });
+      completeStreamPresentation(sid);
     }, 2400);
     streamPresentationTimersRef.current.set(sid, timer);
   };
@@ -2038,6 +2050,44 @@ export default function App() {
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   const turnNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const responseAnnotationContextsRef = useRef<
+    Map<string, ResponseAnnotationContext>
+  >(new Map());
+  const openResponseAnnotation = useCallback(() => {
+    const selection = window.getSelection();
+    for (const [eventId, context] of responseAnnotationContextsRef.current) {
+      const container = turnNodeRefs.current.get(eventId);
+      if (!container) continue;
+      const selected = responseSelectionWithin(container, selection);
+      if (!selected) continue;
+      if (!context.enabled) return;
+      setResponseAnnotationTarget({
+        turn: context.turn,
+        input: context.input,
+        eventId,
+        selectedText: selected.text,
+        anchor: selected.anchor,
+      });
+      return;
+    }
+  }, []);
+  useEffect(() => {
+    let selectionFrame: number | null = null;
+    const queueSelection = () => {
+      if (selectionFrame !== null) window.cancelAnimationFrame(selectionFrame);
+      selectionFrame = window.requestAnimationFrame(() => {
+        selectionFrame = null;
+        openResponseAnnotation();
+      });
+    };
+    document.addEventListener("mouseup", queueSelection, true);
+    document.addEventListener("keyup", queueSelection, true);
+    return () => {
+      if (selectionFrame !== null) window.cancelAnimationFrame(selectionFrame);
+      document.removeEventListener("mouseup", queueSelection, true);
+      document.removeEventListener("keyup", queueSelection, true);
+    };
+  }, [openResponseAnnotation]);
   const conversationAutoFollowRef = useRef(true);
   const conversationSmoothScrollRef = useRef(false);
   const conversationSmoothTimerRef = useRef<number | null>(null);
@@ -4495,40 +4545,6 @@ export default function App() {
     return null;
   };
 
-  const openResponseAnnotation = (
-    enabled: boolean,
-    turn: Turn,
-    input: string,
-    eventId: string,
-  ) => {
-    if (!enabled) return;
-    const container = turnNodeRefs.current.get(eventId);
-    if (!container) return;
-    const selected = responseSelectionWithin(container, window.getSelection());
-    if (!selected) return;
-    setResponseAnnotationTarget({
-      turn,
-      input,
-      eventId,
-      selectedText: selected.text,
-      anchor: selected.anchor,
-    });
-  };
-
-  const queueResponseAnnotation = (
-    enabled: boolean,
-    turn: Turn,
-    input: string,
-    eventId: string,
-  ) => {
-    // Chromium-based webviews can finalize the DOM selection immediately
-    // after React's mouseup handler. Read it on the next frame so the selected
-    // text and range geometry are stable.
-    window.requestAnimationFrame(() => {
-      openResponseAnnotation(enabled, turn, input, eventId);
-    });
-  };
-
   const submitResponseAnnotation = async (note: string) => {
     const target = responseAnnotationTarget;
     if (!target) return;
@@ -5693,8 +5709,14 @@ export default function App() {
                   if (!feedbackEventId) return;
                   if (node) {
                     turnNodeRefs.current.set(feedbackEventId, node);
+                    responseAnnotationContextsRef.current.set(feedbackEventId, {
+                      enabled: canAnnotate,
+                      turn,
+                      input: feedbackInput,
+                    });
                   } else {
                     turnNodeRefs.current.delete(feedbackEventId);
+                    responseAnnotationContextsRef.current.delete(feedbackEventId);
                   }
                 }}
                 className={[
@@ -5707,18 +5729,6 @@ export default function App() {
                 aria-label={canAnnotate
                   ? "模型回复；选中文字后可添加批注"
                   : undefined}
-                onMouseUp={() => queueResponseAnnotation(
-                  canAnnotate,
-                  turn,
-                  feedbackInput,
-                  feedbackEventId,
-                )}
-                onKeyUp={() => queueResponseAnnotation(
-                  canAnnotate,
-                  turn,
-                  feedbackInput,
-                  feedbackEventId,
-                )}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}
@@ -5746,6 +5756,11 @@ export default function App() {
                       blocks={turn.blocks}
                       streaming={isLast && (activeConversationBusy || presentingStream)}
                       onStreamFrame={isLast ? followConversationStreamFrame : undefined}
+                      onStreamComplete={
+                        isLast && !activeConversationBusy && presentingStream
+                          ? () => completeStreamPresentation(sessionId)
+                          : undefined
+                      }
                       onAction={onAction}
                       onAuth={onAuth}
                       onArtifactDownload={(filename, version) =>

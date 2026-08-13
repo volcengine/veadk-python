@@ -68,11 +68,15 @@ test("requires a non-empty annotation", () => {
 });
 
 test("assistant selections open an accessible Apps SDK annotation popover", () => {
-  assert.match(appSource, /onMouseUp=\{\(\) => queueResponseAnnotation/);
-  assert.match(appSource, /onKeyUp=\{\(\) => queueResponseAnnotation/);
+  assert.match(appSource, /document\.addEventListener\("mouseup", queueSelection/);
+  assert.match(appSource, /document\.addEventListener\("keyup", queueSelection/);
+  assert.match(appSource, /document\.removeEventListener\("mouseup", queueSelection/);
+  assert.match(appSource, /document\.removeEventListener\("keyup", queueSelection/);
   assert.match(appSource, /tabIndex=\{canAnnotate \? 0 : undefined\}/);
   assert.match(appSource, /window\.requestAnimationFrame/);
+  assert.match(appSource, /onStreamComplete=/);
   assert.match(componentSource, /@openai\/apps-sdk-ui\/components\/Popover/);
+  assert.doesNotMatch(appSource, /onMouseUp=\{\(\) => queueResponseAnnotation/);
   assert.match(componentSource, /@openai\/apps-sdk-ui\/components\/Textarea/);
   assert.match(componentSource, /aria-label="批注选中的模型回复"/);
   assert.match(componentSource, /role="alert"/);

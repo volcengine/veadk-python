@@ -66,6 +66,40 @@ def test_extract_feedback_sample_uses_visible_turn_content() -> None:
     assert sample.message_id == "assistant-2"
 
 
+def test_extract_feedback_sample_stops_at_annotated_assistant_turn() -> None:
+    events: list[dict[str, object]] = []
+    for index in range(1, 5):
+        events.extend(
+            [
+                {
+                    "id": f"user-{index}",
+                    "author": "user",
+                    "content": {"parts": [{"text": f"问题 {index}"}]},
+                },
+                {
+                    "id": f"assistant-{index}",
+                    "author": "agent",
+                    "invocationId": f"invocation-{index}",
+                    "content": {"parts": [{"text": f"回答 {index}"}]},
+                },
+            ]
+        )
+
+    sample = extract_feedback_sample(
+        {"id": "session-1", "events": events},
+        target_event_id="assistant-3",
+        runtime_id="runtime-1",
+        agent_name="测试助手",
+        user_id="user-1",
+    )
+
+    assert sample.input == "问题 3"
+    assert sample.output == "回答 3"
+    assert sample.message_id == "assistant-3"
+    assert "问题 4" not in sample.input
+    assert "回答 4" not in sample.output
+
+
 def test_feedback_identifiers_are_stable() -> None:
     assert feedback_state_key("event-1") == "veadk_feedback:event-1"
     assert feedback_item_key(
