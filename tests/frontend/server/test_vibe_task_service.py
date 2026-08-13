@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from uuid import UUID
 
 from frontend.server.vibe_task.models import (
     CredentialUpload,
@@ -17,7 +18,7 @@ from frontend.server.vibe_task.service import VibeTaskError, VibeTaskService
 @pytest.mark.asyncio
 async def test_task_lifecycle_intent_events_and_secret_receipt() -> None:
     service = VibeTaskService()
-    task = await service.create("owner-a", CreateTaskRequest(goal="Build an Agent"))
+    task = await service.create("owner-a", CreateTaskRequest(requestId=UUID(int=1), goal="Build an Agent"))
     assert task.expires_at > task.created_at
     assert task.intent_revision == 0
 
@@ -58,7 +59,10 @@ async def test_task_lifecycle_intent_events_and_secret_receipt() -> None:
 @pytest.mark.asyncio
 async def test_owner_revision_and_delete_contracts() -> None:
     service = VibeTaskService()
-    task = await service.create("owner-a", CreateTaskRequest(goal="Build"))
+    request = CreateTaskRequest(requestId=UUID(int=2), goal="Build")
+    task = await service.create("owner-a", request)
+    assert VibeTaskService._task_id("owner-a", request.request_id) == task.task_id
+    assert VibeTaskService._task_id("owner-a", request.request_id) == task.task_id
     with pytest.raises(VibeTaskError) as foreign:
         await service.require("owner-b", task.task_id)
     assert foreign.value.status_code == 404
@@ -81,7 +85,7 @@ async def test_owner_revision_and_delete_contracts() -> None:
 @pytest.mark.asyncio
 async def test_event_stream_replays_after_sequence_and_closes_on_terminal() -> None:
     service = VibeTaskService()
-    task = await service.create("owner", CreateTaskRequest(goal="Build"))
+    task = await service.create("owner", CreateTaskRequest(requestId=UUID(int=3), goal="Build"))
     await service.stop("owner", task.task_id)
     received = [event async for event in service.events("owner", task.task_id, after=1)]
     assert [event.sequence for event in received] == [2]
@@ -91,7 +95,7 @@ async def test_event_stream_replays_after_sequence_and_closes_on_terminal() -> N
 @pytest.mark.asyncio
 async def test_stream_heartbeat_does_not_mutate_persisted_sequence(monkeypatch) -> None:
     service = VibeTaskService()
-    task = await service.create("owner", CreateTaskRequest(goal="Build"))
+    task = await service.create("owner", CreateTaskRequest(requestId=UUID(int=4), goal="Build"))
 
     async def immediate_timeout(awaitable, timeout):
         del timeout

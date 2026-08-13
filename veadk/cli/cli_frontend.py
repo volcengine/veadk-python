@@ -1581,19 +1581,9 @@ def _run_frontend_server(
         skills_client_factory=_skill_workbench_skills_client,
     )
 
-    from frontend.server.vibe_task import mount_vibe_task_routes
-
     def _vibe_owner(request: Request) -> str:
         principal = _require_agent_management(request)
         return principal.owner_id if principal is not None else "local"
-
-    from frontend.server.vibe_task import VibeTaskService
-
-    mount_vibe_task_routes(
-        app,
-        _vibe_owner,
-        service=VibeTaskService(),
-    )
 
     from veadk.cli.frontend_coding_agents import mount_coding_agent_routes
 
@@ -1931,6 +1921,17 @@ def _run_frontend_server(
             provider=provider,
         ),
     )
+    from frontend.server.vibe_task import VibeTaskService, mount_vibe_task_routes
+    from frontend.server.vibe_task.sandbox import VibeSandboxStore
+
+    vibe_service = VibeTaskService(
+        sandbox_store=VibeSandboxStore(
+            sandbox_gateway,
+            os.getenv("SANDBOX_DEV", ""),
+        )
+    )
+    mount_vibe_task_routes(app, _vibe_owner, service=vibe_service)
+
     sandbox_service = SandboxConversationService(
         sandbox_gateway,
         tool_id=sandbox_chat_codex_tool_id,

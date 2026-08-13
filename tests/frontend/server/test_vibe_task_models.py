@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import ValidationError
 import pytest
+from uuid import UUID
 
 from frontend.server.vibe_task.models import (
     CredentialUpload,
@@ -14,11 +15,19 @@ from frontend.server.vibe_task.models import (
 
 
 def test_create_task_normalizes_goal_and_rejects_extra_fields() -> None:
-    assert CreateTaskRequest(goal="  build an agent  ").goal == "build an agent"
+    request_id = UUID("12345678-1234-5678-9234-567812345678")
+    assert (
+        CreateTaskRequest(requestId=request_id, goal="  build an agent  ").goal
+        == "build an agent"
+    )
     with pytest.raises(ValidationError):
-        CreateTaskRequest.model_validate({"goal": "ok", "unknown": True})
+        CreateTaskRequest.model_validate(
+            {"requestId": str(request_id), "goal": "ok", "unknown": True}
+        )
     with pytest.raises(ValidationError):
-        CreateTaskRequest(goal="   ")
+        CreateTaskRequest(requestId=request_id, goal="   ")
+    with pytest.raises(ValidationError):
+        CreateTaskRequest.model_validate({"requestId": "invalid", "goal": "ok"})
 
 
 def test_credentials_never_serialize_or_repr_secret_values() -> None:

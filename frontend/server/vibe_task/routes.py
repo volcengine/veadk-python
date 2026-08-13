@@ -39,13 +39,7 @@ def mount_vibe_task_routes(
     @app.get("/web/vibe/capabilities")
     async def capabilities(request: Request) -> dict[str, object]:
         owner_resolver(request)
-        return {
-            "enabled": True,
-            "sandboxTtlSeconds": 28_800,
-            "maxCloudAttempts": 3,
-            "intentSummaryPath": "/home/gem/.vibe/task/intent-summary.json",
-            "evaluationEnabled": False,
-        }
+        return service.capabilities()
 
     @app.post("/web/vibe/tasks")
     async def create_task(body: CreateTaskRequest, request: Request) -> dict[str, object]:
