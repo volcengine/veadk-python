@@ -1,0 +1,19 @@
+studio:
+  base_url: "http://127.0.0.1:8000"
+
+deploy:
+  region: "cn-beijing"
+  project_name: "default"
+
+baseline:
+  model_name: "doubao-seed-2-1-pro-260628"
+
+profiles: [{"name": "developer", "auth": {"local_user": "studio-e2e-developer@example.com"}, "expected_access_status": 200, "expect_create_agents": true, "expect_manage_agents": true}]
+  # Add a user/viewer profile only if your Studio deployment maps it to a
+  # restricted role. The script will assert 401/403 for create/manage.
+  # - name: "viewer"
+  #   auth:
+  #     cookie: "session=..."
+  #   expected_access_status: 200
+  #   expect_create_agents: false
+  #   expect_manage_agents: false

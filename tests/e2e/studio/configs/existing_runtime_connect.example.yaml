@@ -1,0 +1,22 @@
+studio:
+  base_url: "http://127.0.0.1:8000"
+  auth:
+    local_user: "studio-e2e-user@example.com"
+
+runtime:
+  # Set runtime_id for deterministic runs, or leave blank to pick from /web/runtimes.
+  runtime_id: ""
+  region: "cn-beijing"
+  app: ""
+  scope: "mine"
+  page_size: 20
+  name_contains: ""
+
+deploy:
+  region: "cn-beijing"
+  project_name: "default"
+
+chat:
+  user_id: "studio_e2e_existing_runtime_chat"
+  message: "Hello from existing runtime smoke test."
+  expected_contains: ""

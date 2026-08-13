@@ -2111,6 +2111,8 @@ def _run_frontend_server(
             "MODEL_VIDEO_API_KEY",
             "MODEL_REALTIME_API_KEY",
             "ARK_API_KEY",
+            "ARK_PROJECT_NAME",
+            "MODEL_AGENT_API_KEY_PROJECT",
             "VOLCENGINE_ACCESS_KEY",
             "VOLCENGINE_SECRET_KEY",
             "VOLCENGINE_SESSION_TOKEN",

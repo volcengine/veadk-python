@@ -1,0 +1,40 @@
+studio:
+  base_url: "http://127.0.0.1:8000"
+  auth:
+    local_user: "studio-e2e-user@example.com"
+
+agent:
+  name_prefix: "studio-e2e-tools"
+
+baseline:
+  model_name: "doubao-seed-2-1-pro-260628"
+  instruction: "Use configured tools only when helpful."
+
+tools:
+  builtin: ["link_reader"]
+  legacy: []
+  custom: [{"name": "lookup_order_status", "description": "Return a fake order status for smoke testing."}]
+  mcp: []
+  # Example HTTP MCP:
+  # mcp:
+  #   - name: "demo_mcp"
+  #     transport: "http"
+  #     url: "https://example.com/mcp"
+  #     authToken: ""
+
+deploy:
+  region: "cn-beijing"
+  project_name: "default"
+  session_storage: "persistent"
+  env: {}
+
+chat:
+  enabled: true
+  user_id: "studio_e2e_tools_chat"
+  message: "Say hello and mention the configured custom tool name."
+  expected_contains: ""
+
+cleanup:
+  delete_runtime_on_success: false
+  delete_runtime_on_failure: false
+  verify_runtime_deleted: true

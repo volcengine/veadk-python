@@ -1286,7 +1286,7 @@ def _a2a_registry_env_values(draft: AgentDraft) -> dict[str, str]:
 def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
     """Return runtime env values allowed by active components in a debug draft."""
     draft = prepare_mcp_auth(draft)
-    allowed_keys: set[str] = set()
+    allowed_keys: set[str] = {"ARK_PROJECT_NAME", "MODEL_AGENT_API_KEY_PROJECT"}
     fixed_values: dict[str, str] = {}
 
     def allow_env(items: tuple[EnvVar, ...]) -> None:

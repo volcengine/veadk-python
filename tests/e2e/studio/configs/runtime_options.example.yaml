@@ -1,0 +1,42 @@
+studio:
+  base_url: "http://127.0.0.1:8000"
+  auth:
+    local_user: "studio-e2e-user@example.com"
+
+agent:
+  name_prefix: "studio-e2e-options"
+
+baseline:
+  model_name: "doubao-seed-2-1-pro-260628"
+  instruction: "You are a deploy options smoke-test agent."
+
+deploy:
+  region: "cn-beijing"
+  project_name: "default"
+  session_storage: "persistent" # persistent | in-memory
+  min_instance: 1
+  max_instance: 2
+  network:
+    mode: "public" # public | private | both
+    vpc_id: ""
+    subnet_ids: []
+    enable_shared_internet_access: false
+  im:
+    feishu:
+      enabled: false
+  env: {}
+  # Required when deploy.im.feishu.enabled=true:
+  # env:
+  #   FEISHU_APP_ID: "cli_xxx"
+  #   FEISHU_APP_SECRET: "xxx"
+
+chat:
+  enabled: true
+  user_id: "studio_e2e_options_chat"
+  message: "Hello from runtime options smoke test."
+  expected_contains: ""
+
+cleanup:
+  delete_runtime_on_success: false
+  delete_runtime_on_failure: false
+  verify_runtime_deleted: true

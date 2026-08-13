@@ -1,0 +1,53 @@
+studio:
+  base_url: "http://127.0.0.1:8000"
+  auth:
+    local_user: "studio-e2e-user@example.com"
+
+agent:
+  name_prefix: "studio-e2e-catalog"
+
+baseline:
+  model_name: "doubao-seed-2-1-pro-260628"
+  instruction: "You are a catalog integration smoke-test agent."
+
+skill_space:
+  enabled: true
+  region: "all"
+  project: ""
+  page_size: 50
+  space_id: ""
+  space_name_contains: ""
+  skill_id: ""
+  skill_name_contains: ""
+  version: ""
+  fetch_detail: true
+
+a2a:
+  enabled: true
+  region: "cn-beijing"
+  project: "default"
+  page_size: 100
+  space_id: ""
+  space_name_contains: ""
+  top_k: "3"
+  endpoint: "https://open.volcengineapi.com/"
+
+deploy_catalog_agent:
+  enabled: false
+
+deploy:
+  region: "cn-beijing"
+  project_name: "default"
+  session_storage: "persistent"
+  env: {}
+
+chat:
+  enabled: true
+  user_id: "studio_e2e_catalog_chat"
+  message: "Hello from catalog smoke test."
+  expected_contains: ""
+
+cleanup:
+  delete_runtime_on_success: false
+  delete_runtime_on_failure: false
+  verify_runtime_deleted: true

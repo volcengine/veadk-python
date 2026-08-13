@@ -1,0 +1,90 @@
+# Copy to byteplus_basic.local.yaml and fill values for your BytePlus Studio.
+# Local config files are git-ignored.
+
+studio:
+  base_url: "https://your-byteplus-studio.example.com"
+  provider: "byteplus"
+  timeout_seconds: 900
+  auth:
+    # For local no-SSO Studio only. For deployed Studio, use cookie or bearer_token.
+    local_user: "studio-e2e-user"
+    # cookie: "session=..."
+    # bearer_token: "..."
+    headers: {}
+
+agent:
+  name_prefix: "studio-e2e-bp"
+  cloud_provider: "byteplus"
+  agent_type: "llm"
+  builtin_tools: []
+  custom_tools: []
+  mcp_tools: []
+  memory:
+    short_term: false
+    long_term: false
+  knowledgebase:
+    enabled: false
+    backend: "local"
+  tracing:
+    enabled: false
+    exporters: []
+
+baseline:
+  model_name: "seed-2-0-lite-260228"
+  model_provider: ""
+  model_api_base: "https://ark.ap-southeast.bytepluses.com/api/v3"
+  description: "Studio E2E BytePlus basic assistant."
+  instruction: "Reply concisely. If asked for the smoke keyword, include BYTEPLUS_STUDIO_E2E_OK."
+
+debug:
+  # Requires either MODEL_AGENT_API_KEY on the Studio server process or an ARK
+  # API key in the configured BytePlus project.
+  enabled: true
+  # Keep false for basic BP coverage; set true when debug/chat must be strict.
+  required: false
+  user_id: "byteplus_e2e_user"
+  message: "Please reply with the smoke keyword for BytePlus Studio."
+  expected_contains: "BYTEPLUS_STUDIO_E2E_OK"
+  verify_trace: false
+
+catalog_probes:
+  enabled: true
+  # Keep false unless the test account is expected to have Skill Space, A2A,
+  # and Viking KnowledgeBase permissions in BytePlus.
+  required: false
+
+deploy:
+  # Turn this on for full BytePlus runtime deploy/connect/chat coverage.
+  enabled: false
+  winner: "baseline"
+  region: "ap-southeast-1"
+  # Debug auto-fetch searches this BytePlus ModelArk project for an ARK API key.
+  project_name: "default"
+  task_id_prefix: "studio-e2e-bp"
+  session_storage: "persistent"
+  min_instance: 1
+  max_instance: 1
+  # BytePlus Studio does not create AgentKit evaluation sets in this release.
+  create_evaluation_sets: false
+  description: "Studio E2E BytePlus basic smoke runtime."
+  network:
+    mode: "public"
+  env:
+    # Optional: pass model key through generated debug/deploy environments.
+    # Prefer setting MODEL_AGENT_API_KEY on the Studio server process instead of
+    # writing secrets into YAML, even though *.local.yaml is git-ignored.
+    # MODEL_AGENT_API_KEY: ""
+  im:
+    feishu:
+      enabled: false
+
+chat:
+  user_id: "byteplus_e2e_chat_user"
+  message: "Hello BytePlus deployed agent. Please answer with a short OK."
+  expected_contains: ""
+
+cleanup:
+  delete_debug_runs: true
+  delete_runtime_on_success: false
+  delete_runtime_on_failure: false
+  verify_runtime_deleted: true

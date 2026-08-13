@@ -1,0 +1,24 @@
+studio:
+  base_url: "http://127.0.0.1:8000"
+  auth:
+    local_user: "studio-e2e-user@example.com"
+  timeout_seconds: 900
+
+agent:
+  name_prefix: "studio-e2e-cancel"
+
+baseline:
+  model_name: "doubao-seed-2-1-pro-260628"
+  instruction: "You are only used to test cancel deployment."
+
+deploy:
+  region: "cn-beijing"
+  project_name: "default"
+  session_storage: "persistent"
+  task_id_prefix: "studio-e2e-cancel"
+  env: {}
+
+cancel:
+  wait_before_cancel_seconds: 30
+  wait_after_cancel_seconds: 180
+  require_terminal_failure: false

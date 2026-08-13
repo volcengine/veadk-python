@@ -1,0 +1,78 @@
+# Copy to custom_kb_deploy_chat.local.yaml and fill values for your test Studio.
+# Local config files are git-ignored.
+
+studio:
+  base_url: "https://your-studio.example.com"
+  timeout_seconds: 900
+  auth:
+    local_user: "studio-e2e-user"
+    # cookie: "session=..."
+    # bearer_token: "..."
+    headers: {}
+
+agent:
+  name_prefix: "studio-e2e-kb"
+  agent_type: "llm"
+  builtin_tools: []
+  custom_tools: []
+  mcp_tools: []
+  memory:
+    short_term: false
+    long_term: false
+  knowledgebase:
+    enabled: true
+    # viking, opensearch, or context_search
+    backend: "viking"
+    # Existing VikingDB collection/index, or leave empty to let generated code
+    # derive an index from the agent name.
+    index: ""
+    verify_managed_list: true
+    require_index_in_list: false
+  tracing:
+    enabled: false
+    exporters: []
+
+baseline:
+  model_name: "doubao-seed-2-1-pro-260628"
+  model_provider: ""
+  model_api_base: ""
+  description: "Studio E2E knowledge-base assistant."
+  instruction: "Use the mounted knowledge base when it helps. Reply concisely."
+
+debug:
+  user_id: "test_user"
+  message: "Please reply OK for this knowledge-base Studio debug test."
+  expected_contains: ""
+  verify_trace: true
+
+deploy:
+  region: "cn-beijing"
+  project_name: "default"
+  task_id_prefix: "studio-e2e-kb"
+  session_storage: "persistent"
+  min_instance: 1
+  max_instance: 1
+  description: "Studio E2E knowledge-base smoke runtime."
+  network:
+    mode: "public"
+  # Runtime component credentials. Fill only what your selected backend needs.
+  env: {}
+
+knowledge_search:
+  enabled: true
+  user_id: "studio-e2e-kb-user"
+  query: "Studio E2E knowledge-base test"
+  expected_contains: ""
+  require_result: false
+
+chat:
+  user_id: "studio-e2e-kb-user"
+  message: "Please answer a short question using your configured knowledge base if relevant."
+  expected_contains: ""
+
+cleanup:
+  delete_debug_runs: true
+  delete_runtime_on_success: false
+  delete_runtime_on_failure: false
+  verify_runtime_deleted: true
+

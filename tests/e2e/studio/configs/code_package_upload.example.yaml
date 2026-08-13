@@ -1,0 +1,27 @@
+studio:
+  base_url: "http://127.0.0.1:8000"
+  auth:
+    local_user: "studio-e2e-user@example.com"
+
+package:
+  # Directory, .zip, .tar, .tar.gz, or .tgz containing app.py.
+  path: "./path/to/generated-or-downloaded-agent-project"
+  name: "studio-e2e-code-package"
+  max_bytes: 2000000
+
+deploy:
+  region: "cn-beijing"
+  project_name: "default"
+  session_storage: "persistent"
+  env: {}
+
+chat:
+  enabled: true
+  user_id: "studio_e2e_code_package_chat"
+  message: "Hello from uploaded code package smoke test."
+  expected_contains: ""
+
+cleanup:
+  delete_runtime_on_success: false
+  delete_runtime_on_failure: false
+  verify_runtime_deleted: true

@@ -1,0 +1,66 @@
+# Copy to manage_update_feedback_delete.local.yaml and fill values for your test Studio.
+# Local config files are git-ignored.
+
+studio:
+  base_url: "https://your-studio.example.com"
+  timeout_seconds: 900
+  auth:
+    # For local no-SSO Studio only. For deployed Studio, use cookie or bearer_token.
+    local_user: "studio-e2e-user"
+    # cookie: "session=..."
+    # bearer_token: "..."
+    headers: {}
+
+target:
+  # Prefer an explicit runtime_id for repeatability. If empty, the script will
+  # find the first runtime whose name contains name_contains.
+  runtime_id: ""
+  name_contains: "studio-e2e"
+  region: "cn-beijing"
+  scope: "mine"
+
+update:
+  model_name: "doubao-seed-2-1-pro-260628"
+  description_suffix: " Updated by Studio manage E2E."
+  instruction_suffix: " When asked for the update keyword, include STUDIO_E2E_UPDATED_OK."
+  expected_min_version_after: 2
+  deploy:
+    task_id_prefix: "studio-e2e-update"
+    project_name: "default"
+    session_storage: "persistent"
+    min_instance: 1
+    max_instance: 1
+    network:
+      mode: "public"
+    env: {}
+
+chat:
+  user_id: "studio-e2e-user"
+  messages:
+    good:
+      text: "Please reply with the update keyword."
+      expected_contains: "STUDIO_E2E_UPDATED_OK"
+      comment: "Good E2E response"
+    bad:
+      text: "Please give another short test response."
+      expected_contains: ""
+      comment: "Bad E2E response"
+
+cases:
+  page_size: 100
+  delete_one_case: true
+  delete_kind: "bad"
+  verify_nav_to_chat: true
+
+delete_agents:
+  enabled: false
+  # Destructive: every runtime must be explicitly listed here.
+  runtimes:
+    # - runtime_id: "r-xxxx"
+    #   region: "cn-beijing"
+    #   expected_name_contains: "studio-e2e"
+  verify_deleted: true
+  verify_list_absence: true
+  # Set true only for disposable runtimes if you cannot provide name guards.
+  allow_without_name_guard: false
+

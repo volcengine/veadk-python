@@ -1,0 +1,84 @@
+# Copy to custom_ab_deploy_chat.local.yaml and fill values for your test Studio.
+# Local config files are git-ignored.
+
+studio:
+  base_url: "https://your-studio.example.com"
+  timeout_seconds: 900
+  auth:
+    # For local no-SSO Studio only. For deployed Studio, use cookie or bearer_token.
+    local_user: "studio-e2e-user"
+    # cookie: "session=..."
+    # bearer_token: "..."
+    headers: {}
+
+agent:
+  # The script appends a timestamp unless agent.name is provided.
+  name_prefix: "studio-e2e-custom"
+  # name: "studio-e2e-custom-fixed"
+  agent_type: "llm"
+  builtin_tools: []
+  custom_tools: []
+  mcp_tools: []
+  memory:
+    short_term: false
+    long_term: false
+  knowledgebase:
+    enabled: false
+    backend: "local"
+  tracing:
+    enabled: false
+    exporters: []
+
+baseline:
+  model_name: "doubao-seed-2-1-pro-260628"
+  model_provider: ""
+  model_api_base: ""
+  description: "Studio E2E baseline assistant."
+  instruction: "Reply concisely. If asked for the smoke keyword, include STUDIO_E2E_BASELINE_OK."
+
+variant:
+  name: "comparison-1"
+  model_name: "doubao-seed-2-1-pro-260628"
+  description: "Studio E2E comparison assistant."
+  instruction: "Reply concisely. If asked for the smoke keyword, include STUDIO_E2E_VARIANT_OK."
+
+debug:
+  user_id: "test_user"
+  message: "Please reply with the smoke keyword for your configuration."
+  # Empty means only require a non-empty assistant response.
+  expected_contains:
+    baseline: "STUDIO_E2E_BASELINE_OK"
+    variant: "STUDIO_E2E_VARIANT_OK"
+  verify_trace: true
+
+deploy:
+  # baseline or variant
+  winner: "variant"
+  region: "cn-beijing"
+  project_name: "default"
+  task_id_prefix: "studio-e2e-custom"
+  session_storage: "persistent"
+  min_instance: 1
+  max_instance: 1
+  description: "Studio E2E custom A/B deploy-chat smoke runtime."
+  network:
+    mode: "public"
+    # vpc_id: ""
+    # subnet_ids: []
+    # enable_shared_internet_access: true
+  env: {}
+  im:
+    feishu:
+      enabled: false
+
+chat:
+  user_id: "studio_e2e_chat_user"
+  message: "Hello deployed agent. Please answer with a short OK."
+  expected_contains: ""
+
+cleanup:
+  delete_debug_runs: true
+  delete_runtime_on_success: false
+  delete_runtime_on_failure: false
+  verify_runtime_deleted: true
+

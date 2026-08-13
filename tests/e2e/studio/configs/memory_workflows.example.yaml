@@ -1,0 +1,41 @@
+# Copy to memory_workflows.local.yaml and fill auth/resource values.
+studio:
+  base_url: "http://127.0.0.1:8000"
+  auth:
+    local_user: "studio-e2e-user@example.com"
+
+agent:
+  name_prefix: "studio-e2e-memory"
+
+baseline:
+  model_name: "doubao-seed-2-1-pro-260628"
+  instruction: "You are a concise memory workflow test agent."
+
+memory:
+  mode: "both" # short_term | long_term | both
+  short_term_backend: "local" # local | sqlite | mysql | postgresql
+  long_term_backend: "local" # local | opensearch | redis | viking | mem0
+  auto_save_session: true
+  verify_search: true
+  search_query: "studio e2e memory"
+
+deploy:
+  region: "cn-beijing"
+  project_name: "default"
+  session_storage: "persistent"
+  env: {}
+
+debug:
+  enabled: true
+  user_id: "studio_e2e_memory_debug"
+
+chat:
+  user_id: "studio_e2e_memory_chat"
+  message: "Remember that the memory workflow token is STUDIO_MEMORY_E2E."
+  expected_contains: ""
+
+cleanup:
+  delete_debug_runs: true
+  delete_runtime_on_success: false
+  delete_runtime_on_failure: false
+  verify_runtime_deleted: true

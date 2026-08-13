@@ -1,0 +1,18 @@
+studio:
+  base_url: "http://127.0.0.1:8000"
+  auth:
+    local_user: "studio-e2e-user@example.com"
+
+agent:
+  name_prefix: "studio-e2e-errors"
+
+baseline:
+  model_name: "doubao-seed-2-1-pro-260628"
+
+deploy:
+  region: "cn-beijing"
+  project_name: "default"
+
+error:
+  expected_draft_error_contains: "shortTermBackend"
+  expected_deploy_error_contains: "minInstance"

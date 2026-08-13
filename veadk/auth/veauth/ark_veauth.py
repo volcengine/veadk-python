@@ -53,13 +53,44 @@ def get_ark_token(
     """
     logger.info("Fetching ARK token...")
 
-    access_key = access_key or os.getenv("VOLCENGINE_ACCESS_KEY")
-    secret_key = secret_key or os.getenv("VOLCENGINE_SECRET_KEY")
-    session_token = (
-        session_token
-        or os.getenv("VOLCENGINE_SESSION_TOKEN")
-        or os.getenv("VOLC_SESSIONTOKEN", "")
+    provider = (
+        os.getenv("CLOUD_PROVIDER")
+        or os.getenv("AGENTKIT_CLOUD_PROVIDER")
+        or ""
+    ).lower()
+    project_name = (
+        os.getenv("ARK_PROJECT_NAME")
+        or os.getenv("MODEL_AGENT_API_KEY_PROJECT")
+        or _ARK_PROJECT_NAME
     )
+
+    if provider == "byteplus":
+        access_key = (
+            access_key
+            or os.getenv("BYTEPLUS_ACCESS_KEY")
+            or os.getenv("BYTEPLUS_ACCESS_KEY_ID")
+            or os.getenv("VOLCENGINE_ACCESS_KEY")
+        )
+        secret_key = (
+            secret_key
+            or os.getenv("BYTEPLUS_SECRET_KEY")
+            or os.getenv("BYTEPLUS_SECRET_ACCESS_KEY")
+            or os.getenv("VOLCENGINE_SECRET_KEY")
+        )
+        session_token = (
+            session_token
+            or os.getenv("BYTEPLUS_SESSION_TOKEN")
+            or os.getenv("VOLCENGINE_SESSION_TOKEN")
+            or os.getenv("VOLC_SESSIONTOKEN", "")
+        )
+    else:
+        access_key = access_key or os.getenv("VOLCENGINE_ACCESS_KEY")
+        secret_key = secret_key or os.getenv("VOLCENGINE_SECRET_KEY")
+        session_token = (
+            session_token
+            or os.getenv("VOLCENGINE_SESSION_TOKEN")
+            or os.getenv("VOLC_SESSIONTOKEN", "")
+        )
 
     if not (access_key and secret_key):
         # try to get from vefaas iam
@@ -68,9 +99,8 @@ def get_ark_token(
         secret_key = cred.secret_access_key
         session_token = cred.session_token
 
-    provider = os.getenv("CLOUD_PROVIDER")
     host = "open.volcengineapi.com"
-    if provider and provider.lower() == "byteplus":
+    if provider == "byteplus":
         region = "ap-southeast-1"
         host = "open.byteplusapi.com"
 
@@ -79,7 +109,7 @@ def get_ark_token(
         # request body makes the ARK gateway 504.
         res = ve_request(
             request_body={
-                "ProjectName": _ARK_PROJECT_NAME,
+                "ProjectName": project_name,
                 "Filter": {"AllowAll": True},
             },
             header={"X-Security-Token": session_token},
@@ -118,13 +148,13 @@ def get_ark_token(
         if target_id is None:
             raise ValueError(
                 f"ARK API Key named '{api_key_name}' not found in project "
-                f"'{_ARK_PROJECT_NAME}' (scanned {scanned} keys)."
+                f"'{project_name}' (scanned {scanned} keys)."
             )
         logger.info("Using the requested ARK API Key.")
     else:
         items = _list_api_keys(1).get("Items", [])
         if not items:
-            raise ValueError(f"No ARK API keys found in project '{_ARK_PROJECT_NAME}'.")
+            raise ValueError(f"No ARK API keys found in project '{project_name}'.")
         target_id = items[0]["Id"]
         logger.warning("By default, VeADK fetches the first API Key in the list.")
         logger.info("Fetching the first ARK API Key returned by ListApiKeys.")

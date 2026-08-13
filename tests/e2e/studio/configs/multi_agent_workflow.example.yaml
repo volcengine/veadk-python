@@ -1,0 +1,33 @@
+studio:
+  base_url: "http://127.0.0.1:8000"
+  auth:
+    local_user: "studio-e2e-user@example.com"
+
+agent:
+  name_prefix: "studio-e2e-flow"
+
+baseline:
+  model_name: "doubao-seed-2-1-pro-260628"
+  description: "Studio E2E workflow orchestrator."
+
+workflow:
+  type: "sequential" # sequential | parallel | loop
+  max_iterations: 3
+  sub_agents: [{"name": "workflow_researcher", "instruction": "Extract the key facts from the user request."}, {"name": "workflow_writer", "instruction": "Write a concise final response."}]
+
+deploy:
+  region: "cn-beijing"
+  project_name: "default"
+  session_storage: "persistent"
+  env: {}
+
+chat:
+  enabled: true
+  user_id: "studio_e2e_flow_chat"
+  message: "Use the workflow to summarize why automated API smoke tests help."
+  expected_contains: ""
+
+cleanup:
+  delete_runtime_on_success: false
+  delete_runtime_on_failure: false
+  verify_runtime_deleted: true
