@@ -230,6 +230,8 @@ def runtime_is_ready(result: CommandResult) -> bool:
 
 def invoke_succeeded(result: CommandResult) -> bool:
     payload = parse_json_result(result)
+    if isinstance(payload, str):
+        return bool(payload.strip())
     if not isinstance(payload, dict):
         return False
     if payload.get("success") is True:

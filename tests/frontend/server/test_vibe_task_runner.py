@@ -145,6 +145,7 @@ def test_parse_helpers_fail_closed() -> None:
     assert not runtime_is_ready(CommandResult(1, stdout='{"status": "Ready"}'))
     assert not runtime_is_ready(CommandResult(0, stdout="not-json"))
 
+    assert invoke_succeeded(CommandResult(0, stdout='"VIBE_LOCAL_E2E_OK"'))
     assert invoke_succeeded(CommandResult(0, stdout='{"success": true}'))
     assert invoke_succeeded(CommandResult(0, stdout='{"status": "succeeded"}'))
     assert not invoke_succeeded(CommandResult(0, stdout='{"success": false}'))
