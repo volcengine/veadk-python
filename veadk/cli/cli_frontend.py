@@ -7617,6 +7617,13 @@ def _resolve_studio_cloud_credentials(
     "so release logs can be inspected in the console.",
 )
 @click.option(
+    "--precheck-only",
+    is_flag=True,
+    default=False,
+    help="Run the read-only IAM permission pre-check and exit without creating "
+    "cloud resources.",
+)
+@click.option(
     "--site-logo",
     default=None,
     help="Studio logo as a local image path or HTTP(S) URL; the image is "
@@ -7734,6 +7741,7 @@ def frontend_deploy(
     veadk_version: str,
     from_source: bool,
     keep_failed_deploy: bool,
+    precheck_only: bool,
     site_logo: str | None,
     site_title: str | None,
     studio_admins: str | None,
@@ -7800,6 +7808,70 @@ def frontend_deploy(
             os.environ["BYTEPLUS_SESSION_TOKEN"] = session_token
 
     auto_identity_resources = not (user_pool_id and allowed_client_id)
+    auto_storage = not str(
+        veadk_environments.get("VEADK_STUDIO_TOS_BUCKET") or ""
+    ).strip()
+    auto_sandbox_tools = any(
+        not tool_id
+        for tool_id in (
+            sandbox_dev_tool_id,
+            sandbox_chat_codex_tool_id,
+            sandbox_chat_openclaw_tool_id,
+            sandbox_chat_hermes_tool_id,
+            sandbox_chat_codex_snapshot_tool_id,
+            sandbox_chat_openclaw_snapshot_tool_id,
+            sandbox_chat_hermes_snapshot_tool_id,
+        )
+    )
+    from veadk.cli.studio_deploy_permissions import (
+        IAM_CONFIG_URLS,
+        required_permission_specs,
+        run_studio_deploy_permission_precheck,
+    )
+
+    permission_specs = required_permission_specs(
+        auto_identity_resources=auto_identity_resources,
+        auto_function_role=not iam_role,
+        auto_storage=auto_storage,
+        auto_sandbox_tools=auto_sandbox_tools,
+        auto_gateway=not gateway_name,
+        keep_failed_deploy=keep_failed_deploy,
+    )
+    try:
+        permission_results = run_studio_deploy_permission_precheck(
+            provider=provider_id,
+            access_key=ak,
+            secret_key=sk,
+            session_token=session_token,
+            specs=permission_specs,
+        )
+    except Exception as error:
+        detail = _safe_exception_detail(error, secrets=(ak, sk, session_token))
+        label = (
+            "Configure permissions in BytePlus IAM"
+            if provider_id == "byteplus"
+            else "前往火山引擎 IAM 配置权限"
+        )
+        click.echo(f"{label}: {IAM_CONFIG_URLS[provider_id]}")
+        raise click.ClickException(
+            f"IAM permission pre-check failed: {detail}"
+        ) from error
+    if any(not result.satisfied for result in permission_results):
+        message = (
+            "Studio deployment stopped before creating cloud resources because "
+            "required IAM Actions are missing."
+            if provider_id == "byteplus"
+            else "缺少 Studio 部署所需的 IAM 权限，已在创建云资源前终止。"
+        )
+        raise click.ClickException(message)
+    if precheck_only:
+        click.echo(
+            "Pre-check only: no cloud resources were created."
+            if provider_id == "byteplus"
+            else "仅执行权限预检，未创建任何云资源。"
+        )
+        return
+
     user_pool_domain = ""
     if user_pool_id and allowed_client_id:
         identity_region = _resolve_studio_identity_region(
@@ -7871,9 +7943,6 @@ def frontend_deploy(
         resolve_studio_storage_for_deploy,
     )
 
-    auto_storage = not str(
-        veadk_environments.get("VEADK_STUDIO_TOS_BUCKET") or ""
-    ).strip()
     click.echo("Ensuring Studio persistent storage…")
     try:
         storage_config = resolve_studio_storage_for_deploy(
