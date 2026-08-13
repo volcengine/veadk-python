@@ -781,7 +781,7 @@ def _serve_options(f):
             "--site-title",
             default=None,
             envvar="VEADK_SITE_TITLE",
-            help="Studio title, at most 6 characters (env: VEADK_SITE_TITLE).",
+            help="Studio title, at most 16 characters (env: VEADK_SITE_TITLE).",
         ),
         click.option("--host", default="127.0.0.1", show_default=True),
         click.option("--port", default=8000, show_default=True, type=int),
@@ -7772,7 +7772,7 @@ def _resolve_studio_cloud_credentials(
 @click.option(
     "--site-title",
     default=None,
-    help="Studio title, at most 6 characters.",
+    help="Studio title, at most 16 characters.",
 )
 @click.option(
     "--admin",
@@ -8588,7 +8588,7 @@ def frontend_deploy(
 @click.option(
     "--site-title",
     default=None,
-    help="Replace the deployed Studio title, at most 6 characters.",
+    help="Replace the deployed Studio title, at most 16 characters.",
 )
 @click.option(
     "--sandbox-dev-tool-id",

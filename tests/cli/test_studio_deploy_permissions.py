@@ -274,3 +274,36 @@ def test_cli_precheck_only_exits_before_cloud_writes(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert "All 38 required IAM Actions are satisfied." in result.output
     assert "Pre-check only: no cloud resources were created." in result.output
+
+
+def test_cli_precheck_only_rejects_overlong_site_title_before_iam(monkeypatch) -> None:
+    precheck_called = False
+
+    def _precheck(**_kwargs):
+        nonlocal precheck_called
+        precheck_called = True
+        return []
+
+    monkeypatch.setattr(
+        permissions,
+        "run_studio_deploy_permission_precheck",
+        _precheck,
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--vefaas-app-name",
+            "studio-test",
+            "--provider",
+            "byteplus",
+            "--precheck-only",
+            "--site-title",
+            "ABCDEFGHIJKLMNOPQ",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "at most 16 characters" in result.output
+    assert precheck_called is False
