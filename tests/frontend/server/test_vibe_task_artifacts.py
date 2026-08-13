@@ -146,7 +146,7 @@ def test_package_is_deterministic_across_source_mtimes(tmp_path: Path) -> None:
     "contents, supplied",
     [
         ("token = supplied-value\n", ("supplied-value",)),
-        ("SERVICE_API_KEY=embedded-value\n", ()),
+        ("SERVICE_SECRET_ACCESS_KEY=embedded-value\n", ()),
         ("password: embedded-value\n", ()),
     ],
 )
