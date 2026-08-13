@@ -229,6 +229,15 @@ def main(path):
             if os.path.commonpath((os.path.realpath(SECRETS), parent_real)) != os.path.realpath(SECRETS): raise ValueError("secret escapes root")
             info = os.lstat(secret)
             if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600: raise ValueError("secret must be a regular 0600 file")
+            active_secret = os.path.join(SECRETS, "active.json")
+            if secret != active_secret:
+                os.replace(secret, active_secret)
+            os.chmod(active_secret, 0o600)
+            for name in os.listdir(SECRETS):
+                candidate = os.path.join(SECRETS, name)
+                if candidate != active_secret and not os.path.isdir(candidate):
+                    try: os.unlink(candidate)
+                    except FileNotFoundError: pass
             append_event(records, previous, command, "credentials.configured", status["stage"], {"commandId": command["commandId"], "commandHash": command_hash}, {"credentialsConfigured": True})
         else:
             scrub_secrets()
