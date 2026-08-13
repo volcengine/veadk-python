@@ -3543,7 +3543,7 @@
   font-size: 14px;
   font-weight: 600;
 }
-.cw-toggle-desc {
+.cw-toggle-help {
   font-size: 12.5px;
   line-height: 1.5;
   color: hsl(var(--muted-foreground));

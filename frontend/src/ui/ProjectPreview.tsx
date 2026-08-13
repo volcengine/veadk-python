@@ -1974,34 +1974,36 @@ export function ProjectPreview({
                   <label className="pp-config-label" htmlFor={runtimeNameInputId}>
                     Runtime 名称
                   </label>
-                  <input
-                    id={runtimeNameInputId}
-                    className="pp-runtime-name-input"
-                    value={effectiveRuntimeName}
-                    disabled={deploying || isRuntimeUpdate}
-                    maxLength={64}
-                    autoComplete="off"
-                    aria-label="Runtime 名称"
-                    aria-invalid={Boolean(runtimeNameError)}
-                    aria-describedby={`${runtimeNameHelpId}${runtimeNameError ? ` ${runtimeNameErrorId}` : ""}`}
-                    onChange={(event) =>
-                      onDeploymentRuntimeNameChange?.(event.currentTarget.value)
-                    }
-                  />
-                  <p id={runtimeNameHelpId} className="pp-config-note">
-                    {isRuntimeUpdate
-                      ? "更新时保持现有 Runtime 名称不变。"
-                      : "默认根据 Root Agent 名称生成。支持 4-64 位字母、数字、连字符和下划线。"}
-                  </p>
-                  {runtimeNameError && (
-                    <p
-                      id={runtimeNameErrorId}
-                      className="pp-runtime-name-error"
-                      role="alert"
-                    >
-                      {runtimeNameError}
+                  <div className="pp-runtime-name-field">
+                    <input
+                      id={runtimeNameInputId}
+                      className="pp-runtime-name-input"
+                      value={effectiveRuntimeName}
+                      disabled={deploying || isRuntimeUpdate}
+                      maxLength={64}
+                      autoComplete="off"
+                      aria-label="Runtime 名称"
+                      aria-invalid={Boolean(runtimeNameError)}
+                      aria-describedby={`${runtimeNameHelpId}${runtimeNameError ? ` ${runtimeNameErrorId}` : ""}`}
+                      onChange={(event) =>
+                        onDeploymentRuntimeNameChange?.(event.currentTarget.value)
+                      }
+                    />
+                    <p id={runtimeNameHelpId} className="pp-config-note">
+                      {isRuntimeUpdate
+                        ? "更新时保持现有 Runtime 名称不变。"
+                        : "默认根据 Root Agent 名称生成。支持 4-64 位字母、数字、连字符和下划线。"}
                     </p>
-                  )}
+                    {runtimeNameError && (
+                      <p
+                        id={runtimeNameErrorId}
+                        className="pp-runtime-name-error"
+                        role="alert"
+                      >
+                        {runtimeNameError}
+                      </p>
+                    )}
+                  </div>
                 </section>
               )}
 

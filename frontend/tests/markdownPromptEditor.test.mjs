@@ -859,6 +859,16 @@ test("memory is a directly visible configuration section", () => {
     createSource,
     /<Section meta=\{metaOf\("memory"\)\}>[\s\S]*?title="短期记忆"[\s\S]*?title="长期记忆"/,
   );
+  assert.match(createSource, /desc="存储单会话上下文"/);
+  assert.match(createSource, /desc="存储跨会话上下文，通常使用向量化检索"/);
+  assert.match(
+    createSource,
+    /showDescription && <span className="cw-toggle-help">\{desc\}<\/span>/,
+  );
+  assert.match(
+    createSource,
+    /title="短期记忆"[\s\S]*?desc="存储单会话上下文"[\s\S]*?showDescription[\s\S]*?title="长期记忆"[\s\S]*?desc="存储跨会话上下文，通常使用向量化检索"[\s\S]*?showDescription/,
+  );
   assert.doesNotMatch(createSource, /advancedConfigOpen|cw-advanced-disclosure/);
   assert.doesNotMatch(createSource, /<span>观测<\/span>/);
   assert.doesNotMatch(createSource, /观测 \/ Tracing/);
