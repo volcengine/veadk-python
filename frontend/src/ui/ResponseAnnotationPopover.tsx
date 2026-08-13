@@ -16,7 +16,6 @@ import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { Popover } from "@openai/apps-sdk-ui/components/Popover";
 import { Textarea } from "@openai/apps-sdk-ui/components/Textarea";
 import { useEffect, useRef, useState } from "react";
-import { isImeCompositionEvent } from "./composerKeyboard";
 import {
   canSubmitResponseAnnotation,
   prepareResponseAnnotationSelection,
@@ -38,7 +37,6 @@ export function ResponseAnnotationPopover({
   onClose,
   onSubmit,
 }: ResponseAnnotationPopoverProps) {
-  const formRef = useRef<HTMLFormElement>(null);
   const busyRef = useRef(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -123,7 +121,6 @@ export function ResponseAnnotationPopover({
           </div>
         ) : (
           <form
-            ref={formRef}
             className="response-annotation-form"
             aria-label="批注选中的模型回复"
             aria-busy={busy || undefined}
@@ -134,7 +131,6 @@ export function ResponseAnnotationPopover({
           >
             <div className="response-annotation-header">
               <h2>添加批注</h2>
-              <span>将保存为 Bad case</span>
             </div>
             <blockquote title={excerpt}>{excerpt}</blockquote>
             <label className="response-annotation-field">
@@ -153,30 +149,16 @@ export function ResponseAnnotationPopover({
                   setNote(event.target.value);
                   if (error) setError("");
                 }}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === "Enter" &&
-                    (event.metaKey || event.ctrlKey) &&
-                    !isImeCompositionEvent({
-                      isComposing: event.nativeEvent.isComposing,
-                      keyCode: event.nativeEvent.keyCode,
-                    })
-                  ) {
-                    event.preventDefault();
-                    formRef.current?.requestSubmit();
-                  }
-                }}
               />
             </label>
-            {error ? (
+            {error && (
               <p className="response-annotation-error" role="alert">
                 {error}，请重试。
               </p>
-            ) : (
-              <p className="response-annotation-hint">按 ⌘ Enter 或 Ctrl Enter 保存</p>
             )}
             <div className="response-annotation-actions">
               <Button
+                className="response-annotation-action"
                 type="button"
                 color="secondary"
                 variant="ghost"
@@ -188,6 +170,7 @@ export function ResponseAnnotationPopover({
                 取消
               </Button>
               <Button
+                className="response-annotation-action"
                 type="submit"
                 color="primary"
                 size="sm"
@@ -195,7 +178,7 @@ export function ResponseAnnotationPopover({
                 loading={busy}
                 disabled={!canSubmitResponseAnnotation(note)}
               >
-                加入评测集
+                加入 Bad Case
               </Button>
             </div>
           </form>

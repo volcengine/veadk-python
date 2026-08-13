@@ -90,6 +90,20 @@ test("assistant selections open an accessible Apps SDK annotation popover", () =
   assert.match(componentStyles, /\[data-theme="dark"\]/);
 });
 
+test("annotation submission uses the explicit action without a keyboard shortcut", () => {
+  assert.match(
+    componentSource,
+    /<Button[\s\S]*?type="submit"[\s\S]*?>[\s\S]*?加入 Bad Case[\s\S]*?<\/Button>/,
+  );
+  assert.doesNotMatch(componentSource, /将保存为 Bad case/);
+  assert.doesNotMatch(componentSource, />\s*加入评测集\s*</);
+  assert.doesNotMatch(componentSource, /isImeCompositionEvent/);
+  assert.doesNotMatch(componentSource, /onKeyDown=/);
+  assert.doesNotMatch(componentSource, /event\.metaKey|event\.ctrlKey/);
+  assert.doesNotMatch(componentSource, /requestSubmit\(/);
+  assert.doesNotMatch(componentSource, /⌘\s*Enter|Ctrl\s*Enter/);
+});
+
 test("repeated selections remount a fresh annotation form after submission", () => {
   const targetType = appSource.slice(
     appSource.indexOf("interface ResponseAnnotationTarget"),

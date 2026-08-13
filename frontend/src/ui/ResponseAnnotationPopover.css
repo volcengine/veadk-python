@@ -35,12 +35,6 @@
   font-weight: 600;
 }
 
-.response-annotation-header span {
-  color: hsl(var(--muted-foreground));
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-
 .response-annotation-form blockquote {
   max-height: 82px;
   margin: 0;
@@ -72,21 +66,22 @@
   line-height: 1.55;
 }
 
-.response-annotation-hint,
 .response-annotation-error {
-  min-height: 17px;
   margin: -4px 0 0;
   font-size: 11.5px;
   line-height: 1.45;
 }
 
-.response-annotation-hint { color: hsl(var(--muted-foreground)); }
 .response-annotation-error { color: hsl(var(--destructive)); }
 
 .response-annotation-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.response-annotation-action {
+  font-size: 12px;
 }
 
 .response-annotation-success {
