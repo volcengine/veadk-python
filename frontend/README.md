@@ -80,7 +80,10 @@ server that `veadk frontend` launches — no separate backend.
   idempotently syncs the server-derived question and answer to per-Agent
   `{agent_name}_good_case` or `{agent_name}_bad_case` AgentKit evaluation sets.
   Studio creates regular evaluation sets and confirms they are list-visible
-  before writing feedback items.
+  before writing feedback items. On finalized Volcengine Runtime replies, users
+  can also select a text fragment and add an inline annotation; Studio preserves
+  the selected fragment in the feedback comment and saves the reply as a Bad
+  case evaluation sample. Failed saves keep the annotation open for retry.
   Runtime credentials and Volcengine credentials remain server-side.
 - **Smart search**: search sessions, the network through `web_search`, and a
   selected Agent's KnowledgeBase or long-term memory when mounted. The source
