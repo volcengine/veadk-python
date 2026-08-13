@@ -208,7 +208,17 @@ class VibeTaskOrchestrator:
 
             artifact_ready = False
             if cloud_results and all(cloud_results.values()):
-                artifact_ready = bool(await self._artifact(owner_id, task_id))
+                try:
+                    artifact_ready = bool(await self._artifact(owner_id, task_id))
+                except Exception as error:
+                    await self._emit(
+                        owner_id,
+                        task_id,
+                        "artifact.failed",
+                        TaskStage.DELIVERING,
+                        payload={"errorType": type(error).__name__},
+                    )
+                    artifact_ready = False
             gates = CompletionGates(
                 local_ok=True,
                 build_ok=all(

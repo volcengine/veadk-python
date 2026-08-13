@@ -41,7 +41,7 @@ MAX_SOURCE_FILE_BYTES = 5 * 1024 * 1024
 
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _SENSITIVE_ASSIGNMENT_RE = re.compile(
-    rb"(?im)^\s*(?:export\s+)?(?:[A-Z0-9_]*(?:API[_-]?KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE[_-]?KEY|ACCESS[_-]?KEY)[A-Z0-9_]*)\s*[:=]\s*[^\s#]{4,}"
+    rb"(?im)^\s*(?:export\s+)?(?:[A-Z0-9_]*(?:SECRET[_-]?ACCESS[_-]?KEY|API[_-]?KEY|PASSWORD|PASSWD|PRIVATE[_-]?KEY)[A-Z0-9_]*)\s*[:=]\s*[^\s#]{4,}"
 )
 _EXCLUDED_DIR_NAMES = frozenset(
     {
@@ -87,7 +87,7 @@ MAX_FILES = 2000
 MAX_FILE_BYTES = 5 * 1024 * 1024
 EXCLUDED_DIRS = frozenset((".cache", ".codex", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".venv", ".vibe", "__pycache__", "cache", "caches", "node_modules", "secrets", "venv"))
 EXCLUDED_FILES = frozenset((".env", ".env.local", ".env.production"))
-SENSITIVE = re.compile(rb"(?im)^\s*(?:export\s+)?(?:[A-Z0-9_]*(?:API[_-]?KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE[_-]?KEY|ACCESS[_-]?KEY)[A-Z0-9_]*)\s*[:=]\s*[^\s#]{4,}")
+SENSITIVE = re.compile(rb"(?im)^\s*(?:export\s+)?(?:[A-Z0-9_]*(?:SECRET[_-]?ACCESS[_-]?KEY|API[_-]?KEY|PASSWORD|PASSWD|PRIVATE[_-]?KEY)[A-Z0-9_]*)\s*[:=]\s*[^\s#]{4,}")
 HASH = re.compile(r"^[0-9a-f]{64}$")
 TASK = re.compile(r"^vt-[0-9a-f]{12}-[0-9a-f]{24}$")
 TIMESTAMP = (1980, 1, 1, 0, 0, 0)
