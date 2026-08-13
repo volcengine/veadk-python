@@ -312,7 +312,7 @@ test("places the add-variable row before any environment variable rows", () => {
 test("shows the total environment variable count beside the section title", () => {
   assert.match(
     projectPreviewSource,
-    /const environmentVariableCount = automaticEnvRows\.length \+ envRows\.length;/,
+    /const environmentVariableCount =\s*automaticEnvRows\.length \+ requiredSecretEnv\.length \+ envRows\.length;/,
   );
   assert.match(
     projectPreviewSource,
