@@ -26,6 +26,30 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+
+def _patch_markdown_stream_merge() -> None:
+    """Disable lark_channel's "overlap dedup" streaming merge.
+
+    ``lark_channel``'s ``MarkdownStreamController.append`` merges each chunk via
+    ``merge_streaming_text``, which tries to auto-detect accumulated vs. delta
+    producers and drops the longest suffix-of-prev that is also a prefix-of-chunk.
+    Google ADK's LiteLlm streams *pure deltas*, so that heuristic corrupts output
+    whenever a delta's leading char equals the accumulated tail — e.g. "404"->"40",
+    "2100"->"210", "2026-07-23"->"2026-07-2". We patch it to a plain concatenation.
+    """
+    try:
+        from lark_channel.channel.outbound.streaming import markdown_stream
+
+        def _concat(prev: str, chunk: str) -> str:
+            return (prev or "") + (chunk or "")
+
+        markdown_stream.merge_streaming_text = _concat
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to patch markdown-stream merge: %s", exc)
+
+
+_patch_markdown_stream_merge()
+
 MessageHandler = Callable[["FeishuMessageContext"], Awaitable[str | None] | str | None]
 SessionIdFactory = Callable[[Any], str]
 UserIdFactory = Callable[[Any], str]
@@ -328,6 +352,26 @@ class FeishuChannelExtension:
         )
         self._openapi_client: Any = None
 
+        # Lifecycle / graceful-shutdown state.
+        #
+        # ``start()`` captures the long-lived app event loop and spawns a
+        # background reconnect loop; inbound WS messages are processed as
+        # tracked tasks *on that loop* so they survive the WS teardown. On
+        # ``shutdown()`` we close the WebSocket first (during a rolling update
+        # Feishu re-routes new events to another instance that still holds a WS
+        # connection) and then drain messages already received — their replies
+        # go out over the OpenAPI HTTP client, which does not depend on the WS.
+        self._draining = False
+        self._inflight: set[asyncio.Task[Any]] = set()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._retry_task: asyncio.Task[Any] | None = None
+        self._reconnect_interval = float(
+            os.getenv("TOOL_FEISHU_CHANNEL_RECONNECT_INTERVAL", "3")
+        )
+        self._drain_timeout = float(
+            os.getenv("TOOL_FEISHU_CHANNEL_DRAIN_TIMEOUT", "300")
+        )
+
         if channel is not None:
             self.channel = channel
         else:
@@ -385,6 +429,118 @@ class FeishuChannelExtension:
             return await disconnect()
         return await asyncio.to_thread(_call_in_fresh_event_loop, disconnect)
 
+    @property
+    def is_draining(self) -> bool:
+        """True once a graceful shutdown has begun (WS closing / draining).
+
+        The reconnect loop checks this and stops reconnecting, otherwise it
+        would re-open the WebSocket we just closed for shutdown.
+        """
+        return self._draining
+
+    def start(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        """Begin serving: capture the app loop and spawn the reconnect loop.
+
+        Call this from within the running app event loop (e.g. an ASGI
+        ``startup`` hook). The captured loop is where inbound WS messages are
+        processed, so in-flight work survives a later WebSocket teardown.
+        Idempotent.
+        """
+        if self._retry_task is not None and not self._retry_task.done():
+            return
+        self._draining = False
+        self._loop = loop or asyncio.get_running_loop()
+        self._retry_task = self._loop.create_task(self._reconnect_loop())
+
+    async def _reconnect_loop(self) -> None:
+        """Keep the channel connected, retrying with a fixed backoff.
+
+        Owns the connect/retry policy that callers used to implement inline, so
+        it can cooperate with :meth:`shutdown` and stop reconnecting once a
+        drain has begun.
+        """
+        attempt = 0
+        while not self._draining:
+            attempt += 1
+            try:
+                logger.info(
+                    "Connecting Feishu channel WebSocket (attempt #%d)...", attempt
+                )
+                await self.connect()
+                # ``connect()`` returning without raising means the WS session
+                # ended; log before we back off and retry.
+                logger.warning(
+                    "Feishu channel WebSocket disconnected (after attempt #%d).",
+                    attempt,
+                )
+            except Exception as exc:
+                logger.error(
+                    "Feishu channel connection error on attempt #%d: %s", attempt, exc
+                )
+            if self._draining:
+                break
+            logger.info(
+                "Reconnecting Feishu channel in %.1fs (next attempt #%d).",
+                self._reconnect_interval,
+                attempt + 1,
+            )
+            await asyncio.sleep(self._reconnect_interval)
+
+    async def shutdown(self, *, drain_timeout: float | None = None) -> None:
+        """Close the WS, then drain in-flight messages before returning.
+
+        Intended as an ASGI ``shutdown`` hook. Safe to call multiple times;
+        only the first call performs the teardown.
+
+        1. Stop reconnecting and close the WebSocket so no *new* messages are
+           accepted (Feishu re-routes them to another live instance).
+        2. Wait (up to ``drain_timeout``) for messages already received to
+           finish replying over the OpenAPI HTTP client, which does not depend
+           on the WebSocket. Defaults to ``TOOL_FEISHU_CHANNEL_DRAIN_TIMEOUT``.
+        """
+        if self._draining:
+            return
+        if drain_timeout is None:
+            drain_timeout = self._drain_timeout
+        self._draining = True
+        logger.info(
+            "Shutting down Feishu channel: closing WebSocket and draining %d in-flight message(s)...",
+            len(self._inflight),
+        )
+
+        # 1. Stop the reconnect loop and close the WebSocket. The OpenAPI HTTP
+        #    client used for replies is unaffected.
+        if self._retry_task is not None:
+            self._retry_task.cancel()
+            try:
+                await self._retry_task
+            except (asyncio.CancelledError, Exception):  # pragma: no cover
+                pass
+            self._retry_task = None
+        try:
+            await self.disconnect()
+        except Exception as exc:  # pragma: no cover - best-effort teardown
+            logger.warning("Error while closing Feishu WebSocket: %s", exc)
+
+        # 2. Let already-received messages finish replying.
+        await self.drain(timeout=drain_timeout)
+        logger.info("Feishu channel drained; shutdown complete.")
+
+    async def drain(self, timeout: float = 300.0) -> None:
+        """Wait for all in-flight message tasks to finish (bounded by timeout)."""
+        pending = [t for t in self._inflight if not t.done()]
+        if not pending:
+            return
+        _done, still_pending = await asyncio.wait(pending, timeout=timeout)
+        if still_pending:
+            logger.warning(
+                "Drain timed out after %.1fs; cancelling %d unfinished message(s).",
+                timeout,
+                len(still_pending),
+            )
+            for task in still_pending:
+                task.cancel()
+
     async def handle_webhook_request(
         self, headers: dict[str, str], body: bytes | str
     ) -> Any:
@@ -397,6 +553,44 @@ class FeishuChannelExtension:
         return result
 
     async def _on_message(self, message: Any) -> None:
+        """WebSocket inbound entry point.
+
+        Runs on ``lark_channel``'s background WS loop, which
+        :meth:`FeishuChannel.stop` tears down on shutdown. To keep already
+        received messages replying *after* the WS is closed, we hand the actual
+        processing off to the long-lived app loop (captured by :meth:`start`)
+        as a tracked task and return immediately, so nothing stays in-flight on
+        the WS loop.
+
+        We do NOT drop messages while draining: closing the WebSocket is what
+        stops new events (during a rolling update Feishu re-routes them to
+        another instance that still holds a WS connection), so any message that
+        still reaches us here was already accepted and should be replied to.
+        """
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            # No dedicated app loop was captured (e.g. tests, webhook mode):
+            # process inline on the current loop.
+            await self._process_message(message)
+            return
+
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+
+        if running is loop:
+            self._spawn_inflight(message)
+        else:
+            loop.call_soon_threadsafe(self._spawn_inflight, message)
+
+    def _spawn_inflight(self, message: Any) -> None:
+        """Create + track a message-processing task on the app loop."""
+        task = asyncio.ensure_future(self._process_message(message))
+        self._inflight.add(task)
+        task.add_done_callback(self._inflight.discard)
+
+    async def _process_message(self, message: Any) -> None:
         text = _extract_message_text(message).strip()
         if self.ignore_empty_messages and not text:
             logger.debug(
