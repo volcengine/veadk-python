@@ -28,6 +28,7 @@ const helperUrl = `data:text/javascript;base64,${Buffer.from(outputText).toStrin
 const {
   canSubmitResponseAnnotation,
   formatResponseAnnotationComment,
+  prepareResponseAnnotationNote,
   prepareResponseAnnotationSelection,
   RESPONSE_ANNOTATION_COMMENT_MAX_LENGTH,
 } = await import(helperUrl);
@@ -67,6 +68,18 @@ test("requires a non-empty annotation", () => {
   assert.equal(canSubmitResponseAnnotation("需要修正"), true);
 });
 
+test("limits typed and pasted annotations before submission", () => {
+  assert.equal(prepareResponseAnnotationNote("注".repeat(1_205)).length, 1_200);
+  assert.equal(
+    Array.from(prepareResponseAnnotationNote("🙂".repeat(1_205))).length,
+    1_200,
+  );
+  assert.match(
+    componentSource,
+    /setNote\(prepareResponseAnnotationNote\(event\.target\.value\)\)/,
+  );
+});
+
 test("assistant selections open an accessible Apps SDK annotation popover", () => {
   assert.match(appSource, /document\.addEventListener\("mouseup", queueSelection/);
   assert.match(appSource, /document\.addEventListener\("keyup", queueSelection/);
@@ -102,6 +115,48 @@ test("annotation submission uses the explicit action without a keyboard shortcut
   assert.doesNotMatch(componentSource, /event\.metaKey|event\.ctrlKey/);
   assert.doesNotMatch(componentSource, /requestSubmit\(/);
   assert.doesNotMatch(componentSource, /⌘\s*Enter|Ctrl\s*Enter/);
+});
+
+test("cancelling an annotation clears the selection without reopening the popover", () => {
+  const selectionListeners = appSource.slice(
+    appSource.indexOf("const openResponseAnnotation"),
+    appSource.indexOf("const conversationAutoFollowRef"),
+  );
+
+  // The capture listener must ignore events originating inside the popover.
+  // Otherwise clicking Cancel reads the still-active answer selection and
+  // immediately creates a replacement annotation target.
+  assert.match(
+    selectionListeners,
+    /const queueSelection = \(event: MouseEvent \| KeyboardEvent\)/,
+  );
+  assert.match(
+    selectionListeners,
+    /event\.target instanceof Element[\s\S]*?event\.target\.closest\("\.response-annotation-popover"\)/,
+  );
+  assert.match(
+    selectionListeners,
+    /document\.addEventListener\("mouseup", queueSelection, true\);/,
+  );
+  assert.match(
+    selectionListeners,
+    /document\.removeEventListener\("mouseup", queueSelection, true\);/,
+  );
+
+  // Every close path invalidates the browser Selection before dropping the
+  // target, so later global mouse/key events cannot resurrect it.
+  assert.match(
+    componentSource,
+    /const dismiss = useCallback\(\(\) => \{[\s\S]*?window\.getSelection\(\)\?\.removeAllRanges\(\);[\s\S]*?onClose\(\);/,
+  );
+  assert.match(
+    componentSource,
+    /onOpenChange=\{\(open\) => \{[\s\S]*?if \(!open && !busy\) dismiss\(\);/,
+  );
+  assert.match(
+    componentSource,
+    /onClick=\{dismiss\}[\s\S]*?>\s*取消\s*<\/Button>/,
+  );
 });
 
 test("repeated selections remount a fresh annotation form after submission", () => {
@@ -143,15 +198,33 @@ test("repeated selections remount a fresh annotation form after submission", () 
   );
   assert.match(
     appSource,
-    /responseAnnotationContextsRef\s*=\s*useRef<\s*WeakMap<HTMLDivElement, ResponseAnnotationContext>/,
+    /responseAnnotationContextsRef\s*=\s*useRef<\s*Map<number, ResponseAnnotationContext>/,
   );
   assert.match(
     selectionHandler,
     /closest<HTMLDivElement>\("\.turn--assistant"\)/,
   );
-  assert.doesNotMatch(
-    appSource,
-    /responseAnnotationContextsRef\.current\.delete/,
+  assert.match(selectionHandler, /container\.dataset\.responseAnnotationIndex/);
+  assert.match(appSource, /data-response-annotation-index=\{i\}/);
+});
+
+test("refreshes selection context when a streaming reply finishes", () => {
+  const selectionContextSync = appSource.slice(
+    appSource.indexOf("const responseAnnotationRuntimeAvailable"),
+    appSource.indexOf("const openResponseAnnotation"),
+  );
+
+  assert.match(selectionContextSync, /const contexts = new Map<number, ResponseAnnotationContext>/);
+  assert.match(selectionContextSync, /contexts\.set\(index/);
+  assert.match(selectionContextSync, /responseAnnotationContextsRef\.current = contexts/);
+  assert.match(
+    selectionContextSync,
+    /index === turns\.length - 1[\s\S]*?activeConversationBusy \|\| presentingStream/,
+  );
+  assert.match(selectionContextSync, /enabled: Boolean\(/);
+  assert.match(
+    selectionContextSync,
+    /\[\s*activeConversationBusy,[\s\S]*?presentingStream,[\s\S]*?responseAnnotationRuntimeAvailable,[\s\S]*?turns,[\s\S]*?\]/,
   );
 });
 

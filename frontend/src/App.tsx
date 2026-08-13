@@ -2052,8 +2052,42 @@ export default function App() {
   const turnNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const responseAnnotationSelectionIdRef = useRef(0);
   const responseAnnotationContextsRef = useRef<
-    WeakMap<HTMLDivElement, ResponseAnnotationContext>
-  >(new WeakMap());
+    Map<number, ResponseAnnotationContext>
+  >(new Map());
+  const responseAnnotationRuntimeAvailable = connections.some(
+    (connection) =>
+      Boolean(connection.runtimeId && connection.region) &&
+      connection.apps.some((app) => remoteAppId(connection.id, app) === appName),
+  );
+  useLayoutEffect(() => {
+    const contexts = new Map<number, ResponseAnnotationContext>();
+    turns.forEach((turn, index) => {
+      const feedbackEventId = turn.meta?.eventId ?? "";
+      const canRate = Boolean(
+        responseAnnotationRuntimeAvailable && feedbackEventId && turnText(turn),
+      );
+      const turnIsStreaming = index === turns.length - 1 && (
+        activeConversationBusy || presentingStream
+      );
+      contexts.set(index, {
+        enabled: Boolean(
+          canRate &&
+          cloudProvider !== "byteplus" &&
+          !turnIsStreaming &&
+          !turnAwaitingAuth(turn)
+        ),
+        turn,
+        input: canRate ? previousUserTurnText(turns, index) : "",
+      });
+    });
+    responseAnnotationContextsRef.current = contexts;
+  }, [
+    activeConversationBusy,
+    cloudProvider,
+    presentingStream,
+    responseAnnotationRuntimeAvailable,
+    turns,
+  ]);
   const openResponseAnnotation = useCallback(() => {
     const selection = window.getSelection();
     const anchorElement = selection?.anchorNode instanceof Element
@@ -2061,7 +2095,9 @@ export default function App() {
       : selection?.anchorNode?.parentElement;
     const container = anchorElement?.closest<HTMLDivElement>(".turn--assistant");
     if (!container) return;
-    const context = responseAnnotationContextsRef.current.get(container);
+    const turnIndex = Number(container.dataset.responseAnnotationIndex);
+    if (!Number.isInteger(turnIndex)) return;
+    const context = responseAnnotationContextsRef.current.get(turnIndex);
     if (!context?.enabled) return;
     const selected = responseSelectionWithin(container, selection);
     if (!selected) return;
@@ -2075,7 +2111,13 @@ export default function App() {
   }, []);
   useEffect(() => {
     let selectionFrame: number | null = null;
-    const queueSelection = () => {
+    const queueSelection = (event: MouseEvent | KeyboardEvent) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest(".response-annotation-popover")
+      ) {
+        return;
+      }
       if (selectionFrame !== null) window.cancelAnimationFrame(selectionFrame);
       selectionFrame = window.requestAnimationFrame(() => {
         selectionFrame = null;
@@ -5707,15 +5749,11 @@ export default function App() {
               <motion.div
                 key={i}
                 data-share-message-source="true"
+                data-response-annotation-index={i}
                 ref={(node) => {
                   if (!feedbackEventId) return;
                   if (node) {
                     turnNodeRefs.current.set(feedbackEventId, node);
-                    responseAnnotationContextsRef.current.set(node, {
-                      enabled: canAnnotate,
-                      turn,
-                      input: feedbackInput,
-                    });
                   } else {
                     turnNodeRefs.current.delete(feedbackEventId);
                   }

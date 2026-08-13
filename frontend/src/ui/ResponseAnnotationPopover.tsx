@@ -15,9 +15,10 @@
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { Popover } from "@openai/apps-sdk-ui/components/Popover";
 import { Textarea } from "@openai/apps-sdk-ui/components/Textarea";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   canSubmitResponseAnnotation,
+  prepareResponseAnnotationNote,
   prepareResponseAnnotationSelection,
   RESPONSE_ANNOTATION_NOTE_MAX_LENGTH,
   type ResponseAnnotationAnchor,
@@ -43,12 +44,16 @@ export function ResponseAnnotationPopover({
   const [error, setError] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const excerpt = prepareResponseAnnotationSelection(selectedText);
+  const dismiss = useCallback(() => {
+    window.getSelection()?.removeAllRanges();
+    onClose();
+  }, [onClose]);
 
   busyRef.current = busy;
 
   useEffect(() => {
     const handleResize = () => {
-      if (!busyRef.current) onClose();
+      if (!busyRef.current) dismiss();
     };
     const handleScroll = (event: Event) => {
       const target = event.target;
@@ -58,7 +63,7 @@ export function ResponseAnnotationPopover({
       ) {
         return;
       }
-      if (!busyRef.current) onClose();
+      if (!busyRef.current) dismiss();
     };
     window.addEventListener("resize", handleResize);
     window.addEventListener("scroll", handleScroll, true);
@@ -66,7 +71,7 @@ export function ResponseAnnotationPopover({
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("scroll", handleScroll, true);
     };
-  }, [onClose]);
+  }, [dismiss]);
 
   const submit = async () => {
     if (busy || submitted || !canSubmitResponseAnnotation(note)) return;
@@ -86,7 +91,7 @@ export function ResponseAnnotationPopover({
     <Popover
       open
       onOpenChange={(open) => {
-        if (!open && !busy) onClose();
+        if (!open && !busy) dismiss();
       }}
     >
       <Popover.Trigger>
@@ -114,7 +119,7 @@ export function ResponseAnnotationPopover({
               color="secondary"
               size="sm"
               pill={false}
-              onClick={onClose}
+              onClick={dismiss}
             >
               完成
             </Button>
@@ -146,7 +151,7 @@ export function ResponseAnnotationPopover({
                 aria-label="批注内容"
                 placeholder="说明问题或期望的修改方式"
                 onChange={(event) => {
-                  setNote(event.target.value);
+                  setNote(prepareResponseAnnotationNote(event.target.value));
                   if (error) setError("");
                 }}
               />
@@ -165,7 +170,7 @@ export function ResponseAnnotationPopover({
                 size="sm"
                 pill={false}
                 disabled={busy}
-                onClick={onClose}
+                onClick={dismiss}
               >
                 取消
               </Button>

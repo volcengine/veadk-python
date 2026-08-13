@@ -40,6 +40,10 @@ export function prepareResponseAnnotationSelection(value: string): string {
   );
 }
 
+export function prepareResponseAnnotationNote(value: string): string {
+  return truncateCodePoints(value, RESPONSE_ANNOTATION_NOTE_MAX_LENGTH);
+}
+
 export function canSubmitResponseAnnotation(note: string): boolean {
   return note.trim().length > 0;
 }
@@ -49,10 +53,7 @@ export function formatResponseAnnotationComment(
   note: string,
 ): string {
   const selection = prepareResponseAnnotationSelection(selectedText);
-  const annotation = truncateCodePoints(
-    note.trim(),
-    RESPONSE_ANNOTATION_NOTE_MAX_LENGTH,
-  );
+  const annotation = prepareResponseAnnotationNote(note.trim());
   return truncateCodePoints(
     `选中片段：${selection}\n\n批注：${annotation}`,
     RESPONSE_ANNOTATION_COMMENT_MAX_LENGTH,
