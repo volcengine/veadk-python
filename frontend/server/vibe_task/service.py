@@ -146,11 +146,8 @@ class VibeTaskService:
     def __init__(
         self,
         repository: TaskRepository | None = None,
-        *,
-        dev_env: object | None = None,
     ) -> None:
         self.repository = repository or InMemoryTaskRepository()
-        self.dev_env = dev_env
         self._conditions: dict[tuple[str, str], asyncio.Condition] = {}
 
     @staticmethod
@@ -175,14 +172,6 @@ class VibeTaskService:
             created_at=now.isoformat(),
             expires_at=(now + timedelta(seconds=DEV_SANDBOX_TTL_SECONDS)).isoformat(),
         )
-        if self.dev_env is not None:
-            capabilities = self.dev_env.capabilities()
-            if not capabilities.get("enabled"):
-                raise VibeTaskError(
-                    "VIBE_DEV_SANDBOX_UNAVAILABLE",
-                    str(capabilities.get("reason") or "Dev Sandbox is unavailable"),
-                    status_code=503,
-                )
         await self.repository.create(owner_id, status)
         self._conditions[(owner_id, status.task_id)] = asyncio.Condition()
         await self.emit(owner_id, status.task_id, "task.created", TaskStage.PROVISIONING, {"intentSummaryPath": INTENT_SUMMARY_PATH})

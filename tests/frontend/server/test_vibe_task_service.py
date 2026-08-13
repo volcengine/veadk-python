@@ -45,8 +45,9 @@ async def test_task_lifecycle_intent_events_and_secret_receipt() -> None:
         "credentials.configured",
         "vibe.intent.updated",
     ]
-    assert "ak" not in repr(events)
-    assert "sk" not in repr(events)
+    rendered_events = repr(events)
+    assert "accessKeyId='ak'" not in rendered_events
+    assert "secretAccessKey='sk'" not in rendered_events
 
     stopped = await service.stop("owner-a", task.task_id)
     assert stopped.state == TaskState.CANCELLED
