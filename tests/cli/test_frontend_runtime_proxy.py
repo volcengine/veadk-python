@@ -305,6 +305,19 @@ def test_ui_config_disables_telemetry_outside_studio(
 
     assert response.status_code == 200
     assert response.json()["telemetry"]["enabled"] is False
+    assert response.json()["features"]["agentUsage"] is False
+
+
+def test_ui_config_enables_agent_usage_only_in_studio(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path, studio=True)
+
+    with TestClient(app) as client:
+        response = client.get("/web/ui-config")
+
+    assert response.status_code == 200
+    assert response.json()["features"]["agentUsage"] is True
 
 
 def test_runtime_list_paginates_across_regions(

@@ -205,6 +205,8 @@ test("agent details expose detected integration methods without inventing unavai
 });
 
 test("runtime-backed Agent details load and paginate usage without stale responses", () => {
+  assert.match(clientSource, /agentUsage: boolean/);
+  assert.match(clientSource, /agentUsage: false/);
   assert.match(clientSource, /export interface AgentUsageUser/);
   assert.match(clientSource, /export interface AgentUsageResponse/);
   assert.match(clientSource, /export async function getAgentUsage/);
@@ -214,11 +216,16 @@ test("runtime-backed Agent details load and paginate usage without stale respons
   );
   assert.match(clientSource, /`\/web\/agent-usage\?\$\{params\.toString\(\)\}`/);
   assert.match(clientSource, /httpErrorMessage\(res, "加载 Agent 用量失败"\)/);
+  assert.match(clientSource, /服务端返回非 JSON 响应/);
+  assert.match(clientSource, /Content-Type/);
+  assert.match(clientSource, /请确认当前服务以 Studio 模式启动/);
 
   assert.match(
     workspaceSource,
-    /selectedAgent\?\.runtimeId\s*\? AGENT_SECTIONS\s*:\s*AGENT_SECTIONS\.filter\(\(item\) => item\.id !== "usage"\)/,
+    /canViewUsage && selectedAgent\?\.runtimeId\s*\? AGENT_SECTIONS\s*:\s*AGENT_SECTIONS\.filter\(\(item\) => item\.id !== "usage"\)/,
   );
+  assert.match(workspaceSource, /canViewUsage\?: boolean/);
+  assert.match(workspaceSource, /section === "usage" && !canViewUsage[\s\S]*?setSection\("basic"\)/);
   assert.match(workspaceSource, /section !== "usage" \|\| !runtimeId/);
   assert.match(
     workspaceSource,
@@ -755,9 +762,11 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(workspaceSource, /caseSourceFilter === source/);
   assert.match(workspaceSource, /setCaseSourceFilter\(source\)/);
   assert.match(workspaceSource, /formatCaseTime\(item\.createdAt\)/);
-  assert.match(workspaceSource, /item\.source !== "auto"/);
+  assert.doesNotMatch(workspaceSource, /item\.source !== "auto"/);
   assert.match(workspaceSource, /Math\.round\(item\.score \* 100\)/);
-  assert.match(workspaceSource, /isAutomatic \? item\.reason \|\| "暂无评分理由" : "—"/);
+  assert.match(workspaceSource, /item\.reason \|\| "—"/);
+  assert.match(workspaceSource, /item\.comment\.trim\(\) !== item\.reason\?\.trim\(\)/);
+  assert.match(workspaceSource, /showComment && <small title=\{item\.comment\}>备注：\{item\.comment\}<\/small>/);
   assert.match(workspaceStyles, /\.aw-case-summary/);
   assert.match(workspaceStyles, /\.aw-case-filter-bar/);
   assert.match(workspaceStyles, /\.aw-case-source-filters/);

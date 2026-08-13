@@ -1911,6 +1911,7 @@ def _run_frontend_server(
                 "history": True,
                 "addAgent": True,
                 "manageAgents": True,
+                "agentUsage": studio,
                 "addAgentkit": True,
                 "generatedAgentTestRun": True,
                 "generatedAgentTestRunDisabledReason": "",
@@ -6221,6 +6222,28 @@ def _run_frontend_server(
             f"{quote(feedback.session_id, safe='')}"
         )
         agent_info_path = f"web/agent-info/{quote(feedback.app_name, safe='')}"
+
+        async def _feedback_agent_info() -> dict[str, Any]:
+            try:
+                return await _runtime_json_request(
+                    request,
+                    runtime=runtime,
+                    runtime_id=feedback.runtime_id,
+                    region=feedback.region,
+                    method="GET",
+                    path=agent_info_path,
+                )
+            except HTTPException as error:
+                if error.status_code != 404:
+                    raise
+                logger.info(
+                    "Runtime %s does not expose Agent info; using app name %s "
+                    "for evaluation feedback",
+                    feedback.runtime_id,
+                    feedback.app_name,
+                )
+                return {}
+
         try:
             session, agent_info = await asyncio.gather(
                 _runtime_json_request(
@@ -6231,14 +6254,7 @@ def _run_frontend_server(
                     method="GET",
                     path=session_path,
                 ),
-                _runtime_json_request(
-                    request,
-                    runtime=runtime,
-                    runtime_id=feedback.runtime_id,
-                    region=feedback.region,
-                    method="GET",
-                    path=agent_info_path,
-                ),
+                _feedback_agent_info(),
             )
             from veadk.integrations.agentkit.evaluation import (
                 AgentKitEvaluationDatasetsClient,
@@ -6355,6 +6371,7 @@ def _run_frontend_server(
 
             feedback_state = {
                 "rating": feedback.rating,
+                "comment": feedback.comment if feedback.rating is not None else "",
                 "evaluationSetId": evaluation_set.id if evaluation_set else None,
                 "evaluationSetName": evaluation_set.name if evaluation_set else None,
                 "workspaceId": (
@@ -6485,6 +6502,8 @@ def _run_frontend_server(
                 )
                 for item in items:
                     fields = item.fields
+                    comment = fields.get("feedback_comment", "")
+                    is_annotated_bad_case = rating == "bad" and bool(comment.strip())
                     response_items.append(
                         {
                             "id": item.id or item.item_key,
@@ -6493,7 +6512,7 @@ def _run_frontend_server(
                             "input": fields.get("input", ""),
                             "output": fields.get("output", ""),
                             "referenceOutput": fields.get("reference_output", ""),
-                            "comment": fields.get("feedback_comment", ""),
+                            "comment": comment,
                             "agentName": fields.get("agent_name", agent_name),
                             "sessionId": fields.get("session_id", ""),
                             "messageId": fields.get("message_id", ""),
@@ -6505,8 +6524,8 @@ def _run_frontend_server(
                             "evaluationSetName": evaluation_set.name,
                             "workspaceId": evaluation_set.workspace_id,
                             "source": "user",
-                            "score": None,
-                            "reason": "",
+                            "score": 0 if is_annotated_bad_case else None,
+                            "reason": comment if is_annotated_bad_case else "",
                         }
                     )
             if studio:

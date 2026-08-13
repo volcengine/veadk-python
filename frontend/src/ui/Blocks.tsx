@@ -34,6 +34,7 @@ function useSmoothStreamingText(
   text: string,
   streaming: boolean,
   onFrame?: () => void,
+  onComplete?: () => void,
 ): string {
   const [displayed, setDisplayed] = useState(() => (streaming ? "" : text));
   const displayedRef = useRef(displayed);
@@ -97,6 +98,10 @@ function useSmoothStreamingText(
   useLayoutEffect(() => {
     onFrameRef.current?.();
   }, [displayed]);
+
+  useEffect(() => {
+    if (displayed === text) onComplete?.();
+  }, [displayed, onComplete, text]);
 
   useEffect(() => () => {
     if (frameRef.current !== null) {
@@ -205,12 +210,19 @@ const StreamingTextBlock = memo(function StreamingTextBlock({
   text,
   streaming,
   onStreamFrame,
+  onStreamComplete,
 }: {
   text: string;
   streaming: boolean;
   onStreamFrame?: () => void;
+  onStreamComplete?: () => void;
 }) {
-  const displayedText = useSmoothStreamingText(text, streaming, onStreamFrame);
+  const displayedText = useSmoothStreamingText(
+    text,
+    streaming,
+    onStreamFrame,
+    onStreamComplete,
+  );
   return displayedText ? (
     <div className="bubble">
       <Markdown text={displayedText} />
@@ -507,6 +519,7 @@ export interface BlocksProps {
   appName?: string;
   streaming?: boolean;
   onStreamFrame?: () => void;
+  onStreamComplete?: () => void;
   onAction: (action: A2uiAction | undefined, node: A2uiComponent) => void;
   /** Handle an MCP/tool OAuth request (opens auth URL, resumes the run). */
   onAuth?: (block: AuthBlock) => Promise<void>;
@@ -519,11 +532,16 @@ export function Blocks({
   appName = "",
   streaming = false,
   onStreamFrame,
+  onStreamComplete,
   onAction,
   onAuth,
   onArtifactDownload,
   onArtifactPreview,
 }: BlocksProps) {
+  const lastTextBlockIndex = blocks.reduce(
+    (lastIndex, block, index) => block.kind === "text" ? index : lastIndex,
+    -1,
+  );
   return (
     <>
       {blocks.map((b, i) => {
@@ -551,6 +569,9 @@ export function Blocks({
                 text={t}
                 streaming={streaming}
                 onStreamFrame={onStreamFrame}
+                onStreamComplete={i === lastTextBlockIndex
+                  ? onStreamComplete
+                  : undefined}
               />
             ) : null;
           }

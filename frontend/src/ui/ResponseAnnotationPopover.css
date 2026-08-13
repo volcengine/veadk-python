@@ -1,0 +1,116 @@
+.response-annotation-anchor {
+  position: fixed;
+  z-index: 80;
+  width: 1px;
+  pointer-events: none;
+}
+
+.response-annotation-popover {
+  --response-annotation-surface: 48 100% 97%;
+  --response-annotation-excerpt: 47 86% 93%;
+  --response-annotation-border: 43 72% 82%;
+  width: min(360px, calc(100vw - 24px));
+  border: 1px solid hsl(var(--response-annotation-border));
+  border-radius: 12px;
+  background: hsl(var(--response-annotation-surface));
+}
+
+.response-annotation-form {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.response-annotation-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.response-annotation-header h2 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.response-annotation-form blockquote {
+  max-height: 82px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-left: 2px solid hsl(var(--response-annotation-border));
+  border-radius: 0 7px 7px 0;
+  background: hsl(var(--response-annotation-excerpt));
+  color: hsl(var(--foreground));
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.response-annotation-field {
+  display: grid;
+  gap: 6px;
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.response-annotation-field textarea {
+  min-height: 78px;
+  background: hsl(var(--background));
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.55;
+}
+
+.response-annotation-error {
+  margin: -4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.response-annotation-error { color: hsl(var(--destructive)); }
+
+.response-annotation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.response-annotation-action {
+  font-size: 12px;
+}
+
+.response-annotation-success {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+}
+
+.response-annotation-success strong {
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.response-annotation-success p {
+  margin: 3px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+:where([data-theme="dark"]) .response-annotation-popover {
+  --response-annotation-surface: 43 22% 14%;
+  --response-annotation-excerpt: 43 25% 18%;
+  --response-annotation-border: 42 32% 30%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .response-annotation-popover { transition: none; }
+}

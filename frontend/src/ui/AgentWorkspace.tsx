@@ -580,7 +580,7 @@ function formatCaseTime(value: string): string {
 }
 
 function formatCaseScore(item: AgentCase): string {
-  if (item.source !== "auto" || typeof item.score !== "number") return "—";
+  if (typeof item.score !== "number") return "—";
   if (!Number.isFinite(item.score)) return "—";
   return `${Math.round(item.score * 100)} 分`;
 }
@@ -925,6 +925,7 @@ export interface AgentWorkspaceProps {
   loadingAgentInfo: boolean;
   canCreate: boolean;
   canUpdate: boolean;
+  canViewUsage?: boolean;
   loadingAgents?: boolean;
   agentsError?: string;
   deploymentTasks?: DeploymentTaskUpdate[];
@@ -956,6 +957,7 @@ export function AgentWorkspace({
   loadingAgentInfo,
   canCreate,
   canUpdate,
+  canViewUsage = false,
   loadingAgents = false,
   agentsError = "",
   deploymentTasks = [],
@@ -1150,7 +1152,7 @@ export function AgentWorkspace({
       : null;
   const selectedAgentAppName =
     selectedAgentInfo?.appName || selectedAgent?.runtimeApp || selectedAgent?.app || "";
-  const visibleAgentSections = selectedAgent?.runtimeId
+  const visibleAgentSections = canViewUsage && selectedAgent?.runtimeId
     ? AGENT_SECTIONS
     : AGENT_SECTIONS.filter((item) => item.id !== "usage");
   const agentUsageRequestKey = JSON.stringify([
@@ -1395,6 +1397,10 @@ export function AgentWorkspace({
     ? `runtime:${selectedAgent?.runtimeId ?? selectedAgentInfo.name}:v${runtimeVersionKey}:${draftFlowKey}`
     : `draft:${selectedPendingTask?.id ?? selectedDraft?.id ?? selectedAgent?.id ?? selectedName}:${draftFlowKey}`;
   useEffect(() => {
+    if (section === "usage" && !canViewUsage) setSection("basic");
+  }, [canViewUsage, section]);
+
+  useEffect(() => {
     if (!focusedDeploymentTaskId) return;
     const focusedTask = deploymentTasks.find(
       (task) => task.id === focusedDeploymentTaskId,
@@ -1418,18 +1424,18 @@ export function AgentWorkspace({
       appliedFocusKeyRef.current = "";
       return;
     }
-    const focusKey = `${focusedAgentId}:${focusedAgentSection}:${focusedCaseKind}`;
+    const focusKey = `${focusedAgentId}:${focusedAgentSection}:${focusedCaseKind}:${canViewUsage}`;
     if (appliedFocusKeyRef.current === focusKey) return;
     if (!agents.some((agent) => agent.id === focusedAgentId)) return;
     appliedFocusKeyRef.current = focusKey;
     setActiveDraftId("");
     setActiveAgentId(focusedAgentId);
-    setSection(focusedAgentSection);
+    setSection(focusedAgentSection === "usage" && !canViewUsage ? "basic" : focusedAgentSection);
     if (focusedAgentSection === "evaluations") {
       setCaseFilter(focusedCaseKind);
       setCaseQuery("");
     }
-  }, [agents, focusedAgentId, focusedAgentSection, focusedCaseKind]);
+  }, [agents, canViewUsage, focusedAgentId, focusedAgentSection, focusedCaseKind]);
 
   useEffect(() => {
     for (const agent of listedAgents.slice(0, 8)) {
@@ -3461,7 +3467,9 @@ function CaseTable({
             item.output.length + item.referenceOutput.length;
           const canExpand = outputLength > 220 || (item.reason?.length ?? 0) > 120;
           const canDeleteCase = canDelete && !isLocalPreview;
-          const isAutomatic = item.source === "auto";
+          const showComment = Boolean(
+            item.comment && item.comment.trim() !== item.reason?.trim(),
+          );
           return (
             <div
               className={[
@@ -3502,7 +3510,7 @@ function CaseTable({
                   )}
                   <strong title={item.input}>{item.input || "无用户输入"}</strong>
                 </span>
-                {item.comment && <small title={item.comment}>备注：{item.comment}</small>}
+                {showComment && <small title={item.comment}>备注：{item.comment}</small>}
                 <small className="aw-case-time">{formatCaseTime(item.createdAt)}</small>
                 {(item.userId || item.sessionId) && (
                   <small title={[item.userId, item.sessionId].filter(Boolean).join(" · ")}>
@@ -3545,28 +3553,28 @@ function CaseTable({
                 className={`aw-case-reason aw-case-cell${isExpanded ? " is-expanded" : ""}`}
                 data-label="评分理由"
               >
-                <p title={isAutomatic ? item.reason : undefined}>
-                  {isAutomatic ? item.reason || "暂无评分理由" : "—"}
-                  </p>
-                </div>
-                <div className="aw-case-actions aw-case-cell" data-label="操作">
-                  {canDeleteCase && (
-                    <button
-                      type="button"
-                      className="aw-case-delete"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onDeleteCase?.(item);
-                      }}
-                      disabled={deleting}
-                      title="删除反馈案例"
-                      aria-label="删除反馈案例"
-                    >
-                      <DeleteCaseIcon />
-                    </button>
-                  )}
-                </div>
+                <p title={item.reason || undefined}>
+                  {item.reason || "—"}
+                </p>
               </div>
+              <div className="aw-case-actions aw-case-cell" data-label="操作">
+                {canDeleteCase && (
+                  <button
+                    type="button"
+                    className="aw-case-delete"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDeleteCase?.(item);
+                    }}
+                    disabled={deleting}
+                    title="删除反馈案例"
+                    aria-label="删除反馈案例"
+                  >
+                    <DeleteCaseIcon />
+                  </button>
+                )}
+              </div>
+            </div>
           );
         })
       )}

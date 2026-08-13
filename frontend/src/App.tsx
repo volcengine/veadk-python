@@ -220,6 +220,20 @@ interface ShareMessageTarget {
   targetTurn: HTMLElement;
 }
 
+interface ResponseAnnotationTarget {
+  selectionId: number;
+  turn: Turn;
+  input: string;
+  selectedText: string;
+  anchor: ResponseAnnotationAnchor;
+}
+
+interface ResponseAnnotationContext {
+  enabled: boolean;
+  turn: Turn;
+  input: string;
+}
+
 function issueFeedbackModuleForPage(page: string): IssueFeedbackModule {
   if (page === "agents") return "agents";
   if (page === "applications") return "applications";
@@ -332,6 +346,12 @@ import { LoginPage } from "./ui/LoginPage";
 import { AuthExpiredDialog } from "./ui/AuthExpiredDialog";
 import { IssueFeedbackDialog } from "./ui/IssueFeedbackDialog";
 import { ShareMessageDialog } from "./ui/ShareMessageDialog";
+import { ResponseAnnotationPopover } from "./ui/ResponseAnnotationPopover";
+import {
+  formatResponseAnnotationComment,
+  responseSelectionWithin,
+  type ResponseAnnotationAnchor,
+} from "./ui/responseAnnotation";
 import { PlatformFeedback } from "./ui/PlatformFeedback";
 import { Markdown } from "./ui/Markdown";
 import {
@@ -1032,16 +1052,22 @@ export default function App() {
     streamPresentationTimersRef.current.delete(sid);
     setStreamPresentationSids((current) => new Set(current).add(sid));
   };
+  const completeStreamPresentation = (sid: string) => {
+    const timer = streamPresentationTimersRef.current.get(sid);
+    if (timer !== undefined) window.clearTimeout(timer);
+    streamPresentationTimersRef.current.delete(sid);
+    setStreamPresentationSids((current) => {
+      if (!current.has(sid)) return current;
+      const next = new Set(current);
+      next.delete(sid);
+      return next;
+    });
+  };
   const finishStreamPresentation = (sid: string) => {
     const previousTimer = streamPresentationTimersRef.current.get(sid);
     if (previousTimer !== undefined) window.clearTimeout(previousTimer);
     const timer = window.setTimeout(() => {
-      streamPresentationTimersRef.current.delete(sid);
-      setStreamPresentationSids((current) => {
-        const next = new Set(current);
-        next.delete(sid);
-        return next;
-      });
+      completeStreamPresentation(sid);
     }, 2400);
     streamPresentationTimersRef.current.set(sid, timer);
   };
@@ -1288,8 +1314,14 @@ export default function App() {
     useState<IssueFeedbackTarget | null>(null);
   const [shareMessageTarget, setShareMessageTarget] =
     useState<ShareMessageTarget | null>(null);
+  const [responseAnnotationTarget, setResponseAnnotationTarget] =
+    useState<ResponseAnnotationTarget | null>(null);
   const [platformFeedbackOrigin, setPlatformFeedbackOrigin] =
     useState<string | null>(null);
+
+  useEffect(() => {
+    setResponseAnnotationTarget(null);
+  }, [appName, sessionId]);
   const [traceOpen, setTraceOpen] = useState(false);
   const [traceEndTimeMs, setTraceEndTimeMs] = useState<number>();
   const [greeting, setGreeting] = useState(pickGreeting);
@@ -1314,6 +1346,7 @@ export default function App() {
     history: true,
     addAgent: true,
     manageAgents: true,
+    agentUsage: false,
     addAgentkit: true,
   });
   const [agentsSource, setAgentsSource] = useState<"local" | "cloud">("cloud");
@@ -2017,6 +2050,88 @@ export default function App() {
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   const turnNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const responseAnnotationSelectionIdRef = useRef(0);
+  const responseAnnotationContextsRef = useRef<
+    Map<number, ResponseAnnotationContext>
+  >(new Map());
+  const responseAnnotationRuntimeAvailable = connections.some(
+    (connection) =>
+      Boolean(connection.runtimeId && connection.region) &&
+      connection.apps.some((app) => remoteAppId(connection.id, app) === appName),
+  );
+  useLayoutEffect(() => {
+    const contexts = new Map<number, ResponseAnnotationContext>();
+    turns.forEach((turn, index) => {
+      const feedbackEventId = turn.meta?.eventId ?? "";
+      const canRate = Boolean(
+        responseAnnotationRuntimeAvailable && feedbackEventId && turnText(turn),
+      );
+      const turnIsStreaming = index === turns.length - 1 && (
+        activeConversationBusy || presentingStream
+      );
+      contexts.set(index, {
+        enabled: Boolean(
+          canRate &&
+          cloudProvider !== "byteplus" &&
+          !turnIsStreaming &&
+          !turnAwaitingAuth(turn)
+        ),
+        turn,
+        input: canRate ? previousUserTurnText(turns, index) : "",
+      });
+    });
+    responseAnnotationContextsRef.current = contexts;
+  }, [
+    activeConversationBusy,
+    cloudProvider,
+    presentingStream,
+    responseAnnotationRuntimeAvailable,
+    turns,
+  ]);
+  const openResponseAnnotation = useCallback(() => {
+    const selection = window.getSelection();
+    const anchorElement = selection?.anchorNode instanceof Element
+      ? selection.anchorNode
+      : selection?.anchorNode?.parentElement;
+    const container = anchorElement?.closest<HTMLDivElement>(".turn--assistant");
+    if (!container) return;
+    const turnIndex = Number(container.dataset.responseAnnotationIndex);
+    if (!Number.isInteger(turnIndex)) return;
+    const context = responseAnnotationContextsRef.current.get(turnIndex);
+    if (!context?.enabled) return;
+    const selected = responseSelectionWithin(container, selection);
+    if (!selected) return;
+    setResponseAnnotationTarget({
+      selectionId: ++responseAnnotationSelectionIdRef.current,
+      turn: context.turn,
+      input: context.input,
+      selectedText: selected.text,
+      anchor: selected.anchor,
+    });
+  }, []);
+  useEffect(() => {
+    let selectionFrame: number | null = null;
+    const queueSelection = (event: MouseEvent | KeyboardEvent) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest(".response-annotation-popover")
+      ) {
+        return;
+      }
+      if (selectionFrame !== null) window.cancelAnimationFrame(selectionFrame);
+      selectionFrame = window.requestAnimationFrame(() => {
+        selectionFrame = null;
+        openResponseAnnotation();
+      });
+    };
+    document.addEventListener("mouseup", queueSelection, true);
+    document.addEventListener("keyup", queueSelection, true);
+    return () => {
+      if (selectionFrame !== null) window.cancelAnimationFrame(selectionFrame);
+      document.removeEventListener("mouseup", queueSelection, true);
+      document.removeEventListener("keyup", queueSelection, true);
+    };
+  }, [openResponseAnnotation]);
   const conversationAutoFollowRef = useRef(true);
   const conversationSmoothScrollRef = useRef(false);
   const conversationSmoothTimerRef = useRef<number | null>(null);
@@ -4206,6 +4321,7 @@ export default function App() {
 
   const canCreateAgents = access.capabilities.createAgents;
   const canManageAgents = access.capabilities.manageAgents;
+  const canViewAgentUsage = features.agentUsage && canManageAgents;
   const visibleCreateView = canCreateAgents ? createView : null;
   const showAddMenu = canCreateAgents && addMenu;
   const showAddAgent = canCreateAgents && addAgent;
@@ -4331,16 +4447,23 @@ export default function App() {
     turn: Turn,
     rating: MessageFeedbackRating | null,
     input = "",
-  ) => {
+    comment = "",
+    reportGlobalError = true,
+  ): Promise<string | null> => {
     const eventId = turn.meta?.eventId;
     const sid = sessionId;
-    if (!eventId || !sid || !currentRuntime) return;
-    if (cloudProvider === "byteplus") return;
+    if (!eventId || !sid || !currentRuntime) {
+      return "当前回复暂不支持加入评测集";
+    }
+    if (cloudProvider === "byteplus") {
+      return "BytePlus 暂不支持 AgentKit 评测集";
+    }
     const output = turnText(turn);
     const previousFeedback = turn.meta?.feedback;
     const optimisticFeedback = {
       ...previousFeedback,
       rating,
+      comment,
       syncStatus: "syncing" as const,
       updatedAt: Date.now() / 1000,
     };
@@ -4364,6 +4487,7 @@ export default function App() {
         rating,
         input,
         output,
+        comment,
         createdAt: turn.meta?.ts
           ? new Date(turn.meta.ts * 1000).toISOString()
           : undefined,
@@ -4376,6 +4500,7 @@ export default function App() {
         sessionId: sid,
         eventId,
         rating,
+        comment,
       });
       setTurnsFor(sid, (current) =>
         current.map((item) =>
@@ -4409,6 +4534,7 @@ export default function App() {
           rating: feedback.rating,
           input,
           output,
+          comment,
           createdAt: turn.meta?.ts
             ? new Date(turn.meta.ts * 1000).toISOString()
             : undefined,
@@ -4421,6 +4547,9 @@ export default function App() {
         });
       }
     } catch (feedbackError) {
+      const feedbackErrorMessage = feedbackError instanceof Error
+        ? feedbackError.message
+        : String(feedbackError);
       setTurnsFor(sid, (current) =>
         current.map((item) =>
           item.meta?.eventId === eventId
@@ -4440,18 +4569,16 @@ export default function App() {
           rating: previousFeedback?.rating ?? null,
           input,
           output,
+          comment: previousFeedback?.comment ?? "",
           createdAt: turn.meta?.ts
             ? new Date(turn.meta.ts * 1000).toISOString()
             : undefined,
         });
       }
-      if (viewSidRef.current === sid) {
-        setError(
-          feedbackError instanceof Error
-            ? feedbackError.message
-            : String(feedbackError),
-        );
+      if (reportGlobalError && viewSidRef.current === sid) {
+        setError(feedbackErrorMessage);
       }
+      return feedbackErrorMessage;
     } finally {
       setFeedbackPendingIds((current) => {
         const next = new Set(current);
@@ -4459,6 +4586,20 @@ export default function App() {
         return next;
       });
     }
+    return null;
+  };
+
+  const submitResponseAnnotation = async (note: string) => {
+    const target = responseAnnotationTarget;
+    if (!target) return;
+    const errorMessage = await rateAssistantTurn(
+      target.turn,
+      "bad",
+      target.input,
+      formatResponseAnnotationComment(target.selectedText, note),
+      false,
+    );
+    if (errorMessage) throw new Error(errorMessage);
   };
 
   // Refresh the selected Agent before leaving the current page, then open a
@@ -5192,6 +5333,7 @@ export default function App() {
                 loadingAgentInfo={capabilitiesLoading}
                 canCreate={canCreateAgents}
                 canUpdate={canCreateAgents || canManageAgents}
+                canViewUsage={canViewAgentUsage}
                 loadingAgents={agentLibraryLoading}
                 agentsError={agentLibraryError}
                 deploymentTasks={deploymentTasks}
@@ -5594,10 +5736,20 @@ export default function App() {
               currentRuntime && feedbackEventId && turnText(turn),
             );
             const feedbackInput = canRate ? previousUserTurnText(turns, i) : "";
+            const turnIsStreaming = isLast && (
+              activeConversationBusy || presentingStream
+            );
+            const canAnnotate = Boolean(
+              canRate &&
+              cloudProvider !== "byteplus" &&
+              !turnIsStreaming &&
+              !turnAwaitingAuth(turn),
+            );
             return (
               <motion.div
                 key={i}
                 data-share-message-source="true"
+                data-response-annotation-index={i}
                 ref={(node) => {
                   if (!feedbackEventId) return;
                   if (node) {
@@ -5612,6 +5764,10 @@ export default function App() {
                   feedbackTargetEventId &&
                   feedbackTargetEventId === feedbackEventId ? "is-feedback-target" : "",
                 ].filter(Boolean).join(" ")}
+                tabIndex={canAnnotate ? 0 : undefined}
+                aria-label={canAnnotate
+                  ? "模型回复；选中文字后可添加批注"
+                  : undefined}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}
@@ -5639,6 +5795,11 @@ export default function App() {
                       blocks={turn.blocks}
                       streaming={isLast && (activeConversationBusy || presentingStream)}
                       onStreamFrame={isLast ? followConversationStreamFrame : undefined}
+                      onStreamComplete={
+                        isLast && !activeConversationBusy && presentingStream
+                          ? () => completeStreamPresentation(sessionId)
+                          : undefined
+                      }
                       onAction={onAction}
                       onAuth={onAuth}
                       onArtifactDownload={(filename, version) =>
@@ -5797,6 +5958,20 @@ export default function App() {
         <ShareMessageDialog
           targetTurn={shareMessageTarget.targetTurn}
           onClose={() => setShareMessageTarget(null)}
+        />
+      )}
+
+      {responseAnnotationTarget && sessionId && (
+        <ResponseAnnotationPopover
+          key={responseAnnotationTarget.selectionId}
+          anchor={responseAnnotationTarget.anchor}
+          selectedText={responseAnnotationTarget.selectedText}
+          onClose={() => setResponseAnnotationTarget((current) =>
+            current?.selectionId === responseAnnotationTarget.selectionId
+              ? null
+              : current
+          )}
+          onSubmit={submitResponseAnnotation}
         />
       )}
 
