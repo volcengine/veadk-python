@@ -51,24 +51,25 @@ class _LogoStream:
         pass
 
 
-def test_normalize_site_title_uses_default_and_accepts_six_characters() -> None:
+def test_normalize_site_title_uses_default_and_accepts_sixteen_characters() -> None:
     assert DEFAULT_SITE_TITLE == "AgentKit Studio"
     assert normalize_site_title(None) == DEFAULT_SITE_TITLE
     assert normalize_site_title(" 火山助手 ") == "火山助手"
-    assert normalize_site_title("ABC123") == "ABC123"
+    assert normalize_site_title("AgentKit Studio") == "AgentKit Studio"
+    assert normalize_site_title("ABCDEFGHIJKLMNOP") == "ABCDEFGHIJKLMNOP"
 
 
-@pytest.mark.parametrize("title", ["", "       ", "ABCDEFG", "火山智能助手平台"])
+@pytest.mark.parametrize("title", ["", "       ", "ABCDEFGHIJKLMNOPQ", "火" * 17])
 def test_normalize_site_title_rejects_invalid_values(title: str) -> None:
     with pytest.raises(ValueError):
         normalize_site_title(title)
 
 
 def test_studio_cli_rejects_overlong_site_title() -> None:
-    result = CliRunner().invoke(studio, ["--site-title", "ABCDEFG"])
+    result = CliRunner().invoke(studio, ["--site-title", "ABCDEFGHIJKLMNOPQ"])
 
     assert result.exit_code == 1
-    assert "at most 6 characters" in result.output
+    assert "at most 16 characters" in result.output
 
 
 def test_resolve_site_logo_reads_and_validates_local_image(tmp_path: Path) -> None:
