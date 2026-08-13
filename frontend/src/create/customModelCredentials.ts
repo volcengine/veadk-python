@@ -5,6 +5,15 @@ export interface CustomModelCredentialRequirement {
   label: string;
 }
 
+export interface CustomModelEnvironmentBinding {
+  providerKey?: string;
+  apiBaseKey?: string;
+  apiKeyKey: string;
+  provider: string;
+  apiBase: string;
+  label: string;
+}
+
 function envSegment(value: string, fallback: string): string {
   const segment = value.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_");
   return segment.replace(/^_+|_+$/g, "") || fallback;
@@ -44,24 +53,40 @@ export function isProviderModelApiBase(
 }
 
 /** Mirror backend codegen names without storing any credential in the draft. */
-export function customModelCredentialRequirements(
+export function customModelEnvironmentBindings(
   root: AgentDraft,
   officialBaseUrl: string,
-): CustomModelCredentialRequirement[] {
-  const requirements: CustomModelCredentialRequirement[] = [];
+): CustomModelEnvironmentBinding[] {
+  const bindings: CustomModelEnvironmentBinding[] = [];
   const used = new Set<string>();
 
   const visit = (node: AgentDraft) => {
     if (
       node.agentType === "llm" &&
-      node.modelApiBase?.trim() &&
-      !isProviderModelApiBase(node.modelApiBase, officialBaseUrl)
+      node.modelSource !== "ark" &&
+      (node.modelSource === "custom" ||
+        (!!node.modelApiBase?.trim() &&
+          !isProviderModelApiBase(node.modelApiBase, officialBaseUrl)))
     ) {
       const segment = envSegment(node.name, "AGENT");
-      const key = nextEnvName(`CUSTOM_MODEL_${segment}_API_KEY`, used);
-      used.add(key);
-      requirements.push({
-        key,
+      const provider = node.modelProvider?.trim() ?? "";
+      const apiBase = node.modelApiBase?.trim() ?? "";
+      const providerKey = provider
+        ? nextEnvName(`CUSTOM_MODEL_${segment}_PROVIDER`, used)
+        : undefined;
+      if (providerKey) used.add(providerKey);
+      const apiBaseKey = apiBase
+        ? nextEnvName(`CUSTOM_MODEL_${segment}_API_BASE`, used)
+        : undefined;
+      if (apiBaseKey) used.add(apiBaseKey);
+      const apiKeyKey = nextEnvName(`CUSTOM_MODEL_${segment}_API_KEY`, used);
+      used.add(apiKeyKey);
+      bindings.push({
+        providerKey,
+        apiBaseKey,
+        apiKeyKey,
+        provider,
+        apiBase,
         label: `${node.name.trim() || "自定义模型"} 模型 API Key`,
       });
     }
@@ -69,5 +94,15 @@ export function customModelCredentialRequirements(
   };
 
   visit(root);
-  return requirements;
+  return bindings;
+}
+
+/** Mirror backend codegen names without storing any credential in the draft. */
+export function customModelCredentialRequirements(
+  root: AgentDraft,
+  officialBaseUrl: string,
+): CustomModelCredentialRequirement[] {
+  return customModelEnvironmentBindings(root, officialBaseUrl).map(
+    ({ apiKeyKey, label }) => ({ key: apiKeyKey, label }),
+  );
 }

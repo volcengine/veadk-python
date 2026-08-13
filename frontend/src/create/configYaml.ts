@@ -33,8 +33,11 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
   o.instruction = draft.instruction;
   if (draft.agentType === "loop") o.maxIterations = draft.maxIterations ?? 3;
   if (draft.modelName?.trim()) o.modelName = draft.modelName.trim();
-  if (draft.modelProvider?.trim()) o.modelProvider = draft.modelProvider.trim();
-  if (draft.modelApiBase?.trim()) o.modelApiBase = draft.modelApiBase.trim();
+  if (draft.modelSource) o.modelSource = draft.modelSource;
+  if (draft.modelSource !== "ark") {
+    if (draft.modelProvider?.trim()) o.modelProvider = draft.modelProvider.trim();
+    if (draft.modelApiBase?.trim()) o.modelApiBase = draft.modelApiBase.trim();
+  }
   if (draft.builtinTools?.length) o.builtinTools = [...draft.builtinTools];
   if (draft.customTools?.length)
     o.customTools = draft.customTools.map((t) => ({
@@ -78,11 +81,27 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
   }
   if (
     draft.deployment?.feishuEnabled ||
+    draft.deployment?.runtimeName?.trim() ||
+    draft.deployment?.runtimeNameCustomized ||
+    draft.deployment?.modelApiKeyId?.trim() ||
+    draft.deployment?.modelApiKeyName?.trim() ||
     Object.keys(draft.deployment?.envValues ?? {}).length > 0
   ) {
     const deployment: Record<string, unknown> = {
       feishuEnabled: !!draft.deployment?.feishuEnabled,
     };
+    if (draft.deployment?.runtimeName?.trim()) {
+      deployment.runtimeName = draft.deployment.runtimeName.trim();
+    }
+    if (draft.deployment?.runtimeNameCustomized) {
+      deployment.runtimeNameCustomized = true;
+    }
+    if (draft.deployment?.modelApiKeyId?.trim()) {
+      deployment.modelApiKeyId = draft.deployment.modelApiKeyId.trim();
+    }
+    if (draft.deployment?.modelApiKeyName?.trim()) {
+      deployment.modelApiKeyName = draft.deployment.modelApiKeyName.trim();
+    }
     if (Object.keys(draft.deployment?.envValues ?? {}).length > 0) {
       deployment.envValues = { ...draft.deployment?.envValues };
     }

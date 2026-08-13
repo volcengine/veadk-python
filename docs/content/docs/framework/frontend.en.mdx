@@ -64,11 +64,15 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
   error details and Runner logs that can be expanded and copied. The deployment
   page shows the Agent topology on the left, with hover details, configuration
   export, source download, and a code browser/editor dialog; region, message
-  channel, network, and environment settings remain primary on the right. The
-  global task list shows the actual AgentKit-generated Runtime name, region,
-  and progress across pages; in-flight tasks can be cancelled and cleaned up,
-  and failed tasks can be retried. Remote topology and traces are fetched
-  through the selected Runtime data plane.
+  channel, network, and environment settings remain primary on the right. For
+  a new Runtime, Studio deterministically normalizes the Root Agent name into
+  the default Runtime name and never appends a random suffix. Runtime names
+  must contain 4–64 letters, digits, hyphens (`-`), or underscores (`_`). You
+  can change the name before the first deployment, but it is read-only when
+  updating an existing Runtime. The global task list keeps the Runtime name,
+  region, and progress visible across pages; in-flight tasks can be cancelled
+  and cleaned up, and failed tasks can be retried. Remote topology and traces
+  are fetched through the selected Runtime data plane.
 - **Tracing**: view the call flame graph for the current session.
 - **Login**: SSO (VeIdentity / GitHub / Google / any OIDC) or a local username.
 

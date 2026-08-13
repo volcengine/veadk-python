@@ -2,6 +2,7 @@ import type { AgentDraft } from "./types";
 import { prepareMcpAuth } from "./mcpAuth";
 
 const WORKSPACE_DRAFT_STORAGE_VERSION = 1;
+const SERVER_MANAGED_MODEL_API_KEY = "MODEL_AGENT_API_KEY";
 
 export interface WorkspaceAgentDraft {
   id: string;
@@ -43,6 +44,46 @@ export function workspaceDraftsKey(userId: string): string {
   return `veadk.agentDrafts.${encodeURIComponent(userId)}`;
 }
 
+/**
+ * Ark key values are resolved by the Studio server. Keep only the non-secret
+ * key ID/name in drafts so a legacy value cannot be copied back to browser
+ * storage through a Root Agent, nested sub-agent, or workflow node.
+ */
+function stripServerManagedModelApiKey(draft: AgentDraft): AgentDraft {
+  const deployment = draft.deployment;
+  const envValues = deployment?.envValues;
+  const safeDeployment = deployment
+    ? {
+        ...deployment,
+        ...(envValues
+          ? {
+              envValues: Object.fromEntries(
+                Object.entries(envValues).filter(
+                  ([key]) => key !== SERVER_MANAGED_MODEL_API_KEY,
+                ),
+              ),
+            }
+          : {}),
+      }
+    : undefined;
+  return {
+    ...draft,
+    ...(safeDeployment ? { deployment: safeDeployment } : {}),
+    subAgents: draft.subAgents.map(stripServerManagedModelApiKey),
+    ...(draft.workflow
+      ? {
+          workflow: {
+            ...draft.workflow,
+            nodes: draft.workflow.nodes.map((node) => ({
+              ...node,
+              agent: stripServerManagedModelApiKey(node.agent),
+            })),
+          },
+        }
+      : {}),
+  };
+}
+
 export function sanitizeAgentDraftForStorage(draft: AgentDraft): AgentDraft {
   const prepared = prepareMcpAuth(draft);
   const envValues = {
@@ -50,15 +91,15 @@ export function sanitizeAgentDraftForStorage(draft: AgentDraft): AgentDraft {
     ...prepared.envValues,
   };
   if (!prepared.draft.deployment && Object.keys(envValues).length === 0) {
-    return prepared.draft;
+    return stripServerManagedModelApiKey(prepared.draft);
   }
-  return {
+  return stripServerManagedModelApiKey({
     ...prepared.draft,
     deployment: {
       ...(prepared.draft.deployment ?? { feishuEnabled: false }),
       envValues,
     },
-  };
+  });
 }
 
 function sanitizeWorkspaceDraft(item: WorkspaceAgentDraft): WorkspaceAgentDraft {

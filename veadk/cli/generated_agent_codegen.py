@@ -168,6 +168,8 @@ class DeploymentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     feishuEnabled: bool = False
+    modelApiKeyId: str = ""
+    modelApiKeyName: str = ""
     envValues: dict[str, str] = Field(default_factory=dict)
 
 
@@ -182,6 +184,7 @@ class AgentDraft(BaseModel):
     maxIterations: int = 3
     a2aUrl: str = ""
     model: str = ""
+    modelSource: Literal["ark", "custom"] | None = None
     modelName: str = ""
     modelProvider: str = ""
     modelApiBase: str = ""
@@ -331,6 +334,8 @@ def _safe_draft_payload(draft: AgentDraft) -> dict[str, Any]:
     def sanitize(node: dict[str, Any]) -> None:
         if node.get("cloudProvider") == "volcengine":
             node.pop("cloudProvider", None)
+        if node.get("modelSource") is None:
+            node.pop("modelSource", None)
         agent_segment = _env_segment(str(node.get("name") or ""), "AGENT")
         tools = node.get("mcpTools")
         if isinstance(tools, list):
@@ -360,6 +365,10 @@ def _safe_draft_payload(draft: AgentDraft) -> dict[str, Any]:
         deployment = node.get("deployment")
         if isinstance(deployment, dict):
             deployment.pop("envValues", None)
+            if not str(deployment.get("modelApiKeyId") or "").strip():
+                deployment.pop("modelApiKeyId", None)
+            if not str(deployment.get("modelApiKeyName") or "").strip():
+                deployment.pop("modelApiKeyName", None)
         sub_agents = node.get("subAgents")
         if isinstance(sub_agents, list):
             for sub_agent in sub_agents:
@@ -645,30 +654,63 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
         kwargs.append(f"tools=[{', '.join(tool_exprs)}]")
     if draft.modelName.strip():
         kwargs.append(f"model_name={_py_str(draft.modelName.strip())}")
-    if draft.modelProvider.strip():
-        kwargs.append(f"model_provider={_py_str(draft.modelProvider.strip())}")
-    if draft.modelApiBase.strip():
-        kwargs.append(f"model_api_base={_py_str(draft.modelApiBase.strip())}")
-        if not is_provider_modelark_base_url(
+    is_custom_model = draft.modelSource == "custom" or (
+        draft.modelSource is None
+        and bool(draft.modelApiBase.strip())
+        and not is_provider_modelark_base_url(
             acc.cloud_provider,
             draft.modelApiBase,
-        ):
-            _add_import(acc, "import os")
-            agent_segment = _env_segment(draft.name, _env_segment(var_name, "AGENT"))
+        )
+    )
+    if is_custom_model:
+        _add_import(acc, "import os")
+        agent_segment = _env_segment(draft.name, _env_segment(var_name, "AGENT"))
+
+        def custom_model_env(suffix: str) -> str:
             env_name = _next_env_name(
-                f"CUSTOM_MODEL_{agent_segment}_API_KEY",
+                f"CUSTOM_MODEL_{agent_segment}_{suffix}",
                 acc.used_env_names,
             )
             acc.used_env_names.add(env_name)
+            return env_name
+
+        if draft.modelProvider.strip():
+            provider_env = custom_model_env("PROVIDER")
             acc.env.append(
                 EnvVar(
-                    env_name,
+                    provider_env,
                     True,
-                    "replace-with-your-own-model-api-key",
-                    f"{draft.name.strip() or 'Custom model'} API Key",
+                    draft.modelProvider.strip(),
+                    f"{draft.name.strip() or 'Custom model'} Provider",
                 )
             )
-            kwargs.append(f"model_api_key=os.environ[{_py_str(env_name)}]")
+            kwargs.append(f"model_provider=os.environ[{_py_str(provider_env)}]")
+        if draft.modelApiBase.strip():
+            api_base_env = custom_model_env("API_BASE")
+            acc.env.append(
+                EnvVar(
+                    api_base_env,
+                    True,
+                    draft.modelApiBase.strip(),
+                    f"{draft.name.strip() or 'Custom model'} API Base",
+                )
+            )
+            kwargs.append(f"model_api_base=os.environ[{_py_str(api_base_env)}]")
+        api_key_env = custom_model_env("API_KEY")
+        acc.env.append(
+            EnvVar(
+                api_key_env,
+                True,
+                "replace-with-your-own-model-api-key",
+                f"{draft.name.strip() or 'Custom model'} API Key",
+            )
+        )
+        kwargs.append(f"model_api_key=os.environ[{_py_str(api_key_env)}]")
+    else:
+        if draft.modelProvider.strip():
+            kwargs.append(f"model_provider={_py_str(draft.modelProvider.strip())}")
+        if draft.modelApiBase.strip():
+            kwargs.append(f"model_api_base={_py_str(draft.modelApiBase.strip())}")
 
     if draft.memory.shortTerm:
         backend = STM_BY_ID.get(draft.shortTermBackend or "local")
@@ -1313,11 +1355,44 @@ def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
     draft = prepare_mcp_auth(draft)
     allowed_keys: set[str] = set()
     fixed_values: dict[str, str] = {}
+    uses_ark_model = False
 
     def allow_env(items: tuple[EnvVar, ...]) -> None:
         allowed_keys.update(item.key for item in items)
 
     def visit(node: AgentDraft) -> None:
+        nonlocal uses_ark_model
+        is_custom_model = node.modelSource == "custom" or (
+            node.modelSource is None
+            and bool(node.modelApiBase.strip())
+            and not is_provider_modelark_base_url(
+                draft.cloudProvider,
+                node.modelApiBase,
+            )
+        )
+        if is_custom_model:
+            agent_segment = _env_segment(node.name, "AGENT")
+            if node.modelProvider.strip():
+                provider_env = _next_env_name(
+                    f"CUSTOM_MODEL_{agent_segment}_PROVIDER",
+                    allowed_keys,
+                )
+                allowed_keys.add(provider_env)
+                fixed_values[provider_env] = node.modelProvider.strip()
+            if node.modelApiBase.strip():
+                api_base_env = _next_env_name(
+                    f"CUSTOM_MODEL_{agent_segment}_API_BASE",
+                    allowed_keys,
+                )
+                allowed_keys.add(api_base_env)
+                fixed_values[api_base_env] = node.modelApiBase.strip()
+            api_key_env = _next_env_name(
+                f"CUSTOM_MODEL_{agent_segment}_API_KEY",
+                allowed_keys,
+            )
+            allowed_keys.add(api_key_env)
+        elif node.agentType == "llm":
+            uses_ark_model = True
         for tool_id in node.builtinTools:
             tool = TOOL_BY_ID.get(tool_id)
             if tool:
@@ -1358,6 +1433,21 @@ def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
             visit(sub_agent)
 
     visit(draft)
+    if uses_ark_model:
+        model_env = {
+            item.key: item.placeholder
+            for item in model_env_for_provider(draft.cloudProvider)
+        }
+        fixed_values["MODEL_AGENT_PROVIDER"] = (
+            model_env.get("MODEL_AGENT_PROVIDER") or "openai"
+        )
+        fixed_values["MODEL_AGENT_API_BASE"] = model_env.get("MODEL_AGENT_API_BASE", "")
+    if draft.deployment.modelApiKeyId.strip():
+        fixed_values["MODEL_AGENT_API_KEY_ID"] = draft.deployment.modelApiKeyId.strip()
+    if draft.deployment.modelApiKeyName.strip():
+        fixed_values["MODEL_AGENT_API_KEY_NAME"] = (
+            draft.deployment.modelApiKeyName.strip()
+        )
     env = {
         key: value
         for key, value in draft.deployment.envValues.items()

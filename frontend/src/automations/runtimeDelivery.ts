@@ -12,6 +12,7 @@ import {
   runtimeNameField,
 } from "./githubFields";
 import type { GitHubAutomationDefinition } from "./types";
+import { runtimeNameProblem } from "../create/runtimeName";
 
 interface RuntimeDeliveryWorkflowInput {
   baseBranch: string;
@@ -21,14 +22,14 @@ interface RuntimeDeliveryWorkflowInput {
   region: GitHubAutomationRegion;
 }
 
-const RUNTIME_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const RUNTIME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export function validateRuntimeSettings(
   input: Pick<RuntimeDeliveryWorkflowInput, "runtimeName" | "runtimeId">,
 ): void {
-  if (!RUNTIME_NAME_PATTERN.test(input.runtimeName)) {
-    throw new Error("Runtime 名称需以字母开头，且只能包含字母、数字、下划线和连字符");
+  const runtimeNameError = runtimeNameProblem(input.runtimeName);
+  if (runtimeNameError) {
+    throw new Error(runtimeNameError);
   }
   if (!RUNTIME_ID_PATTERN.test(input.runtimeId)) {
     throw new Error("Runtime ID 格式不正确");

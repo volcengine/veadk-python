@@ -6,10 +6,12 @@ import {
   type ReactNode,
   Suspense,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { Checkbox } from "@openai/apps-sdk-ui/components/Checkbox";
 import { RadioGroup } from "@openai/apps-sdk-ui/components/RadioGroup";
@@ -83,16 +85,19 @@ import {
   normalizeDraft,
   sanitizeGeneratedDraftCapabilities,
 } from "./normalizeDraft";
+import {
+  activeModelConfiguration,
+  resolvedModelSource,
+  type ModelSource,
+} from "./modelSource";
+import { resolveRuntimeName } from "./runtimeName";
 import type { AgentProject } from "./project";
 import { AgentBuildCanvas } from "./AgentBuildCanvas";
 import type { SkillSource } from "./skills/types";
 import { SkillHubPicker } from "./SkillHubPicker";
 import { LocalPicker } from "./LocalPicker";
 import { SkillSpacePicker } from "./SkillSpacePicker";
-import {
-  listA2aSpaces,
-  type A2aSpaceRef,
-} from "./a2aSpaces";
+import { listA2aSpaces, type A2aSpaceRef } from "./a2aSpaces";
 import {
   listVikingKnowledgebases,
   type VikingKnowledgebaseRef,
@@ -114,7 +119,11 @@ import {
   deployAgentkitProject,
   generateAgentDraftFromRequirement,
   generateAgentProject,
+  listModelApiKeys,
+  listModelOptions,
+  type ModelApiKeyOption,
   runGeneratedAgentTestSSE,
+  type ModelOption,
 } from "../adk/client";
 import {
   beginAgentDebug,
@@ -134,11 +143,15 @@ import {
   defaultModelApiBase,
   defaultModelName,
   defaultVideoModelName,
+  modelActivationConsoleUrl,
   plannerModelName,
   type CloudProvider,
 } from "../adk/cloudProvider";
 import { applyEvent, emptyAcc, type Block } from "../blocks";
-import { customModelCredentialRequirements } from "./customModelCredentials";
+import {
+  customModelCredentialRequirements,
+  customModelEnvironmentBindings,
+} from "./customModelCredentials";
 import "./CustomCreate.css";
 
 const MarkdownPromptEditor = lazy(() => import("./MarkdownPromptEditor"));
@@ -587,7 +600,9 @@ function RuntimeEnvFields({
                   autoComplete="off"
                   spellCheck={false}
                   aria-invalid={!!jsonError}
-                  onChange={(event) => onChange(item.key, event.currentTarget.value)}
+                  onChange={(event) =>
+                    onChange(item.key, event.currentTarget.value)
+                  }
                 />
               ) : (
                 <input
@@ -598,7 +613,9 @@ function RuntimeEnvFields({
                   placeholder={item.placeholder || "请输入参数值"}
                   autoComplete="off"
                   aria-invalid={!!jsonError}
-                  onChange={(event) => onChange(item.key, event.currentTarget.value)}
+                  onChange={(event) =>
+                    onChange(item.key, event.currentTarget.value)
+                  }
                 />
               )}
               {jsonError && <span className="cw-env-error">{jsonError}</span>}
@@ -660,6 +677,573 @@ function vikingKnowledgebaseDisplayName(item: VikingKnowledgebaseRef): string {
   const name = item.name.trim() || item.id || "未命名知识库";
   const details = [item.sourceLabel, item.projectName].filter(Boolean);
   return details.length ? `${name} · ${details.join(" · ")}` : name;
+}
+
+function modelAvailabilityLabel(model: ModelOption): string {
+  if (model.available) return "已开通";
+  if (model.lifecycleStatus === "Retiring") return "即将下线";
+  if (model.activationState && model.activationState !== "Available") {
+    return "未开通";
+  }
+  return "暂不可用";
+}
+
+function isModelSelectable(model: ModelOption): boolean {
+  return model.available || model.lifecycleStatus === "Retiring";
+}
+
+interface ModelMenuPosition {
+  top?: number;
+  bottom?: number;
+  left: number;
+  width: number;
+  maxHeight: number;
+  opensUp: boolean;
+}
+
+function CatalogSelect({
+  selectedLabel,
+  placeholder,
+  disabled,
+  triggerAriaLabel,
+  menuAriaLabel,
+  searchAriaLabel,
+  searchValue,
+  searchPlaceholder,
+  onSearchChange,
+  empty,
+  emptyLabel,
+  triggerClassName = "",
+  optionsClassName = "",
+  renderOptions,
+}: {
+  selectedLabel: string;
+  placeholder: boolean;
+  disabled: boolean;
+  triggerAriaLabel: string;
+  menuAriaLabel: string;
+  searchAriaLabel: string;
+  searchValue: string;
+  searchPlaceholder: string;
+  onSearchChange: (value: string) => void;
+  empty: boolean;
+  emptyLabel: string;
+  triggerClassName?: string;
+  optionsClassName?: string;
+  renderOptions: (closeMenu: () => void) => ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuId = useId();
+  const [menuPosition, setMenuPosition] = useState<ModelMenuPosition | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        pickerRef.current &&
+        !pickerRef.current.contains(target) &&
+        !menuRef.current?.contains(target)
+      ) {
+        setOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      setMenuPosition(null);
+      return;
+    }
+    const positionMenu = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const viewportPadding = 12;
+      const gap = 6;
+      const availableBelow =
+        window.innerHeight - rect.bottom - viewportPadding - gap;
+      const availableAbove = rect.top - viewportPadding - gap;
+      const opensUp = availableBelow < 300 && availableAbove > availableBelow;
+      const available = Math.max(
+        96,
+        opensUp ? availableAbove : availableBelow,
+      );
+      const width = Math.min(
+        rect.width,
+        window.innerWidth - viewportPadding * 2,
+      );
+      const left = Math.min(
+        Math.max(viewportPadding, rect.left),
+        window.innerWidth - viewportPadding - width,
+      );
+      setMenuPosition({
+        ...(opensUp
+          ? { bottom: window.innerHeight - rect.top + gap }
+          : { top: rect.bottom + gap }),
+        left,
+        width,
+        maxHeight: available,
+        opensUp,
+      });
+    };
+    positionMenu();
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    return () => {
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+    };
+  }, [open]);
+
+  const closeMenu = () => setOpen(false);
+  const moveOptionFocus = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const options = Array.from(
+      menuRef.current?.querySelectorAll<HTMLElement>(
+        '[role="option"]:not(:disabled)',
+      ) ?? [],
+    );
+    if (!options.length) return;
+    event.preventDefault();
+    const currentIndex = options.findIndex(
+      (option) => option === document.activeElement,
+    );
+    const nextIndex =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? options.length - 1
+          : event.key === "ArrowUp"
+            ? currentIndex <= 0
+              ? options.length - 1
+              : currentIndex - 1
+            : currentIndex < 0 || currentIndex === options.length - 1
+              ? 0
+              : currentIndex + 1;
+    options[nextIndex]?.focus();
+  };
+
+  return (
+    <div
+      className={`cw-a2a-space-select-wrap cw-catalog-select${open ? " is-open" : ""}`}
+      ref={pickerRef}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`cw-a2a-space-trigger ${triggerClassName}`.trim()}
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-controls={open ? menuId : undefined}
+        aria-expanded={open}
+        aria-label={triggerAriaLabel}
+        title={selectedLabel}
+        onClick={() => {
+          if (!open) onSearchChange("");
+          setOpen((current) => !current);
+        }}
+      >
+        <span className={placeholder ? "is-placeholder" : undefined}>
+          {selectedLabel}
+        </span>
+        <A2aSelectChevronIcon className="cw-a2a-space-trigger-icon" />
+      </button>
+      {open &&
+        menuPosition &&
+        createPortal(
+          <div
+            ref={menuRef}
+            className={`cw-a2a-space-menu cw-catalog-menu cw-catalog-menu-portal${menuPosition.opensUp ? " is-up" : ""}`}
+            style={{
+              top: menuPosition.top,
+              bottom: menuPosition.bottom,
+              left: menuPosition.left,
+              width: menuPosition.width,
+              maxHeight: menuPosition.maxHeight,
+            }}
+            onKeyDown={moveOptionFocus}
+          >
+            <div className="cw-picker-search">
+              <input
+                className="cw-picker-search-input"
+                type="search"
+                value={searchValue}
+                autoFocus
+                autoComplete="off"
+                aria-label={searchAriaLabel}
+                placeholder={searchPlaceholder}
+                onChange={(event) => onSearchChange(event.currentTarget.value)}
+              />
+            </div>
+            <div
+              id={menuId}
+              className={`cw-picker-options cw-catalog-options ${optionsClassName}`.trim()}
+              role="listbox"
+              aria-label={menuAriaLabel}
+            >
+              {renderOptions(closeMenu)}
+              {empty && <div className="cw-picker-empty">{emptyLabel}</div>}
+            </div>
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
+
+function ModelOptionSelect({
+  value,
+  cloudProvider,
+  apiKeyId,
+  apiKeyName,
+  onApiKeyChange,
+  onChange,
+}: {
+  value: string;
+  cloudProvider: CloudProvider;
+  apiKeyId?: string;
+  apiKeyName?: string;
+  onApiKeyChange: (key: ModelApiKeyOption) => void;
+  onChange: (modelId: string) => void;
+}) {
+  const [apiKeys, setApiKeys] = useState<ModelApiKeyOption[]>([]);
+  const [keysLoading, setKeysLoading] = useState(false);
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [modelsApiKeyId, setModelsApiKeyId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [keySelectionRevision, setKeySelectionRevision] = useState(0);
+  const [apiKeySearchQuery, setApiKeySearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setKeysLoading(true);
+    setError(null);
+    listModelApiKeys(controller.signal, reloadKey > 0)
+      .then((response) => {
+        if (controller.signal.aborted) return;
+        setApiKeys(response.keys);
+        const selected =
+          response.keys.find((key) => key.id === apiKeyId) ??
+          response.keys.find((key) => key.name === apiKeyName) ??
+          response.keys.find((key) => key.id === response.defaultKeyId) ??
+          response.keys[0];
+        if (selected) onApiKeyChange(selected);
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) {
+          setError(
+            err instanceof Error ? err.message : "加载 Ark API Key 失败",
+          );
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setKeysLoading(false);
+      });
+    return () => controller.abort();
+  }, [cloudProvider, reloadKey]);
+
+  useEffect(() => {
+    if (!apiKeyId) {
+      setModels([]);
+      return;
+    }
+    const controller = new AbortController();
+    setLoading(true);
+    setError(null);
+    setModelsApiKeyId(null);
+    listModelOptions({
+      signal: controller.signal,
+      apiKeyId,
+      refresh: reloadKey > 0 || keySelectionRevision > 0,
+    })
+      .then((response) => {
+        if (!controller.signal.aborted) {
+          setModels(response.models);
+          setModelsApiKeyId(apiKeyId);
+        }
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) {
+          setError(err instanceof Error ? err.message : "加载模型列表失败");
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [apiKeyId, cloudProvider, keySelectionRevision, reloadKey]);
+
+  const normalizedValue = value.trim();
+  const modelsAreCurrent = modelsApiKeyId === apiKeyId;
+  const visibleModels = modelsAreCurrent ? models : [];
+  const selectedApiKey = apiKeys.find((key) => key.id === apiKeyId);
+  const selectedApiKeyLabel = selectedApiKey
+    ? selectedApiKey.name
+    : apiKeyId
+      ? "当前 API Key"
+      : keysLoading
+        ? "正在加载 API Key…"
+        : apiKeys.length === 0
+          ? "暂无可用 API Key"
+          : "请选择 API Key";
+  const filteredApiKeys = useMemo(
+    () =>
+      apiKeys.filter((key) =>
+        localPickerMatches(apiKeySearchQuery, [key.name]),
+      ),
+    [apiKeySearchQuery, apiKeys],
+  );
+  const selectedModel = visibleModels.find(
+    (model) => model.id === normalizedValue,
+  );
+  const selectedLabel =
+    loading && !modelsAreCurrent
+      ? "正在刷新模型列表…"
+      : selectedModel
+        ? `${selectedModel.displayName} (${selectedModel.id})`
+        : normalizedValue || "请选择模型";
+  const filteredModels = useMemo(
+    () =>
+      visibleModels.filter((model) =>
+        localPickerMatches(searchQuery, [
+          model.displayName,
+          model.id,
+          model.name,
+          model.vendorName,
+          model.activationState,
+          model.lifecycleStatus,
+        ]),
+      ),
+    [searchQuery, visibleModels],
+  );
+  const showUnknownModel = Boolean(
+    normalizedValue &&
+    !selectedModel &&
+    localPickerMatches(searchQuery, [normalizedValue]),
+  );
+  const availableCount = visibleModels.filter(
+    (model) => model.available,
+  ).length;
+  const providerLabel =
+    cloudProvider === "byteplus" ? "BytePlus ModelArk" : "火山方舟";
+  const activationConsoleUrl = modelActivationConsoleUrl(cloudProvider);
+
+  return (
+    <div className="cw-a2a-space-picker cw-model-picker">
+      <div className="cw-model-picker-stack">
+        <div className="cw-model-picker-field">
+          <span className="cw-model-picker-label">API Key</span>
+          <CatalogSelect
+            selectedLabel={selectedApiKeyLabel}
+            placeholder={!apiKeyId}
+            disabled={keysLoading}
+            triggerAriaLabel="选择 API Key"
+            menuAriaLabel="API Key 列表"
+            searchAriaLabel="搜索 API Key"
+            searchValue={apiKeySearchQuery}
+            searchPlaceholder="搜索 API Key 名称"
+            onSearchChange={setApiKeySearchQuery}
+            empty={filteredApiKeys.length === 0}
+            emptyLabel="未找到匹配的 API Key"
+            optionsClassName="cw-model-key-options"
+            renderOptions={(closeMenu) =>
+              filteredApiKeys.map((key) => {
+                const selected = key.id === apiKeyId;
+                return (
+                  <button
+                    key={key.id}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    className={`cw-a2a-space-option cw-model-key-option ${
+                      selected ? "is-selected" : ""
+                    }`}
+                    title={key.name}
+                    onClick={() => {
+                      setKeySelectionRevision((revision) => revision + 1);
+                      onApiKeyChange(key);
+                      closeMenu();
+                    }}
+                  >
+                    <span>{key.name}</span>
+                  </button>
+                );
+              })
+            }
+          />
+        </div>
+        <div className="cw-model-picker-field">
+          <span className="cw-model-picker-label">模型</span>
+          <div className="cw-a2a-space-row">
+            <CatalogSelect
+              selectedLabel={selectedLabel}
+              placeholder={!normalizedValue}
+              disabled={loading}
+              triggerAriaLabel={`选择${providerLabel}模型`}
+              menuAriaLabel={`${providerLabel}模型`}
+              searchAriaLabel="搜索模型"
+              searchValue={searchQuery}
+              searchPlaceholder="搜索名称、Model ID 或服务商"
+              onSearchChange={setSearchQuery}
+              empty={!showUnknownModel && filteredModels.length === 0}
+              emptyLabel="未找到匹配的模型"
+              triggerClassName="cw-model-trigger"
+              optionsClassName="cw-model-options"
+              renderOptions={(closeMenu) => (
+                <>
+                  {showUnknownModel && (
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected
+                      className="cw-a2a-space-option cw-model-option is-selected"
+                      onClick={() => {
+                        onChange(normalizedValue);
+                        closeMenu();
+                      }}
+                    >
+                      <span className="cw-model-option-copy">
+                        <strong>当前配置</strong>
+                        <small>{normalizedValue}</small>
+                      </span>
+                      <span className="cw-model-status is-unknown">
+                        状态未知
+                      </span>
+                    </button>
+                  )}
+                  {filteredModels.map((model) => {
+                    const selected = model.id === normalizedValue;
+                    const selectable = isModelSelectable(model);
+                    const activationRequired =
+                      !selectable && model.activationState !== "Available";
+                    if (activationRequired) {
+                      return (
+                        <button
+                          key={model.id}
+                          type="button"
+                          role="option"
+                          aria-selected={false}
+                          className="cw-a2a-space-option cw-model-option is-activation-link"
+                          title={`前往${providerLabel}开通 ${model.displayName}`}
+                          onClick={() => {
+                            window.open(
+                              activationConsoleUrl,
+                              "_blank",
+                              "noopener,noreferrer",
+                            );
+                            closeMenu();
+                          }}
+                        >
+                          <span className="cw-model-option-copy">
+                            <strong>{model.displayName}</strong>
+                            <small>
+                              {model.id}
+                              {model.vendorName ? ` · ${model.vendorName}` : ""}
+                            </small>
+                          </span>
+                          <span className="cw-model-status is-unavailable">
+                            未开通，去开通
+                          </span>
+                        </button>
+                      );
+                    }
+                    return (
+                      <button
+                        key={model.id}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        disabled={!selectable}
+                        className={`cw-a2a-space-option cw-model-option ${
+                          selected ? "is-selected" : ""
+                        }`}
+                        title={`${model.displayName} (${model.id})`}
+                        onClick={() => {
+                          onChange(model.id);
+                          closeMenu();
+                        }}
+                      >
+                        <span className="cw-model-option-copy">
+                          <strong>{model.displayName}</strong>
+                          <small>
+                            {model.id}
+                            {model.vendorName ? ` · ${model.vendorName}` : ""}
+                          </small>
+                        </span>
+                        <span
+                          className={`cw-model-status ${
+                            model.available
+                              ? "is-available"
+                              : model.lifecycleStatus === "Retiring"
+                                ? "is-retiring"
+                                : "is-unavailable"
+                          }`}
+                        >
+                          {modelAvailabilityLabel(model)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </>
+              )}
+            />
+            <button
+              type="button"
+              className="cw-icon-btn cw-a2a-space-refresh"
+              title="刷新 API Key 和模型列表"
+              aria-label="刷新 API Key 和模型列表"
+              disabled={loading || keysLoading}
+              onClick={() => setReloadKey((key) => key + 1)}
+            >
+              {loading || keysLoading ? (
+                <Loader2 className="cw-i cw-i-sm cw-spin" />
+              ) : (
+                <A2aRefreshIcon className="cw-i cw-i-sm" />
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+      {error ? (
+        <div className="cw-banner cw-a2a-space-error" role="alert">
+          <Info className="cw-i" />
+          <span>{error}</span>
+        </div>
+      ) : loading ? (
+        <span className="cw-help cw-a2a-space-status" aria-live="polite">
+          <Loader2 className="cw-i cw-i-sm cw-spin" />
+          正在加载模型列表…
+        </span>
+      ) : visibleModels.length === 0 ? (
+        <span className="cw-help">当前账号下暂无可配置模型。</span>
+      ) : (
+        <span className="cw-help">
+          已加载 {visibleModels.length} 个模型，其中 {availableCount} 个已开通。
+        </span>
+      )}
+    </div>
+  );
 }
 
 function A2aSpaceSelect({
@@ -726,8 +1310,8 @@ function A2aSpaceSelect({
   );
   const showUnknownSpace = Boolean(
     value &&
-      !selectedKnown &&
-      localPickerMatches(searchQuery, ["已选择的智能体中心", value]),
+    !selectedKnown &&
+    localPickerMatches(searchQuery, ["已选择的智能体中心", value]),
   );
 
   useEffect(() => {
@@ -759,7 +1343,10 @@ function A2aSpaceSelect({
   };
 
   return (
-    <div className={`cw-a2a-space-picker${open ? " is-open" : ""}`} ref={pickerRef}>
+    <div
+      className={`cw-a2a-space-picker${open ? " is-open" : ""}`}
+      ref={pickerRef}
+    >
       <div className="cw-a2a-space-row">
         <div className="cw-a2a-space-select-wrap">
           <button
@@ -780,9 +1367,7 @@ function A2aSpaceSelect({
             <A2aSelectChevronIcon className="cw-a2a-space-trigger-icon" />
           </button>
           {open && (
-            <div
-              className="cw-a2a-space-menu"
-            >
+            <div className="cw-a2a-space-menu">
               <div className="cw-picker-search">
                 <input
                   className="cw-picker-search-input"
@@ -792,7 +1377,9 @@ function A2aSpaceSelect({
                   autoComplete="off"
                   aria-label="搜索 AgentKit 智能体中心"
                   placeholder="搜索名称或 ID"
-                  onChange={(event) => setSearchQuery(event.currentTarget.value)}
+                  onChange={(event) =>
+                    setSearchQuery(event.currentTarget.value)
+                  }
                 />
               </div>
               <div
@@ -1001,9 +1588,7 @@ function VikingKnowledgebaseSelect({
             <A2aSelectChevronIcon className="cw-a2a-space-trigger-icon" />
           </button>
           {open && (
-            <div
-              className="cw-a2a-space-menu cw-viking-kb-menu"
-            >
+            <div className="cw-a2a-space-menu cw-viking-kb-menu">
               <div className="cw-picker-search">
                 <input
                   className="cw-picker-search-input"
@@ -1013,7 +1598,9 @@ function VikingKnowledgebaseSelect({
                   autoComplete="off"
                   aria-label="搜索 VikingDB 知识库"
                   placeholder="搜索名称或 ID"
-                  onChange={(event) => setSearchQuery(event.currentTarget.value)}
+                  onChange={(event) =>
+                    setSearchQuery(event.currentTarget.value)
+                  }
                 />
               </div>
               <div
@@ -1063,7 +1650,11 @@ function VikingKnowledgebaseSelect({
                       className={`cw-a2a-space-option ${
                         selected ? "is-selected" : ""
                       }`}
-                      title={optionIds ? `${optionLabel} (${optionIds})` : optionLabel}
+                      title={
+                        optionIds
+                          ? `${optionLabel} (${optionIds})`
+                          : optionLabel
+                      }
                       onClick={() => selectItem(item)}
                     >
                       {optionLabel}
@@ -1249,12 +1840,6 @@ function McpToolEditor({
         <Plus className="cw-i" />
         添加 MCP 工具
       </button>
-
-      {tools.length === 0 && (
-        <p className="cw-empty-line">
-          暂无 MCP 工具，点击「添加 MCP 工具」连接外部 MCP 服务。
-        </p>
-      )}
     </div>
   );
 }
@@ -1708,10 +2293,39 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
   const selections: RuntimeEnvSelection[] = [];
   const fixedValues: Record<string, string> = { ...prepared.envValues };
   const cloudProvider = prepared.draft.cloudProvider ?? "volcengine";
+  let usesArkModel = false;
+  for (const binding of customModelEnvironmentBindings(
+    prepared.draft,
+    defaultModelApiBase(cloudProvider),
+  )) {
+    const env: EnvVar[] = [
+      {
+        key: binding.apiKeyKey,
+        required: true,
+        comment: binding.label,
+      },
+    ];
+    if (binding.providerKey) {
+      env.push({ key: binding.providerKey, required: true });
+      fixedValues[binding.providerKey] = binding.provider;
+    }
+    if (binding.apiBaseKey) {
+      env.push({ key: binding.apiBaseKey, required: true });
+      fixedValues[binding.apiBaseKey] = binding.apiBase;
+    }
+    selections.push({ env });
+  }
   const visit = (node: AgentDraft) => {
+    if (
+      node.agentType === "llm" &&
+      resolvedModelSource(node, cloudProvider) === "ark"
+    ) {
+      usesArkModel = true;
+    }
     for (const toolId of node.builtinTools ?? []) {
       const tool = BUILTIN_TOOLS.find((item) => item.id === toolId);
-      if (tool) selections.push({ env: providerRuntimeEnv(tool.env, cloudProvider) });
+      if (tool)
+        selections.push({ env: providerRuntimeEnv(tool.env, cloudProvider) });
     }
     for (const mcpTool of node.mcpTools ?? []) {
       if (mcpTool.authTokenEnv) {
@@ -1735,36 +2349,33 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
     }
     if (node.memory.shortTerm) {
       selections.push({
-        env:
-          providerRuntimeEnv(
-            STM_BACKENDS.find(
-              (item) => item.id === (node.shortTermBackend ?? "local"),
-            )?.env ?? [],
-            cloudProvider,
-          ),
+        env: providerRuntimeEnv(
+          STM_BACKENDS.find(
+            (item) => item.id === (node.shortTermBackend ?? "local"),
+          )?.env ?? [],
+          cloudProvider,
+        ),
       });
     }
     if (node.memory.longTerm) {
       selections.push({
-        env:
-          providerRuntimeEnv(
-            LTM_BACKENDS.find(
-              (item) => item.id === (node.longTermBackend ?? "local"),
-            )?.env ?? [],
-            cloudProvider,
-          ),
+        env: providerRuntimeEnv(
+          LTM_BACKENDS.find(
+            (item) => item.id === (node.longTermBackend ?? "local"),
+          )?.env ?? [],
+          cloudProvider,
+        ),
       });
     }
     if (node.knowledgebase) {
       selections.push({
-        env:
-          providerRuntimeEnv(
-            KB_BACKENDS.find(
-              (item) =>
-                item.id === (node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND),
-            )?.env ?? [],
-            cloudProvider,
-          ),
+        env: providerRuntimeEnv(
+          KB_BACKENDS.find(
+            (item) =>
+              item.id === (node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND),
+          )?.env ?? [],
+          cloudProvider,
+        ),
       });
     }
     if (node.tracing) {
@@ -1783,6 +2394,25 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
     node.subAgents.forEach(visit);
   };
   visit(prepared.draft);
+  if (usesArkModel) {
+    selections.push({
+      env: [
+        { key: "MODEL_AGENT_PROVIDER", required: true },
+        { key: "MODEL_AGENT_API_BASE", required: true },
+        {
+          key: "MODEL_AGENT_API_KEY",
+          required: true,
+          comment: "Ark API Key",
+          placeholder: "由所选 API Key 注入",
+          secret: true,
+          readOnly: true,
+          serverManaged: true,
+        },
+      ],
+    });
+    fixedValues.MODEL_AGENT_PROVIDER = "openai";
+    fixedValues.MODEL_AGENT_API_BASE = defaultModelApiBase(cloudProvider);
+  }
   const config = runtimeEnvConfiguration(selections);
   return {
     specs: config.specs,
@@ -2027,16 +2657,19 @@ function draftForCloudProvider(
   cloudProvider: CloudProvider,
 ): AgentDraft {
   const previousProvider = draft.cloudProvider ?? "volcengine";
+  const modelSource = resolvedModelSource(draft, previousProvider);
   const nextSubAgents = draft.subAgents.map((child) =>
     draftForCloudProvider(child, cloudProvider),
   );
-  const nextModelName = shouldUseProviderDefaultModel(
-    draft.modelName,
-    previousProvider,
-    cloudProvider,
-  )
-    ? defaultModelName(cloudProvider)
-    : draft.modelName;
+  const nextModelName =
+    modelSource === "ark" &&
+    shouldUseProviderDefaultModel(
+      draft.modelName,
+      previousProvider,
+      cloudProvider,
+    )
+      ? defaultModelName(cloudProvider)
+      : draft.modelName;
   const shouldUseProviderDefaultBase =
     sameBaseUrl(draft.modelApiBase, defaultModelApiBase(previousProvider)) ||
     (cloudProvider === "byteplus" &&
@@ -2059,12 +2692,56 @@ function draftForCloudProvider(
   };
 }
 
+interface CustomCreateInitialState {
+  draft: AgentDraft;
+  customModelSecretValues: Record<string, string>;
+}
+
+function customCreateInitialState(
+  initialDraft: AgentDraft,
+  cloudProvider: CloudProvider,
+): CustomCreateInitialState {
+  const draft = draftForCloudProvider(initialDraft, cloudProvider);
+  const requirements = customModelCredentialRequirements(
+    draft,
+    defaultModelApiBase(cloudProvider),
+  );
+  const secretKeys = new Set(requirements.map(({ key }) => key));
+  const initialEnvValues = draft.deployment?.envValues ?? {};
+  const customModelSecretValues = Object.fromEntries(
+    Object.entries(initialEnvValues).filter(
+      ([key, value]) => secretKeys.has(key) && Boolean(value.trim()),
+    ),
+  );
+  if (Object.keys(customModelSecretValues).length === 0) {
+    return { draft, customModelSecretValues };
+  }
+  return {
+    draft: {
+      ...draft,
+      deployment: {
+        ...(draft.deployment ?? { feishuEnabled: false }),
+        envValues: Object.fromEntries(
+          Object.entries(initialEnvValues).filter(([key]) => !secretKeys.has(key)),
+        ),
+      },
+    },
+    customModelSecretValues,
+  };
+}
+
 function codegenDraft(draft: AgentDraft): AgentDraft {
   const prepared = prepareMcpAuth(draft).draft;
+  const activeModelDraft = activeModelConfiguration(
+    prepared,
+    prepared.cloudProvider ?? "volcengine",
+  );
   return {
-    ...prepared,
+    ...activeModelDraft,
     deployment: {
       feishuEnabled: !!draft.deployment?.feishuEnabled,
+      modelApiKeyId: draft.deployment?.modelApiKeyId ?? "",
+      modelApiKeyName: draft.deployment?.modelApiKeyName ?? "",
     },
   };
 }
@@ -2079,16 +2756,22 @@ function defaultDebugModelName(draft: AgentDraft): string {
   return "";
 }
 
-function debugRuntimeDraft(draft: AgentDraft): AgentDraft {
+function debugRuntimeDraft(
+  draft: AgentDraft,
+  transientEnvValues: Record<string, string> = {},
+): AgentDraft {
   const runtimeEnv = collectDeploymentEnv(draft);
   const values = {
     ...(draft.deployment?.envValues ?? {}),
+    ...transientEnvValues,
     ...runtimeEnv.fixedValues,
   };
   return {
     ...codegenDraft(draft),
     deployment: {
       feishuEnabled: !!draft.deployment?.feishuEnabled,
+      modelApiKeyId: draft.deployment?.modelApiKeyId ?? "",
+      modelApiKeyName: draft.deployment?.modelApiKeyName ?? "",
       envValues: Object.fromEntries(
         runtimeEnvVars(runtimeEnv.specs, values).map(({ key, value }) => [
           key,
@@ -2099,8 +2782,11 @@ function debugRuntimeDraft(draft: AgentDraft): AgentDraft {
   };
 }
 
-function debugSnapshotKey(draft: AgentDraft): string {
-  return JSON.stringify(debugRuntimeDraft(draft));
+function debugSnapshotKey(
+  draft: AgentDraft,
+  transientEnvValues: Record<string, string> = {},
+): string {
+  return JSON.stringify(debugRuntimeDraft(draft, transientEnvValues));
 }
 
 function debugVariantSnapshot(
@@ -2199,18 +2885,23 @@ function DebugComparisonWorkspace({
               const instruction = variant.instruction.trim();
               const configurationKey = debugVariantConfigurationKey(variant);
               const duplicateConfiguration = Boolean(
-                modelName && description && instruction &&
-                  variants.findIndex(
-                    (item) =>
-                      debugVariantConfigurationKey(item) === configurationKey,
-                  ) !== variantIndex,
+                modelName &&
+                description &&
+                instruction &&
+                variants.findIndex(
+                  (item) =>
+                    debugVariantConfigurationKey(item) === configurationKey,
+                ) !== variantIndex,
               );
               const configurationUnavailable =
-                !modelName || !description || !instruction || duplicateConfiguration;
+                !modelName ||
+                !description ||
+                !instruction ||
+                duplicateConfiguration;
               const stale = Boolean(
                 variant.runtimeSnapshot &&
-                  variant.runtimeSnapshot !==
-                    debugVariantSnapshot(draftSnapshot, variant),
+                variant.runtimeSnapshot !==
+                  debugVariantSnapshot(draftSnapshot, variant),
               );
               const starting = variant.phase === "starting";
               const ready = variant.phase === "ready" && !stale;
@@ -2218,7 +2909,9 @@ function DebugComparisonWorkspace({
               const traceAvailable =
                 ready &&
                 variant.phase !== "sending" &&
-                variant.messages.some((message) => message.role === "assistant");
+                variant.messages.some(
+                  (message) => message.role === "assistant",
+                );
               const startDisabled =
                 busy || variant.configOpen || configurationUnavailable;
               const disabledReason = !modelName
@@ -2240,10 +2933,7 @@ function DebugComparisonWorkspace({
                       ? "重新启动环境"
                       : "启动环境";
               return (
-                <article
-                  key={variant.id}
-                  className="cw-ab-card"
-                >
+                <article key={variant.id} className="cw-ab-card">
                   <div
                     className={`cw-ab-card-inner${variant.configOpen ? " is-flipped" : ""}`}
                   >
@@ -2299,7 +2989,9 @@ function DebugComparisonWorkspace({
                           <div className="cw-ab-empty cw-ab-launch">
                             {ready ? (
                               <>
-                                <strong className="cw-ab-ready-title">已就绪</strong>
+                                <strong className="cw-ab-ready-title">
+                                  已就绪
+                                </strong>
                                 <span className="cw-ab-launch-hint">
                                   可在下方输入测试消息
                                 </span>
@@ -2325,8 +3017,12 @@ function DebugComparisonWorkspace({
                                     className="cw-debug-msg-error"
                                     defaultExpanded
                                   />
-                                ) : message.blocks && message.blocks.length > 0 ? (
-                                  <Blocks blocks={message.blocks} onAction={() => {}} />
+                                ) : message.blocks &&
+                                  message.blocks.length > 0 ? (
+                                  <Blocks
+                                    blocks={message.blocks}
+                                    onAction={() => {}}
+                                  />
                                 ) : message.content ? (
                                   message.content
                                 ) : index === variant.messages.length - 1 &&
@@ -2376,7 +3072,6 @@ function DebugComparisonWorkspace({
                           部署该配置
                         </button>
                       </footer>
-
                     </section>
 
                     <section
@@ -2413,10 +3108,15 @@ function DebugComparisonWorkspace({
                               }
                               onClick={() => onCompleteConfig(variant.id)}
                             >
-                              {variant.id === "baseline" ? "完成配置" : "完成并启动"}
+                              {variant.id === "baseline"
+                                ? "完成配置"
+                                : "完成并启动"}
                             </button>
                             {disabledReason && (
-                              <span className="cw-ab-config-done-tip" role="tooltip">
+                              <span
+                                className="cw-ab-config-done-tip"
+                                role="tooltip"
+                              >
                                 {disabledReason}
                               </span>
                             )}
@@ -2478,7 +3178,9 @@ function DebugComparisonWorkspace({
                             {DEBUG_OPTIMIZATIONS.map((item) => (
                               <Checkbox
                                 key={item.id}
-                                checked={variant.optimizations.includes(item.id)}
+                                checked={variant.optimizations.includes(
+                                  item.id,
+                                )}
                                 disabled
                                 label={item.label}
                                 className="cw-ab-optimization-checkbox"
@@ -2493,7 +3195,6 @@ function DebugComparisonWorkspace({
                 </article>
               );
             })}
-
           </div>
         )}
       </div>
@@ -2718,13 +3419,25 @@ export function CustomCreate({
   void onCreate; // outcome is the in-pane project preview, not a navigation
   void onBack; // no footer nav in the single-scroll layout; back lives in app chrome
   void onDiscard; // the discard action is intentionally hidden in this flow
-  const [draft, setDraft] = useState<AgentDraft>(
-    () =>
-      draftForCloudProvider(
-        initialDraft ?? emptyDraft(cloudProvider),
-        cloudProvider,
-      ),
+  const [initialState] = useState<CustomCreateInitialState>(() =>
+    customCreateInitialState(
+      initialDraft ?? emptyDraft(cloudProvider),
+      cloudProvider,
+    ),
   );
+  const [draft, setDraft] = useState<AgentDraft>(initialState.draft);
+  const [customModelSecretValues, setCustomModelSecretValues] = useState<
+    Record<string, string>
+  >(initialState.customModelSecretValues);
+  const configuredRuntimeName = draft.deployment?.runtimeName ?? "";
+  const deploymentRuntimeName = deploymentTarget
+    ? deploymentTarget.name
+    : resolveRuntimeName(
+        draft.name,
+        configuredRuntimeName,
+        draft.deployment?.runtimeNameCustomized,
+      );
+  const transientModelSecretValues = customModelSecretValues;
   useEffect(() => {
     setDraft((current) => draftForCloudProvider(current, cloudProvider));
   }, [cloudProvider]);
@@ -2800,12 +3513,11 @@ export function CustomCreate({
     useState<DebugTraceTarget | null>(null);
   const [debugLeaveConfirmOpen, setDebugLeaveConfirmOpen] = useState(false);
   const [debugLeaveCleaning, setDebugLeaveCleaning] = useState(false);
-  const debugLeaveConfirmResolverRef =
-    useRef<((confirmed: boolean) => void) | null>(null);
+  const debugLeaveConfirmResolverRef = useRef<
+    ((confirmed: boolean) => void) | null
+  >(null);
   const [buildErr, setBuildErr] = useState("");
-  const [modelAdvancedOpen, setModelAdvancedOpen] = useState(false);
-  const [a2aRegistryAdvancedOpen, setA2aRegistryAdvancedOpen] =
-    useState(false);
+  const [a2aRegistryAdvancedOpen, setA2aRegistryAdvancedOpen] = useState(false);
 
   // Which tree node is being edited ([] = root). The detail pane and per-node
   // inline errors are driven by this selection.
@@ -2885,7 +3597,6 @@ export function CustomCreate({
   const safePath = pathExists(draft, selectedPath) ? selectedPath : [];
   const node = getNode(draft, safePath);
   const isRootAgent = safePath.length === 0;
-  const modelAdvancedId = `cw-model-advanced-${safePath.join("-") || "root"}`;
   const a2aRegistryAdvancedId = `cw-a2a-registry-advanced-${
     safePath.join("-") || "root"
   }`;
@@ -2992,9 +3703,7 @@ export function CustomCreate({
       setAiGenerated(true);
       setUsedAiGeneration(true);
     } catch (error) {
-      setAiErrorDialog(
-        error instanceof Error ? error.message : String(error),
-      );
+      setAiErrorDialog(error instanceof Error ? error.message : String(error));
     } finally {
       setAiGenerating(false);
     }
@@ -3010,10 +3719,7 @@ export function CustomCreate({
 
   const insertCanvasStep = (parentPath: NodePath, index: number) => {
     const parent = getNode(draft, parentPath);
-    if (
-      !nodeAcceptsChildren(parent) ||
-      parentPath.length >= MAX_TREE_DEPTH
-    ) {
+    if (!nodeAcceptsChildren(parent) || parentPath.length >= MAX_TREE_DEPTH) {
       return;
     }
     const safeIndex = Math.max(0, Math.min(index, parent.subAgents.length));
@@ -3064,6 +3770,19 @@ export function CustomCreate({
   // Detail-pane branching is driven by the SELECTED node's type.
   const orchestrator = isOrchestratorType(node.agentType);
   const a2a = isA2aType(node.agentType);
+  const modelSource = resolvedModelSource(node, cloudProvider);
+  const selectModelSource = (source: ModelSource) => {
+    const nextModelName =
+      source === "custom" && modelSource === "ark"
+        ? ""
+        : source === "ark" && !node.modelName?.trim()
+          ? defaultModelName(cloudProvider)
+          : node.modelName;
+    patch({
+      modelSource: source,
+      modelName: nextModelName,
+    });
+  };
 
   // Inline error flags for the selected node.
   const duplicateNames = useMemo(() => duplicateAgentNames(draft), [draft]);
@@ -3094,8 +3813,8 @@ export function CustomCreate({
     [cloudProvider, draft],
   );
   const currentDebugSnapshot = useMemo(
-    () => debugSnapshotKey(providerDraft),
-    [providerDraft],
+    () => debugSnapshotKey(providerDraft, transientModelSecretValues),
+    [providerDraft, transientModelSecretValues],
   );
   const selectedDebugVariant =
     debugVariants.find((variant) => variant.id === selectedVariantId) ??
@@ -3111,6 +3830,10 @@ export function CustomCreate({
         defaultModelApiBase(cloudProvider),
       ),
     [cloudProvider, providerDraft],
+  );
+  const selectedCustomModelCredential = customModelCredentials.find(
+    (requirement) =>
+      requirement.label === `${node.name.trim() || "自定义模型"} 模型 API Key`,
   );
 
   // Smooth-scroll to the first invalid section during validation.
@@ -3128,7 +3851,9 @@ export function CustomCreate({
     if (problems[0]) {
       setSelectedPath(problems[0].path);
       window.requestAnimationFrame(() =>
-        scrollToSection(problems[0].problem === "缺少子 Agent" ? "type" : "basic"),
+        scrollToSection(
+          problems[0].problem === "缺少子 Agent" ? "type" : "basic",
+        ),
       );
     }
     return false;
@@ -3264,7 +3989,11 @@ export function CustomCreate({
     if (!debugEnabled || building) return;
     if (!requireCompleteDraft()) return;
     const variant = debugVariants.find((item) => item.id === id);
-    if (!variant || variant.phase === "starting" || variant.phase === "sending") {
+    if (
+      !variant ||
+      variant.phase === "starting" ||
+      variant.phase === "sending"
+    ) {
       return;
     }
     const modelName = variant.modelName.trim();
@@ -3280,7 +4009,8 @@ export function CustomCreate({
       !description ||
       !instruction ||
       firstMatchingIndex !== variantIndex
-    ) return;
+    )
+      return;
 
     const snapshot = debugVariantSnapshot(currentDebugSnapshot, variant);
     setDebugVariants((current) =>
@@ -3316,7 +4046,7 @@ export function CustomCreate({
       };
       failedPhase = "create_test_run";
       createdRun = await createGeneratedAgentTestRun(
-        debugRuntimeDraft(variantDraft),
+        debugRuntimeDraft(variantDraft, transientModelSecretValues),
         deploymentTarget
           ? {
               runtimeId: deploymentTarget.runtimeId,
@@ -3480,7 +4210,9 @@ export function CustomCreate({
 
   const removeDebugVariant = async (id: string) => {
     await cleanupDebugVariantRun(id);
-    setDebugVariants((current) => current.filter((variant) => variant.id !== id));
+    setDebugVariants((current) =>
+      current.filter((variant) => variant.id !== id),
+    );
     if (selectedVariantId === id) setSelectedVariantId("baseline");
   };
 
@@ -3520,7 +4252,8 @@ export function CustomCreate({
       !description ||
       !instruction ||
       firstMatchingIndex !== variantIndex
-    ) return;
+    )
+      return;
     if (id === "baseline") {
       patchDebugVariant(id, { configOpen: false });
       return;
@@ -3555,6 +4288,7 @@ export function CustomCreate({
         ...options,
         onStage,
         runtimeId: deploymentTarget?.runtimeId,
+        runtimeName: deploymentRuntimeName,
         appName: deploymentTarget?.appName,
         description: draft.description,
       },
@@ -3702,743 +4436,902 @@ export function CustomCreate({
         />
       )}
       <main className="cw-workspace-main" id="cw-workspace-main">
-      {workspaceMode === "build" && (
-        <div className="cw-build-workspace">
-        <div className="cw-editor">
-        <AgentBuildCanvas
-          draft={draft}
-          direction="horizontal"
-          selectedPath={safePath}
-          onSelect={setSelectedPath}
-          onAdd={addCanvasStep}
-          onInsert={insertCanvasStep}
-          onDelete={deleteCanvasStep}
-        />
-        {/* Right: the form for the currently-selected node. */}
-        <div className="cw-detail">
-          {/* Scroll area: form on the left, step nav on the right. */}
-          <div className="cw-detail-scroll" ref={scrollRef}>
-          <div className="cw-detail-inner">
-            <div className="cw-lower">
-            <div className="cw-form-col">
-            <Section meta={metaOf("type")}>
-              <RadioGroup<AgentType>
-                className="cw-agent-type-options"
-                aria-label="Agent 类型"
-                value={node.agentType ?? "llm"}
-                onChange={selectAgentType}
-              >
-                {AGENT_TYPES.map((t) => {
-                  const on = (node.agentType ?? "llm") === t.id;
-                  const remoteTypeDisabled = isRootAgent && t.id === "a2a";
-                  const disabledHintId = remoteTypeDisabled
-                    ? "cw-remote-agent-disabled-hint"
-                    : undefined;
-                  return (
-                    <div
-                      key={t.id}
-                      data-agent-type={t.id}
-                      className={`cw-agent-type-option ${on ? "is-on" : ""} ${
-                        remoteTypeDisabled ? "is-disabled" : ""
-                      }`}
-                      tabIndex={remoteTypeDisabled ? 0 : undefined}
-                      aria-describedby={disabledHintId}
-                    >
-                      <RadioGroup.Item
-                        value={t.id}
-                        disabled={remoteTypeDisabled}
-                        block
-                        className="cw-agent-type-control"
-                      >
-                        <span className="cw-agent-type-copy">
-                          <strong>{AGENT_TYPE_BAR_LABELS[t.id]}</strong>
-                        </span>
-                      </RadioGroup.Item>
-                      {remoteTypeDisabled && (
-                        <span
-                          id={disabledHintId}
-                          className="cw-agent-type-disabled-hint"
-                          role="tooltip"
-                        >
-                          远程智能体只能作为子步骤使用
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </RadioGroup>
-              {showErrors && orchestrator && node.subAgents.length === 0 && (
-                <span className="cw-error-text">
-                  {validationProblemMessage({
-                    path: safePath,
-                    name: node.name.trim() || "未命名",
-                    typeLabel: agentTypeMeta(node.agentType).label,
-                    problem: "缺少子 Agent",
-                  })}
-                </span>
-              )}
-            </Section>
-            <Section meta={metaOf("basic")}>
-                <div className="cw-form">
-                      {!a2a && (
-                        <>
-                    <div className="cw-field">
-                      <label className="cw-label">
-                        {isRootAgent ? "Agent 名称" : "名称"}
-                        <span className="cw-req">*</span>
-                      </label>
-                      <input
-                        className={`cw-input ${invalidClass(nameInvalid)}`}
-                        value={node.name}
-                        placeholder="assistant"
-                        onChange={(e) => patch({ name: e.target.value })}
-                      />
-                      {showErrors && nameProblem ? (
-                              <span className="cw-error-text">
-                                {nameProblem}
-                              </span>
-                      ) : (
-                        <span className="cw-help">
-                                遵循 Google ADK 命名规则，且在执行流程中保持唯一。
-                        </span>
-                      )}
-                    </div>
-                    <div className="cw-field">
-                      <label className="cw-label">
-                        {isRootAgent ? "描述" : "智能体描述"}
-                        <span className="cw-req">*</span>
-                      </label>
-                      <textarea
-                        className={`cw-textarea cw-textarea-sm ${invalidClass(
-                          descriptionMissing,
-                        )}`}
-                        value={node.description}
-                        placeholder="简要描述这个 Agent 的用途，便于团队识别…"
-                        onChange={(e) =>
-                          patch({ description: e.target.value })
-                        }
-                      />
-                      {showErrors && descriptionMissing ? (
-                              <span className="cw-error-text">
-                                描述为必填项
-                              </span>
-                      ) : (
-                        <span className="cw-help">
-                          {isRootAgent
-                            ? "完整描述会保留；部署时会自动整理为符合 Runtime 规范的单行描述。"
-                            : "描述会显示在 Agent 列表与选择器中。"}
-                        </span>
-                      )}
-                    </div>
-                        </>
-                      )}
-                    {orchestrator ? (
-                      <>
-                        <p className="cw-section-desc cw-dependency-hint">
-                            这是一个协作容器，本身不生成回答。请在左侧画布中
-                            添加任务步骤，并通过拖拽调整它们的位置。
-                        </p>
-                        {node.agentType === "loop" && (
-                          <div className="cw-field">
-                            <label className="cw-label">最大轮次</label>
-                            <input
-                              className="cw-input"
-                              type="number"
-                              min={1}
-                              value={node.maxIterations ?? 3}
-                              onChange={(e) =>
-                                patch({
-                                  maxIterations: Math.max(
-                                    1,
-                                    Number(e.target.value) || 1,
-                                  ),
-                                })
-                              }
-                            />
-                            <span className="cw-help">
-                                循环编排反复执行子
-                                Agent，直到满足条件或达到该轮次上限。
-                            </span>
-                          </div>
-                        )}
-                      </>
-                    ) : a2a ? (
-                        <div className="cw-field cw-remote-center-fields">
-                          <div className="cw-remote-center-head">
-                            <div className="cw-label">
-                              AgentKit 智能体中心
-                              <span className="cw-req">*</span>
-                            </div>
-                            <p className="cw-help cw-remote-center-description">
-                              远程 Agent 的名称、描述和能力来自中心返回的 Agent Card。
-                              系统会根据每轮任务动态发现并挂载匹配的 Agent。
-                            </p>
-                          </div>
-                          <A2aSpaceSelect
-                            value={node.a2aRegistry?.registrySpaceId ?? ""}
-                            region={
-                              node.a2aRegistry?.registryRegion ||
-                              A2A_REGISTRY_DEFAULTS.region
-                            }
-                            invalid={showErrors && a2aRegistrySpaceMissing}
-                            onChange={(spaceId) =>
-                              patchA2aRegistryEnv(
-                                A2A_REGISTRY_SPACE_ENV_KEY,
-                                spaceId,
-                              )
-                            }
-                          />
-                          <button
-                            type="button"
-                            className="cw-more-options"
-                            aria-expanded={a2aRegistryAdvancedOpen}
-                            aria-controls={a2aRegistryAdvancedId}
-                            onClick={() =>
-                              setA2aRegistryAdvancedOpen((open) => !open)
-                            }
+        {workspaceMode === "build" && (
+          <div className="cw-build-workspace">
+            <div className="cw-editor">
+              <AgentBuildCanvas
+                draft={draft}
+                direction="horizontal"
+                selectedPath={safePath}
+                onSelect={setSelectedPath}
+                onAdd={addCanvasStep}
+                onInsert={insertCanvasStep}
+                onDelete={deleteCanvasStep}
+              />
+              {/* Right: the form for the currently-selected node. */}
+              <div className="cw-detail">
+                {/* Scroll area: form on the left, step nav on the right. */}
+                <div className="cw-detail-scroll" ref={scrollRef}>
+                  <div className="cw-detail-inner">
+                    <div className="cw-lower">
+                      <div className="cw-form-col">
+                        <Section meta={metaOf("type")}>
+                          <RadioGroup<AgentType>
+                            className="cw-agent-type-options"
+                            aria-label="Agent 类型"
+                            value={node.agentType ?? "llm"}
+                            onChange={selectAgentType}
                           >
-                            <span>更多选项</span>
-                            <ChevronRight
-                              className={`cw-more-options-chevron ${
-                                a2aRegistryAdvancedOpen ? "is-open" : ""
-                              }`}
-                              aria-hidden
-                            />
-                          </button>
-                          <AnimatePresence initial={false}>
-                            {a2aRegistryAdvancedOpen && (
-                              <motion.div
-                                id={a2aRegistryAdvancedId}
-                                className="cw-model-advanced"
-                                initial={{ height: 0, opacity: 0 }}
-                                animate={{ height: "auto", opacity: 1 }}
-                                exit={{ height: 0, opacity: 0 }}
-                                transition={{
-                                  duration: 0.18,
-                                  ease: "easeOut",
-                                }}
-                              >
-                                <RuntimeEnvFields
-                                  env={A2A_REGISTRY_RUNTIME_ENV}
-                                  values={a2aRegistryEnvValues(
-                                    node.a2aRegistry,
-                                    { includeDefaults: false },
+                            {AGENT_TYPES.map((t) => {
+                              const on = (node.agentType ?? "llm") === t.id;
+                              const remoteTypeDisabled =
+                                isRootAgent && t.id === "a2a";
+                              const disabledHintId = remoteTypeDisabled
+                                ? "cw-remote-agent-disabled-hint"
+                                : undefined;
+                              return (
+                                <div
+                                  key={t.id}
+                                  data-agent-type={t.id}
+                                  className={`cw-agent-type-option ${on ? "is-on" : ""} ${
+                                    remoteTypeDisabled ? "is-disabled" : ""
+                                  }`}
+                                  tabIndex={remoteTypeDisabled ? 0 : undefined}
+                                  aria-describedby={disabledHintId}
+                                >
+                                  <RadioGroup.Item
+                                    value={t.id}
+                                    disabled={remoteTypeDisabled}
+                                    block
+                                    className="cw-agent-type-control"
+                                  >
+                                    <span className="cw-agent-type-copy">
+                                      <strong>
+                                        {AGENT_TYPE_BAR_LABELS[t.id]}
+                                      </strong>
+                                    </span>
+                                  </RadioGroup.Item>
+                                  {remoteTypeDisabled && (
+                                    <span
+                                      id={disabledHintId}
+                                      className="cw-agent-type-disabled-hint"
+                                      role="tooltip"
+                                    >
+                                      远程智能体只能作为子步骤使用
+                                    </span>
                                   )}
-                                  onChange={patchA2aRegistryEnv}
-                                />
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                          {showErrors && a2aRegistrySpaceMissing && (
-                            <span className="cw-error-text">
-                              请选择 AgentKit 智能体中心
-                          </span>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="cw-field">
-                        <label className="cw-label">
-                          系统提示词<span className="cw-req">*</span>
-                        </label>
-                        <Suspense
-                          fallback={
-                              <div
-                                className="cw-markdown-loading"
-                                role="status"
-                              >
-                              正在加载 Markdown 编辑器…
-                            </div>
-                          }
-                        >
-                          <MarkdownPromptEditor
-                            value={node.instruction}
-                            invalid={instructionMissing}
-                            onChange={(instruction) => patch({ instruction })}
-                          />
-                        </Suspense>
-                        {showErrors && instructionMissing ? (
-                          <span className="cw-error-text">
-                            系统提示词为必填项
-                          </span>
-                        ) : (
-                          <span className="cw-help">
-                              支持 Markdown 快捷输入，例如键入 ##
-                              加空格创建二级标题。
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-            </Section>
-
-            {/* Every LLM agent gets model, tools, skills, and knowledge.
-                Root LLM agents additionally own memory and tracing. */}
-            {!orchestrator && !a2a && (
-              <>
-            <Section meta={metaOf("model")}>
-                  <div className="cw-form">
-                    <div className="cw-field">
-                      <label className="cw-label">模型名称</label>
-                      <input
-                        className="cw-input"
-                        value={node.modelName ?? ""}
-                        placeholder={defaultModelName(cloudProvider)}
-                              onChange={(e) =>
-                                patch({ modelName: e.target.value })
-                              }
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      className="cw-more-options cw-model-more-options"
-                      aria-expanded={modelAdvancedOpen}
-                      aria-controls={modelAdvancedId}
-                            onClick={() =>
-                              setModelAdvancedOpen((open) => !open)
-                            }
-                    >
-                      <span>更多选项</span>
-                      <ChevronRight
-                        className={`cw-more-options-chevron ${
-                          modelAdvancedOpen ? "is-open" : ""
-                        }`}
-                        aria-hidden
-                      />
-                    </button>
-                    <AnimatePresence initial={false}>
-                      {modelAdvancedOpen && (
-                        <motion.div
-                          id={modelAdvancedId}
-                          className="cw-model-advanced"
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: "auto", opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          transition={{ duration: 0.18, ease: "easeOut" }}
-                        >
-                          <div className="cw-field">
-                                  <label className="cw-label">
-                                    服务商 Provider
-                                  </label>
-                            <input
-                              className="cw-input"
-                              value={node.modelProvider ?? ""}
-                              placeholder="openai"
-                              onChange={(e) =>
-                                patch({ modelProvider: e.target.value })
-                              }
-                            />
-                          </div>
-                          <div className="cw-field">
-                            <label className="cw-label">API Base</label>
-                            <input
-                              className="cw-input"
-                              value={node.modelApiBase ?? ""}
-                              placeholder={defaultModelApiBase(cloudProvider)}
-                              onChange={(e) =>
-                                patch({ modelApiBase: e.target.value })
-                              }
-                            />
-                            <span className="cw-help cw-dependency-hint">
-                                    留空或使用当前云的官方 Ark 地址时，Studio
-                                    会提供 Ark API Key。填写自定义地址后，发布页会
-                                    要求填写该 Agent 自己的模型 API Key。
-                            </span>
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-            </Section>
-
-            <Section meta={metaOf("tools")}>
-                  <div className="cw-form">
-                    <div className="cw-field">
-                      <label className="cw-label">内置工具</label>
-                      <span className="cw-help">
-                              勾选 VeADK 提供的内置能力，生成时会自动补全 import
-                              与所需环境变量。
-                      </span>
-                      <div className="cw-tools-list-shell">
-                        <Checklist
-                          items={createBuiltinTools}
-                          selected={builtinTools}
-                          onToggle={toggleBuiltin}
-                          scrollRows={6}
-                        />
-                      </div>
-                      <AnimatePresence initial={false}>
-                        {builtinTools.includes("run_code") && (
-                          <motion.div
-                            className="cw-tool-config"
-                            initial={{ opacity: 0, y: -4 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -4 }}
-                            transition={{ duration: 0.16, ease: "easeOut" }}
-                          >
-                            <div className="cw-tool-config-head">
-                              <span className="cw-label">代码执行配置</span>
-                              <span className="cw-help">
-                                指定 AgentKit 代码执行沙箱。
+                                </div>
+                              );
+                            })}
+                          </RadioGroup>
+                          {showErrors &&
+                            orchestrator &&
+                            node.subAgents.length === 0 && (
+                              <span className="cw-error-text">
+                                {validationProblemMessage({
+                                  path: safePath,
+                                  name: node.name.trim() || "未命名",
+                                  typeLabel: agentTypeMeta(node.agentType)
+                                    .label,
+                                  problem: "缺少子 Agent",
+                                })}
                               </span>
-                            </div>
-                            <RuntimeEnvFields
-                              env={
-                                BUILTIN_TOOLS.find(
-                                  (item) => item.id === "run_code",
-                                )?.env ?? []
-                              }
-                              values={draft.deployment?.envValues ?? {}}
-                              onChange={patchDeploymentEnv}
-                            />
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                    <div className="cw-field cw-mcp-field">
-                      <label className="cw-label">MCP 工具</label>
-                      <McpToolEditor
-                        tools={mcpTools}
-                        onChange={(next) => patch({ mcpTools: next })}
-                      />
-                    </div>
-                  </div>
-            </Section>
-
-            <Section meta={metaOf("skills")}>
-                  <div className="cw-form">
-                    <SkillsSourceTabs
-                      selected={selectedSkills}
-                      onChange={(next) => patch({ selectedSkills: next })}
-                      cloudProvider={cloudProvider}
-                    />
-                  </div>
-            </Section>
-
-            <Section meta={metaOf("knowledge")}>
-                  <div className="cw-form cw-toggle-stack">
-                    <Toggle
-                      checked={node.knowledgebase}
-                      onChange={(v) => patch({ knowledgebase: v })}
-                      title="知识库"
-                      desc="启用外部知识检索（RAG），让 Agent 基于你的资料作答。"
-                      icon={Database}
-                    />
-                    {node.knowledgebase && (
-                      <div className="cw-field cw-subfield">
-                        <label className="cw-label">知识库后端</label>
-                        <BackendSelect
-                          options={KB_BACKENDS}
-                          value={node.knowledgebaseBackend}
-                          onChange={(id) =>
-                            patch({
-                              knowledgebaseBackend: id,
-                              knowledgebaseIndex:
-                                id === "viking" || id === "openviking"
-                                  ? node.knowledgebaseIndex
-                                  : "",
-                            })
-                          }
-                        />
-                        {(node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND) ===
-                          "viking" && (
-                          <div className="cw-field cw-subfield">
-                            <label className="cw-label">VikingDB 知识库</label>
-                            <VikingKnowledgebaseSelect
-                              value={node.knowledgebaseIndex ?? ""}
-                              onChange={(knowledgebase) => {
-                                patch({
-                                  knowledgebaseIndex: knowledgebase.id,
-                                });
-                                if (knowledgebase.projectName) {
-                                  patchDeploymentEnv(
-                                    "DATABASE_VIKING_PROJECT",
-                                    knowledgebase.projectName,
-                                  );
-                                }
-                                if (knowledgebase.region) {
-                                  patchDeploymentEnv(
-                                    "DATABASE_VIKING_REGION",
-                                    knowledgebase.region,
-                                  );
-                                }
-                                if (knowledgebase.sourceKind) {
-                                  patchDeploymentEnv(
-                                    "DATABASE_VIKING_COLLECTION_KIND",
-                                    knowledgebase.sourceKind,
-                                  );
-                                }
-                                patchDeploymentEnv(
-                                  "DATABASE_VIKING_RESOURCE_ID",
-                                  knowledgebase.resourceId ?? "",
-                                );
-                              }}
-                            />
-                          </div>
-                        )}
-                        <RuntimeEnvFields
-                          env={
-                            KB_BACKENDS.find(
-                                    (item) =>
-                                      item.id ===
-                                      (node.knowledgebaseBackend ??
-                                        DEFAULT_KB_BACKEND),
-                            )?.env ?? []
-                          }
-                          values={draft.deployment?.envValues ?? {}}
-                          onChange={patchDeploymentEnv}
-                          renderAfterField={
-                            (node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND) ===
-                            "openviking"
-                              ? (item) =>
-                                  item.key === "DATABASE_OPENVIKING_USER_ID" ? (
-                                    <OpenVikingKnowledgeIndexField
-                                      value={node.knowledgebaseIndex ?? ""}
-                                      onChange={(knowledgebaseIndex) =>
-                                        patch({ knowledgebaseIndex })
+                            )}
+                        </Section>
+                        <Section meta={metaOf("basic")}>
+                          <div className="cw-form">
+                            {!a2a && (
+                              <>
+                                <div className="cw-field">
+                                  <label className="cw-label">
+                                    {isRootAgent ? "Agent 名称" : "名称"}
+                                    <span className="cw-req">*</span>
+                                  </label>
+                                  <input
+                                    className={`cw-input ${invalidClass(nameInvalid)}`}
+                                    value={node.name}
+                                    placeholder="assistant"
+                                    onChange={(e) =>
+                                      patch({ name: e.target.value })
+                                    }
+                                  />
+                                  {showErrors && nameProblem ? (
+                                    <span className="cw-error-text">
+                                      {nameProblem}
+                                    </span>
+                                  ) : (
+                                    <span className="cw-help">
+                                      遵循 Google ADK
+                                      命名规则，且在执行流程中保持唯一。
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="cw-field">
+                                  <label className="cw-label">
+                                    {isRootAgent ? "描述" : "智能体描述"}
+                                    <span className="cw-req">*</span>
+                                  </label>
+                                  <textarea
+                                    className={`cw-textarea cw-textarea-sm ${invalidClass(
+                                      descriptionMissing,
+                                    )}`}
+                                    value={node.description}
+                                    placeholder="简要描述这个 Agent 的用途，便于团队识别…"
+                                    onChange={(e) =>
+                                      patch({ description: e.target.value })
+                                    }
+                                  />
+                                  {showErrors && descriptionMissing ? (
+                                    <span className="cw-error-text">
+                                      描述为必填项
+                                    </span>
+                                  ) : (
+                                    <span className="cw-help">
+                                      {isRootAgent
+                                        ? "完整描述会保留；部署时会自动整理为符合 Runtime 规范的单行描述。"
+                                        : "描述会显示在 Agent 列表与选择器中。"}
+                                    </span>
+                                  )}
+                                </div>
+                              </>
+                            )}
+                            {orchestrator ? (
+                              <>
+                                <p className="cw-section-desc cw-dependency-hint">
+                                  这是一个协作容器，本身不生成回答。请在左侧画布中
+                                  添加任务步骤，并通过拖拽调整它们的位置。
+                                </p>
+                                {node.agentType === "loop" && (
+                                  <div className="cw-field">
+                                    <label className="cw-label">最大轮次</label>
+                                    <input
+                                      className="cw-input"
+                                      type="number"
+                                      min={1}
+                                      value={node.maxIterations ?? 3}
+                                      onChange={(e) =>
+                                        patch({
+                                          maxIterations: Math.max(
+                                            1,
+                                            Number(e.target.value) || 1,
+                                          ),
+                                        })
                                       }
                                     />
-                                  ) : null
-                              : undefined
-                          }
-                        />
+                                    <span className="cw-help">
+                                      循环编排反复执行子
+                                      Agent，直到满足条件或达到该轮次上限。
+                                    </span>
+                                  </div>
+                                )}
+                              </>
+                            ) : a2a ? (
+                              <div className="cw-field cw-remote-center-fields">
+                                <div className="cw-remote-center-head">
+                                  <div className="cw-label">
+                                    AgentKit 智能体中心
+                                    <span className="cw-req">*</span>
+                                  </div>
+                                  <p className="cw-help cw-remote-center-description">
+                                    远程 Agent 的名称、描述和能力来自中心返回的
+                                    Agent Card。
+                                    系统会根据每轮任务动态发现并挂载匹配的
+                                    Agent。
+                                  </p>
+                                </div>
+                                <A2aSpaceSelect
+                                  value={
+                                    node.a2aRegistry?.registrySpaceId ?? ""
+                                  }
+                                  region={
+                                    node.a2aRegistry?.registryRegion ||
+                                    A2A_REGISTRY_DEFAULTS.region
+                                  }
+                                  invalid={
+                                    showErrors && a2aRegistrySpaceMissing
+                                  }
+                                  onChange={(spaceId) =>
+                                    patchA2aRegistryEnv(
+                                      A2A_REGISTRY_SPACE_ENV_KEY,
+                                      spaceId,
+                                    )
+                                  }
+                                />
+                                <button
+                                  type="button"
+                                  className="cw-more-options"
+                                  aria-expanded={a2aRegistryAdvancedOpen}
+                                  aria-controls={a2aRegistryAdvancedId}
+                                  onClick={() =>
+                                    setA2aRegistryAdvancedOpen((open) => !open)
+                                  }
+                                >
+                                  <span>更多选项</span>
+                                  <ChevronRight
+                                    className={`cw-more-options-chevron ${
+                                      a2aRegistryAdvancedOpen ? "is-open" : ""
+                                    }`}
+                                    aria-hidden
+                                  />
+                                </button>
+                                <AnimatePresence initial={false}>
+                                  {a2aRegistryAdvancedOpen && (
+                                    <motion.div
+                                      id={a2aRegistryAdvancedId}
+                                      className="cw-model-advanced"
+                                      initial={{ height: 0, opacity: 0 }}
+                                      animate={{ height: "auto", opacity: 1 }}
+                                      exit={{ height: 0, opacity: 0 }}
+                                      transition={{
+                                        duration: 0.18,
+                                        ease: "easeOut",
+                                      }}
+                                    >
+                                      <RuntimeEnvFields
+                                        env={A2A_REGISTRY_RUNTIME_ENV}
+                                        values={a2aRegistryEnvValues(
+                                          node.a2aRegistry,
+                                          { includeDefaults: false },
+                                        )}
+                                        onChange={patchA2aRegistryEnv}
+                                      />
+                                    </motion.div>
+                                  )}
+                                </AnimatePresence>
+                                {showErrors && a2aRegistrySpaceMissing && (
+                                  <span className="cw-error-text">
+                                    请选择 AgentKit 智能体中心
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="cw-field">
+                                <label className="cw-label">
+                                  系统提示词<span className="cw-req">*</span>
+                                </label>
+                                <Suspense
+                                  fallback={
+                                    <div
+                                      className="cw-markdown-loading"
+                                      role="status"
+                                    >
+                                      正在加载 Markdown 编辑器…
+                                    </div>
+                                  }
+                                >
+                                  <MarkdownPromptEditor
+                                    value={node.instruction}
+                                    invalid={instructionMissing}
+                                    onChange={(instruction) =>
+                                      patch({ instruction })
+                                    }
+                                  />
+                                </Suspense>
+                                {showErrors && instructionMissing ? (
+                                  <span className="cw-error-text">
+                                    系统提示词为必填项
+                                  </span>
+                                ) : (
+                                  <span className="cw-help">
+                                    支持 Markdown 快捷输入，例如键入 ##
+                                    加空格创建二级标题。
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </Section>
+
+                        {/* Every LLM agent gets model, tools, skills, and knowledge.
+                Root LLM agents additionally own memory and tracing. */}
+                        {!orchestrator && !a2a && (
+                          <>
+                            <Section meta={metaOf("model")}>
+                              <div className="cw-form">
+                                <div className="cw-field cw-model-source-field">
+                                  <label className="cw-label">模型来源</label>
+                                  <RadioGroup<ModelSource | "gateway">
+                                    className="cw-model-source-options"
+                                    aria-label="模型来源"
+                                    value={modelSource}
+                                    onChange={(source) => {
+                                      if (source !== "gateway")
+                                        selectModelSource(source);
+                                    }}
+                                  >
+                                    {[
+                                      {
+                                        value: "ark" as const,
+                                        label:
+                                          cloudProvider === "byteplus"
+                                            ? "BytePlus ModelArk"
+                                            : "火山方舟",
+                                      },
+                                      {
+                                        value: "custom" as const,
+                                        label: "自定义",
+                                      },
+                                      {
+                                        value: "gateway" as const,
+                                        label: "模型网关",
+                                        disabled: true,
+                                      },
+                                    ].map((option) => (
+                                      <div
+                                        key={option.value}
+                                        className={`cw-model-source-option ${
+                                          modelSource === option.value
+                                            ? "is-on"
+                                            : ""
+                                        }${option.disabled ? " is-disabled" : ""}`}
+                                      >
+                                        <RadioGroup.Item
+                                          value={option.value}
+                                          disabled={option.disabled}
+                                          block
+                                          className="cw-model-source-control"
+                                        >
+                                          <span>{option.label}</span>
+                                          {option.disabled && (
+                                            <span className="cw-model-source-coming-soon">
+                                              待上线
+                                            </span>
+                                          )}
+                                        </RadioGroup.Item>
+                                      </div>
+                                    ))}
+                                  </RadioGroup>
+                                </div>
+                                {modelSource === "ark" ? (
+                                  <div className="cw-field">
+                                    <label className="cw-label">模型配置</label>
+                                    <ModelOptionSelect
+                                      value={node.modelName ?? ""}
+                                      cloudProvider={cloudProvider}
+                                      apiKeyId={draft.deployment?.modelApiKeyId}
+                                      apiKeyName={draft.deployment?.modelApiKeyName}
+                                      onApiKeyChange={(key) =>
+                                        setDraft((current) => ({
+                                          ...current,
+                                          deployment: {
+                                            ...(current.deployment ?? {
+                                              feishuEnabled: false,
+                                            }),
+                                            modelApiKeyId: key.id,
+                                            modelApiKeyName: key.name,
+                                          },
+                                        }))
+                                      }
+                                      onChange={(modelName) =>
+                                        patch({ modelName })
+                                      }
+                                    />
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div className="cw-field">
+                                      <label className="cw-label">
+                                        模型名称
+                                      </label>
+                                      <input
+                                        className="cw-input"
+                                        value={node.modelName ?? ""}
+                                        onChange={(e) =>
+                                          patch({ modelName: e.target.value })
+                                        }
+                                      />
+                                    </div>
+                                    <div className="cw-field">
+                                      <label className="cw-label cw-label-with-link">
+                                        <span>服务商 Provider</span>
+                                        <a
+                                          href="https://docs.litellm.ai/docs/providers"
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          onClick={(event) =>
+                                            event.stopPropagation()
+                                          }
+                                        >
+                                          LiteLLM 支持列表
+                                          <ExternalLink aria-hidden="true" />
+                                        </a>
+                                      </label>
+                                      <input
+                                        className="cw-input"
+                                        value={node.modelProvider ?? ""}
+                                        placeholder="openai"
+                                        onChange={(e) =>
+                                          patch({
+                                            modelProvider: e.target.value,
+                                          })
+                                        }
+                                      />
+                                    </div>
+                                    <div className="cw-field">
+                                      <label className="cw-label">
+                                        API Base
+                                      </label>
+                                      <input
+                                        className="cw-input"
+                                        value={node.modelApiBase ?? ""}
+                                        placeholder={defaultModelApiBase(
+                                          cloudProvider,
+                                        )}
+                                        onChange={(e) =>
+                                          patch({
+                                            modelApiBase: e.target.value,
+                                          })
+                                        }
+                                      />
+                                    </div>
+                                    <div className="cw-field">
+                                      <label className="cw-label">
+                                        API Key
+                                      </label>
+                                      <input
+                                        className="cw-input"
+                                        type="password"
+                                        value={
+                                          selectedCustomModelCredential
+                                            ? (customModelSecretValues[
+                                                selectedCustomModelCredential
+                                                  .key
+                                              ] ?? "")
+                                            : ""
+                                        }
+                                        placeholder="请输入模型 API Key"
+                                        autoComplete="new-password"
+                                        onChange={(event) => {
+                                          if (!selectedCustomModelCredential)
+                                            return;
+                                          const value =
+                                            event.currentTarget.value;
+                                          setCustomModelSecretValues(
+                                            (current) => ({
+                                              ...current,
+                                              [selectedCustomModelCredential.key]:
+                                                value,
+                                            }),
+                                          );
+                                        }}
+                                      />
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            </Section>
+
+                            <Section meta={metaOf("tools")}>
+                              <div className="cw-form">
+                                <div className="cw-field">
+                                  <label className="cw-label">内置工具</label>
+                                  <span className="cw-help">
+                                    勾选 VeADK 提供的内置能力，生成时会自动补全
+                                    import 与所需环境变量。
+                                  </span>
+                                  <div className="cw-tools-list-shell">
+                                    <Checklist
+                                      items={createBuiltinTools}
+                                      selected={builtinTools}
+                                      onToggle={toggleBuiltin}
+                                      scrollRows={6}
+                                    />
+                                  </div>
+                                  <AnimatePresence initial={false}>
+                                    {builtinTools.includes("run_code") && (
+                                      <motion.div
+                                        className="cw-tool-config"
+                                        initial={{ opacity: 0, y: -4 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: -4 }}
+                                        transition={{
+                                          duration: 0.16,
+                                          ease: "easeOut",
+                                        }}
+                                      >
+                                        <div className="cw-tool-config-head">
+                                          <span className="cw-label">
+                                            代码执行配置
+                                          </span>
+                                          <span className="cw-help">
+                                            指定 AgentKit 代码执行沙箱。
+                                          </span>
+                                        </div>
+                                        <RuntimeEnvFields
+                                          env={
+                                            BUILTIN_TOOLS.find(
+                                              (item) => item.id === "run_code",
+                                            )?.env ?? []
+                                          }
+                                          values={
+                                            draft.deployment?.envValues ?? {}
+                                          }
+                                          onChange={patchDeploymentEnv}
+                                        />
+                                      </motion.div>
+                                    )}
+                                  </AnimatePresence>
+                                </div>
+                                <div className="cw-field cw-mcp-field">
+                                  <label className="cw-label">MCP 工具</label>
+                                  <McpToolEditor
+                                    tools={mcpTools}
+                                    onChange={(next) =>
+                                      patch({ mcpTools: next })
+                                    }
+                                  />
+                                </div>
+                              </div>
+                            </Section>
+
+                            <Section meta={metaOf("skills")}>
+                              <div className="cw-form">
+                                <SkillsSourceTabs
+                                  selected={selectedSkills}
+                                  onChange={(next) =>
+                                    patch({ selectedSkills: next })
+                                  }
+                                  cloudProvider={cloudProvider}
+                                />
+                              </div>
+                            </Section>
+
+                            <Section meta={metaOf("knowledge")}>
+                              <div className="cw-form cw-toggle-stack">
+                                <Toggle
+                                  checked={node.knowledgebase}
+                                  onChange={(v) => patch({ knowledgebase: v })}
+                                  title="知识库"
+                                  desc="启用外部知识检索（RAG），让 Agent 基于你的资料作答。"
+                                  icon={Database}
+                                />
+                                {node.knowledgebase && (
+                                  <div className="cw-field cw-subfield">
+                                    <label className="cw-label">
+                                      知识库后端
+                                    </label>
+                                    <BackendSelect
+                                      options={KB_BACKENDS}
+                                      value={node.knowledgebaseBackend}
+                                      onChange={(id) =>
+                                        patch({
+                                          knowledgebaseBackend: id,
+                                          knowledgebaseIndex:
+                                            id === "viking" ||
+                                            id === "openviking"
+                                              ? node.knowledgebaseIndex
+                                              : "",
+                                        })
+                                      }
+                                    />
+                                    {(node.knowledgebaseBackend ??
+                                      DEFAULT_KB_BACKEND) === "viking" && (
+                                      <div className="cw-field cw-subfield">
+                                        <label className="cw-label">
+                                          VikingDB 知识库
+                                        </label>
+                                        <VikingKnowledgebaseSelect
+                                          value={node.knowledgebaseIndex ?? ""}
+                                          onChange={(knowledgebase) => {
+                                            patch({
+                                              knowledgebaseIndex:
+                                                knowledgebase.id,
+                                            });
+                                            if (knowledgebase.projectName) {
+                                              patchDeploymentEnv(
+                                                "DATABASE_VIKING_PROJECT",
+                                                knowledgebase.projectName,
+                                              );
+                                            }
+                                            if (knowledgebase.region) {
+                                              patchDeploymentEnv(
+                                                "DATABASE_VIKING_REGION",
+                                                knowledgebase.region,
+                                              );
+                                            }
+                                            if (knowledgebase.sourceKind) {
+                                              patchDeploymentEnv(
+                                                "DATABASE_VIKING_COLLECTION_KIND",
+                                                knowledgebase.sourceKind,
+                                              );
+                                            }
+                                            patchDeploymentEnv(
+                                              "DATABASE_VIKING_RESOURCE_ID",
+                                              knowledgebase.resourceId ?? "",
+                                            );
+                                          }}
+                                        />
+                                      </div>
+                                    )}
+                                    <RuntimeEnvFields
+                                      env={
+                                        KB_BACKENDS.find(
+                                          (item) =>
+                                            item.id ===
+                                            (node.knowledgebaseBackend ??
+                                              DEFAULT_KB_BACKEND),
+                                        )?.env ?? []
+                                      }
+                                      values={draft.deployment?.envValues ?? {}}
+                                      onChange={patchDeploymentEnv}
+                                      renderAfterField={
+                                        (node.knowledgebaseBackend ??
+                                          DEFAULT_KB_BACKEND) === "openviking"
+                                          ? (item) =>
+                                              item.key ===
+                                              "DATABASE_OPENVIKING_USER_ID" ? (
+                                                <OpenVikingKnowledgeIndexField
+                                                  value={
+                                                    node.knowledgebaseIndex ??
+                                                    ""
+                                                  }
+                                                  onChange={(
+                                                    knowledgebaseIndex,
+                                                  ) =>
+                                                    patch({
+                                                      knowledgebaseIndex,
+                                                    })
+                                                  }
+                                                />
+                                              ) : null
+                                          : undefined
+                                      }
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            </Section>
+
+                            {isRootAgent && (
+                              <Section meta={metaOf("memory")}>
+                                <div className="cw-form cw-toggle-stack">
+                                  <Toggle
+                                    checked={node.memory.shortTerm}
+                                    onChange={(v) =>
+                                      patch({
+                                        memory: {
+                                          ...node.memory,
+                                          shortTerm: v,
+                                        },
+                                      })
+                                    }
+                                    title="短期记忆"
+                                    desc="在单次会话内保留上下文，跨轮次记住对话内容。"
+                                    icon={Layers}
+                                  />
+                                  {node.memory.shortTerm && (
+                                    <div className="cw-field cw-subfield">
+                                      <label className="cw-label">
+                                        短期记忆后端
+                                      </label>
+                                      <BackendSelect
+                                        options={STM_BACKENDS}
+                                        value={node.shortTermBackend}
+                                        onChange={(id) =>
+                                          patch({ shortTermBackend: id })
+                                        }
+                                      />
+                                      <RuntimeEnvFields
+                                        env={
+                                          STM_BACKENDS.find(
+                                            (item) =>
+                                              item.id ===
+                                              (node.shortTermBackend ??
+                                                "local"),
+                                          )?.env ?? []
+                                        }
+                                        values={
+                                          draft.deployment?.envValues ?? {}
+                                        }
+                                        onChange={patchDeploymentEnv}
+                                      />
+                                    </div>
+                                  )}
+                                  <Toggle
+                                    checked={node.memory.longTerm}
+                                    onChange={(v) =>
+                                      patch({
+                                        memory: {
+                                          ...node.memory,
+                                          longTerm: v,
+                                        },
+                                      })
+                                    }
+                                    title="长期记忆"
+                                    desc="跨会话持久化关键信息，让 Agent 记住历史偏好。"
+                                    icon={Database}
+                                  />
+                                  {node.memory.longTerm && (
+                                    <div className="cw-field cw-subfield">
+                                      <label className="cw-label">
+                                        长期记忆后端
+                                      </label>
+                                      <BackendSelect
+                                        options={LTM_BACKENDS}
+                                        value={node.longTermBackend}
+                                        onChange={(id) =>
+                                          patch({ longTermBackend: id })
+                                        }
+                                      />
+                                      <RuntimeEnvFields
+                                        env={
+                                          LTM_BACKENDS.find(
+                                            (item) =>
+                                              item.id ===
+                                              (node.longTermBackend ?? "local"),
+                                          )?.env ?? []
+                                        }
+                                        values={
+                                          draft.deployment?.envValues ?? {}
+                                        }
+                                        onChange={patchDeploymentEnv}
+                                      />
+                                      <Toggle
+                                        checked={!!node.autoSaveSession}
+                                        onChange={(v) =>
+                                          patch({ autoSaveSession: v })
+                                        }
+                                        title="自动保存会话到长期记忆"
+                                        desc="会话结束时自动把内容写入长期记忆，无需手动调用。"
+                                        icon={Database}
+                                      />
+                                    </div>
+                                  )}
+                                </div>
+                              </Section>
+                            )}
+                          </>
+                        )}
                       </div>
-                    )}
+                    </div>
+                    {/* cw-lower */}
                   </div>
-            </Section>
-
-            {isRootAgent && (
-              <Section meta={metaOf("memory")}>
-                      <div className="cw-form cw-toggle-stack">
-                        <Toggle
-                          checked={node.memory.shortTerm}
-                          onChange={(v) =>
-                                        patch({
-                                          memory: {
-                                            ...node.memory,
-                                            shortTerm: v,
-                                          },
-                                        })
-                          }
-                          title="短期记忆"
-                          desc="在单次会话内保留上下文，跨轮次记住对话内容。"
-                          icon={Layers}
-                        />
-                        {node.memory.shortTerm && (
-                          <div className="cw-field cw-subfield">
-                                        <label className="cw-label">
-                                          短期记忆后端
-                                        </label>
-                            <BackendSelect
-                              options={STM_BACKENDS}
-                              value={node.shortTermBackend}
-                                          onChange={(id) =>
-                                            patch({ shortTermBackend: id })
-                                          }
-                            />
-                            <RuntimeEnvFields
-                              env={
-                                STM_BACKENDS.find(
-                                  (item) =>
-                                                item.id ===
-                                                (node.shortTermBackend ??
-                                                  "local"),
-                                )?.env ?? []
-                              }
-                                          values={
-                                            draft.deployment?.envValues ?? {}
-                                          }
-                              onChange={patchDeploymentEnv}
-                            />
-                          </div>
-                        )}
-                        <Toggle
-                          checked={node.memory.longTerm}
-                          onChange={(v) =>
-                                        patch({
-                                          memory: {
-                                            ...node.memory,
-                                            longTerm: v,
-                                          },
-                                        })
-                          }
-                          title="长期记忆"
-                          desc="跨会话持久化关键信息，让 Agent 记住历史偏好。"
-                          icon={Database}
-                        />
-                        {node.memory.longTerm && (
-                          <div className="cw-field cw-subfield">
-                                        <label className="cw-label">
-                                          长期记忆后端
-                                        </label>
-                            <BackendSelect
-                              options={LTM_BACKENDS}
-                              value={node.longTermBackend}
-                                          onChange={(id) =>
-                                            patch({ longTermBackend: id })
-                                          }
-                            />
-                            <RuntimeEnvFields
-                              env={
-                                LTM_BACKENDS.find(
-                                  (item) =>
-                                                item.id ===
-                                                (node.longTermBackend ??
-                                                  "local"),
-                                )?.env ?? []
-                              }
-                                          values={
-                                            draft.deployment?.envValues ?? {}
-                                          }
-                              onChange={patchDeploymentEnv}
-                            />
-                            <Toggle
-                              checked={!!node.autoSaveSession}
-                                          onChange={(v) =>
-                                            patch({ autoSaveSession: v })
-                                          }
-                              title="自动保存会话到长期记忆"
-                              desc="会话结束时自动把内容写入长期记忆，无需手动调用。"
-                              icon={Database}
-                            />
-                          </div>
-                        )}
-                      </div>
-              </Section>
-            )}
-              </>
-            )}
-          </div>
-
+                  {/* cw-detail-inner */}
+                </div>
+                {/* cw-detail-scroll */}
               </div>
-              {/* cw-lower */}
+              {/* cw-detail */}
             </div>
-            {/* cw-detail-inner */}
           </div>
-          {/* cw-detail-scroll */}
-        </div>
-        {/* cw-detail */}
-        </div>
-        </div>
-      )}
+        )}
 
-      {workspaceMode === "validate" && (
-        <div className="cw-validation-workspace">
-          <div className="cw-validation-content">
-            <DebugComparisonWorkspace
-              enabled={debugEnabled}
-              disabledReason={debugDisabledReason}
-              variants={debugVariants}
-              draftSnapshot={currentDebugSnapshot}
-              input={debugInput}
-              onInput={setDebugInput}
-              onSend={sendDebugMessage}
-              onStartVariant={startDebugVariant}
-              onDeployVariant={(id) => void openPublishPreview(id)}
-              onAddVariant={addDebugVariant}
-              onRemoveVariant={removeDebugVariant}
-              onToggleConfig={(id) => {
-                const variant = debugVariants.find((item) => item.id === id);
-                if (variant) patchDebugVariant(id, { configOpen: !variant.configOpen });
-              }}
-              onCompleteConfig={completeDebugVariantConfig}
-              onConfigChange={updateDebugVariantConfig}
-              onOpenTrace={openDebugTrace}
-            />
-          </div>
-        </div>
-      )}
-
-      {workspaceMode === "publish" && (
-        <div className="cw-preview-body">
-          {project ? (
-            <ProjectPreview
-              embedded
-              cloudProvider={cloudProvider}
-              project={project}
-              agentDraft={draft}
-              agentName={draft.name || "未命名 Agent"}
-              agentCount={countDraftAgents(draft)}
-              releaseConfiguration={
-                selectedDebugVariant
-                  ? {
-                      modelName:
-                        selectedDebugVariant.modelName ||
-                        draft.modelName ||
-                        "默认模型",
-                      description: selectedDebugVariant.description,
-                      instruction: selectedDebugVariant.instruction,
-                      optimizations: selectedDebugVariant.optimizations.flatMap(
-                        (id) => {
-                          const option = DEBUG_OPTIMIZATIONS.find(
-                            (item) => item.id === id,
-                          );
-                          return option ? [option.label] : [];
-                        },
-                      ),
-                    }
-                  : undefined
-              }
-              onChange={setProject}
-              onDeploy={handleDeploy}
-              onAgentAdded={onAgentAdded}
-              onDeploymentTaskChange={onDeploymentTaskChange}
-              deploymentActionLabel={deploymentTarget ? "更新并发布" : "部署"}
-              deploymentActionTargetId="cw-publish-primary-action"
-              deploymentRuntimeId={deploymentTarget?.runtimeId}
-              onDeploymentStarted={onDeploymentStarted}
-              onDeploymentComplete={onDeploymentComplete}
-              feishuEnabled={!!draft.deployment?.feishuEnabled}
-              onFeishuEnabledChange={(feishuEnabled) => {
-                const nextDraft: AgentDraft = {
-                  ...draft,
-                  deployment: {
-                    ...(draft.deployment ?? { feishuEnabled: false }),
-                    feishuEnabled,
-                  },
-                };
-                setDraft(nextDraft);
-              }}
-              deploymentEnv={deploymentEnv.specs}
-              requiredSecretEnv={customModelCredentials}
-              deploymentEnvValues={{
-                ...providerDraft.deployment?.envValues,
-                ...deploymentEnv.fixedValues,
-              }}
-              onDeploymentEnvChange={patchDeploymentEnv}
-              network={draft.deployment?.network}
-              onNetworkChange={(network) =>
-                setDraft((current) => ({
-                  ...current,
-                  deployment: {
-                    ...(current.deployment ?? { feishuEnabled: false }),
-                    network,
-                  },
-                }))
-              }
-              deployRegion={deployRegion}
-              onDeployRegionChange={setDeployRegion}
-              deploymentTelemetry={{
-                source: "scratch",
-                createMode,
-                aiAssisted: usedAiGeneration,
-              }}
-              onExportYaml={() =>
-                downloadText(
-                  `${providerDraft.name || "agent"}.yaml`,
-                  draftToYaml(providerDraft),
-                  "text/yaml",
-                )
-              }
-            />
-          ) : (
-            <div className="cw-publish-loading" role="status">
-              <Loader2 className="cw-i cw-spin" />
-              <strong>正在生成发布配置</strong>
-              <span>校验 Agent 结构并准备部署快照…</span>
+        {workspaceMode === "validate" && (
+          <div className="cw-validation-workspace">
+            <div className="cw-validation-content">
+              <DebugComparisonWorkspace
+                enabled={debugEnabled}
+                disabledReason={debugDisabledReason}
+                variants={debugVariants}
+                draftSnapshot={currentDebugSnapshot}
+                input={debugInput}
+                onInput={setDebugInput}
+                onSend={sendDebugMessage}
+                onStartVariant={startDebugVariant}
+                onDeployVariant={(id) => void openPublishPreview(id)}
+                onAddVariant={addDebugVariant}
+                onRemoveVariant={removeDebugVariant}
+                onToggleConfig={(id) => {
+                  const variant = debugVariants.find((item) => item.id === id);
+                  if (variant)
+                    patchDebugVariant(id, { configOpen: !variant.configOpen });
+                }}
+                onCompleteConfig={completeDebugVariantConfig}
+                onConfigChange={updateDebugVariantConfig}
+                onOpenTrace={openDebugTrace}
+              />
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        )}
+
+        {workspaceMode === "publish" && (
+          <div className="cw-preview-body">
+            {project ? (
+              <ProjectPreview
+                embedded
+                cloudProvider={cloudProvider}
+                project={project}
+                agentDraft={draft}
+                agentName={draft.name || "未命名 Agent"}
+                agentCount={countDraftAgents(draft)}
+                releaseConfiguration={
+                  selectedDebugVariant
+                    ? {
+                        modelName:
+                          selectedDebugVariant.modelName ||
+                          draft.modelName ||
+                          "默认模型",
+                        description: selectedDebugVariant.description,
+                        instruction: selectedDebugVariant.instruction,
+                        optimizations:
+                          selectedDebugVariant.optimizations.flatMap((id) => {
+                            const option = DEBUG_OPTIMIZATIONS.find(
+                              (item) => item.id === id,
+                            );
+                            return option ? [option.label] : [];
+                          }),
+                      }
+                    : undefined
+                }
+                onChange={setProject}
+                onDeploy={handleDeploy}
+                onAgentAdded={onAgentAdded}
+                onDeploymentTaskChange={onDeploymentTaskChange}
+                deploymentActionLabel={deploymentTarget ? "更新并发布" : "部署"}
+                deploymentActionTargetId="cw-publish-primary-action"
+                deploymentRuntimeId={deploymentTarget?.runtimeId}
+                deploymentRuntimeName={deploymentRuntimeName}
+                onDeploymentRuntimeNameChange={(runtimeName) =>
+                  setDraft((current) => ({
+                    ...current,
+                    deployment: {
+                      ...(current.deployment ?? { feishuEnabled: false }),
+                      runtimeName,
+                      runtimeNameCustomized: true,
+                    },
+                  }))
+                }
+                onDeploymentStarted={onDeploymentStarted}
+                onDeploymentComplete={onDeploymentComplete}
+                feishuEnabled={!!draft.deployment?.feishuEnabled}
+                onFeishuEnabledChange={(feishuEnabled) => {
+                  const nextDraft: AgentDraft = {
+                    ...draft,
+                    deployment: {
+                      ...(draft.deployment ?? { feishuEnabled: false }),
+                      feishuEnabled,
+                    },
+                  };
+                  setDraft(nextDraft);
+                }}
+                deploymentEnv={deploymentEnv.specs}
+                requiredSecretEnv={customModelCredentials}
+                requiredSecretEnvValues={customModelSecretValues}
+                onRequiredSecretEnvChange={(key, value) =>
+                  setCustomModelSecretValues((current) => ({
+                    ...current,
+                    [key]: value,
+                  }))
+                }
+                deploymentEnvValues={{
+                  ...providerDraft.deployment?.envValues,
+                  ...customModelSecretValues,
+                  ...deploymentEnv.fixedValues,
+                }}
+                onDeploymentEnvChange={patchDeploymentEnv}
+                network={draft.deployment?.network}
+                onNetworkChange={(network) =>
+                  setDraft((current) => ({
+                    ...current,
+                    deployment: {
+                      ...(current.deployment ?? { feishuEnabled: false }),
+                      network,
+                    },
+                  }))
+                }
+                deployRegion={deployRegion}
+                onDeployRegionChange={setDeployRegion}
+                deploymentTelemetry={{
+                  source: "scratch",
+                  createMode,
+                  aiAssisted: usedAiGeneration,
+                }}
+                onExportYaml={() =>
+                  downloadText(
+                    `${providerDraft.name || "agent"}.yaml`,
+                    draftToYaml(providerDraft),
+                    "text/yaml",
+                  )
+                }
+              />
+            ) : (
+              <div className="cw-publish-loading" role="status">
+                <Loader2 className="cw-i cw-spin" />
+                <strong>正在生成发布配置</strong>
+                <span>校验 Agent 结构并准备部署快照…</span>
+              </div>
+            )}
+          </div>
+        )}
       </main>
       <WorkspaceLifecycleFooter
         mode={workspaceMode}
@@ -4479,10 +5372,7 @@ export function CustomCreate({
             <div className="confirm-title" id="ai-generate-error-title">
               智能生成失败
             </div>
-            <div
-              className="cw-ai-error-message"
-              id="ai-generate-error-message"
-            >
+            <div className="cw-ai-error-message" id="ai-generate-error-message">
               {aiErrorDialog}
             </div>
             <div className="confirm-actions">

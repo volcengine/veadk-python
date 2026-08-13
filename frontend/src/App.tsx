@@ -128,6 +128,10 @@ import { WorkflowCreate } from "./create/WorkflowCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
 import type { AgentDraft } from "./create/types";
 import {
+  hydrateRuntimeModelSelection,
+  isRuntimeModelSelectionEnv,
+} from "./create/modelSource";
+import {
   loadWorkspaceDrafts,
   workspaceDraftsKey,
   writeWorkspaceDrafts,
@@ -2023,10 +2027,10 @@ export default function App() {
       const fallbackRegion = runtimeUpdateTarget?.region ?? newRuntimeRegion;
       const agentId = await connectRuntime(
         result.runtimeId,
-        result.agentName,
+        result.runtimeName,
         result.region ?? fallbackRegion,
         result.version,
-        { waitForReady: true },
+        { waitForReady: true, agentName: result.agentName },
       );
       setConnections(loadConnections());
       setAgentInfoRefreshKey((key) => key + 1);
@@ -5390,19 +5394,29 @@ export default function App() {
                     return;
                   }
                   const runtimeEnvValues = Object.fromEntries(
-                    capability.runtime.envs.map(({ key, value }) => [key, value]),
+                    capability.runtime.envs
+                      .filter(({ key }) => !isRuntimeModelSelectionEnv(key))
+                      .map(({ key, value }) => [key, value]),
                   );
-                  const hydratedDraft: AgentDraft = {
-                    ...nextDraft,
-                    deployment: {
-                      ...(nextDraft.deployment ?? { feishuEnabled: false }),
-                      network: capability.runtime.network,
-                      envValues: {
-                        ...runtimeEnvValues,
-                        ...(nextDraft.deployment?.envValues ?? {}),
+                  const draftEnvValues = Object.fromEntries(
+                    Object.entries(nextDraft.deployment?.envValues ?? {}).filter(
+                      ([key]) => !isRuntimeModelSelectionEnv(key),
+                    ),
+                  );
+                  const hydratedDraft = hydrateRuntimeModelSelection(
+                    {
+                      ...nextDraft,
+                      deployment: {
+                        ...(nextDraft.deployment ?? { feishuEnabled: false }),
+                        network: capability.runtime.network,
+                        envValues: {
+                          ...runtimeEnvValues,
+                          ...draftEnvValues,
+                        },
                       },
                     },
-                  };
+                    capability.runtime.envs,
+                  );
                   setManageAgents(false);
                   setImportedDraft(hydratedDraft);
                   setCustomCreateMode("custom");

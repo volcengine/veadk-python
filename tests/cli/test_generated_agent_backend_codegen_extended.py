@@ -77,10 +77,10 @@ _MINIMAL_FRONTEND_GOLDEN = {
 _FULL_FRONTEND_GOLDEN = {
     "app.py": "56183a125e505c543294356fc9c7662a5eedb3b8661070f6be1df9b579e35ed4",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
-    "agents/full_agent/agent.py": "7cdba9abb0ba50bc8a3471b785d935f9c2b48e34aa426d2036a3772b9a449d5a",
+    "agents/full_agent/agent.py": "35560cfa5ea93955244482d727c8f8369599fa5b9560ba1f3804df7273e245ce",
     "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/full_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
-    ".env.example": "58c8b3da90b8cbe71edf6825e4e92cc870bcc45e0761c9d2156bb7d9c326c6ba",
+    ".env.example": "2bfd3afda4e661fbb71588ec5f0d584ce6682363cacc81b0394f8da09f7977e8",
     "requirements.txt": "4a941e1bf7efb43d57f608649ac238f2e5ea833f9e0aae92f8bc3fef67b8874e",
     "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
 }

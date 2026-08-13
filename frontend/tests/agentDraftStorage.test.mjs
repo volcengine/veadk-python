@@ -130,6 +130,67 @@ test("writes a versioned user-scoped payload with runtime environment values", (
   });
 });
 
+test("never persists server-managed Ark API key values while retaining selection metadata", () => {
+  const leakedValue = "raw-ark-secret-must-not-enter-local-storage";
+  const storage = memoryStorage();
+  const draftWithLegacySecrets = draft({
+    deployment: {
+      feishuEnabled: false,
+      modelApiKeyId: "ark-key-id",
+      modelApiKeyName: "production-key",
+      envValues: {
+        MODEL_AGENT_API_KEY: leakedValue,
+        SAFE_SETTING: "kept",
+      },
+    },
+    subAgents: [
+      draft({
+        name: "child",
+        deployment: {
+          feishuEnabled: false,
+          envValues: { MODEL_AGENT_API_KEY: leakedValue },
+        },
+      }),
+    ],
+    workflow: {
+      type: "sequential",
+      edges: [],
+      nodes: [
+        {
+          id: "workflow-node",
+          agent: draft({
+            name: "workflow_agent",
+            deployment: {
+              feishuEnabled: false,
+              envValues: { MODEL_AGENT_API_KEY: leakedValue },
+            },
+          }),
+        },
+      ],
+    },
+  });
+
+  writeWorkspaceDrafts(storage, "alice", [
+    {
+      id: "draft-with-legacy-secret",
+      updatedAt: 123,
+      draft: draftWithLegacySecrets,
+    },
+  ]);
+
+  const serialized = storage.value(workspaceDraftsKey("alice"));
+  assert.equal(serialized.includes(leakedValue), false);
+  const persisted = JSON.parse(serialized).drafts[0].draft;
+  assert.equal(persisted.deployment.modelApiKeyId, "ark-key-id");
+  assert.equal(persisted.deployment.modelApiKeyName, "production-key");
+  assert.deepEqual(persisted.deployment.envValues, { SAFE_SETTING: "kept" });
+  assert.deepEqual(persisted.subAgents[0].deployment.envValues, {});
+  assert.deepEqual(
+    persisted.workflow.nodes[0].agent.deployment.envValues,
+    {},
+  );
+});
+
 test("loads both legacy arrays and the current versioned payload", () => {
   const key = workspaceDraftsKey("alice");
   const legacyDraft = { id: "legacy", updatedAt: 1, draft: draft() };
