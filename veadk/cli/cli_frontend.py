@@ -1592,7 +1592,7 @@ def _run_frontend_server(
     mount_vibe_task_routes(
         app,
         _vibe_owner,
-        service=VibeTaskService(dev_env=skill_workbench_service),
+        service=VibeTaskService(),
     )
 
     from veadk.cli.frontend_coding_agents import mount_coding_agent_routes
