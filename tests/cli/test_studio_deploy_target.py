@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -28,6 +29,7 @@ from volcenginesdkcore.interceptor.interceptors.build_request_interceptor import
 from volcenginesdkcore.rest import ApiException
 
 from veadk.cli.cli_frontend import (
+    _safe_exception_detail,
     _resolve_or_create_studio_identity_resources,
     _resolve_studio_cloud_credentials,
     _resolve_studio_identity_region,
@@ -614,6 +616,161 @@ def test_studio_deploy_surfaces_redacted_provisioning_error_chain(
 
 
 @pytest.mark.parametrize(
+    ("provider", "access_key_option", "secret_key_option", "token_option"),
+    [
+        (
+            "volcengine",
+            "--volcengine-access-key",
+            "--volcengine-secret-key",
+            "--volcengine-session-token",
+        ),
+        (
+            "byteplus",
+            "--byteplus-access-key",
+            "--byteplus-secret-key",
+            "--byteplus-session-token",
+        ),
+    ],
+    ids=["volcengine", "byteplus"],
+)
+def test_studio_deploy_surfaces_tool_id_from_provisioning_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    access_key_option: str,
+    secret_key_option: str,
+    token_option: str,
+) -> None:
+    failed_tool_id = "tool-failed-4f86b2"
+    access_key = f"ak-{uuid4().hex}"
+    secret_key = f"sk-{uuid4().hex}"
+    session_token = f"token-{uuid4().hex}"
+    environment_prefix = provider.upper()
+    monkeypatch.setenv(f"{environment_prefix}_ACCESS_KEY", access_key)
+    monkeypatch.setenv(f"{environment_prefix}_SECRET_KEY", secret_key)
+    monkeypatch.setenv(f"{environment_prefix}_SESSION_TOKEN", session_token)
+    native_message = "CreateTool rejected by the native cloud service"
+    error_code = "RequestLimitExceeded"
+    status_code = 429
+    request_id = "req-native-tool-123"
+
+    class _NativeToolServiceError(Exception):
+        def __init__(self) -> None:
+            super().__init__(
+                f"{native_message}; access_key={access_key}; "
+                f"secret_key={secret_key}; token={session_token}"
+            )
+            self.error_code = error_code
+            self.status_code = status_code
+            self.request_id = request_id
+
+    class _FakeCloudAgentEngine:
+        def __init__(self, **_: object) -> None:
+            self._vefaas_service = SimpleNamespace()
+
+        def deploy(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                vefaas_endpoint="https://studio.example.com",
+                vefaas_application_id="app-id",
+                vefaas_function_id="",
+            )
+
+    def _fail_after_tool_creation(**_: object) -> str:
+        try:
+            raise _NativeToolServiceError
+        except _NativeToolServiceError as cause:
+            raise RuntimeError(
+                f"AgentKit Tool ID '{failed_tool_id}' creation failed after 3 attempts"
+            ) from cause
+
+    monkeypatch.setattr(
+        "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_studio_identity_region",
+        lambda **kwargs: kwargs["deployment_region"],
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.register_callback_for_user_pool_client",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.configure_user_pool_for_idp_only",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
+        _fail_after_tool_creation,
+    )
+    monkeypatch.setattr("veadk.cli.cli_frontend.sleep", lambda _: None)
+
+    provider_args = [
+        access_key_option,
+        access_key,
+        secret_key_option,
+        secret_key,
+        token_option,
+        session_token,
+    ]
+    if provider == "byteplus":
+        provider_args[:0] = ["--provider", provider]
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+            "--iam-role",
+            "trn:iam::role/test",
+            "--gateway-name",
+            "gateway",
+            *provider_args,
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Failed to provision the AgentKit Codex Tool" in result.output
+    assert f"AgentKit Tool ID '{failed_tool_id}' creation failed" in result.output
+    assert native_message in result.output
+    assert (
+        "Server metadata: "
+        f"error_code={error_code}, status_code={status_code}, request_id={request_id}"
+        in result.output
+    )
+    assert "Caused by:" in result.output
+    assert "access_key=***" in result.output
+    assert "secret_key=***" in result.output
+    assert "token=***" in result.output
+    assert access_key not in result.output
+    assert secret_key not in result.output
+    assert session_token not in result.output
+
+
+def test_safe_exception_detail_preserves_real_agentkit_api_error_shape() -> None:
+    from agentkit.toolkit.errors import ApiError
+
+    native_error = ApiError(
+        "Failed to CreateTool: native quota exceeded",
+        error_code="RequestLimitExceeded",
+    )
+    try:
+        raise RuntimeError(
+            "Tool provisioning failed after 3 attempts."
+        ) from native_error
+    except RuntimeError as error:
+        detail = _safe_exception_detail(error)
+
+    assert "Tool provisioning failed after 3 attempts." in detail
+    assert "Failed to CreateTool: native quota exceeded" in detail
+    assert "Server metadata: error_code=RequestLimitExceeded" in detail
+    assert "Caused by:" in detail
+
+
+@pytest.mark.parametrize(
     (
         "target_args",
         "expected_region",
@@ -1045,7 +1202,7 @@ def test_studio_deploy_byteplus_auto_provisions_four_sandbox_tools(
 ) -> None:
     captured: dict[str, object] = {}
     code_tools: list[dict[str, object]] = []
-    dev_tools: list[str] = []
+    dev_tools: list[dict[str, object]] = []
     agent_tools: list[dict[str, object]] = []
     code_credentials: list[dict[str, object]] = []
     agent_credentials: list[dict[str, object]] = []
@@ -1081,7 +1238,7 @@ def test_studio_deploy_byteplus_auto_provisions_four_sandbox_tools(
         return f"{kwargs['kind']}{suffix}-tool"
 
     def _ensure_dev_tool(**kwargs: object) -> str:
-        dev_tools.append(str(kwargs["name"]))
+        dev_tools.append(kwargs)
         return "dev-tool"
 
     monkeypatch.setattr(
@@ -1151,6 +1308,11 @@ def test_studio_deploy_byteplus_auto_provisions_four_sandbox_tools(
     assert {str(call["kind"]) for call in agent_tools} == {"openclaw", "hermes"}
     assert {bool(call["enable_snapshot"]) for call in agent_tools} == {False, True}
     assert {str(call["model_name"]) for call in agent_tools} == {"seed-2-0-lite-260228"}
+    assert len(code_tools + dev_tools + agent_tools) == 7
+    assert {
+        float(call["create_min_interval"])
+        for call in code_tools + dev_tools + agent_tools
+    } == {0.5}
     assert {str(call["provider"]) for call in code_credentials} == {"byteplus"}
     code_credentials_by_tool = {str(call["tool_id"]): call for call in code_credentials}
     assert code_credentials_by_tool["chat-tool"]["model_name"] == (
@@ -1317,6 +1479,35 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     agent_credential_kinds: list[str] = []
     creation_barrier = threading.Barrier(7)
     created_kinds_lock = threading.Lock()
+    virtual_time = 0.0
+    tool_start_times: list[float] = []
+
+    def _fake_sleep(seconds: float) -> None:
+        nonlocal virtual_time
+        with created_kinds_lock:
+            virtual_time += seconds
+
+    class _StartSynchronizedThreadPoolExecutor(ThreadPoolExecutor):
+        def submit(  # type: ignore[override]
+            self,
+            fn: object,
+            /,
+            *args: object,
+            **kwargs: object,
+        ) -> Future[object]:
+            worker_started = threading.Event()
+
+            def _run() -> object:
+                if "name" in kwargs:
+                    with created_kinds_lock:
+                        tool_start_times.append(virtual_time)
+                worker_started.set()
+                assert callable(fn)
+                return fn(*args, **kwargs)
+
+            future = super().submit(_run)
+            assert worker_started.wait(timeout=5)
+            return future
 
     class _FakeCloudAgentEngine:
         def __init__(self, **_: object) -> None:
@@ -1331,6 +1522,7 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
 
     def _ensure_tool(**kwargs: object) -> str:
         creation_barrier.wait(timeout=5)
+        assert kwargs["create_min_interval"] == 0.5
         snapshot = bool(kwargs["enable_snapshot"])
         with created_kinds_lock:
             created_kinds.append("codex_snapshot" if snapshot else "codex")
@@ -1342,6 +1534,7 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
         kind = str(kwargs["kind"])
         snapshot = bool(kwargs["enable_snapshot"])
         creation_barrier.wait(timeout=5)
+        assert kwargs["create_min_interval"] == 0.5
         with created_kinds_lock:
             created_kinds.append(f"{kind}_snapshot" if snapshot else kind)
         agent_tool_kinds.append(f"{kind}_snapshot" if snapshot else kind)
@@ -1350,8 +1543,9 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
         suffix = "-snapshot" if snapshot else ""
         return f"{kind}{suffix}-tool"
 
-    def _ensure_dev_tool(**_: object) -> str:
+    def _ensure_dev_tool(**kwargs: object) -> str:
         creation_barrier.wait(timeout=5)
+        assert kwargs["create_min_interval"] == 0.5
         with created_kinds_lock:
             created_kinds.append("dev")
         return "dev-tool"
@@ -1394,6 +1588,11 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
         _ensure_code_credential,
     )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend.ThreadPoolExecutor",
+        _StartSynchronizedThreadPoolExecutor,
+    )
+    monkeypatch.setattr("veadk.cli.cli_frontend.sleep", _fake_sleep)
 
     result = CliRunner().invoke(
         studio,
@@ -1426,6 +1625,11 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
         "openclaw",
         "openclaw_snapshot",
     ]
+    assert len(tool_start_times) == 7
+    assert all(
+        later - earlier >= 0.5
+        for earlier, later in zip(tool_start_times, tool_start_times[1:])
+    )
     assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-tool"
     assert veadk_environments["SANDBOX_CHAT_CODEX_SNAPSHOT"] == ("chat-snapshot-tool")
     assert "SANDBOX_SKILL_CREATOR" not in veadk_environments

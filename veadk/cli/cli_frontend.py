@@ -34,7 +34,7 @@ import zipfile
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from time import monotonic
+from time import monotonic, sleep
 from typing import Any, Literal
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -97,6 +97,7 @@ _SENSITIVE_LOG_PATTERNS = (
 )
 _CP_BUILD_LOG_MAX_CHARS = 16000
 _CP_BUILD_LOG_MAX_LINES = 260
+_SANDBOX_TOOL_CREATE_STAGGER_SECONDS = 0.5
 _CP_PIPELINE_CREATED_RE = re.compile(
     r"Pipeline created successfully:\s*(?P<name>.*?)\s*\(ID:\s*(?P<id>[^)]+)\)"
 )
@@ -365,6 +366,94 @@ def _redact_debug_text(text: str) -> str:
     )
 
 
+def _service_error_payload(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if isinstance(parsed, Mapping) else None
+    json_method = getattr(value, "json", None)
+    if callable(json_method):
+        try:
+            parsed = json_method()
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, Mapping) else None
+    return None
+
+
+def _service_error_context(error: BaseException) -> tuple[str, dict[str, str]]:
+    """Extract native cloud error fields without replacing its original message."""
+    metadata: dict[str, str] = {}
+    attribute_names = {
+        "error_code": ("error_code", "code"),
+        "status_code": ("status_code",),
+        "request_id": ("request_id", "requestId", "requestid"),
+    }
+    for field, names in attribute_names.items():
+        for name in names:
+            value = getattr(error, name, None)
+            if value is None or callable(value):
+                continue
+            text = str(getattr(value, "value", value)).strip()
+            if text:
+                metadata[field] = text
+                break
+
+    service_message = ""
+    payloads = []
+    for candidate in (
+        getattr(error, "response", None),
+        getattr(error, "body", None),
+        getattr(error, "data", None),
+    ):
+        payload = _service_error_payload(candidate)
+        if payload is not None:
+            payloads.append(payload)
+        if candidate is not None and "status_code" not in metadata:
+            status_code = getattr(candidate, "status_code", None)
+            if status_code is not None:
+                metadata["status_code"] = str(status_code)
+        headers = getattr(candidate, "headers", None)
+        if isinstance(headers, Mapping) and "request_id" not in metadata:
+            for key in ("x-request-id", "x-tt-logid", "x-response-id"):
+                request_id = headers.get(key)
+                if request_id:
+                    metadata["request_id"] = str(request_id)
+                    break
+
+    for payload in payloads:
+        response_metadata = payload.get("ResponseMetadata")
+        if not isinstance(response_metadata, Mapping):
+            response_metadata = payload.get("response_metadata")
+        if isinstance(response_metadata, Mapping):
+            request_id = response_metadata.get("RequestId") or response_metadata.get(
+                "RequestID"
+            )
+            if request_id and "request_id" not in metadata:
+                metadata["request_id"] = str(request_id)
+            error_payload = response_metadata.get("Error")
+        else:
+            error_payload = payload.get("Error") or payload.get("error")
+        if not isinstance(error_payload, Mapping):
+            error_payload = payload
+
+        code = error_payload.get("Code") or error_payload.get("code")
+        if code and "error_code" not in metadata:
+            metadata["error_code"] = str(code)
+        message = error_payload.get("Message") or error_payload.get("message")
+        if message and not service_message:
+            service_message = str(message).strip()
+        request_id = error_payload.get("RequestId") or error_payload.get("request_id")
+        if request_id and "request_id" not in metadata:
+            metadata["request_id"] = str(request_id)
+
+    return service_message, metadata
+
+
 def _safe_exception_detail(
     error: BaseException,
     *,
@@ -377,6 +466,14 @@ def _safe_exception_detail(
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         message = _ANSI_ESCAPE_RE.sub("", str(current)).strip()
+        service_message, service_metadata = _service_error_context(current)
+        if service_message and service_message not in message:
+            message = f"{message}\nServer message: {service_message}".strip()
+        if service_metadata:
+            metadata_text = ", ".join(
+                f"{key}={value}" for key, value in service_metadata.items()
+            )
+            message = f"{message}\nServer metadata: {metadata_text}".strip()
         for secret in secrets:
             if secret:
                 message = message.replace(secret, "***")
@@ -8028,6 +8125,8 @@ def frontend_deploy(
         with ThreadPoolExecutor(max_workers=len(missing_sandbox_tools)) as executor:
             tool_futures = {}
             for kind, tool_name in missing_sandbox_tools.items():
+                if tool_futures:
+                    sleep(_SANDBOX_TOOL_CREATE_STAGGER_SECONDS)
                 base_kind = kind.removesuffix("_snapshot")
                 enable_snapshot = kind.endswith("_snapshot")
                 if base_kind == "codex":
@@ -8035,6 +8134,7 @@ def frontend_deploy(
                         ensure_studio_code_env_tool,
                         name=tool_name,
                         enable_snapshot=enable_snapshot,
+                        create_min_interval=_SANDBOX_TOOL_CREATE_STAGGER_SECONDS,
                         region=region,
                         access_key=ak,
                         secret_key=sk,
@@ -8044,6 +8144,7 @@ def frontend_deploy(
                     future = executor.submit(
                         ensure_studio_dev_env_tool,
                         name=tool_name,
+                        create_min_interval=_SANDBOX_TOOL_CREATE_STAGGER_SECONDS,
                         region=region,
                         access_key=ak,
                         secret_key=sk,
@@ -8056,6 +8157,7 @@ def frontend_deploy(
                         kind=base_kind,
                         enable_snapshot=enable_snapshot,
                         model_name=sandbox_agent_model_name,
+                        create_min_interval=_SANDBOX_TOOL_CREATE_STAGGER_SECONDS,
                         region=region,
                         access_key=ak,
                         secret_key=sk,
@@ -8713,6 +8815,8 @@ def frontend_update(
                 ) as executor:
                     tool_futures = {}
                     for kind, tool_name in missing_snapshot_tools.items():
+                        if tool_futures:
+                            sleep(_SANDBOX_TOOL_CREATE_STAGGER_SECONDS)
                         label = snapshot_labels[kind]
                         click.echo(f"Creating AgentKit {label} Tool '{tool_name}'…")
                         base_kind = kind.removesuffix("_snapshot")
@@ -8721,6 +8825,9 @@ def frontend_update(
                                 ensure_studio_code_env_tool,
                                 name=tool_name,
                                 enable_snapshot=True,
+                                create_min_interval=(
+                                    _SANDBOX_TOOL_CREATE_STAGGER_SECONDS
+                                ),
                                 region=target.region,
                                 access_key=ak,
                                 secret_key=sk,
@@ -8733,6 +8840,9 @@ def frontend_update(
                                 kind=base_kind,
                                 enable_snapshot=True,
                                 model_name=sandbox_agent_model_name,
+                                create_min_interval=(
+                                    _SANDBOX_TOOL_CREATE_STAGGER_SECONDS
+                                ),
                                 region=target.region,
                                 access_key=ak,
                                 secret_key=sk,
@@ -8893,6 +9003,8 @@ def frontend_update(
                     ) as ex:
                         tool_futures = {}
                         for kind, tool_name in missing_sandbox_tools.items():
+                            if tool_futures:
+                                sleep(_SANDBOX_TOOL_CREATE_STAGGER_SECONDS)
                             base_kind = kind.removesuffix("_snapshot")
                             enable_snapshot = kind.endswith("_snapshot")
                             if base_kind == "codex":
@@ -8900,6 +9012,9 @@ def frontend_update(
                                     ensure_studio_code_env_tool,
                                     name=tool_name,
                                     enable_snapshot=enable_snapshot,
+                                    create_min_interval=(
+                                        _SANDBOX_TOOL_CREATE_STAGGER_SECONDS
+                                    ),
                                     region=target.region,
                                     access_key=ak,
                                     secret_key=sk,
@@ -8909,6 +9024,9 @@ def frontend_update(
                                 future = ex.submit(
                                     ensure_studio_dev_env_tool,
                                     name=tool_name,
+                                    create_min_interval=(
+                                        _SANDBOX_TOOL_CREATE_STAGGER_SECONDS
+                                    ),
                                     region=target.region,
                                     access_key=ak,
                                     secret_key=sk,
@@ -8921,6 +9039,9 @@ def frontend_update(
                                     kind=base_kind,
                                     enable_snapshot=enable_snapshot,
                                     model_name=sandbox_agent_model_name,
+                                    create_min_interval=(
+                                        _SANDBOX_TOOL_CREATE_STAGGER_SECONDS
+                                    ),
                                     region=target.region,
                                     access_key=ak,
                                     secret_key=sk,

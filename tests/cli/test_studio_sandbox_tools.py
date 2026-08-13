@@ -20,7 +20,10 @@ from typing import cast
 from unittest.mock import patch
 
 import pytest
+from agentkit.auth.errors import NetworkError
+from agentkit.toolkit.errors import ApiError
 
+import veadk.cli.studio_sandbox_tools as studio_sandbox_tools
 from veadk.cli.studio_sandbox_tools import (
     ensure_studio_agent_model_credential,
     ensure_studio_agent_tool,
@@ -86,10 +89,167 @@ def test_ensure_studio_code_env_tool_creates_ready_code_env() -> None:
     assert getattr(request, "name") == "veadk-studio-demo-skill-12345678"
     assert getattr(request, "tool_type") == "CodeEnv"
     assert getattr(request, "project_name") == "default"
+    assert len(getattr(request, "client_token")) == 32
     assert getattr(request, "cpu_milli") == 4000
     assert getattr(request, "memory_mb") == 8192
     assert getattr(request, "envs") is None
     assert getattr(request, "enable_snapshot") is False
+
+
+@pytest.mark.parametrize(
+    "transient_error",
+    [
+        RuntimeError("QPS limit exceeded"),
+        ConnectionError("temporary connection failure"),
+        NetworkError("Failed to CreateTool: network error"),
+        ApiError(
+            "Failed to CreateTool: request limit exceeded",
+            error_code="RequestLimitExceeded",
+        ),
+    ],
+    ids=[
+        "qps-limit",
+        "connection-error",
+        "agentkit-network-error",
+        "agentkit-request-limit",
+    ],
+)
+def test_ensure_studio_code_env_tool_retries_transient_create_errors(
+    transient_error: Exception,
+) -> None:
+    create_calls = 0
+    client_tokens: list[str] = []
+    sleeps: list[float] = []
+
+    def _create(request: object) -> SimpleNamespace:
+        nonlocal create_calls
+        create_calls += 1
+        client_tokens.append(str(getattr(request, "client_token")))
+        if create_calls == 1:
+            raise transient_error
+        return SimpleNamespace(tool_id="tool-after-retry")
+
+    client = SimpleNamespace(
+        list_tools=lambda _: SimpleNamespace(tools=[], next_token=None),
+        get_tool=lambda _: SimpleNamespace(status="Ready"),
+        create_tool=_create,
+    )
+
+    assert (
+        ensure_studio_code_env_tool(
+            name="veadk-studio-demo-retry-12345678",
+            client=client,
+            timeout_seconds=0,
+            create_max_attempts=3,
+            create_retry_delay=0.25,
+            sleep=sleeps.append,
+        )
+        == "tool-after-retry"
+    )
+    assert create_calls == 2
+    assert len(set(client_tokens)) == 1
+    assert len(client_tokens[0]) == 32
+    assert sleeps == [0.25]
+
+
+def test_ensure_studio_code_env_tool_spaces_create_api_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = 100.0
+    create_started_at: list[float] = []
+    sleeps: list[float] = []
+
+    def _sleep(delay: float) -> None:
+        nonlocal now
+        sleeps.append(delay)
+        now += delay
+
+    def _create(_: object) -> SimpleNamespace:
+        create_started_at.append(now)
+        return SimpleNamespace(tool_id=f"tool-{len(create_started_at)}")
+
+    monkeypatch.setattr(studio_sandbox_tools.time, "monotonic", lambda: now)
+    monkeypatch.setattr(studio_sandbox_tools, "_NEXT_CREATE_TOOL_AT", 0.0)
+    client = SimpleNamespace(
+        list_tools=lambda _: SimpleNamespace(tools=[], next_token=None),
+        get_tool=lambda _: SimpleNamespace(status="Ready"),
+        create_tool=_create,
+    )
+
+    for suffix in ("first", "second"):
+        ensure_studio_code_env_tool(
+            name=f"veadk-studio-demo-{suffix}-12345678",
+            client=client,
+            timeout_seconds=0,
+            create_min_interval=0.5,
+            sleep=_sleep,
+        )
+
+    assert create_started_at == [100.0, 100.5]
+    assert create_started_at[1] - create_started_at[0] >= 0.5
+    assert sleeps == [0.5]
+
+
+def test_ensure_studio_code_env_tool_preserves_exhausted_create_error() -> None:
+    create_calls = 0
+    sleeps: list[float] = []
+    last_error = TimeoutError("temporary create timeout")
+
+    def _create(_: object) -> SimpleNamespace:
+        nonlocal create_calls
+        create_calls += 1
+        raise last_error
+
+    client = SimpleNamespace(
+        list_tools=lambda _: SimpleNamespace(tools=[], next_token=None),
+        create_tool=_create,
+    )
+
+    with pytest.raises(RuntimeError, match="veadk-studio-demo-retry-12345678") as exc:
+        ensure_studio_code_env_tool(
+            name="veadk-studio-demo-retry-12345678",
+            client=client,
+            timeout_seconds=0,
+            create_max_attempts=3,
+            create_retry_delay=0.25,
+            sleep=sleeps.append,
+        )
+
+    assert create_calls == 3
+    assert sleeps == [0.25, 0.5]
+    assert exc.value.__cause__ is last_error
+
+
+@pytest.mark.parametrize(
+    ("get_tool", "timeout_seconds"),
+    [
+        (lambda _: SimpleNamespace(status="Failed"), 60),
+        (lambda _: SimpleNamespace(status="Creating"), 0),
+        (
+            lambda _: (_ for _ in ()).throw(
+                ConnectionError("temporary status lookup failure")
+            ),
+            60,
+        ),
+    ],
+    ids=["failed", "timeout", "get-tool-error"],
+)
+def test_ensure_studio_code_env_tool_ready_errors_include_tool_id(
+    get_tool: object,
+    timeout_seconds: float,
+) -> None:
+    client = SimpleNamespace(
+        list_tools=lambda _: SimpleNamespace(tools=[], next_token=None),
+        create_tool=lambda _: SimpleNamespace(tool_id="tool-with-ready-error"),
+        get_tool=get_tool,
+    )
+
+    with pytest.raises(RuntimeError, match="tool-with-ready-error"):
+        ensure_studio_code_env_tool(
+            name="veadk-studio-demo-ready-error-12345678",
+            client=client,
+            timeout_seconds=timeout_seconds,
+        )
 
 
 def test_ensure_studio_code_env_tool_creates_snapshot_enabled_code_env() -> None:
@@ -225,22 +385,43 @@ def test_ensure_studio_agent_tool_creates_snapshot_enabled_managed_tool(
     assert requests[0].enable_snapshot is True
 
 
-def test_snapshot_tool_name_is_distinct_and_has_snapshot_suffix() -> None:
-    standard = studio_sandbox_tool_name("Studio App", "chat")
-    snapshot = studio_sandbox_tool_name("Studio App", "chat", snapshot=True)
+def test_studio_sandbox_tool_name_uses_short_studio_format() -> None:
+    assert studio_sandbox_tool_name("Studio App", "chat") == (
+        "studio-studio-app-chat-1d66ce"
+    )
 
-    assert snapshot == f"{standard}_snapshot"
-    assert snapshot.endswith("_snapshot")
+
+def test_studio_sandbox_tool_name_normalizes_invalid_characters() -> None:
+    assert studio_sandbox_tool_name("  My_App@2026!  ", "skill") == (
+        "studio-my-app-2026-skill-6c7faf"
+    )
+
+
+def test_studio_sandbox_tool_name_truncates_normalized_app_name_to_20_chars() -> None:
+    assert (
+        studio_sandbox_tool_name(
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+            "chat",
+        )
+        == "studio-abcdefghijklmnopqrst-chat-1655ef"
+    )
+
+
+def test_studio_sandbox_tool_name_hash_distinguishes_normalization_collisions() -> None:
+    underscore_name = studio_sandbox_tool_name("My_App", "chat")
+    space_name = studio_sandbox_tool_name("My App", "chat")
+
+    assert underscore_name == "studio-my-app-chat-6bcaca"
+    assert space_name == "studio-my-app-chat-58967a"
+    assert underscore_name != space_name
 
 
 @pytest.mark.parametrize("purpose", ["chat", "openclaw", "hermes"])
-def test_snapshot_tool_name_preserves_the_standard_length_bound(purpose: str) -> None:
-    application_name = "a" * 100
-    standard = studio_sandbox_tool_name(application_name, purpose)
-    snapshot = studio_sandbox_tool_name(application_name, purpose, snapshot=True)
+def test_snapshot_tool_name_appends_snapshot_suffix(purpose: str) -> None:
+    standard = studio_sandbox_tool_name("Studio App", purpose)
+    snapshot = studio_sandbox_tool_name("Studio App", purpose, snapshot=True)
 
-    assert len(snapshot) <= len(standard)
-    assert snapshot.endswith("_snapshot")
+    assert snapshot == f"{standard}_snapshot"
 
 
 def test_agent_model_credential_is_bound_to_tool_as_complete_env_set() -> None:

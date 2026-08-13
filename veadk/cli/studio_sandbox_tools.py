@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 import secrets
+import threading
 import time
 import zlib
 from collections.abc import Callable
@@ -33,6 +34,8 @@ from veadk.cli.studio_model_catalog import (
 _PROJECT_NAME = "default"
 _TOOL_TYPE = "CodeEnv"
 _DEV_TOOL_TYPE = "DevEnv"
+_TOOL_NAME_APP_MAX_LENGTH = 20
+_TOOL_NAME_HASH_LENGTH = 6
 STUDIO_SANDBOX_AGENT_MODEL_NAME = VOLCENGINE_STUDIO_AGENT_MODEL_NAME
 STUDIO_SANDBOX_BYTEPLUS_AGENT_MODEL_NAME = BYTEPLUS_STUDIO_AGENT_MODEL_NAME
 STUDIO_SANDBOX_MODEL_BASE_URLS = {
@@ -45,6 +48,35 @@ _AGENT_TOOL_TYPES = {
 }
 _READY_STATUS = "Ready"
 _FAILED_STATUSES = frozenset({"Error", "Failed", "CreateFailed", "Deleting", "Deleted"})
+_RETRYABLE_CREATE_STATUS_CODES = frozenset({408, 409, 425, 429})
+_RETRYABLE_CREATE_ERROR_CODES = frozenset(
+    {
+        "internalerror",
+        "internalservererror",
+        "requestlimitexceeded",
+        "serviceunavailable",
+        "throttling",
+        "toomanyrequests",
+    }
+)
+_RETRYABLE_CREATE_ERROR_MARKERS = (
+    "connection aborted",
+    "connection error",
+    "connection reset",
+    "internal server error",
+    "network error",
+    "qps",
+    "rate limit",
+    "request limit",
+    "service unavailable",
+    "temporarily unavailable",
+    "throttl",
+    "timed out",
+    "timeout",
+    "too many requests",
+)
+_CREATE_TOOL_RATE_LOCK = threading.Lock()
+_NEXT_CREATE_TOOL_AT = 0.0
 
 
 def studio_sandbox_agent_model_name(provider: str) -> str:
@@ -69,9 +101,9 @@ def studio_sandbox_tool_name(
     """Return a stable, account-local Tool name for one Studio capability."""
     safe_name = re.sub(r"[^a-z0-9-]+", "-", application_name.lower()).strip("-")
     suffix = "_snapshot" if snapshot else ""
-    safe_name = safe_name[: 30 - len(suffix)].rstrip("-") or "studio"
-    digest = f"{zlib.crc32(application_name.encode()):08x}"
-    name = f"veadk-studio-{safe_name}-{purpose}-{digest}"
+    safe_name = safe_name[:_TOOL_NAME_APP_MAX_LENGTH].rstrip("-") or "app"
+    digest = f"{zlib.crc32(application_name.encode()):08x}"[:_TOOL_NAME_HASH_LENGTH]
+    name = f"studio-{safe_name}-{purpose}-{digest}"
     return f"{name}{suffix}"
 
 
@@ -88,7 +120,13 @@ def _wait_for_ready_tool(
 ) -> str:
     deadline = time.monotonic() + timeout_seconds
     while True:
-        tool = tools_client.get_tool(tools_types.GetToolRequest(ToolId=tool_id))
+        try:
+            tool = tools_client.get_tool(tools_types.GetToolRequest(ToolId=tool_id))
+        except Exception as error:
+            raise RuntimeError(
+                f"Failed to query AgentKit Tool '{name}' "
+                f"(Tool ID: '{tool_id}') status: {error}"
+            ) from error
         status = (tool.status or "").strip()
         if status == _READY_STATUS:
             actual_snapshot = bool(getattr(tool, "enable_snapshot", False))
@@ -96,17 +134,147 @@ def _wait_for_ready_tool(
                 expected = "enabled" if enable_snapshot else "disabled"
                 actual = "enabled" if actual_snapshot else "disabled"
                 raise RuntimeError(
-                    f"AgentKit Tool '{name}' has snapshot {actual}; "
+                    f"AgentKit Tool '{name}' (Tool ID: '{tool_id}') "
+                    f"has snapshot {actual}; "
                     f"expected snapshot {expected}."
                 )
             return tool_id
         if status in _FAILED_STATUSES:
             raise RuntimeError(
-                f"AgentKit Tool '{name}' failed to become ready: {status}."
+                f"AgentKit Tool '{name}' (Tool ID: '{tool_id}') "
+                f"failed to become ready: {status}."
             )
         if time.monotonic() >= deadline:
-            raise RuntimeError(f"Timed out waiting for AgentKit Tool '{name}'.")
+            raise RuntimeError(
+                f"Timed out waiting for AgentKit Tool '{name}' (Tool ID: '{tool_id}')."
+            )
         sleep(poll_interval)
+
+
+def _is_retryable_tool_creation_error(error: Exception) -> bool:
+    """Return whether a Tool creation failure is safe to retry."""
+    candidates: list[Any] = []
+    current: BaseException | None = error
+    while current is not None and current not in candidates:
+        candidates.append(current)
+        current = current.__cause__ or current.__context__
+    response = getattr(error, "response", None)
+    if response is not None and response not in candidates:
+        candidates.append(response)
+
+    details = []
+    for candidate in candidates:
+        if isinstance(candidate, (ConnectionError, TimeoutError)):
+            return True
+        details.append(str(candidate))
+        for attribute in ("status_code", "status", "code", "error_code"):
+            value = getattr(candidate, attribute, None)
+            if value is not None:
+                details.append(str(value))
+                normalized_code = re.sub(r"[^a-z0-9]", "", str(value).lower())
+                if normalized_code in _RETRYABLE_CREATE_ERROR_CODES:
+                    return True
+            try:
+                status_code = int(value)
+            except (TypeError, ValueError):
+                continue
+            if (
+                status_code in _RETRYABLE_CREATE_STATUS_CODES
+                or 500 <= status_code < 600
+            ):
+                return True
+
+    detail = " ".join(details).lower()
+    return any(marker in detail for marker in _RETRYABLE_CREATE_ERROR_MARKERS)
+
+
+def _created_tool_id(match: Any | None, *, name: str) -> str | None:
+    if match is None:
+        return None
+    tool_id = (match.tool_id or "").strip()
+    if not tool_id:
+        raise RuntimeError(f"AgentKit Tool '{name}' did not return a Tool ID.")
+    return tool_id
+
+
+def _wait_for_tool_creation_slot(
+    interval_seconds: float,
+    *,
+    sleep: Callable[[float], None],
+) -> None:
+    """Serialize create_tool starts while leaving other provisioning work parallel."""
+    if interval_seconds < 0:
+        raise ValueError("create_min_interval must not be negative")
+    if interval_seconds == 0:
+        return
+
+    global _NEXT_CREATE_TOOL_AT
+    with _CREATE_TOOL_RATE_LOCK:
+        now = time.monotonic()
+        delay = max(0.0, _NEXT_CREATE_TOOL_AT - now)
+        if delay:
+            sleep(delay)
+            now = time.monotonic()
+        _NEXT_CREATE_TOOL_AT = max(now, _NEXT_CREATE_TOOL_AT) + interval_seconds
+
+
+def _create_tool_with_retry(
+    tools_client: Any,
+    tools_types: Any,
+    *,
+    request: Any,
+    name: str,
+    tool_type: str,
+    create_max_attempts: int,
+    create_retry_delay: float,
+    create_min_interval: float,
+    sleep: Callable[[float], None],
+) -> str:
+    if create_max_attempts < 1:
+        raise ValueError("create_max_attempts must be at least 1")
+    if create_retry_delay < 0:
+        raise ValueError("create_retry_delay must not be negative")
+    if create_min_interval < 0:
+        raise ValueError("create_min_interval must not be negative")
+
+    for attempt in range(1, create_max_attempts + 1):
+        if attempt > 1:
+            sleep(create_retry_delay * (2 ** (attempt - 2)))
+            try:
+                recovered_id = _created_tool_id(
+                    _find_exact_tool(
+                        tools_client,
+                        tools_types,
+                        name=name,
+                        tool_type=tool_type,
+                    ),
+                    name=name,
+                )
+            except Exception:
+                recovered_id = None
+            if recovered_id:
+                return recovered_id
+
+        try:
+            _wait_for_tool_creation_slot(create_min_interval, sleep=sleep)
+            response = tools_client.create_tool(request)
+        except Exception as error:
+            if attempt < create_max_attempts and _is_retryable_tool_creation_error(
+                error
+            ):
+                continue
+            raise RuntimeError(
+                f"Creating AgentKit Tool '{name}' failed after {attempt} attempt(s)."
+            ) from error
+
+        tool_id = (response.tool_id or "").strip()
+        if not tool_id:
+            raise RuntimeError(
+                f"Creating AgentKit Tool '{name}' did not return a Tool ID."
+            )
+        return tool_id
+
+    raise AssertionError("unreachable")
 
 
 def _find_exact_tool(
@@ -161,6 +329,9 @@ def _ensure_studio_environment_tool(
     client: Any | None = None,
     timeout_seconds: float = 600.0,
     poll_interval: float = 5.0,
+    create_max_attempts: int = 3,
+    create_retry_delay: float = 1.0,
+    create_min_interval: float = 0.0,
     sleep: Callable[[float], None] = time.sleep,
 ) -> str:
     """Reuse or create one ready managed environment Tool."""
@@ -180,15 +351,17 @@ def _ensure_studio_environment_tool(
         tool_type=tool_type,
     )
     if match is not None:
-        tool_id = (match.tool_id or "").strip()
-        if not tool_id:
-            raise RuntimeError(f"AgentKit Tool '{name}' did not return a Tool ID.")
+        tool_id = _created_tool_id(match, name=name)
+        assert tool_id is not None
     else:
-        response = tools_client.create_tool(
-            tools_types.CreateToolRequest(
+        tool_id = _create_tool_with_retry(
+            tools_client,
+            tools_types,
+            request=tools_types.CreateToolRequest(
                 Name=name,
                 ToolType=tool_type,
                 ProjectName=_PROJECT_NAME,
+                ClientToken=secrets.token_hex(16),
                 EnableSnapshot=enable_snapshot,
                 CpuMilli=4000,
                 MemoryMb=8192,
@@ -202,13 +375,14 @@ def _ensure_studio_environment_tool(
                     EnablePublicNetwork=True,
                     EnablePrivateNetwork=False,
                 ),
-            )
+            ),
+            name=name,
+            tool_type=tool_type,
+            create_max_attempts=create_max_attempts,
+            create_retry_delay=create_retry_delay,
+            create_min_interval=create_min_interval,
+            sleep=sleep,
         )
-        tool_id = (response.tool_id or "").strip()
-        if not tool_id:
-            raise RuntimeError(
-                f"Creating AgentKit Tool '{name}' did not return a Tool ID."
-            )
 
     return _wait_for_ready_tool(
         tools_client,
@@ -245,6 +419,9 @@ def ensure_studio_agent_tool(
     client: Any | None = None,
     timeout_seconds: float = 600.0,
     poll_interval: float = 5.0,
+    create_max_attempts: int = 3,
+    create_retry_delay: float = 1.0,
+    create_min_interval: float = 0.0,
     sleep: Callable[[float], None] = time.sleep,
 ) -> str:
     """Reuse or create one ready managed Hermes/OpenClaw Tool."""
@@ -271,15 +448,17 @@ def ensure_studio_agent_tool(
         tool_type=tool_type,
     )
     if match is not None:
-        tool_id = (match.tool_id or "").strip()
-        if not tool_id:
-            raise RuntimeError(f"AgentKit Tool '{name}' did not return a Tool ID.")
+        tool_id = _created_tool_id(match, name=name)
+        assert tool_id is not None
     else:
-        response = tools_client.create_tool(
-            tools_types.CreateToolRequest(
+        tool_id = _create_tool_with_retry(
+            tools_client,
+            tools_types,
+            request=tools_types.CreateToolRequest(
                 Name=name,
                 ToolType=tool_type,
                 ProjectName=_PROJECT_NAME,
+                ClientToken=secrets.token_hex(16),
                 EnableSnapshot=enable_snapshot,
                 ModelAgentName=normalized_model_name,
                 CpuMilli=4000,
@@ -294,13 +473,14 @@ def ensure_studio_agent_tool(
                     EnablePublicNetwork=True,
                     EnablePrivateNetwork=False,
                 ),
-            )
+            ),
+            name=name,
+            tool_type=tool_type,
+            create_max_attempts=create_max_attempts,
+            create_retry_delay=create_retry_delay,
+            create_min_interval=create_min_interval,
+            sleep=sleep,
         )
-        tool_id = (response.tool_id or "").strip()
-        if not tool_id:
-            raise RuntimeError(
-                f"Creating AgentKit {tool_type} Tool '{name}' did not return a Tool ID."
-            )
 
     return _wait_for_ready_tool(
         tools_client,
