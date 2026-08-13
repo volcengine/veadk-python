@@ -46,6 +46,48 @@ const dimensionOrder: Record<DebugComparisonDimension, number> = {
   skills: 2,
 };
 
+/** Stable Session identity for semantic changes, excluding editor focus and secrets. */
+export function semanticDebugConfigurationKey<TSkill>(
+  changes: DebugChangeState<TSkill>[],
+): string {
+  return JSON.stringify(
+    changes
+      .map((change) => ({
+        modelName: change.modelName.trim(),
+        modelProvider: change.modelProvider.trim(),
+        modelApiBase: change.modelApiBase.trim(),
+        instruction: change.instruction.trim(),
+        selectedSkills: change.selectedSkills,
+        agentKey: change.agentKey,
+        dimension: change.dimension,
+      }))
+      .sort((left, right) =>
+        `${left.agentKey}:${left.dimension}`.localeCompare(
+          `${right.agentKey}:${right.dimension}`,
+        ),
+      ),
+  );
+}
+
+/** Clear every candidate credential when its Agent topology or cloud changes. */
+export function invalidateDebugVariantCredentials<
+  TSkill,
+  TVariant extends DebugVariantConfiguration<TSkill>,
+>(variant: TVariant): TVariant {
+  return {
+    ...variant,
+    apiKey: "",
+    apiKeyLocked: false,
+    apiKeyVisible: false,
+    additionalChanges: variant.additionalChanges.map((change) => ({
+      ...change,
+      apiKey: "",
+      apiKeyLocked: false,
+      apiKeyVisible: false,
+    })),
+  };
+}
+
 /** Apply a semantic configuration edit without rewriting prior Session evidence. */
 export function updateDebugVariantConfiguration<
   TVariant extends DebugVariantEvidence,

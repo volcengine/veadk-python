@@ -118,3 +118,31 @@ test("inherits a temporary key only when Provider and API Base are unchanged", (
     "",
   );
 });
+
+test("invalidates one temporary credential across value lock and reveal state", () => {
+  const current = {
+    values: { root: "root-key", 0: "worker-key" },
+    locked: new Set(["root", "0"]),
+    revealed: new Set(["root", "0"]),
+  };
+
+  const next = credentials.invalidateTransientModelCredentials(current, "0");
+
+  assert.deepEqual(next.values, { root: "root-key" });
+  assert.deepEqual([...next.locked], ["root"]);
+  assert.deepEqual([...next.revealed], ["root"]);
+  assert.equal(current.values["0"], "worker-key");
+  assert.equal(current.locked.has("0"), true);
+});
+
+test("invalidates every temporary credential after a topology or cloud change", () => {
+  const next = credentials.invalidateTransientModelCredentials({
+    values: { root: "root-key", 0: "worker-key" },
+    locked: new Set(["root", "0"]),
+    revealed: new Set(["0"]),
+  });
+
+  assert.deepEqual(next.values, {});
+  assert.deepEqual([...next.locked], []);
+  assert.deepEqual([...next.revealed], []);
+});

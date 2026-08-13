@@ -32,6 +32,7 @@ from veadk.cli.generated_agent_codegen import (
 )
 from veadk.cli.generated_agent_security import (
     DebugPolicyError,
+    parse_debug_model_host_allowlist,
     validate_debug_policy,
     validate_project_policy,
     validate_url_not_private,
@@ -369,7 +370,69 @@ def test_debug_policy_allows_custom_model_api_base_with_temporary_credential(
         draft,
         managed_cloud_provider="volcengine",
         custom_model_credential_paths={(0,)},
+        custom_model_allowed_hosts={"gateway.example.com"},
     )
+
+
+def test_debug_policy_requires_allowlisted_custom_model_host_with_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+    draft = AgentDraft(
+        name="demo",
+        instruction="You are helpful.",
+        modelApiBase="https://gateway.example.com/v1",
+    )
+
+    with pytest.raises(DebugPolicyError, match="调试白名单"):
+        validate_debug_policy(
+            draft,
+            managed_cloud_provider="volcengine",
+            custom_model_credential_paths={()},
+        )
+
+
+def test_debug_model_host_allowlist_is_exact_and_normalized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+    allowed_hosts = parse_debug_model_host_allowlist(
+        " Gateway.Example.com. , models.example.com "
+    )
+    allowed = AgentDraft(
+        name="demo",
+        instruction="You are helpful.",
+        modelApiBase="https://gateway.example.com/v1",
+    )
+    validate_debug_policy(
+        allowed,
+        managed_cloud_provider="volcengine",
+        custom_model_credential_paths={()},
+        custom_model_allowed_hosts=allowed_hosts,
+    )
+
+    subdomain = allowed.model_copy(
+        update={"modelApiBase": "https://child.gateway.example.com/v1"}
+    )
+    with pytest.raises(DebugPolicyError, match="调试白名单"):
+        validate_debug_policy(
+            subdomain,
+            managed_cloud_provider="volcengine",
+            custom_model_credential_paths={()},
+            custom_model_allowed_hosts=allowed_hosts,
+        )
 
 
 def test_debug_policy_rejects_private_custom_model_api_base_with_credential() -> None:
@@ -384,6 +447,7 @@ def test_debug_policy_rejects_private_custom_model_api_base_with_credential() ->
             draft,
             managed_cloud_provider="volcengine",
             custom_model_credential_paths={()},
+            custom_model_allowed_hosts={"169.254.169.254"},
         )
 
 

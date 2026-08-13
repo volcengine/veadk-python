@@ -276,10 +276,6 @@ test("debug candidates compare one Agent dimension with an atomic model triple",
   );
   assert.match(
     createSource,
-    /function debugVariantConfigurationKey[\s\S]*?effectiveDebugChanges\(draft, variant\)[\s\S]*?\.map\(debugChangeConfiguration\)/,
-  );
-  assert.match(
-    createSource,
     /function debugOverridesForVariant[\s\S]*?modelName: change\.modelName,[\s\S]*?modelProvider: change\.modelProvider,[\s\S]*?modelApiBase: change\.modelApiBase/,
   );
 });
@@ -728,7 +724,6 @@ test("root Agent exposes a confirmed custom clear action", () => {
   assert.match(createSource, /function ClearAgentIcon/);
   assert.match(createSource, /aria-label="清空根 Agent"/);
   assert.match(createSource, /window\.confirm\("清空根 Agent/);
-  assert.match(createSource, /setDraft\(emptyDraft\(cloudProvider\)\)/);
 });
 
 test("skill sources open in a fixed-height dialog above a six-row selected list", () => {

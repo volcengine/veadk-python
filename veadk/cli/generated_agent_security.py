@@ -64,6 +64,46 @@ _METADATA_IPS = {
 }
 
 
+def _normalize_debug_model_hostname(raw_hostname: str) -> str:
+    hostname = (raw_hostname or "").strip().rstrip(".")
+    if not hostname or any(character in hostname for character in "/?#@"):
+        raise DebugPolicyError("Invalid debug model allowlist hostname")
+    if hostname.startswith("[") and hostname.endswith("]"):
+        hostname = hostname[1:-1]
+    try:
+        return ipaddress.ip_address(hostname).compressed.lower()
+    except ValueError:
+        pass
+    if "://" in hostname or "*" in hostname:
+        raise DebugPolicyError("Debug model allowlist only accepts exact hostnames")
+    try:
+        normalized = hostname.encode("idna").decode("ascii").lower()
+    except UnicodeError as exc:
+        raise DebugPolicyError("Invalid debug model allowlist hostname") from exc
+    labels = normalized.split(".")
+    if len(normalized) > 253 or any(
+        not label
+        or len(label) > 63
+        or label.startswith("-")
+        or label.endswith("-")
+        or any(not (character.isalnum() or character == "-") for character in label)
+        for label in labels
+    ):
+        raise DebugPolicyError("Invalid debug model allowlist hostname")
+    return normalized
+
+
+def parse_debug_model_host_allowlist(raw_value: str | None) -> frozenset[str]:
+    """Parse the Studio-managed exact-host allowlist for custom model debugging."""
+    if not raw_value:
+        return frozenset()
+    return frozenset(
+        _normalize_debug_model_hostname(value)
+        for value in raw_value.split(",")
+        if value.strip()
+    )
+
+
 def validate_project_policy(draft: AgentDraft) -> None:
     total = _validate_node(
         draft,
@@ -81,11 +121,13 @@ def validate_debug_policy(
     allow_local_runtime_resources: bool = False,
     managed_cloud_provider: str | None = None,
     custom_model_credential_paths: Collection[tuple[int, ...]] = (),
+    custom_model_allowed_hosts: Collection[str] = (),
 ) -> None:
     trusted_debug_model_api_base(
         draft,
         managed_cloud_provider=managed_cloud_provider,
         custom_model_credential_paths=custom_model_credential_paths,
+        custom_model_allowed_hosts=custom_model_allowed_hosts,
     )
     total = _validate_node(
         draft,
@@ -102,6 +144,7 @@ def trusted_debug_model_api_base(
     *,
     managed_cloud_provider: str | None = None,
     custom_model_credential_paths: Collection[tuple[int, ...]] = (),
+    custom_model_allowed_hosts: Collection[str] = (),
 ) -> str:
     """Return the model endpoint allowed to receive Studio credentials.
 
@@ -120,6 +163,9 @@ def trusted_debug_model_api_base(
         )
 
     credential_paths = set(custom_model_credential_paths)
+    allowed_hosts = {
+        _normalize_debug_model_hostname(host) for host in custom_model_allowed_hosts
+    }
 
     def visit(node: AgentDraft, path: tuple[int, ...]) -> None:
         if (
@@ -128,6 +174,15 @@ def trusted_debug_model_api_base(
             and not is_provider_modelark_base_url(provider, node.modelApiBase)
         ):
             if path in credential_paths:
+                hostname = _normalize_debug_model_hostname(
+                    urlparse(node.modelApiBase).hostname or ""
+                )
+                if hostname not in allowed_hosts:
+                    raise DebugPolicyError(
+                        f"自定义模型地址 {hostname} 未在 Studio 调试白名单中。"
+                        "请由管理员配置 "
+                        "VEADK_STUDIO_DEBUG_MODEL_HOST_ALLOWLIST。"
+                    )
                 validate_url_not_private(
                     node.modelApiBase,
                     field_name="modelApiBase",

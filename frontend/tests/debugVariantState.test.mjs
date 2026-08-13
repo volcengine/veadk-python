@@ -128,6 +128,40 @@ test("temporary credentials survive dimension switching without storing untouche
   assert.deepEqual(backOnModel.additionalChanges, []);
 });
 
+test("topology or cloud changes invalidate every candidate credential", () => {
+  const candidate = variant({
+    modelName: "root-candidate",
+    apiKey: "root-temporary-key",
+    apiKeyLocked: true,
+    apiKeyVisible: true,
+    messages: [{ role: "assistant", content: "Previous evidence" }],
+    additionalChanges: [
+      change({
+        id: "worker:model",
+        agentKey: "worker",
+        modelName: "worker-candidate",
+        apiKey: "worker-temporary-key",
+        apiKeyLocked: true,
+        apiKeyVisible: true,
+      }),
+    ],
+  });
+
+  const invalidated = state.invalidateDebugVariantCredentials(candidate);
+
+  assert.equal(invalidated.apiKey, "");
+  assert.equal(invalidated.apiKeyLocked, false);
+  assert.equal(invalidated.apiKeyVisible, false);
+  assert.equal(invalidated.additionalChanges[0].apiKey, "");
+  assert.equal(invalidated.additionalChanges[0].apiKeyLocked, false);
+  assert.equal(invalidated.additionalChanges[0].apiKeyVisible, false);
+  assert.equal(invalidated.modelName, "root-candidate");
+  assert.equal(invalidated.additionalChanges[0].modelName, "worker-candidate");
+  assert.deepEqual(invalidated.messages, candidate.messages);
+  assert.equal(candidate.apiKey, "root-temporary-key");
+  assert.equal(candidate.additionalChanges[0].apiKey, "worker-temporary-key");
+});
+
 test("the complete change summary stays stable while the editor focus moves", () => {
   const rootBaseline = change();
   const workerInstructionBaseline = change({
@@ -190,6 +224,43 @@ test("the complete change summary stays stable while the editor focus moves", ()
       .change.agentKey,
     "worker",
   );
+});
+
+test("editor focus changes do not change the semantic Session configuration", () => {
+  const rootBaseline = change();
+  const workerInstructionBaseline = change({
+    id: "worker:instruction",
+    agentKey: "worker",
+    dimension: "instruction",
+    instruction: "Worker prompt",
+  });
+  const candidate = variant({
+    modelName: "root-candidate",
+    apiKey: "temporary-secret",
+    apiKeyLocked: true,
+    apiKeyVisible: true,
+    additionalChanges: [
+      {
+        ...workerInstructionBaseline,
+        instruction: "Worker candidate prompt",
+      },
+    ],
+  });
+
+  const before = state.semanticDebugConfigurationKey(
+    variantChanges(candidate),
+  );
+  const editingWorker = state.switchPrimaryDebugChange(
+    candidate,
+    rootBaseline,
+    workerInstructionBaseline,
+  );
+  const after = state.semanticDebugConfigurationKey(
+    variantChanges(editingWorker),
+  );
+
+  assert.equal(after, before);
+  assert.doesNotMatch(before, /temporary-secret/);
 });
 
 test("previews the first three stable changes without losing Agent groups", () => {

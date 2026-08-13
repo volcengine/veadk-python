@@ -24,8 +24,6 @@ import {
   ExternalLink,
   FolderUp,
   Globe,
-  Eye,
-  EyeOff,
   Info,
   Layers,
   Loader2,
@@ -107,6 +105,7 @@ import {
 import { Blocks, ThinkingPlaceholder } from "../ui/Blocks";
 import { DeploymentErrorMessage } from "../ui/DeploymentErrorMessage";
 import { StudioConfirmDialog } from "../ui/StudioConfirmDialog";
+import { SecretVisibilityIcon } from "../ui/icons/SecretVisibilityIcon";
 import { TraceDrawer } from "../ui/TraceDrawer";
 import { isImeCompositionEvent } from "../ui/composerKeyboard";
 import type { A2uiAction, A2uiComponent } from "../a2ui/types";
@@ -142,14 +141,21 @@ import {
 } from "../adk/cloudProvider";
 import { applyEvent, emptyAcc, type Block } from "../blocks";
 import { customModelCredentialRequirements } from "./customModelCredentials";
-import { validateModelConnection } from "./comparison/modelCredentials";
 import {
+  invalidateTransientModelCredentials,
+  type TransientModelCredentialState,
+  validateModelConnection,
+} from "./comparison/modelCredentials";
+import {
+  invalidateDebugVariantCredentials,
   previewDebugChangeSummary,
   removeDebugChange,
+  semanticDebugConfigurationKey,
   summarizeDebugChanges,
   switchPrimaryDebugChange,
   updateDebugVariantConfiguration as preserveDebugVariantEvidence,
 } from "./comparison/debugVariantState";
+import { DebugStreamRegistry } from "./comparison/debugStreamRegistry";
 import {
   buildCandidateDraft,
   applyCandidateAtomically,
@@ -2200,28 +2206,11 @@ function debugSnapshotKey(draft: AgentDraft): string {
 
 function debugVariantSnapshot(
   draftSnapshot: string,
-  variant: Pick<
-    DebugVariant,
-    | "modelName"
-    | "modelProvider"
-    | "modelApiBase"
-    | "instruction"
-    | "selectedSkills"
-    | "agentKey"
-    | "dimension"
-    | "additionalChanges"
-  >,
+  semanticConfigurationKey: string,
 ): string {
   return JSON.stringify({
     draftSnapshot,
-    modelName: variant.modelName,
-    modelProvider: variant.modelProvider,
-    modelApiBase: variant.modelApiBase,
-    instruction: variant.instruction,
-    selectedSkills: variant.selectedSkills,
-    agentKey: variant.agentKey,
-    dimension: variant.dimension,
-    additionalChanges: variant.additionalChanges.map(debugChangeConfiguration),
+    semanticConfigurationKey,
   });
 }
 
@@ -2230,14 +2219,8 @@ function debugVariantConfigurationKey(
   variant: DebugVariant,
 ): string {
   if (variant.id === "baseline") return "[]";
-  return JSON.stringify(
-    effectiveDebugChanges(draft, variant)
-      .map(debugChangeConfiguration)
-      .sort((left, right) =>
-        `${left.agentKey}:${left.dimension}`.localeCompare(
-          `${right.agentKey}:${right.dimension}`,
-        ),
-      ),
+  return semanticDebugConfigurationKey(
+    effectiveDebugChanges(draft, variant),
   );
 }
 
@@ -2259,18 +2242,6 @@ function primaryDebugChange(variant: DebugVariant): DebugVariantChange {
 
 function debugChangesForVariant(variant: DebugVariant): DebugVariantChange[] {
   return [primaryDebugChange(variant), ...variant.additionalChanges];
-}
-
-function debugChangeConfiguration(change: DebugVariantChange) {
-  return {
-    modelName: change.modelName.trim(),
-    modelProvider: change.modelProvider.trim(),
-    modelApiBase: change.modelApiBase.trim(),
-    instruction: change.instruction.trim(),
-    selectedSkills: change.selectedSkills,
-    agentKey: change.agentKey,
-    dimension: change.dimension,
-  };
 }
 
 function debugVariantConfigurationProblem(
@@ -2977,11 +2948,10 @@ function DebugVariantConfigurationPanel({
                       disabled={busy}
                       onClick={() => onToggleApiKey(variant.id)}
                     >
-                      {variant.apiKeyVisible ? (
-                        <EyeOff className="cw-i cw-i-sm" />
-                      ) : (
-                        <Eye className="cw-i cw-i-sm" />
-                      )}
+                      <SecretVisibilityIcon
+                        visible={variant.apiKeyVisible}
+                        className="cw-i cw-i-sm"
+                      />
                     </button>
                   </div>
                 )}
@@ -3204,7 +3174,11 @@ function DebugComparisonWorkspace({
   const runningVariants = variants.filter((variant) => {
     if (variant.phase !== "ready" || variant.configOpen) return false;
     return (
-      variant.runtimeSnapshot === debugVariantSnapshot(draftSnapshot, variant)
+      variant.runtimeSnapshot ===
+      debugVariantSnapshot(
+        draftSnapshot,
+        debugVariantConfigurationKey(draft, variant),
+      )
     );
   });
   const sending = variants.some((variant) => variant.phase === "sending");
@@ -4062,12 +4036,21 @@ export function CustomCreate({
   const comparisonSessionStatusValue = comparisonSessionStatus(
     comparisonSessionState,
   );
+  const markComparisonConfigChanged = (changed = true) => {
+    if (!changed) return;
+    setComparisonSessionState((current) => {
+      const next = markComparisonConfigurationChanged(current, true);
+      comparisonSessionStateRef.current = next;
+      return next;
+    });
+  };
   const sessionReadOnly =
     comparisonSessionState.activeSessionRevision !== null &&
     comparisonSessionStatusValue !== "ready";
   const comparisonRoundIdRef = useRef("");
   const undoDraftRef = useRef<AgentDraft | null>(null);
-  const undoModelApiKeysRef = useRef<Record<string, string> | null>(null);
+  const undoModelCredentialStateRef =
+    useRef<TransientModelCredentialState | null>(null);
   const [canUndoCandidate, setCanUndoCandidate] = useState(false);
   const [comparisonHistoryRevision, setComparisonHistoryRevision] = useState(0);
   const comparisonHistory = useMemo(
@@ -4078,6 +4061,7 @@ export function CustomCreate({
   const debugRunsRef = useRef(
     new Map<string, { run: GeneratedAgentTestRun; sessionId: string }>(),
   );
+  const debugStreamRegistryRef = useRef(new DebugStreamRegistry());
   const [activeDebugRunCount, setActiveDebugRunCount] = useState(0);
   const [debugInput, setDebugInput] = useState("");
   const [debugTraceTarget, setDebugTraceTarget] =
@@ -4092,13 +4076,30 @@ export function CustomCreate({
     useRef<((confirmed: boolean) => void) | null>(null);
   const [buildErr, setBuildErr] = useState("");
   const [modelAdvancedOpen, setModelAdvancedOpen] = useState(false);
-  const [modelApiKeys, setModelApiKeys] = useState<Record<string, string>>({});
-  const [revealedModelApiKeys, setRevealedModelApiKeys] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const [lockedModelApiKeys, setLockedModelApiKeys] = useState<Set<string>>(
-    () => new Set(),
-  );
+  const [modelCredentialState, setModelCredentialState] =
+    useState<TransientModelCredentialState>(() => ({
+      values: {},
+      locked: new Set(),
+      revealed: new Set(),
+    }));
+  const modelApiKeys = modelCredentialState.values;
+  const revealedModelApiKeys = modelCredentialState.revealed;
+  const lockedModelApiKeys = modelCredentialState.locked;
+  const credentialCloudProviderRef = useRef(cloudProvider);
+  const invalidateComparisonEnvironment = () => {
+    setModelCredentialState((current) =>
+      invalidateTransientModelCredentials(current),
+    );
+    setDebugVariants((current) =>
+      current.map(invalidateDebugVariantCredentials),
+    );
+    markComparisonConfigChanged();
+  };
+  useEffect(() => {
+    if (credentialCloudProviderRef.current === cloudProvider) return;
+    credentialCloudProviderRef.current = cloudProvider;
+    invalidateComparisonEnvironment();
+  }, [cloudProvider]);
   const [a2aRegistryAdvancedOpen, setA2aRegistryAdvancedOpen] =
     useState(false);
 
@@ -4132,6 +4133,7 @@ export function CustomCreate({
     void cleanupStoredDebugRuns();
     return () => {
       comparisonSessionAttemptRef.current += 1;
+      debugStreamRegistryRef.current.abortAll();
       for (const { run } of debugRunsRef.current.values()) {
         deleteGeneratedAgentTestRun(run.runId)
           .then(() => forgetDebugTestRun(run.runId))
@@ -4259,6 +4261,7 @@ export function CustomCreate({
   // Replace the whole tree (structural edits from the left tree), optionally
   // moving the selection to a new node.
   const applyTree = (nextRoot: AgentDraft, select?: NodePath) => {
+    invalidateComparisonEnvironment();
     setDraft(nextRoot);
     if (select) setSelectedPath(select);
   };
@@ -4280,7 +4283,7 @@ export function CustomCreate({
     setBuildErr("");
     try {
       const result = await generateAgentDraftFromRequirement(requirement);
-      setDraft(
+      applyTree(
         draftForCloudProvider(
           sanitizeGeneratedDraftCapabilities(
             normalizeDraft(result.draft),
@@ -4288,8 +4291,8 @@ export function CustomCreate({
           ),
           cloudProvider,
         ),
+        [],
       );
-      setSelectedPath([]);
       setProject(null);
       setShowErrors(false);
       setBuildErr("");
@@ -4331,8 +4334,7 @@ export function CustomCreate({
     ) {
       return;
     }
-    setDraft(emptyDraft(cloudProvider));
-    setSelectedPath([]);
+    applyTree(emptyDraft(cloudProvider), []);
     setShowErrors(false);
   };
 
@@ -4440,6 +4442,7 @@ export function CustomCreate({
 
   const cleanupDebugRuns = async () => {
     comparisonSessionAttemptRef.current += 1;
+    debugStreamRegistryRef.current.abortAll();
     comparisonRoundIdRef.current = "";
     const resetSessionState = resetComparisonSessionState();
     comparisonSessionStateRef.current = resetSessionState;
@@ -4471,6 +4474,7 @@ export function CustomCreate({
   };
 
   const cleanupDebugVariantRun = async (id: string) => {
+    debugStreamRegistryRef.current.abort(id);
     const runtime = debugRunsRef.current.get(id);
     if (!runtime) return;
     debugRunsRef.current.delete(id);
@@ -4593,15 +4597,6 @@ export function CustomCreate({
     }
   };
 
-  const markComparisonConfigChanged = (changed = true) => {
-    if (!changed) return;
-    setComparisonSessionState((current) => {
-      const next = markComparisonConfigurationChanged(current, true);
-      comparisonSessionStateRef.current = next;
-      return next;
-    });
-  };
-
   const comparisonSessionProblem = () =>
     debugComparisonSessionProblem(draft, debugVariants, modelApiKeys);
 
@@ -4627,7 +4622,7 @@ export function CustomCreate({
         .filter(({ apiKey }) => apiKey.trim().length > 0);
       const runtimeSnapshot = debugVariantSnapshot(
         currentDebugSnapshot,
-        variant,
+        debugVariantConfigurationKey(providerDraft, variant),
       );
 
       for (const { path, key } of configurableAgents) {
@@ -4793,6 +4788,7 @@ export function CustomCreate({
 
     const oldRuntimes = debugRunsRef.current;
     const preparedByVariant = staged.runtimes;
+    debugStreamRegistryRef.current.abortAll();
     debugRunsRef.current = new Map(
       [...preparedByVariant].map(([variantId, prepared]) => [
         variantId,
@@ -4809,11 +4805,14 @@ export function CustomCreate({
         prepared.credentialAgentPaths.map(nodePathKey),
       ),
     );
-    setLockedModelApiKeys(new Set(credentialPathKeys));
-    setRevealedModelApiKeys((current) => {
-      const next = new Set(current);
-      credentialPathKeys.forEach((pathKey) => next.delete(pathKey));
-      return next;
+    setModelCredentialState((current) => {
+      const revealed = new Set(current.revealed);
+      credentialPathKeys.forEach((pathKey) => revealed.delete(pathKey));
+      return {
+        values: current.values,
+        locked: new Set(credentialPathKeys),
+        revealed,
+      };
     });
     setDebugVariants((current) =>
       current.map((variant) => {
@@ -4914,15 +4913,35 @@ export function CustomCreate({
         const startedAt = performance.now();
         const runtime = debugRunsRef.current.get(variant.id);
         if (!runtime) return;
+        const roundId = comparisonRoundIdRef.current;
+        const runId = runtime.run.runId;
+        const sessionId = runtime.sessionId;
+        const stream = debugStreamRegistryRef.current.begin(variant.id);
+        const runtimeIsCurrent = () => {
+          const current = debugRunsRef.current.get(variant.id);
+          return (
+            comparisonRoundIdRef.current === roundId &&
+            current?.run.runId === runId &&
+            current.sessionId === sessionId
+          );
+        };
+        const streamIsCurrent = () =>
+          runtimeIsCurrent() &&
+          debugStreamRegistryRef.current.isCurrent(
+            variant.id,
+            stream.token,
+          );
         try {
           let acc = emptyAcc();
           let firstVisibleAt: number | null = null;
           for await (const event of runGeneratedAgentTestSSE({
-            runId: runtime.run.runId,
+            runId,
             userId: "test_user",
-            sessionId: runtime.sessionId,
+            sessionId,
             text,
+            signal: stream.signal,
           })) {
+            if (!streamIsCurrent()) return;
             const eventError =
               event.error || event.errorMessage || event.error_message;
             const usage = event.usageMetadata ?? event.usage_metadata;
@@ -4937,48 +4956,63 @@ export function CustomCreate({
               firstVisibleAt = performance.now();
             }
             setDebugVariants((current) =>
-              current.map((item) => {
-                if (item.id !== variant.id) return item;
-                const messages = [...item.messages];
-                const last = { ...messages[messages.length - 1] };
-                if (eventError) {
-                  last.error = String(eventError);
-                } else {
-                  last.content = acc.blocks
-                    .filter((block) => block.kind === "text")
-                    .map((block) => (block as { text: string }).text)
-                    .join("");
-                  last.blocks = acc.blocks;
-                }
-                messages[messages.length - 1] = last;
-                return {
-                  ...item,
-                  messages,
-                  ttftMs:
-                    firstVisibleAt == null
-                      ? item.ttftMs
-                      : Math.round(firstVisibleAt - startedAt),
-                  toolCalls: acc.blocks.filter(
-                    (block) => block.kind === "tool" && block.done,
-                  ).length,
-                  tokens: usage?.totalTokenCount ?? item.tokens,
-                };
-              }),
+              streamIsCurrent()
+                ? current.map((item) => {
+                    if (item.id !== variant.id) return item;
+                    const messages = [...item.messages];
+                    const last = { ...messages[messages.length - 1] };
+                    if (eventError) {
+                      last.error = String(eventError);
+                    } else {
+                      last.content = acc.blocks
+                        .filter((block) => block.kind === "text")
+                        .map((block) => (block as { text: string }).text)
+                        .join("");
+                      last.blocks = acc.blocks;
+                    }
+                    messages[messages.length - 1] = last;
+                    return {
+                      ...item,
+                      messages,
+                      ttftMs:
+                        firstVisibleAt == null
+                          ? item.ttftMs
+                          : Math.round(firstVisibleAt - startedAt),
+                      toolCalls: acc.blocks.filter(
+                        (block) => block.kind === "tool" && block.done,
+                      ).length,
+                      tokens: usage?.totalTokenCount ?? item.tokens,
+                    };
+                  })
+                : current,
             );
             if (eventError) break;
           }
         } catch (err) {
+          if (
+            !streamIsCurrent() ||
+            (err instanceof Error && err.name === "AbortError")
+          ) {
+            return;
+          }
           setDebugVariants((current) =>
-            current.map((item) => {
-              if (item.id !== variant.id) return item;
-              const messages = [...item.messages];
-              const last = { ...messages[messages.length - 1] };
-              last.error = err instanceof Error ? err.message : String(err);
-              messages[messages.length - 1] = last;
-              return { ...item, messages };
-            }),
+            streamIsCurrent()
+              ? current.map((item) => {
+                  if (item.id !== variant.id) return item;
+                  const messages = [...item.messages];
+                  const last = { ...messages[messages.length - 1] };
+                  last.error = err instanceof Error ? err.message : String(err);
+                  messages[messages.length - 1] = last;
+                  return { ...item, messages };
+                })
+              : current,
           );
         } finally {
+          const finished = debugStreamRegistryRef.current.finish(
+            variant.id,
+            stream.token,
+          );
+          if (!finished || !runtimeIsCurrent()) return;
           setDebugVariants((current) =>
             current.map((item) =>
               item.id === variant.id
@@ -5005,7 +5039,10 @@ export function CustomCreate({
         variant.phase === "ready" &&
         !variant.configOpen &&
         variant.runtimeSnapshot ===
-          debugVariantSnapshot(currentDebugSnapshot, variant) &&
+          debugVariantSnapshot(
+            currentDebugSnapshot,
+            debugVariantConfigurationKey(providerDraft, variant),
+          ) &&
         debugRunsRef.current.has(variant.id),
     );
     if (!text || targets.length === 0) return;
@@ -5026,7 +5063,10 @@ export function CustomCreate({
         variant.phase === "ready" &&
         !variant.configOpen &&
         variant.runtimeSnapshot ===
-          debugVariantSnapshot(currentDebugSnapshot, variant) &&
+          debugVariantSnapshot(
+            currentDebugSnapshot,
+            debugVariantConfigurationKey(providerDraft, variant),
+          ) &&
         debugRunsRef.current.has(variant.id),
     );
     const matchingTargets = runningTargets.filter((variant) =>
@@ -5181,16 +5221,29 @@ export function CustomCreate({
     const nextFingerprint = await fingerprintDraft(result.draft);
 
     undoDraftRef.current = structuredClone(draft);
-    undoModelApiKeysRef.current = { ...modelApiKeys };
+    undoModelCredentialStateRef.current = {
+      values: { ...modelApiKeys },
+      locked: new Set(lockedModelApiKeys),
+      revealed: new Set(revealedModelApiKeys),
+    };
     setDraft(result.draft);
-    setModelApiKeys((current) => {
-      const next = { ...current };
-      debugChangesForVariant(variant)
+    setModelCredentialState((current) => {
+      return debugChangesForVariant(variant)
         .filter((change) => change.dimension === "model")
-        .forEach((change) => {
-          next[change.agentKey] = change.apiKey;
-        });
-      return next;
+        .reduce((next, change) => {
+          const invalidated = invalidateTransientModelCredentials(
+            next,
+            change.agentKey,
+          );
+          if (!change.apiKey) return invalidated;
+          return {
+            ...invalidated,
+            values: {
+              ...invalidated.values,
+              [change.agentKey]: change.apiKey,
+            },
+          };
+        }, current);
     });
     setComparisonFingerprint(nextFingerprint);
     markComparisonConfigChanged();
@@ -5224,13 +5277,18 @@ export function CustomCreate({
     const previous = undoDraftRef.current;
     if (!previous) return;
     setDraft(previous);
-    if (undoModelApiKeysRef.current) {
-      setModelApiKeys(undoModelApiKeysRef.current);
+    if (undoModelCredentialStateRef.current) {
+      const previousCredentials = undoModelCredentialStateRef.current;
+      setModelCredentialState({
+        values: { ...previousCredentials.values },
+        locked: new Set(previousCredentials.locked),
+        revealed: new Set(previousCredentials.revealed),
+      });
     }
     setComparisonFingerprint(await fingerprintDraft(previous));
     markComparisonConfigChanged();
     undoDraftRef.current = null;
-    undoModelApiKeysRef.current = null;
+    undoModelCredentialStateRef.current = null;
     setCanUndoCandidate(false);
     setSelectedVariantId("baseline");
   };
@@ -5293,7 +5351,6 @@ export function CustomCreate({
         );
       }),
     );
-    markComparisonConfigChanged();
   };
 
   const removeDebugVariantChange = (
@@ -5452,7 +5509,7 @@ export function CustomCreate({
     if (!requireCompleteDraft()) return;
     setComparisonFingerprint(await fingerprintDraft(draft));
     undoDraftRef.current = null;
-    undoModelApiKeysRef.current = null;
+    undoModelCredentialStateRef.current = null;
     setCanUndoCandidate(false);
     setDebugVariants((current) =>
       current.map((variant) =>
@@ -5918,9 +5975,15 @@ export function CustomCreate({
                               className="cw-input"
                               value={node.modelProvider ?? ""}
                               placeholder="openai"
-                              onChange={(e) =>
-                                patch({ modelProvider: e.target.value })
-                              }
+                              onChange={(e) => {
+                                setModelCredentialState((current) =>
+                                  invalidateTransientModelCredentials(
+                                    current,
+                                    selectedModelSecretKey,
+                                  ),
+                                );
+                                patch({ modelProvider: e.target.value });
+                              }}
                             />
                           </div>
                           <div className="cw-field">
@@ -5929,9 +5992,15 @@ export function CustomCreate({
                               className="cw-input"
                               value={node.modelApiBase ?? ""}
                               placeholder={defaultModelApiBase(cloudProvider)}
-                              onChange={(e) =>
-                                patch({ modelApiBase: e.target.value })
-                              }
+                              onChange={(e) => {
+                                setModelCredentialState((current) =>
+                                  invalidateTransientModelCredentials(
+                                    current,
+                                    selectedModelSecretKey,
+                                  ),
+                                );
+                                patch({ modelApiBase: e.target.value });
+                              }}
                             />
                             <span className="cw-help cw-dependency-hint">
                               留空或使用当前云的官方 Ark 地址时，Studio
@@ -5949,17 +6018,14 @@ export function CustomCreate({
                                 <button
                                   type="button"
                                   className="cw-link-btn"
-                                  onClick={() => {
-                                    setModelApiKeys((current) => ({
-                                      ...current,
-                                      [selectedModelSecretKey]: "",
-                                    }));
-                                    setLockedModelApiKeys((current) => {
-                                      const next = new Set(current);
-                                      next.delete(selectedModelSecretKey);
-                                      return next;
-                                    });
-                                  }}
+                                  onClick={() =>
+                                    setModelCredentialState((current) =>
+                                      invalidateTransientModelCredentials(
+                                        current,
+                                        selectedModelSecretKey,
+                                      ),
+                                    )
+                                  }
                                 >
                                   清除并重新输入
                                 </button>
@@ -5978,11 +6044,25 @@ export function CustomCreate({
                                   placeholder="可留空"
                                   aria-label="模型 API Key"
                                   onChange={(event) =>
-                                    setModelApiKeys((current) => ({
-                                      ...current,
-                                      [selectedModelSecretKey]:
-                                        event.target.value,
-                                    }))
+                                    setModelCredentialState((current) => {
+                                      const value = event.target.value;
+                                      const locked = new Set(current.locked);
+                                      locked.delete(selectedModelSecretKey);
+                                      const revealed = new Set(
+                                        current.revealed,
+                                      );
+                                      if (!value) {
+                                        revealed.delete(selectedModelSecretKey);
+                                      }
+                                      return {
+                                        values: {
+                                          ...current.values,
+                                          [selectedModelSecretKey]: value,
+                                        },
+                                        locked,
+                                        revealed,
+                                      };
+                                    })
                                   }
                                 />
                                 <button
@@ -5995,22 +6075,27 @@ export function CustomCreate({
                                   }
                                   aria-pressed={selectedModelApiKeyRevealed}
                                   onClick={() =>
-                                    setRevealedModelApiKeys((current) => {
-                                      const next = new Set(current);
-                                      if (next.has(selectedModelSecretKey)) {
-                                        next.delete(selectedModelSecretKey);
+                                    setModelCredentialState((current) => {
+                                      const revealed = new Set(
+                                        current.revealed,
+                                      );
+                                      if (
+                                        revealed.has(selectedModelSecretKey)
+                                      ) {
+                                        revealed.delete(
+                                          selectedModelSecretKey,
+                                        );
                                       } else {
-                                        next.add(selectedModelSecretKey);
+                                        revealed.add(selectedModelSecretKey);
                                       }
-                                      return next;
+                                      return { ...current, revealed };
                                     })
                                   }
                                 >
-                                  {selectedModelApiKeyRevealed ? (
-                                    <EyeOff className="cw-i cw-i-sm" />
-                                  ) : (
-                                    <Eye className="cw-i cw-i-sm" />
-                                  )}
+                                  <SecretVisibilityIcon
+                                    visible={selectedModelApiKeyRevealed}
+                                    className="cw-i cw-i-sm"
+                                  />
                                 </button>
                               </div>
                             )}

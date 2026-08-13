@@ -6,6 +6,33 @@ export interface ModelConnectionInput {
   studioApiBase: string;
 }
 
+export interface TransientModelCredentialState {
+  values: Record<string, string>;
+  locked: Set<string>;
+  revealed: Set<string>;
+}
+
+export function invalidateTransientModelCredentials(
+  current: TransientModelCredentialState,
+  pathKey?: string,
+): TransientModelCredentialState {
+  if (pathKey === undefined) {
+    return {
+      values: {},
+      locked: new Set(),
+      revealed: new Set(),
+    };
+  }
+
+  const values = { ...current.values };
+  delete values[pathKey];
+  const locked = new Set(current.locked);
+  locked.delete(pathKey);
+  const revealed = new Set(current.revealed);
+  revealed.delete(pathKey);
+  return { values, locked, revealed };
+}
+
 function normalizedBase(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }

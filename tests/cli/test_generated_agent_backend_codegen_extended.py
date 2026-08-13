@@ -1050,6 +1050,17 @@ def test_generated_project_and_debug_run_api_lifecycle(
     monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "byteplus-sk")
     monkeypatch.setenv("BYTEPLUS_SESSION_TOKEN", "byteplus-token")
     monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-1")
+    monkeypatch.setenv(
+        "VEADK_STUDIO_DEBUG_MODEL_HOST_ALLOWLIST",
+        "user-controlled.example",
+    )
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ],
+    )
 
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
@@ -1161,6 +1172,18 @@ def test_generated_project_and_debug_run_api_lifecycle(
         )
         assert old_shape_response.status_code == 422
 
+        validation_secret = "validation-secret-sentinel-" + "x" * 16384
+        invalid_credential_response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": draft,
+                "modelCredentials": [{"agentPath": [], "apiKey": validation_secret}],
+            },
+        )
+        assert invalid_credential_response.status_code == 422
+        assert validation_secret not in invalid_credential_response.text
+        assert "validation-secret-sentinel" not in invalid_credential_response.text
+
         process_count = len(_FakeProcess.created)
         custom_model_response = client.post(
             "/web/generated-agent-test-runs",
@@ -1174,6 +1197,32 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert custom_model_response.status_code == 400
         assert "自定义模型地址" in custom_model_response.json()["detail"]
         assert len(_FakeProcess.created) == process_count
+
+        allowlisted_custom_response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": {
+                    **draft,
+                    "modelApiBase": "https://user-controlled.example/v1",
+                },
+                "modelCredentials": [
+                    {"agentPath": [], "apiKey": "allowlisted-temporary-key"}
+                ],
+            },
+        )
+        assert allowlisted_custom_response.status_code == 200
+        allowlisted_custom_run = allowlisted_custom_response.json()
+        allowlisted_custom_process = _FakeProcess.created[-1]
+        assert (
+            allowlisted_custom_process.env["VEADK_DEBUG_MODEL_API_KEY_ROOT"]
+            == "allowlisted-temporary-key"
+        )
+        assert (
+            client.delete(
+                f"/web/generated-agent-test-runs/{allowlisted_custom_run['runId']}"
+            ).status_code
+            == 200
+        )
 
         temporary_model_key = "temporary-model-api-key-123"
         run_response = client.post(

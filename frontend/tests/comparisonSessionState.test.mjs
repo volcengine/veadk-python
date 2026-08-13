@@ -49,6 +49,19 @@ test("latches a real configuration edit even when later values are restored", ()
   assert.equal(state.comparisonSessionStatus(restored), "stale");
 });
 
+test("topology or cloud invalidation makes a ready Session stale", () => {
+  const ready = state.completeComparisonSession(
+    state.beginComparisonSession(state.createComparisonSessionState()),
+    0,
+  );
+
+  const invalidated = state.markComparisonConfigurationChanged(ready, true);
+
+  assert.equal(invalidated.activeSessionRevision, 0);
+  assert.equal(invalidated.configurationRevision, 1);
+  assert.equal(state.comparisonSessionStatus(invalidated), "stale");
+});
+
 test("a semantic edit during startup clears the matching attempt and remains recoverable", () => {
   const firstStarting = state.beginComparisonSession(
     state.createComparisonSessionState(),

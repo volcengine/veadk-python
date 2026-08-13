@@ -157,6 +157,14 @@ server that `veadk frontend` launches — no separate backend.
   its generated internal proxy mounts AgentKit A2A center agents dynamically
   from the center ID, recall count, region, and OpenAPI endpoint. Remote names,
   descriptions, and capabilities come from the returned Agent Cards.
+
+Custom model endpoints used by comparison debugging require an endpoint-specific
+temporary API Key and an exact server-side hostname allowlist. Studio operators
+configure comma-separated hostnames with
+`VEADK_STUDIO_DEBUG_MODEL_HOST_ALLOWLIST`; URLs, wildcards, and inherited
+subdomains are not accepted. The endpoint must still use HTTPS and resolve to a
+public address.
+
 - **Code-package deployment**: upload a ZIP project from the add-Agent menu,
   inspect or edit its files in the existing code browser, then choose the
   region and public/VPC network before deploying it to AgentKit. The package

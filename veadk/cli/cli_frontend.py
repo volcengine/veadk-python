@@ -2298,6 +2298,7 @@ def _run_frontend_server(
     )
     from veadk.cli.generated_agent_security import (
         DebugPolicyError,
+        parse_debug_model_host_allowlist,
         validate_debug_policy,
         validate_project_policy,
     )
@@ -2313,6 +2314,9 @@ def _run_frontend_server(
     _TEST_RUN_MAX_ACTIVE = 4
     _TEST_RUN_MAX_ACTIVE_DURING_COMPARISON_SWAP = 8
     _TEST_RUN_READY_TIMEOUT = 30.0
+    debug_model_allowed_hosts = parse_debug_model_host_allowlist(
+        os.getenv("VEADK_STUDIO_DEBUG_MODEL_HOST_ALLOWLIST")
+    )
 
     @dataclass
     class _GeneratedAgentTestRun:
@@ -2856,6 +2860,7 @@ def _run_frontend_server(
                     custom_model_credential_paths=set(
                         tuple(item.agentPath) for item in req.modelCredentials
                     ),
+                    custom_model_allowed_hosts=debug_model_allowed_hosts,
                 )
                 try:
                     model_api_key_env_by_path, credential_env = (
@@ -2894,7 +2899,10 @@ def _run_frontend_server(
                 )
             return project, draft, credential_env
         except ValidationError as e:
-            raise HTTPException(status_code=422, detail=e.errors()) from e
+            raise HTTPException(
+                status_code=422,
+                detail=e.errors(include_input=False),
+            ) from e
         except DebugPolicyError as e:
             raise _http_policy_error(e) from e
         except McpDebugConnectionError as e:
@@ -3056,7 +3064,10 @@ def _run_frontend_server(
         try:
             payload = GeneratedAgentDraftRequest.model_validate(await request.json())
         except ValidationError as error:
-            raise HTTPException(status_code=422, detail=error.errors()) from error
+            raise HTTPException(
+                status_code=422,
+                detail=error.errors(include_input=False),
+            ) from error
 
         try:
             return await generate_agent_draft(payload.requirement)
