@@ -1992,7 +1992,7 @@ export function ProjectPreview({
                     <p id={runtimeNameHelpId} className="pp-config-note">
                       {isRuntimeUpdate
                         ? "更新时保持现有 Runtime 名称不变。"
-                        : "默认根据 Root Agent 名称生成。支持 4-64 位字母、数字、连字符和下划线。"}
+                        : "默认根据 Root Agent 名称生成，支持 4-64 位字母、数字、连字符和下划线"}
                     </p>
                     {runtimeNameError && (
                       <p

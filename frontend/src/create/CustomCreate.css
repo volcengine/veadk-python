@@ -3506,7 +3506,7 @@
 }
 .cw-toggle {
   display: grid;
-  grid-template-columns: minmax(124px, 0.34fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
   width: 100%;
