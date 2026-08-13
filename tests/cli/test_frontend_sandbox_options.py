@@ -123,6 +123,24 @@ def test_local_sandbox_tool_options_fall_back_to_environment(
     assert "sandbox_skill_creator_tool_id" not in captured
 
 
+def test_local_studio_composes_vibe_runtime_before_sandbox_shutdown() -> None:
+    source = Path("veadk/cli/cli_frontend.py").read_text(encoding="utf-8")
+
+    store = "vibe_store = VibeSandboxStore("
+    manager = "vibe_runtime_manager = VibeTaskRuntimeManager("
+    state = "app.state.vibe_task_runtime_manager = vibe_runtime_manager"
+    shutdown = "app.router.on_shutdown.append(vibe_runtime_manager.close_all)"
+    sandbox_routes = "mount_sandbox_routes("
+
+    assert "resolver=vibe_store.find" in source
+    assert "SandboxRemoteTransport(session.endpoint).exec_text(" in source
+    assert 'workspace = f"/home/gem/workspace/{session.user_session_id}"' in source
+    assert 'f"mkdir -p {workspace}"' in source
+    assert source.count(shutdown) == 1
+    assert source.index(store) < source.index(manager) < source.index(state)
+    assert source.index(state) < source.index(shutdown) < source.index(sandbox_routes)
+
+
 def test_local_studio_mounts_snapshot_tools_into_sandbox_services() -> None:
     source = Path("veadk/cli/cli_frontend.py").read_text(encoding="utf-8")
 
