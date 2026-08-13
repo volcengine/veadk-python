@@ -689,6 +689,7 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
     agent_tools: list[dict[str, object]] = []
     code_credentials: list[dict[str, object]] = []
     agent_credentials: list[dict[str, object]] = []
+    stagger_delays: list[float] = []
     monkeypatch.setattr(
         "veadk.cli.studio_update.find_studio_deployments", lambda **_: [target]
     )
@@ -709,14 +710,16 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
         "veadk.cli.cli_frontend._new_studio_deploy_id",
         lambda: "stddep_update",
     )
+    monkeypatch.setattr("veadk.cli.cli_frontend.sleep", stagger_delays.append)
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
         lambda **kwargs: code_tools.append(kwargs) or "codex-snapshot-tool",
     )
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_tool",
-        lambda **kwargs: agent_tools.append(kwargs)
-        or f"{kwargs['kind']}-snapshot-tool",
+        lambda **kwargs: (
+            agent_tools.append(kwargs) or f"{kwargs['kind']}-snapshot-tool"
+        ),
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
@@ -764,9 +767,12 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
     assert result.exit_code == 0, result.output
     assert len(code_tools) == 1
     assert code_tools[0]["enable_snapshot"] is True
+    assert code_tools[0]["create_min_interval"] == 0.5
     assert str(code_tools[0]["name"]).endswith("_snapshot")
     assert {str(call["kind"]) for call in agent_tools} == {"openclaw", "hermes"}
     assert {bool(call["enable_snapshot"]) for call in agent_tools} == {True}
+    assert {float(call["create_min_interval"]) for call in agent_tools} == {0.5}
+    assert stagger_delays == [0.5, 0.5]
     assert {str(call["provider"]) for call in code_credentials} == {"volcengine"}
     assert {str(call["provider"]) for call in agent_credentials} == {"volcengine"}
     overrides = captured["environment_overrides"]
@@ -819,11 +825,13 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     )
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_tool",
-        lambda **kwargs: agent_tools.append(kwargs)
-        or (
-            f"{kwargs['kind']}-snapshot-tool"
-            if kwargs["enable_snapshot"]
-            else f"{kwargs['kind']}-tool"
+        lambda **kwargs: (
+            agent_tools.append(kwargs)
+            or (
+                f"{kwargs['kind']}-snapshot-tool"
+                if kwargs["enable_snapshot"]
+                else f"{kwargs['kind']}-tool"
+            )
         ),
     )
     monkeypatch.setattr(
