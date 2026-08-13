@@ -4,9 +4,13 @@ from uuid import UUID
 
 import pytest
 
+from frontend.server.sandbox_remote import SandboxRemoteError
 from frontend.server.vibe_task.models import (
+    CredentialUpload,
     CreateTaskRequest,
     IntentSummary,
+    IntentSummaryUpdate,
+    StopTaskRequest,
     TaskStage,
     TaskState,
     TaskStatus,
@@ -56,17 +60,28 @@ class FakeTransport:
     snapshots: dict[str, dict[str, object]] = {}
     exec_json_calls: list[tuple[str, str, int]] = []
     exec_text_calls: list[tuple[str, str, int]] = []
+    upload_calls: list[tuple[str, str, bytes]] = []
+    exec_error: Exception | None = None
 
     def __init__(self, endpoint: str) -> None:
         self.endpoint = endpoint
 
     async def exec_json(self, command: str, *, timeout: int = 12):
         self.exec_json_calls.append((self.endpoint, command, timeout))
-        return self.snapshots[self.endpoint]
+        snapshot = self.snapshots[self.endpoint]
+        if isinstance(snapshot, list):
+            return snapshot.pop(0)
+        return snapshot
 
     async def exec_text(self, command: str, *, timeout: int = 12):
         self.exec_text_calls.append((self.endpoint, command, timeout))
+        if self.exec_error is not None:
+            raise self.exec_error
         return ""
+
+    async def upload(self, path: str, content: bytes, **kwargs):
+        del kwargs
+        self.upload_calls.append((self.endpoint, path, content))
 
 
 @pytest.fixture(autouse=True)
@@ -74,6 +89,8 @@ def fake_transport(monkeypatch):
     FakeTransport.snapshots = {}
     FakeTransport.exec_json_calls = []
     FakeTransport.exec_text_calls = []
+    FakeTransport.upload_calls = []
+    FakeTransport.exec_error = None
     monkeypatch.setattr(
         "frontend.server.vibe_task.sandbox.SandboxRemoteTransport", FakeTransport
     )
@@ -100,7 +117,16 @@ def _session(
     )
 
 
-def _snapshot(task_id: str, *, corrupt_events: bool = False) -> dict[str, object]:
+def _snapshot(
+    task_id: str,
+    *,
+    corrupt_events: bool = False,
+    command_id: str = "",
+    event_type: str = "task.created",
+    state: TaskState = TaskState.PROVISIONING,
+    intent_revision: int = 1,
+    credentials_configured: bool = False,
+) -> dict[str, object]:
     request = RemoteTaskRequest(
         taskId=task_id,
         requestId=UUID(int=1),
@@ -111,26 +137,28 @@ def _snapshot(task_id: str, *, corrupt_events: bool = False) -> dict[str, object
         task_id=task_id,
         sequence=1,
         previous_hash=EVENT_CHAIN_GENESIS,
-        event_type="task.created",
-        stage=TaskStage.PROVISIONING,
+        event_type=event_type,
+        stage=TaskStage.DONE if state is TaskState.CANCELLED else TaskStage.PROVISIONING,
         timestamp="2026-08-13T00:00:00+00:00",
-        payload={},
+        payload={"commandId": command_id} if command_id else {},
         projection=RemoteStatusProjection(
-            state=TaskState.PROVISIONING,
-            stage=TaskStage.PROVISIONING,
-            intentRevision=1,
+            state=state,
+            stage=TaskStage.DONE if state is TaskState.CANCELLED else TaskStage.PROVISIONING,
+            intentRevision=intent_revision,
+            credentialsConfigured=credentials_configured,
         ),
     )
     status = TaskStatus(
         taskId=task_id,
         displayName="Vibe Task",
         goal="Build",
-        state=TaskState.PROVISIONING,
-        stage=TaskStage.PROVISIONING,
+        state=state,
+        stage=TaskStage.DONE if state is TaskState.CANCELLED else TaskStage.PROVISIONING,
         createdAt="2026-08-13T00:00:00+00:00",
         expiresAt="2026-08-13T08:00:00+00:00",
         lastSequence=1,
-        intentRevision=1,
+        intentRevision=intent_revision,
+        credentialsConfigured=credentials_configured,
     )
     events = event.model_dump_json(by_alias=True) + "\n"
     if corrupt_events:
@@ -138,7 +166,7 @@ def _snapshot(task_id: str, *, corrupt_events: bool = False) -> dict[str, object
     return {
         "request": request.model_dump_json(by_alias=True),
         "status": status.model_dump_json(by_alias=True),
-        "intent": IntentSummary(revision=1, goal="Build").model_dump_json(by_alias=True),
+        "intent": IntentSummary(revision=intent_revision, goal="Build").model_dump_json(by_alias=True),
         "events": events,
     }
 
@@ -204,6 +232,127 @@ async def test_corrupt_event_log_fails_closed_for_all_reads() -> None:
 
 
 @pytest.mark.asyncio
+async def test_credentials_upload_secret_out_of_band_and_reconcile_unknown_outcome() -> None:
+    task_id = task_id_for("owner", UUID(int=1))
+    command_id = UUID(int=9)
+    gateway = FakeGateway()
+    gateway.sessions = [_session(task_id)]
+    FakeTransport.snapshots["https://sandbox.example"] = _snapshot(
+        task_id,
+        command_id=command_id.hex,
+        event_type="credentials.configured",
+        credentials_configured=True,
+    )
+    FakeTransport.exec_error = SandboxRemoteError("unknown", retryable=True)
+    store = VibeSandboxStore(gateway, "dev-tool")
+
+    status = await store.configure_credentials(
+        "owner",
+        task_id,
+        CredentialUpload(
+            commandId=command_id,
+            accessKeyId="access-secret",
+            secretAccessKey="secret-secret",
+        ),
+    )
+
+    assert status.credentials_configured is True
+    assert len(FakeTransport.exec_text_calls) == 1
+    command = FakeTransport.exec_text_calls[0][1]
+    assert "access-secret" not in command and "secret-secret" not in command
+    assert f"chmod 600 -- /home/gem/.vibe/task/secrets/{command_id.hex}.json" in command
+    assert FakeTransport.upload_calls[0][1].endswith(f"/{command_id.hex}.json")
+    assert b"access-secret" in FakeTransport.upload_calls[0][2]
+
+
+@pytest.mark.asyncio
+async def test_update_intent_uses_cas_command_and_reconciles_snapshot() -> None:
+    task_id = task_id_for("owner", UUID(int=1))
+    command_id = UUID(int=10)
+    gateway = FakeGateway()
+    gateway.sessions = [_session(task_id)]
+    FakeTransport.snapshots["https://sandbox.example"] = _snapshot(
+        task_id,
+        command_id=command_id.hex,
+        event_type="vibe.intent.updated",
+        intent_revision=2,
+    )
+    store = VibeSandboxStore(gateway, "dev-tool")
+
+    intent = await store.update_intent(
+        "owner",
+        task_id,
+        IntentSummaryUpdate(
+            commandId=command_id,
+            expectedRevision=1,
+            summary=IntentSummary(goal="Build"),
+        ),
+    )
+
+    assert intent.revision == 2
+    assert len(FakeTransport.exec_text_calls) == 1
+    assert '"expectedRevision":1' in FakeTransport.exec_text_calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_stop_closes_runtime_before_remote_command() -> None:
+    task_id = task_id_for("owner", UUID(int=1))
+    command_id = UUID(int=11)
+    calls = []
+
+    class Runtime:
+        async def interrupt(self, owner, task):
+            calls.append(("interrupt", owner, task))
+
+        async def close(self, owner, task):
+            calls.append(("close", owner, task))
+
+    gateway = FakeGateway()
+    gateway.sessions = [_session(task_id)]
+    FakeTransport.snapshots["https://sandbox.example"] = _snapshot(
+        task_id,
+        command_id=command_id.hex,
+        event_type="task.cancelled",
+        state=TaskState.CANCELLED,
+    )
+    store = VibeSandboxStore(gateway, "dev-tool", runtime_manager=Runtime())
+
+    status = await store.stop(
+        "owner", task_id, StopTaskRequest(commandId=command_id)
+    )
+
+    assert status.state is TaskState.CANCELLED
+    assert calls == [("interrupt", "owner", task_id), ("close", "owner", task_id)]
+    assert FakeTransport.exec_text_calls == []
+
+
+@pytest.mark.asyncio
+async def test_stop_executes_once_after_runtime_cleanup() -> None:
+    task_id = task_id_for("owner", UUID(int=1))
+    command_id = UUID(int=12)
+    gateway = FakeGateway()
+    gateway.sessions = [_session(task_id)]
+    FakeTransport.snapshots["https://sandbox.example"] = [
+        _snapshot(task_id),
+        _snapshot(
+            task_id,
+            command_id=command_id.hex,
+            event_type="task.cancelled",
+            state=TaskState.CANCELLED,
+        ),
+    ]
+    store = VibeSandboxStore(gateway, "dev-tool")
+
+    status = await store.stop(
+        "owner", task_id, StopTaskRequest(commandId=command_id, reason="user")
+    )
+
+    assert status.state is TaskState.CANCELLED
+    assert len(FakeTransport.exec_text_calls) == 1
+    assert '"commandType":"task.stop"' in FakeTransport.exec_text_calls[0][1]
+
+
+@pytest.mark.asyncio
 async def test_delete_resolves_owner_and_workload_identity_before_gateway() -> None:
     task_id = task_id_for("owner", UUID(int=1))
     session = _session(task_id)
@@ -216,6 +365,9 @@ async def test_delete_resolves_owner_and_workload_identity_before_gateway() -> N
         ),
     ]
     store = VibeSandboxStore(gateway, "dev-tool")
+    FakeTransport.snapshots["https://sandbox.example"] = _snapshot(
+        task_id, state=TaskState.CANCELLED, event_type="task.cancelled"
+    )
 
     assert await store.delete("owner", task_id) is True
     assert gateway.deleted == [session]

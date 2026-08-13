@@ -17,7 +17,9 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 import shlex
+from typing import Protocol
 
 from veadk.cli.agentkit_session_metadata import (
     SESSION_SCHEMA_VERSION_METADATA_KEY,
@@ -29,11 +31,21 @@ from veadk.cli.frontend_sandbox import (
 )
 
 from ..sandbox_remote import SandboxRemoteError, SandboxRemoteTransport
+from .control import (
+    CredentialsMarkerCommand,
+    IntentUpdateCommand,
+    REMOTE_SECRETS_ROOT,
+    StopCommand,
+    build_control_command,
+)
 from .models import (
+    CredentialUpload,
     CreateTaskRequest,
     DEV_SANDBOX_TTL_SECONDS,
     INTENT_SUMMARY_PATH,
     IntentSummary,
+    IntentSummaryUpdate,
+    StopTaskRequest,
     TaskEvent,
     TaskStage,
     TaskState,
@@ -57,12 +69,24 @@ VIBE_WORKLOAD = "vibe-task"
 VIBE_SCHEMA_VERSION = "1"
 
 
+class RuntimeManager(Protocol):
+    async def interrupt(self, owner_id: str, task_id: str) -> None: ...
+    async def close(self, owner_id: str, task_id: str) -> None: ...
+
+
 class VibeSandboxStore:
     """Sandbox-backed boundary for discovering and reading Vibe tasks."""
 
-    def __init__(self, gateway: AgentkitSandboxGateway, tool_id: str) -> None:
+    def __init__(
+        self,
+        gateway: AgentkitSandboxGateway,
+        tool_id: str,
+        *,
+        runtime_manager: RuntimeManager | None = None,
+    ) -> None:
         self.gateway = gateway
         self.tool_id = tool_id.strip()
+        self.runtime_manager = runtime_manager
 
     def capabilities(self) -> dict[str, object]:
         return {
@@ -192,8 +216,140 @@ class VibeSandboxStore:
         _, _, events = await self._snapshot(await self.find(owner_id, task_id))
         return [event for event in events if event.sequence > sequence]
 
+    async def _execute_control(
+        self,
+        session: SandboxCloudSession,
+        command: IntentUpdateCommand | CredentialsMarkerCommand | StopCommand,
+        *,
+        prefix: str = "",
+    ) -> tuple[TaskStatus, IntentSummary, list[TaskEvent]]:
+        if not session.endpoint:
+            raise VibeTaskError(
+                "VIBE_TASK_INITIALIZING",
+                "Dev Sandbox 正在初始化",
+                status_code=409,
+            )
+        error: SandboxRemoteError | None = None
+        try:
+            await SandboxRemoteTransport(session.endpoint).exec_text(
+                prefix + build_control_command(command), timeout=30
+            )
+        except SandboxRemoteError as caught:
+            error = caught
+            if not caught.retryable:
+                raise VibeTaskError(
+                    "VIBE_CONTROL_COMMAND_FAILED",
+                    "Dev Sandbox control command failed",
+                    status_code=502,
+                ) from caught
+        snapshot = await self._snapshot(session)
+        if any(
+            event.payload.get("commandId") == command.command_id
+            for event in snapshot[2]
+        ):
+            return snapshot
+        if isinstance(command, IntentUpdateCommand) and (
+            snapshot[0].intent_revision != command.expected_revision
+        ):
+            raise VibeTaskError(
+                "VIBE_INTENT_REVISION_CONFLICT",
+                "Intent Summary is stale",
+                status_code=409,
+            ) from error
+        if snapshot[0].terminal:
+            raise VibeTaskError(
+                "VIBE_TASK_TERMINAL", "Task is terminal", status_code=409
+            ) from error
+        raise VibeTaskError(
+            "VIBE_CONTROL_COMMAND_FAILED",
+            "Dev Sandbox control command failed",
+            status_code=502,
+        ) from error
+
+    async def configure_credentials(
+        self, owner_id: str, task_id: str, body: CredentialUpload
+    ) -> TaskStatus:
+        session = await self.find(owner_id, task_id)
+        command_id = body.command_id.hex
+        secret_path = f"{REMOTE_SECRETS_ROOT}/{command_id}.json"
+        secret = json.dumps(
+            {
+                "accessKeyId": body.access_key_id.get_secret_value(),
+                "secretAccessKey": body.secret_access_key.get_secret_value(),
+                "sessionToken": (
+                    body.session_token.get_secret_value() if body.session_token else None
+                ),
+            },
+            separators=(",", ":"),
+        ).encode()
+        transport = SandboxRemoteTransport(session.endpoint)
+        await transport.upload(secret_path, secret, media_type="application/json")
+        command = CredentialsMarkerCommand(
+            commandId=command_id,
+            taskId=task_id,
+            commandType="credentials.marker",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            secretRelativePath=f"secrets/{command_id}.json",
+        )
+        status, _, _ = await self._execute_control(
+            session,
+            command,
+            prefix=f"chmod 600 -- {secret_path} && ",
+        )
+        return status
+
+    async def update_intent(
+        self, owner_id: str, task_id: str, body: IntentSummaryUpdate
+    ) -> IntentSummary:
+        session = await self.find(owner_id, task_id)
+        summary = body.summary.model_copy(
+            update={"revision": body.expected_revision}
+        ).next_revision()
+        command = IntentUpdateCommand(
+            commandId=body.command_id.hex,
+            taskId=task_id,
+            commandType="intent.update",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            expectedRevision=body.expected_revision,
+            summary=summary,
+        )
+        _, intent, _ = await self._execute_control(session, command)
+        return intent
+
+    async def _close_runtime(self, owner_id: str, task_id: str) -> None:
+        if self.runtime_manager is None:
+            return
+        try:
+            await self.runtime_manager.interrupt(owner_id, task_id)
+            await self.runtime_manager.close(owner_id, task_id)
+        except Exception as error:
+            if getattr(error, "code", "") != "VIBE_RUNTIME_NOT_CONNECTED":
+                raise
+
+    async def stop(
+        self, owner_id: str, task_id: str, body: StopTaskRequest
+    ) -> TaskStatus:
+        session = await self.find(owner_id, task_id)
+        await self._close_runtime(owner_id, task_id)
+        status, _, _ = await self._snapshot(session)
+        if status.terminal:
+            return status
+        command = StopCommand(
+            commandId=body.command_id.hex,
+            taskId=task_id,
+            commandType="task.stop",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            reason=body.reason,
+        )
+        status, _, _ = await self._execute_control(session, command)
+        return status
+
     async def delete(self, owner_id: str, task_id: str) -> bool:
         session = await self.find(owner_id, task_id)
+        await self.stop(owner_id, task_id, StopTaskRequest())
+        await SandboxRemoteTransport(session.endpoint).exec_text(
+            f"rm -rf -- {REMOTE_SECRETS_ROOT}", timeout=15
+        )
         await self.gateway.delete_session(session)
         return True
 

@@ -1948,6 +1948,7 @@ def _run_frontend_server(
     )
     app.state.vibe_task_runtime_manager = vibe_runtime_manager
     app.router.on_shutdown.append(vibe_runtime_manager.close_all)
+    vibe_store.runtime_manager = vibe_runtime_manager
     vibe_service = VibeTaskService(sandbox_store=vibe_store)
     mount_vibe_task_routes(app, _vibe_owner, service=vibe_service)
 
