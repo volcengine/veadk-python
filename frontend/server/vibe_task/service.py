@@ -149,9 +149,11 @@ class VibeTaskService:
         repository: TaskRepository | None = None,
         *,
         sandbox_store: object | None = None,
+        orchestrator: object | None = None,
     ) -> None:
         self.repository = repository or InMemoryTaskRepository()
         self.sandbox_store = sandbox_store
+        self.orchestrator = orchestrator
         self._conditions: dict[tuple[str, str], asyncio.Condition] = {}
 
     def capabilities(self) -> dict[str, object]:
@@ -218,7 +220,12 @@ class VibeTaskService:
 
     async def configure_credentials(self, owner_id: str, task_id: str, body: CredentialUpload) -> TaskStatus:
         if self.sandbox_store is not None:
-            return await self.sandbox_store.configure_credentials(owner_id, task_id, body)
+            status = await self.sandbox_store.configure_credentials(
+                owner_id, task_id, body
+            )
+            if self.orchestrator is not None:
+                asyncio.create_task(self.orchestrator.start(owner_id, task_id))
+            return status
         status = await self.require(owner_id, task_id)
         if status.terminal:
             raise VibeTaskError("VIBE_TASK_TERMINAL", "Task is terminal", status_code=409)

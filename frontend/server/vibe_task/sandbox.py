@@ -36,6 +36,7 @@ from .control import (
     IntentUpdateCommand,
     REMOTE_SECRETS_ROOT,
     StopCommand,
+    TransitionCommand,
     build_control_command,
 )
 from .models import (
@@ -265,6 +266,32 @@ class VibeSandboxStore:
             "Dev Sandbox control command failed",
             status_code=502,
         ) from error
+
+    async def transition(
+        self,
+        owner_id: str,
+        task_id: str,
+        event_type: str,
+        stage: TaskStage,
+        *,
+        payload: dict[str, object] | None = None,
+        projection: dict[str, object] | None = None,
+    ) -> TaskStatus:
+        session = await self.find(owner_id, task_id)
+        from uuid import uuid4
+
+        command = TransitionCommand(
+            commandId=uuid4().hex,
+            taskId=task_id,
+            commandType="task.transition",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            eventType=event_type,
+            stage=stage.value,
+            payload=payload or {},
+            projection=projection or {},
+        )
+        status, _, _ = await self._execute_control(session, command)
+        return status
 
     async def configure_credentials(
         self, owner_id: str, task_id: str, body: CredentialUpload

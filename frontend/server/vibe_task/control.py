@@ -51,7 +51,17 @@ class StopCommand(_ControlCommand):
     reason: str = Field(default="", max_length=500)
 
 
-ControlCommand = IntentUpdateCommand | CredentialsMarkerCommand | StopCommand
+class TransitionCommand(_ControlCommand):
+    command_type: Literal["task.transition"]
+    event_type: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
+    stage: str = Field(pattern=r"^[a-z][a-z0-9_]{0,39}$")
+    payload: dict[str, object] = Field(default_factory=dict)
+    projection: dict[str, object] = Field(default_factory=dict)
+
+
+ControlCommand = (
+    IntentUpdateCommand | CredentialsMarkerCommand | StopCommand | TransitionCommand
+)
 
 
 # This is the canonical, dependency-free sandbox implementation. It is installed once by
@@ -150,7 +160,7 @@ def append_event(records, previous, command, event_type, stage, payload, project
 def validate_command(command):
     common = {"commandId", "taskId", "commandType", "timestamp"}
     kind = command.get("commandType") if isinstance(command, dict) else None
-    extras = {"intent.update": {"expectedRevision", "summary"}, "credentials.marker": {"secretRelativePath"}, "task.stop": set()}.get(kind)
+    extras = {"intent.update": {"expectedRevision", "summary"}, "credentials.marker": {"secretRelativePath"}, "task.stop": set(), "task.transition": {"eventType", "stage", "payload", "projection"}}.get(kind)
     optional = {"reason"} if kind == "task.stop" else set()
     if extras is None: raise ValueError("unknown command")
     exact_keys(command, common | extras, optional)
@@ -204,6 +214,13 @@ def main(path):
             if summary["revision"] != command["expectedRevision"] + 1: raise ValueError("summary revision must advance once")
             intent = summary
             append_event(records, previous, command, "vibe.intent.updated", status["stage"], {"commandId": command["commandId"], "commandHash": command_hash, "revision": summary["revision"], "summary": summary}, {"intentRevision": summary["revision"]})
+        elif kind == "task.transition":
+            allowed_projection = {"state", "stage", "attempt", "credentialsConfigured", "intentRevision", "sandboxSessionId", "validationRuntimeId", "validationRuntimeStatus", "artifact", "warnings", "error"}
+            if not isinstance(command["eventType"], str) or not isinstance(command["stage"], str) or command["stage"] not in STAGES: raise ValueError("invalid transition")
+            if not isinstance(command["payload"], dict) or not isinstance(command["projection"], dict) or not set(command["projection"]) <= allowed_projection: raise ValueError("invalid transition payload")
+            if command["projection"].get("state") in TERMINAL and command["stage"] != "done": raise ValueError("terminal transition must be done")
+            payload = dict(command["payload"]); payload.update({"commandId": command["commandId"], "commandHash": command_hash})
+            append_event(records, previous, command, command["eventType"], command["stage"], payload, command["projection"])
         elif kind == "credentials.marker":
             relative = command["secretRelativePath"]
             if not isinstance(relative, str) or relative.startswith("/") or relative.split("/")[0] != "secrets" or any(x in ("", ".", "..") for x in relative.split("/")): raise ValueError("invalid secret path")
@@ -236,7 +253,10 @@ def build_control_command(
     task_root: str = REMOTE_TASK_ROOT,
 ) -> str:
     """Build an invocation that stages one command and passes only its path to the worker."""
-    if not isinstance(command, (IntentUpdateCommand, CredentialsMarkerCommand, StopCommand)):
+    if not isinstance(
+        command,
+        (IntentUpdateCommand, CredentialsMarkerCommand, StopCommand, TransitionCommand),
+    ):
         raise TypeError("command must be a control command")
     path = f"{inbox}/{command.command_id}.json"
     value = command.model_dump_json(by_alias=True) + "\n"
