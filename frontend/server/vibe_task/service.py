@@ -311,6 +311,27 @@ class VibeTaskService:
                 )
                 sequence += 1
 
+    async def download_artifact(
+        self,
+        owner_id: str,
+        task_id: str,
+        *,
+        expected_revision: int,
+        expected_sha256: str,
+    ) -> bytes:
+        if self.sandbox_store is None:
+            raise VibeTaskError(
+                "VIBE_ARTIFACT_UNAVAILABLE",
+                "Artifact download requires Dev Sandbox",
+                status_code=404,
+            )
+        return await self.sandbox_store.download_artifact(
+            owner_id,
+            task_id,
+            expected_revision=expected_revision,
+            expected_sha256=expected_sha256,
+        )
+
     async def stop(
         self,
         owner_id: str,

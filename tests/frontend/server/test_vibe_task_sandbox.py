@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import hashlib
+import io
+import json
 from uuid import UUID
+import zipfile
 
 import pytest
 
 from frontend.server.sandbox_remote import SandboxRemoteError
 from frontend.server.vibe_task.models import (
+    ArtifactInfo,
     CredentialUpload,
     CreateTaskRequest,
     IntentSummary,
@@ -62,6 +67,7 @@ class FakeTransport:
     exec_text_calls: list[tuple[str, str, int]] = []
     upload_calls: list[tuple[str, str, bytes]] = []
     exec_error: Exception | None = None
+    downloads: dict[str, bytes] = {}
 
     def __init__(self, endpoint: str) -> None:
         self.endpoint = endpoint
@@ -83,6 +89,12 @@ class FakeTransport:
         del kwargs
         self.upload_calls.append((self.endpoint, path, content))
 
+    async def download(self, path: str, *, max_bytes: int):
+        content = self.downloads[path]
+        if len(content) > max_bytes:
+            raise SandboxRemoteError("too large")
+        return content
+
 
 @pytest.fixture(autouse=True)
 def fake_transport(monkeypatch):
@@ -91,6 +103,7 @@ def fake_transport(monkeypatch):
     FakeTransport.exec_text_calls = []
     FakeTransport.upload_calls = []
     FakeTransport.exec_error = None
+    FakeTransport.downloads = {}
     monkeypatch.setattr(
         "frontend.server.vibe_task.sandbox.SandboxRemoteTransport", FakeTransport
     )
@@ -126,6 +139,7 @@ def _snapshot(
     state: TaskState = TaskState.PROVISIONING,
     intent_revision: int = 1,
     credentials_configured: bool = False,
+    artifact: ArtifactInfo | None = None,
 ) -> dict[str, object]:
     request = RemoteTaskRequest(
         taskId=task_id,
@@ -146,6 +160,7 @@ def _snapshot(
             stage=TaskStage.DONE if state is TaskState.CANCELLED else TaskStage.PROVISIONING,
             intentRevision=intent_revision,
             credentialsConfigured=credentials_configured,
+            artifact=artifact,
         ),
     )
     status = TaskStatus(
@@ -159,6 +174,7 @@ def _snapshot(
         lastSequence=1,
         intentRevision=intent_revision,
         credentialsConfigured=credentials_configured,
+        artifact=artifact,
     )
     events = event.model_dump_json(by_alias=True) + "\n"
     if corrupt_events:
@@ -350,6 +366,62 @@ async def test_stop_executes_once_after_runtime_cleanup() -> None:
     assert status.state is TaskState.CANCELLED
     assert len(FakeTransport.exec_text_calls) == 1
     assert '"commandType":"task.stop"' in FakeTransport.exec_text_calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_package_artifact_uploads_fixed_worker_and_returns_info() -> None:
+    task_id = task_id_for("owner", UUID(int=1))
+    gateway = FakeGateway()
+    gateway.sessions = [_session(task_id)]
+    FakeTransport.snapshots["https://sandbox.example"] = _snapshot(task_id)
+    FakeTransport.snapshots["https://sandbox.example"] = [
+        _snapshot(task_id),
+        {"revision": 1, "path": "/home/gem/.vibe/task/artifacts/1/artifact.zip", "sha256": "a" * 64, "size": 123},
+    ]
+
+    info = await VibeSandboxStore(gateway, "dev-tool").package_artifact(
+        "owner", task_id, {name: value * 64 for name, value in zip(("runtime", "status", "invoke", "log"), "1234")}
+    )
+
+    assert info == ArtifactInfo(revision=1, sha256="a" * 64, size=123, filename="artifact.zip")
+    assert [call[1] for call in FakeTransport.upload_calls] == [
+        "/home/gem/.vibe/task/artifact-worker.py",
+        "/home/gem/.vibe/task/artifact-request.json",
+    ]
+    request = json.loads(FakeTransport.upload_calls[1][2])
+    assert request["taskId"] == task_id
+    assert request["manifest"]["hashes"]["invoke"] == "3" * 64
+    assert "frontend.server" not in FakeTransport.upload_calls[0][2].decode()
+
+
+@pytest.mark.asyncio
+async def test_download_artifact_validates_projected_descriptor_and_zip() -> None:
+    task_id = task_id_for("owner", UUID(int=1))
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("artifact-manifest.json", "{}")
+    content = buffer.getvalue()
+    digest = hashlib.sha256(content).hexdigest()
+    artifact = ArtifactInfo(revision=1, sha256=digest, size=len(content), filename="artifact.zip")
+    gateway = FakeGateway()
+    gateway.sessions = [_session(task_id)]
+    FakeTransport.snapshots["https://sandbox.example"] = _snapshot(task_id, artifact=artifact)
+    FakeTransport.downloads = {
+        "/home/gem/.vibe/task/artifacts/1/descriptor.json": json.dumps(
+            {"revision": 1, "path": "/home/gem/.vibe/task/artifacts/1/artifact.zip", "sha256": digest, "size": len(content)}
+        ).encode(),
+        "/home/gem/.vibe/task/artifacts/1/artifact.zip": content,
+    }
+    store = VibeSandboxStore(gateway, "dev-tool")
+
+    assert await store.download_artifact(
+        "owner", task_id, expected_revision=1, expected_sha256=digest
+    ) == content
+    with pytest.raises(VibeTaskError) as caught:
+        await store.download_artifact(
+            "owner", task_id, expected_revision=1, expected_sha256="0" * 64
+        )
+    assert caught.value.code == "VIBE_ARTIFACT_VERSION_CONFLICT"
 
 
 @pytest.mark.asyncio

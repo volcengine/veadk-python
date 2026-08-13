@@ -18,7 +18,7 @@ from collections.abc import Callable
 import json
 from typing import Any
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 
 from .models import (
@@ -104,6 +104,28 @@ def mount_vibe_task_routes(
                 yield f"id: {event.sequence}\nevent: {event.event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(stream(), media_type="text/event-stream")
+
+    @app.get("/web/vibe/tasks/{task_id}/download")
+    async def download_artifact(
+        task_id: str,
+        request: Request,
+        expected_revision: int = Query(ge=1),
+        expected_sha256: str = Query(pattern=r"^[0-9a-f]{64}$"),
+    ) -> Response:
+        try:
+            content = await service.download_artifact(
+                owner_resolver(request),
+                task_id,
+                expected_revision=expected_revision,
+                expected_sha256=expected_sha256,
+            )
+        except VibeTaskError as error:
+            raise handle(error) from error
+        return Response(
+            content=content,
+            media_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="artifact.zip"'},
+        )
 
     @app.post("/web/vibe/tasks/{task_id}/stop")
     async def stop(

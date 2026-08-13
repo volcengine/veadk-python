@@ -1924,6 +1924,7 @@ def _run_frontend_server(
     )
     from frontend.server.sandbox_remote import SandboxRemoteTransport
     from frontend.server.vibe_task import VibeTaskService, mount_vibe_task_routes
+    from frontend.server.vibe_task.models import TaskStage
     from frontend.server.vibe_task.orchestrator import VibeTaskOrchestrator
     from frontend.server.vibe_task.remote_executor import VibeRemoteExecutor
     from frontend.server.vibe_task.runtime_manager import VibeTaskRuntimeManager
@@ -1963,9 +1964,49 @@ def _run_frontend_server(
         )
 
     async def _vibe_artifact(owner_id: str, task_id: str) -> bool:
-        # Remote packaging is wired after cloud evidence exists; fail closed meanwhile.
-        del owner_id, task_id
-        return False
+        status = await vibe_store.get(owner_id, task_id)
+        events = await vibe_store.events_after(owner_id, task_id, 0)
+        evidence_by_name: dict[str, object] = {}
+        for event in events:
+            name = event.payload.get("name")
+            evidence = event.payload.get("evidence")
+            if isinstance(name, str) and isinstance(evidence, dict):
+                evidence_by_name[name] = evidence
+        required = ("runtime-ready", "invoke", "logs")
+        if any(name not in evidence_by_name for name in required):
+            return False
+
+        def _evidence_hash(value: object) -> str:
+            encoded = json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            return hashlib.sha256(encoded).hexdigest()
+
+        artifact = await vibe_store.package_artifact(
+            owner_id,
+            task_id,
+            {
+                "runtime": _evidence_hash(evidence_by_name["runtime-ready"]),
+                "status": _evidence_hash(status.model_dump(by_alias=True)),
+                "invoke": _evidence_hash(evidence_by_name["invoke"]),
+                "log": _evidence_hash(evidence_by_name["logs"]),
+            },
+        )
+        await vibe_store.transition(
+            owner_id,
+            task_id,
+            "artifact.created",
+            TaskStage.DELIVERING,
+            payload={"revision": artifact.revision, "sha256": artifact.sha256},
+            projection={
+                "artifact": artifact.model_dump(by_alias=True),
+                "stage": TaskStage.DELIVERING,
+            },
+        )
+        return True
 
     vibe_orchestrator = VibeTaskOrchestrator(
         vibe_runtime_manager,
