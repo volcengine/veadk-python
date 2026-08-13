@@ -292,6 +292,9 @@ class _FakeCodex:
     def resolve_approval(self, approval_id: str, decision: str) -> None:
         self.approvals.append((approval_id, decision))
 
+    async def interrupt(self) -> None:
+        self.active = False
+
     async def close(self) -> None:
         self.closed = True
 

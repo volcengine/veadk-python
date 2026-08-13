@@ -16,11 +16,8 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import hashlib
 import shlex
-from typing import Any
-
-import requests
-from agentkit.toolkit.cli.sandbox.sandbox_client import build_exec_url
 
 from veadk.cli.agentkit_session_metadata import (
     SESSION_SCHEMA_VERSION_METADATA_KEY,
@@ -31,17 +28,26 @@ from veadk.cli.frontend_sandbox import (
     SandboxCloudSession,
 )
 
+from ..sandbox_remote import SandboxRemoteError, SandboxRemoteTransport
 from .models import (
     CreateTaskRequest,
     DEV_SANDBOX_TTL_SECONDS,
+    INTENT_SUMMARY_PATH,
+    IntentSummary,
+    TaskEvent,
     TaskStage,
     TaskState,
     TaskStatus,
 )
 from .remote_state import (
+    REMOTE_EVENTS_PATH,
+    REMOTE_LOCK_PATH,
+    REMOTE_REQUEST_PATH,
     REMOTE_STATUS_PATH,
     RemoteTaskRequest,
     build_bootstrap_command,
+    project_status,
+    replay_event_log,
     task_id_for,
 )
 from .service import VibeTaskError
@@ -52,7 +58,7 @@ VIBE_SCHEMA_VERSION = "1"
 
 
 class VibeSandboxStore:
-    """Discover Vibe tasks from AgentKit and read state from their Sandbox."""
+    """Sandbox-backed boundary for discovering and reading Vibe tasks."""
 
     def __init__(self, gateway: AgentkitSandboxGateway, tool_id: str) -> None:
         self.gateway = gateway
@@ -64,7 +70,7 @@ class VibeSandboxStore:
             "reason": "" if self.tool_id else "管理员未配置 Dev Sandbox",
             "sandboxTtlSeconds": DEV_SANDBOX_TTL_SECONDS,
             "maxCloudAttempts": 3,
-            "intentSummaryPath": "/home/gem/.vibe/task/intent-summary.json",
+            "intentSummaryPath": INTENT_SUMMARY_PATH,
             "evaluationEnabled": False,
             "stateSource": "dev-sandbox",
         }
@@ -91,9 +97,7 @@ class VibeSandboxStore:
     async def find(self, owner_id: str, task_id: str) -> SandboxCloudSession:
         parts = task_id.split("-")
         expected_owner_hash = parts[1] if len(parts) == 3 else ""
-        from hashlib import sha256
-
-        if expected_owner_hash != sha256(owner_id.encode()).hexdigest()[:12]:
+        if expected_owner_hash != hashlib.sha256(owner_id.encode()).hexdigest()[:12]:
             raise VibeTaskError("VIBE_TASK_NOT_FOUND", "Task not found", status_code=404)
         matches = [
             item
@@ -151,8 +155,7 @@ class VibeSandboxStore:
             goal=body.goal,
             display_name=status.display_name,
         )
-        await self._exec(
-            session.endpoint,
+        await SandboxRemoteTransport(session.endpoint).exec_text(
             build_bootstrap_command(request.model_dump(by_alias=True), status),
             timeout=30,
         )
@@ -161,8 +164,9 @@ class VibeSandboxStore:
     async def list(self, owner_id: str) -> list[TaskStatus]:
         async def hydrate(session: SandboxCloudSession) -> TaskStatus | None:
             try:
-                return await self._read_status(session)
-            except (VibeTaskError, ValueError, requests.RequestException):
+                status, _, _ = await self._snapshot(session)
+                return status
+            except (VibeTaskError, ValueError, SandboxRemoteError):
                 return None
 
         results = await asyncio.gather(*(hydrate(item) for item in await self._sessions(owner_id)))
@@ -173,50 +177,120 @@ class VibeSandboxStore:
         )
 
     async def get(self, owner_id: str, task_id: str) -> TaskStatus:
-        return await self._read_status(await self.find(owner_id, task_id))
+        status, _, _ = await self._snapshot(await self.find(owner_id, task_id))
+        return status
 
-    async def _read_status(self, session: SandboxCloudSession) -> TaskStatus:
-        source = (
-            "import pathlib;"
-            f"print(pathlib.Path({REMOTE_STATUS_PATH!r}).read_text(encoding='utf-8'))"
-        )
-        output = await self._exec(
-            session.endpoint,
-            f"python3 -c {shlex.quote(source)}",
-            timeout=15,
-        )
+    async def get_intent(self, owner_id: str, task_id: str) -> IntentSummary:
+        _, intent, _ = await self._snapshot(await self.find(owner_id, task_id))
+        return intent
+
+    async def events_after(
+        self, owner_id: str, task_id: str, sequence: int
+    ) -> list[TaskEvent]:
+        if sequence < 0:
+            raise ValueError("sequence must not be negative")
+        _, _, events = await self._snapshot(await self.find(owner_id, task_id))
+        return [event for event in events if event.sequence > sequence]
+
+    async def delete(self, owner_id: str, task_id: str) -> bool:
+        session = await self.find(owner_id, task_id)
+        await self.gateway.delete_session(session)
+        return True
+
+    async def _snapshot(
+        self, session: SandboxCloudSession
+    ) -> tuple[TaskStatus, IntentSummary, list[TaskEvent]]:
+        if not session.endpoint:
+            raise VibeTaskError(
+                "VIBE_TASK_INITIALIZING",
+                "Dev Sandbox 正在初始化",
+                status_code=409,
+            )
+        source = f"""import fcntl
+import json
+from pathlib import Path
+def read(path, required=True):
+    try:
+        return Path(path).read_text(encoding=\"utf-8\")
+    except FileNotFoundError:
+        if required:
+            raise
+        return None
+with open({REMOTE_LOCK_PATH!r}, \"a+\") as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+    snapshot = {{
+        \"request\": read({REMOTE_REQUEST_PATH!r}),
+        \"status\": read({REMOTE_STATUS_PATH!r}),
+        \"intent\": read({INTENT_SUMMARY_PATH!r}, required=False),
+        \"events\": read({REMOTE_EVENTS_PATH!r}),
+    }}
+print(json.dumps(snapshot, separators=(\",\", \":\")))
+"""
         try:
-            status = TaskStatus.model_validate_json(output)
-        except ValueError as error:
+            snapshot = await SandboxRemoteTransport(session.endpoint).exec_json(
+                f"python3 -c {shlex.quote(source)}", timeout=15
+            )
+            request_value = snapshot.get("request")
+            status_value = snapshot.get("status")
+            intent_value = snapshot.get("intent")
+            events_value = snapshot.get("events")
+            if not all(isinstance(value, str) for value in (request_value, status_value, events_value)):
+                raise ValueError("snapshot is missing required state")
+            request = RemoteTaskRequest.model_validate_json(request_value)
+            status = TaskStatus.model_validate_json(status_value)
+            replay = replay_event_log(events_value, expected_task_id=session.user_session_id)
+            if request.task_id != session.user_session_id or status.task_id != session.user_session_id:
+                raise ValueError("snapshot task identity does not match session")
+            initial = TaskStatus(
+                task_id=request.task_id,
+                display_name=request.display_name or "Vibe Task",
+                goal=request.goal,
+                state=TaskState.PROVISIONING,
+                stage=TaskStage.PROVISIONING,
+                created_at=status.created_at,
+                expires_at=status.expires_at,
+                sandbox_session_id=session.instance_id,
+            )
+            projected = project_status(initial, replay.events)
+            comparable_fields = (
+                "state",
+                "stage",
+                "attempt",
+                "last_sequence",
+                "credentials_configured",
+                "intent_revision",
+                "validation_runtime_id",
+                "validation_runtime_status",
+                "artifact",
+                "warnings",
+                "error",
+            )
+            if any(
+                getattr(status, field) != getattr(projected, field)
+                for field in comparable_fields
+            ):
+                raise ValueError("status projection does not match event log")
+            if intent_value is None:
+                intent = IntentSummary(
+                    revision=status.intent_revision,
+                    goal=request.goal,
+                )
+            elif isinstance(intent_value, str):
+                intent = IntentSummary.model_validate_json(intent_value)
+            else:
+                raise ValueError("snapshot intent is invalid")
+            if intent.revision != status.intent_revision:
+                raise ValueError("intent revision does not match status")
+        except VibeTaskError:
+            raise
+        except (ValueError, TypeError, SandboxRemoteError) as error:
             raise VibeTaskError(
                 "VIBE_TASK_STATE_INVALID",
                 "Dev Sandbox 中的 Vibe Task 状态无效",
                 status_code=502,
             ) from error
-        if status.task_id != session.user_session_id:
-            raise VibeTaskError(
-                "VIBE_TASK_STATE_INVALID",
-                "Dev Sandbox 中的 Vibe Task 身份不匹配",
-                status_code=502,
-            )
-        return status.model_copy(
-            update={"sandbox_session_id": session.instance_id}
+        return (
+            projected.model_copy(update={"sandbox_session_id": session.instance_id}),
+            intent,
+            [record.event for record in replay.events],
         )
-
-    @staticmethod
-    async def _exec(endpoint: str, command: str, *, timeout: int) -> str:
-        def invoke() -> str:
-            response = requests.post(
-                build_exec_url(endpoint),
-                json={"id": "", "exec_dir": "/home/gem", "command": command},
-                timeout=(5, timeout),
-            )
-            response.raise_for_status()
-            payload: Any = response.json()
-            data = payload.get("data") if isinstance(payload, dict) else None
-            output = data.get("output") if isinstance(data, dict) else None
-            if not isinstance(output, str):
-                raise ValueError("Dev Sandbox command returned no output")
-            return output
-
-        return await asyncio.to_thread(invoke)

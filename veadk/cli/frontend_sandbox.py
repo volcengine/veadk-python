@@ -868,6 +868,10 @@ class SandboxCodexConnection(Protocol):
         """Resolve one pending user approval."""
         raise NotImplementedError
 
+    async def interrupt(self) -> None:
+        """Interrupt the active turn if one exists."""
+        raise NotImplementedError
+
     async def close(self) -> None:
         """Close the persistent connection."""
         raise NotImplementedError
