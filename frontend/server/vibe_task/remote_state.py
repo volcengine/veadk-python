@@ -23,7 +23,14 @@ from uuid import UUID
 
 from pydantic import Field, model_validator
 
-from .models import ArtifactInfo, TaskEvent, TaskStage, TaskState, TaskStatus, VibeModel
+from .models import (
+    ArtifactInfo,
+    TaskEvent,
+    TaskStage,
+    TaskState,
+    TaskStatus,
+    VibeModel,
+)
 
 
 REMOTE_SCHEMA_VERSION = 1
@@ -33,6 +40,10 @@ REMOTE_STATUS_PATH = f"{REMOTE_TASK_ROOT}/status.json"
 REMOTE_EVENTS_PATH = f"{REMOTE_TASK_ROOT}/events.jsonl"
 REMOTE_RUNNER_RESULT_PATH = f"{REMOTE_TASK_ROOT}/runner-result.json"
 REMOTE_LOCK_PATH = f"{REMOTE_TASK_ROOT}/state.lock"
+REMOTE_COMMAND_INBOX = f"{REMOTE_TASK_ROOT}/commands/inbox"
+REMOTE_COMMAND_PROCESSED = f"{REMOTE_TASK_ROOT}/commands/processed"
+REMOTE_CONTROL_WORKER_PATH = f"{REMOTE_TASK_ROOT}/control-worker.py"
+REMOTE_SECRETS_ROOT = f"{REMOTE_TASK_ROOT}/secrets"
 EVENT_CHAIN_GENESIS = "0" * 64
 _HASH_PATTERN = r"^[0-9a-f]{64}$"
 
@@ -224,6 +235,9 @@ def atomic_write(path, value):
 
 
 def build_bootstrap_command(request: dict[str, object], status: TaskStatus) -> str:
+    # Imported lazily to avoid making the canonical schemas depend on the command adapter.
+    from .control import CONTROL_WORKER_SOURCE
+
     validated_request = RemoteTaskRequest.model_validate(request)
     if validated_request.task_id != status.task_id:
         raise ValueError("request and status task ids do not match")
@@ -246,24 +260,61 @@ def build_bootstrap_command(request: dict[str, object], status: TaskStatus) -> s
     request_json = validated_request.model_dump_json(by_alias=True)
     status_json = status.model_dump_json(by_alias=True)
     event_json = initial_event.model_dump_json(by_alias=True)
+    intent_json = json.dumps({
+        "revision": 1,
+        "goal": validated_request.goal,
+        "confirmedRequirements": [],
+        "constraints": [],
+        "assumptions": [],
+        "openQuestions": [],
+        "successCriteria": [],
+        "architectureSummary": {},
+        "currentStatus": {},
+        "evidence": [],
+        "updatedAt": status.created_at,
+    }, ensure_ascii=False, separators=(",", ":"))
     source = f"""import fcntl
 import json
 import os
 import tempfile
 {_atomic_write_source()}
 os.makedirs({REMOTE_TASK_ROOT!r}, mode=0o700, exist_ok=True)
+os.makedirs({REMOTE_COMMAND_INBOX!r}, mode=0o700, exist_ok=True)
+os.makedirs({REMOTE_COMMAND_PROCESSED!r}, mode=0o700, exist_ok=True)
+os.makedirs({REMOTE_SECRETS_ROOT!r}, mode=0o700, exist_ok=True)
 with open({REMOTE_LOCK_PATH!r}, "a+") as lock:
     fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
     if os.path.exists({REMOTE_REQUEST_PATH!r}) and os.path.exists({REMOTE_STATUS_PATH!r}):
         existing = json.loads(open({REMOTE_REQUEST_PATH!r}, encoding="utf-8").read())
         if existing.get("taskId") != {status.task_id!r} or existing.get("requestId") != {str(validated_request.request_id)!r}:
             raise RuntimeError("refusing to overwrite another Vibe Task")
+        if not os.path.exists({(REMOTE_TASK_ROOT + '/intent-summary.json')!r}):
+            atomic_write({(REMOTE_TASK_ROOT + '/intent-summary.json')!r}, {intent_json!r} + "\\n")
+        atomic_write({REMOTE_CONTROL_WORKER_PATH!r}, {CONTROL_WORKER_SOURCE!r})
+        os.chmod({REMOTE_CONTROL_WORKER_PATH!r}, 0o700)
         raise SystemExit(0)
     atomic_write({REMOTE_REQUEST_PATH!r}, {request_json!r} + "\\n")
     atomic_write({REMOTE_STATUS_PATH!r}, {status_json!r} + "\\n")
     atomic_write({REMOTE_EVENTS_PATH!r}, {event_json!r} + "\\n")
+    atomic_write({(REMOTE_TASK_ROOT + '/intent-summary.json')!r}, {intent_json!r} + "\\n")
+    atomic_write({REMOTE_CONTROL_WORKER_PATH!r}, {CONTROL_WORKER_SOURCE!r})
+    os.chmod({REMOTE_CONTROL_WORKER_PATH!r}, 0o700)
 """
     return _command_for_source(source)
+
+
+from .control import CredentialsMarkerCommand, IntentUpdateCommand, StopCommand  # noqa: E402
+
+
+def build_control_command(command: object) -> str:
+    from .control import build_control_command as build
+
+    return build(
+        command,  # type: ignore[arg-type]
+        inbox=REMOTE_COMMAND_INBOX,
+        worker_path=REMOTE_CONTROL_WORKER_PATH,
+        task_root=REMOTE_TASK_ROOT,
+    )
 
 
 def build_runner_command(argv: list[str], *, timeout: int) -> str:

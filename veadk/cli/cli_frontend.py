@@ -1848,6 +1848,7 @@ def _run_frontend_server(
     from veadk.cli.frontend_sandbox import (
         AgentkitSandboxGateway,
         SandboxAgentSessionService,
+        SandboxCloudSession,
         SandboxConfigurationError,
         SandboxConversationService,
         SandboxProxyTarget,
@@ -1921,15 +1922,33 @@ def _run_frontend_server(
             provider=provider,
         ),
     )
+    from frontend.server.sandbox_remote import SandboxRemoteTransport
     from frontend.server.vibe_task import VibeTaskService, mount_vibe_task_routes
+    from frontend.server.vibe_task.runtime_manager import VibeTaskRuntimeManager
     from frontend.server.vibe_task.sandbox import VibeSandboxStore
 
-    vibe_service = VibeTaskService(
-        sandbox_store=VibeSandboxStore(
-            sandbox_gateway,
-            os.getenv("SANDBOX_DEV", ""),
-        )
+    vibe_store = VibeSandboxStore(
+        sandbox_gateway,
+        os.getenv("SANDBOX_DEV", ""),
     )
+
+    async def _ensure_vibe_workspace(session: SandboxCloudSession) -> str:
+        workspace = f"/home/gem/workspace/{session.user_session_id}"
+        if not re.fullmatch(r"vt-[0-9a-f]{12}-[0-9a-f]{24}", session.user_session_id):
+            raise ValueError("invalid Vibe Task workspace identity")
+        await SandboxRemoteTransport(session.endpoint).exec_text(
+            f"mkdir -p {workspace}"
+        )
+        return workspace
+
+    vibe_runtime_manager = VibeTaskRuntimeManager(
+        gateway=sandbox_gateway,
+        resolver=vibe_store.find,
+        ensure_workspace=_ensure_vibe_workspace,
+    )
+    app.state.vibe_task_runtime_manager = vibe_runtime_manager
+    app.router.on_shutdown.append(vibe_runtime_manager.close_all)
+    vibe_service = VibeTaskService(sandbox_store=vibe_store)
     mount_vibe_task_routes(app, _vibe_owner, service=vibe_service)
 
     sandbox_service = SandboxConversationService(
