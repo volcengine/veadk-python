@@ -1586,6 +1586,20 @@ def _run_frontend_server(
         identity_resolver=_video_owner,
     )
 
+    from frontend.server.model_catalog import (
+        build_model_catalog_service,
+        mount_model_catalog_routes,
+    )
+
+    mount_model_catalog_routes(
+        app,
+        service=build_model_catalog_service(
+            provider=provider,
+            resolve_credentials=_resolve_ve_credentials,
+        ),
+        authorize=_require_agent_management,
+    )
+
     from frontend.server.deployment_resources import (
         mount_deployment_resource_routes,
     )
@@ -1746,6 +1760,7 @@ def _run_frontend_server(
         "ARK_",
         "OPENAI_",
         "GOOGLE_",
+        "CUSTOM_MODEL_",
     )
     _ENV_EXACT: frozenset[str] = frozenset(
         {
@@ -1781,31 +1796,31 @@ def _run_frontend_server(
                 continue
             if k in _ENV_EXACT or any(k.startswith(p) for p in _ENV_PREFIXES):
                 out[str(k)] = str(v)
-        if not out.get("MODEL_AGENT_API_KEY"):
-            try:
-                from veadk.auth.veauth.ark_veauth import get_ark_token
-
-                logger.info(
-                    "MODEL_AGENT_API_KEY not set; resolving an Ark API key "
-                    "via ListApiKeys for the runtime..."
-                )
-                ark_key = get_ark_token()
-                if ark_key:
-                    out["MODEL_AGENT_API_KEY"] = str(ark_key)
-                    logger.info("Injected MODEL_AGENT_API_KEY into runtime env.")
-            except Exception as e:
-                logger.warning(
-                    "Could not auto-resolve MODEL_AGENT_API_KEY for the runtime: "
-                    "%s. The deployed agent may fail to start without this key; "
-                    "set MODEL_AGENT_API_KEY in .env/config.yaml before deploying.",
-                    e,
-                )
         out["VEADK_DISABLE_EXPIRE_AT"] = "true"
         if provider == "byteplus":
             out["CLOUD_PROVIDER"] = "byteplus"
             out["AGENTKIT_CLOUD_PROVIDER"] = "byteplus"
             out["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
         return out
+
+    def _resolve_ark_model_api_key(
+        *,
+        api_key_id: str = "",
+        api_key_name: str = "",
+    ) -> str:
+        """Resolve one explicitly selected key without exposing it to the UI."""
+        from veadk.auth.veauth.ark_veauth import get_ark_token
+
+        access_key, secret_key, session_token = _resolve_ve_credentials()
+        return get_ark_token(
+            region=("ap-southeast-1" if provider == "byteplus" else "cn-beijing"),
+            api_key_name=api_key_name.strip() or None,
+            api_key_id=api_key_id.strip() or None,
+            cloud_provider=provider,
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token,
+        )
 
     def _model_name(model: object) -> str:
         if isinstance(model, str):
@@ -3008,6 +3023,27 @@ def _run_frontend_server(
             runner_env = _safe_runner_env()
             runner_env.update(runtime_envs)
             runner_env.update(debug_runtime_env_from_draft(draft))
+            selected_api_key_id = draft.deployment.modelApiKeyId.strip()
+            selected_api_key_name = draft.deployment.modelApiKeyName.strip()
+
+            def _draft_uses_ark_model(node: AgentDraft) -> bool:
+                return (
+                    node.agentType == "llm" and node.modelSource != "custom"
+                ) or any(_draft_uses_ark_model(child) for child in node.subAgents)
+
+            draft_uses_ark = _draft_uses_ark_model(draft)
+            if draft_uses_ark and (selected_api_key_id or selected_api_key_name):
+                try:
+                    runner_env["MODEL_AGENT_API_KEY"] = await asyncio.to_thread(
+                        _resolve_ark_model_api_key,
+                        api_key_id=selected_api_key_id,
+                        api_key_name=selected_api_key_name,
+                    )
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="所选 Ark API Key 不可用，请刷新后重新选择。",
+                    ) from e
             runner_env["MODEL_AGENT_API_BASE"] = trusted_debug_model_api_base(
                 draft,
                 managed_cloud_provider=provider,
@@ -3445,8 +3481,10 @@ def _run_frontend_server(
         Body: {name, files:[{path,content}], config:{region,projectName}}.
         While building/deploying, streams `data: {level, phase, message, pct?}`
         frames (phase = build|deploy|publish|evaluation); ends with a terminal
-        `data: {done:true, success, agentName?, url?, apikey?, runtimeId?,
-        consoleUrl?, error?, phase?}` frame. Uses the AgentKit SDK in-process
+        `data: {done:true, success, agentName?, runtimeName?, url?, apikey?,
+        runtimeId?, consoleUrl?, error?, phase?}` frame. `agentName` is the ADK
+        app name while `runtimeName` is the platform Runtime resource name. Uses
+        the AgentKit SDK in-process
         (no CLI subprocess) and tags the runtime with the deploying user.
         """
         import tempfile
@@ -3462,6 +3500,7 @@ def _run_frontend_server(
         data = await request.json()
         agent_name = (data.get("name") or "").strip()
         runtime_id = (data.get("runtimeId") or "").strip()
+        requested_runtime_name = (data.get("runtimeName") or agent_name).strip()
         files = data.get("files", [])
         config = data.get("config", {})
         task_id = str(data.get("taskId") or f"deploy-{id(request)}").strip()
@@ -3703,6 +3742,35 @@ def _run_frontend_server(
                     runtime_envs[key] = str(getattr(item, "value", "") or "")
         for k, v in extra_runtime_envs.items():
             runtime_envs[k] = v
+        explicit_model_key_requested = bool(
+            extra_runtime_envs.get("MODEL_AGENT_API_KEY", "").strip()
+        )
+        selected_model_key_requested = bool(
+            extra_runtime_envs.get("MODEL_AGENT_API_KEY_ID", "").strip()
+            or extra_runtime_envs.get("MODEL_AGENT_API_KEY_NAME", "").strip()
+        )
+        if not explicit_model_key_requested and (
+            selected_model_key_requested
+            or not runtime_envs.get("MODEL_AGENT_API_KEY", "").strip()
+        ):
+            try:
+                runtime_envs["MODEL_AGENT_API_KEY"] = await asyncio.to_thread(
+                    _resolve_ark_model_api_key,
+                    api_key_id=runtime_envs.get("MODEL_AGENT_API_KEY_ID", ""),
+                    api_key_name=runtime_envs.get("MODEL_AGENT_API_KEY_NAME", ""),
+                )
+            except Exception as e:
+                if selected_model_key_requested:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="所选 Ark API Key 不可用，请刷新后重新选择。",
+                    ) from e
+                logger.warning(
+                    "Could not auto-resolve MODEL_AGENT_API_KEY for the runtime: "
+                    "%s. The deployed agent may fail to start without this key; "
+                    "set MODEL_AGENT_API_KEY before deploying.",
+                    e,
+                )
         if feishu_enabled:
             runtime_envs.update(
                 {
@@ -3744,8 +3812,13 @@ def _run_frontend_server(
                     or "Auto",
                 }
             )
-        elif runtime_network:
-            cloud_config["runtime_network"] = runtime_network
+        else:
+            # AgentKit auto-generates "<agent>-<random>" when runtime_name is
+            # absent or Auto. Always provide an explicit name so Studio keeps
+            # Agent and Runtime naming deterministic.
+            cloud_config["runtime_name"] = requested_runtime_name or agent_name
+            if runtime_network:
+                cloud_config["runtime_network"] = runtime_network
         if region and region != "cn-beijing":
             region_suffix = (
                 region.split("-", 1)[1] if region.startswith("cn-") else region
@@ -4390,14 +4463,15 @@ def _run_frontend_server(
                     if res is not None and getattr(res, "success", False):
                         meta = (dr.metadata if (dr and dr.metadata) else {}) or {}
                         runtime_name = str(
-                            meta.get("runtime_name")
-                            or task_state.get("runtime_name")
+                            task_state.get("runtime_name")
+                            or meta.get("runtime_name")
                             or agent_name
                         )
                         final.update(
                             {
                                 "success": True,
-                                "agentName": runtime_name,
+                                "agentName": agent_name,
+                                "runtimeName": runtime_name,
                                 "url": getattr(dr, "endpoint_url", None)
                                 if dr
                                 else None,
@@ -6019,6 +6093,7 @@ def _run_frontend_server(
                 }
                 for item in (getattr(runtime, "envs", None) or [])
                 if getattr(item, "key", None)
+                and str(getattr(item, "key", "") or "") != "MODEL_AGENT_API_KEY"
             ],
             "network": _runtime_network_payload(runtime),
         }
@@ -6091,16 +6166,35 @@ def _run_frontend_server(
                 expected_type=list,
             )
         except HTTPException as error:
-            if error.status_code != 404:
-                raise
-            return _runtime_update_result(
-                runtime,
-                runtime_payload,
-                app_name,
-                can_update=False,
-                reason="该 Runtime 不支持 list-apps 接口，无法更新。",
-                reason_code="runtime_list_apps_unsupported",
-            )
+            if error.status_code == 404:
+                return _runtime_update_result(
+                    runtime,
+                    runtime_payload,
+                    app_name,
+                    can_update=False,
+                    reason="该 Runtime 不支持 list-apps 接口，无法更新。",
+                    reason_code="runtime_list_apps_unsupported",
+                )
+            if error.status_code >= 500:
+                if app_name:
+                    return _runtime_update_result(
+                        runtime,
+                        runtime_payload,
+                        app_name,
+                        can_update=True,
+                    )
+                return _runtime_update_result(
+                    runtime,
+                    runtime_payload,
+                    app_name,
+                    can_update=False,
+                    reason="暂时无法读取该 Runtime 的 Agent 信息，请稍后重试。",
+                    reason_code="runtime_list_apps_unavailable",
+                )
+            raise HTTPException(
+                status_code=error.status_code,
+                detail="runtime_update_capability_failed",
+            ) from error
         except RuntimeError:
             return _runtime_update_result(
                 runtime,
@@ -6138,7 +6232,7 @@ def _run_frontend_server(
                 reason="该 Runtime 包含多个 Agent，暂不支持原地更新。",
                 reason_code="runtime_multiple_apps",
             )
-        runtime_app_name = apps[0]
+        runtime_app_name = str(apps[0])
         if app_name and app_name != runtime_app_name:
             return _runtime_update_result(
                 runtime,
@@ -6162,16 +6256,26 @@ def _run_frontend_server(
                 path=agent_info_path,
             )
         except HTTPException as error:
-            if error.status_code != 404:
-                raise
-            return _runtime_update_result(
-                runtime,
-                runtime_payload,
-                app_name,
-                can_update=False,
-                reason="该 Runtime 不支持 Agent 信息接口，无法更新。",
-                reason_code="runtime_agent_info_unsupported",
-            )
+            if error.status_code == 404:
+                return _runtime_update_result(
+                    runtime,
+                    runtime_payload,
+                    app_name,
+                    can_update=False,
+                    reason="该 Runtime 不支持 Agent 信息接口，无法更新。",
+                    reason_code="runtime_agent_info_unsupported",
+                )
+            if error.status_code >= 500:
+                return _runtime_update_result(
+                    runtime,
+                    runtime_payload,
+                    app_name,
+                    can_update=True,
+                )
+            raise HTTPException(
+                status_code=error.status_code,
+                detail="runtime_update_capability_failed",
+            ) from error
         except RuntimeError:
             return _runtime_update_result(
                 runtime,

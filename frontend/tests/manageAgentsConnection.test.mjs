@@ -54,6 +54,22 @@ test("runtime connection probing is shared with the Agent selector", () => {
   assert.match(connectionsSource, /return remoteAppId\(connection\.id, apps\[0\]\)/);
 });
 
+test("runtime connections keep the Runtime resource name separate from Agent labels", () => {
+  assert.match(connectionsSource, /agentName\?: string/);
+  assert.match(
+    connectionsSource,
+    /const resolvedAgentName = agentName\?\.trim\(\) \|\| apps\[0\]/,
+  );
+  assert.match(
+    connectionsSource,
+    /Object\.fromEntries\([\s\S]*?apps\.map\(\(app\) => \[app, app === apps\[0\] \? resolvedAgentName : app\]\)[\s\S]*?\)/,
+  );
+  assert.match(
+    appSource,
+    /connectRuntime\([\s\S]*?result\.runtimeId,[\s\S]*?result\.runtimeName,[\s\S]*?agentName: result\.agentName/,
+  );
+});
+
 test("fresh deployments wait for the Runtime network to become reachable", () => {
   assert.match(connectionsSource, /DEPLOYED_RUNTIME_CONNECT_INTERVAL_MS = 3_000/);
   assert.match(connectionsSource, /DEPLOYED_RUNTIME_CONNECT_TIMEOUT_MS = 60_000/);
@@ -64,7 +80,7 @@ test("fresh deployments wait for the Runtime network to become reachable", () =>
   );
   assert.match(
     appSource,
-    /const finishDeployment = useCallback[\s\S]*?connectRuntime\([\s\S]*?\{ waitForReady: true \}/,
+    /const finishDeployment = useCallback[\s\S]*?connectRuntime\([\s\S]*?waitForReady: true,[\s\S]*?agentName: result\.agentName/,
   );
 });
 

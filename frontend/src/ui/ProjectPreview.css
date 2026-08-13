@@ -554,9 +554,7 @@
   border: 1px solid hsl(var(--border) / 0.72);
   border-radius: 18px;
   background: hsl(var(--panel));
-  box-shadow:
-    inset 0 1px 0 hsl(var(--background)),
-    0 8px 28px hsl(var(--foreground) / 0.045);
+  box-shadow: none;
 }
 
 .pp-release-card-head {
@@ -833,9 +831,7 @@
   border: 1px solid hsl(var(--border) / 0.72);
   border-radius: 18px;
   background: hsl(var(--panel));
-  box-shadow:
-    inset 0 1px 0 hsl(var(--background)),
-    0 8px 28px hsl(var(--foreground) / 0.045);
+  box-shadow: none;
 }
 
 .pp-config-section:has(.pp-network-region) {
@@ -860,6 +856,7 @@
 }
 
 .pp-config-label {
+  display: block;
   margin: 0 -18px 12px;
   padding: 13px 18px;
   border-bottom: 1px solid hsl(var(--border) / 0.68);
@@ -1198,6 +1195,7 @@
 }
 
 .pp-config-select,
+.pp-runtime-name-input,
 .pp-channel-fields input,
 .pp-instance-fields input,
 .pp-network-fields input,
@@ -1227,6 +1225,7 @@
 }
 
 .pp-config-select:focus,
+.pp-runtime-name-input:focus,
 .pp-channel-fields input:focus,
 .pp-instance-fields input:focus,
 .pp-network-fields input:focus,
@@ -1236,7 +1235,23 @@
   box-shadow: 0 0 0 2px hsl(var(--ring) / 0.08);
 }
 
+.pp-runtime-name-input[aria-invalid="true"] {
+  border-color: hsl(var(--destructive) / 0.72);
+}
+
+.pp-runtime-name-input[aria-invalid="true"]:focus {
+  box-shadow: 0 0 0 2px hsl(var(--destructive) / 0.1);
+}
+
+.pp-runtime-name-error {
+  margin: -4px 0 10px;
+  color: hsl(var(--destructive));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .pp-config-select:disabled,
+.pp-runtime-name-input:disabled,
 .pp-channel-fields input:disabled,
 .pp-instance-fields input:disabled,
 .pp-network-fields input:disabled,
@@ -1878,6 +1893,58 @@
 .pp-env-value {
   min-width: 0;
   width: 100%;
+}
+
+.pp-env-secret-control {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 6px;
+}
+
+.pp-env-secret-toggle {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+
+.pp-env-secret-toggle:hover:not(:disabled) {
+  background: hsl(var(--foreground) / 0.045);
+  color: hsl(var(--foreground));
+}
+
+.pp-env-secret-toggle:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.55);
+  outline-offset: 2px;
+}
+
+.pp-env-secret-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.pp-env-secret-toggle svg,
+.pp-env-secret-spinner {
+  width: 16px;
+  height: 16px;
+}
+
+.pp-env-secret-spinner {
+  animation: pp-spin 0.8s linear infinite;
+}
+
+.pp-env-reveal-error {
+  color: hsl(var(--destructive));
+  font-size: 11.5px;
+  line-height: 1.35;
 }
 
 .pp-env-json-value {

@@ -320,7 +320,22 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /onDeploymentStarted\?: \(task: DeploymentTaskUpdate\)/);
   assert.match(projectPreviewSource, /onDeploymentComplete\?: \(result: DeployResult\)/);
   assert.match(projectPreviewSource, /draftId\?: string/);
-  assert.match(projectPreviewSource, /const isRuntimeUpdate = deploymentActionLabel\.includes\("更新"\)/);
+  assert.match(projectPreviewSource, /agentName: string/);
+  assert.match(projectPreviewSource, /deploymentRuntimeName\?: string/);
+  assert.match(
+    projectPreviewSource,
+    /const taskAgentName = agentName\?\.trim\(\) \|\| agentDraft\?\.name \|\| project\.name/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /const requestedRuntimeName = effectiveRuntimeName\.trim\(\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /deploymentRuntimeName=\{deploymentRuntimeName\}/,
+  );
+  assert.match(projectPreviewSource, /const isRuntimeUpdate = Boolean\(deploymentRuntimeId\)/);
+  assert.match(customCreateSource, /resolveRuntimeName\([\s\S]*?draft\.name,[\s\S]*?configuredRuntimeName,[\s\S]*?runtimeNameCustomized/);
   assert.match(
     projectPreviewSource,
     /aria-describedby=\{isRuntimeUpdate \? deploymentRegionHelpId : undefined\}/,
@@ -441,6 +456,16 @@ test("runtime update deployments stay on the existing agent row", () => {
     /const matchingAgent = focusedTask\?\.runtimeId[\s\S]*?agentByRuntimeId\.get/,
   );
   assert.match(workspaceStyles, /\.aw-draft-badge\.is-deploying/);
+  assert.doesNotMatch(
+    workspaceSource,
+    /task\.runtimeName === selectedDraft\.draft\.name|task\.runtimeName === selectedAgent\.label|candidate\.runtimeName === item\.draft\.name/,
+  );
+  assert.match(workspaceSource, /task\.agentName === selectedDraft\.draft\.name/);
+  assert.match(workspaceSource, /task\.agentName === selectedAgent\.label/);
+  assert.match(
+    workspaceSource,
+    /infoToDraft\([\s\S]*?selectedAgentInfo,[\s\S]*?selectedAgentAppName \|\| selectedAgent\?\.label \|\| "agent"/,
+  );
 });
 
 test("deployed agent detail connects, refreshes the current Agent, then opens a new chat", () => {
@@ -519,12 +544,16 @@ test("runtime updates use the Agent selected in management instead of the active
   assert.match(clientSource, /export async function getRuntimeUpdateCapability/);
   assert.match(clientSource, /\/web\/runtime-update-capability\?\$\{params\.toString\(\)\}/);
   assert.match(clientSource, /new URLSearchParams\(\{ runtimeId, region \}\)/);
+  assert.match(clientSource, /if \(appName\) params\.set\("appName", appName\)/);
+  assert.match(clientSource, /runtimeUpdateCapabilityErrorMessage/);
   const capabilityCallStart = workspaceSource.indexOf("getRuntimeUpdateCapability({");
   const capabilityCallEnd = workspaceSource.indexOf("}).then", capabilityCallStart);
   assert.ok(capabilityCallStart >= 0 && capabilityCallEnd > capabilityCallStart);
   const capabilityCall = workspaceSource.slice(capabilityCallStart, capabilityCallEnd);
-  assert.match(capabilityCall, /runtimeId,[\s\S]*?region,[\s\S]*?signal/);
-  assert.doesNotMatch(capabilityCall, /appName/);
+  assert.match(
+    capabilityCall,
+    /runtimeId,[\s\S]*?region,[\s\S]*?appName: selectedAgentAppName,[\s\S]*?signal/,
+  );
   assert.match(workspaceSource, /onUpdateAgent: \(draft: AgentDraft, capability: RuntimeUpdateCapability\) => void/);
   assert.match(workspaceSource, /selectedUpdateCapability\.agent\?\.draft \?\? draft,[\s\S]*?selectedUpdateCapability/);
   assert.match(clientSource, /appName:\s*opts\?\.appName/);
@@ -538,11 +567,15 @@ test("runtime updates use the Agent selected in management instead of the active
   assert.match(handler, /capability\.runtime\.runtimeId/);
   assert.match(handler, /capability\.runtime\.region/);
   assert.match(handler, /capability\.runtime\.currentVersion/);
-  assert.match(handler, /capability\.runtime\.envs\.map/);
   assert.match(
     handler,
-    /envValues:\s*\{[\s\S]*?\.\.\.runtimeEnvValues,[\s\S]*?\.\.\.\(nextDraft\.deployment\?\.envValues \?\? \{\}\)/,
+    /capability\.runtime\.envs[\s\S]*?filter\(\(\{ key \}\) => !isRuntimeModelSelectionEnv\(key\)\)[\s\S]*?\.map/,
   );
+  assert.match(
+    handler,
+    /envValues:\s*\{[\s\S]*?\.\.\.runtimeEnvValues,[\s\S]*?\.\.\.draftEnvValues/,
+  );
+  assert.match(handler, /hydrateRuntimeModelSelection\(/);
   assert.match(handler, /network:\s*capability\.runtime\.network/);
 });
 
@@ -552,8 +585,16 @@ test("runtime update capability checks ignore aborted and stale selections", () 
   assert.match(workspaceSource, /requestId !== updateCapabilityRequestRef\.current/);
   assert.match(workspaceSource, /return \(\) => controller\.abort\(\)/);
   assert.match(workspaceSource, /const updateCapabilityRequestKey = JSON\.stringify\(\[[\s\S]*?selectedAgent\?\.runtimeId[\s\S]*?selectedAgent\?\.region[\s\S]*?\]\)/);
+  assert.match(
+    workspaceSource,
+    /const updateCapabilityRequestKey = JSON\.stringify\(\[[\s\S]*?selectedAgentAppName[\s\S]*?\]\)/,
+  );
   assert.match(workspaceSource, /updateCapability\?\.requestKey === updateCapabilityRequestKey/);
   assert.match(workspaceSource, /value\.runtime\.region !== region/);
+  assert.match(
+    workspaceSource,
+    /selectedAgentAppName &&[\s\S]*?value\.agent\?\.appName !== selectedAgentAppName/,
+  );
   assert.match(workspaceSource, /value\.canUpdate && !value\.agent\?\.appName/);
   assert.match(workspaceSource, /selectedUpdateCapability\.agent\?\.appName/);
   assert.match(workspaceSource, /updateCapabilityLoading[\s\S]*?loading-gap-spinner[\s\S]*?检测中/);

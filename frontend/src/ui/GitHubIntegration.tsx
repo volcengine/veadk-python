@@ -17,6 +17,7 @@ import type {
   AutomationFormValues,
   GitHubAutomationId,
 } from "../automations/types";
+import { runtimeNameProblem } from "../create/runtimeName";
 import { GitHubLogo } from "./GitHubLogo";
 import "./GitHubIntegration.css";
 
@@ -81,8 +82,8 @@ function validateField(name: FieldName, value: string, required: boolean): strin
   if (name === "projectPath" && (text.startsWith("/") || text.split("/").includes(".."))) {
     return "请输入仓库内的相对目录";
   }
-  if (name === "runtimeName" && !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(text)) {
-    return "以字母开头，仅支持字母、数字、下划线和连字符";
+  if (name === "runtimeName") {
+    return runtimeNameProblem(text) ?? "";
   }
   if (name === "runtimeId" && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(text)) {
     return "Runtime ID 格式不正确";

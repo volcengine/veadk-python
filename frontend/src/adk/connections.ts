@@ -49,6 +49,8 @@ const DEPLOYED_RUNTIME_CONNECT_TIMEOUT_MS = 60_000;
 
 interface ConnectRuntimeOptions {
   waitForReady?: boolean;
+  /** Friendly ADK Agent label. Runtime resource names may include a suffix. */
+  agentName?: string;
 }
 
 export function loadConnections(): RemoteConnection[] {
@@ -130,9 +132,10 @@ export function addRuntimeConnection(
 
 async function connectRuntimeOnce(
   runtimeId: string,
-  name: string,
+  runtimeName: string,
   region: string,
   currentVersion?: number | null,
+  agentName?: string,
 ): Promise<string> {
   let apps: string[] | null = null;
   let resolvedRegion = region || "cn-beijing";
@@ -168,10 +171,13 @@ async function connectRuntimeOnce(
       true,
     );
   }
-  const labels = Object.fromEntries(apps.map((app) => [app, name]));
+  const resolvedAgentName = agentName?.trim() || apps[0];
+  const labels = Object.fromEntries(
+    apps.map((app) => [app, app === apps[0] ? resolvedAgentName : app]),
+  );
   const connection = addRuntimeConnection(
     runtimeId,
-    name,
+    runtimeName,
     resolvedRegion,
     apps,
     labels,
@@ -187,7 +193,7 @@ function waitForRuntimeProbe(delayMs: number): Promise<void> {
 /** Probe, persist, and register one AgentKit runtime, returning its first app id. */
 export async function connectRuntime(
   runtimeId: string,
-  name: string,
+  runtimeName: string,
   region: string,
   currentVersion?: number | null,
   options: ConnectRuntimeOptions = {},
@@ -195,7 +201,13 @@ export async function connectRuntime(
   const startedAt = Date.now();
   while (true) {
     try {
-      return await connectRuntimeOnce(runtimeId, name, region, currentVersion);
+      return await connectRuntimeOnce(
+        runtimeId,
+        runtimeName,
+        region,
+        currentVersion,
+        options.agentName,
+      );
     } catch (error) {
       const elapsedMs = Date.now() - startedAt;
       if (
