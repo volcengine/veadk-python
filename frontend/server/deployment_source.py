@@ -72,6 +72,15 @@ def _target(base: Path, relative: str) -> Path:
     return target
 
 
+def _is_macos_metadata(relative: str) -> bool:
+    path = PurePosixPath(relative)
+    return (
+        path.parts[0] == "__MACOSX"
+        or path.name == ".DS_Store"
+        or path.name.startswith("._")
+    )
+
+
 def _configured_entry_point(base: Path) -> str:
     manifest_path = base / "agentkit.yaml"
     if not manifest_path.is_file():
@@ -238,6 +247,7 @@ def extract_migration_source(
         raise DeploymentSourceError("迁移产物 ZIP 大小无效。")
     descriptors, entry_point = _manifest_files(manifest)
     seen: set[str] = set()
+    materialized: set[str] = set()
     try:
         with zipfile.ZipFile(io.BytesIO(archive_content)) as archive:
             infos = [info for info in archive.infolist() if not info.is_dir()]
@@ -259,13 +269,16 @@ def extract_migration_source(
                 content = archive.read(info)
                 if hashlib.sha256(content).hexdigest() != descriptor[1]:
                     raise DeploymentSourceError("迁移产物文件完整性校验失败。")
+                if _is_macos_metadata(relative):
+                    continue
                 target = _target(base, relative)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(content)
+                materialized.add(relative)
     except zipfile.BadZipFile as error:
         raise DeploymentSourceError("迁移产物 ZIP 格式无效。") from error
     entry_point = _require_entry_point(base, entry_point)
-    _validate_migration_python_contract(base, seen)
+    _validate_migration_python_contract(base, materialized)
     return entry_point
 
 

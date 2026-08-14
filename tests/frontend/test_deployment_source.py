@@ -147,6 +147,55 @@ def test_migration_source_extracts_only_manifest_files(tmp_path: Path) -> None:
     assert (tmp_path / entry).read_bytes() == content
 
 
+def test_migration_source_ignores_verified_macos_metadata(tmp_path: Path) -> None:
+    files = {
+        "strands/agent.py": b"app = object()\n",
+        "__MACOSX/strands/._agent.py": b"\x00\x05AppleDouble",
+        "strands/._agentkit.yaml": b"\x00\x05AppleDouble",
+        ".DS_Store": b"desktop metadata",
+    }
+    manifest = {
+        "files": [
+            {
+                "path": path,
+                "size": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+            for path, content in files.items()
+        ],
+        "startup": {"module": "strands/agent.py"},
+    }
+
+    entry = extract_migration_source(tmp_path, _archive(files), manifest)
+
+    assert entry == "strands/agent.py"
+    assert (tmp_path / entry).read_bytes() == files[entry]
+    assert not (tmp_path / "__MACOSX").exists()
+    assert not (tmp_path / "strands/._agentkit.yaml").exists()
+    assert not (tmp_path / ".DS_Store").exists()
+
+    tampered_manifest = {
+        **manifest,
+        "files": [
+            {
+                **item,
+                "sha256": (
+                    "0" * 64
+                    if item["path"] == "__MACOSX/strands/._agent.py"
+                    else item["sha256"]
+                ),
+            }
+            for item in manifest["files"]
+        ],
+    }
+    with pytest.raises(DeploymentSourceError, match="完整性校验失败"):
+        extract_migration_source(
+            tmp_path / "tampered",
+            _archive(files),
+            tampered_manifest,
+        )
+
+
 @pytest.mark.parametrize(
     "content",
     [
