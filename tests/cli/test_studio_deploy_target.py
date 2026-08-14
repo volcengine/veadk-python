@@ -1524,6 +1524,11 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
         creation_barrier.wait(timeout=5)
         assert kwargs["create_min_interval"] == 0.5
         snapshot = bool(kwargs["enable_snapshot"])
+        assert "-codex-" in str(kwargs["name"])
+        legacy_names = kwargs["legacy_names"]
+        assert isinstance(legacy_names, tuple)
+        assert len(legacy_names) == 1
+        assert "-chat-" in str(legacy_names[0])
         with created_kinds_lock:
             created_kinds.append("codex_snapshot" if snapshot else "codex")
         if snapshot:

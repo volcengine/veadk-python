@@ -107,6 +107,31 @@ def studio_sandbox_tool_name(
     return f"{name}{suffix}"
 
 
+def studio_sandbox_tool_name_candidates(
+    application_name: str,
+    purpose: str,
+    *,
+    snapshot: bool = False,
+) -> tuple[str, ...]:
+    """Return the preferred Tool name followed by compatible legacy names."""
+    names = [
+        studio_sandbox_tool_name(
+            application_name,
+            purpose,
+            snapshot=snapshot,
+        )
+    ]
+    if purpose == "codex":
+        names.append(
+            studio_sandbox_tool_name(
+                application_name,
+                "chat",
+                snapshot=snapshot,
+            )
+        )
+    return tuple(names)
+
+
 def _wait_for_ready_tool(
     tools_client: Any,
     tools_types: Any,
@@ -326,6 +351,7 @@ def _ensure_studio_environment_tool(
     region: str = "cn-beijing",
     session_token: str = "",
     enable_snapshot: bool = False,
+    legacy_names: tuple[str, ...] = (),
     client: Any | None = None,
     timeout_seconds: float = 600.0,
     poll_interval: float = 5.0,
@@ -344,14 +370,24 @@ def _ensure_studio_environment_tool(
         region=region,
         session_token=session_token,
     )
-    match = _find_exact_tool(
-        tools_client,
-        tools_types,
-        name=name,
-        tool_type=tool_type,
-    )
+    matched_name = name
+    match = None
+    seen_names: set[str] = set()
+    for candidate_name in (name, *legacy_names):
+        if candidate_name in seen_names:
+            continue
+        seen_names.add(candidate_name)
+        match = _find_exact_tool(
+            tools_client,
+            tools_types,
+            name=candidate_name,
+            tool_type=tool_type,
+        )
+        if match is not None:
+            matched_name = candidate_name
+            break
     if match is not None:
-        tool_id = _created_tool_id(match, name=name)
+        tool_id = _created_tool_id(match, name=matched_name)
         assert tool_id is not None
     else:
         tool_id = _create_tool_with_retry(
@@ -388,7 +424,7 @@ def _ensure_studio_environment_tool(
         tools_client,
         tools_types,
         tool_id=tool_id,
-        name=name,
+        name=matched_name,
         enable_snapshot=enable_snapshot,
         timeout_seconds=timeout_seconds,
         poll_interval=poll_interval,

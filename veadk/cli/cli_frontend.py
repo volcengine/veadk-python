@@ -8237,8 +8237,8 @@ def frontend_deploy(
         "dev": "Dev Sandbox",
     }
     sandbox_tool_purposes = {
-        "codex": "chat",
-        "codex_snapshot": "chat",
+        "codex": "codex",
+        "codex_snapshot": "codex",
         "openclaw": "openclaw",
         "openclaw_snapshot": "openclaw",
         "hermes": "hermes",
@@ -8252,38 +8252,40 @@ def frontend_deploy(
         ensure_studio_dev_env_tool,
         studio_sandbox_agent_model_name,
         studio_sandbox_model_base_url,
-        studio_sandbox_tool_name,
+        studio_sandbox_tool_name_candidates,
     )
 
     sandbox_agent_model_name = studio_sandbox_agent_model_name(provider_id)
     sandbox_model_base_url = studio_sandbox_model_base_url(provider_id)
 
-    missing_sandbox_tools: dict[str, str] = {}
+    missing_sandbox_tools: dict[str, tuple[str, ...]] = {}
     for kind, tool_id in sandbox_tool_ids.items():
         label = sandbox_tool_labels[kind]
         if tool_id:
             click.echo(f"Using configured AgentKit {label} Tool '{tool_id}'.")
             continue
-        tool_name = studio_sandbox_tool_name(
+        tool_names = studio_sandbox_tool_name_candidates(
             vefaas_app_name,
             sandbox_tool_purposes[kind],
             snapshot=kind.endswith("_snapshot"),
         )
-        click.echo(f"Creating AgentKit {label} Tool '{tool_name}'…")
-        missing_sandbox_tools[kind] = tool_name
+        click.echo(f"Creating AgentKit {label} Tool '{tool_names[0]}'…")
+        missing_sandbox_tools[kind] = tool_names
 
     if missing_sandbox_tools:
         with ThreadPoolExecutor(max_workers=len(missing_sandbox_tools)) as executor:
             tool_futures = {}
-            for kind, tool_name in missing_sandbox_tools.items():
+            for kind, tool_names in missing_sandbox_tools.items():
                 if tool_futures:
                     sleep(_SANDBOX_TOOL_CREATE_STAGGER_SECONDS)
+                tool_name = tool_names[0]
                 base_kind = kind.removesuffix("_snapshot")
                 enable_snapshot = kind.endswith("_snapshot")
                 if base_kind == "codex":
                     future = executor.submit(
                         ensure_studio_code_env_tool,
                         name=tool_name,
+                        legacy_names=tool_names[1:],
                         enable_snapshot=enable_snapshot,
                         create_min_interval=_SANDBOX_TOOL_CREATE_STAGGER_SECONDS,
                         region=region,
@@ -8948,7 +8950,7 @@ def frontend_update(
                 ensure_studio_code_env_tool,
                 studio_sandbox_agent_model_name,
                 studio_sandbox_model_base_url,
-                studio_sandbox_tool_name,
+                studio_sandbox_tool_name_candidates,
             )
 
             snapshot_labels = {
@@ -8957,14 +8959,14 @@ def frontend_update(
                 "hermes_snapshot": "Hermes Snapshot",
             }
             snapshot_purposes = {
-                "codex_snapshot": "chat",
+                "codex_snapshot": "codex",
                 "openclaw_snapshot": "openclaw",
                 "hermes_snapshot": "hermes",
             }
             sandbox_agent_model_name = studio_sandbox_agent_model_name(provider_id)
             sandbox_model_base_url = studio_sandbox_model_base_url(provider_id)
             missing_snapshot_tools = {
-                kind: studio_sandbox_tool_name(
+                kind: studio_sandbox_tool_name_candidates(
                     vefaas_app_name,
                     snapshot_purposes[kind],
                     snapshot=True,
@@ -8977,9 +8979,10 @@ def frontend_update(
                     max_workers=len(missing_snapshot_tools)
                 ) as executor:
                     tool_futures = {}
-                    for kind, tool_name in missing_snapshot_tools.items():
+                    for kind, tool_names in missing_snapshot_tools.items():
                         if tool_futures:
                             sleep(_SANDBOX_TOOL_CREATE_STAGGER_SECONDS)
+                        tool_name = tool_names[0]
                         label = snapshot_labels[kind]
                         click.echo(f"Creating AgentKit {label} Tool '{tool_name}'…")
                         base_kind = kind.removesuffix("_snapshot")
@@ -8987,6 +8990,7 @@ def frontend_update(
                             future = executor.submit(
                                 ensure_studio_code_env_tool,
                                 name=tool_name,
+                                legacy_names=tool_names[1:],
                                 enable_snapshot=True,
                                 create_min_interval=(
                                     _SANDBOX_TOOL_CREATE_STAGGER_SECONDS
@@ -9126,7 +9130,7 @@ def frontend_update(
             }
             byteplus_sandbox_purposes = {
                 "dev": "dev",
-                "codex": "chat",
+                "codex": "codex",
                 "openclaw": "openclaw",
                 "hermes": "hermes",
             }
@@ -9141,39 +9145,41 @@ def frontend_update(
                     ensure_studio_dev_env_tool,
                     studio_sandbox_agent_model_name,
                     studio_sandbox_model_base_url,
-                    studio_sandbox_tool_name,
+                    studio_sandbox_tool_name_candidates,
                 )
 
                 sandbox_agent_model_name = studio_sandbox_agent_model_name(provider_id)
                 sandbox_model_base_url = studio_sandbox_model_base_url(provider_id)
-                missing_sandbox_tools: dict[str, str] = {}
+                missing_sandbox_tools: dict[str, tuple[str, ...]] = {}
                 for kind, tool_id in byteplus_sandbox_tool_ids.items():
                     label = byteplus_sandbox_labels[kind]
                     if str(tool_id or "").strip():
                         click.echo(f"Using AgentKit {label} Tool '{tool_id}'.")
                         continue
-                    tool_name = studio_sandbox_tool_name(
+                    tool_names = studio_sandbox_tool_name_candidates(
                         vefaas_app_name,
                         byteplus_sandbox_purposes[kind],
                         snapshot=kind.endswith("_snapshot"),
                     )
-                    click.echo(f"Creating AgentKit {label} Tool '{tool_name}'…")
-                    missing_sandbox_tools[kind] = tool_name
+                    click.echo(f"Creating AgentKit {label} Tool '{tool_names[0]}'…")
+                    missing_sandbox_tools[kind] = tool_names
 
                 if missing_sandbox_tools:
                     with ThreadPoolExecutor(
                         max_workers=len(missing_sandbox_tools)
                     ) as ex:
                         tool_futures = {}
-                        for kind, tool_name in missing_sandbox_tools.items():
+                        for kind, tool_names in missing_sandbox_tools.items():
                             if tool_futures:
                                 sleep(_SANDBOX_TOOL_CREATE_STAGGER_SECONDS)
+                            tool_name = tool_names[0]
                             base_kind = kind.removesuffix("_snapshot")
                             enable_snapshot = kind.endswith("_snapshot")
                             if base_kind == "codex":
                                 future = ex.submit(
                                     ensure_studio_code_env_tool,
                                     name=tool_name,
+                                    legacy_names=tool_names[1:],
                                     enable_snapshot=enable_snapshot,
                                     create_min_interval=(
                                         _SANDBOX_TOOL_CREATE_STAGGER_SECONDS
