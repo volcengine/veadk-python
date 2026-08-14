@@ -71,10 +71,23 @@ def _read_attr(obj: Any, *path: str) -> Any:
     return current
 
 
-def _call_in_fresh_event_loop(method: Callable[[], Any]) -> Any:
+def _call_in_fresh_event_loop(
+    method: Callable[[], Any],
+    *,
+    bind_lark_ws_loop: bool = False,
+) -> Any:
     loop = asyncio.new_event_loop()
     try:
         asyncio.set_event_loop(loop)
+        if bind_lark_ws_loop:
+            # lark_channel.ws.client captures a module-level event loop when it
+            # is imported. AgentKit imports the SDK from a running ASGI loop,
+            # while the SDK's synchronous start() later calls
+            # loop.run_until_complete(). Rebind that SDK-global loop to this
+            # dedicated worker loop before starting the WebSocket.
+            from lark_channel.ws import client as lark_ws_client
+
+            lark_ws_client.loop = loop
         result = method()
         if inspect.isawaitable(result):
             return loop.run_until_complete(result)
@@ -417,7 +430,11 @@ class FeishuChannelExtension:
         connect = getattr(self.channel, "start", None) or self.channel.connect
         if inspect.iscoroutinefunction(connect):
             return await connect()
-        return await asyncio.to_thread(_call_in_fresh_event_loop, connect)
+        return await asyncio.to_thread(
+            _call_in_fresh_event_loop,
+            connect,
+            bind_lark_ws_loop=type(self.channel).__module__.startswith("lark_channel."),
+        )
 
     async def disconnect(self) -> Any:
         disconnect = getattr(self.channel, "stop", None) or getattr(

@@ -392,3 +392,117 @@ async def test_extension_prefers_sync_start_stop_over_async_connect():
     assert channel.stop_called is True
     assert channel.start_loop_running is False
     assert channel.stop_loop_running is False
+
+
+@pytest.mark.anyio
+async def test_extension_rebinds_lark_ws_loop_before_sync_start(monkeypatch):
+    from lark_channel.ws import client as lark_ws_client
+
+    asgi_loop = asyncio.get_running_loop()
+    observed = {}
+
+    class LoopInspectingChannel(FakeChannel):
+        def start(self):
+            worker_loop = asyncio.get_event_loop()
+            observed["worker_loop"] = worker_loop
+            observed["sdk_loop"] = lark_ws_client.loop
+            observed["worker_loop_running"] = worker_loop.is_running()
+            lark_ws_client.loop.run_until_complete(asyncio.sleep(0))
+
+    LoopInspectingChannel.__module__ = "lark_channel.testing"
+    monkeypatch.setattr(lark_ws_client, "loop", asgi_loop)
+    extension = FeishuChannelExtension(
+        runner=FakeRunner(),
+        channel=LoopInspectingChannel(),
+    )
+
+    await extension.connect()
+
+    assert observed["sdk_loop"] is observed["worker_loop"]
+    assert observed["sdk_loop"] is not asgi_loop
+    assert observed["worker_loop_running"] is False
+
+
+@pytest.mark.anyio
+async def test_extension_shutdown_disconnects_before_draining_inflight_messages():
+    events = []
+    message_started = asyncio.Event()
+    release_message = asyncio.Event()
+
+    class DrainChannel(FakeChannel):
+        def stop(self):
+            events.append("channel.stopped")
+
+    extension = FeishuChannelExtension(
+        runner=FakeRunner(),
+        channel=DrainChannel(),
+    )
+
+    async def process_message():
+        events.append("message.started")
+        message_started.set()
+        await release_message.wait()
+        events.append("message.completed")
+
+    task = asyncio.create_task(process_message())
+    extension._inflight.add(task)
+    task.add_done_callback(extension._inflight.discard)
+    await message_started.wait()
+
+    shutdown = asyncio.create_task(extension.shutdown(drain_timeout=1))
+    await asyncio.sleep(0)
+    while "channel.stopped" not in events:
+        await asyncio.sleep(0)
+
+    assert events == ["message.started", "channel.stopped"]
+    assert not shutdown.done()
+
+    release_message.set()
+    await shutdown
+
+    assert events == [
+        "message.started",
+        "channel.stopped",
+        "message.completed",
+    ]
+    assert not extension._inflight
+
+
+@pytest.mark.anyio
+async def test_extension_start_and_shutdown_manage_blocking_channel():
+    events = []
+
+    class BlockingStartChannel(FakeChannel):
+        def __init__(self):
+            super().__init__()
+            self.started = threading.Event()
+            self.stopped = threading.Event()
+            self.start_returned = threading.Event()
+
+        def start(self):
+            events.append("channel.started")
+            self.started.set()
+            self.stopped.wait(timeout=1)
+            events.append("channel.start_returned")
+            self.start_returned.set()
+
+        def stop(self):
+            events.append("channel.stopped")
+            self.stopped.set()
+
+    channel = BlockingStartChannel()
+    extension = FeishuChannelExtension(runner=FakeRunner(), channel=channel)
+
+    extension.start()
+    assert await asyncio.to_thread(channel.started.wait, 1)
+
+    await extension.shutdown(drain_timeout=1)
+    assert await asyncio.to_thread(channel.start_returned.wait, 1)
+
+    assert events == [
+        "channel.started",
+        "channel.stopped",
+        "channel.start_returned",
+    ]
+    assert extension.is_draining is True
+    assert extension._retry_task is None

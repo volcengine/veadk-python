@@ -20,8 +20,6 @@ import asyncio
 import inspect
 import json
 import os
-import threading
-import traceback
 from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -58,6 +56,7 @@ from veadk.memory.short_term_memory import ShortTermMemory
 if TYPE_CHECKING:
     from agentkit.identity import RuntimeIdentity
 
+    from veadk.extensions.feishu_channel import FeishuChannelExtension
     from veadk.runner import Runner
 
 
@@ -218,62 +217,9 @@ def _agent_node(
     }
 
 
-def _get_feishu_channel_method(
-    channel: object,
-    names: tuple[str, ...],
-) -> Callable[[], Any] | None:
-    raw_channel = getattr(channel, "channel", None)
-    for target in (raw_channel, channel):
-        if target is None:
-            continue
-        for name in names:
-            method = getattr(target, name, None)
-            if callable(method):
-                return method
-    return None
-
-
-def _call_feishu_channel_method(
-    loop: asyncio.AbstractEventLoop,
-    method: Callable[[], Any],
-) -> Any:
-    result = method()
-    if inspect.isawaitable(result):
-        return loop.run_until_complete(result)
-    return result
-
-
-def _connect_feishu_channel(
-    loop: asyncio.AbstractEventLoop,
-    channel: object,
-) -> Any:
-    connect = _get_feishu_channel_method(channel, ("start", "connect"))
-    if connect is None:
-        raise AttributeError("Feishu channel has no start/connect method")
-    return _call_feishu_channel_method(loop, connect)
-
-
-def _disconnect_feishu_channel(
-    loop: asyncio.AbstractEventLoop,
-    channel: object,
-) -> Any:
-    disconnect = _get_feishu_channel_method(channel, ("stop", "disconnect"))
-    if disconnect is None:
-        return None
-    return _call_feishu_channel_method(loop, disconnect)
-
-
-def _stop_feishu_channel_from_lifespan(channel: object) -> None:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        _disconnect_feishu_channel(loop, channel)
-    finally:
-        asyncio.set_event_loop(None)
-        loop.close()
-
-
-def _build_feishu_channel(runner: Runner, app_id: str, app_secret: str) -> object:
+def _build_feishu_channel(
+    runner: Runner, app_id: str, app_secret: str
+) -> FeishuChannelExtension:
     from veadk.extensions import FeishuChannelExtension
 
     return FeishuChannelExtension(
@@ -286,54 +232,6 @@ def _build_feishu_channel(runner: Runner, app_id: str, app_secret: str) -> objec
     )
 
 
-def _run_feishu_channel(
-    runner: Runner,
-    app_id: str,
-    app_secret: str,
-    stop_event: threading.Event,
-    state: dict[str, Any],
-) -> None:
-    loop = asyncio.new_event_loop()
-    state["loop"] = loop
-    asyncio.set_event_loop(loop)
-    try:
-        while not stop_event.is_set():
-            channel = None
-            try:
-                channel = _build_feishu_channel(runner, app_id, app_secret)
-                state["channel"] = channel
-                print("feishu channel connecting in dedicated thread", flush=True)
-                _connect_feishu_channel(loop, channel)
-                print("feishu channel disconnected; reconnecting in 5s", flush=True)
-            except Exception as exc:  # The channel reconnects after transport errors.
-                stage = "initialization" if channel is None else "connect"
-                print(
-                    f"feishu channel {stage} failed: "
-                    f"{type(exc).__name__}: {exc}; reconnecting in 5s",
-                    flush=True,
-                )
-                if channel is None:
-                    print(traceback.format_exc(), flush=True)
-            finally:
-                if channel is not None:
-                    try:
-                        _disconnect_feishu_channel(loop, channel)
-                    except Exception as exc:  # Cleanup must not stop reconnection.
-                        print(
-                            "feishu channel disconnect failed: "
-                            f"{type(exc).__name__}: {exc}",
-                            flush=True,
-                        )
-                    finally:
-                        if state.get("channel") is channel:
-                            state["channel"] = None
-            stop_event.wait(5)
-    finally:
-        asyncio.set_event_loop(None)
-        state["loop"] = None
-        loop.close()
-
-
 async def _start_feishu_channel(app: FastAPI, runner: Runner) -> None:
     app_id = os.getenv("FEISHU_APP_ID")
     app_secret = os.getenv("FEISHU_APP_SECRET")
@@ -344,40 +242,20 @@ async def _start_feishu_channel(app: FastAPI, runner: Runner) -> None:
         )
         return
 
-    app.state.feishu_channel_state = {"channel": None, "loop": None}
-    app.state.feishu_channel_stop_event = threading.Event()
-    app.state.feishu_channel_thread = threading.Thread(
-        target=_run_feishu_channel,
-        args=(
-            runner,
-            app_id,
-            app_secret,
-            app.state.feishu_channel_stop_event,
-            app.state.feishu_channel_state,
-        ),
-        name="feishu-channel",
-        daemon=True,
-    )
-    app.state.feishu_channel_thread.start()
-    print("feishu channel background thread started", flush=True)
+    channel = _build_feishu_channel(runner, app_id, app_secret)
+    app.state.feishu_channel = channel
+    channel.start()
+    print("feishu channel reconnect loop started", flush=True)
 
 
 async def _stop_feishu_channel(app: FastAPI) -> None:
-    stop_event = getattr(app.state, "feishu_channel_stop_event", None)
-    if stop_event is not None:
-        stop_event.set()
-    state = getattr(app.state, "feishu_channel_state", None) or {}
-    channel = state.get("channel")
-    if channel is not None:
-        await asyncio.to_thread(_stop_feishu_channel_from_lifespan, channel)
-    thread = getattr(app.state, "feishu_channel_thread", None)
-    if thread is not None:
-        await asyncio.to_thread(thread.join, 2)
-        if thread.is_alive():
-            print(
-                "feishu channel background thread did not stop within 2s",
-                flush=True,
-            )
+    channel = getattr(app.state, "feishu_channel", None)
+    if channel is None:
+        return
+    try:
+        await channel.shutdown()
+    finally:
+        app.state.feishu_channel = None
 
 
 def _configure_feishu_lifecycle(

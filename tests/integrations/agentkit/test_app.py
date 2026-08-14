@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -397,29 +398,40 @@ def test_feishu_lifecycle_starts_and_stops_with_application(
 ) -> None:
     runners: list[dict[str, Any]] = []
     events: list[str] = []
+    loops: list[object] = []
 
     class _FakeRunner:
         def __init__(self, **kwargs: Any) -> None:
             runners.append(kwargs)
 
-    async def fake_start(app: FastAPI, runner: object) -> None:
-        del app, runner
-        events.append("start")
+    class _FakeFeishuChannel:
+        def start(self) -> None:
+            events.append("start")
+            loops.append(asyncio.get_running_loop())
 
-    async def fake_stop(app: FastAPI) -> None:
-        del app
-        events.append("stop")
+        async def shutdown(self) -> None:
+            events.append("shutdown")
+            loops.append(asyncio.get_running_loop())
 
     monkeypatch.setattr(veadk, "Runner", _FakeRunner)
-    monkeypatch.setattr(agentkit_app, "_start_feishu_channel", fake_start)
-    monkeypatch.setattr(agentkit_app, "_stop_feishu_channel", fake_stop)
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_test")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+    channel = _FakeFeishuChannel()
+    monkeypatch.setattr(
+        agentkit_app,
+        "_build_feishu_channel",
+        lambda runner, app_id, app_secret: channel,
+    )
     root_agent = _root_agent()
 
     app = agentkit_app.create_agentkit_app(root_agent, enable_feishu=True)
     with TestClient(app):
         assert events == ["start"]
+        assert app.state.feishu_channel is channel
 
-    assert events == ["start", "stop"]
+    assert events == ["start", "shutdown"]
+    assert loops[0] is loops[1]
+    assert app.state.feishu_channel is None
     assert runners[0]["agent"] is root_agent
     assert runners[0]["app_name"] == "agent"
     assert isinstance(runners[0]["short_term_memory"], _FakeShortTermMemory)
