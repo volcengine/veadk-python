@@ -2393,6 +2393,7 @@ export interface StudioTelemetryContext {
   region: string;
   project: string;
   version: string;
+  accountId?: string;
 }
 
 export interface StudioTelemetryConfig {
@@ -2470,6 +2471,7 @@ function normalizeStudioTelemetryConfig(value: unknown): StudioTelemetryConfig {
       region: typeof studio.region === "string" ? studio.region : "",
       project: typeof studio.project === "string" ? studio.project : "",
       version: typeof studio.version === "string" ? studio.version : "",
+      accountId: typeof studio.accountId === "string" ? studio.accountId : "",
     },
   };
 }

@@ -16,6 +16,7 @@ import {
   type AgentSourceDownloadFailedProps,
   type AgentSourceDownloadStartedProps,
   type AgentSourceDownloadSucceededProps,
+  type EntryViewedProps,
   type SandboxCreateFailedProps,
   type SandboxCreateStartedProps,
   type SandboxCreateSucceededProps,
@@ -62,6 +63,7 @@ export class TelemetryRuntime {
   private pageInstanceId: string;
   private context: StudioTelemetryContext | undefined;
   private identity: TelemetryIdentity | undefined;
+  private entryViewed = false;
   private sessionStarted = false;
 
   constructor(dependencies: TelemetryRuntimeDependencies) {
@@ -72,7 +74,10 @@ export class TelemetryRuntime {
   }
 
   setContext(context: StudioTelemetryContext): void {
-    this.context = context;
+    this.context = {
+      ...context,
+      accountId: context.accountId?.trim() ?? "",
+    };
   }
 
   identify(identity: TelemetryIdentity): void {
@@ -100,6 +105,29 @@ export class TelemetryRuntime {
     this.emit("studio_session_started", {
       agents_source: props.agentsSource,
     });
+  }
+
+  /** Records one anonymous Studio page entry as soon as the SPA is loaded. */
+  trackStudioEntryViewed(props: EntryViewedProps): void {
+    if (this.entryViewed || !this.context) return;
+    this.entryViewed = true;
+    const payload = sanitizeTelemetryPayload("studio_entry_viewed", compact({
+      schema_version: TELEMETRY_SCHEMA_VERSION,
+      event_id: this.createId(),
+      user_pool_id: this.context.userPoolId,
+      studio_deploy_id: this.context.studioDeployId,
+      vefaas_application_id: this.context.applicationId,
+      vefaas_function_id: this.context.functionId,
+      studio_region: this.context.studioRegion,
+      studio_project: this.context.studioProject,
+      studio_version: this.context.studioVersion,
+      environment: this.context.environment,
+      cloud_provider: this.context.cloudProvider,
+      account_id: this.context.accountId,
+      page_instance_id: this.pageInstanceId,
+      auth_state: props.authState,
+    }));
+    this.sink.emit("studio_entry_viewed", payload);
   }
 
   beginAgentDeploy(
@@ -203,7 +231,10 @@ export class TelemetryRuntime {
   }
 
   private beginOperation<Succeeded, Failed>(
-    name: Exclude<StudioTelemetryEventName, "studio_session_started">,
+    name: Exclude<
+      StudioTelemetryEventName,
+      "studio_entry_viewed" | "studio_session_started"
+    >,
     startedProps: Record<string, unknown>,
     successProps: (props: Succeeded) => Record<string, unknown>,
     failureProps: (props: Failed) => Record<string, unknown>,

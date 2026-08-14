@@ -8945,7 +8945,7 @@ def frontend_update(
             )
 
             if ensure_default_frontend_role_policy(
-                str(getattr(function, "role", "") or ""),
+                str(getattr(remote_function, "role", "") or ""),
                 access_key=ak,
                 secret_key=sk,
                 session_token=session_token,

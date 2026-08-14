@@ -26,6 +26,7 @@ def test_studio_telemetry_config_builds_ui_payload_from_environment() -> None:
             "VEADK_STUDIO_FUNCTION_ID": "function-id",
             "VEADK_STUDIO_DEPLOY_REGION": "cn-beijing",
             "VEADK_STUDIO_PROJECT": "default",
+            "VEADK_STUDIO_ACCOUNT_ID": "2100123456",
         },
     )
 
@@ -39,5 +40,6 @@ def test_studio_telemetry_config_builds_ui_payload_from_environment() -> None:
             "region": "cn-beijing",
             "project": "default",
             "version": "20260805120000",
+            "accountId": "2100123456",
         },
     }

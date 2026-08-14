@@ -26,6 +26,7 @@ STUDIO_APPLICATION_ID_ENV = "VEADK_STUDIO_APPLICATION_ID"
 STUDIO_FUNCTION_ID_ENV = "VEADK_STUDIO_FUNCTION_ID"
 STUDIO_DEPLOY_REGION_ENV = "VEADK_STUDIO_DEPLOY_REGION"
 STUDIO_PROJECT_ENV = "VEADK_STUDIO_PROJECT"
+STUDIO_ACCOUNT_ID_ENV = "VEADK_STUDIO_ACCOUNT_ID"
 AGENTKIT_SANDBOX_REGION_ENV = "AGENTKIT_SANDBOX_REGION"
 
 
@@ -62,5 +63,6 @@ def studio_telemetry_config(
             "region": region,
             "project": _env_value(current_env, STUDIO_PROJECT_ENV),
             "version": version,
+            "accountId": _env_value(current_env, STUDIO_ACCOUNT_ID_ENV),
         },
     }

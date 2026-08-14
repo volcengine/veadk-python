@@ -5,6 +5,7 @@ export type TelemetryValue = string | number;
 export type TelemetryPayload = Record<string, TelemetryValue>;
 
 export type StudioTelemetryEventName =
+  | "studio_entry_viewed"
   | "studio_session_started"
   | "studio_agent_deploy"
   | "studio_sandbox_create"
@@ -27,6 +28,7 @@ export interface StudioTelemetryContext {
   studioVersion: string;
   environment: TelemetryEnvironment;
   cloudProvider: "volcengine" | "byteplus";
+  accountId?: string;
 }
 
 export interface TelemetryIdentity {
@@ -51,6 +53,10 @@ export type ErrorKind =
 
 export interface SessionStartedProps {
   agentsSource: "local" | "cloud";
+}
+
+export interface EntryViewedProps {
+  authState: "anonymous";
 }
 
 export type DeploySource =

@@ -103,6 +103,7 @@ const COMMON_KEYS = [
 ] as const;
 
 const EVENT_KEYS: Record<StudioTelemetryEventName, readonly string[]> = {
+  studio_entry_viewed: ["auth_state"],
   studio_session_started: ["agents_source"],
   studio_agent_deploy: [
     "status",

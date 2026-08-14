@@ -28,6 +28,12 @@ test("Studio access fails closed until the server-derived role is known", () => 
   assert.match(appSource, /setAccess\(DEFAULT_STUDIO_ACCESS\)/);
 });
 
+test("Studio entry telemetry uses anonymous UI config metadata", () => {
+  assert.match(clientSource, /accountId: typeof studio\.accountId === "string"/);
+  assert.match(appSource, /accountId: studio\?\.accountId \?\? ""/);
+  assert.match(appSource, /trackStudioEntryViewed\(\{ authState: "anonymous" \}\)/);
+});
+
 test("Agent workspace creation and update actions obey Studio access", () => {
   assert.doesNotMatch(sidebarSource, /access\.capabilities\.createAgents && show\("addAgent"\)/);
   assert.doesNotMatch(sidebarSource, /access\.capabilities\.manageAgents && show\("manageAgents"\)/);
