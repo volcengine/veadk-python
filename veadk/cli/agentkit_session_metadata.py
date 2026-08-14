@@ -24,6 +24,7 @@ from pydantic import Field
 SESSION_DISPLAY_NAME_MAX_LENGTH = 40
 SESSION_DISPLAY_NAME_METADATA_KEY = "veadk_display_name"
 SESSION_CREATOR_NAME_METADATA_KEY = "veadk_creator_name"
+SESSION_AGENT_KIND_METADATA_KEY = "veadk_agent_kind"
 SESSION_USERNAME_METADATA_KEY = "Username"
 
 
@@ -78,6 +79,7 @@ def build_create_session_request(
     display_name: str,
     username: str = "",
     creator_name: str = "",
+    agent_kind: str = "",
 ) -> Any:
     """Build a native or compatibility CreateSession request."""
     metadata = []
@@ -103,6 +105,14 @@ def build_create_session_request(
                 Key=SESSION_CREATOR_NAME_METADATA_KEY,
                 Type="String",
                 Value=creator_name,
+            )
+        )
+    if agent_kind:
+        metadata.append(
+            _SessionMetadata(
+                Key=SESSION_AGENT_KIND_METADATA_KEY,
+                Type="String",
+                Value=agent_kind,
             )
         )
     request_type: Any = tools_types.CreateSessionRequest
@@ -174,55 +184,41 @@ def call_session_client(client: Any, method_name: str, request: Any) -> Any:
     return getattr(client, method_name)(request)
 
 
-def session_display_name(value: Any) -> str:
-    """Extract a valid Studio display name from one Session response."""
+def _metadata_string(value: Any, expected_key: str) -> str:
+    """Extract one string metadata value from a Session response."""
     metadata = getattr(value, "metadata", None)
     if not isinstance(metadata, (list, tuple)):
         return ""
     for item in metadata:
         if isinstance(item, dict):
             key = item.get("key") or item.get("Key")
-            name = item.get("value") or item.get("Value")
+            string_value = item.get("value") or item.get("Value")
         else:
             key = getattr(item, "key", "")
-            name = getattr(item, "value", "")
-        if key != SESSION_DISPLAY_NAME_METADATA_KEY or not isinstance(name, str):
-            continue
-        normalized = name.strip()
-        if 0 < len(normalized) <= SESSION_DISPLAY_NAME_MAX_LENGTH:
-            return normalized
+            string_value = getattr(item, "value", "")
+        if key == expected_key and isinstance(string_value, str):
+            return string_value.strip()
+    return ""
+
+
+def session_display_name(value: Any) -> str:
+    """Extract a valid Studio display name from one Session response."""
+    normalized = _metadata_string(value, SESSION_DISPLAY_NAME_METADATA_KEY)
+    if 0 < len(normalized) <= SESSION_DISPLAY_NAME_MAX_LENGTH:
+        return normalized
     return ""
 
 
 def session_username(value: Any) -> str:
     """Extract the Username owner metadata from one Session response."""
-    metadata = getattr(value, "metadata", None)
-    if not isinstance(metadata, (list, tuple)):
-        return ""
-    for item in metadata:
-        if isinstance(item, dict):
-            key = item.get("key") or item.get("Key")
-            username = item.get("value") or item.get("Value")
-        else:
-            key = getattr(item, "key", "")
-            username = getattr(item, "value", "")
-        if key == SESSION_USERNAME_METADATA_KEY and isinstance(username, str):
-            return username.strip()
-    return ""
+    return _metadata_string(value, SESSION_USERNAME_METADATA_KEY)
 
 
 def session_creator_name(value: Any) -> str:
     """Extract the human-readable creator name from one Session response."""
-    metadata = getattr(value, "metadata", None)
-    if not isinstance(metadata, (list, tuple)):
-        return ""
-    for item in metadata:
-        if isinstance(item, dict):
-            key = item.get("key") or item.get("Key")
-            creator_name = item.get("value") or item.get("Value")
-        else:
-            key = getattr(item, "key", "")
-            creator_name = getattr(item, "value", "")
-        if key == SESSION_CREATOR_NAME_METADATA_KEY and isinstance(creator_name, str):
-            return creator_name.strip()
-    return ""
+    return _metadata_string(value, SESSION_CREATOR_NAME_METADATA_KEY)
+
+
+def session_agent_kind(value: Any) -> str:
+    """Extract the Studio frontend agent kind from one Session response."""
+    return _metadata_string(value, SESSION_AGENT_KIND_METADATA_KEY)

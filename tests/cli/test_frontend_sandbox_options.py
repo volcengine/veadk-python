@@ -136,6 +136,16 @@ def test_local_studio_mounts_snapshot_tools_into_sandbox_services() -> None:
     assert (
         "SandboxAgentSessionService(\n"
         "            sandbox_gateway,\n"
+        '            kind="deepseek-harness",\n'
+        "            tool_id=sandbox_chat_codex_tool_id,\n"
+        "            snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,\n"
+        '            surface_path="/deepseek-harness/",\n'
+        "            filter_agent_kind=True,\n"
+        "        )"
+    ) in source
+    assert (
+        "SandboxAgentSessionService(\n"
+        "            sandbox_gateway,\n"
         '            kind="openclaw",\n'
         "            tool_id=sandbox_chat_openclaw_tool_id,\n"
         "            snapshot_tool_id=sandbox_chat_openclaw_snapshot_tool_id,\n"

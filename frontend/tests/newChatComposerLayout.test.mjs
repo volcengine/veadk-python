@@ -196,11 +196,12 @@ test("keeps alternate chat modes hidden from the new-chat composer", () => {
   assert.doesNotMatch(selectorSource, /<AgentSelector/);
   assert.match(navbarSource, /<AgentSelector[\s\S]*?variant="navbar"/);
   assert.match(selectorSource, /Codex 智能体/);
+  assert.match(selectorSource, /DeepSeek Harness/);
   assert.match(selectorSource, /\{ label: "ArkClaw", kind: "openclaw" \}/);
   assert.match(selectorSource, /\{ label: "Hermes 智能体", kind: "hermes" \}/);
   assert.match(
     selectorSource,
-    /<SandboxAgentIcon kind="codex" className="new-chat-mode__builtin-icon"/,
+    /<SandboxAgentIcon kind=\{agent\.kind\} className="new-chat-mode__builtin-icon"/,
   );
   assert.match(
     selectorSource,
@@ -335,7 +336,7 @@ test("hides skill customization until the administrator Dev Sandbox is usable", 
   );
 });
 
-test("keeps the four existing Agent types and adds the two skill actions", () => {
+test("keeps the built-in Agent types and adds the two skill actions", () => {
   assert.match(
     newChatAgentPickerSource,
     /\{ id: "general", label: "通用智能体" \}/,
@@ -343,6 +344,10 @@ test("keeps the four existing Agent types and adds the two skill actions", () =>
   assert.match(
     newChatAgentPickerSource,
     /\{ id: "codex", label: "Codex 智能体" \}/,
+  );
+  assert.match(
+    newChatAgentPickerSource,
+    /\{ id: "deepseek-harness", label: "DeepSeek Harness" \}/,
   );
   assert.match(
     newChatAgentPickerSource,

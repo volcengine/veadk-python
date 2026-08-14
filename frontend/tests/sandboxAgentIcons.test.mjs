@@ -24,18 +24,23 @@ const launchDialogSource = readFileSync(
 );
 
 test("sandbox agent icons share one local outline system", () => {
-  for (const icon of ["CodexAgentIcon", "OpenClawAgentIcon", "HermesAgentIcon"]) {
+  for (const icon of [
+    "CodexAgentIcon",
+    "OpenClawAgentIcon",
+    "HermesAgentIcon",
+    "DeepSeekHarnessAgentIcon",
+  ]) {
     assert.match(iconsSource, new RegExp(`export function ${icon}`));
   }
-  assert.equal((iconsSource.match(/viewBox="0 0 24 24"/g) ?? []).length, 3);
-  assert.equal((iconsSource.match(/stroke="currentColor"/g) ?? []).length, 3);
-  assert.equal((iconsSource.match(/strokeWidth="1\.75"/g) ?? []).length, 3);
+  assert.equal((iconsSource.match(/viewBox="0 0 24 24"/g) ?? []).length, 4);
+  assert.equal((iconsSource.match(/stroke="currentColor"/g) ?? []).length, 4);
+  assert.equal((iconsSource.match(/strokeWidth="1\.75"/g) ?? []).length, 4);
 });
 
 test("all sandbox agent entry points use the shared vector icons", () => {
   assert.match(pickerSource, /<SandboxAgentIcon kind=\{type\}/);
   assert.match(myAgentsSource, /<SandboxAgentIcon kind=\{type\}/);
-  assert.match(selectorSource, /<SandboxAgentIcon kind="codex"/);
+  assert.match(selectorSource, /<SandboxAgentIcon kind=\{agent\.kind\}/);
   assert.match(selectorSource, /<SandboxAgentIcon kind=\{kind\}/);
   assert.match(launchDialogSource, /<SandboxAgentIcon kind=\{agentKind\}/);
   assert.doesNotMatch(launchDialogSource, /<InsightIcon/);

@@ -121,6 +121,11 @@ test("sends persistence explicitly for default and temporary agents", async (t) 
       persistent: false,
     }),
   );
+  await assert.rejects(() =>
+    sandboxClient.startAgentSession("deepseek-harness", {
+      displayName: "DeepSeek Harness",
+    }),
+  );
 
   assert.deepEqual(requests, [
     {
@@ -130,6 +135,10 @@ test("sends persistence explicitly for default and temporary agents", async (t) 
     {
       url: "/web/openclaw/sessions",
       body: { displayName: "OpenClaw", persistent: false },
+    },
+    {
+      url: "/web/deepseek-harness/sessions",
+      body: { displayName: "DeepSeek Harness", persistent: true },
     },
   ]);
 });

@@ -13,7 +13,7 @@ const SETTINGS_TIMEOUT_MS = 60_000;
 const UPLOAD_TIMEOUT_MS = 330_000;
 
 export const SANDBOX_DISPLAY_NAME_MAX_LENGTH = 40;
-export type SandboxAgentKind = "openclaw" | "hermes";
+export type SandboxAgentKind = "deepseek-harness" | "openclaw" | "hermes";
 
 export function sandboxStatusLabel(status: string): string {
   switch (status.trim().toLowerCase()) {

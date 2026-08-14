@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Same-origin WebUI proxy for managed OpenClaw and Hermes Sessions."""
+"""Same-origin WebUI proxy for managed branded agent Sessions."""
 
 from __future__ import annotations
 
@@ -44,6 +44,13 @@ _OPENCLAW_RESET_TAG = (
     b"<script>try{for(const key of Object.keys(localStorage)){"
     b"if(key.startsWith('openclaw.control.settings.v1'))localStorage.removeItem(key)"
     b"}}catch{}</script>"
+)
+_DEEPSEEK_HARNESS_PATHS = (
+    "/deepseek-harness-auth-query.js",
+    "/deepseek-harness",
+    "/plugins",
+    "/assets",
+    "/api",
 )
 _BLOCKED_RESPONSE_HEADERS = {
     "connection",
@@ -84,8 +91,10 @@ def _rewrite_body(
 ) -> bytes:
     if not any(marker in content_type for marker in _TEXT_CONTENT_TYPES):
         return body
-    if kind == "hermes":
+    if kind in {"hermes", "deepseek-harness"}:
         body = _strip_hermes_gateway_query(body)
+    if kind == "deepseek-harness":
+        return _rewrite_deepseek_harness_body(body, prefix)
     source = f"/{kind}".encode()
     replacement = f"{prefix}/{kind}".encode()
     for quote in (b'"', b"'", b"`"):
@@ -93,6 +102,22 @@ def _rewrite_body(
     body = body.replace(b"url(" + source, b"url(" + replacement)
     if kind == "openclaw" and "text/html" in content_type:
         body = body.replace(b"<head>", b"<head>" + _OPENCLAW_RESET_TAG, 1)
+    return body
+
+
+def _rewrite_root_path(body: bytes, source_path: str, replacement_path: str) -> bytes:
+    source = source_path.encode()
+    replacement = replacement_path.encode()
+    for quote in (b'"', b"'", b"`"):
+        body = body.replace(quote + source, quote + replacement)
+    body = body.replace(b"url(" + source, b"url(" + replacement)
+    return body
+
+
+def _rewrite_deepseek_harness_body(body: bytes, prefix: str) -> bytes:
+    """Route DSH root assets and APIs through the opaque Studio surface proxy."""
+    for path in _DEEPSEEK_HARNESS_PATHS:
+        body = _rewrite_root_path(body, path, f"{prefix}{path}")
     return body
 
 

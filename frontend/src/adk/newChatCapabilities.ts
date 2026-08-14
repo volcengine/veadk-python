@@ -1,5 +1,6 @@
 import { withAuth } from "./auth";
 import { withLocalUser } from "./identity";
+import type { SandboxAgentKind } from "./sandbox";
 import { requestSignal } from "./timeout";
 
 const CAPABILITY_TIMEOUT_MS = 10_000;
@@ -29,4 +30,10 @@ async function getCapability(path: string): Promise<NewChatModeCapability> {
 
 export async function getSandboxCapability(): Promise<NewChatModeCapability> {
   return getCapability("/web/sandbox/capabilities");
+}
+
+export async function getSandboxAgentCapability(
+  kind: SandboxAgentKind,
+): Promise<NewChatModeCapability> {
+  return getCapability(`/web/${kind}/capabilities`);
 }

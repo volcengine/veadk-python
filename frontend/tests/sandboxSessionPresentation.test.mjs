@@ -75,6 +75,10 @@ test("sandbox errors preserve HTTP status and backend detail", () => {
 test("new-chat built-in agent mode launches the AgentKit sandbox", () => {
   assert.match(modeSelectorSource, /value: "temporary"[\s\S]*?label: "内置智能体"/);
   assert.match(appSource, /mode === "temporary"[\s\S]*?openSandboxLaunch\(\)/);
+  assert.match(
+    appSource,
+    /mode === "deepseek-harness"[\s\S]*?openSandboxLaunch\("deepseek-harness"\)/,
+  );
   assert.doesNotMatch(appSource, /<SandboxEntryButton/);
 });
 

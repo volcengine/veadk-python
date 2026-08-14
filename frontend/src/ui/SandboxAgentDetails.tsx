@@ -4,6 +4,7 @@ import "./SandboxAgentDetails.css";
 
 const AGENT_LABELS = {
   codex: "Codex",
+  "deepseek-harness": "DeepSeek Harness",
   openclaw: "OpenClaw",
   hermes: "Hermes",
 } as const;
