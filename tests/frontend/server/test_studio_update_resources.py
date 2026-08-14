@@ -186,6 +186,10 @@ def test_reconcile_studio_update_resources_provisions_missing_resources(
     ]
     assert {call["kind"] for call in tool_calls} == {"codex", "openclaw", "hermes"}
     assert all(call["application_id"] == "application-id" for call in tool_calls)
+    assert (
+        next(call for call in tool_calls if call["kind"] == "codex")["purpose"]
+        == "codex"
+    )
 
 
 def test_reconcile_studio_update_resources_only_repairs_missing_items(
@@ -228,7 +232,7 @@ def test_provision_codex_snapshot_tool_binds_model_credential(
 ) -> None:
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
-        "veadk.cli.studio_sandbox_tools.studio_sandbox_tool_name",
+        "veadk.cli.studio_sandbox_tools.studio_sandbox_tool_name_candidates",
         lambda application_id, purpose, *, snapshot: (
             captured.update(
                 {
@@ -237,7 +241,7 @@ def test_provision_codex_snapshot_tool_binds_model_credential(
                     "snapshot": snapshot,
                 }
             )
-            or "snapshot-tool-name"
+            or ("snapshot-tool-name", "legacy-snapshot-tool-name")
         ),
     )
     monkeypatch.setattr(
@@ -255,7 +259,7 @@ def test_provision_codex_snapshot_tool_binds_model_credential(
 
     tool_id = _provision_snapshot_tool(
         kind="codex",
-        purpose="chat",
+        purpose="codex",
         provider="byteplus",
         region="ap-southeast-1",
         application_id="application-id",
@@ -265,7 +269,10 @@ def test_provision_codex_snapshot_tool_binds_model_credential(
     )
 
     assert tool_id == "tool-id"
+    assert captured["purpose"] == "codex"
     assert captured["snapshot"] is True
+    assert captured["tool"]["name"] == "snapshot-tool-name"
+    assert captured["tool"]["legacy_names"] == ("legacy-snapshot-tool-name",)
     assert captured["tool"]["enable_snapshot"] is True
     assert captured["credential"]["tool_id"] == "tool-id"
     assert captured["credential"]["provider"] == "byteplus"
@@ -277,8 +284,8 @@ def test_provision_agent_snapshot_tool_binds_provider_model(
 ) -> None:
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
-        "veadk.cli.studio_sandbox_tools.studio_sandbox_tool_name",
-        lambda *_args, **_kwargs: "snapshot-tool-name",
+        "veadk.cli.studio_sandbox_tools.studio_sandbox_tool_name_candidates",
+        lambda *_args, **_kwargs: ("snapshot-tool-name",),
     )
     monkeypatch.setattr(
         "veadk.cli.studio_sandbox_tools.studio_sandbox_agent_model_name",

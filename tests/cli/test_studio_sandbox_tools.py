@@ -16,7 +16,7 @@
 
 import os
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -32,6 +32,7 @@ from veadk.cli.studio_sandbox_tools import (
     studio_sandbox_agent_model_name,
     studio_sandbox_model_base_url,
     studio_sandbox_tool_name,
+    studio_sandbox_tool_name_candidates,
 )
 
 
@@ -62,6 +63,46 @@ def test_ensure_studio_code_env_tool_reuses_ready_exact_name() -> None:
         )
         == "tool-existing"
     )
+
+
+def test_ensure_studio_code_env_tool_reuses_legacy_name() -> None:
+    requested_names: list[str] = []
+
+    def _list_tools(request: object) -> SimpleNamespace:
+        filters = cast(Any, request).filters
+        requested_name = str(filters[0].values[0])
+        requested_names.append(requested_name)
+        tools = []
+        if requested_name == "studio-demo-chat-123456":
+            tools.append(
+                SimpleNamespace(
+                    name=requested_name,
+                    project_name="default",
+                    tool_type="CodeEnv",
+                    tool_id="legacy-tool",
+                )
+            )
+        return SimpleNamespace(tools=tools, next_token=None)
+
+    client = SimpleNamespace(
+        list_tools=_list_tools,
+        get_tool=lambda _: SimpleNamespace(status="Ready"),
+        create_tool=lambda _: pytest.fail("the legacy Tool must be reused"),
+    )
+
+    assert (
+        ensure_studio_code_env_tool(
+            name="studio-demo-codex-123456",
+            legacy_names=("studio-demo-chat-123456",),
+            client=client,
+            timeout_seconds=0,
+        )
+        == "legacy-tool"
+    )
+    assert requested_names == [
+        "studio-demo-codex-123456",
+        "studio-demo-chat-123456",
+    ]
 
 
 def test_ensure_studio_code_env_tool_creates_ready_code_env() -> None:
@@ -388,6 +429,21 @@ def test_ensure_studio_agent_tool_creates_snapshot_enabled_managed_tool(
 def test_studio_sandbox_tool_name_uses_short_studio_format() -> None:
     assert studio_sandbox_tool_name("Studio App", "chat") == (
         "studio-studio-app-chat-1d66ce"
+    )
+
+
+def test_codex_tool_name_candidates_prefer_codex_and_fall_back_to_chat() -> None:
+    assert studio_sandbox_tool_name_candidates("Studio App", "codex") == (
+        "studio-studio-app-codex-1d66ce",
+        "studio-studio-app-chat-1d66ce",
+    )
+    assert studio_sandbox_tool_name_candidates(
+        "Studio App",
+        "codex",
+        snapshot=True,
+    ) == (
+        "studio-studio-app-codex-1d66ce_snapshot",
+        "studio-studio-app-chat-1d66ce_snapshot",
     )
 
 
