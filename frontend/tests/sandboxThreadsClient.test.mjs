@@ -123,7 +123,7 @@ test("sends persistence explicitly for default and temporary agents", async (t) 
   );
   await assert.rejects(() =>
     sandboxClient.startAgentSession("deepseek-harness", {
-      displayName: "DeepSeekHarness",
+      displayName: "DeepSeek Harness",
     }),
   );
 
@@ -138,7 +138,7 @@ test("sends persistence explicitly for default and temporary agents", async (t) 
     },
     {
       url: "/web/deepseek-harness/sessions",
-      body: { displayName: "DeepSeekHarness", persistent: true },
+      body: { displayName: "DeepSeek Harness", persistent: true },
     },
   ]);
 });

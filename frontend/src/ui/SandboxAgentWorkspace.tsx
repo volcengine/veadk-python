@@ -19,7 +19,7 @@ export function SandboxAgentWorkspace({
   const [terminalLoading, setTerminalLoading] = useState(false);
   const [terminalError, setTerminalError] = useState("");
   const label = workspace.kind === "deepseek-harness"
-    ? "DeepSeekHarness"
+    ? "DeepSeek Harness"
     : workspace.kind === "openclaw" ? "OpenClaw" : "Hermes";
 
   useEffect(() => {

@@ -5045,7 +5045,7 @@ export default function App() {
                   sandboxSession.toolName === "codex"
                     ? "Codex"
                     : sandboxSession.toolName === "deepseek-harness"
-                      ? "DeepSeekHarness"
+                      ? "DeepSeek Harness"
                     : sandboxSession.toolName === "openclaw"
                       ? "OpenClaw"
                       : "Hermes"

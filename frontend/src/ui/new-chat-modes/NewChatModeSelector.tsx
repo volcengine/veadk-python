@@ -34,10 +34,10 @@ const BUILTIN_AGENTS = [
     description: "在沙箱中执行任务",
   },
   {
-    label: "DeepSeekHarness 智能体",
+    label: "DeepSeek Harness",
     kind: "deepseek-harness",
     value: "deepseek-harness",
-    description: "打开 DeepSeekHarness 工作区",
+    description: "打开 DeepSeek Harness 工作区",
   },
 ] satisfies Array<{
   label: string;

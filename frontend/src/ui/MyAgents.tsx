@@ -57,7 +57,7 @@ export type AgentType =
 const AGENT_TYPES: Array<{ id: AgentType; label: string }> = [
   { id: "general", label: "通用智能体" },
   { id: "codex", label: "Codex 智能体" },
-  { id: "deepseek-harness", label: "DeepSeekHarness 智能体" },
+  { id: "deepseek-harness", label: "DeepSeek Harness" },
   { id: "openclaw", label: "OpenClaw 智能体" },
   { id: "hermes", label: "Hermes 智能体" },
 ];

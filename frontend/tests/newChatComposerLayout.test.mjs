@@ -196,7 +196,7 @@ test("keeps alternate chat modes hidden from the new-chat composer", () => {
   assert.doesNotMatch(selectorSource, /<AgentSelector/);
   assert.match(navbarSource, /<AgentSelector[\s\S]*?variant="navbar"/);
   assert.match(selectorSource, /Codex 智能体/);
-  assert.match(selectorSource, /DeepSeekHarness 智能体/);
+  assert.match(selectorSource, /DeepSeek Harness/);
   assert.match(selectorSource, /\{ label: "ArkClaw", kind: "openclaw" \}/);
   assert.match(selectorSource, /\{ label: "Hermes 智能体", kind: "hermes" \}/);
   assert.match(
@@ -347,7 +347,7 @@ test("keeps the built-in Agent types and adds the two skill actions", () => {
   );
   assert.match(
     newChatAgentPickerSource,
-    /\{ id: "deepseek-harness", label: "DeepSeekHarness 智能体" \}/,
+    /\{ id: "deepseek-harness", label: "DeepSeek Harness" \}/,
   );
   assert.match(
     newChatAgentPickerSource,

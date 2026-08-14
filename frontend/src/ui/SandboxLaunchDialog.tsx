@@ -30,7 +30,7 @@ export function SandboxLaunchDialog({
   const agentLabel = agentKind === "codex"
     ? "Codex"
     : agentKind === "deepseek-harness"
-      ? "DeepSeekHarness"
+      ? "DeepSeek Harness"
       : agentKind === "openclaw" ? "OpenClaw" : "Hermes";
   const defaultDisplayName = agentKind === "codex"
     ? DEFAULT_SANDBOX_DISPLAY_NAME

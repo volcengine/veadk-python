@@ -54,7 +54,7 @@ test("keeps message actions disabled while leaving the Agent picker available", 
 test("renders a two-level Agent type and runtime menu", () => {
   assert.match(pickerSource, /label: "通用智能体"/);
   assert.match(pickerSource, /label: "Codex 智能体"/);
-  assert.match(pickerSource, /label: "DeepSeekHarness 智能体"/);
+  assert.match(pickerSource, /label: "DeepSeek Harness"/);
   assert.match(pickerSource, /label: "OpenClaw 智能体"/);
   assert.match(pickerSource, /label: "Hermes 智能体"/);
   assert.match(pickerSource, /aria-label="智能体类型"/);
