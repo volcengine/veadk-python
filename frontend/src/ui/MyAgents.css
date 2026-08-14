@@ -102,6 +102,13 @@
   gap: 8px;
 }
 
+.my-agent-type-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .my-agent-type-pill {
   min-height: 30px;
   padding: 0 13px;
@@ -125,6 +132,23 @@
   border-color: hsl(var(--foreground) / 0.14);
   background: hsl(var(--foreground));
   color: hsl(var(--background));
+}
+
+.my-agent-create-secondary {
+  height: 32px;
+  padding: 0 13px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.my-agent-create-secondary:hover {
+  background: hsl(var(--secondary));
 }
 
 .my-agent-results {
@@ -602,6 +626,7 @@
 
 .my-agent-actions button:focus-visible,
 .my-agent-type-pill:focus-visible,
+.my-agent-create-secondary:focus-visible,
 .my-agent-create-primary:focus-visible,
 .my-agent-empty button:focus-visible {
   outline: 2px solid hsl(var(--ring) / 0.65);
@@ -639,7 +664,7 @@
     gap: 12px;
   }
 
-  .my-agent-create-primary {
+  .my-agent-type-actions {
     align-self: flex-end;
   }
 

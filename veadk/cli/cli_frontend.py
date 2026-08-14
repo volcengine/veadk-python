@@ -6048,6 +6048,7 @@ def _run_frontend_server(
                     "/favicon.ico",
                     "/web/auth-config",
                     "/web/site-logo",
+                    "/web/sandbox/codex-project-upload/sessions",
                     "/web/ui-config",
                 },
                 exempt_prefixes={"/assets", "/skillhub"},

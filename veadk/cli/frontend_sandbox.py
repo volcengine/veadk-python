@@ -17,9 +17,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
+import hashlib
+import hmac
 import json
 import os
+import posixpath
 import re
 import secrets
 import time
@@ -79,6 +84,12 @@ STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH = SESSION_DISPLAY_NAME_MAX_LENGTH
 _SANDBOX_CHAT_TOOL_ENV = "SANDBOX_CHAT_CODEX"
 _SANDBOX_CHAT_SNAPSHOT_TOOL_ENV = "SANDBOX_CHAT_CODEX_SNAPSHOT"
 _SANDBOX_ENDPOINT_EXPORT_ENV = "STUDIO_EXPOSE_SANDBOX_ENDPOINT"
+_CODEX_PROJECT_UPLOAD_SECRET_ENV = "STUDIO_CODEX_PROJECT_UPLOAD_SECRET"
+_CODEX_PROJECT_UPLOAD_TTL_ENV = "STUDIO_CODEX_PROJECT_UPLOAD_TTL_SECONDS"
+_CODEX_PROJECT_UPLOAD_SCOPE = "codex-project-upload:create-session"
+_CODEX_PROJECT_UPLOAD_DEFAULT_TTL_SECONDS = 20 * 60
+_CODEX_PROJECT_UPLOAD_MAX_TTL_SECONDS = 60 * 60
+_CODEX_PROJECT_UPLOAD_MIN_TTL_SECONDS = 60
 _SANDBOX_AGENT_TOOL_ENVS = {
     "deepseek-harness": (_SANDBOX_CHAT_TOOL_ENV,),
     "openclaw": ("SANDBOX_CHAT_OPENCLAW", "SANDBOX_OPENCLAW_TOOL"),
@@ -100,6 +111,8 @@ _SENSITIVE_PATTERN = re.compile(
     r"(?i)((?:api[_-]?key|access[_-]?key|secret|token|authorization|password)"
     r"\s*[:=]\s*)(?:[\"'][^\"']*[\"']|[^\s,;]+)"
 )
+_CODEX_PROJECT_UPLOAD_FALLBACK_SECRET = secrets.token_bytes(32)
+_CODEX_PROJECT_UPLOAD_CONSUMED_JTIS: dict[str, int] = {}
 
 
 class SandboxError(RuntimeError):
@@ -260,6 +273,174 @@ def _public_event_text(value: object) -> str:
             value.get("text") or value.get("content") or value.get("summary")
         )
     return ""
+
+
+def _utc_timestamp(value: int) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(value))
+
+
+def _b64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode((value + padding).encode("ascii"))
+
+
+def _codex_project_upload_secret() -> bytes:
+    configured = os.getenv(_CODEX_PROJECT_UPLOAD_SECRET_ENV)
+    if configured:
+        return configured.encode("utf-8")
+    return _CODEX_PROJECT_UPLOAD_FALLBACK_SECRET
+
+
+def _codex_project_upload_ttl_seconds(value: object = None) -> int:
+    if value is None:
+        raw = (os.getenv(_CODEX_PROJECT_UPLOAD_TTL_ENV) or "").strip()
+        if raw:
+            try:
+                value = int(raw)
+            except ValueError:
+                value = _CODEX_PROJECT_UPLOAD_DEFAULT_TTL_SECONDS
+        else:
+            value = _CODEX_PROJECT_UPLOAD_DEFAULT_TTL_SECONDS
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise SandboxValidationError("授权码有效期必须是整数秒数。")
+    if value < _CODEX_PROJECT_UPLOAD_MIN_TTL_SECONDS:
+        raise SandboxValidationError(
+            f"授权码有效期不能少于 {_CODEX_PROJECT_UPLOAD_MIN_TTL_SECONDS} 秒。"
+        )
+    return min(value, _CODEX_PROJECT_UPLOAD_MAX_TTL_SECONDS)
+
+
+def _codex_project_upload_signature(payload: str) -> str:
+    digest = hmac.new(
+        _codex_project_upload_secret(),
+        payload.encode("ascii"),
+        hashlib.sha256,
+    ).digest()
+    return _b64url_encode(digest)
+
+
+def _create_codex_project_upload_authorization(
+    owner_id: str,
+    creator_name: str,
+    ttl_seconds: int,
+) -> tuple[str, int]:
+    now = int(time.time())
+    expire_at = now + ttl_seconds
+    payload = {
+        "v": 1,
+        "scope": _CODEX_PROJECT_UPLOAD_SCOPE,
+        "ownerId": owner_id,
+        "creatorName": creator_name,
+        "jti": secrets.token_urlsafe(18),
+        "iat": now,
+        "exp": expire_at,
+    }
+    encoded_payload = _b64url_encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    )
+    signature = _codex_project_upload_signature(encoded_payload)
+    return f"v1.{encoded_payload}.{signature}", expire_at
+
+
+def _consume_codex_project_upload_authorization(
+    authorization_code: object,
+) -> dict[str, object]:
+    if not isinstance(authorization_code, str) or not authorization_code.strip():
+        raise SandboxPermissionError("Codex 项目上传授权码无效或已过期。")
+    parts = authorization_code.strip().split(".")
+    if len(parts) != 3 or parts[0] != "v1":
+        raise SandboxPermissionError("Codex 项目上传授权码无效或已过期。")
+    encoded_payload, signature = parts[1], parts[2]
+    expected_signature = _codex_project_upload_signature(encoded_payload)
+    if not hmac.compare_digest(signature, expected_signature):
+        raise SandboxPermissionError("Codex 项目上传授权码无效或已过期。")
+    try:
+        payload = json.loads(_b64url_decode(encoded_payload))
+    except (
+        binascii.Error,
+        ValueError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+    ) as error:
+        raise SandboxPermissionError("Codex 项目上传授权码无效或已过期。") from error
+    if not isinstance(payload, dict):
+        raise SandboxPermissionError("Codex 项目上传授权码无效或已过期。")
+    now = int(time.time())
+    active_jtis = {
+        jti: exp
+        for jti, exp in _CODEX_PROJECT_UPLOAD_CONSUMED_JTIS.items()
+        if exp > now
+    }
+    _CODEX_PROJECT_UPLOAD_CONSUMED_JTIS.clear()
+    _CODEX_PROJECT_UPLOAD_CONSUMED_JTIS.update(active_jtis)
+    exp = payload.get("exp")
+    jti = payload.get("jti")
+    owner_id = payload.get("ownerId")
+    if (
+        payload.get("scope") != _CODEX_PROJECT_UPLOAD_SCOPE
+        or not isinstance(exp, int)
+        or exp <= now
+        or not isinstance(jti, str)
+        or not jti
+        or not isinstance(owner_id, str)
+        or not owner_id
+    ):
+        raise SandboxPermissionError("Codex 项目上传授权码无效或已过期。")
+    if jti in _CODEX_PROJECT_UPLOAD_CONSUMED_JTIS:
+        raise SandboxPermissionError("Codex 项目上传授权码已使用或已过期。")
+    _CODEX_PROJECT_UPLOAD_CONSUMED_JTIS[jti] = exp
+    return payload
+
+
+def _codex_project_upload_project_name(value: object) -> str:
+    if value is None:
+        return "project"
+    if not isinstance(value, str):
+        raise SandboxValidationError("项目名称必须是文本。")
+    cleaned = re.sub(r"\s+", " ", value.strip())
+    return cleaned or "project"
+
+
+def _codex_project_upload_display_name(project_name: str) -> str:
+    display_name = project_name
+    if not display_name.lower().startswith("codex-"):
+        display_name = f"codex-{display_name}"
+    return display_name[:STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH]
+
+
+def _codex_project_upload_directory_name(project_name: str) -> str:
+    directory = project_name.strip().replace("/", "-").replace("\\", "-")
+    directory = re.sub(r"[^A-Za-z0-9._-]+", "-", directory)
+    directory = re.sub(r"-+", "-", directory).strip(" ._-")
+    return directory or "project"
+
+
+def _codex_project_upload_remote_home(value: object) -> str:
+    if value is None or value == "":
+        return "/home/gem"
+    if not isinstance(value, str):
+        raise SandboxValidationError("远端 Home 目录必须是文本。")
+    remote_home = posixpath.normpath(value.strip())
+    if not remote_home.startswith("/"):
+        raise SandboxValidationError("远端 Home 目录必须是绝对路径。")
+    return remote_home
+
+
+def _studio_url_for_request(request: Request) -> str:
+    forwarded_proto = (
+        request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+    )
+    forwarded_host = (
+        request.headers.get("x-forwarded-host", "").split(",", 1)[0].strip()
+    )
+    scheme = forwarded_proto or request.url.scheme
+    host = forwarded_host or request.headers.get("host") or request.url.netloc
+    root_path = str(request.scope.get("root_path") or "").rstrip("/")
+    return f"{scheme}://{host}{root_path}"
 
 
 @dataclass(frozen=True)
@@ -2393,6 +2574,79 @@ def mount_sandbox_routes(
         if not isinstance(value, dict):
             raise SandboxValidationError("请求必须是 JSON 对象。")
         return value
+
+    @app.post("/web/sandbox/codex-project-upload/authorizations")
+    async def _create_codex_project_upload_authorization_route(
+        request: Request,
+    ) -> JSONResponse:
+        owner_id = owner_resolver(request)
+        creator_name = creator_resolver(request) if creator_resolver else owner_id
+        try:
+            data = await _request_object(request)
+            ttl_seconds = _codex_project_upload_ttl_seconds(data.get("ttlSeconds"))
+            authorization_code, expire_at = _create_codex_project_upload_authorization(
+                owner_id,
+                creator_name,
+                ttl_seconds,
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        response = JSONResponse(
+            {
+                "authorizationCode": authorization_code,
+                "expireAt": _utc_timestamp(expire_at),
+                "studioUrl": _studio_url_for_request(request),
+            }
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/web/sandbox/codex-project-upload/sessions")
+    async def _create_codex_project_upload_session(
+        request: Request,
+    ) -> JSONResponse:
+        try:
+            data = await _request_object(request)
+            project_name = _codex_project_upload_project_name(data.get("projectName"))
+            display_name = _codex_project_upload_display_name(project_name)
+            persistent = data.get("persistent", True)
+            if not isinstance(persistent, bool):
+                raise SandboxValidationError("persistent 必须是布尔值。")
+            remote_home = _codex_project_upload_remote_home(data.get("remoteHome"))
+            remote_repo_dir = posixpath.join(
+                remote_home,
+                _codex_project_upload_directory_name(project_name),
+            )
+            payload = _consume_codex_project_upload_authorization(
+                data.get("authorizationCode")
+            )
+            owner_id = str(payload["ownerId"])
+            creator_name = payload.get("creatorName")
+            if not isinstance(creator_name, str) or not creator_name.strip():
+                creator_name = owner_id
+            session = await service.create(
+                owner_id,
+                display_name,
+                creator_name,
+                persistent,
+            )
+            if not session.endpoint:
+                raise SandboxSessionUnavailableError(
+                    "AgentKit Session 已创建，但暂无可用 Endpoint。"
+                )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        response = JSONResponse(
+            {
+                "sessionId": session.instance_id,
+                "displayName": session.display_name,
+                "endpoint": session.endpoint,
+                "remoteRepoDir": remote_repo_dir,
+                "expireAt": session.expire_at,
+            }
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     def _launch_response(
         request: Request,

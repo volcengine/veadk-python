@@ -101,6 +101,9 @@ test("keeps a primary create action visible above the scrolling results", () => 
   assert.match(pageSource, /onCreateAgent\(defaultCloudRegion\(cloudProvider\)\)/);
   assert.match(pageSource, /onCreateSandboxAgent: \(kind: "codex" \| SandboxAgentKind\) => void/);
   assert.match(pageSource, /className="my-agent-create-primary"[\s\S]*?disabled=\{!createAgent\}[\s\S]*?<span>创建智能体<\/span>/);
+  assert.match(pageSource, /className="my-agent-create-secondary"[\s\S]*?<span>本地Codex项目上传<\/span>/);
+  assert.match(pageSource, /<Button[\s\S]*?color="secondary"[\s\S]*?本地Codex项目上传/);
+  assert.doesNotMatch(pageSource, /本地迁移/);
   assert.ok(pageSource.indexOf('className="my-agent-create-primary"') < pageSource.indexOf('className="my-agent-results"'));
   assert.match(pageSource, /当前账号没有创建智能体权限/);
   assert.match(pageStyles, /\.my-agent-create-primary\s*\{[\s\S]*?background: hsl\(var\(--foreground\)\);[\s\S]*?color: hsl\(var\(--background\)\)/);
