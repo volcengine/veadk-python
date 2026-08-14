@@ -798,6 +798,7 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
         "VEADK_STUDIO_FUNCTION_ID": "function-app-id",
         "VEADK_STUDIO_DEPLOY_REGION": "cn-beijing",
         "VEADK_STUDIO_PROJECT": "default",
+        "VEADK_STUDIO_ACCOUNT_ID": "123",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
         "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",
@@ -865,12 +866,13 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
         def __init__(self, **_: str) -> None:
             self.client = SimpleNamespace(
                 get_function=lambda _request: SimpleNamespace(
+                    role="trn:iam::3001037806:role/VeADKFrontendServiceRole",
                     envs=[
                         SimpleNamespace(
                             key="SANDBOX_CHAT_CODEX",
                             value="existing-codex-tool",
                         )
-                    ]
+                    ],
                 )
             )
 
@@ -928,6 +930,7 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     assert overrides["SANDBOX_CHAT_HERMES_SNAPSHOT"] == "hermes-snapshot-tool"
     assert overrides["SANDBOX_DEV"] == expected_dev_tool_id
     assert overrides["CLOUD_PROVIDER"] == "byteplus"
+    assert overrides["VEADK_STUDIO_ACCOUNT_ID"] == "3001037806"
 
 
 def test_update_application_code_bundle_merges_only_explicit_environment(

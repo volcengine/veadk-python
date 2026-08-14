@@ -85,7 +85,11 @@ export class TelemetryRuntime {
       this.pageInstanceId = this.createId();
       this.sessionStarted = false;
     }
-    this.identity = { ...identity, userUniqueId };
+    this.identity = {
+      ...identity,
+      userUniqueId,
+      accountId: identity.accountId?.trim() ?? "",
+    };
     this.sink.identify?.(userUniqueId);
   }
 
@@ -253,6 +257,7 @@ export class TelemetryRuntime {
       studio_version: this.context.studioVersion,
       environment: this.context.environment,
       cloud_provider: this.context.cloudProvider,
+      account_id: this.identity.accountId,
       user_role: this.identity.userRole,
       user_source: this.identity.userSource,
       page_instance_id: this.pageInstanceId,

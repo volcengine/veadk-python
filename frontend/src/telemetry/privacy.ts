@@ -96,6 +96,7 @@ const COMMON_KEYS = [
   "studio_version",
   "environment",
   "cloud_provider",
+  "account_id",
   "user_role",
   "user_source",
   "page_instance_id",

@@ -38,6 +38,10 @@ Studio 的产品行为数据统一上报到 TEA App `1050062`。火山引擎和 
 的用户池、池内全部成员或当前 Agent/Sandbox 存量。这些资源存量必须来自后端管理接口
 或定期快照。
 
+`account_id` 表示部署当前 Studio 的云账号 ID。它在 `veadk studio deploy` 时由部署
+凭据解析并保存到 Studio 运行时环境中，前端只在用户完成身份确认后通过 `/web/access`
+拿到该值用于埋点，不应作为登录用户身份使用。
+
 ## 数据边界
 
 只允许上报已登记的扁平 string/number 字段。禁止上报 Prompt、消息正文、模型响应、

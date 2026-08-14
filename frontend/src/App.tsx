@@ -2408,6 +2408,7 @@ export default function App() {
     if (!userUniqueId) return;
     identifyTelemetryUser({
       userUniqueId,
+      accountId: access.telemetry.accountId ?? "",
       userRole: access.role === "admin" ? "admin" : "member",
       userSource: localMode ? "local" : "sso",
     });

@@ -31,6 +31,7 @@ export interface StudioTelemetryContext {
 
 export interface TelemetryIdentity {
   userUniqueId: string;
+  accountId?: string;
   userRole: UserRole;
   userSource: UserSource;
 }

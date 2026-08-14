@@ -102,6 +102,7 @@ function harness() {
   });
   runtime.identify({
     userUniqueId: " user-1 ",
+    accountId: " 2100123456 ",
     userRole: "member",
     userSource: "sso",
   });
@@ -185,6 +186,7 @@ test("records one authenticated page-ready Studio visit, not an Agent chat sessi
   assert.equal("user_unique_id" in events[0].payload, false);
   assert.equal("auth_session_id" in events[0].payload, false);
   assert.equal(events[0].payload.cloud_provider, "volcengine");
+  assert.equal(events[0].payload.account_id, "2100123456");
   assert.equal(events[0].payload.page_instance_id, "id-1");
   assert.equal("session_id" in events[0].payload, false);
 });
