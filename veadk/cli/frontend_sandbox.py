@@ -165,8 +165,26 @@ def _build_studio_user_session_id() -> str:
 
 
 def _safe_error_message(error: object) -> str:
-    """Return a bounded credential-safe diagnostic message."""
-    message = _redact_public_text(str(error).strip(), maximum=1_000)
+    """Return a bounded, credential-safe message including the exception chain."""
+    parts: list[str] = []
+    current = error if isinstance(error, BaseException) else None
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        detail = str(current).strip()
+        if not parts:
+            parts.append(detail or type(current).__name__)
+        else:
+            label = type(current).__name__
+            parts.append(
+                f"Caused by {label}: {detail}" if detail else f"Caused by {label}"
+            )
+        next_error = current.__cause__
+        if next_error is None and not current.__suppress_context__:
+            next_error = current.__context__
+        current = next_error
+    raw_message = "\n".join(parts) if parts else str(error).strip()
+    message = _redact_public_text(raw_message, maximum=20_000)
     return message or type(error).__name__
 
 

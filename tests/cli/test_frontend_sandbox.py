@@ -1851,6 +1851,48 @@ def test_sse_error_has_an_explicit_done_frame() -> None:
     assert 'event: done\ndata: {"reason": "failed"}' in response.text
 
 
+def test_sse_error_includes_redacted_exception_chain() -> None:
+    class _CauseFailCodex(_FakeCodex):
+        async def stream_turn(
+            self, prompt: str, skill_ids: tuple[str, ...] = ()
+        ) -> AsyncIterator[CodexAppServerEvent]:
+            del prompt, skill_ids
+            if False:
+                yield CodexAppServerEvent()
+            try:
+                raise ConnectionError(
+                    "socket write failed: Authorization=transport-secret"
+                )
+            except ConnectionError as error:
+                raise CodexAppServerError(
+                    "向 Codex app-server 发送请求失败。"
+                ) from error
+
+    class _CauseFailGateway(_FakeGateway):
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            del session
+            connection = _CauseFailCodex(self.thread_ids)
+            self.connections.append(connection)
+            return connection
+
+    with TestClient(_app(_CauseFailGateway())) as client:
+        created = client.post("/web/sandbox/sessions", headers={"X-Test-User": "alice"})
+        client.post(
+            f"/web/sandbox/sessions/{created.json()['sessionId']}/connect",
+            headers={"X-Test-User": "alice"},
+        )
+        response = client.post(
+            f"/web/sandbox/sessions/{created.json()['sessionId']}/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "hello"},
+        )
+
+    assert "向 Codex app-server 发送请求失败。" in response.text
+    assert "Caused by ConnectionError: socket write failed" in response.text
+    assert "transport-secret" not in response.text
+    assert "Authorization=***" in response.text
+
+
 @pytest.mark.asyncio
 async def test_cancelled_create_is_deleted_after_sdk_call_finishes(
     monkeypatch: pytest.MonkeyPatch,

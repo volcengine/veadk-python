@@ -52,6 +52,13 @@ class CodexAppServerError(RuntimeError):
     """The Sandbox Codex app-server rejected or interrupted an operation."""
 
 
+def _app_server_error_detail(error: object) -> str:
+    """Preserve the complete JSON-RPC error payload for upstream diagnostics."""
+    if isinstance(error, (dict, list)):
+        return json.dumps(error, ensure_ascii=False, separators=(",", ":"))
+    return str(error)
+
+
 @dataclass(frozen=True)
 class CodexPermissionSettings:
     """Permission settings applied to every Codex thread in one cloud Session."""
@@ -524,9 +531,12 @@ class CodexAppServerSession:
             status = str(turn_result.get("status") or "completed")
             if status.lower() in {"failed", "cancelled"}:
                 error = turn_result.get("error")
-                if isinstance(error, dict):
-                    error = error.get("message")
-                raise CodexAppServerError(str(error or f"Codex Turn 状态：{status}。"))
+                detail = (
+                    _app_server_error_detail(error)
+                    if error is not None
+                    else f"Codex Turn 状态：{status}。"
+                )
+                raise CodexAppServerError(detail)
         except asyncio.CancelledError:
             await self.interrupt()
             raise
@@ -954,11 +964,11 @@ class CodexAppServerSession:
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001 - transport boundary
-            failure = (
-                error
-                if isinstance(error, CodexAppServerError)
-                else CodexAppServerError("Codex app-server 连接异常。")
-            )
+            if isinstance(error, CodexAppServerError):
+                failure = error
+            else:
+                failure = CodexAppServerError("Codex app-server 连接异常。")
+                failure.__cause__ = error
         else:
             if not self._closed:
                 failure = CodexAppServerError("Codex app-server 连接已断开。")
@@ -978,11 +988,7 @@ class CodexAppServerSession:
             return
         error = message.get("error")
         if error is not None:
-            if isinstance(error, dict):
-                detail = str(error.get("message") or "未知错误")
-            else:
-                detail = str(error)
-            future.set_exception(CodexAppServerError(detail))
+            future.set_exception(CodexAppServerError(_app_server_error_detail(error)))
             return
         result = message.get("result")
         if not isinstance(result, dict):

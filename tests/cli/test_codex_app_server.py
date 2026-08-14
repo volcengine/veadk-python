@@ -325,6 +325,38 @@ class _MissingRolloutWebSocket(_FakeWebSocket):
         await super().send(raw)
 
 
+class _DetailedErrorWebSocket(_FakeWebSocket):
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        if message.get("method") == "rpc/error":
+            self.messages.append(message)
+            await self.queue.put(
+                json.dumps(
+                    {
+                        "id": message["id"],
+                        "error": {
+                            "code": -32001,
+                            "message": "quota exceeded",
+                            "data": {
+                                "reason": "quota_exceeded",
+                                "retryAfter": 30,
+                            },
+                        },
+                    }
+                )
+            )
+            return
+        await super().send(raw)
+
+
+class _SendFailureWebSocket(_FakeWebSocket):
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        if message.get("method") == "model/list":
+            raise ConnectionError("socket write failed: transport reset")
+        await super().send(raw)
+
+
 @pytest.mark.asyncio
 async def test_permissions_persist_and_apply_to_every_turn() -> None:
     websocket = _FakeWebSocket()
@@ -447,6 +479,42 @@ async def test_clean_socket_close_rejects_pending_requests() -> None:
 
     with pytest.raises(CodexAppServerError, match="连接已断开"):
         await pending
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_send_failure_preserves_transport_error_as_cause() -> None:
+    websocket = _SendFailureWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    with pytest.raises(CodexAppServerError, match="发送请求失败") as captured:
+        await session.list_models()
+
+    assert isinstance(captured.value.__cause__, ConnectionError)
+    assert str(captured.value.__cause__) == "socket write failed: transport reset"
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_json_rpc_error_preserves_complete_payload() -> None:
+    websocket = _DetailedErrorWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    with pytest.raises(CodexAppServerError) as captured:
+        await session.request("rpc/error")
+
+    detail = str(captured.value)
+    assert '"code":-32001' in detail
+    assert '"message":"quota exceeded"' in detail
+    assert '"data":{"reason":"quota_exceeded","retryAfter":30}' in detail
     await session.close()
 
 
