@@ -39,7 +39,9 @@ const result = await build({
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(
   result.outputFiles[0].contents,
 ).toString("base64")}`;
-const { getMigrationCapabilities, MigrationApiError } = await import(moduleUrl);
+const { getMigrationCapabilities, getMigrationTask, MigrationApiError } = await import(
+  moduleUrl
+);
 
 test("surfaces FastAPI validation details without blaming the proxy", async (t) => {
   const previousFetch = globalThis.fetch;
@@ -75,4 +77,69 @@ test("surfaces FastAPI validation details without blaming the proxy", async (t) 
       return true;
     },
   );
+});
+
+test("accepts an actionable unsupported analysis without a fake recommendation", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        id: `migration-v1-${"1".repeat(32)}`,
+        state: "failed",
+        message: "ZIP 中没有足以恢复 Agent 行为的项目材料。",
+        sourceFileName: "compiled-only.zip",
+        instruction: "",
+        createdAt: "2026-08-14T08:00:00Z",
+        expiresAt: "2026-08-14T09:00:00Z",
+        sessionTtlSeconds: 3600,
+        canModify: false,
+        canUpload: false,
+        canAnswer: false,
+        canConfirm: false,
+        canStop: false,
+        artifact: {
+          state: "none",
+          previewReady: false,
+          downloadReady: false,
+          deployReady: false,
+        },
+        analysis: {
+          schema_version: 1,
+          status: "unsupported",
+          attempt: 1,
+          input_sha256: "2".repeat(64),
+          summary: "ZIP 中没有足以恢复 Agent 行为的项目材料。",
+          frameworks: [],
+          recommended: null,
+          entries: [],
+          boundary: { include: [], exclude: ["编译产物"] },
+          assumptions: [],
+          questions: [],
+          warnings: ["请上传源码、工作流定义或提示词。"],
+        },
+        analysisRef: {
+          attempt: 1,
+          sha256: "3".repeat(64),
+          inputSha256: "2".repeat(64),
+        },
+        error: {
+          code: "MIGRATION_ANALYSIS_UNSUPPORTED",
+          message: "项目材料不足。",
+          retryable: false,
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+
+  const task = await getMigrationTask(`migration-v1-${"1".repeat(32)}`);
+
+  assert.equal(task.analysis.recommended, null);
+  assert.equal(task.analysis.summary, "ZIP 中没有足以恢复 Agent 行为的项目材料。");
+  assert.equal(task.canConfirm, false);
 });

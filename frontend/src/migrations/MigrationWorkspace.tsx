@@ -226,6 +226,15 @@ function isTerminalState(state: MigrationTask["state"]): boolean {
   ].includes(state);
 }
 
+function shouldShowCodexActivity(task: MigrationTask): boolean {
+  return (
+    task.state === "analyzing" ||
+    Boolean(task.analysisRef) ||
+    Boolean(task.confirmation) ||
+    task.error?.code.startsWith("MIGRATION_ANALYSIS_") === true
+  );
+}
+
 function sourceStem(name: string): string {
   return name.replace(/\.zip$/i, "");
 }
@@ -350,11 +359,13 @@ function AnalysisSummary({ analysis }: { analysis: MigrationAnalysis }) {
     <div className="migration-analysis">
       <Markdown text={analysis.summary} allowRawHtml={false} />
       <div className="migration-analysis__facts">
-        <section>
-          <h3>建议迁移方式</h3>
-          <strong>{FRAMEWORK_LABELS[analysis.recommended.framework]}</strong>
-          <p>{analysis.recommended.reason}</p>
-        </section>
+        {analysis.recommended ? (
+          <section>
+            <h3>建议迁移方式</h3>
+            <strong>{FRAMEWORK_LABELS[analysis.recommended.framework]}</strong>
+            <p>{analysis.recommended.reason}</p>
+          </section>
+        ) : null}
         <section>
           <h3>迁移范围</h3>
           <ul>
@@ -428,10 +439,12 @@ function MigrationActivityFeed({
   activity,
   loading,
   error,
+  analyzing,
 }: {
   activity: MigrationActivity | null;
   loading: boolean;
   error: string;
+  analyzing: boolean;
 }) {
   const items = activity?.items ?? [];
 
@@ -470,7 +483,9 @@ function MigrationActivityFeed({
           })}
         </div>
       ) : loading || !activity?.complete ? (
-        <TextShimmer>Codex 正在开始迁移…</TextShimmer>
+        <TextShimmer>
+          {analyzing ? "Codex 正在开始分析…" : "Codex 正在开始迁移…"}
+        </TextShimmer>
       ) : null}
       {error ? (
         <p className="migration-activity__error" role="status">
@@ -836,10 +851,7 @@ export function MigrationWorkspace({
     setActivity(null);
     setActivityError("");
     setActivityLoading(false);
-    if (
-      !task?.confirmation?.framework ||
-      !["dify", "any"].includes(task.confirmation.framework)
-    ) {
+    if (!task || !shouldShowCodexActivity(task)) {
       return;
     }
 
@@ -857,7 +869,7 @@ export function MigrationWorkspace({
         }
       } catch (cause) {
         if (controller.signal.aborted) return;
-        setActivityError("暂时无法读取执行动态，迁移任务仍在继续。");
+        setActivityError("暂时无法读取 Codex 执行动态，不影响当前任务。");
         if (
           isActiveState(task.state) &&
           cause instanceof MigrationApiError &&
@@ -874,7 +886,12 @@ export function MigrationWorkspace({
       controller.abort();
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [task?.id, task?.confirmation?.framework, task?.state]);
+  }, [
+    task?.id,
+    task?.state,
+    task?.analysisRef?.sha256,
+    task?.confirmation?.framework,
+  ]);
 
   useEffect(() => {
     if (
@@ -890,6 +907,7 @@ export function MigrationWorkspace({
     setAnswers({});
     if (task.state !== "analysis_ready") return;
     const recommended = task.analysis.recommended;
+    if (!recommended) return;
     setFramework(recommended.framework);
     setEntry(recommended.entry || "");
     setAppName(defaultAppName(task.sourceFileName));
@@ -1507,21 +1525,38 @@ export function MigrationWorkspace({
                       </p>
                     </div>
                   ) : task.state === "failed" ? (
-                    <div className="migration-system-state is-error">
-                      <strong>迁移未完成</strong>
-                      <p>{task.message}</p>
-                    </div>
+                    task.error?.code === "MIGRATION_ANALYSIS_UNSUPPORTED" &&
+                    task.analysis ? (
+                      <div className="migration-system-state is-error">
+                        <strong>当前 ZIP 暂时无法迁移</strong>
+                        <Markdown text={task.analysis.summary} allowRawHtml={false} />
+                        {task.analysis.warnings.length > 0 ? (
+                          <ul>
+                            {task.analysis.warnings.map((warning) => (
+                              <li key={warning}>{warning}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        <p>请按提示整理项目后，新建迁移并重新上传。</p>
+                      </div>
+                    ) : (
+                      <div className="migration-system-state is-error">
+                        <strong>迁移未完成</strong>
+                        <p>{task.message}</p>
+                      </div>
+                    )
                   ) : task.state === "cancelled" ? (
                     <p>当前迁移已终止。你可以新建迁移并重新上传项目。</p>
                   ) : (
                     <p>{taskDisplayMessage(task)}</p>
                   )}
-                  {task.confirmation?.framework &&
-                  ["dify", "any"].includes(task.confirmation.framework) ? (
+                  {shouldShowCodexActivity(task) &&
+                  (activityLoading || activity?.available || activityError) ? (
                     <MigrationActivityFeed
                       activity={activity}
                       loading={activityLoading}
                       error={activityError}
+                      analyzing={task.state === "analyzing"}
                     />
                   ) : null}
                 </div>

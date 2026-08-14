@@ -116,7 +116,7 @@ _PROCESS_EXIT_PATH = f"{MIGRATION_ROOT}/diagnostics/migration/process-exit.json"
 _DELIVERY_STATUS_PATH = f"{MIGRATION_ROOT}/delivery/migration-status.json"
 _DELIVERY_RESULT_PATH = f"{MIGRATION_ROOT}/delivery/migration-result.json"
 _DELIVERY_ARTIFACT_PATH = f"{MIGRATION_ROOT}/delivery/migration-result.zip"
-_ACTIVITY_LOG_PATHS = tuple(
+_MIGRATION_ACTIVITY_LOG_PATHS = tuple(
     f"{MIGRATION_ROOT}/work/agentic/logs/codex-attempt-{attempt}.jsonl"
     for attempt in range(1, 4)
 )
@@ -172,7 +172,14 @@ def _activity_status(event_type: str, item: dict[str, object]) -> str:
     return "running"
 
 
-def _command_activity_title(command: str, status: str) -> str:
+def _command_activity_title(command: str, status: str, phase: str) -> str:
+    if phase == "analysis":
+        action = "项目分析"
+        if status == "completed":
+            return f"已完成{action}步骤"
+        if status == "failed":
+            return f"{action}步骤未完成"
+        return f"正在执行{action}步骤"
     normalized = command.casefold()
     if any(
         marker in normalized
@@ -195,7 +202,12 @@ def _command_activity_title(command: str, status: str) -> str:
     return f"正在执行{action}"
 
 
-def _parse_activity_log(content: bytes, attempt: int) -> list[dict[str, str]]:
+def _parse_activity_log(
+    content: bytes,
+    attempt: int,
+    *,
+    phase: str,
+) -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
     item_indexes: dict[str, int] = {}
 
@@ -228,7 +240,7 @@ def _parse_activity_log(content: bytes, attempt: int) -> list[dict[str, str]]:
             if isinstance(raw_item_id, (str, int)) and str(raw_item_id)
             else f"event-{line_number}"
         )
-        activity_id = f"{attempt}:{item_id}"
+        activity_id = f"{phase}:{attempt}:{item_id}"
         status = _activity_status(event_type, item)
 
         if item_type in {"reasoning", "agent_message"}:
@@ -267,7 +279,11 @@ def _parse_activity_log(content: bytes, attempt: int) -> list[dict[str, str]]:
                     "id": activity_id,
                     "kind": "plan",
                     "status": todo_status,
-                    "title": "Codex 正在按计划迁移",
+                    "title": (
+                        "Codex 正在按计划分析"
+                        if phase == "analysis"
+                        else "Codex 正在按计划迁移"
+                    ),
                     "detail": f"已完成 {completed}/{len(todos)} 项",
                 }
             )
@@ -283,6 +299,7 @@ def _parse_activity_log(content: bytes, attempt: int) -> list[dict[str, str]]:
                     "title": _command_activity_title(
                         command if isinstance(command, str) else "",
                         status,
+                        phase,
                     ),
                 }
             )
@@ -292,13 +309,21 @@ def _parse_activity_log(content: bytes, attempt: int) -> list[dict[str, str]]:
             turn_status = "completed" if event_type == "turn.completed" else "failed"
             upsert(
                 {
-                    "id": f"{attempt}:turn",
+                    "id": f"{phase}:{attempt}:turn",
                     "kind": "status",
                     "status": turn_status,
                     "title": (
-                        "Codex 已完成本轮执行"
+                        (
+                            "Codex 已完成本轮分析"
+                            if phase == "analysis"
+                            else "Codex 已完成本轮执行"
+                        )
                         if turn_status == "completed"
-                        else "Codex 本轮执行未完成"
+                        else (
+                            "Codex 本轮分析未完成"
+                            if phase == "analysis"
+                            else "Codex 本轮执行未完成"
+                        )
                     ),
                 }
             )
@@ -719,7 +744,11 @@ def _analysis_schema() -> dict[str, object]:
                 "type": "string",
                 "pattern": "^[0-9a-f]{64}$",
             },
-            "summary": {"type": "string", "maxLength": 20_000},
+            "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20_000,
+            },
             "frameworks": {
                 "type": "array",
                 "maxItems": 20,
@@ -767,6 +796,7 @@ def _analysis_schema() -> dict[str, object]:
                             "reason": {"type": "string", "maxLength": 4_000},
                         },
                     },
+                    {"type": "null"},
                 ],
             },
             "entries": {
@@ -842,6 +872,22 @@ def _analysis_schema() -> dict[str, object]:
                 "items": {"type": "string", "maxLength": 4_000},
             },
         },
+        "allOf": [
+            {
+                "if": {
+                    "properties": {"status": {"const": "unsupported"}},
+                    "required": ["status"],
+                },
+                "then": {
+                    "properties": {
+                        "recommended": {"type": "null"},
+                        "entries": {"maxItems": 0},
+                        "questions": {"maxItems": 0},
+                    }
+                },
+                "else": {"properties": {"recommended": {"not": {"type": "null"}}}},
+            }
+        ],
     }
 
 
@@ -889,10 +935,14 @@ def _analysis_prompt(
 
 - 只读检查 `{_PROJECT_PATH}`，禁止修改、安装依赖、联网或执行来源项目代码。
 - 不要调用 `ak migrate inspect`，也不要开始任何迁移。
+- 不要为了提高成功率而缩小迁移边界。应尽量保留可从 ZIP 恢复的 Agent
+  行为、编排、提示词、工具、知识检索、记忆、回调、接口和配置，并明确无法随
+  代码交付的外部依赖。
 - 通过依赖文件、导入、对象定义、配置和调用关系识别框架、候选入口与迁移边界。
 - 每个结论必须给出文件路径、行号和理由；证据不足时降低置信度，不得猜测。
 - Structured 候选仅限 langchain、langgraph、adk、strands、agentcore。
-- Dify 导出选择 dify；无法可靠归类、需要 Agentic 改写的项目选择 any。
+- Dify 导出选择 dify；无法可靠归类、使用其他框架、需要跨语言或 Agentic
+  改写但仍有足够项目材料时，优先选择 any，不得仅因不属于 Structured 框架而拒绝。
 - Dify 和 Any 的 recommended.entry 必须为 null；entries 只能列出 Structured
   框架的可执行 Python 入口，Dify 和 Any 的 entries 必须为空。
 - entries 是与 recommended 同级的必填顶层字段，禁止放入 recommended；
@@ -902,17 +952,51 @@ def _analysis_prompt(
   `package.module:object` 形式的 Python 模块导入路径。
 - 最终迁移方式必须由用户选择并确认，本阶段只给建议和待确认问题。
 - 结果中的 attempt 必须是 {attempt}，input_sha256 必须是 {input_sha256}。
-- 事实不足时返回 needs_input 和最小必答问题集；此时至少有一个 required=true 的问题。
+- 事实不足且用户无需替换 ZIP 就能回答时，返回 needs_input 和最小必答问题集；
+  此时至少有一个 required=true 的问题。
 - 事实充分时返回 recommendation_ready 且 questions 必须为空。
-- 项目确实无法由任一支持方式迁移时才返回 unsupported，questions 必须为空。
+- 只有 ZIP 中不存在足以恢复 Agent 行为的源码、工作流定义、配置、提示词或其他
+  可用材料时，才返回 unsupported。此时 questions 和 entries 必须为空，
+  recommended 必须为 null。
 - 用户补充要求明确使用其他语言时，用户补充要求优先；否则必须遵守上面的简体中文协议。
+
+## ZIP 内容与项目完整性
+
+按以下顺序进行边界分析，目标是找到最大可迁移范围：
+
+1. 识别 ZIP 是否包含一个可迁移项目、多个独立项目，或仅包含某个项目的子目录；
+   多项目时优先识别主入口，只有无法从证据判断目标且用户无需替换 ZIP 就能澄清时
+   才提问。
+2. 区分源码和项目定义，与依赖缓存、虚拟环境、日志、测试输出、压缩包、二进制、
+   `build`、`dist` 等生成内容。只有编译产物、构建产物或依赖缓存且没有任何可恢复
+   行为的材料，才属于不支持。
+3. 检查入口定义是否能追踪到 Agent、Graph、Workflow 或服务启动对象，并分析提示词、
+   工具、知识库/RAG、记忆、回调、守护逻辑、API 和异步/流式行为是否包含在 ZIP 中。
+4. 检查依赖声明、框架配置、Dify 导出定义、相对路径资源和自定义包是否齐全；缺失项
+   应说明影响，并尽可能通过 Any 迁移现有可恢复部分。
+5. 识别外部服务、私有包、模型、数据库、知识库和部署环境变量。缺少凭证、环境变量、
+   网络访问、测试或运行条件不能作为 unsupported 的理由，只能列入 assumptions、
+   warnings 或 boundary.exclude，供迁移和部署时处理。
+
+## 支持判定与用户表达
+
+- 能可靠识别 Structured 框架和入口时推荐对应 Structured 方式；否则只要存在足够材料
+  可以进行 best-effort 重建，就推荐 Any，迁移范围应覆盖所有有证据支持的用户可见行为。
+- needs_input 只用于答案能够改变迁移方式、入口或范围，且不需要用户替换 ZIP 的情况。
+- unsupported 是最后手段。不要因为框架陌生、项目复杂、代码量大、缺少凭证、无法在
+  只读分析阶段运行，或预计迁移需要较多改写而判定不支持。
+- unsupported 的 summary 必须使用用户易懂的两到三句话：先说明在 ZIP 中发现了什么，
+  再说明为什么现有材料不足以恢复 Agent 行为，最后明确建议用户补充哪些内容并新建迁移。
+  不要只输出错误码、框架术语或“未找到可执行方式”之类没有行动建议的表述。
+- warnings 要具体描述缺失材料及影响，不得把可在迁移或部署阶段补齐的条件写成阻塞项。
 
 ## 输出协议
 
 - 顶层字段必须且只能是：schema_version、status、attempt、input_sha256、
   summary、frameworks、recommended、entries、boundary、assumptions、questions、warnings。
-- recommended 必须且只能包含 framework、entry、reason；entries 必须与
-  recommended 同级，绝不能嵌套在 recommended 中。
+- recommendation_ready 和 needs_input 的 recommended 必须且只能包含
+  framework、entry、reason；unsupported 的 recommended 必须为 null。
+  entries 必须与 recommended 同级，绝不能嵌套在 recommended 中。
 - Dify/Any 必须输出 `recommended.entry=null` 和顶层 `entries=[]`。
 - 输出前自行核对字段层级、必填字段、枚举值和问题状态约束；不要在响应中描述核对过程。
 - 最终响应必须严格符合提供的 JSON Schema，只输出一个 JSON 对象，不要输出
@@ -2414,6 +2498,43 @@ class MigrationService:
                     analysis_sha256=analysis_sha256,
                 )
             if analysis_state == "failed":
+                analysis_error = analysis_status.get("error")
+                if (
+                    isinstance(analysis_error, dict)
+                    and analysis_error.get("code") == "MIGRATION_ANALYSIS_UNSUPPORTED"
+                ):
+                    source = self._read_json(
+                        session,
+                        _SOURCE_STATUS_PATH,
+                        optional=True,
+                    )
+                    if source is None:
+                        raise MigrationError(
+                            "MIGRATION_SOURCE_STATE_INVALID",
+                            "上传项目的来源状态无效。",
+                            status_code=502,
+                        )
+                    source = self._validated_source(source)
+                    analysis, analysis_sha256 = self._read_analysis(
+                        session,
+                        expected_attempt=int(analysis_attempt),
+                        expected_input_sha256=str(source["sha256"]),
+                    )
+                    if analysis["status"] != "unsupported":
+                        raise MigrationError(
+                            "MIGRATION_ANALYSIS_INVALID",
+                            "Codex 分析结果与当前分析阶段不匹配。",
+                            status_code=502,
+                        )
+                    return self._task_payload(
+                        session,
+                        request,
+                        state="failed",
+                        message=str(analysis["summary"]),
+                        analysis=analysis,
+                        analysis_sha256=analysis_sha256,
+                        error=analysis_error,
+                    )
                 return self._task_payload(
                     session,
                     request,
@@ -2813,11 +2934,48 @@ class MigrationService:
             if isinstance(confirmation, dict)
             else ""
         )
-        if framework not in {"dify", "any"}:
+        agentic_migration = framework in {"dify", "any"}
+        analysis_status = self._read_json(
+            session,
+            _ANALYSIS_STATUS_PATH,
+            optional=True,
+        )
+        analysis_attempt = 0
+        if analysis_status is not None:
+            try:
+                analysis_status = validate_analysis_status(analysis_status)
+            except MigrationContractError as error:
+                raise MigrationError(
+                    "MIGRATION_ANALYSIS_STATE_INVALID",
+                    "Codex 分析状态无效。",
+                    status_code=502,
+                ) from error
+            analysis_attempt = int(analysis_status["attempt"])
+        if analysis_attempt < 1 and not agentic_migration:
             return {"available": False, "complete": False, "items": []}
 
         items: list[dict[str, str]] = []
-        for attempt, path in enumerate(_ACTIVITY_LOG_PATHS, start=1):
+        if analysis_attempt >= 1:
+            analysis_log = self._read(
+                session,
+                (
+                    f"{MIGRATION_ROOT}/diagnostics/analysis/"
+                    f"attempt-{analysis_attempt}.log"
+                ),
+                max_bytes=_MAX_ACTIVITY_LOG_BYTES,
+                optional=True,
+            )
+            if analysis_log is not None:
+                items.extend(
+                    _parse_activity_log(
+                        analysis_log,
+                        analysis_attempt,
+                        phase="analysis",
+                    )
+                )
+        for attempt, path in enumerate(_MIGRATION_ACTIVITY_LOG_PATHS, start=1):
+            if not agentic_migration:
+                break
             content = self._read(
                 session,
                 path,
@@ -2825,10 +2983,16 @@ class MigrationService:
                 optional=True,
             )
             if content is not None:
-                items.extend(_parse_activity_log(content, attempt))
+                items.extend(_parse_activity_log(content, attempt, phase="migration"))
+        if task["state"] == "analyzing":
+            complete = False
+        elif agentic_migration:
+            complete = task["state"] in _ACTIVITY_COMPLETE_STATES
+        else:
+            complete = True
         return {
             "available": True,
-            "complete": task["state"] in _ACTIVITY_COMPLETE_STATES,
+            "complete": complete,
             "items": items[-_MAX_ACTIVITY_ITEMS:],
         }
 

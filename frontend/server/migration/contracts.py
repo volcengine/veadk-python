@@ -373,7 +373,7 @@ def validate_analysis_result(value: object) -> dict[str, object]:
         raise MigrationContractError("unsupported analysis schema")
     _bounded_integer(value.get("attempt"), minimum=1, maximum=100)
     _sha256(value.get("input_sha256"))
-    _text(value.get("summary"))
+    _text(value.get("summary"), allow_empty=False)
 
     frameworks = value.get("frameworks")
     if not isinstance(frameworks, list) or len(frameworks) > 20:
@@ -405,17 +405,21 @@ def validate_analysis_result(value: object) -> dict[str, object]:
             _text(evidence_item.get("reason"), allow_empty=False, maximum=4_000)
 
     recommended = value.get("recommended")
-    if not isinstance(recommended, dict):
-        raise MigrationContractError("invalid recommendation")
-    _exact_keys(recommended, required={"framework", "entry", "reason"})
-    recommended_framework = _framework(recommended.get("framework"))
-    recommended_entry = recommended.get("entry")
-    if recommended_entry is not None and (
-        recommended_framework not in STRUCTURED_MIGRATION_FRAMEWORKS
-        or not is_valid_structured_entry(recommended_entry)
-    ):
-        raise MigrationContractError("invalid recommended entry")
-    _text(recommended.get("reason"), maximum=4_000)
+    if status == "unsupported":
+        if recommended is not None:
+            raise MigrationContractError("unsupported analysis has a recommendation")
+    else:
+        if not isinstance(recommended, dict):
+            raise MigrationContractError("analysis recommendation is missing")
+        _exact_keys(recommended, required={"framework", "entry", "reason"})
+        recommended_framework = _framework(recommended.get("framework"))
+        recommended_entry = recommended.get("entry")
+        if recommended_entry is not None and (
+            recommended_framework not in STRUCTURED_MIGRATION_FRAMEWORKS
+            or not is_valid_structured_entry(recommended_entry)
+        ):
+            raise MigrationContractError("invalid recommended entry")
+        _text(recommended.get("reason"), maximum=4_000)
 
     entries = value.get("entries")
     if not isinstance(entries, list) or len(entries) > 100:
@@ -435,6 +439,8 @@ def validate_analysis_result(value: object) -> dict[str, object]:
             raise MigrationContractError("invalid entry candidate")
         seen_entries.add((framework, str(entry)))
         _text(item.get("evidence"), allow_empty=False, maximum=4_000)
+    if status == "unsupported" and entries:
+        raise MigrationContractError("unsupported analysis has entry candidates")
 
     boundary = value.get("boundary")
     if not isinstance(boundary, dict):

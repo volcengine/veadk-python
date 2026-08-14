@@ -340,6 +340,7 @@ def test_analysis_contract_rejects_each_untrusted_collection_boundary() -> None:
     invalid(contracts.validate_analysis_result, None, "must be an object")
     cases: list[tuple[Callable[[dict[str, object]], None], str]] = [
         (lambda value: value.update(status="unknown"), "analysis schema"),
+        (lambda value: value.update(summary=""), "empty text"),
         (lambda value: value.update(frameworks="bad"), "framework candidates"),
         (lambda value: value.update(frameworks=["bad"]), "framework candidate"),
         (
@@ -399,6 +400,45 @@ def test_analysis_contract_rejects_each_untrusted_collection_boundary() -> None:
         contracts.validate_analysis_result,
         completed_with_question,
         "completed analysis",
+    )
+
+    unsupported = analysis_payload()
+    unsupported.update(
+        status="unsupported",
+        summary=(
+            "ZIP 中只有编译产物，没有可分析的项目源码。"
+            "请上传包含源码、依赖声明和配置文件的项目 ZIP。"
+        ),
+        frameworks=[],
+        recommended=None,
+        entries=[],
+        boundary={"include": [], "exclude": ["编译产物"]},
+        warnings=["缺少源码，无法还原 Agent 行为。"],
+    )
+    assert contracts.validate_analysis_result(unsupported)["recommended"] is None
+
+    unsupported_with_recommendation = analysis_payload()
+    unsupported_with_recommendation["status"] = "unsupported"
+    invalid(
+        contracts.validate_analysis_result,
+        unsupported_with_recommendation,
+        "unsupported analysis has a recommendation",
+    )
+
+    unsupported_with_entry = analysis_payload()
+    unsupported_with_entry.update(status="unsupported", recommended=None)
+    invalid(
+        contracts.validate_analysis_result,
+        unsupported_with_entry,
+        "unsupported analysis has entry candidates",
+    )
+
+    ready_without_recommendation = analysis_payload()
+    ready_without_recommendation["recommended"] = None
+    invalid(
+        contracts.validate_analysis_result,
+        ready_without_recommendation,
+        "analysis recommendation is missing",
     )
 
 

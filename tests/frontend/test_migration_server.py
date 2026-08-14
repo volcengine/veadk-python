@@ -600,34 +600,34 @@ def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
     assert activity["complete"] is False
     assert activity["items"] == [
         {
-            "id": "1:reasoning-1",
+            "id": "migration:1:reasoning-1",
             "kind": "reasoning",
             "status": "completed",
             "title": "Codex 思考",
             "detail": "正在分析源项目结构。",
         },
         {
-            "id": "1:plan-1",
+            "id": "migration:1:plan-1",
             "kind": "plan",
             "status": "running",
             "title": "Codex 正在按计划迁移",
             "detail": "已完成 1/2 项",
         },
         {
-            "id": "1:command-1",
+            "id": "migration:1:command-1",
             "kind": "command",
             "status": "completed",
             "title": "已完成迁移校验",
         },
         {
-            "id": "1:message-1",
+            "id": "migration:1:message-1",
             "kind": "message",
             "status": "completed",
             "title": "Codex 更新",
             "detail": "正在修复配置，API_KEY=[已隐藏]",
         },
         {
-            "id": "1:turn",
+            "id": "migration:1:turn",
             "kind": "status",
             "status": "completed",
             "title": "Codex 已完成本轮执行",
@@ -735,24 +735,24 @@ def test_agentic_activity_handles_incremental_and_malformed_events() -> None:
     assert activity["complete"] is False
     items = activity["items"]
     assert isinstance(items, list)
-    assert items[0]["id"] == "2:reasoning-live"
+    assert items[0]["id"] == "migration:2:reasoning-live"
     assert items[0]["status"] == "completed"
     assert str(items[0]["detail"]).endswith("…内容已截断")
-    assert next(item for item in items if item["id"] == "2:package") == {
-        "id": "2:package",
+    assert next(item for item in items if item["id"] == "migration:2:package") == {
+        "id": "migration:2:package",
         "kind": "command",
         "status": "failed",
         "title": "产物打包未完成",
     }
-    assert next(item for item in items if item["id"] == "2:install")["title"] == (
-        "正在执行依赖准备"
-    )
-    assert next(item for item in items if item["id"] == "2:3")["title"] == (
+    assert next(item for item in items if item["id"] == "migration:2:install")[
+        "title"
+    ] == ("正在执行依赖准备")
+    assert next(item for item in items if item["id"] == "migration:2:3")["title"] == (
         "已完成迁移步骤"
     )
-    assert next(item for item in items if item["id"] == "2:plan")["status"] == (
-        "completed"
-    )
+    assert next(item for item in items if item["id"] == "migration:2:plan")[
+        "status"
+    ] == ("completed")
     assert items[-1]["title"] == "Codex 本轮执行未完成"
     assert "private-token-value" not in json.dumps(activity)
 
@@ -782,7 +782,210 @@ def test_agentic_activity_handles_incremental_and_malformed_events() -> None:
     assert service.activity(task_id, "owner-1")["complete"] is True
 
 
-def test_structured_activity_is_not_available() -> None:
+def test_analysis_activity_is_visible_before_route_confirmation() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    analysis_events = [
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "analysis-message",
+                "type": "agent_message",
+                "text": "发现项目包含两个独立入口，正在核对调用关系。",
+            },
+        },
+        {
+            "type": "item.updated",
+            "item": {
+                "id": "analysis-plan",
+                "type": "todo_list",
+                "items": [{"completed": True}],
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {"id": "analysis-done", "type": "command_execution"},
+        },
+        {
+            "type": "item.failed",
+            "item": {"id": "analysis-failed", "type": "command_execution"},
+        },
+        {
+            "type": "item.started",
+            "item": {"id": "analysis-running", "type": "command_execution"},
+        },
+        {"type": "turn.completed"},
+    ]
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/diagnostics/analysis/attempt-1.log")] = (
+        "\n".join(json.dumps(event, ensure_ascii=False) for event in analysis_events)
+        + "\n"
+    ).encode()
+
+    running = service.activity(task_id, "owner-1")
+
+    assert running == {
+        "available": True,
+        "complete": False,
+        "items": [
+            {
+                "id": "analysis:1:analysis-message",
+                "kind": "message",
+                "status": "completed",
+                "title": "Codex 更新",
+                "detail": "发现项目包含两个独立入口，正在核对调用关系。",
+            },
+            {
+                "id": "analysis:1:analysis-plan",
+                "kind": "plan",
+                "status": "completed",
+                "title": "Codex 正在按计划分析",
+                "detail": "已完成 1/1 项",
+            },
+            {
+                "id": "analysis:1:analysis-done",
+                "kind": "command",
+                "status": "completed",
+                "title": "已完成项目分析步骤",
+            },
+            {
+                "id": "analysis:1:analysis-failed",
+                "kind": "command",
+                "status": "failed",
+                "title": "项目分析步骤未完成",
+            },
+            {
+                "id": "analysis:1:analysis-running",
+                "kind": "command",
+                "status": "running",
+                "title": "正在执行项目分析步骤",
+            },
+            {
+                "id": "analysis:1:turn",
+                "kind": "status",
+                "status": "completed",
+                "title": "Codex 已完成本轮分析",
+            },
+        ],
+    }
+
+    mark_analysis_ready(gateway, task_id)
+
+    completed = service.activity(task_id, "owner-1")
+
+    assert completed["available"] is True
+    assert completed["complete"] is True
+    assert completed["items"] == running["items"]
+
+
+def test_unsupported_analysis_surfaces_actionable_codex_explanation() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    source = json.loads(
+        gateway.files[(task_id, f"{MIGRATION_ROOT}/request/source.json")]
+    )
+    analysis = analysis_result(
+        input_sha256=source["sha256"],
+        status="unsupported",
+    )
+    analysis.update(
+        summary=(
+            "ZIP 中只有编译后的文件，没有发现可读取的源码、工作流定义或提示词。"
+            "现有内容不足以恢复 Agent 行为，请补充项目源码和依赖声明后新建迁移。"
+        ),
+        frameworks=[],
+        recommended=None,
+        entries=[],
+        boundary={"include": [], "exclude": ["编译产物"]},
+        assumptions=[],
+        warnings=["缺少可用于恢复 Agent 行为的项目材料。"],
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/analysis/route.json")] = json.dumps(
+        analysis,
+        ensure_ascii=False,
+    ).encode()
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/control/task-status.json")] = json.dumps(
+        {
+            "schema_version": 1,
+            "attempt": 1,
+            "state": "failed",
+            "message": "当前项目不适用于已支持的迁移方式",
+            "error": {
+                "code": "MIGRATION_ANALYSIS_UNSUPPORTED",
+                "message": "项目分析未找到可执行的迁移方式。",
+                "retryable": False,
+            },
+        },
+        ensure_ascii=False,
+    ).encode()
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == "failed"
+    assert task["message"] == analysis["summary"]
+    assert task["analysis"] == analysis
+    assert task["analysisRef"]["attempt"] == 1
+    assert task["canConfirm"] is False
+    assert task["error"]["code"] == "MIGRATION_ANALYSIS_UNSUPPORTED"
+
+    source_content = gateway.files.pop(
+        (task_id, f"{MIGRATION_ROOT}/request/source.json")
+    )
+    with pytest.raises(MigrationError) as missing_source:
+        service.get_task(task_id, "owner-1")
+    assert missing_source.value.code == "MIGRATION_SOURCE_STATE_INVALID"
+
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/request/source.json")] = source_content
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/analysis/route.json")] = json.dumps(
+        analysis_result(input_sha256=source["sha256"]),
+        ensure_ascii=False,
+    ).encode()
+    with pytest.raises(MigrationError) as mismatched_status:
+        service.get_task(task_id, "owner-1")
+    assert mismatched_status.value.code == "MIGRATION_ANALYSIS_INVALID"
+
+
+def test_activity_is_unavailable_before_analysis_starts() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task = service.create_task(
+        CreateMigrationTaskBody(sourceFileName="source.zip"),
+        "owner-1",
+        "Owner",
+    )
+
+    assert service.activity(str(task["id"]), "owner-1") == {
+        "available": False,
+        "complete": False,
+        "items": [],
+    }
+
+
+def test_activity_rejects_invalid_analysis_state_after_confirmation() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id, framework="any", entry=None)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id, framework="any", entry=None),
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/control/task-status.json")] = b"{}"
+
+    with pytest.raises(MigrationError) as invalid_status:
+        service.activity(task_id, "owner-1")
+
+    assert invalid_status.value.code == "MIGRATION_ANALYSIS_STATE_INVALID"
+
+    gateway.files.pop((task_id, f"{MIGRATION_ROOT}/control/task-status.json"))
+    without_analysis_status = service.activity(task_id, "owner-1")
+    assert without_analysis_status["available"] is True
+    assert without_analysis_status["complete"] is False
+
+
+def test_structured_activity_keeps_completed_analysis_visible() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
     task_id, _ = create_uploaded_task(service)
@@ -794,8 +997,8 @@ def test_structured_activity_is_not_available() -> None:
     )
 
     assert service.activity(task_id, "owner-1") == {
-        "available": False,
-        "complete": False,
+        "available": True,
+        "complete": True,
         "items": [],
     }
 
@@ -1708,6 +1911,14 @@ def test_upload_starts_read_only_codex_analysis_without_cli_inspection() -> None
     assert "用户补充要求明确使用其他语言时" in prompt
     assert "相对项目根目录的文件入口" in prompt
     assert "agent.py:agent" in prompt
+    assert "ZIP 内容与项目完整性" in prompt
+    assert "一个可迁移项目" in prompt
+    assert "只有编译产物、构建产物" in prompt
+    assert "缺少凭证、环境变量" in prompt
+    assert "不能作为 unsupported 的理由" in prompt
+    assert "用户无需替换 ZIP 就能回答" in prompt
+    assert "先说明在 ZIP 中发现了什么" in prompt
+    assert "recommended 必须为 null" in prompt
     assert schema["properties"]["frameworks"]["maxItems"] == 20
     assert (
         schema["properties"]["frameworks"]["items"]["properties"]["evidence"][
@@ -1739,6 +1950,8 @@ def test_upload_starts_read_only_codex_analysis_without_cli_inspection() -> None
         "any",
     ]
     assert recommended_variants[1]["properties"]["entry"]["type"] == "null"
+    assert recommended_variants[2] == {"type": "null"}
+    assert schema["allOf"][0]["then"]["properties"]["recommended"] == {"type": "null"}
     assert schema["properties"]["entries"]["items"]["properties"]["framework"][
         "enum"
     ] == ["langchain", "langgraph", "adk", "strands", "agentcore"]

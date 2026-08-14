@@ -91,8 +91,12 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(source, /kind: "thinking"/);
   assert.match(source, /kind: "text"/);
   assert.match(source, /Codex 执行动态/);
-  assert.match(source, /暂时无法读取执行动态，迁移任务仍在继续/);
-  assert.match(source, /\["dify", "any"\]\.includes/);
+  assert.match(source, /暂时无法读取 Codex 执行动态，不影响当前任务/);
+  assert.match(source, /function shouldShowCodexActivity/);
+  assert.match(source, /task\.state === "analyzing"/);
+  assert.match(source, /Codex 正在开始分析/);
+  assert.match(source, /当前 ZIP 暂时无法迁移/);
+  assert.match(source, /按提示整理项目后，新建迁移并重新上传/);
   assert.match(source, /downloadMigrationArtifact/);
   assert.match(source, /task\.canUpload/);
   assert.match(source, /task\?\.canConfirm/);

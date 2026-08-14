@@ -969,6 +969,11 @@
   margin: 4px 0 0;
 }
 
+.migration-system-state ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
 .migration-retry-button {
   min-height: 30px;
   margin-top: 8px;

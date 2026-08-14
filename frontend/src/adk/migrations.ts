@@ -62,7 +62,7 @@ export interface MigrationAnalysis {
     framework: MigrationFramework;
     entry: string | null;
     reason: string;
-  };
+  } | null;
   entries: Array<{
     value: string;
     framework: MigrationFramework;
@@ -267,7 +267,10 @@ function framework(value: unknown, label: string): MigrationFramework {
 
 function normalizeAnalysis(value: unknown): MigrationAnalysis {
   const analysis = record(value, "迁移分析结果");
-  const recommended = record(analysis.recommended, "迁移建议");
+  const recommended =
+    analysis.recommended === null
+      ? null
+      : record(analysis.recommended, "迁移建议");
   const boundary = record(analysis.boundary, "迁移边界");
   if (
     analysis.schema_version !== 1 ||
@@ -317,15 +320,18 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
         }),
       };
     }),
-    recommended: {
-      framework: framework(recommended.framework, "推荐框架"),
-      entry:
-        recommended.entry === null || typeof recommended.entry === "string"
-          ? recommended.entry
-          : null,
-      reason:
-        typeof recommended.reason === "string" ? recommended.reason : "",
-    },
+    recommended:
+      recommended === null
+        ? null
+        : {
+            framework: framework(recommended.framework, "推荐框架"),
+            entry:
+              recommended.entry === null || typeof recommended.entry === "string"
+                ? recommended.entry
+                : null,
+            reason:
+              typeof recommended.reason === "string" ? recommended.reason : "",
+          },
     entries: analysis.entries.map((item) => {
       const entry = record(item, "入口候选");
       if (typeof entry.value !== "string" || typeof entry.evidence !== "string") {
