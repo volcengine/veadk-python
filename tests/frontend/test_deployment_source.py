@@ -410,3 +410,6 @@ def test_migration_source_rejects_unsafe_and_corrupt_entries(tmp_path: Path) -> 
                 "startup": {"module": "app.py"},
             },
         )
+
+    with pytest.raises(DeploymentSourceError, match="ZIP 格式无效"):
+        extract_migration_source(tmp_path, b"not-a-zip", manifest)

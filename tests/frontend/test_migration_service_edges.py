@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import zipfile
+from pathlib import Path
 
 import pytest
 from typing_extensions import Self
@@ -768,3 +769,204 @@ def test_artifact_binding_requires_confirmation_state() -> None:
         )
 
     assert_code(missing, "MIGRATION_CONFIRMATION_INVALID")
+
+
+def test_terminal_actions_reject_invalid_state_and_delete_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    created = service.create_task(
+        CreateMigrationTaskBody(sourceFileName="source.zip"),
+        "owner-1",
+        "Owner",
+    )
+    task_id = str(created["id"])
+
+    with pytest.raises(MigrationError) as not_running:
+        service.stop(task_id, "owner-1")
+    assert_code(not_running, "MIGRATION_NOT_RUNNING")
+
+    with pytest.raises(MigrationError) as not_ready:
+        service.artifact(task_id, "owner-1")
+    assert_code(not_ready, "MIGRATION_ARTIFACT_NOT_READY")
+
+    with pytest.raises(MigrationError) as not_deployable:
+        service.materialize_deployment(task_id, "owner-1", tmp_path)
+    assert_code(not_deployable, "MIGRATION_ARTIFACT_NOT_DEPLOYABLE")
+
+    service.delete(task_id, "owner-1")
+    assert gateway.deleted == [task_id]
+
+    failed = service.create_task(
+        CreateMigrationTaskBody(sourceFileName="failed.zip"),
+        "owner-1",
+        "Owner",
+    )
+
+    def fail_delete(_session: object) -> None:
+        raise MigrationGatewayError(
+            "MIGRATION_REMOTE_DELETE_FAILED",
+            "delete failed",
+            retryable=True,
+        )
+
+    monkeypatch.setattr(gateway, "delete_session", fail_delete)
+    with pytest.raises(MigrationError) as delete_failed:
+        service.delete(str(failed["id"]), "owner-1")
+    assert_code(delete_failed, "MIGRATION_REMOTE_DELETE_FAILED")
+    assert delete_failed.value.retryable is True
+
+
+def test_artifact_result_rejects_missing_state_and_decision_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    created = service.create_task(
+        CreateMigrationTaskBody(sourceFileName="source.zip"),
+        "owner-1",
+        "Owner",
+    )
+    session = gateway.sessions[str(created["id"])]
+    ready_task = {
+        "state": "succeeded",
+        "artifact": {"previewReady": True},
+    }
+
+    monkeypatch.setattr(service, "_read_json", lambda *_args, **_kwargs: None)
+    with pytest.raises(MigrationError) as missing_result:
+        service._artifact_result(session, ready_task, readiness="previewReady")
+    assert_code(missing_result, "MIGRATION_ARTIFACT_MISSING")
+
+    states = iter([{}, None])
+    monkeypatch.setattr(
+        service,
+        "_read_json",
+        lambda *_args, **_kwargs: next(states),
+    )
+    monkeypatch.setattr(service, "_read", lambda *_args, **_kwargs: b"confirmation")
+    with pytest.raises(MigrationError) as missing_source:
+        service._artifact_result(session, ready_task, readiness="previewReady")
+    assert_code(missing_source, "MIGRATION_SOURCE_STATE_INVALID")
+
+    with pytest.raises(MigrationError) as decision:
+        MigrationService._validate_result_binding(
+            {
+                "migration": {
+                    "provenance_sha256": "1" * 64,
+                    "framework": "any",
+                    "engine": "structured",
+                }
+            },
+            expected_provenance_sha256="1" * 64,
+            expected_source_archive_sha256="2" * 64,
+            confirmation={
+                "input_sha256": "2" * 64,
+                "framework": "any",
+                "entry": None,
+            },
+        )
+    assert_code(decision, "MIGRATION_ARTIFACT_DECISION_MISMATCH")
+
+
+def test_artifact_preview_and_download_reject_missing_or_tampered_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    created = service.create_task(
+        CreateMigrationTaskBody(sourceFileName="source.zip"),
+        "owner-1",
+        "Owner",
+    )
+    task_id = str(created["id"])
+    session = gateway.sessions[task_id]
+    ready_task = {
+        "state": "succeeded",
+        "artifact": {"previewReady": True, "downloadReady": True},
+    }
+    monkeypatch.setattr(service, "_task_from_session", lambda _session: ready_task)
+
+    monkeypatch.setattr(
+        service,
+        "_artifact_result",
+        lambda *_args, **_kwargs: {"files": None},
+    )
+    with pytest.raises(MigrationError) as invalid_files:
+        service.preview_file(task_id, "owner-1", "app.py")
+    assert_code(invalid_files, "MIGRATION_ARTIFACT_INVALID")
+
+    large_result = {
+        "files": [
+            {
+                "path": "app.py",
+                "size": 2 * 1024 * 1024 + 1,
+                "sha256": "0" * 64,
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        service,
+        "_artifact_result",
+        lambda *_args, **_kwargs: large_result,
+    )
+    with pytest.raises(MigrationError) as too_large:
+        service.preview_file(task_id, "owner-1", "app.py")
+    assert_code(too_large, "MIGRATION_ARTIFACT_FILE_TOO_LARGE")
+
+    preview_result = {
+        "files": [
+            {
+                "path": "app.py",
+                "size": 4,
+                "sha256": hashlib.sha256(b"good").hexdigest(),
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        service,
+        "_artifact_result",
+        lambda *_args, **_kwargs: preview_result,
+    )
+    monkeypatch.setattr(service, "_read", lambda *_args, **_kwargs: None)
+    with pytest.raises(MigrationError) as missing_preview:
+        service.preview_file(task_id, "owner-1", "app.py")
+    assert_code(missing_preview, "MIGRATION_ARTIFACT_FILE_NOT_FOUND")
+
+    monkeypatch.setattr(service, "_read", lambda *_args, **_kwargs: b"bad")
+    with pytest.raises(MigrationError) as tampered_preview:
+        service.preview_file(task_id, "owner-1", "app.py")
+    assert_code(tampered_preview, "MIGRATION_ARTIFACT_INTEGRITY_FAILED")
+
+    artifact_result = {
+        "artifact": {
+            "size": 4,
+            "sha256": hashlib.sha256(b"good").hexdigest(),
+        }
+    }
+    monkeypatch.setattr(service, "_read", lambda *_args, **_kwargs: None)
+    with pytest.raises(MigrationError) as missing_artifact:
+        service._verified_artifact_content(session, artifact_result)
+    assert_code(missing_artifact, "MIGRATION_ARTIFACT_MISSING")
+
+    monkeypatch.setattr(service, "_read", lambda *_args, **_kwargs: b"bad")
+    with pytest.raises(MigrationError) as tampered_artifact:
+        service._verified_artifact_content(session, artifact_result)
+    assert_code(tampered_artifact, "MIGRATION_ARTIFACT_INTEGRITY_FAILED")
+
+    monkeypatch.setattr(
+        service,
+        "_artifact_result",
+        lambda *_args, **_kwargs: artifact_result,
+    )
+    monkeypatch.setattr(
+        service,
+        "_verified_artifact_content",
+        lambda *_args, **_kwargs: b"zip",
+    )
+    monkeypatch.setattr(service, "_read_json", lambda *_args, **_kwargs: None)
+    with pytest.raises(MigrationError) as missing_request:
+        service.download(task_id, "owner-1")
+    assert_code(missing_request, "MIGRATION_REQUEST_INVALID")
