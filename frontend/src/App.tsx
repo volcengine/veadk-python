@@ -374,6 +374,7 @@ import {
   identifyTelemetryUser,
   initTelemetry,
   setTelemetryContext,
+  trackStudioEntryViewed,
   trackStudioSessionStarted,
   type AgentConnectStartedProps,
   type AgentConnectSucceededProps,
@@ -2386,7 +2387,9 @@ export default function App() {
         studioVersion: studio?.version || cfg.version,
         environment,
         cloudProvider: cfg.provider,
+        accountId: studio?.accountId ?? "",
       });
+      trackStudioEntryViewed({ authState: "anonymous" });
       setFeatures(cfg.features);
       setAgentsSource(cfg.agentsSource);
       setCloudProvider(cfg.provider);
@@ -2408,6 +2411,7 @@ export default function App() {
     if (!userUniqueId) return;
     identifyTelemetryUser({
       userUniqueId,
+      accountId: access.telemetry.accountId ?? "",
       userRole: access.role === "admin" ? "admin" : "member",
       userSource: localMode ? "local" : "sso",
     });

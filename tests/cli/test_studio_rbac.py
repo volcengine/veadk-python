@@ -1200,6 +1200,7 @@ def test_access_endpoint_resolves_local_roles_and_blocks_user_management(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setenv("VEADK_STUDIO_ACCOUNT_ID", "2100123456")
     app = _create_studio_app(
         monkeypatch,
         tmp_path,
@@ -1226,9 +1227,13 @@ def test_access_endpoint_resolves_local_roles_and_blocks_user_management(
 
     assert admin.json()["role"] == "admin"
     assert developer.json()["role"] == "developer"
-    assert developer.json()["telemetry"] == {"userId": "developer"}
+    assert developer.json()["telemetry"] == {
+        "userId": "developer",
+        "accountId": "2100123456",
+    }
     assert user.json()["role"] == "user"
     assert user.json()["telemetry"]["userId"] == "reader"
+    assert user.json()["telemetry"]["accountId"] == "2100123456"
     assert forbidden.status_code == 403
     assert legacy_skill_creator.status_code == 404
 

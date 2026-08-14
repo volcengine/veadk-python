@@ -63,6 +63,8 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _BYTEPLUS_VEFAAS_APPLICATION_NAME_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
 )
+_CLOUD_ACCOUNT_ID_RE = re.compile(r"[0-9]+")
+_IAM_ACCOUNT_ID_RE = re.compile(r"\biam::(?P<account_id>[0-9]+):")
 _BUILD_ERROR_MARKERS = (
     "no solution found",
     "unsatisfiable",
@@ -228,6 +230,24 @@ def _normalize_runtime_description(value: object) -> str:
         normalized.append(character)
         byte_length += character_bytes
     return re.sub(r" +", " ", "".join(normalized)).rstrip()
+
+
+def _cloud_account_id_from_value(value: object) -> str:
+    normalized = str(value or "").strip()
+    return normalized if _CLOUD_ACCOUNT_ID_RE.fullmatch(normalized) else ""
+
+
+def _studio_account_id_from_remote_function(function: object) -> str:
+    for attribute in ("owner", "Owner"):
+        account_id = _cloud_account_id_from_value(getattr(function, attribute, ""))
+        if account_id:
+            return account_id
+    for attribute in ("role", "Role"):
+        role = str(getattr(function, attribute, "") or "")
+        match = _IAM_ACCOUNT_ID_RE.search(role)
+        if match:
+            return match.group("account_id")
+    return ""
 
 
 def _is_malformed_runtime_description_error(error: object) -> bool:
@@ -1497,6 +1517,7 @@ def _run_frontend_server(
         payload = access_policy.access_payload(principal)
         payload["telemetry"] = {
             "userId": principal.owner_id if principal else "",
+            "accountId": os.getenv("VEADK_STUDIO_ACCOUNT_ID", "").strip(),
         }
         return payload
 
@@ -8188,8 +8209,28 @@ def frontend_deploy(
 
     from frontend.server.storage.provisioning import (
         StudioStorageProvisioningError,
+        resolve_studio_account_id_for_deploy,
         resolve_studio_storage_for_deploy,
     )
+
+    studio_account_id = ""
+    try:
+        studio_account_id = resolve_studio_account_id_for_deploy(
+            access_key=ak,
+            secret_key=sk,
+            session_token=session_token or "",
+            region=region,
+            provider=provider_id,
+        )
+    except StudioStorageProvisioningError as error:
+        detail = _safe_exception_detail(
+            error,
+            secrets=(ak, sk, session_token),
+        )
+        click.echo(
+            "Warning: Could not resolve Studio cloud account ID for telemetry: "
+            f"{detail}"
+        )
 
     click.echo("Ensuring Studio persistent storage…")
     try:
@@ -8464,6 +8505,8 @@ def frontend_deploy(
     veadk_environments["VEADK_STUDIO_DEPLOY_ID"] = studio_deploy_id
     veadk_environments["VEADK_STUDIO_USER_POOL_ID"] = user_pool_id
     veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] = region
+    if studio_account_id:
+        veadk_environments["VEADK_STUDIO_ACCOUNT_ID"] = studio_account_id
     veadk_environments.update(studio_storage_environment)
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
@@ -8612,6 +8655,8 @@ def frontend_deploy(
                 ],
                 "VEADK_STUDIO_DEPLOY_REGION": region,
             }
+            if studio_account_id:
+                release_environment["VEADK_STUDIO_ACCOUNT_ID"] = studio_account_id
             if studio_update_bucket:
                 release_environment.update(
                     {
@@ -8888,10 +8933,11 @@ def frontend_update(
         environment_overrides = {"AGENTKIT_SANDBOX_REGION": target.region}
         service_client = getattr(service, "client", None)
         current_env: dict[str, str] = {}
+        remote_function: object | None = None
         if service_client is not None:
             import volcenginesdkvefaas
 
-            function = service_client.get_function(
+            remote_function = service_client.get_function(
                 volcenginesdkvefaas.GetFunctionRequest(id=target.function_id)
             )
             from veadk.cli.frontend_deploy_iam import (
@@ -8899,7 +8945,7 @@ def frontend_update(
             )
 
             if ensure_default_frontend_role_policy(
-                str(getattr(function, "role", "") or ""),
+                str(getattr(remote_function, "role", "") or ""),
                 access_key=ak,
                 secret_key=sk,
                 session_token=session_token,
@@ -8907,7 +8953,8 @@ def frontend_update(
             ):
                 click.echo("Studio IAM role policy updated.")
             current_env = {
-                item.key: item.value for item in (getattr(function, "envs", None) or [])
+                item.key: item.value
+                for item in (getattr(remote_function, "envs", None) or [])
             }
             user_pool_id = str(
                 current_env.get("VEADK_STUDIO_USER_POOL_ID")
@@ -8928,6 +8975,37 @@ def frontend_update(
                         "VEADK_STUDIO_PROJECT": target.project,
                     }
                 )
+
+        studio_account_id = str(
+            current_env.get("VEADK_STUDIO_ACCOUNT_ID") or ""
+        ).strip()
+        if not studio_account_id and remote_function is not None:
+            studio_account_id = _studio_account_id_from_remote_function(remote_function)
+        if not studio_account_id and service_client is not None:
+            from frontend.server.storage.provisioning import (
+                StudioStorageProvisioningError,
+                resolve_studio_account_id_for_deploy,
+            )
+
+            try:
+                studio_account_id = resolve_studio_account_id_for_deploy(
+                    access_key=ak,
+                    secret_key=sk,
+                    session_token=session_token or "",
+                    region=target.region,
+                    provider=provider_id,
+                )
+            except StudioStorageProvisioningError as error:
+                detail = _safe_exception_detail(
+                    error,
+                    secrets=(ak, sk, session_token),
+                )
+                click.echo(
+                    "Warning: Could not resolve Studio cloud account ID for telemetry: "
+                    f"{detail}"
+                )
+        if studio_account_id:
+            environment_overrides["VEADK_STUDIO_ACCOUNT_ID"] = studio_account_id
 
         snapshot_tool_ids = {
             "codex_snapshot": sandbox_chat_codex_snapshot_tool_id

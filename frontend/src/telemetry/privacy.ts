@@ -96,12 +96,14 @@ const COMMON_KEYS = [
   "studio_version",
   "environment",
   "cloud_provider",
+  "account_id",
   "user_role",
   "user_source",
   "page_instance_id",
 ] as const;
 
 const EVENT_KEYS: Record<StudioTelemetryEventName, readonly string[]> = {
+  studio_entry_viewed: ["auth_state"],
   studio_session_started: ["agents_source"],
   studio_agent_deploy: [
     "status",

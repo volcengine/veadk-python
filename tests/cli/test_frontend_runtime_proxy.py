@@ -274,6 +274,7 @@ def test_ui_config_serves_studio_telemetry_config(
     monkeypatch.setenv("VEADK_STUDIO_FUNCTION_ID", "func-id")
     monkeypatch.setenv("VEADK_STUDIO_DEPLOY_REGION", "cn-beijing")
     monkeypatch.setenv("VEADK_STUDIO_PROJECT", "studio-project")
+    monkeypatch.setenv("VEADK_STUDIO_ACCOUNT_ID", "2100123456")
     app = _create_frontend_app(monkeypatch, tmp_path, studio=True)
 
     with TestClient(app) as client:
@@ -291,6 +292,7 @@ def test_ui_config_serves_studio_telemetry_config(
             "region": "cn-beijing",
             "project": "studio-project",
             "version": response.json()["version"],
+            "accountId": "2100123456",
         },
     }
 

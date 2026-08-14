@@ -21,6 +21,7 @@ import type {
   AgentSourceDownloadFailedProps,
   AgentSourceDownloadStartedProps,
   AgentSourceDownloadSucceededProps,
+  EntryViewedProps,
   SandboxCreateFailedProps,
   SandboxCreateStartedProps,
   SandboxCreateSucceededProps,
@@ -43,6 +44,11 @@ export function setTelemetryContext(context: StudioTelemetryContext): void {
 
 export function identifyTelemetryUser(identity: TelemetryIdentity): void {
   runtime.identify(identity);
+}
+
+/** Tracks an anonymous Studio page entry before user identity is known. */
+export function trackStudioEntryViewed(props: EntryViewedProps): void {
+  runtime.trackStudioEntryViewed(props);
 }
 
 /** Tracks an authenticated, page-ready Studio visit, not an Agent chat session. */

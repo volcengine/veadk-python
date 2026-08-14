@@ -2393,6 +2393,7 @@ export interface StudioTelemetryContext {
   region: string;
   project: string;
   version: string;
+  accountId?: string;
 }
 
 export interface StudioTelemetryConfig {
@@ -2470,6 +2471,7 @@ function normalizeStudioTelemetryConfig(value: unknown): StudioTelemetryConfig {
       region: typeof studio.region === "string" ? studio.region : "",
       project: typeof studio.project === "string" ? studio.project : "",
       version: typeof studio.version === "string" ? studio.version : "",
+      accountId: typeof studio.accountId === "string" ? studio.accountId : "",
     },
   };
 }
@@ -2514,6 +2516,7 @@ export interface StudioAccess {
   role: StudioRole;
   telemetry: {
     userId: string;
+    accountId?: string;
   };
   capabilities: {
     createAgents: boolean;
@@ -2527,6 +2530,7 @@ export const DEFAULT_STUDIO_ACCESS: StudioAccess = {
   role: "user",
   telemetry: {
     userId: "",
+    accountId: "",
   },
   capabilities: {
     createAgents: false,
@@ -2543,6 +2547,10 @@ export async function getStudioAccess(): Promise<StudioAccess> {
   if (
     !["admin", "developer", "user"].includes(access.role) ||
     typeof access.telemetry?.userId !== "string" ||
+    (
+      access.telemetry.accountId !== undefined &&
+      typeof access.telemetry.accountId !== "string"
+    ) ||
     typeof access.capabilities?.createAgents !== "boolean" ||
     typeof access.capabilities?.manageAgents !== "boolean" ||
     !["all", "mine"].includes(access.capabilities?.runtimeScope)

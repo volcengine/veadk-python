@@ -99,9 +99,11 @@ function harness() {
     studioVersion: "1.2.3",
     environment: "staging",
     cloudProvider: "volcengine",
+    accountId: "2100123456",
   });
   runtime.identify({
     userUniqueId: " user-1 ",
+    accountId: " 2100123456 ",
     userRole: "member",
     userSource: "sso",
   });
@@ -173,6 +175,22 @@ test("bootstraps the documented TEA queue and flushes pre-init events", async ()
   }
 });
 
+test("records one anonymous Studio page entry before login", () => {
+  const { events, runtime } = harness();
+  runtime.trackStudioEntryViewed({ authState: "anonymous" });
+  runtime.trackStudioEntryViewed({ authState: "anonymous" });
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].name, "studio_entry_viewed");
+  assert.equal(events[0].payload.auth_state, "anonymous");
+  assert.equal(events[0].payload.cloud_provider, "volcengine");
+  assert.equal(events[0].payload.account_id, "2100123456");
+  assert.equal(events[0].payload.page_instance_id, "id-1");
+  assert.equal("user_role" in events[0].payload, false);
+  assert.equal("user_source" in events[0].payload, false);
+  assert.equal("agents_source" in events[0].payload, false);
+});
+
 test("records one authenticated page-ready Studio visit, not an Agent chat session", () => {
   const { events, identities, runtime } = harness();
   runtime.trackStudioSessionStarted({ agentsSource: "cloud" });
@@ -185,6 +203,7 @@ test("records one authenticated page-ready Studio visit, not an Agent chat sessi
   assert.equal("user_unique_id" in events[0].payload, false);
   assert.equal("auth_session_id" in events[0].payload, false);
   assert.equal(events[0].payload.cloud_provider, "volcengine");
+  assert.equal(events[0].payload.account_id, "2100123456");
   assert.equal(events[0].payload.page_instance_id, "id-1");
   assert.equal("session_id" in events[0].payload, false);
 });

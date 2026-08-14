@@ -8,6 +8,7 @@ Studio 的产品行为数据统一上报到 TEA App `1050062`。火山引擎和 
 
 | 事件 | 含义 |
 | --- | --- |
+| `studio_entry_viewed` | 用户打开 Studio 前端页面后的一次匿名入口访问；不要求登录。 |
 | `studio_session_started` | 用户身份确认且页面可用后开始的一次 Studio 访问；不是 Agent 对话会话。 |
 | `studio_agent_deploy` | 部署或更新 Agent。 |
 | `studio_sandbox_create` | 创建 Sandbox。 |
@@ -22,8 +23,9 @@ Studio 的产品行为数据统一上报到 TEA App `1050062`。火山引擎和 
 
 ## 指标口径
 
+- Studio 匿名入口访问次数：`studio_entry_viewed` 去重 `page_instance_id`。
 - Studio 使用人数：`studio_session_started` 去重 `user_unique_id`。
-- Studio 访问次数：去重 `page_instance_id`。
+- Studio 登录访问次数：`studio_session_started` 去重 `page_instance_id`。
 - 活跃用户池数：过滤空值后去重 `user_pool_id`。
 - 每池活跃人数：按 `user_pool_id` 分组后去重 `user_unique_id`。
 - 操作尝试数：过滤 `status = started` 后去重 `operation_id`。
@@ -37,6 +39,10 @@ Studio 的产品行为数据统一上报到 TEA App `1050062`。火山引擎和 
 前端事件只能计算时间范围内的活跃用户池和池内活跃用户，不能计算从未访问 Studio
 的用户池、池内全部成员或当前 Agent/Sandbox 存量。这些资源存量必须来自后端管理接口
 或定期快照。
+
+`account_id` 表示部署当前 Studio 的云账号 ID。它在 `veadk studio deploy/update`
+时解析并保存到 Studio 运行时环境中，前端通过匿名可访问的 `/web/ui-config` 获取该值，
+用于 `studio_entry_viewed` 和后续登录会话埋点，不应作为登录用户身份使用。
 
 ## 数据边界
 
