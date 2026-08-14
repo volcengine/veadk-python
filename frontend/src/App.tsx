@@ -250,6 +250,7 @@ interface NewChatCapabilitiesState {
   harnessEnabled?: boolean;
   builtinTools?: string[];
   temporaryEnabled?: boolean;
+  sandboxEndpointExportEnabled?: boolean;
   skillCustomizationEnabled?: boolean;
 }
 
@@ -268,6 +269,9 @@ async function probeNewChatCapabilities(
     builtinTools: harnessResult.status === "fulfilled" ? harnessResult.value : [],
     temporaryEnabled:
       sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
+    sandboxEndpointExportEnabled:
+      sandboxResult.status === "fulfilled" &&
+      sandboxResult.value.endpointExportEnabled === true,
     skillCustomizationEnabled:
       skillResult.status === "fulfilled" && skillResult.value.enabled,
   };
@@ -871,6 +875,8 @@ export default function App() {
   const [sandboxApprovalBusy, setSandboxApprovalBusy] = useState(false);
   const [sandboxApprovalError, setSandboxApprovalError] = useState("");
   const [sandboxUploadBusy, setSandboxUploadBusy] = useState(false);
+  const [sandboxEndpointCopyState, setSandboxEndpointCopyState] =
+    useState<"idle" | "copying" | "copied">("idle");
   const [sandboxLaunchOpen, setSandboxLaunchOpen] = useState(false);
   const [sandboxLaunchState, setSandboxLaunchState] =
     useState<SandboxLaunchState>("confirm");
@@ -890,9 +896,13 @@ export default function App() {
   const sandboxSessionIdRef = useRef(sandboxSession?.id ?? "");
   const sandboxActiveAssistantTurnIdRef = useRef("");
   const sandboxUploadRunRef = useRef(0);
+  const sandboxEndpointCopyTimerRef = useRef<number | undefined>(undefined);
   const sandboxPreviewUrlsRef = useRef<Set<string>>(new Set());
   sandboxSessionIdRef.current = sandboxSession?.id ?? "";
   useEffect(() => () => {
+    if (sandboxEndpointCopyTimerRef.current !== undefined) {
+      window.clearTimeout(sandboxEndpointCopyTimerRef.current);
+    }
     for (const previewUrl of sandboxPreviewUrlsRef.current) {
       URL.revokeObjectURL(previewUrl);
     }
@@ -916,6 +926,18 @@ export default function App() {
     }
     sandboxPreviewUrlsRef.current.clear();
   }
+
+  const resetSandboxEndpointCopyState = useCallback(() => {
+    if (sandboxEndpointCopyTimerRef.current !== undefined) {
+      window.clearTimeout(sandboxEndpointCopyTimerRef.current);
+      sandboxEndpointCopyTimerRef.current = undefined;
+    }
+    setSandboxEndpointCopyState("idle");
+  }, []);
+
+  useEffect(() => {
+    resetSandboxEndpointCopyState();
+  }, [resetSandboxEndpointCopyState, sandboxSession?.id]);
 
   // Turns are stored PER SESSION, so a background stream can keep updating its
   // own session's transcript while you view another one — no cross-session
@@ -3044,6 +3066,7 @@ export default function App() {
     setSandboxApproval(null);
     setSandboxApprovalBusy(false);
     setSandboxApprovalError("");
+    resetSandboxEndpointCopyState();
     setSandboxThreadDeleteTarget(null);
     setSandboxUploadBusy(false);
     sandboxUploadRunRef.current += 1;
@@ -3074,6 +3097,33 @@ export default function App() {
       );
     } finally {
       setSandboxToolLoading(false);
+    }
+  }
+
+  async function copySandboxEndpoint() {
+    const activeSession = sandboxSession;
+    if (!activeSession || sandboxEndpointCopyState === "copying") return;
+    setSandboxEndpointCopyState("copying");
+    setError("");
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("当前浏览器不支持写入剪贴板。");
+      }
+      const exported = await sandboxClient.getEndpoint(activeSession.id);
+      await navigator.clipboard.writeText(exported.endpoint);
+      if (sandboxSessionIdRef.current !== activeSession.id) return;
+      setSandboxEndpointCopyState("copied");
+      if (sandboxEndpointCopyTimerRef.current !== undefined) {
+        window.clearTimeout(sandboxEndpointCopyTimerRef.current);
+      }
+      sandboxEndpointCopyTimerRef.current = window.setTimeout(() => {
+        setSandboxEndpointCopyState("idle");
+        sandboxEndpointCopyTimerRef.current = undefined;
+      }, 1600);
+    } catch (cause) {
+      if (sandboxSessionIdRef.current !== activeSession.id) return;
+      setSandboxEndpointCopyState("idle");
+      setError(cause instanceof Error ? cause.message : String(cause));
     }
   }
 
@@ -5028,6 +5078,10 @@ export default function App() {
                     setSandboxSettingsError("");
                     setSandboxWorkspaceOpen(true);
                   },
+                  onCopyEndpoint: copySandboxEndpoint,
+                  endpointCopyEnabled:
+                    newChatCapabilities.sandboxEndpointExportEnabled === true,
+                  endpointCopyState: sandboxEndpointCopyState,
                   workspaceLocked: sandboxSession.workspaceLocked,
                   settingsBusy: sandboxSettingsBusy,
                   uploadBusy: sandboxUploadBusy || sandboxBusy,

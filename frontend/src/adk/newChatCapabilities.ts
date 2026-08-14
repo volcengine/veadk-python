@@ -7,6 +7,7 @@ const CAPABILITY_TIMEOUT_MS = 10_000;
 export interface NewChatModeCapability {
   enabled: boolean;
   reason?: string;
+  endpointExportEnabled?: boolean;
 }
 
 async function getCapability(path: string): Promise<NewChatModeCapability> {
@@ -24,6 +25,7 @@ async function getCapability(path: string): Promise<NewChatModeCapability> {
   return {
     enabled: payload.enabled,
     reason: typeof payload.reason === "string" ? payload.reason : undefined,
+    endpointExportEnabled: payload.endpointExportEnabled === true,
   };
 }
 

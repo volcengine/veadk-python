@@ -95,6 +95,12 @@ export interface SandboxToolLaunch {
   shellSessionId?: string;
 }
 
+export interface SandboxEndpointExport {
+  endpoint: string;
+  sessionId: string;
+  expireAt?: string;
+}
+
 export interface SandboxUploadedFile {
   id: string;
   path: string;
@@ -286,6 +292,10 @@ export interface AgentKitSandboxClient {
     sessionId: string,
     options?: SandboxRequestOptions,
   ): Promise<SandboxStatus>;
+  getEndpoint(
+    sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxEndpointExport>;
   listModels(
     sessionId: string,
     options?: SandboxRequestOptions,
@@ -1147,6 +1157,24 @@ export const sandboxClient: AgentKitSandboxClient = {
         Number.isFinite(context) &&
         context >= 0
         ? { modelContextWindow: Math.trunc(context) }
+        : {}),
+    };
+  },
+
+  async getEndpoint(sessionId, options = {}) {
+    const value = recordOf(await sandboxJson(sessionId, "endpoint", {
+      options,
+      fallback: "无法读取 Sandbox Endpoint。",
+    }));
+    if (typeof value?.endpoint !== "string" || !value.endpoint.trim()) {
+      throw new Error("Sandbox 返回了无效 Endpoint。");
+    }
+    return {
+      endpoint: value.endpoint,
+      sessionId:
+        typeof value.sessionId === "string" ? value.sessionId : sessionId,
+      ...(typeof value.expireAt === "string"
+        ? { expireAt: value.expireAt }
         : {}),
     };
   },
