@@ -798,6 +798,7 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
         "VEADK_STUDIO_FUNCTION_ID": "function-app-id",
         "VEADK_STUDIO_DEPLOY_REGION": "cn-beijing",
         "VEADK_STUDIO_PROJECT": "default",
+        "VEADK_STUDIO_ACCOUNT_ID": "123",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
         "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",
@@ -817,6 +818,7 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     agent_tools: list[dict[str, object]] = []
     code_credentials: list[dict[str, object]] = []
     agent_credentials: list[dict[str, object]] = []
+    role_policy_syncs: list[dict[str, object]] = []
     monkeypatch.setattr(
         "veadk.cli.studio_update.find_studio_deployments", lambda **_: [target]
     )
@@ -860,17 +862,23 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_model_credential",
         lambda **kwargs: agent_credentials.append(kwargs),
     )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_deploy_iam.ensure_default_frontend_role_policy",
+        lambda role, **kwargs: role_policy_syncs.append({"role": role, **kwargs})
+        or True,
+    )
 
     class _FakeVeFaaS:
         def __init__(self, **_: str) -> None:
             self.client = SimpleNamespace(
                 get_function=lambda _request: SimpleNamespace(
+                    role="trn:iam::3001037806:role/VeADKFrontendServiceRole",
                     envs=[
                         SimpleNamespace(
                             key="SANDBOX_CHAT_CODEX",
                             value="existing-codex-tool",
                         )
-                    ]
+                    ],
                 )
             )
 
@@ -898,6 +906,15 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     result = CliRunner().invoke(studio, args)
 
     assert result.exit_code == 0, result.output
+    assert role_policy_syncs == [
+        {
+            "role": "trn:iam::3001037806:role/VeADKFrontendServiceRole",
+            "access_key": "ak",
+            "secret_key": "sk",
+            "session_token": "",
+            "provider": "byteplus",
+        }
+    ]
     assert len(code_tools) == 1
     assert code_tools[0]["enable_snapshot"] is True
     assert "-codex-" in str(code_tools[0]["name"])
@@ -928,6 +945,7 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     assert overrides["SANDBOX_CHAT_HERMES_SNAPSHOT"] == "hermes-snapshot-tool"
     assert overrides["SANDBOX_DEV"] == expected_dev_tool_id
     assert overrides["CLOUD_PROVIDER"] == "byteplus"
+    assert overrides["VEADK_STUDIO_ACCOUNT_ID"] == "3001037806"
 
 
 def test_update_application_code_bundle_merges_only_explicit_environment(

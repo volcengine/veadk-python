@@ -67,6 +67,41 @@ def _patch_cloud(
 @pytest.mark.parametrize(
     ("provider", "region", "expected_host"),
     [
+        ("volcengine", "cn-beijing", "sts.volcengineapi.com"),
+        ("byteplus", "ap-southeast-1", "sts.ap-southeast-1.byteplusapi.com"),
+    ],
+)
+def test_account_id_resolver_uses_provider_specific_sts_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: StudioProvider,
+    region: str,
+    expected_host: str,
+) -> None:
+    from agentkit.toolkit.volcengine.sts import VeSTS
+
+    calls: list[tuple[str, str, str]] = []
+
+    def _get_account_id(self: Any) -> int:
+        calls.append((self.host, self.region, self.service))
+        return 3001037806
+
+    monkeypatch.setattr(VeSTS, "get_account_id", _get_account_id)
+
+    account_id = provisioning.resolve_studio_account_id_for_deploy(
+        provider=provider,
+        region=region,
+        access_key="ak",
+        secret_key="sk",
+        session_token="token",
+    )
+
+    assert account_id == "3001037806"
+    assert calls == [(expected_host, region, "sts")]
+
+
+@pytest.mark.parametrize(
+    ("provider", "region", "expected_host"),
+    [
         (
             "volcengine",
             "cn-beijing",

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from contextlib import nullcontext
 from typing import Any
 
 from . import StudioProvider, StudioStorageConfig
@@ -35,18 +36,51 @@ def _resolve_account_id(
     secret_key: str,
     session_token: str,
     region: str,
+    provider: StudioProvider | None = None,
 ) -> str:
     from agentkit.toolkit.volcengine.sts import VeSTS
 
-    account_id = VeSTS(
-        access_key=access_key,
-        secret_key=secret_key,
-        session_token=session_token,
-        region=region,
-    ).get_account_id()
+    context = nullcontext()
+    if provider is not None:
+        from agentkit.platform.context import default_cloud_provider
+
+        context = default_cloud_provider(provider)
+
+    with context:
+        account_id = VeSTS(
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token,
+            region=region,
+        ).get_account_id()
     if account_id is None:
         raise StudioStorageProvisioningError("无法获取当前云账号 ID。")
     return str(account_id).strip()
+
+
+def resolve_studio_account_id_for_deploy(
+    *,
+    access_key: str,
+    secret_key: str,
+    session_token: str,
+    region: str,
+    provider: StudioProvider | None = None,
+) -> str:
+    """Resolve the deployer's cloud account id for Studio runtime metadata."""
+    try:
+        return _resolve_account_id(
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token,
+            region=region,
+            provider=provider,
+        )
+    except StudioStorageProvisioningError:
+        raise
+    except Exception as error:
+        raise StudioStorageProvisioningError(
+            f"无法获取当前云账号 ID：{error}"
+        ) from error
 
 
 def _create_tos_client(
@@ -129,6 +163,7 @@ def resolve_studio_storage_for_deploy(
                 secret_key=secret_key,
                 session_token=session_token,
                 region=region,
+                provider=provider,
             )
         except StudioStorageProvisioningError:
             raise
@@ -181,5 +216,6 @@ def resolve_studio_storage_for_deploy(
 
 __all__ = [
     "StudioStorageProvisioningError",
+    "resolve_studio_account_id_for_deploy",
     "resolve_studio_storage_for_deploy",
 ]

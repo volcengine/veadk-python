@@ -19,12 +19,19 @@ const cliFrontendSource = readFileSync(
 
 test("Studio access fails closed until the server-derived role is known", () => {
   assert.match(clientSource, /export type StudioRole = "admin" \| "developer" \| "user"/);
-  assert.match(clientSource, /telemetry:\s*\{\s*userId: string;\s*\}/);
-  assert.match(clientSource, /export const DEFAULT_STUDIO_ACCESS[\s\S]*?userId: ""[\s\S]*?createAgents: false[\s\S]*?manageAgents: false[\s\S]*?runtimeScope: "mine"/);
+  assert.match(clientSource, /telemetry:\s*\{\s*userId: string;\s*accountId\?: string;\s*\}/);
+  assert.match(clientSource, /export const DEFAULT_STUDIO_ACCESS[\s\S]*?userId: ""[\s\S]*?accountId: ""[\s\S]*?createAgents: false[\s\S]*?manageAgents: false[\s\S]*?runtimeScope: "mine"/);
   assert.match(clientSource, /typeof access\.telemetry\?\.userId !== "string"/);
+  assert.match(appSource, /accountId: access\.telemetry\.accountId \?\? ""/);
   assert.match(clientSource, /apiFetch\("\/web\/access"\)/);
   assert.match(appSource, /if \(!access\) \{\s*return <div className="boot" \/>;\s*\}/);
   assert.match(appSource, /setAccess\(DEFAULT_STUDIO_ACCESS\)/);
+});
+
+test("Studio entry telemetry uses anonymous UI config metadata", () => {
+  assert.match(clientSource, /accountId: typeof studio\.accountId === "string"/);
+  assert.match(appSource, /accountId: studio\?\.accountId \?\? ""/);
+  assert.match(appSource, /trackStudioEntryViewed\(\{ authState: "anonymous" \}\)/);
 });
 
 test("Agent workspace creation and update actions obey Studio access", () => {

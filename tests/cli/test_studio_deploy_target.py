@@ -94,6 +94,10 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
             ),
         ),
     )
+    monkeypatch.setattr(
+        "frontend.server.storage.provisioning.resolve_studio_account_id_for_deploy",
+        lambda **_kwargs: "2100123456",
+    )
 
 
 @pytest.mark.parametrize("kind", ["codex", "openclaw", "hermes"])
@@ -939,6 +943,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] == "veadk/studio/main"
     assert veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] == expected_region
     assert veadk_environments["VEADK_STUDIO_PROJECT"] == expected_project
+    assert veadk_environments["VEADK_STUDIO_ACCOUNT_ID"] == "2100123456"
     assert veadk_environments["VEADK_STUDIO_TOS_BUCKET"] == ("veadk-studio-2100123456")
     assert veadk_environments["VEADK_STUDIO_TOS_REGION"] == expected_region
     assert "VEADK_STUDIO_UPDATE_REGION" not in veadk_environments
@@ -1039,6 +1044,7 @@ def test_studio_deploy_persists_studio_context_environment(
     )
     assert release_environment["VEADK_STUDIO_DEPLOY_ID"] == deploy_id
     assert release_environment["VEADK_STUDIO_USER_POOL_ID"] == "pool-id"
+    assert release_environment["VEADK_STUDIO_ACCOUNT_ID"] == "2100123456"
     assert release_environment["VEADK_STUDIO_APPLICATION_ID"] == "app-id"
     assert release_environment["VEADK_STUDIO_FUNCTION_ID"] == "function-id"
 
@@ -1087,6 +1093,10 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
     def _record_serverless_role(*args: object, **kwargs: object) -> None:
         captured["serverless_role"] = {"args": args, "kwargs": kwargs}
 
+    def _resolve_account_id(**kwargs: object) -> str:
+        captured["account_id"] = kwargs
+        return "3001037806"
+
     monkeypatch.setattr(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
     )
@@ -1109,6 +1119,10 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
     monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
         lambda **kwargs: credential_tool_ids.append(str(kwargs["tool_id"])),
+    )
+    monkeypatch.setattr(
+        "frontend.server.storage.provisioning.resolve_studio_account_id_for_deploy",
+        _resolve_account_id,
     )
 
     result = CliRunner().invoke(
@@ -1174,12 +1188,20 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
         "args": ("byteplus-ak", "byteplus-sk"),
         "kwargs": {"session_token": "", "provider": "byteplus"},
     }
+    assert captured["account_id"] == {
+        "access_key": "byteplus-ak",
+        "secret_key": "byteplus-sk",
+        "session_token": "",
+        "region": "ap-southeast-1",
+        "provider": "byteplus",
+    }
     assert veadk_environments["CLOUD_PROVIDER"] == "byteplus"
     assert veadk_environments["AGENTKIT_CLOUD_PROVIDER"] == "byteplus"
     assert veadk_environments["BYTEPLUS_REGION"] == "ap-southeast-1"
     assert veadk_environments["BYTEPLUS_WEB_SEARCH_API_KEY"] == "bp-search-key"
     assert veadk_environments["VEIDENTITY_REGION"] == "ap-southeast-1"
     assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == "ap-southeast-1"
+    assert veadk_environments["VEADK_STUDIO_ACCOUNT_ID"] == "3001037806"
     assert sorted(credential_tool_ids) == [
         "chat-code-env-id",
         "chat-code-env-snapshot-id",
