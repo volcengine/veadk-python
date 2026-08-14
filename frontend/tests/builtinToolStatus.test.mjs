@@ -6,6 +6,10 @@ const blocksSource = readFileSync(
   new URL("../src/ui/Blocks.tsx", import.meta.url),
   "utf8",
 );
+const agentKitLogoSource = readFileSync(
+  new URL("../src/ui/icons/AgentKitLogoIcon.tsx", import.meta.url),
+  "utf8",
+);
 const registrySource = readFileSync(
   new URL("../src/ui/builtin-tools/registry.ts", import.meta.url),
   "utf8",
@@ -149,6 +153,22 @@ test("centralizes all loading text shimmer behavior in TextShimmer", () => {
   assert.match(blocksSource, /<TextShimmer className="think-label"/);
   assert.match(blocksSource, /<TextShimmer className="tool-name"/);
   assert.doesNotMatch(blocksSource, /className=\{`[^`]*shimmer/);
+});
+
+test("uses the monochrome AgentKit mark as the accessible thinking status indicator", () => {
+  assert.match(blocksSource, /<AgentKitLogoIcon className=\{`thinking-logo/);
+  assert.doesNotMatch(blocksSource, /function SparkIcon/);
+  assert.match(agentKitLogoSource, /viewBox="0 0 111 117"/);
+  assert.match(agentKitLogoSource, /fill="currentColor"/);
+  assert.match(agentKitLogoSource, /aria-hidden="true"/);
+  assert.match(sharedStylesSource, /\.think-icon > svg\s*\{\s*width:\s*14px;\s*height:\s*15px;/);
+  assert.match(sharedStylesSource, /thinking-logo-breathe 1\.6s ease-in-out infinite/);
+  assert.match(sharedStylesSource, /opacity:\s*0\.42;\s*transform:\s*scale\(0\.97\)/);
+  assert.match(sharedStylesSource, /opacity:\s*0\.72;\s*transform:\s*scale\(1\.02\)/);
+  assert.match(
+    sharedStylesSource,
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.thinking-logo\.is-active\s*\{[^}]*animation:\s*none/,
+  );
 });
 
 test("aligns thinking and special-tool headers on the same visual grid", () => {
