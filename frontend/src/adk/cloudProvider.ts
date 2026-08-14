@@ -16,7 +16,7 @@ export const BYTEPLUS_MODELARK_ACTIVATION_URL =
   "https://console.byteplus.com/ark/region:ark+ap-southeast-1/openManagement";
 export const VOLCENGINE_MODELARK_ACTIVATION_URL =
   "https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement";
-export const BYTEPLUS_DEFAULT_MODEL_NAME = "seed-2-0-lite-260228";
+export const BYTEPLUS_DEFAULT_MODEL_NAME = "dola-seed-2-1-turbo-260628";
 export const VOLCENGINE_DEFAULT_MODEL_NAME = "doubao-seed-2-1-pro-260628";
 export const BYTEPLUS_DEFAULT_EMBEDDING_NAME =
   "skylark-embedding-vision-250615";

@@ -6,7 +6,7 @@ import {
   TRANSFER_REQUEST_TIMEOUT_MS,
 } from "./timeout";
 
-const API_ROOT = "/web/migrations";
+const API_ROOT = "/web/agent-migrations";
 const SESSION_START_TIMEOUT_MS = 390_000;
 
 export type MigrationFramework =
@@ -21,6 +21,7 @@ export type MigrationFramework =
 export type MigrationTaskState =
   | "awaiting_upload"
   | "analyzing"
+  | "needs_input"
   | "analysis_ready"
   | "migrating"
   | "validating"
@@ -48,6 +49,9 @@ export interface MigrationEvidence {
 
 export interface MigrationAnalysis {
   schema_version: 1;
+  status: "needs_input" | "recommendation_ready" | "unsupported";
+  attempt: number;
+  input_sha256: string;
   summary: string;
   frameworks: Array<{
     id: MigrationFramework;
@@ -68,6 +72,7 @@ export interface MigrationAnalysis {
     include: string[];
     exclude: string[];
   };
+  assumptions: string[];
   questions: Array<{
     id: string;
     prompt: string;
@@ -87,6 +92,7 @@ export interface MigrationTask {
   sessionTtlSeconds: number;
   canModify: boolean;
   canUpload: boolean;
+  canAnswer: boolean;
   canConfirm: boolean;
   canStop: boolean;
   artifact: {
@@ -96,6 +102,11 @@ export interface MigrationTask {
     deployReady: boolean;
   };
   analysis?: MigrationAnalysis;
+  analysisRef?: {
+    attempt: number;
+    sha256: string;
+    inputSha256: string;
+  };
   confirmation?: {
     framework?: MigrationFramework;
     entry?: string | null;
@@ -185,6 +196,7 @@ const FRAMEWORKS = new Set<MigrationFramework>([
 const TASK_STATES = new Set<MigrationTaskState>([
   "awaiting_upload",
   "analyzing",
+  "needs_input",
   "analysis_ready",
   "migrating",
   "validating",
@@ -224,6 +236,11 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
   const boundary = record(analysis.boundary, "迁移边界");
   if (
     analysis.schema_version !== 1 ||
+    !["needs_input", "recommendation_ready", "unsupported"].includes(
+      String(analysis.status),
+    ) ||
+    typeof analysis.attempt !== "number" ||
+    typeof analysis.input_sha256 !== "string" ||
     typeof analysis.summary !== "string" ||
     !Array.isArray(analysis.frameworks) ||
     !Array.isArray(analysis.entries) ||
@@ -233,6 +250,9 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
   }
   return {
     schema_version: 1,
+    status: analysis.status as MigrationAnalysis["status"],
+    attempt: analysis.attempt,
+    input_sha256: analysis.input_sha256,
     summary: analysis.summary,
     frameworks: analysis.frameworks.map((item) => {
       const candidate = record(item, "框架候选");
@@ -286,6 +306,7 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
       include: stringArray(boundary.include, "迁移包含范围"),
       exclude: stringArray(boundary.exclude, "迁移排除范围"),
     },
+    assumptions: stringArray(analysis.assumptions, "分析假设"),
     questions: analysis.questions.map((item) => {
       const question = record(item, "待确认问题");
       if (
@@ -320,6 +341,7 @@ function normalizeTask(value: unknown): MigrationTask {
     typeof task.sessionTtlSeconds !== "number" ||
     typeof task.canModify !== "boolean" ||
     typeof task.canUpload !== "boolean" ||
+    typeof task.canAnswer !== "boolean" ||
     typeof task.canConfirm !== "boolean" ||
     typeof task.canStop !== "boolean"
   ) {
@@ -336,6 +358,7 @@ function normalizeTask(value: unknown): MigrationTask {
     sessionTtlSeconds: task.sessionTtlSeconds,
     canModify: task.canModify,
     canUpload: task.canUpload,
+    canAnswer: task.canAnswer,
     canConfirm: task.canConfirm,
     canStop: task.canStop,
     artifact: {
@@ -346,6 +369,21 @@ function normalizeTask(value: unknown): MigrationTask {
     },
   };
   if (task.analysis !== undefined) normalized.analysis = normalizeAnalysis(task.analysis);
+  if (task.analysisRef !== undefined) {
+    const reference = record(task.analysisRef, "分析结果引用");
+    if (
+      typeof reference.attempt !== "number" ||
+      typeof reference.sha256 !== "string" ||
+      typeof reference.inputSha256 !== "string"
+    ) {
+      throw new Error("分析结果引用格式错误。");
+    }
+    normalized.analysisRef = {
+      attempt: reference.attempt,
+      sha256: reference.sha256,
+      inputSha256: reference.inputSha256,
+    };
+  }
   if (task.confirmation !== undefined) {
     const confirmation = record(task.confirmation, "迁移确认");
     normalized.confirmation = {
@@ -685,7 +723,9 @@ export async function confirmMigrationTask(args: {
   entry?: string;
   appName: string;
   instruction: string;
-  answers: Record<string, string>;
+  analysisAttempt: number;
+  analysisSha256: string;
+  inputSha256: string;
   signal?: AbortSignal;
 }): Promise<MigrationTask> {
   return normalizeTask(
@@ -700,13 +740,46 @@ export async function confirmMigrationTask(args: {
             entry: args.entry || null,
             appName: args.appName,
             instruction: args.instruction,
-            answers: args.answers,
+            analysisAttempt: args.analysisAttempt,
+            analysisSha256: args.analysisSha256,
+            inputSha256: args.inputSha256,
+            boundaryConfirmed: true,
           }),
           signal: args.signal,
         },
         SESSION_START_TIMEOUT_MS,
       ),
       "启动迁移失败",
+    ),
+  );
+}
+
+export async function submitMigrationAnalysisAnswers(args: {
+  taskId: string;
+  analysisAttempt: number;
+  analysisSha256: string;
+  inputSha256: string;
+  answers: Record<string, string>;
+  signal?: AbortSignal;
+}): Promise<MigrationTask> {
+  return normalizeTask(
+    await json(
+      await request(
+        `/tasks/${encodeURIComponent(args.taskId)}/answers`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            analysisAttempt: args.analysisAttempt,
+            analysisSha256: args.analysisSha256,
+            inputSha256: args.inputSha256,
+            answers: args.answers,
+          }),
+          signal: args.signal,
+        },
+        SESSION_START_TIMEOUT_MS,
+      ),
+      "提交分析补充信息失败",
     ),
   );
 }

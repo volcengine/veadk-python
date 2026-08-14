@@ -29,6 +29,7 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from veadk.cli.cli_frontend import (
+    _adapt_migration_model_envs,
     _create_runtime_with_description_fallback,
     _is_malformed_runtime_description_error,
     _normalize_runtime_description,
@@ -89,6 +90,81 @@ def _create_studio_app(
         studio=True,
     )
     return captured["app"]
+
+
+@pytest.mark.parametrize(
+    (
+        "provider",
+        "inherited_name",
+        "inherited_base",
+        "expected_name",
+        "expected_base",
+    ),
+    [
+        (
+            "volcengine",
+            "seed-2-0-lite-260228",
+            "https://ark.ap-southeast.bytepluses.com/api/v3",
+            "doubao-seed-2-1-pro-260628",
+            "https://ark.cn-beijing.volces.com/api/v3",
+        ),
+        (
+            "byteplus",
+            "doubao-seed-2-1-pro-260628",
+            "https://ark.cn-beijing.volces.com/api/v3/",
+            "dola-seed-2-1-turbo-260628",
+            "https://ark.ap-southeast.bytepluses.com/api/v3",
+        ),
+        (
+            "volcengine",
+            "seed-2-0-lite-260228",
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "doubao-seed-2-1-pro-260628",
+            "https://ark.cn-beijing.volces.com/api/v3",
+        ),
+        (
+            "byteplus",
+            "doubao-seed-2-1-pro-260628",
+            "https://ark.ap-southeast.bytepluses.com/api/v3",
+            "dola-seed-2-1-turbo-260628",
+            "https://ark.ap-southeast.bytepluses.com/api/v3",
+        ),
+    ],
+)
+def test_migration_model_defaults_follow_studio_provider(
+    provider: str,
+    inherited_name: str,
+    inherited_base: str,
+    expected_name: str,
+    expected_base: str,
+) -> None:
+    runtime_envs = {
+        "MODEL_AGENT_NAME": inherited_name,
+        "MODEL_AGENT_API_BASE": inherited_base,
+    }
+
+    _adapt_migration_model_envs(runtime_envs, provider)
+
+    assert runtime_envs == {
+        "MODEL_AGENT_NAME": expected_name,
+        "MODEL_AGENT_API_BASE": expected_base,
+        "MODEL_NAME": expected_name,
+    }
+
+
+def test_migration_model_defaults_preserve_custom_endpoint() -> None:
+    runtime_envs = {
+        "MODEL_AGENT_NAME": "private-model",
+        "MODEL_AGENT_API_BASE": "https://models.example.com/v1",
+    }
+
+    _adapt_migration_model_envs(runtime_envs, "volcengine")
+
+    assert runtime_envs == {
+        "MODEL_AGENT_NAME": "private-model",
+        "MODEL_AGENT_API_BASE": "https://models.example.com/v1",
+        "MODEL_NAME": "private-model",
+    }
 
 
 @pytest.mark.parametrize(
@@ -656,16 +732,81 @@ def test_migration_routes_require_agent_management_role(
 
     with TestClient(app) as client:
         viewer = client.get(
-            "/web/migrations/capabilities",
+            "/web/agent-migrations/capabilities",
             headers={"X-VeADK-Local-User": "viewer"},
         )
         developer = client.get(
-            "/web/migrations/capabilities",
+            "/web/agent-migrations/capabilities",
             headers={"X-VeADK-Local-User": "developer"},
+        )
+        create = client.post(
+            "/web/agent-migrations/tasks",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={"sourceFileName": "source.zip"},
+        )
+        invalid_cancel = client.post(
+            "/web/cancel-deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={},
         )
 
     assert viewer.status_code == 403
     assert developer.status_code == 200
+    assert create.status_code == 503
+    assert invalid_cancel.status_code == 400
+
+
+def test_migration_capabilities_reuse_the_shared_devenv_client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.tools.client import AgentkitToolsClient
+
+    from veadk.cli.frontend_skill_creator import _sandbox_model_config
+
+    _, base_url = _sandbox_model_config("volcengine")
+    monkeypatch.setenv("SANDBOX_DEV", "tool-dev")
+    monkeypatch.setattr(
+        AgentkitToolsClient,
+        "get_tool",
+        lambda _self, _request: SimpleNamespace(
+            tool_type="DevEnv",
+            status="Ready",
+            image_url="",
+            envs=[
+                SimpleNamespace(key="CODEX_MODEL", value="model"),
+                SimpleNamespace(key="CODEX_API_KEY", value="secret"),
+                SimpleNamespace(key="CODEX_BASE_URL", value=base_url),
+            ],
+        ),
+    )
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        configured = client.get(
+            "/web/agent-migrations/capabilities",
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert configured.status_code == 200
+    assert configured.json()["enabled"] is True
+
+    missing_credentials_app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+    )
+    monkeypatch.delenv("VOLCENGINE_ACCESS_KEY")
+    monkeypatch.delenv("VOLCENGINE_SECRET_KEY")
+
+    with TestClient(missing_credentials_app) as client:
+        unavailable = client.get(
+            "/web/agent-migrations/capabilities",
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert unavailable.status_code == 200
+    assert unavailable.json()["enabled"] is False
 
 
 def test_invalid_code_package_deploy_removes_temporary_source(
@@ -774,6 +915,7 @@ def test_migration_deployment_materializes_owned_session_source_server_side(
     tmp_path: Path,
 ) -> None:
     from frontend.server.migration.service import MigrationService
+    from veadk.config import veadk_environments
 
     captured_config: dict[str, Any] = {}
     materialized: dict[str, str] = {}
@@ -811,6 +953,17 @@ def test_migration_deployment_materializes_owned_session_source_server_side(
 
     monkeypatch.setattr(MigrationService, "materialize_deployment", materialize)
     monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    monkeypatch.setitem(
+        veadk_environments,
+        "MODEL_AGENT_NAME",
+        "seed-2-0-lite-260228",
+    )
+    monkeypatch.setitem(
+        veadk_environments,
+        "MODEL_AGENT_API_BASE",
+        "https://ark.ap-southeast.bytepluses.com/api/v3",
+    )
+    monkeypatch.setitem(veadk_environments, "MODEL_AGENT_API_KEY", "test-model-key")
     app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
 
     with (
@@ -822,6 +975,14 @@ def test_migration_deployment_materializes_owned_session_source_server_side(
             json={
                 "name": "migrated-agent",
                 "migrationTaskId": "migration-v1-" + "1" * 32,
+                "envs": [
+                    {"key": "MODEL_AGENT_NAME", "value": "seed-2-0-lite-260228"},
+                    {
+                        "key": "MODEL_AGENT_API_BASE",
+                        "value": "https://ark.ap-southeast.bytepluses.com/api/v3",
+                    },
+                    {"key": "MODEL_NAME", "value": "seed-2-0-lite-260228"},
+                ],
                 "files": [
                     {
                         "path": "browser.py",
@@ -846,6 +1007,54 @@ def test_migration_deployment_materializes_owned_session_source_server_side(
         "owner_id": "developer",
     }
     assert captured_config["common"]["entry_point"] == "runtime/migrated.py"
+    runtime_envs = captured_config["launch_types"]["cloud"]["runtime_envs"]
+    assert runtime_envs["MODEL_AGENT_NAME"] == "doubao-seed-2-1-pro-260628"
+    assert runtime_envs["MODEL_NAME"] == "doubao-seed-2-1-pro-260628"
+    assert runtime_envs["MODEL_AGENT_API_BASE"] == (
+        "https://ark.cn-beijing.volces.com/api/v3"
+    )
+
+
+def test_migration_deployment_rejection_removes_temporary_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from frontend.server.migration.service import MigrationError, MigrationService
+
+    temporary_source = tmp_path / "rejected-migration"
+
+    def make_temporary_source(*, prefix: str) -> str:
+        assert prefix.startswith("agentkit_deploy_")
+        temporary_source.mkdir()
+        return str(temporary_source)
+
+    def reject(*_args: object, **_kwargs: object) -> str:
+        raise MigrationError(
+            "MIGRATION_ARTIFACT_NOT_READY",
+            "artifact not ready",
+            status_code=409,
+        )
+
+    monkeypatch.setattr("tempfile.mkdtemp", make_temporary_source)
+    monkeypatch.setattr(MigrationService, "materialize_deployment", reject)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "migrated-agent",
+                "migrationTaskId": "migration-v1-" + "1" * 32,
+                "files": [],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+                "createEvaluationSets": False,
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "artifact not ready"
+    assert not temporary_source.exists()
 
 
 @pytest.mark.parametrize(
@@ -2392,6 +2601,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         SimpleNamespace(key="MODEL_AGENT_API_KEY", value="old-raw-model-key"),
         SimpleNamespace(key="MODEL_AGENT_API_KEY_ID", value="old-key-id"),
         SimpleNamespace(key="MODEL_AGENT_API_KEY_NAME", value="old-key-name"),
+        SimpleNamespace(key="VEADK_DISABLE_EXPIRE_AT", value="true"),
     ]
     captured_config: dict[str, Any] = {}
     get_calls = 0
@@ -2593,6 +2803,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert resolved_model_keys[0]["api_key_id"] == "new-key-id"
     assert resolved_model_keys[0]["api_key_name"] == "new-key-name"
     assert resolved_model_keys[0]["cloud_provider"] == provider
+    assert "VEADK_DISABLE_EXPIRE_AT" not in cloud["runtime_envs"]
     assert "runtime_network" not in cloud
     if has_resource_tags:
         assert cloud["tos_bucket"] == "tagged-bucket"
@@ -2714,6 +2925,7 @@ def test_new_deployment_only_updates_non_default_instance_range(
     }
     assert captured_config["launch_types"]["cloud"]["runtime_auth_type"] == ("key_auth")
     runtime_envs = captured_config["launch_types"]["cloud"]["runtime_envs"]
+    assert "VEADK_DISABLE_EXPIRE_AT" not in runtime_envs
     assert "OTEL_SDK_DISABLED" not in runtime_envs
     assert "ENABLE_APMPLUS" not in runtime_envs
     assert "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY" not in runtime_envs
@@ -2727,6 +2939,32 @@ def test_new_deployment_only_updates_non_default_instance_range(
         assert request.min_instance == min_instance
         assert request.max_instance == max_instance
         assert request.release_enable is True
+
+
+def test_deployment_rejects_internal_runtime_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "demo-agent",
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+                "envs": [
+                    {"key": "VEADK_DISABLE_EXPIRE_AT", "value": "true"},
+                ],
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Reserved runtime environment variable: VEADK_DISABLE_EXPIRE_AT"
+    )
 
 
 @pytest.mark.parametrize(

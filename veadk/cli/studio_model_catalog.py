@@ -24,7 +24,7 @@ BYTEPLUS_MODELARK_BASE_URL = "https://ark.ap-southeast.bytepluses.com/api/v3"
 SUPPORTED_CLOUD_PROVIDERS = frozenset({"volcengine", "byteplus"})
 
 VOLCENGINE_STUDIO_AGENT_MODEL_NAME = "doubao-seed-2-1-pro-260628"
-BYTEPLUS_STUDIO_AGENT_MODEL_NAME = "seed-2-0-lite-260228"
+BYTEPLUS_STUDIO_AGENT_MODEL_NAME = "dola-seed-2-1-turbo-260628"
 
 VOLCENGINE_GENERATED_AGENT_MODEL_NAME = "doubao-seed-1-6-250615"
 BYTEPLUS_GENERATED_AGENT_MODEL_NAME = BYTEPLUS_STUDIO_AGENT_MODEL_NAME
@@ -84,7 +84,7 @@ BYTEPLUS_MODELARK_MODEL_IDS = frozenset(
 )
 
 BYTEPLUS_SKILL_CREATOR_MODELS = (
-    ("a", BYTEPLUS_STUDIO_AGENT_MODEL_NAME, "Seed 2.0 Lite"),
+    ("a", BYTEPLUS_STUDIO_AGENT_MODEL_NAME, "Dola Seed 2.1 Turbo"),
     ("b", "deepseek-v4-flash-260425", "DeepSeek V4 Flash"),
 )
 

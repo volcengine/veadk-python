@@ -24,7 +24,11 @@ from fastapi import HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
-from .models import ConfirmMigrationBody, CreateMigrationTaskBody
+from .models import (
+    ConfirmMigrationBody,
+    CreateMigrationTaskBody,
+    SubmitAnalysisAnswersBody,
+)
 from .service import (
     MIGRATION_UPLOAD_MAX_BYTES,
     MigrationError,
@@ -86,12 +90,12 @@ def mount_migration_routes(
                 detail=internal.detail(),
             ) from error
 
-    @app.get("/web/migrations/capabilities")
+    @app.get("/web/agent-migrations/capabilities")
     async def capabilities(request: Request) -> dict[str, object]:
         owner_resolver(request)
         return await invoke("capabilities", service.capabilities)
 
-    @app.get("/web/migrations/tasks")
+    @app.get("/web/agent-migrations/tasks")
     async def list_tasks(request: Request) -> dict[str, list[dict[str, object]]]:
         owner_id = owner_resolver(request)
         return await invoke(
@@ -99,7 +103,7 @@ def mount_migration_routes(
             lambda: service.list_tasks(owner_id),
         )
 
-    @app.post("/web/migrations/tasks")
+    @app.post("/web/agent-migrations/tasks")
     async def create_task(
         body: CreateMigrationTaskBody,
         request: Request,
@@ -111,7 +115,7 @@ def mount_migration_routes(
             lambda: service.create_task(body, owner_id, creator_name),
         )
 
-    @app.put("/web/migrations/tasks/{task_id}/source")
+    @app.put("/web/agent-migrations/tasks/{task_id}/source")
     async def upload_source(
         task_id: str,
         request: Request,
@@ -172,7 +176,7 @@ def mount_migration_routes(
             task_id=task_id,
         )
 
-    @app.get("/web/migrations/tasks/{task_id}")
+    @app.get("/web/agent-migrations/tasks/{task_id}")
     async def get_task(
         task_id: str,
         request: Request,
@@ -184,7 +188,20 @@ def mount_migration_routes(
             task_id=task_id,
         )
 
-    @app.post("/web/migrations/tasks/{task_id}/confirm")
+    @app.post("/web/agent-migrations/tasks/{task_id}/answers")
+    async def submit_answers(
+        task_id: str,
+        body: SubmitAnalysisAnswersBody,
+        request: Request,
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        return await invoke(
+            "submit_answers",
+            lambda: service.submit_answers(task_id, owner_id, body),
+            task_id=task_id,
+        )
+
+    @app.post("/web/agent-migrations/tasks/{task_id}/confirm")
     async def confirm(
         task_id: str,
         body: ConfirmMigrationBody,
@@ -197,7 +214,7 @@ def mount_migration_routes(
             task_id=task_id,
         )
 
-    @app.post("/web/migrations/tasks/{task_id}/stop")
+    @app.post("/web/agent-migrations/tasks/{task_id}/stop")
     async def stop(
         task_id: str,
         request: Request,
@@ -209,7 +226,7 @@ def mount_migration_routes(
             task_id=task_id,
         )
 
-    @app.get("/web/migrations/tasks/{task_id}/artifact")
+    @app.get("/web/agent-migrations/tasks/{task_id}/artifact")
     async def artifact(
         task_id: str,
         request: Request,
@@ -221,7 +238,7 @@ def mount_migration_routes(
             task_id=task_id,
         )
 
-    @app.get("/web/migrations/tasks/{task_id}/download")
+    @app.get("/web/agent-migrations/tasks/{task_id}/download")
     async def download(
         task_id: str,
         request: Request,
@@ -241,7 +258,7 @@ def mount_migration_routes(
             },
         )
 
-    @app.get("/web/migrations/tasks/{task_id}/artifact/file")
+    @app.get("/web/agent-migrations/tasks/{task_id}/artifact/file")
     async def preview_file(
         task_id: str,
         request: Request,
@@ -259,7 +276,7 @@ def mount_migration_routes(
             headers={"Cache-Control": "no-store"},
         )
 
-    @app.delete("/web/migrations/tasks/{task_id}")
+    @app.delete("/web/agent-migrations/tasks/{task_id}")
     async def delete(
         task_id: str,
         request: Request,

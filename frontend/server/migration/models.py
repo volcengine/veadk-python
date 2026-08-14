@@ -45,9 +45,13 @@ STRUCTURED_MIGRATION_FRAMEWORKS: frozenset[str] = frozenset(
     {"langchain", "langgraph", "adk", "strands", "agentcore"}
 )
 _SOURCE_FILE_NAME_RE = re.compile(r"^[^/\\\x00-\x1f]{1,255}\.zip$", re.IGNORECASE)
-_APP_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+_APP_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _TASK_ID_RE = re.compile(r"^migration-v1-[0-9a-f]{32}$")
-_ENTRY_RE = re.compile(r"^[A-Za-z0-9_./-]+\.(?:py|json)(?::[A-Za-z_][A-Za-z0-9_]*)?$")
+STRUCTURED_ENTRY_PATTERN = (
+    r"^[A-Za-z0-9_./-]+\.(?:py|json)(?::[A-Za-z_][A-Za-z0-9_]*)?$"
+)
+_ENTRY_RE = re.compile(STRUCTURED_ENTRY_PATTERN)
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def is_valid_structured_entry(value: object) -> bool:
@@ -85,9 +89,12 @@ class CreateMigrationTaskBody(BaseModel):
 class ConfirmMigrationBody(BaseModel):
     framework: MigrationFramework
     entry: str | None = Field(default=None, max_length=512)
-    app_name: str = Field(alias="appName", min_length=1, max_length=64)
+    app_name: str = Field(alias="appName", min_length=1, max_length=63)
     instruction: str = Field(default="", max_length=20_000)
-    answers: dict[str, str] = Field(default_factory=dict)
+    analysis_attempt: int = Field(alias="analysisAttempt", ge=1)
+    analysis_sha256: str = Field(alias="analysisSha256", min_length=64, max_length=64)
+    input_sha256: str = Field(alias="inputSha256", min_length=64, max_length=64)
+    boundary_confirmed: bool = Field(alias="boundaryConfirmed")
 
     model_config = {"populate_by_name": True, "extra": "forbid"}
 
@@ -96,15 +103,43 @@ class ConfirmMigrationBody(BaseModel):
         self.entry = (self.entry or "").strip() or None
         self.app_name = self.app_name.strip()
         self.instruction = self.instruction.strip()
+        self.analysis_sha256 = self.analysis_sha256.strip()
+        self.input_sha256 = self.input_sha256.strip()
+        if not _SHA256_RE.fullmatch(self.analysis_sha256) or not _SHA256_RE.fullmatch(
+            self.input_sha256
+        ):
+            raise ValueError("迁移确认引用无效")
+        if self.boundary_confirmed is not True:
+            raise ValueError("请先确认迁移边界")
         if not _APP_NAME_RE.fullmatch(self.app_name):
             raise ValueError(
-                "Agent 名称必须以字母开头，且只能包含字母、数字、下划线和连字符"
+                "Agent 名称必须为 1-63 位，只能包含小写字母、数字和连字符，"
+                "且必须以字母或数字开头和结尾"
             )
         if self.framework in STRUCTURED_MIGRATION_FRAMEWORKS:
             if not is_valid_structured_entry(self.entry):
                 raise ValueError("Structured 迁移必须确认有效的项目入口")
         elif self.entry is not None:
             raise ValueError("Dify/Any 迁移不接受 Structured 项目入口")
+        return self
+
+
+class SubmitAnalysisAnswersBody(BaseModel):
+    analysis_attempt: int = Field(alias="analysisAttempt", ge=1)
+    analysis_sha256: str = Field(alias="analysisSha256", min_length=64, max_length=64)
+    input_sha256: str = Field(alias="inputSha256", min_length=64, max_length=64)
+    answers: dict[str, str]
+
+    model_config = {"populate_by_name": True, "extra": "forbid"}
+
+    @model_validator(mode="after")
+    def normalize(self) -> SubmitAnalysisAnswersBody:
+        self.analysis_sha256 = self.analysis_sha256.strip()
+        self.input_sha256 = self.input_sha256.strip()
+        if not _SHA256_RE.fullmatch(self.analysis_sha256) or not _SHA256_RE.fullmatch(
+            self.input_sha256
+        ):
+            raise ValueError("分析结果引用无效")
         if len(self.answers) > 50:
             raise ValueError("待确认问题不能超过 50 个")
         normalized_answers: dict[str, str] = {}
@@ -122,9 +157,11 @@ class ConfirmMigrationBody(BaseModel):
 
 __all__ = [
     "MIGRATION_FRAMEWORKS",
+    "STRUCTURED_ENTRY_PATTERN",
     "STRUCTURED_MIGRATION_FRAMEWORKS",
     "ConfirmMigrationBody",
     "CreateMigrationTaskBody",
     "MigrationFramework",
+    "SubmitAnalysisAnswersBody",
     "is_valid_structured_entry",
 ]

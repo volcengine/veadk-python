@@ -24,7 +24,7 @@ test("exposes a typed migration API with bounded transfer requests", () => {
   assert.equal(existsSync(apiUrl), true);
   const source = readFileSync(apiUrl, "utf8");
 
-  assert.match(source, /const API_ROOT = "\/web\/migrations"/);
+  assert.match(source, /const API_ROOT = "\/web\/agent-migrations"/);
   assert.match(source, /export type MigrationFramework/);
   assert.match(source, /export interface MigrationTask/);
   assert.match(source, /export async function getMigrationCapabilities/);
@@ -68,6 +68,12 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(source, /from "\.\/MigrationIcons"/);
   assert.match(source, /const MAX_SOURCE_BYTES = 50 \* 1024 \* 1024/);
   assert.match(source, /accept="\.zip,application\/zip"/);
+  assert.match(source, /\.toLowerCase\(\)/);
+  assert.match(
+    source,
+    /\/\^\[a-z0-9\]\(\?:\[a-z0-9-\]\{0,61\}\[a-z0-9\]\)\?\$\//,
+  );
+  assert.match(source, /只能包含小写字母、数字和连字符/);
   assert.match(source, /TextShimmer/);
   assert.match(source, /listMigrationTasks/);
   assert.match(source, /getMigrationTask/);
@@ -112,8 +118,60 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
     source,
     /artifact\.files\.map\(\(file\) => \(\{[\s\S]*?content: ""/,
   );
-  assert.match(source, /Dev Sandbox 已超过 1 小时 TTL/);
+  assert.match(source, /迁移环境已过期，内容和产物无法继续访问/);
+  assert.match(source, /function taskDisplayMessage/);
+  assert.match(source, /迁移产物已生成，请查看迁移提示/);
+  assert.match(
+    source,
+    /task\.state === "failed"[\s\S]*?<p>\{task\.message\}<\/p>/,
+  );
+  assert.match(
+    source,
+    /产物可预览、下载和部署。运行效果取决于源项目和部署环境变量/,
+  );
+  assert.match(source, /产物校验未完成/);
   assert.match(source, /迁移执行中不能修改附件或迁移方式/);
+  assert.doesNotMatch(source, /const \[instruction, setInstruction\]/);
+  assert.doesNotMatch(
+    source,
+    /const \[additionalInstruction, setAdditionalInstruction\]/,
+  );
+  assert.doesNotMatch(source, /描述迁移目标、需要保留的行为和验收要求/);
+  assert.doesNotMatch(source, /补充迁移要求/);
+  assert.match(
+    source,
+    /createMigrationTask\(\{[\s\S]*?instruction: "",[\s\S]*?signal:/,
+  );
+  assert.match(
+    source,
+    /confirmMigrationTask\(\{[\s\S]*?instruction: "",[\s\S]*?analysisAttempt:/,
+  );
+  assert.doesNotMatch(
+    source,
+    /filter\(\(key\) => !key\.startsWith\("MODEL_AGENT_"\)\)/,
+  );
+  assert.match(source, /requiredSecretEnv=\{deploymentSecretEnv\}/);
+  assert.match(source, /MODEL_AGENT_API_KEY/);
+  assert.match(source, /defaultModelName\(cloudProvider\)/);
+  assert.match(source, /defaultModelApiBase\(cloudProvider\)/);
+  assert.match(
+    source,
+    /options=\{\(capability\?\.frameworks \?\? \[\]\)\.map/,
+  );
+  assert.match(source, /any: "Any（通用迁移）"/);
+  assert.match(source, /className="migration-confirm-upload-button"/);
+  assert.match(source, /\{task \? "继续上传" : "开始迁移"\}/);
+  assert.match(source, /function MigrationTransferProgress/);
+  assert.match(source, /className="migration-transfer-progress__marker"/);
+  assert.match(source, /创建迁移环境/);
+  assert.match(source, /上传项目/);
+  assert.match(source, /分析项目/);
+  assert.match(source, /role="status"/);
+  assert.match(
+    source,
+    /className="migration-main__header-actions"[\s\S]*?task\?\.canStop[\s\S]*?终止迁移/,
+  );
+  assert.doesNotMatch(source, /className="migration-running-actions"/);
   assert.match(source, /role="log"/);
   assert.match(source, /aria-live="polite"/);
   assert.match(source, /ProjectPreview/);
@@ -125,5 +183,16 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
     /@media \(max-width: 980px\)[\s\S]*?\.migration-artifact-browser\s*\{[\s\S]*?grid-template-rows:/,
   );
   assert.match(styles, /overflow-wrap:\s*anywhere/);
+  assert.match(styles, /--migration-content-width:\s*1180px/);
+  assert.match(
+    styles,
+    /\.migration-turn,[\s\S]*?\.migration-result,[\s\S]*?\{[\s\S]*?max-width:\s*var\(--migration-content-width\)/,
+  );
+  assert.match(
+    styles,
+    /\.migration-composer\s*\{[\s\S]*?var\(--migration-content-width\)/,
+  );
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(styles, /\.migration-transfer-progress__marker/);
+  assert.doesNotMatch(styles, /\.migration-transfer-progress > div > span/);
 });

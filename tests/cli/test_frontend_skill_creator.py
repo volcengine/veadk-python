@@ -407,17 +407,17 @@ def test_code_env_credential_accepts_a_provider_specific_default_model() -> None
             access_key=os.urandom(16).hex(),
             secret_key=os.urandom(24).hex(),
             provider="byteplus",
-            model_name="seed-2-0-lite-260228",
+            model_name="dola-seed-2-1-turbo-260628",
             client=client,
         )
 
     envs = {
         item.key: item.value for item in cast(list[Any], getattr(updates[0], "envs"))
     }
-    assert envs["CODEX_MODEL"] == "seed-2-0-lite-260228"
-    assert envs["MODEL_AGENT_NAME"] == "seed-2-0-lite-260228"
-    assert envs["OPENCODE_MODEL"] == "seed-2-0-lite-260228"
-    assert envs["ANTHROPIC_MODEL"] == "seed-2-0-lite-260228"
+    assert envs["CODEX_MODEL"] == "dola-seed-2-1-turbo-260628"
+    assert envs["MODEL_AGENT_NAME"] == "dola-seed-2-1-turbo-260628"
+    assert envs["OPENCODE_MODEL"] == "dola-seed-2-1-turbo-260628"
+    assert envs["ANTHROPIC_MODEL"] == "dola-seed-2-1-turbo-260628"
 
 
 def test_code_env_credential_defaults_to_byteplus_model() -> None:
@@ -442,9 +442,9 @@ def test_code_env_credential_defaults_to_byteplus_model() -> None:
     envs = {
         item.key: item.value for item in cast(list[Any], getattr(updates[0], "envs"))
     }
-    assert envs["CODEX_MODEL"] == "seed-2-0-lite-260228"
-    assert envs["OPENCODE_MODEL"] == "seed-2-0-lite-260228"
-    assert envs["ANTHROPIC_MODEL"] == "seed-2-0-lite-260228"
+    assert envs["CODEX_MODEL"] == "dola-seed-2-1-turbo-260628"
+    assert envs["OPENCODE_MODEL"] == "dola-seed-2-1-turbo-260628"
+    assert envs["ANTHROPIC_MODEL"] == "dola-seed-2-1-turbo-260628"
 
 
 def test_candidate_session_never_overrides_tool_model_credential(monkeypatch) -> None:
@@ -537,8 +537,8 @@ def test_routes_report_byteplus_skill_creator_models(monkeypatch) -> None:
     assert response.json()["models"] == [
         {
             "candidateId": "a",
-            "id": "seed-2-0-lite-260228",
-            "label": "Seed 2.0 Lite",
+            "id": "dola-seed-2-1-turbo-260628",
+            "label": "Dola Seed 2.1 Turbo",
         },
         {
             "candidateId": "b",

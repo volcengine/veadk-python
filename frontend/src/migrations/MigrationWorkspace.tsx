@@ -17,6 +17,7 @@ import {
   listMigrationTasks,
   MigrationApiError,
   stopMigrationTask,
+  submitMigrationAnalysisAnswers,
   uploadMigrationSource,
   type MigrationAnalysis,
   type MigrationArtifact,
@@ -30,6 +31,8 @@ import {
 } from "../adk/client";
 import {
   defaultCloudRegion,
+  defaultModelApiBase,
+  defaultModelName,
   type CloudProvider,
 } from "../adk/cloudProvider";
 import type { AgentProject } from "../create/project";
@@ -45,7 +48,6 @@ import {
   type DeploymentTaskUpdate,
 } from "../ui/ProjectPreview";
 import { TextShimmer } from "../ui/text-shimmer/TextShimmer";
-import { isImeCompositionEvent } from "../ui/composerKeyboard";
 import {
   BackIcon,
   CloseIcon,
@@ -53,7 +55,6 @@ import {
   DownloadIcon,
   FileIcon,
   PlusIcon,
-  SendIcon,
   UploadIcon,
 } from "./MigrationIcons";
 import "./MigrationWorkspace.css";
@@ -62,6 +63,14 @@ const MAX_SOURCE_BYTES = 50 * 1024 * 1024;
 const POLL_INTERVAL_MS = 1_200;
 const LIST_POLL_INTERVAL_MS = 5_000;
 const MAX_VISIBLE_FILES = 500;
+const SECRET_ENV_KEYS = new Set(["MODEL_AGENT_API_KEY"]);
+
+function isSecretEnvironmentKey(key: string): boolean {
+  return (
+    SECRET_ENV_KEYS.has(key) ||
+    /(?:API_KEY|SECRET|TOKEN|PASSWORD)$/.test(key)
+  );
+}
 
 const FRAMEWORK_LABELS: Record<MigrationFramework, string> = {
   langchain: "LangChain",
@@ -70,7 +79,7 @@ const FRAMEWORK_LABELS: Record<MigrationFramework, string> = {
   strands: "Strands",
   agentcore: "AgentCore",
   dify: "Dify",
-  any: "Any / 其他项目",
+  any: "Any（通用迁移）",
 };
 
 const STRUCTURED_FRAMEWORKS = new Set<MigrationFramework>([
@@ -105,6 +114,8 @@ function stateLabel(state: MigrationTask["state"]): string {
       return "待上传";
     case "analyzing":
       return "分析中";
+    case "needs_input":
+      return "待补充";
     case "analysis_ready":
       return "待确认";
     case "migrating":
@@ -128,6 +139,70 @@ function stateLabel(state: MigrationTask["state"]): string {
   }
 }
 
+function taskDisplayMessage(task: MigrationTask): string {
+  if (task.state === "partial" && task.artifact.previewReady) {
+    return "迁移产物已生成，但交付不完整，请查看迁移提示。";
+  }
+  if (
+    ["succeeded", "succeeded_with_warnings"].includes(task.state) &&
+    task.artifact.previewReady
+  ) {
+    return task.state === "succeeded_with_warnings"
+      ? "迁移产物已生成，请查看迁移提示。"
+      : "迁移产物已生成。";
+  }
+  return task.message;
+}
+
+function verificationLabel(
+  status: MigrationArtifact["verification"]["status"],
+): string {
+  switch (status) {
+    case "passed":
+      return "产物校验通过";
+    case "failed":
+      return "产物校验未通过";
+    case "degraded":
+      return "产物校验未完成";
+  }
+}
+
+function MigrationTransferProgress({
+  stage,
+}: {
+  stage: "session" | "upload" | "analysis";
+}) {
+  const stages = [
+    { id: "session", label: "创建迁移环境" },
+    { id: "upload", label: "上传项目" },
+    { id: "analysis", label: "分析项目" },
+  ] as const;
+  const activeIndex = stages.findIndex((item) => item.id === stage);
+  return (
+    <div className="migration-transfer-progress" role="status">
+      {stages.map((item, index) => (
+        <div
+          key={item.id}
+          className={
+            index < activeIndex
+              ? "is-complete"
+              : index === activeIndex
+                ? "is-active"
+                : ""
+          }
+        >
+          <span className="migration-transfer-progress__marker" aria-hidden="true" />
+          {index === activeIndex ? (
+            <TextShimmer>{item.label}</TextShimmer>
+          ) : (
+            <strong>{item.label}</strong>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function isActiveState(state: MigrationTask["state"]): boolean {
   return ["analyzing", "migrating", "validating", "packaging"].includes(state);
 }
@@ -148,17 +223,20 @@ function sourceStem(name: string): string {
 }
 
 function defaultAppName(name: string): string {
-  let value = sourceStem(name)
-    .replace(/[^A-Za-z0-9_-]+/g, "-")
+  const value = sourceStem(name)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  if (!value || !/^[A-Za-z]/.test(value)) value = `agent-${value || "migration"}`;
-  return value.slice(0, 64);
+  return (
+    (value || "agent-migration").slice(0, 63).replace(/-+$/g, "") ||
+    "agent-migration"
+  );
 }
 
 function appNameError(value: string): string {
   if (!value.trim()) return "请输入 Agent 名称";
-  if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value.trim())) {
-    return "Agent 名称必须以字母开头，且只能包含字母、数字、下划线和连字符";
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value.trim())) {
+    return "Agent 名称必须为 1-63 位，只能包含小写字母、数字和连字符，且必须以字母或数字开头和结尾";
   }
   return "";
 }
@@ -186,7 +264,7 @@ function formatDate(value: string | number): string {
 
 function remainingLabel(task: MigrationTask, now: number): string {
   const expiry = new Date(task.expiresAt).getTime();
-  if (!Number.isFinite(expiry)) return "Session TTL 为 1 小时";
+  if (!Number.isFinite(expiry)) return "迁移环境保留 1 小时";
   if (task.state === "expired" || now >= expiry) return "已过期";
   const remaining = Math.max(0, expiry - now);
   const minutes = Math.floor(remaining / 60_000);
@@ -207,9 +285,10 @@ function expireTasksAtDeadline(
     return {
       ...task,
       state: "expired" as const,
-      message: "Dev Sandbox 已超过 1 小时 TTL，迁移内容和产物不可再访问。",
+      message: "迁移环境已过期，内容和产物无法继续访问。",
       canModify: false,
       canUpload: false,
+      canAnswer: false,
       canConfirm: false,
       canStop: false,
       artifact: {
@@ -308,6 +387,16 @@ function AnalysisSummary({ analysis }: { analysis: MigrationAnalysis }) {
             <p key={warning}>{warning}</p>
           ))}
         </div>
+      ) : null}
+      {analysis.assumptions.length > 0 ? (
+        <details className="migration-analysis__evidence">
+          <summary>查看关键假设</summary>
+          <ul>
+            {analysis.assumptions.map((assumption) => (
+              <li key={assumption}>{assumption}</li>
+            ))}
+          </ul>
+        </details>
       ) : null}
     </div>
   );
@@ -467,27 +556,26 @@ export function MigrationWorkspace({
   initialDeployRegion = defaultCloudRegion(cloudProvider),
 }: MigrationWorkspaceProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const confirmationTaskRef = useRef("");
+  const preparedAnalysisRef = useRef("");
   const transferAbortRef = useRef<AbortController | null>(null);
   const [capability, setCapability] =
     useState<MigrationCapabilities | null>(null);
   const [tasks, setTasks] = useState<MigrationTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [sourceFile, setSourceFile] = useState<File | null>(null);
-  const [instruction, setInstruction] = useState("");
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(true);
   const [action, setAction] = useState<
-    "create" | "upload" | "confirm" | "stop" | "download" | ""
+    "create" | "upload" | "answer" | "confirm" | "stop" | "download" | ""
   >("");
   const [error, setError] = useState("");
   const [pollError, setPollError] = useState("");
+  const [pollErrorRetryable, setPollErrorRetryable] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [framework, setFramework] =
     useState<MigrationFramework>("langchain");
   const [entry, setEntry] = useState("");
   const [appName, setAppName] = useState("");
-  const [additionalInstruction, setAdditionalInstruction] = useState("");
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [artifact, setArtifact] = useState<MigrationArtifact | null>(null);
   const [artifactError, setArtifactError] = useState("");
@@ -512,11 +600,15 @@ export function MigrationWorkspace({
       if (signal?.aborted) return null;
       setTasks((current) => upsertTask(current, authoritative));
       setPollError("");
+      setPollErrorRetryable(false);
       return authoritative;
     } catch (cause) {
       if (signal?.aborted) return null;
       if (surfaceError) {
         setPollError(cause instanceof Error ? cause.message : String(cause));
+        setPollErrorRetryable(
+          cause instanceof MigrationApiError && cause.retryable,
+        );
       }
       return null;
     }
@@ -528,9 +620,13 @@ export function MigrationWorkspace({
       if (signal?.aborted) return;
       setTasks(authoritative);
       setPollError("");
+      setPollErrorRetryable(false);
     } catch (cause) {
       if (signal?.aborted) return;
       setPollError(cause instanceof Error ? cause.message : String(cause));
+      setPollErrorRetryable(
+        cause instanceof MigrationApiError && cause.retryable,
+      );
     }
   }
 
@@ -582,10 +678,15 @@ export function MigrationWorkspace({
       void listMigrationTasks(controller.signal)
         .then((nextTasks) => {
           if (!controller.signal.aborted) setTasks(nextTasks);
+          setPollError("");
+          setPollErrorRetryable(false);
         })
         .catch((cause: unknown) => {
           if (controller.signal.aborted) return;
           setPollError(cause instanceof Error ? cause.message : String(cause));
+          setPollErrorRetryable(
+            cause instanceof MigrationApiError && cause.retryable,
+          );
           if (!(cause instanceof MigrationApiError && cause.retryable)) {
             window.clearInterval(timer);
           }
@@ -607,12 +708,16 @@ export function MigrationWorkspace({
         if (controller.signal.aborted) return;
         setTasks((current) => upsertTask(current, next));
         setPollError("");
+        setPollErrorRetryable(false);
         if (isActiveState(next.state)) {
           timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
         }
       } catch (cause) {
         if (controller.signal.aborted) return;
         setPollError(cause instanceof Error ? cause.message : String(cause));
+        setPollErrorRetryable(
+          cause instanceof MigrationApiError && cause.retryable,
+        );
         if (cause instanceof MigrationApiError && cause.retryable) {
           timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
         }
@@ -628,18 +733,20 @@ export function MigrationWorkspace({
   useEffect(() => {
     if (
       !task?.analysis ||
-      task.state !== "analysis_ready" ||
-      confirmationTaskRef.current === task.id
+      !task.analysisRef ||
+      !["needs_input", "analysis_ready"].includes(task.state)
     ) {
       return;
     }
-    confirmationTaskRef.current = task.id;
+    const analysisKey = `${task.id}:${task.analysisRef.attempt}:${task.analysisRef.sha256}`;
+    if (preparedAnalysisRef.current === analysisKey) return;
+    preparedAnalysisRef.current = analysisKey;
+    setAnswers({});
+    if (task.state !== "analysis_ready") return;
     const recommended = task.analysis.recommended;
     setFramework(recommended.framework);
     setEntry(recommended.entry || "");
     setAppName(defaultAppName(task.sourceFileName));
-    setAdditionalInstruction("");
-    setAnswers({});
   }, [task]);
 
   useEffect(() => {
@@ -647,6 +754,7 @@ export function MigrationWorkspace({
     setArtifactError("");
     setArtifactErrorRetryable(false);
     setDeploymentOpen(false);
+    setDeploymentEnvValues({});
     if (!task?.artifact.previewReady) return;
     const controller = new AbortController();
     void getMigrationArtifact(task.id, controller.signal)
@@ -665,6 +773,24 @@ export function MigrationWorkspace({
       });
     return () => controller.abort();
   }, [task?.id, task?.artifact.previewReady, artifactReload]);
+
+  useEffect(() => {
+    if (!artifact) return;
+    const required = new Set(artifact.environment.required);
+    setDeploymentEnvValues((current) => {
+      const next = { ...current };
+      if (required.has("MODEL_AGENT_NAME") && !next.MODEL_AGENT_NAME?.trim()) {
+        next.MODEL_AGENT_NAME = defaultModelName(cloudProvider);
+      }
+      if (
+        required.has("MODEL_AGENT_API_BASE") &&
+        !next.MODEL_AGENT_API_BASE?.trim()
+      ) {
+        next.MODEL_AGENT_API_BASE = defaultModelApiBase(cloudProvider);
+      }
+      return next;
+    });
+  }, [artifact, cloudProvider]);
 
   function selectFile(file: File | undefined) {
     if (transferAbortRef.current) return;
@@ -715,7 +841,7 @@ export function MigrationWorkspace({
       const created = await createMigrationTask({
         taskId: createdTaskId,
         sourceFileName: sourceFile.name,
-        instruction: instruction.trim(),
+        instruction: "",
         signal: controller.signal,
       });
       if (!isCurrent()) return;
@@ -730,7 +856,6 @@ export function MigrationWorkspace({
       if (!isCurrent()) return;
       setTasks((current) => upsertTask(current, uploaded));
       setSourceFile(null);
-      setInstruction("");
     } catch (cause) {
       if (!isCurrent()) return;
       const authoritative = await reconcileTaskState(
@@ -743,7 +868,6 @@ export function MigrationWorkspace({
         setSelectedTaskId(authoritative.id);
         if (authoritative.state !== "awaiting_upload") {
           setSourceFile(null);
-          setInstruction("");
           return;
         }
       } else {
@@ -816,14 +940,42 @@ export function MigrationWorkspace({
   const confirmationNameError = appNameError(appName);
   const canConfirm = Boolean(
     task?.canConfirm &&
+      task.analysisRef &&
       !action &&
       !confirmationNameError &&
-      requiredQuestionsAnswered &&
       (!STRUCTURED_FRAMEWORKS.has(framework) || entry.trim()),
   );
+  const canSubmitAnswers = Boolean(
+    task?.canAnswer &&
+      task.analysisRef &&
+      !action &&
+      requiredQuestionsAnswered,
+  );
+
+  async function submitAnswers() {
+    if (!task?.analysisRef || !canSubmitAnswers) return;
+    setAction("answer");
+    setError("");
+    try {
+      const next = await submitMigrationAnalysisAnswers({
+        taskId: task.id,
+        analysisAttempt: task.analysisRef.attempt,
+        analysisSha256: task.analysisRef.sha256,
+        inputSha256: task.analysisRef.inputSha256,
+        answers,
+      });
+      setTasks((current) => upsertTask(current, next));
+    } catch (cause) {
+      const authoritative = await reconcileTaskState(task.id);
+      if (authoritative && authoritative.state !== "needs_input") return;
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAction("");
+    }
+  }
 
   async function confirmMigration() {
-    if (!task || !canConfirm) return;
+    if (!task?.analysisRef || !canConfirm) return;
     setAction("confirm");
     setError("");
     try {
@@ -832,8 +984,10 @@ export function MigrationWorkspace({
         framework,
         entry: STRUCTURED_FRAMEWORKS.has(framework) ? entry.trim() : undefined,
         appName: appName.trim(),
-        instruction: additionalInstruction.trim(),
-        answers,
+        instruction: "",
+        analysisAttempt: task.analysisRef.attempt,
+        analysisSha256: task.analysisRef.sha256,
+        inputSha256: task.analysisRef.inputSha256,
       });
       setTasks((current) => upsertTask(current, next));
     } catch (cause) {
@@ -855,7 +1009,7 @@ export function MigrationWorkspace({
       setStopConfirmOpen(false);
     } catch (cause) {
       const authoritative = await reconcileTaskState(task.id);
-      if (authoritative && !isActiveState(authoritative.state)) {
+      if (authoritative && !authoritative.canStop) {
         setStopConfirmOpen(false);
         return;
       }
@@ -881,9 +1035,9 @@ export function MigrationWorkspace({
   function startNewMigration() {
     setSelectedTaskId("");
     setSourceFile(null);
-    setInstruction("");
     setError("");
     setPollError("");
+    setPollErrorRetryable(false);
     setArtifact(null);
     setArtifactError("");
     setArtifactErrorRetryable(false);
@@ -904,10 +1058,15 @@ export function MigrationWorkspace({
         ],
       }
     : null;
+  const deploymentSecretEnv = artifact
+    ? artifact.environment.required
+        .filter(isSecretEnvironmentKey)
+        .map((key) => ({ key, label: key }))
+    : [];
   const deploymentEnv: EnvVar[] = artifact
     ? [
         ...artifact.environment.required
-          .filter((key) => !key.startsWith("MODEL_AGENT_"))
+          .filter((key) => !isSecretEnvironmentKey(key))
           .map((key) => ({
             key,
             required: true,
@@ -971,6 +1130,7 @@ export function MigrationWorkspace({
           deployRegion={deployRegion}
           onDeployRegionChange={setDeployRegion}
           deploymentEnv={deploymentEnv}
+          requiredSecretEnv={deploymentSecretEnv}
           deploymentEnvValues={deploymentEnvValues}
           onDeploymentEnvChange={(key, value) =>
             setDeploymentEnvValues((current) => ({ ...current, [key]: value }))
@@ -1052,6 +1212,7 @@ export function MigrationWorkspace({
                     setSelectedTaskId(item.id);
                     setError("");
                     setPollError("");
+                    setPollErrorRetryable(false);
                   }}
                 >
                   <span>{sourceStem(item.sourceFileName)}</span>
@@ -1073,12 +1234,24 @@ export function MigrationWorkspace({
               </h2>
               <p>
                 {task
-                  ? task.message
+                  ? taskDisplayMessage(task)
                   : "上传本地项目 ZIP，Codex 将先进行只读分析，再由你确认迁移方式。"}
               </p>
             </div>
             {task ? (
-              <span className="migration-ttl">{remainingLabel(task, now)}</span>
+              <div className="migration-main__header-actions">
+                {task?.canStop ? (
+                  <button
+                    type="button"
+                    className="migration-stop-button"
+                    onClick={() => setStopConfirmOpen(true)}
+                    disabled={Boolean(action)}
+                  >
+                    {action === "stop" ? "正在终止…" : "终止迁移"}
+                  </button>
+                ) : null}
+                <span className="migration-ttl">{remainingLabel(task, now)}</span>
+              </div>
             ) : null}
           </header>
 
@@ -1091,16 +1264,21 @@ export function MigrationWorkspace({
           ) : null}
 
           {!task ? (
-            <article className="migration-turn is-assistant">
-              <div className="migration-assistant-mark">AI</div>
-              <div>
-                <p>
-                  请提供本地 ZIP 和迁移目标。项目上传后，我会先识别框架、入口和迁移边界，
-                  不会在你确认前执行迁移。
-                </p>
-                <small>仅支持本地 ZIP，最大 50 MiB；Session 从创建起保留 1 小时。</small>
-              </div>
-            </article>
+            <>
+              <article className="migration-turn is-assistant">
+                <div className="migration-assistant-mark">AI</div>
+                <div>
+                  <p>
+                    请提供本地项目 ZIP。上传后我会识别框架、入口和迁移边界，
+                    并在执行实际迁移前请你确认迁移方式。
+                  </p>
+                  <small>仅支持本地 ZIP，最大 50 MiB；迁移环境从创建起保留 1 小时。</small>
+                </div>
+              </article>
+              {action === "create" ? (
+                <MigrationTransferProgress stage="session" />
+              ) : null}
+            </>
           ) : (
             <>
               <article className="migration-turn is-user">
@@ -1116,12 +1294,51 @@ export function MigrationWorkspace({
               <article className="migration-turn is-assistant">
                 <div className="migration-assistant-mark">AI</div>
                 <div className="migration-assistant-content">
-                  {isActiveState(task.state) ? (
+                  {action === "upload" ? (
                     <>
-                      <TextShimmer>{task.message}</TextShimmer>
+                      <MigrationTransferProgress stage="upload" />
+                      <p className="migration-running-note">
+                        ZIP 上传完成后将自动开始只读分析。
+                      </p>
+                    </>
+                  ) : task.state === "analyzing" ? (
+                    <>
+                      <MigrationTransferProgress stage="analysis" />
+                      <p className="migration-running-note">
+                        Codex 正在识别框架、入口和迁移边界，不会执行实际迁移。
+                      </p>
+                    </>
+                  ) : isActiveState(task.state) ? (
+                    <>
+                      <TextShimmer>{taskDisplayMessage(task)}</TextShimmer>
                       <p className="migration-running-note">
                         迁移执行中不能修改附件或迁移方式。你可以等待当前任务结束，或主动终止。
                       </p>
+                    </>
+                  ) : task.state === "needs_input" && task.analysis ? (
+                    <>
+                      <p>{task.analysis.summary}</p>
+                      <p>
+                        只读分析已暂停。请仅回答下面列出的问题，提交后会在同一
+                        迁移环境中重新分析，不会开始实际迁移。
+                      </p>
+                      {task.analysis.frameworks[0]?.evidence.length ? (
+                        <details className="migration-analysis__evidence">
+                          <summary>查看源码证据</summary>
+                          <ul>
+                            {task.analysis.frameworks.flatMap((candidate) =>
+                              candidate.evidence.map((item) => (
+                                <li
+                                  key={`${candidate.id}:${item.path}:${item.line}`}
+                                >
+                                  <code>{item.path}:{item.line}</code>
+                                  <span>{item.reason}</span>
+                                </li>
+                              )),
+                            )}
+                          </ul>
+                        </details>
+                      ) : null}
                     </>
                   ) : task.state === "analysis_ready" && task.analysis ? (
                     <>
@@ -1129,10 +1346,10 @@ export function MigrationWorkspace({
                       <AnalysisSummary analysis={task.analysis} />
                     </>
                   ) : task.state === "awaiting_upload" ? (
-                    <p>Session 已创建，请重新选择本地 ZIP 继续上传。</p>
+                    <p>迁移环境已创建，请重新选择本地 ZIP 继续上传。</p>
                   ) : task.state === "expired" ? (
                     <div className="migration-expired">
-                      <strong>Dev Sandbox 已超过 1 小时 TTL</strong>
+                      <strong>迁移环境已过期</strong>
                       <p>
                         迁移内容和产物已无法预览、下载或部署。如已完成 Runtime 部署，可返回智能体页面继续使用。
                       </p>
@@ -1140,17 +1357,61 @@ export function MigrationWorkspace({
                   ) : task.state === "failed" ? (
                     <div className="migration-system-state is-error">
                       <strong>迁移未完成</strong>
-                      <p>{task.error?.message || task.message}</p>
+                      <p>{task.message}</p>
                     </div>
                   ) : task.state === "cancelled" ? (
                     <p>当前迁移已终止。你可以新建迁移并重新上传项目。</p>
                   ) : (
-                    <p>{task.message}</p>
+                    <p>{taskDisplayMessage(task)}</p>
                   )}
                 </div>
               </article>
             </>
           )}
+
+          {task?.state === "needs_input" && task.analysis ? (
+            <section
+              className="migration-confirmation"
+              aria-label="补充项目分析信息"
+            >
+              <div className="migration-confirmation__heading">
+                <strong>补充分析所需信息</strong>
+                <span>附件保持锁定，提交后仅继续只读分析</span>
+              </div>
+              {task.analysis.questions.map((question) => (
+                <label className="migration-field" key={question.id}>
+                  <span>
+                    {question.prompt}
+                    {question.required ? <b aria-hidden="true">*</b> : null}
+                  </span>
+                  <textarea
+                    value={answers[question.id] || ""}
+                    maxLength={4_000}
+                    required={question.required}
+                    aria-required={question.required}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      setAnswers((current) => ({
+                        ...current,
+                        [question.id]: value,
+                      }));
+                    }}
+                    disabled={Boolean(action)}
+                  />
+                </label>
+              ))}
+              <div className="migration-confirmation__actions">
+                <button
+                  type="button"
+                  className="migration-primary-button"
+                  onClick={() => void submitAnswers()}
+                  disabled={!canSubmitAnswers}
+                >
+                  {action === "answer" ? "正在继续分析…" : "提交并继续分析"}
+                </button>
+              </div>
+            </section>
+          ) : null}
 
           {task?.state === "analysis_ready" && task.analysis ? (
             <section
@@ -1163,7 +1424,7 @@ export function MigrationWorkspace({
               </div>
               <div className="migration-confirmation__grid">
                 <NewChatCompactSelect
-                  label="迁移框架"
+                  label="迁移方式"
                   value={framework}
                   options={(capability?.frameworks ?? []).map((item) => ({
                     value: item,
@@ -1177,7 +1438,7 @@ export function MigrationWorkspace({
                     );
                     setEntry(candidate?.value || "");
                   }}
-                  placeholder="选择迁移框架"
+                  placeholder="选择迁移方式"
                   disabled={Boolean(action)}
                 />
                 <label className="migration-field">
@@ -1187,7 +1448,7 @@ export function MigrationWorkspace({
                   <input
                     value={appName}
                     onChange={(event) => setAppName(event.currentTarget.value)}
-                    maxLength={64}
+                    maxLength={63}
                     required
                     disabled={Boolean(action)}
                     aria-invalid={Boolean(confirmationNameError)}
@@ -1225,40 +1486,9 @@ export function MigrationWorkspace({
                   )
                 ) : null}
               </div>
-              {task.analysis.questions.map((question) => (
-                <label className="migration-field" key={question.id}>
-                  <span>
-                    {question.prompt}
-                    {question.required ? <b aria-hidden="true">*</b> : null}
-                  </span>
-                  <textarea
-                    value={answers[question.id] || ""}
-                    maxLength={4_000}
-                    required={question.required}
-                    aria-required={question.required}
-                    onChange={(event) => {
-                      const value = event.currentTarget.value;
-                      setAnswers((current) => ({
-                        ...current,
-                        [question.id]: value,
-                      }));
-                    }}
-                    disabled={Boolean(action)}
-                  />
-                </label>
-              ))}
-              <label className="migration-field">
-                <span>补充迁移要求</span>
-                <textarea
-                  value={additionalInstruction}
-                  maxLength={20_000}
-                  onChange={(event) =>
-                    setAdditionalInstruction(event.currentTarget.value)
-                  }
-                  placeholder="可选：补充需要保留的行为、约束或验收要求"
-                  disabled={Boolean(action)}
-                />
-              </label>
+              <p className="migration-running-note">
+                点击“确认并开始迁移”即确认上述迁移范围、排除项和关键假设。
+              </p>
               <div className="migration-confirmation__actions">
                 <button
                   type="button"
@@ -1278,7 +1508,9 @@ export function MigrationWorkspace({
                 <div>
                   <strong>迁移产物</strong>
                   <span>
-                    产物仅在当前 Session 的 1 小时 TTL 内可预览、下载和部署。
+                    {task.artifact.deployReady
+                      ? "产物可预览、下载和部署。运行效果取决于源项目和部署环境变量；迁移环境过期后产物将无法访问。"
+                      : "产物可预览和下载，但当前交付状态不支持部署；迁移环境过期后产物将无法访问。"}
                   </span>
                 </div>
                 <div className="migration-result__actions">
@@ -1298,7 +1530,7 @@ export function MigrationWorkspace({
                     title={
                       task.artifact.deployReady
                         ? "部署迁移产物"
-                        : "当前产物未通过可部署校验"
+                        : "当前交付状态不支持部署"
                     }
                   >
                     <DeployIcon />
@@ -1329,7 +1561,7 @@ export function MigrationWorkspace({
                     <span>{artifact.files.length} 个文件</span>
                     <span>CLI {artifact.cli.version}</span>
                     <span>启动文件 {artifact.startup.module}</span>
-                    <span>校验 {artifact.verification.status}</span>
+                    <span>{verificationLabel(artifact.verification.status)}</span>
                   </div>
                   <ArtifactBrowser task={task} artifact={artifact} />
                 </>
@@ -1342,24 +1574,30 @@ export function MigrationWorkspace({
           {pollError ? (
             <div className="migration-inline-error" role="alert">
               <span>{pollError}</span>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!task) return;
-                  setPollError("");
-                  void getMigrationTask(task.id)
-                    .then((next) =>
-                      setTasks((current) => upsertTask(current, next)),
-                    )
-                    .catch((cause: unknown) =>
-                      setPollError(
-                        cause instanceof Error ? cause.message : String(cause),
-                      ),
-                    );
-                }}
-              >
-                刷新状态
-              </button>
+              {pollErrorRetryable ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!task) return;
+                    setPollError("");
+                    setPollErrorRetryable(false);
+                    void getMigrationTask(task.id)
+                      .then((next) =>
+                        setTasks((current) => upsertTask(current, next)),
+                      )
+                      .catch((cause: unknown) => {
+                        setPollError(
+                          cause instanceof Error ? cause.message : String(cause),
+                        );
+                        setPollErrorRetryable(
+                          cause instanceof MigrationApiError && cause.retryable,
+                        );
+                      });
+                  }}
+                >
+                  刷新状态
+                </button>
+              ) : null}
             </div>
           ) : null}
           {error ? (
@@ -1401,43 +1639,25 @@ export function MigrationWorkspace({
                   selectFile(event.dataTransfer.files?.[0]);
                 }}
               >
-              {composerFile ? (
-                <div className="migration-composer__file">
-                  <FileIcon />
-                  <span>{composerFile.name}</span>
-                  <small>{formatBytes(composerFile.size)}</small>
-                  <button
-                    type="button"
-                    onClick={() => setSourceFile(null)}
-                    aria-label="移除项目 ZIP"
-                    disabled={composerBusy}
-                  >
-                    <CloseIcon />
-                  </button>
-                </div>
-              ) : null}
-              {!task ? (
-                <textarea
-                  value={instruction}
-                  maxLength={20_000}
-                  onChange={(event) => setInstruction(event.currentTarget.value)}
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === "Enter" &&
-                      !event.shiftKey &&
-                      !isImeCompositionEvent(event.nativeEvent) &&
-                      sourceFile
-                    ) {
-                      event.preventDefault();
-                      void createAndUpload();
-                    }
-                  }}
-                  placeholder="描述迁移目标、需要保留的行为和验收要求"
-                  disabled={composerBusy}
-                />
-              ) : (
-                <p>重新选择项目 ZIP 后继续上传到当前 Session。</p>
-              )}
+              <div className="migration-composer__content">
+                {composerFile ? (
+                  <div className="migration-composer__file">
+                    <FileIcon />
+                    <span>{composerFile.name}</span>
+                    <small>{formatBytes(composerFile.size)}</small>
+                    <button
+                      type="button"
+                      onClick={() => setSourceFile(null)}
+                      aria-label="移除项目 ZIP"
+                      disabled={composerBusy}
+                    >
+                      <CloseIcon />
+                    </button>
+                  </div>
+                ) : (
+                  <p>{task ? "重新选择项目 ZIP" : "选择或拖入本地项目 ZIP"}</p>
+                )}
+              </div>
               <div className="migration-composer__actions">
                 <button
                   type="button"
@@ -1450,15 +1670,13 @@ export function MigrationWorkspace({
                 </button>
                 <button
                   type="button"
-                  className="migration-send-button"
+                  className="migration-confirm-upload-button"
                   onClick={() =>
                     void (task ? uploadExistingTask() : createAndUpload())
                   }
                   disabled={!sourceFile || composerBusy}
-                  aria-label={task ? "上传并开始分析" : "创建迁移会话"}
-                  title={task ? "上传并开始分析" : "创建迁移会话"}
                 >
-                  <SendIcon />
+                  {task ? "继续上传" : "开始迁移"}
                 </button>
               </div>
               <input
@@ -1471,18 +1689,8 @@ export function MigrationWorkspace({
               />
               </div>
               <p>
-                Session 从创建完成起保留 1 小时，过期后产物无法预览、下载或部署。
+                迁移环境从创建完成起保留 1 小时，过期后产物无法预览、下载或部署。
               </p>
-            </div>
-          ) : task?.canStop ? (
-            <div className="migration-running-actions">
-              <button
-                type="button"
-                onClick={() => setStopConfirmOpen(true)}
-                disabled={Boolean(action)}
-              >
-                {action === "stop" ? "正在终止…" : "终止迁移"}
-              </button>
             </div>
           ) : null}
         </main>

@@ -519,7 +519,10 @@ def test_agent_model_credential_is_bound_to_tool_as_complete_env_set() -> None:
 
 
 def test_byteplus_agent_model_configuration() -> None:
-    assert studio_sandbox_agent_model_name("byteplus") == "seed-2-0-lite-260228"
+    assert (
+        studio_sandbox_agent_model_name("byteplus")
+        == "dola-seed-2-1-turbo-260628"
+    )
     assert studio_sandbox_model_base_url("byteplus") == (
         "https://ark.ap-southeast.bytepluses.com/api/v3"
     )

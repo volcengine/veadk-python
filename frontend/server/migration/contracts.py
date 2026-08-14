@@ -43,7 +43,7 @@ _SOURCE_FILE_NAME_RE = re.compile(
     r"^[^/\\\x00-\x1f\x7f]{1,255}\.zip$",
     re.IGNORECASE,
 )
-_APP_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+_APP_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _PYTHON_OBJECT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
 _ACTIVE_DELIVERY_STATES = {"migrating", "validating", "packaging"}
 _TERMINAL_DELIVERY_STATES = {
@@ -238,16 +238,19 @@ def validate_analysis_status(value: object) -> dict[str, object]:
         raise MigrationContractError("analysis status must be an object")
     _exact_keys(
         value,
-        required={"schema_version", "state", "message"},
+        required={"schema_version", "attempt", "state", "message"},
         optional={"error"},
     )
     state = value.get("state")
     if value.get("schema_version") != 1 or state not in {
+        "preparing",
         "analyzing",
+        "needs_input",
         "ready",
         "failed",
     }:
         raise MigrationContractError("invalid analysis status")
+    _bounded_integer(value.get("attempt"), minimum=0, maximum=100)
     _text(value.get("message"), allow_empty=False, maximum=4_000)
     if state == "failed":
         if "error" not in value:
@@ -270,12 +273,16 @@ def validate_confirmation(
         required={
             "schema_version",
             "task_id",
-            "source_archive_sha256",
+            "analysis_attempt",
+            "analysis_sha256",
+            "input_sha256",
+            "execution_model",
             "framework",
             "entry",
             "app_name",
             "instruction",
-            "answers",
+            "boundary_confirmed",
+            "confirmed_by",
             "confirmed_at",
         },
     )
@@ -285,8 +292,15 @@ def validate_confirmation(
         or not _TASK_ID_RE.fullmatch(expected_task_id)
     ):
         raise MigrationContractError("invalid confirmation identity")
-    _sha256(value.get("source_archive_sha256"))
+    _bounded_integer(value.get("analysis_attempt"), minimum=1, maximum=100)
+    _sha256(value.get("analysis_sha256"))
+    _sha256(value.get("input_sha256"))
     framework = _framework(value.get("framework"))
+    expected_execution_model = (
+        "structured" if framework in STRUCTURED_MIGRATION_FRAMEWORKS else "agentic"
+    )
+    if value.get("execution_model") != expected_execution_model:
+        raise MigrationContractError("invalid migration execution model")
     entry = value.get("entry")
     if framework in STRUCTURED_MIGRATION_FRAMEWORKS:
         if not is_valid_structured_entry(entry):
@@ -297,12 +311,9 @@ def validate_confirmation(
     if not isinstance(app_name, str) or not _APP_NAME_RE.fullmatch(app_name):
         raise MigrationContractError("invalid app name")
     _text(value.get("instruction"), maximum=_MAX_TEXT_LENGTH)
-    answers = value.get("answers")
-    if not isinstance(answers, dict) or len(answers) > 50:
-        raise MigrationContractError("invalid confirmation answers")
-    for key, answer in answers.items():
-        _text(key, allow_empty=False, maximum=128)
-        _text(answer, maximum=4_000)
+    if value.get("boundary_confirmed") is not True:
+        raise MigrationContractError("migration boundary was not confirmed")
+    _text(value.get("confirmed_by"), allow_empty=False, maximum=256)
     _bounded_integer(value.get("confirmed_at"), maximum=10**12)
     return {str(key): item for key, item in value.items()}
 
@@ -310,10 +321,16 @@ def validate_confirmation(
 def validate_process_exit(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         raise MigrationContractError("process exit must be an object")
-    _exact_keys(value, required={"schema_version", "exit_code"})
+    _exact_keys(
+        value,
+        required={"schema_version", "exit_code"},
+        optional={"finished_at"},
+    )
     if value.get("schema_version") != 1:
         raise MigrationContractError("unsupported process exit schema")
     _bounded_integer(value.get("exit_code"), maximum=255)
+    if "finished_at" in value:
+        _bounded_integer(value.get("finished_at"), maximum=10**12)
     return {str(key): item for key, item in value.items()}
 
 
@@ -334,17 +351,28 @@ def validate_analysis_result(value: object) -> dict[str, object]:
         value,
         required={
             "schema_version",
+            "status",
+            "attempt",
+            "input_sha256",
             "summary",
             "frameworks",
             "recommended",
             "entries",
             "boundary",
+            "assumptions",
             "questions",
             "warnings",
         },
     )
-    if value.get("schema_version") != 1:
+    status = value.get("status")
+    if value.get("schema_version") != 1 or status not in {
+        "needs_input",
+        "recommendation_ready",
+        "unsupported",
+    }:
         raise MigrationContractError("unsupported analysis schema")
+    _bounded_integer(value.get("attempt"), minimum=1, maximum=100)
+    _sha256(value.get("input_sha256"))
     _text(value.get("summary"))
 
     frameworks = value.get("frameworks")
@@ -382,12 +410,11 @@ def validate_analysis_result(value: object) -> dict[str, object]:
     _exact_keys(recommended, required={"framework", "entry", "reason"})
     recommended_framework = _framework(recommended.get("framework"))
     recommended_entry = recommended.get("entry")
-    if recommended_entry is not None:
-        if (
-            recommended_framework not in STRUCTURED_MIGRATION_FRAMEWORKS
-            or not is_valid_structured_entry(recommended_entry)
-        ):
-            raise MigrationContractError("invalid recommended entry")
+    if recommended_entry is not None and (
+        recommended_framework not in STRUCTURED_MIGRATION_FRAMEWORKS
+        or not is_valid_structured_entry(recommended_entry)
+    ):
+        raise MigrationContractError("invalid recommended entry")
     _text(recommended.get("reason"), maximum=4_000)
 
     entries = value.get("entries")
@@ -415,6 +442,7 @@ def validate_analysis_result(value: object) -> dict[str, object]:
     _exact_keys(boundary, required={"include", "exclude"})
     _string_list(boundary.get("include"), maximum_items=200)
     _string_list(boundary.get("exclude"), maximum_items=200)
+    _string_list(value.get("assumptions"), maximum_items=100)
 
     questions = value.get("questions")
     if not isinstance(questions, list) or len(questions) > 50:
@@ -436,6 +464,16 @@ def validate_analysis_result(value: object) -> dict[str, object]:
             raise MigrationContractError("invalid question")
         seen_question_ids.add(question_id)
         _text(item.get("prompt"), allow_empty=False, maximum=4_000)
+    if status == "needs_input" and (
+        not questions
+        or not any(
+            isinstance(question, dict) and question.get("required") is True
+            for question in questions
+        )
+    ):
+        raise MigrationContractError("analysis needing input has no required question")
+    if status != "needs_input" and questions:
+        raise MigrationContractError("completed analysis still has questions")
 
     _string_list(value.get("warnings"), maximum_items=100)
     return {str(key): item for key, item in value.items()}
@@ -519,6 +557,8 @@ def validate_delivery_status(
         or artifact.get("download_ready") is not True
     ):
         raise MigrationContractError("terminal delivery artifact is incomplete")
+    if state == "partial" and artifact.get("deploy_ready") is not False:
+        raise MigrationContractError("partial delivery cannot be deployed")
     if state == "failed" and (
         artifact.get("state") != "unavailable" or any(readiness) or "error" not in value
     ):
@@ -729,8 +769,8 @@ def validate_delivery_result(
 
 __all__ = [
     "MigrationContractError",
-    "validate_analysis_status",
     "validate_analysis_result",
+    "validate_analysis_status",
     "validate_confirmation",
     "validate_delivery_result",
     "validate_delivery_status",

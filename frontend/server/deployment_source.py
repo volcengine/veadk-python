@@ -16,10 +16,12 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import io
 import re
 import stat
+import tokenize
 import zipfile
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
@@ -34,6 +36,8 @@ _MAX_FILE_BYTES = 128 * 1024 * 1024
 _MAX_PATH_BYTES = 4 * 1024
 _MAX_PATH_DEPTH = 64
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_AGENT_VARIABLE_NAMES = frozenset({"agent", "root_agent"})
+_AGENT_RUNTIME_METHODS = frozenset({"run", "run_async"})
 
 
 class DeploymentSourceError(ValueError):
@@ -108,6 +112,51 @@ def _reject_path_collisions(paths: set[str]) -> None:
                 raise DeploymentSourceError(
                     f"部署文件存在文件与目录路径冲突：{parent.as_posix()}"
                 )
+
+
+def _assigned_targets(node: ast.AST) -> list[ast.AST]:
+    if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        return [target for item in targets for target in ast.walk(item)]
+    return []
+
+
+def _replaces_agent_runtime_method(node: ast.AST) -> bool:
+    for target in _assigned_targets(node):
+        if (
+            isinstance(target, ast.Attribute)
+            and target.attr in _AGENT_RUNTIME_METHODS
+            and isinstance(target.value, ast.Name)
+            and target.value.id in _AGENT_VARIABLE_NAMES
+        ):
+            return True
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "setattr"
+        and len(node.args) >= 2
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id in _AGENT_VARIABLE_NAMES
+        and isinstance(node.args[1], ast.Constant)
+        and node.args[1].value in _AGENT_RUNTIME_METHODS
+    )
+
+
+def _validate_migration_python_contract(base: Path, paths: set[str]) -> None:
+    for relative in sorted(path for path in paths if path.endswith(".py")):
+        target = _target(base, relative)
+        try:
+            with tokenize.open(target) as source:
+                tree = ast.parse(source.read(), filename=relative)
+        except (OSError, SyntaxError, UnicodeError) as error:
+            raise DeploymentSourceError(
+                f"迁移产物中的 Python 文件无法解析：{relative}"
+            ) from error
+        if any(_replaces_agent_runtime_method(node) for node in ast.walk(tree)):
+            raise DeploymentSourceError(
+                "迁移产物修改了 Agent 的运行方法，无法保证 Runtime 调用兼容性："
+                f"{relative}"
+            )
 
 
 def write_inline_source(base: Path, files: object) -> str:
@@ -215,9 +264,9 @@ def extract_migration_source(
                 target.write_bytes(content)
     except zipfile.BadZipFile as error:
         raise DeploymentSourceError("迁移产物 ZIP 格式无效。") from error
-    if seen != set(descriptors):
-        raise DeploymentSourceError("迁移产物 ZIP 与文件清单不一致。")
-    return _require_entry_point(base, entry_point)
+    entry_point = _require_entry_point(base, entry_point)
+    _validate_migration_python_contract(base, seen)
+    return entry_point
 
 
 __all__ = [

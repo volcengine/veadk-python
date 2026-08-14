@@ -44,6 +44,13 @@ from pydantic import BaseModel, Field
 
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
+from veadk.cli.studio_model_catalog import (
+    is_byteplus_model,
+    is_provider_modelark_base_url,
+    modelark_base_url,
+    provider_allows_model,
+    studio_agent_model_name,
+)
 from veadk.cli.studio_telemetry import studio_telemetry_config
 from veadk.utils.cloud_provider import (
     DEFAULT_BYTEPLUS_REGION,
@@ -124,6 +131,48 @@ _STUDIO_STORAGE_ENV_KEYS = (
     "DATABASE_TOS_REGION",
     "DATABASE_TOS_ENDPOINT",
 )
+
+
+def _adapt_migration_model_envs(
+    runtime_envs: dict[str, str],
+    provider: str,
+) -> None:
+    """Keep inherited migration model defaults on the Studio cloud provider."""
+    current_base = runtime_envs.get("MODEL_AGENT_API_BASE", "").strip()
+    other_provider = "volcengine" if provider == "byteplus" else "byteplus"
+    base_is_missing = not current_base
+    base_is_other_provider = bool(current_base) and is_provider_modelark_base_url(
+        other_provider,
+        current_base,
+    )
+    if base_is_missing or base_is_other_provider:
+        runtime_envs["MODEL_AGENT_API_BASE"] = modelark_base_url(provider)
+        runtime_envs["MODEL_AGENT_NAME"] = studio_agent_model_name(provider)
+    elif not is_provider_modelark_base_url(provider, current_base):
+        current_model = runtime_envs.get("MODEL_AGENT_NAME", "").strip()
+        if current_model and not runtime_envs.get("MODEL_NAME", "").strip():
+            runtime_envs["MODEL_NAME"] = current_model
+        return
+
+    else:
+        current_model = runtime_envs.get("MODEL_AGENT_NAME", "").strip()
+        model_is_other_provider = (
+            is_byteplus_model(current_model)
+            if provider == "volcengine"
+            else not provider_allows_model(provider, current_model)
+        )
+        if not current_model or model_is_other_provider:
+            runtime_envs["MODEL_AGENT_NAME"] = studio_agent_model_name(provider)
+
+    selected_model = runtime_envs["MODEL_AGENT_NAME"]
+    legacy_model = runtime_envs.get("MODEL_NAME", "").strip()
+    legacy_is_other_provider = (
+        is_byteplus_model(legacy_model)
+        if provider == "volcengine"
+        else not provider_allows_model(provider, legacy_model)
+    )
+    if not legacy_model or legacy_is_other_provider:
+        runtime_envs["MODEL_NAME"] = selected_model
 
 
 def _studio_storage_environment(
@@ -1842,6 +1891,7 @@ def _run_frontend_server(
             *_STUDIO_STORAGE_ENV_KEYS,
         }
     )
+    _RESERVED_RUNTIME_ENV_KEYS = frozenset({"VEADK_DISABLE_EXPIRE_AT"})
 
     def _collect_runtime_envs() -> dict[str, str]:
         """Return env vars that should be injected into a deployed runtime."""
@@ -1855,7 +1905,6 @@ def _run_frontend_server(
                 continue
             if k in _ENV_EXACT or any(k.startswith(p) for p in _ENV_PREFIXES):
                 out[str(k)] = str(v)
-        out["VEADK_DISABLE_EXPIRE_AT"] = "true"
         if provider == "byteplus":
             out["CLOUD_PROVIDER"] = "byteplus"
             out["AGENTKIT_CLOUD_PROVIDER"] = "byteplus"
@@ -3701,6 +3750,11 @@ def _run_frontend_server(
                     status_code=400,
                     detail=f"Invalid environment variable name: {key}",
                 )
+            if key in _RESERVED_RUNTIME_ENV_KEYS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Reserved runtime environment variable: {key}",
+                )
             requested_runtime_envs[key] = str(item.get("value") or "")
         extra_runtime_envs = {
             key: value
@@ -3817,13 +3871,13 @@ def _run_frontend_server(
         # Collect env vars from the deployer's environment to forward into the
         # created runtime. The AgentKit platform only injects what we pass here,
         # so we explicitly forward the VeADK/Volcengine/tool-related vars the
-        # agent needs at boot. User-provided envs (from the UI) take priority
-        # over our defaults.
+        # agent needs at boot. User-provided custom model endpoints take priority;
+        # official endpoints from the other provider are corrected below.
         runtime_envs = _collect_runtime_envs()
         if existing_runtime is not None:
             for item in getattr(existing_runtime, "envs", None) or []:
                 key = str(getattr(item, "key", "") or "").strip()
-                if key:
+                if key and key not in _RESERVED_RUNTIME_ENV_KEYS:
                     runtime_envs[key] = str(getattr(item, "value", "") or "")
         for k, v in extra_runtime_envs.items():
             runtime_envs[k] = v
@@ -3856,6 +3910,8 @@ def _run_frontend_server(
                     "set MODEL_AGENT_API_KEY before deploying.",
                     e,
                 )
+        if migration_task_id:
+            _adapt_migration_model_envs(runtime_envs, provider)
         if feishu_enabled:
             runtime_envs.update(
                 {

@@ -54,6 +54,12 @@ _BASH_OUTPUT_ROUTE = "/v1/bash/output"
 _RETRYABLE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 _SESSION_READY_ATTEMPTS = 31
 _SESSION_READY_INTERVAL_SECONDS = 2
+ANALYSIS_START_MARKER = "VEADK_MIGRATION_ANALYSIS_STARTED_V1"
+MIGRATION_START_MARKER = "VEADK_MIGRATION_EXECUTION_STARTED_V1"
+_BACKGROUND_START_MARKERS = {
+    "start_analysis": ANALYSIS_START_MARKER,
+    "start_migration": MIGRATION_START_MARKER,
+}
 _RELEASED_SESSION_STATUSES = {
     "createfailed",
     "deleted",
@@ -159,7 +165,7 @@ class MigrationGateway(Protocol):
     def delete_session(self, session: MigrationSandboxSession) -> None: ...
 
 
-def _tool_has_model_credential(tool: Any) -> bool:
+def _tool_model_capability(tool: Any) -> dict[str, object]:
     envs = {
         str(getattr(item, "key", "") or ""): str(
             getattr(item, "value", "") or ""
@@ -168,11 +174,15 @@ def _tool_has_model_credential(tool: Any) -> bool:
         if getattr(item, "key", None)
     }
     _, expected_base_url = _sandbox_model_config(cloud_provider_from_env())
-    return bool(
-        envs.get("CODEX_MODEL")
-        and envs.get("CODEX_API_KEY")
-        and envs.get("CODEX_BASE_URL", "").rstrip("/") == expected_base_url.rstrip("/")
-    )
+    return {
+        "configured": bool(
+            envs.get("CODEX_MODEL")
+            and envs.get("CODEX_API_KEY")
+            and envs.get("CODEX_BASE_URL", "").rstrip("/")
+            == expected_base_url.rstrip("/")
+        ),
+        "id": envs.get("CODEX_MODEL", ""),
+    }
 
 
 class MigrationSandboxGateway:
@@ -223,15 +233,24 @@ class MigrationSandboxGateway:
         )
 
     def capabilities(self) -> dict[str, object]:
+        provider = cloud_provider_from_env()
         if not self._tool_id:
-            return {"enabled": False, "reason": "管理员未配置 Dev Sandbox。"}
+            return {
+                "enabled": False,
+                "reason": "管理员未配置 Dev Sandbox。",
+                "provider": provider,
+                "model": {"configured": False, "id": ""},
+            }
         try:
             tool, _ = self._get_tool()
         except MigrationGatewayError:
             return {
                 "enabled": False,
                 "reason": "Dev Sandbox 暂不可用，请联系管理员检查配置。",
+                "provider": provider,
+                "model": {"configured": False, "id": ""},
             }
+        model = _tool_model_capability(tool)
         expected_image = (os.getenv(_DEVENV_IMAGE_ENV) or "").strip()
         valid_tool = (
             str(getattr(tool, "tool_type", "") or "") == _EXPECTED_TOOL_TYPE
@@ -245,13 +264,22 @@ class MigrationSandboxGateway:
             return {
                 "enabled": False,
                 "reason": "Dev Sandbox 暂不可用，请联系管理员检查配置。",
+                "provider": provider,
+                "model": model,
             }
-        if not _tool_has_model_credential(tool):
+        if not model["configured"]:
             return {
                 "enabled": False,
                 "reason": "Dev Sandbox 模型配置不可用，请重新部署 Studio。",
+                "provider": provider,
+                "model": model,
             }
-        return {"enabled": True, "reason": ""}
+        return {
+            "enabled": True,
+            "reason": "",
+            "provider": provider,
+            "model": model,
+        }
 
     @staticmethod
     def _session(
@@ -665,6 +693,7 @@ class MigrationSandboxGateway:
     ) -> dict[str, object]:
         endpoint = self._require_endpoint(session)
         deadline = time.monotonic() + timeout_seconds + 30
+        start_marker = _BACKGROUND_START_MARKERS.get(operation, "")
 
         def response_data(response: requests.Response) -> dict[str, object]:
             if response.status_code >= 400:
@@ -698,11 +727,20 @@ class MigrationSandboxGateway:
             )
             return status, exit_code
 
+        def background_launch_confirmed(
+            data: dict[str, object],
+            status: str,
+        ) -> bool:
+            if status != "running" or not start_marker:
+                return False
+            output = f"{data.get('stdout') or ''}\n{data.get('stderr') or ''}"
+            return start_marker in output
+
         try:
             response = requests.post(
                 build_bash_exec_url(endpoint),
                 json={
-                    "timeout": min(timeout_seconds, 30),
+                    "timeout": 1 if start_marker else min(timeout_seconds, 30),
                     "hard_timeout": timeout_seconds,
                     "command": command,
                 },
@@ -722,6 +760,10 @@ class MigrationSandboxGateway:
         stderr_offset = data.get("stderr_offset", 0)
 
         while status == "running":
+            if background_launch_confirmed(data, status):
+                data["status"] = "accepted"
+                data["exit_code"] = 0
+                return data
             if (
                 not session_id
                 or not command_id
@@ -803,6 +845,8 @@ class MigrationSandboxGateway:
 
 
 __all__ = [
+    "ANALYSIS_START_MARKER",
+    "MIGRATION_START_MARKER",
     "MigrationGateway",
     "MigrationGatewayError",
     "MigrationRemoteFileNotFound",
