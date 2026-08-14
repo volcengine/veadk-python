@@ -1862,10 +1862,25 @@ body {
   display: grid;
   place-items: center;
 }
-.think-icon > svg { width: 18px; height: 18px; }
-.spark { color: hsl(var(--muted-foreground)); }
-.spark.pulse { animation: pulse 1.4s ease-in-out infinite; }
-@keyframes pulse { 0%,100% { opacity: 0.45; transform: scale(0.92); } 50% { opacity: 1; transform: scale(1.08); } }
+.think-icon > svg { width: 14px; height: 15px; }
+.thinking-logo {
+  color: hsl(var(--foreground));
+  opacity: 0.56;
+  transform-origin: center;
+}
+.thinking-logo.is-active { animation: thinking-logo-breathe 1.6s ease-in-out infinite; }
+@keyframes thinking-logo-breathe {
+  0%, 100% { opacity: 0.42; transform: scale(0.97); }
+  50% { opacity: 0.72; transform: scale(1.02); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking-logo.is-active {
+    animation: none;
+    opacity: 0.56;
+    transform: none;
+  }
+}
 
 .chev {
   width: 13px;
