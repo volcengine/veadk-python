@@ -3,7 +3,7 @@ import type {
   SkillSpaceSkill,
 } from "../../create/skills/skillspace";
 
-export type NewChatMode = "agent" | "temporary";
+export type NewChatMode = "agent" | "temporary" | "deepseek-harness";
 
 export type NewChatTask = "ppt" | "image" | "video";
 

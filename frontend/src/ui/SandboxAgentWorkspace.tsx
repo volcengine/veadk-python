@@ -18,7 +18,9 @@ export function SandboxAgentWorkspace({
   const [terminalUrl, setTerminalUrl] = useState("");
   const [terminalLoading, setTerminalLoading] = useState(false);
   const [terminalError, setTerminalError] = useState("");
-  const label = workspace.kind === "openclaw" ? "OpenClaw" : "Hermes";
+  const label = workspace.kind === "deepseek-harness"
+    ? "DeepSeek Harness"
+    : workspace.kind === "openclaw" ? "OpenClaw" : "Hermes";
 
   useEffect(() => {
     setSurface("main");

@@ -268,6 +268,7 @@ class _FakeGateway:
         self.display_names: list[str] = []
         self.usernames: list[str | None] = []
         self.creator_names: list[str] = []
+        self.agent_kinds: list[str] = []
         self.deleted: list[SandboxCloudSession] = []
         self.deleted_snapshots: list[SandboxCloudSnapshot] = []
         self.thread_ids: list[str] = []
@@ -322,11 +323,13 @@ class _FakeGateway:
         display_name: str = "",
         username: str = "",
         creator_name: str = "",
+        agent_kind: str = "",
     ) -> SandboxCloudSession:
         self.created += 1
         self.tool_ids.append(tool_id)
         self.display_names.append(display_name)
         self.creator_names.append(creator_name)
+        self.agent_kinds.append(agent_kind)
         session = SandboxCloudSession(
             tool_id=tool_id,
             instance_id=f"remote-{self.created}",
@@ -340,6 +343,7 @@ class _FakeGateway:
             display_name=display_name,
             created_by=username,
             creator_name=creator_name,
+            agent_kind=agent_kind,
         )
         self.sessions[session.instance_id] = session
         return replace(session, expire_at="")
@@ -422,6 +426,7 @@ def _agent_app(
 ) -> FastAPI:
     if snapshot_tool_ids is None:
         snapshot_tool_ids = {
+            "deepseek-harness": "tool-studio-snapshot",
             "openclaw": "tool-openclaw-snapshot",
             "hermes": "tool-hermes-snapshot",
         }
@@ -442,6 +447,14 @@ def _agent_app(
     mount_sandbox_agent_routes(
         app,
         {
+            "deepseek-harness": SandboxAgentSessionService(
+                gateway,
+                kind="deepseek-harness",
+                tool_id="tool-studio",
+                snapshot_tool_id=snapshot_tool_ids.get("deepseek-harness"),
+                surface_path="/deepseek-harness/",
+                filter_agent_kind=True,
+            ),
             "openclaw": SandboxAgentSessionService(
                 gateway,
                 kind="openclaw",
@@ -547,6 +560,36 @@ def test_managed_agent_routes_create_session_and_return_card_data(
     assert deleted.json() == {"deleted": True}
     assert listed_after_delete.json() == {"sessions": []}
     assert [session.instance_id for session in gateway.deleted] == [session_id]
+
+
+def test_deepseek_harness_reuses_codex_tools_and_has_its_own_surface() -> None:
+    gateway = _FakeGateway()
+    headers = {"X-Test-User": "alice"}
+    with TestClient(_agent_app(gateway)) as client:
+        before = client.get("/web/deepseek-harness/sessions", headers=headers)
+        created = client.post(
+            "/web/deepseek-harness/sessions",
+            headers=headers,
+            json={"displayName": "DSH"},
+        )
+        listed = client.get("/web/deepseek-harness/sessions", headers=headers)
+        session_id = created.json()["sessionId"]
+        opened = client.post(
+            f"/web/deepseek-harness/sessions/{session_id}/open",
+            headers=headers,
+        )
+
+    assert before.json() == {"sessions": []}
+    assert created.status_code == 200
+    assert created.json()["toolName"] == "deepseek-harness"
+    assert created.json()["persistent"] is True
+    assert listed.json()["sessions"] == [created.json()]
+    assert opened.json()["webuiUrl"].startswith(
+        f"/web/deepseek-harness/sessions/{session_id}/surface/"
+    )
+    assert opened.json()["webuiUrl"].endswith("/deepseek-harness/")
+    assert gateway.agent_kinds == ["deepseek-harness"]
+    assert "tool-studio-snapshot" in gateway.tool_ids
 
 
 @pytest.mark.parametrize("kind", ["openclaw", "hermes"])
@@ -1659,6 +1702,7 @@ async def test_gateway_creates_session_with_username_metadata() -> None:
         "Alice Agent",
         "alice",
         "alice@example.com",
+        "deepseek-harness",
     )
 
     assert requests[0]["Metadata"] == [
@@ -1669,9 +1713,15 @@ async def test_gateway_creates_session_with_username_metadata() -> None:
             "Type": "String",
             "Value": "alice@example.com",
         },
+        {
+            "Key": "veadk_agent_kind",
+            "Type": "String",
+            "Value": "deepseek-harness",
+        },
     ]
     assert session.created_by == "alice"
     assert session.creator_name == "alice@example.com"
+    assert session.agent_kind == "deepseek-harness"
 
 
 @pytest.mark.asyncio

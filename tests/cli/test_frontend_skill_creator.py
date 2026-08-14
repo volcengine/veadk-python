@@ -385,6 +385,9 @@ def test_model_credential_is_bound_directly_to_tool(
     assert envs["EXISTING_ENV"] == "preserved"
     assert envs["CODEX_API_KEY"] == model_api_key
     assert envs["CODEX_BASE_URL"] == expected_base_url
+    assert envs["MODEL_AGENT_API_KEY"] == model_api_key
+    assert envs["MODEL_AGENT_NAME"] == envs["CODEX_MODEL"]
+    assert envs["MODEL_AGENT_BASE_URL"] == expected_base_url
     assert envs["AGENTKIT_SANDBOX_MODEL_PROVIDER"] == expected_model_provider
 
 
@@ -412,6 +415,7 @@ def test_code_env_credential_accepts_a_provider_specific_default_model() -> None
         item.key: item.value for item in cast(list[Any], getattr(updates[0], "envs"))
     }
     assert envs["CODEX_MODEL"] == "seed-2-0-lite-260228"
+    assert envs["MODEL_AGENT_NAME"] == "seed-2-0-lite-260228"
     assert envs["OPENCODE_MODEL"] == "seed-2-0-lite-260228"
     assert envs["ANTHROPIC_MODEL"] == "seed-2-0-lite-260228"
 

@@ -50,7 +50,13 @@ test("shows the requested title, search, and agent type pills", () => {
   assert.match(pageSource, /placeholder="搜索所有类型智能体名称"/);
   assert.match(pageSource, /aria-label="搜索智能体"/);
   assert.doesNotMatch(pageSource, /<span className="sr-only">搜索智能体<\/span>/);
-  for (const title of ["通用智能体", "Codex 智能体", "OpenClaw 智能体", "Hermes 智能体"]) {
+  for (const title of [
+    "通用智能体",
+    "Codex 智能体",
+    "DeepSeek Harness",
+    "OpenClaw 智能体",
+    "Hermes 智能体",
+  ]) {
     assert.match(pageSource, new RegExp(`label: "${title}"`));
   }
   assert.match(pageSource, /className="my-agent-type-pill/);
@@ -404,6 +410,7 @@ test("keeps all requested type filters without nested category sections", () => 
   assert.match(appSource, /onCreateSandboxAgent=\{openSandboxAgentCreate\}/);
   assert.match(pageSource, /AGENT_TYPES\.map/);
   assert.match(pageSource, /label: "Codex 智能体"/);
+  assert.match(pageSource, /label: "DeepSeek Harness"/);
   assert.match(pageSource, /label: "OpenClaw 智能体"/);
   assert.match(pageSource, /label: "Hermes 智能体"/);
   assert.doesNotMatch(pageSource, /AgentSection|my-agents-section|comingSoon/);
