@@ -900,6 +900,9 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     assert result.exit_code == 0, result.output
     assert len(code_tools) == 1
     assert code_tools[0]["enable_snapshot"] is True
+    assert "-codex-" in str(code_tools[0]["name"])
+    assert len(code_tools[0]["legacy_names"]) == 1
+    assert "-chat-" in str(code_tools[0]["legacy_names"][0])
     assert str(code_tools[0]["name"]).endswith("_snapshot")
     if dev_tool_id is None:
         assert len(dev_tools) == 1

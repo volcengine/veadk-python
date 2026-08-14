@@ -26,7 +26,7 @@ from veadk.utils.cloud_provider import CloudProvider
 SnapshotKind = Literal["codex", "openclaw", "hermes"]
 
 _SNAPSHOT_ENVIRONMENTS: tuple[tuple[str, SnapshotKind, str], ...] = (
-    ("SANDBOX_CHAT_CODEX_SNAPSHOT", "codex", "chat"),
+    ("SANDBOX_CHAT_CODEX_SNAPSHOT", "codex", "codex"),
     ("SANDBOX_CHAT_OPENCLAW_SNAPSHOT", "openclaw", "openclaw"),
     ("SANDBOX_CHAT_HERMES_SNAPSHOT", "hermes", "hermes"),
 )
@@ -69,18 +69,20 @@ def _provision_snapshot_tool(
         ensure_studio_code_env_tool,
         studio_sandbox_agent_model_name,
         studio_sandbox_model_base_url,
-        studio_sandbox_tool_name,
+        studio_sandbox_tool_name_candidates,
     )
 
-    tool_name = studio_sandbox_tool_name(
+    tool_names = studio_sandbox_tool_name_candidates(
         application_id,
         purpose,
         snapshot=True,
     )
+    tool_name = tool_names[0]
     model_name = studio_sandbox_agent_model_name(provider)
     if kind == "codex":
         tool_id = ensure_studio_code_env_tool(
             name=tool_name,
+            legacy_names=tool_names[1:],
             enable_snapshot=True,
             region=region,
             access_key=access_key,
