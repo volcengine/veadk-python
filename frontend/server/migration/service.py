@@ -172,34 +172,82 @@ def _activity_status(event_type: str, item: dict[str, object]) -> str:
     return "running"
 
 
-def _command_activity_title(command: str, status: str, phase: str) -> str:
-    if phase == "analysis":
-        action = "项目分析"
-        if status == "completed":
-            return f"已完成{action}步骤"
-        if status == "failed":
-            return f"{action}步骤未完成"
-        return f"正在执行{action}步骤"
+def _analysis_result_message(value: str) -> bool:
+    if not value.lstrip().startswith("{"):
+        return False
+    try:
+        candidate = json.loads(value)
+        validate_analysis_result(candidate)
+    except (MigrationContractError, ValueError):
+        return False
+    return True
+
+
+def _command_activity_action(command: str, phase: str) -> str | None:
     normalized = command.casefold()
+    if "ak migrate" in normalized:
+        return "执行 AgentKit 迁移"
+    if re.search(
+        r"(?:^|[\s;&|(/])(?:zip|tar)(?:\s|$)",
+        normalized,
+    ) or any(
+        marker in normalized
+        for marker in ("package_artifact", "package-result", "package.py", "package.sh")
+    ):
+        return "打包迁移产物"
     if any(
         marker in normalized
-        for marker in ("validate", "verify", "pytest", "compileall", " test")
+        for marker in (
+            "pip install",
+            "uv sync",
+            "npm install",
+            "pnpm install",
+            "yarn install",
+        )
     ):
-        action = "迁移校验"
-    elif any(marker in normalized for marker in ("zip ", "tar ", "package")):
-        action = "产物打包"
-    elif any(
+        return "准备项目依赖"
+    if any(marker in normalized for marker in ("compileall", "py_compile")):
+        return "检查代码语法"
+    if any(
         marker in normalized
-        for marker in ("pip install", "uv sync", "npm install", "pnpm install")
+        for marker in ("validate", "verify", "pytest", "unittest", " test")
     ):
-        action = "依赖准备"
-    else:
-        action = "迁移步骤"
+        return "验证迁移结果"
+    if "git diff" in normalized or "git status" in normalized:
+        return "检查代码改动"
+    if any(marker in normalized for marker in ("apply_patch", "<<", "tee ")):
+        return "生成迁移代码"
+    if any(marker in normalized for marker in ("mkdir ", "cp ", "mv ", "touch ")):
+        return "整理迁移文件"
+    if "docker " in normalized or "dockerfile" in normalized:
+        return "检查运行配置"
+    if re.search(
+        r"(?:^|[\s;&|(/])(?:find|fd|rg|grep|ls|tree)(?:\s|$)",
+        normalized,
+    ):
+        return "检查项目结构"
+    if re.search(
+        r"(?:^|[\s;&|(/])(?:cat|sed|head|tail|jq|yq|less)(?:\s|$)",
+        normalized,
+    ):
+        return "读取项目文件"
+    if re.search(
+        r"(?:^|[\s;&|(/])(?:python(?:\d+(?:\.\d+)*)?|node|npx|tsx|bash|sh)(?:\s|$)",
+        normalized,
+    ):
+        return "运行分析脚本" if phase == "analysis" else "运行迁移脚本"
+    return None
+
+
+def _command_activity_title(command: str, status: str, phase: str) -> str | None:
+    action = _command_activity_action(command, phase)
+    if action is None:
+        return None
     if status == "completed":
-        return f"已完成{action}"
+        return f"已{action}"
     if status == "failed":
         return f"{action}未完成"
-    return f"正在执行{action}"
+    return f"正在{action}"
 
 
 def _parse_activity_log(
@@ -247,6 +295,12 @@ def _parse_activity_log(
             raw_text = item.get("text")
             if not isinstance(raw_text, str):
                 continue
+            if (
+                phase == "analysis"
+                and item_type == "agent_message"
+                and _analysis_result_message(raw_text)
+            ):
+                continue
             detail = _redact_activity_text(raw_text)
             if not detail:
                 continue
@@ -291,16 +345,19 @@ def _parse_activity_log(
 
         if item_type == "command_execution":
             command = item.get("command")
+            title = _command_activity_title(
+                command if isinstance(command, str) else "",
+                status,
+                phase,
+            )
+            if title is None:
+                continue
             upsert(
                 {
                     "id": activity_id,
                     "kind": "command",
                     "status": status,
-                    "title": _command_activity_title(
-                        command if isinstance(command, str) else "",
-                        status,
-                        phase,
-                    ),
+                    "title": title,
                 }
             )
             continue
@@ -2935,6 +2992,27 @@ class MigrationService:
             else ""
         )
         agentic_migration = framework in {"dify", "any"}
+        if isinstance(confirmation, dict):
+            if not agentic_migration:
+                return {"available": False, "complete": False, "items": []}
+            items: list[dict[str, str]] = []
+            for attempt, path in enumerate(_MIGRATION_ACTIVITY_LOG_PATHS, start=1):
+                content = self._read(
+                    session,
+                    path,
+                    max_bytes=_MAX_ACTIVITY_LOG_BYTES,
+                    optional=True,
+                )
+                if content is not None:
+                    items.extend(
+                        _parse_activity_log(content, attempt, phase="migration")
+                    )
+            return {
+                "available": True,
+                "complete": task["state"] in _ACTIVITY_COMPLETE_STATES,
+                "items": items[-_MAX_ACTIVITY_ITEMS:],
+            }
+
         analysis_status = self._read_json(
             session,
             _ANALYSIS_STATUS_PATH,
@@ -2951,48 +3029,27 @@ class MigrationService:
                     status_code=502,
                 ) from error
             analysis_attempt = int(analysis_status["attempt"])
-        if analysis_attempt < 1 and not agentic_migration:
+        if analysis_attempt < 1:
             return {"available": False, "complete": False, "items": []}
 
         items: list[dict[str, str]] = []
-        if analysis_attempt >= 1:
-            analysis_log = self._read(
-                session,
-                (
-                    f"{MIGRATION_ROOT}/diagnostics/analysis/"
-                    f"attempt-{analysis_attempt}.log"
-                ),
-                max_bytes=_MAX_ACTIVITY_LOG_BYTES,
-                optional=True,
-            )
-            if analysis_log is not None:
-                items.extend(
-                    _parse_activity_log(
-                        analysis_log,
-                        analysis_attempt,
-                        phase="analysis",
-                    )
+        analysis_log = self._read(
+            session,
+            f"{MIGRATION_ROOT}/diagnostics/analysis/attempt-{analysis_attempt}.log",
+            max_bytes=_MAX_ACTIVITY_LOG_BYTES,
+            optional=True,
+        )
+        if analysis_log is not None:
+            items.extend(
+                _parse_activity_log(
+                    analysis_log,
+                    analysis_attempt,
+                    phase="analysis",
                 )
-        for attempt, path in enumerate(_MIGRATION_ACTIVITY_LOG_PATHS, start=1):
-            if not agentic_migration:
-                break
-            content = self._read(
-                session,
-                path,
-                max_bytes=_MAX_ACTIVITY_LOG_BYTES,
-                optional=True,
             )
-            if content is not None:
-                items.extend(_parse_activity_log(content, attempt, phase="migration"))
-        if task["state"] == "analyzing":
-            complete = False
-        elif agentic_migration:
-            complete = task["state"] in _ACTIVITY_COMPLETE_STATES
-        else:
-            complete = True
         return {
             "available": True,
-            "complete": complete,
+            "complete": task["state"] != "analyzing",
             "items": items[-_MAX_ACTIVITY_ITEMS:],
         }
 

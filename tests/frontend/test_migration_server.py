@@ -47,7 +47,9 @@ from frontend.server.migration.service import (
     MIGRATION_UPLOAD_MAX_BYTES,
     MigrationError,
     MigrationService,
+    _analysis_result_message,
     _codex_event_extractor,
+    _command_activity_title,
     validate_source_archive,
 )
 from veadk.cli.frontend_skill_creator import _sandbox_model_config
@@ -593,6 +595,19 @@ def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
     ] = (
         "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n{"
     ).encode()
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/diagnostics/analysis/attempt-1.log")] = (
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "analysis-message",
+                    "type": "agent_message",
+                    "text": "这是分析阶段的过程消息。",
+                },
+            },
+            ensure_ascii=False,
+        ).encode()
+    )
 
     activity = service.activity(task_id, "owner-1")
 
@@ -617,7 +632,7 @@ def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
             "id": "migration:1:command-1",
             "kind": "command",
             "status": "completed",
-            "title": "已完成迁移校验",
+            "title": "已验证迁移结果",
         },
         {
             "id": "migration:1:message-1",
@@ -636,6 +651,7 @@ def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
     serialized = json.dumps(activity, ensure_ascii=False)
     assert "raw-secret" not in serialized
     assert "正在分析源项目结构" in serialized
+    assert "这是分析阶段的过程消息" not in serialized
 
     with pytest.raises(MigrationError) as wrong_owner:
         service.activity(task_id, "owner-2")
@@ -742,13 +758,13 @@ def test_agentic_activity_handles_incremental_and_malformed_events() -> None:
         "id": "migration:2:package",
         "kind": "command",
         "status": "failed",
-        "title": "产物打包未完成",
+        "title": "打包迁移产物未完成",
     }
     assert next(item for item in items if item["id"] == "migration:2:install")[
         "title"
-    ] == ("正在执行依赖准备")
+    ] == ("正在准备项目依赖")
     assert next(item for item in items if item["id"] == "migration:2:3")["title"] == (
-        "已完成迁移步骤"
+        "已运行迁移脚本"
     )
     assert next(item for item in items if item["id"] == "migration:2:plan")[
         "status"
@@ -805,15 +821,46 @@ def test_analysis_activity_is_visible_before_route_confirmation() -> None:
         },
         {
             "type": "item.completed",
-            "item": {"id": "analysis-done", "type": "command_execution"},
+            "item": {
+                "id": "analysis-done",
+                "type": "command_execution",
+                "command": "rg -n 'Agent|Workflow' .",
+            },
         },
         {
             "type": "item.failed",
-            "item": {"id": "analysis-failed", "type": "command_execution"},
+            "item": {
+                "id": "analysis-failed",
+                "type": "command_execution",
+                "command": "cat pyproject.toml",
+            },
         },
         {
             "type": "item.started",
-            "item": {"id": "analysis-running", "type": "command_execution"},
+            "item": {
+                "id": "analysis-running",
+                "type": "command_execution",
+                "command": "python3 scripts/inspect_project.py",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "analysis-unknown",
+                "type": "command_execution",
+                "command": "custom-tool --run",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "analysis-result",
+                "type": "agent_message",
+                "text": json.dumps(
+                    analysis_result(framework="any", entry=None),
+                    ensure_ascii=False,
+                ),
+            },
         },
         {"type": "turn.completed"},
     ]
@@ -846,19 +893,19 @@ def test_analysis_activity_is_visible_before_route_confirmation() -> None:
                 "id": "analysis:1:analysis-done",
                 "kind": "command",
                 "status": "completed",
-                "title": "已完成项目分析步骤",
+                "title": "已检查项目结构",
             },
             {
                 "id": "analysis:1:analysis-failed",
                 "kind": "command",
                 "status": "failed",
-                "title": "项目分析步骤未完成",
+                "title": "读取项目文件未完成",
             },
             {
                 "id": "analysis:1:analysis-running",
                 "kind": "command",
                 "status": "running",
-                "title": "正在执行项目分析步骤",
+                "title": "正在运行分析脚本",
             },
             {
                 "id": "analysis:1:turn",
@@ -962,7 +1009,7 @@ def test_activity_is_unavailable_before_analysis_starts() -> None:
     }
 
 
-def test_activity_rejects_invalid_analysis_state_after_confirmation() -> None:
+def test_migration_activity_does_not_depend_on_old_analysis_state() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
     task_id, _ = create_uploaded_task(service)
@@ -974,18 +1021,19 @@ def test_activity_rejects_invalid_analysis_state_after_confirmation() -> None:
     )
     gateway.files[(task_id, f"{MIGRATION_ROOT}/control/task-status.json")] = b"{}"
 
-    with pytest.raises(MigrationError) as invalid_status:
-        service.activity(task_id, "owner-1")
-
-    assert invalid_status.value.code == "MIGRATION_ANALYSIS_STATE_INVALID"
+    invalid_status = service.activity(task_id, "owner-1")
+    assert invalid_status == {
+        "available": True,
+        "complete": False,
+        "items": [],
+    }
 
     gateway.files.pop((task_id, f"{MIGRATION_ROOT}/control/task-status.json"))
     without_analysis_status = service.activity(task_id, "owner-1")
-    assert without_analysis_status["available"] is True
-    assert without_analysis_status["complete"] is False
+    assert without_analysis_status == invalid_status
 
 
-def test_structured_activity_keeps_completed_analysis_visible() -> None:
+def test_structured_activity_stops_after_route_confirmation() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
     task_id, _ = create_uploaded_task(service)
@@ -997,10 +1045,59 @@ def test_structured_activity_keeps_completed_analysis_visible() -> None:
     )
 
     assert service.activity(task_id, "owner-1") == {
-        "available": True,
-        "complete": True,
+        "available": False,
+        "complete": False,
         "items": [],
     }
+
+
+@pytest.mark.parametrize(
+    ("command", "phase", "status", "expected"),
+    [
+        ("find . -maxdepth 3 -type f", "analysis", "completed", "已检查项目结构"),
+        ("sed -n '1,120p' agent.py", "analysis", "running", "正在读取项目文件"),
+        ("cat package.json", "analysis", "completed", "已读取项目文件"),
+        ("git diff --check", "migration", "completed", "已检查代码改动"),
+        ("apply_patch < change.diff", "migration", "completed", "已生成迁移代码"),
+        (
+            "mkdir -p output && cp agent.py output/",
+            "migration",
+            "completed",
+            "已整理迁移文件",
+        ),
+        ("docker build .", "migration", "running", "正在检查运行配置"),
+        ("python -m compileall output", "migration", "completed", "已检查代码语法"),
+        ("pnpm test", "migration", "failed", "验证迁移结果未完成"),
+        ("ak migrate any source", "migration", "running", "正在执行 AgentKit 迁移"),
+        ("tar -czf result.tar.gz output", "migration", "completed", "已打包迁移产物"),
+        ("uv sync", "migration", "running", "正在准备项目依赖"),
+        ("node scripts/migrate.mjs", "migration", "completed", "已运行迁移脚本"),
+        ("custom-tool --run", "analysis", "completed", None),
+        ("custom-tool --run", "migration", "running", None),
+    ],
+)
+def test_command_activity_titles_describe_actual_work(
+    command: str,
+    phase: str,
+    status: str,
+    expected: str | None,
+) -> None:
+    assert _command_activity_title(command, status, phase) == expected
+
+
+def test_analysis_result_message_only_matches_the_delivery_contract() -> None:
+    assert _analysis_result_message("分析仍在进行。") is False
+    assert _analysis_result_message("{not-json") is False
+    assert _analysis_result_message('{"progress":"checking"}') is False
+    assert (
+        _analysis_result_message(
+            json.dumps(
+                analysis_result(framework="any", entry=None),
+                ensure_ascii=False,
+            )
+        )
+        is True
+    )
 
 
 def test_session_uses_the_versioned_migration_protocol_and_runtime_preflight() -> None:
