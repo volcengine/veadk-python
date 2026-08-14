@@ -184,6 +184,16 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(source, /创建迁移环境/);
   assert.match(source, /上传项目/);
   assert.match(source, /分析项目/);
+  assert.match(source, /正在创建 Dev Sandbox/);
+  assert.match(
+    source,
+    /正在初始化迁移工作目录，并检查 AgentKit CLI、Codex 和迁移能力。环境就绪后将自动上传项目。/,
+  );
+  assert.match(source, /已等待 \{formatElapsedTime\(createElapsedSeconds\)\}/);
+  assert.match(
+    source,
+    /action === "create" && sourceFile[\s\S]*?migration-turn is-user[\s\S]*?sourceFile\.name/,
+  );
   assert.match(source, /role="status"/);
   assert.match(
     source,

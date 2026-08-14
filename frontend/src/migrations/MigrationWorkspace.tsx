@@ -264,6 +264,11 @@ function formatBytes(value: number): string {
   return `${(value / 1024 / 1024).toFixed(1)} MiB`;
 }
 
+function formatElapsedTime(seconds: number): string {
+  if (seconds < 60) return `${seconds} 秒`;
+  return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+}
+
 function formatDate(value: string | number): string {
   const date =
     typeof value === "number"
@@ -666,6 +671,7 @@ export function MigrationWorkspace({
   const [pollError, setPollError] = useState("");
   const [pollErrorRetryable, setPollErrorRetryable] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const [createStartedAt, setCreateStartedAt] = useState<number | null>(null);
   const [framework, setFramework] =
     useState<MigrationFramework>("langchain");
   const [entry, setEntry] = useState("");
@@ -686,6 +692,9 @@ export function MigrationWorkspace({
     Record<string, string>
   >({});
   const task = selectedTask(tasks, selectedTaskId);
+  const createElapsedSeconds = createStartedAt
+    ? Math.max(0, Math.floor((now - createStartedAt) / 1_000))
+    : 0;
   const latestActivity = activity?.items[activity.items.length - 1];
   const activityKey = [
     activity?.items.length ?? 0,
@@ -1000,6 +1009,7 @@ export function MigrationWorkspace({
       transferAbortRef.current === controller && !controller.signal.aborted;
     const createdTaskId = `migration-v1-${crypto.randomUUID().replace(/-/g, "")}`;
     setAction("create");
+    setCreateStartedAt(Date.now());
     setError("");
     try {
       const created = await createMigrationTask({
@@ -1012,6 +1022,7 @@ export function MigrationWorkspace({
       setTasks((current) => upsertTask(current, created));
       setSelectedTaskId(created.id);
       setAction("upload");
+      setCreateStartedAt(null);
       const uploaded = await uploadMigrationSource(
         created.id,
         sourceFile,
@@ -1042,6 +1053,7 @@ export function MigrationWorkspace({
     } finally {
       if (transferAbortRef.current === controller) {
         transferAbortRef.current = null;
+        setCreateStartedAt(null);
         setAction("");
       }
     }
@@ -1445,8 +1457,32 @@ export function MigrationWorkspace({
                   <small>仅支持本地 ZIP，最大 50 MiB；迁移环境从创建起保留 1 小时。</small>
                 </div>
               </article>
-              {action === "create" ? (
-                <MigrationTransferProgress stage="session" />
+              {action === "create" && sourceFile ? (
+                <>
+                  <article className="migration-turn is-user">
+                    <div className="migration-user-message">
+                      <span className="migration-file-chip">
+                        <FileIcon />
+                        <span title={sourceFile.name}>{sourceFile.name}</span>
+                      </span>
+                    </div>
+                  </article>
+                  <article className="migration-turn is-assistant">
+                    <div className="migration-assistant-mark">AI</div>
+                    <div className="migration-assistant-content">
+                      <MigrationTransferProgress stage="session" />
+                      <TextShimmer as="strong">
+                        正在创建 Dev Sandbox
+                      </TextShimmer>
+                      <p className="migration-running-note">
+                        正在初始化迁移工作目录，并检查 AgentKit CLI、Codex 和迁移能力。环境就绪后将自动上传项目。
+                      </p>
+                      <small>
+                        已等待 {formatElapsedTime(createElapsedSeconds)}
+                      </small>
+                    </div>
+                  </article>
+                </>
               ) : null}
             </>
           ) : (
