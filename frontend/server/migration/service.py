@@ -1133,6 +1133,15 @@ max_bytes = {_MAX_EXPANDED_BYTES}
 max_path_bytes = {_MAX_ARCHIVE_PATH_BYTES}
 max_depth = {_MAX_ARCHIVE_DEPTH}
 
+
+def is_macos_metadata(path):
+    return (
+        path.parts[0] == "__MACOSX"
+        or path.name == ".DS_Store"
+        or path.name.startswith("._")
+    )
+
+
 for relative in (
     "request",
     "input",
@@ -1190,12 +1199,15 @@ try:
                 raise RuntimeError("archive links are not allowed")
             target = extracting.joinpath(*path.parts)
             if info.is_dir():
-                target.mkdir(parents=True, exist_ok=True)
+                if not is_macos_metadata(path):
+                    target.mkdir(parents=True, exist_ok=True)
                 continue
             files += 1
             expanded += info.file_size
             if files > max_files or expanded > max_bytes:
                 raise RuntimeError("expanded archive exceeds limits")
+            if is_macos_metadata(path):
+                continue
             target.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(info) as source_file, target.open("wb") as output:
                 shutil.copyfileobj(source_file, output, length=1024 * 1024)

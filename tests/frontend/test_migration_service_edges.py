@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -119,6 +120,66 @@ def test_source_archive_validation_covers_size_structure_and_encryption(
     with pytest.raises(MigrationError) as encrypted:
         validate_source_archive(b"zip")
     assert_code(encrypted, "MIGRATION_SOURCE_ENCRYPTED")
+
+
+def test_source_preparation_ignores_macos_metadata_when_normalizing_project_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    content = zip_bytes(
+        {
+            "strands/": b"",
+            "strands/agent.py": b"agent = object()\n",
+            "strands/requirements.txt": b"strands-agents[openai]\n",
+            "strands/.DS_Store": b"nested metadata",
+            "strands/._agent.py": b"appledouble metadata",
+            "__MACOSX/": b"",
+            "__MACOSX/strands/._agent.py": b"resource fork",
+            ".DS_Store": b"root metadata",
+        }
+    )
+    summary = validate_source_archive(content)
+    root = tmp_path / "migration"
+    candidate = root / "input" / ".source.zip"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_bytes(content)
+    monkeypatch.setattr(service_module, "MIGRATION_ROOT", str(root))
+    monkeypatch.setattr(service_module, "_SOURCE_PATH", str(root / "input/source.zip"))
+    monkeypatch.setattr(
+        service_module,
+        "_PROJECT_PATH",
+        str(root / "workspace/source"),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "_SOURCE_STATUS_PATH",
+        str(root / "request/source.json"),
+    )
+
+    command = service_module._prepare_source_command(
+        candidate_path=str(candidate),
+        source_sha256=hashlib.sha256(content).hexdigest(),
+        source_size=len(content),
+        summary=summary,
+    )
+    completed = subprocess.run(
+        ["bash", "-c", command],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    project = root / "workspace/source"
+    assert (project / "agent.py").read_bytes() == b"agent = object()\n"
+    assert (project / "requirements.txt").read_bytes() == (b"strands-agents[openai]\n")
+    assert not (project / "strands").exists()
+    assert not (project / "__MACOSX").exists()
+    assert not list(project.rglob(".DS_Store"))
+    assert not list(project.rglob("._*"))
+    marker = json.loads((root / "request/source.json").read_text())
+    assert marker["file_count"] == summary.file_count == 6
+    assert marker["expanded_bytes"] == summary.expanded_bytes
 
 
 @pytest.mark.parametrize(
