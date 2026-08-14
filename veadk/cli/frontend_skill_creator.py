@@ -760,13 +760,11 @@ def ensure_skill_creator_model_credential(
         session_token=session_token,
     )
     model_provider, model_base_url = _sandbox_model_config(provider_id)
+    selected_model_name = model_name or (
+        BYTEPLUS_STUDIO_AGENT_MODEL_NAME if provider_id == "byteplus" else _MODELS[0][1]
+    )
     session_envs = build_exec_session_envs(
-        model_name=model_name
-        or (
-            BYTEPLUS_STUDIO_AGENT_MODEL_NAME
-            if provider_id == "byteplus"
-            else _MODELS[0][1]
-        ),
+        model_name=selected_model_name,
         model_api_key=model_api_key,
         model_provider=model_provider,
         model_base_url=model_base_url,
@@ -778,6 +776,13 @@ def ensure_skill_creator_model_credential(
     if not session_envs:
         raise SkillCreatorError("无法生成 Sandbox 模型环境变量")
     updates = {item.key: item.value for item in session_envs}
+    updates.update(
+        {
+            "MODEL_AGENT_API_KEY": model_api_key,
+            "MODEL_AGENT_NAME": selected_model_name,
+            "MODEL_AGENT_BASE_URL": model_base_url,
+        }
+    )
     if all(envs.get(key) == value for key, value in updates.items()):
         return
     envs.update(updates)

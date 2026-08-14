@@ -1,6 +1,10 @@
 import type { SVGProps } from "react";
 
-export type SandboxAgentIconKind = "codex" | "openclaw" | "hermes";
+export type SandboxAgentIconKind =
+  | "codex"
+  | "deepseek-harness"
+  | "openclaw"
+  | "hermes";
 
 export function CodexAgentIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -60,11 +64,32 @@ export function HermesAgentIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function DeepSeekHarnessAgentIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M5.2 17.2V8.1a3 3 0 0 1 3-3h7.6a3 3 0 0 1 3 3v9.1" />
+      <path d="M7.4 17.2h9.2M9 19.9h6" />
+      <path d="M9.1 9.25h5.8M9.1 12h3.1" />
+      <path d="m14.1 12.4 2 2.1M16.2 12.4l-2.1 2.1" />
+    </svg>
+  );
+}
+
 export function SandboxAgentIcon({
   kind,
   ...props
 }: SVGProps<SVGSVGElement> & { kind: SandboxAgentIconKind }) {
   if (kind === "codex") return <CodexAgentIcon {...props} />;
+  if (kind === "deepseek-harness") return <DeepSeekHarnessAgentIcon {...props} />;
   if (kind === "openclaw") return <OpenClawAgentIcon {...props} />;
   return <HermesAgentIcon {...props} />;
 }

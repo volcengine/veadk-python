@@ -1709,6 +1709,14 @@ def _run_frontend_server(
         snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,
     )
     sandbox_agent_services = {
+        "deepseek-harness": SandboxAgentSessionService(
+            sandbox_gateway,
+            kind="deepseek-harness",
+            tool_id=sandbox_chat_codex_tool_id,
+            snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,
+            surface_path="/deepseek-harness/",
+            filter_agent_kind=True,
+        ),
         "openclaw": SandboxAgentSessionService(
             sandbox_gateway,
             kind="openclaw",

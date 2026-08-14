@@ -65,6 +65,36 @@ def test_hermes_surface_rewrite_removes_private_gateway_query() -> None:
     assert "hermes-secret" not in rewritten
 
 
+def test_deepseek_harness_rewrite_routes_root_assets_and_api_through_surface() -> None:
+    prefix = "/web/deepseek-harness/sessions/session-1/surface/token-1"
+    body = (
+        b'<script src="/deepseek-harness-auth-query.js?Authorization=secret">'
+        b"</script>"
+        b'<script>const slash = "/"; const api = "/api/status";'
+        b'const ws = new WebSocket("/api/events");'
+        b'window.__DSH_BASE_PATH__ = "/deepseek-harness";</script>'
+        b'<script src="/assets/app.js"></script>'
+        b'<link href="/plugins/plugin-a/index.css" rel="stylesheet">'
+    )
+
+    rewritten = _rewrite_body(
+        body,
+        "text/html",
+        prefix,
+        "deepseek-harness",
+    ).decode()
+
+    assert 'const slash = "/"' in rewritten
+    assert f'src="{prefix}/deepseek-harness-auth-query.js"' in rewritten
+    assert f'const api = "{prefix}/api/status"' in rewritten
+    assert f'new WebSocket("{prefix}/api/events")' in rewritten
+    assert f'window.__DSH_BASE_PATH__ = "{prefix}/deepseek-harness"' in rewritten
+    assert f'src="{prefix}/assets/app.js"' in rewritten
+    assert f'href="{prefix}/plugins/plugin-a/index.css"' in rewritten
+    assert "Authorization" not in rewritten
+    assert "secret" not in rewritten
+
+
 def test_agent_surface_proxy_keeps_endpoint_auth_server_side(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -126,6 +156,66 @@ def test_agent_surface_proxy_keeps_endpoint_auth_server_side(
     )
     assert 'const base64 = "/"' in response.text
     assert 'const api = "/api/status"' in response.text
+    assert "server-secret" not in response.text
+
+
+def test_deepseek_harness_proxy_keeps_endpoint_auth_server_side(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    class _Client:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def request(self, _method: str, url: str, **_: object) -> httpx.Response:
+            requested_urls.append(url)
+            return httpx.Response(
+                200,
+                content=b'<script>fetch("/api/status")</script>',
+                headers={"content-type": "text/html"},
+            )
+
+    monkeypatch.setattr("veadk.cli.frontend_agent_proxy.httpx.AsyncClient", _Client)
+    app = FastAPI()
+
+    def _target(kind: str, session_id: str, token: str) -> SandboxProxyTarget:
+        if (kind, session_id, token) != (
+            "deepseek-harness",
+            "session-1",
+            "token-1",
+        ):
+            raise KeyError(session_id)
+        return SandboxProxyTarget(
+            endpoint=(
+                "https://sandbox.example/?faasInstanceName=instance-1"
+                "&Authorization=server-secret"
+            )
+        )
+
+    mount_agent_surface_proxy_routes(app, _target)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/deepseek-harness/sessions/session-1/surface/token-1/api/status"
+        )
+
+    assert response.status_code == 200
+    expected_url = (
+        "https://sandbox.example/api/status"
+        "?faasInstanceName=instance-1&Authorization=server-secret"
+    )
+    assert requested_urls == [expected_url]
+    expected_fetch = (
+        'fetch("/web/deepseek-harness/sessions/session-1/surface/token-1/api/status")'
+    )
+    assert expected_fetch in response.text
     assert "server-secret" not in response.text
 
 

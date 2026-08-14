@@ -103,7 +103,7 @@ export interface AgentDeployFailedProps {
   errorCode?: string;
 }
 
-export type SandboxKind = "codex" | "openclaw" | "hermes";
+export type SandboxKind = "codex" | "deepseek-harness" | "openclaw" | "hermes";
 
 export interface SandboxCreateStartedProps {
   sandboxKind: SandboxKind;
@@ -138,6 +138,7 @@ export type AgentConnectKind =
   | "runtime"
   | "local"
   | "codex"
+  | "deepseek-harness"
   | "openclaw"
   | "hermes";
 export type AgentConnectSource =
@@ -179,7 +180,7 @@ export interface AgentConnectFailedProps {
 
 export interface AgentMessageStartedProps {
   agentId: string;
-  agentKind: "runtime" | "codex" | "openclaw" | "hermes";
+  agentKind: "runtime" | "codex" | "deepseek-harness" | "openclaw" | "hermes";
   messageSource: "composer" | "a2ui_action";
   sessionState: "new" | "existing";
   sessionId?: string;

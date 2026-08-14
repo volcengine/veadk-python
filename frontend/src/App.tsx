@@ -159,7 +159,10 @@ import {
   type SandboxThreadSummary,
   type SandboxToolLaunch,
 } from "./adk/sandbox";
-import { getSandboxCapability } from "./adk/newChatCapabilities";
+import {
+  getSandboxAgentCapability,
+  getSandboxCapability,
+} from "./adk/newChatCapabilities";
 import { getSkillWorkbenchCapability } from "./ui/skill-workbench/api";
 import {
   createVideoTask,
@@ -250,14 +253,21 @@ interface NewChatCapabilitiesState {
   harnessEnabled?: boolean;
   builtinTools?: string[];
   temporaryEnabled?: boolean;
+  deepseekHarnessEnabled?: boolean;
   skillCustomizationEnabled?: boolean;
 }
 
 async function probeNewChatCapabilities(
   agentId: string,
 ): Promise<NewChatCapabilitiesState> {
-  const [sandboxResult, skillResult, harnessResult] = await Promise.allSettled([
+  const [
+    sandboxResult,
+    deepseekHarnessResult,
+    skillResult,
+    harnessResult,
+  ] = await Promise.allSettled([
     getSandboxCapability(),
+    getSandboxAgentCapability("deepseek-harness"),
     getSkillWorkbenchCapability(),
     agentId ? listSessionBuiltinTools(agentId) : Promise.resolve<string[]>([]),
   ]);
@@ -268,6 +278,9 @@ async function probeNewChatCapabilities(
     builtinTools: harnessResult.status === "fulfilled" ? harnessResult.value : [],
     temporaryEnabled:
       sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
+    deepseekHarnessEnabled:
+      deepseekHarnessResult.status === "fulfilled" &&
+      deepseekHarnessResult.value.enabled,
     skillCustomizationEnabled:
       skillResult.status === "fulfilled" && skillResult.value.enabled,
   };
@@ -2849,7 +2862,7 @@ export default function App() {
     setSandboxLaunchError("");
     if (
       !sandboxSession &&
-      newChatMode === "temporary" &&
+      newChatMode !== "agent" &&
       !sandboxLaunchFromAgents
     ) {
       setNewChatMode("agent");
@@ -2890,7 +2903,40 @@ export default function App() {
         setMyAgents(true);
         return;
       }
-      if (sandboxLaunchKind !== "codex") return;
+      if (sandboxLaunchKind !== "codex") {
+        const workspace = await sandboxClient.openAgentSession(
+          sandboxLaunchKind,
+          createdSession.id,
+          { signal: controller.signal },
+        );
+        if (sandboxLaunchAbortRef.current !== controller) return;
+        viewSidRef.current = "";
+        setSessionId("");
+        setPendingTurns([]);
+        setInput("");
+        setInvocation(emptyInvocation());
+        setNewChatMode(
+          sandboxLaunchKind === "deepseek-harness" ? "deepseek-harness" : "agent",
+        );
+        discardDraftAttachments(attachments);
+        setAttachments([]);
+        releaseAllSandboxPreviews();
+        setSandboxTurns([]);
+        setSandboxSession(null);
+        setCreateView(null);
+        setSkillCenter(false);
+        setAddAgent(false);
+        setAddMenu(false);
+        setSearchView(false);
+        setManageAgents(false);
+        setAgentDetailTarget(null);
+        setMyAgents(false);
+        setSandboxAgentDetailTarget(null);
+        setSandboxAgentWorkspace(workspace);
+        setSandboxLaunchOpen(false);
+        setSandboxLaunchState("confirm");
+        return;
+      }
       const nextSession = await sandboxClient.connectSession(createdSession.id, {
         signal: controller.signal,
       });
@@ -4998,6 +5044,8 @@ export default function App() {
                 agentName={
                   sandboxSession.toolName === "codex"
                     ? "Codex"
+                    : sandboxSession.toolName === "deepseek-harness"
+                      ? "DeepSeekHarness"
                     : sandboxSession.toolName === "openclaw"
                       ? "OpenClaw"
                       : "Hermes"
@@ -5120,6 +5168,7 @@ export default function App() {
                   ? false
                   : !userId ||
                     newChatMode === "temporary" ||
+                    newChatMode === "deepseek-harness" ||
                     (newChatWorkspaceMode === "agent" &&
                       newChatMode === "agent" &&
                       !appName) ||
@@ -5200,6 +5249,10 @@ export default function App() {
               onSkillActionChange={setNewChatSkillAction}
               onSkillTargetChange={setNewChatSkillTarget}
               temporaryEnabled={newChatCapabilitiesReady && newChatCapabilities.temporaryEnabled}
+              deepseekHarnessEnabled={
+                newChatCapabilitiesReady &&
+                newChatCapabilities.deepseekHarnessEnabled
+              }
               harnessEnabled={newChatCapabilitiesReady && newChatCapabilities.harnessEnabled}
               builtinTools={
                 newChatCapabilitiesReady ? newChatCapabilities.builtinTools : []
@@ -5210,6 +5263,16 @@ export default function App() {
                   setNewChatTask(null);
                   setNewChatMode(mode);
                   openSandboxLaunch();
+                  return;
+                }
+                if (
+                  mode === "deepseek-harness" &&
+                  !newChatCapabilities.deepseekHarnessEnabled
+                ) return;
+                if (mode === "deepseek-harness") {
+                  setNewChatTask(null);
+                  setNewChatMode(mode);
+                  openSandboxLaunch("deepseek-harness");
                   return;
                 }
                 setNewChatMode(mode);

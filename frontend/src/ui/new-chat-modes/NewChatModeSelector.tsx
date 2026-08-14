@@ -26,6 +26,26 @@ const MODES: ModeOption[] = [
   },
 ];
 
+const BUILTIN_AGENTS = [
+  {
+    label: "Codex 智能体",
+    kind: "codex",
+    value: "temporary",
+    description: "在沙箱中执行任务",
+  },
+  {
+    label: "DeepSeekHarness 智能体",
+    kind: "deepseek-harness",
+    value: "deepseek-harness",
+    description: "打开 DeepSeekHarness 工作区",
+  },
+] satisfies Array<{
+  label: string;
+  kind: SandboxAgentIconKind;
+  value: NewChatMode;
+  description: string;
+}>;
+
 const UNAVAILABLE_BUILTIN_AGENTS = [
   { label: "ArkClaw", kind: "openclaw" },
   { label: "Hermes 智能体", kind: "hermes" },
@@ -39,6 +59,7 @@ export interface NewChatModeSelectorProps {
   onChange: (value: NewChatMode) => void;
   disabled?: boolean;
   temporaryEnabled?: boolean;
+  deepseekHarnessEnabled?: boolean;
 }
 
 function ModeIcon({ mode }: { mode: NewChatMode }) {
@@ -61,25 +82,40 @@ function NestedChevron() {
   );
 }
 
+function modeIndexForValue(value: NewChatMode): number {
+  const index = MODES.findIndex((mode) => mode.value === value);
+  return index >= 0 ? index : MODES.findIndex((mode) => mode.value === "temporary");
+}
+
 export function NewChatModeSelector({
   value,
   onChange,
   disabled = false,
   temporaryEnabled,
+  deepseekHarnessEnabled,
 }: NewChatModeSelectorProps) {
   const [open, setOpen] = useState(false);
   const [builtinOpen, setBuiltinOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(() =>
-    MODES.findIndex((mode) => mode.value === value),
-  );
+  const [activeIndex, setActiveIndex] = useState(() => modeIndexForValue(value));
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const current = MODES.find((mode) => mode.value === value) ?? MODES[0];
-  const currentLabel = current.value === "temporary" ? "Codex 智能体" : current.label;
+  const current = value === "agent" ? MODES[0] : MODES[1];
+  const currentBuiltin = BUILTIN_AGENTS.find((agent) => agent.value === value);
+  const currentLabel = currentBuiltin?.label ?? current.label;
 
   function modeEnabled(mode: ModeOption): boolean | undefined {
-    if (mode.value === "temporary") return temporaryEnabled;
+    if (mode.value === "temporary") {
+      if (temporaryEnabled === true || deepseekHarnessEnabled === true) return true;
+      if (temporaryEnabled === false && deepseekHarnessEnabled === false) return false;
+      return undefined;
+    }
     return true;
+  }
+
+  function builtinEnabled(mode: NewChatMode): boolean | undefined {
+    if (mode === "temporary") return temporaryEnabled;
+    if (mode === "deepseek-harness") return deepseekHarnessEnabled;
+    return false;
   }
 
   function modeDisabled(mode: ModeOption): boolean {
@@ -126,8 +162,9 @@ export function NewChatModeSelector({
     triggerRef.current?.focus();
   }
 
-  function chooseBuiltinAgent() {
-    onChange("temporary");
+  function chooseBuiltinAgent(mode: NewChatMode) {
+    if (builtinEnabled(mode) !== true) return;
+    onChange(mode);
     setOpen(false);
     setBuiltinOpen(false);
   }
@@ -143,7 +180,7 @@ export function NewChatModeSelector({
         aria-expanded={open}
         disabled={disabled}
         onClick={() => {
-          setActiveIndex(MODES.findIndex((mode) => mode.value === value));
+          setActiveIndex(modeIndexForValue(value));
           setOpen((currentOpen) => {
             if (currentOpen) setBuiltinOpen(false);
             return !currentOpen;
@@ -200,7 +237,7 @@ export function NewChatModeSelector({
                   key={mode.value}
                   type="button"
                   role="option"
-                  aria-selected={value === mode.value}
+                  aria-selected={current.value === mode.value}
                   aria-haspopup={nested ? "menu" : undefined}
                   aria-expanded={nested ? builtinOpen : undefined}
                   aria-disabled={modeDisabled(mode)}
@@ -231,18 +268,31 @@ export function NewChatModeSelector({
 
           {builtinOpen ? (
             <div className="new-chat-mode__submenu" role="menu" aria-label="内置智能体">
-              <button
-                type="button"
-                role="menuitem"
-                className="new-chat-mode__submenu-option"
-                onClick={chooseBuiltinAgent}
-              >
-                <SandboxAgentIcon kind="codex" className="new-chat-mode__builtin-icon" />
-                <span className="new-chat-mode__copy">
-                  <span className="new-chat-mode__label">Codex 智能体</span>
-                  <span>在沙箱中执行任务</span>
-                </span>
-              </button>
+              {BUILTIN_AGENTS.map((agent) => {
+                const enabled = builtinEnabled(agent.value);
+                return (
+                  <button
+                    key={agent.value}
+                    type="button"
+                    role="menuitem"
+                    className="new-chat-mode__submenu-option"
+                    disabled={enabled !== true}
+                    onClick={() => chooseBuiltinAgent(agent.value)}
+                  >
+                    <SandboxAgentIcon kind={agent.kind} className="new-chat-mode__builtin-icon" />
+                    <span className="new-chat-mode__copy">
+                      <span className="new-chat-mode__label">{agent.label}</span>
+                      <span>
+                        {enabled === undefined
+                          ? "正在检查配置"
+                          : enabled
+                            ? agent.description
+                            : "管理员未配置"}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
               {UNAVAILABLE_BUILTIN_AGENTS.map(({ label, kind }) => (
                 <button key={label} type="button" role="menuitem" className="new-chat-mode__submenu-option" disabled>
                   <SandboxAgentIcon kind={kind} className="new-chat-mode__builtin-icon" />

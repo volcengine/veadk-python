@@ -16,7 +16,12 @@ import { AgentFaceIcon } from "../AgentFaceIcon";
 import { SandboxAgentIcon } from "../icons/SandboxAgentIcons";
 import "./new-chat-agent-picker.css";
 
-type AgentType = "general" | "codex" | "openclaw" | "hermes";
+type AgentType =
+  | "general"
+  | "codex"
+  | "deepseek-harness"
+  | "openclaw"
+  | "hermes";
 
 interface AgentTypeOption {
   id: AgentType;
@@ -26,6 +31,7 @@ interface AgentTypeOption {
 const AGENT_TYPES: AgentTypeOption[] = [
   { id: "general", label: "通用智能体" },
   { id: "codex", label: "Codex 智能体" },
+  { id: "deepseek-harness", label: "DeepSeekHarness 智能体" },
   { id: "openclaw", label: "OpenClaw 智能体" },
   { id: "hermes", label: "Hermes 智能体" },
 ];
