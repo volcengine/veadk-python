@@ -981,6 +981,52 @@ def test_sandbox_routes_select_and_resolve_both_tool_variants() -> None:
     assert deleted_temporary.json() == {"deleted": True}
 
 
+def test_sandbox_endpoint_export_requires_connected_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("STUDIO_EXPOSE_SANDBOX_ENDPOINT", raising=False)
+    gateway = _FakeGateway()
+    headers = {"X-Test-User": "alice"}
+    with TestClient(_app(gateway)) as client:
+        listed = client.get("/web/sandbox/sessions", headers=headers)
+        connected = client.post(
+            "/web/sandbox/sessions/remote-existing/connect",
+            headers=headers,
+        )
+        exported = client.get(
+            "/web/sandbox/sessions/remote-existing/endpoint",
+            headers=headers,
+        )
+
+    assert connected.status_code == 200
+    assert "Authorization=secret" not in listed.text
+    assert "Authorization=secret" not in connected.text
+    assert exported.status_code == 200
+    assert exported.json() == {
+        "endpoint": "https://sandbox.example/existing?Authorization=secret",
+        "sessionId": "remote-existing",
+        "expireAt": "2026-07-30T16:00:00Z",
+    }
+
+
+def test_sandbox_endpoint_export_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STUDIO_EXPOSE_SANDBOX_ENDPOINT", "0")
+    gateway = _FakeGateway()
+    headers = {"X-Test-User": "alice"}
+    with TestClient(_app(gateway)) as client:
+        capabilities = client.get("/web/sandbox/capabilities", headers=headers)
+        client.post("/web/sandbox/sessions/remote-existing/connect", headers=headers)
+        exported = client.get(
+            "/web/sandbox/sessions/remote-existing/endpoint",
+            headers=headers,
+        )
+
+    assert capabilities.json()["endpointExportEnabled"] is False
+    assert exported.status_code == 403
+
+
 def test_sandbox_persistent_create_requires_snapshot_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1376,6 +1422,7 @@ def test_sandbox_capabilities_report_configured_tool(
         "reason": "",
         "persistentEnabled": False,
         "persistentReason": "管理员未配置快照版 Tool",
+        "endpointExportEnabled": True,
     }
 
 
@@ -1416,6 +1463,7 @@ def test_sandbox_capabilities_report_admin_not_configured(
         "reason": "管理员未配置",
         "persistentEnabled": False,
         "persistentReason": "管理员未配置快照版 Tool",
+        "endpointExportEnabled": True,
     }
 
 

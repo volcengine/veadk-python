@@ -78,6 +78,7 @@ STUDIO_SANDBOX_MAX_ACTIVE = 20
 STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH = SESSION_DISPLAY_NAME_MAX_LENGTH
 _SANDBOX_CHAT_TOOL_ENV = "SANDBOX_CHAT_CODEX"
 _SANDBOX_CHAT_SNAPSHOT_TOOL_ENV = "SANDBOX_CHAT_CODEX_SNAPSHOT"
+_SANDBOX_ENDPOINT_EXPORT_ENV = "STUDIO_EXPOSE_SANDBOX_ENDPOINT"
 _SANDBOX_AGENT_TOOL_ENVS = {
     "deepseek-harness": (_SANDBOX_CHAT_TOOL_ENV,),
     "openclaw": ("SANDBOX_CHAT_OPENCLAW", "SANDBOX_OPENCLAW_TOOL"),
@@ -112,6 +113,12 @@ class SandboxConfigurationError(SandboxError):
     """Required server-side Sandbox configuration is missing."""
 
     code = "SANDBOX_NOT_CONFIGURED"
+
+
+class SandboxPermissionError(SandboxError):
+    """The caller is not allowed to use a Sandbox capability."""
+
+    code = "SANDBOX_FORBIDDEN"
 
 
 class SandboxValidationError(SandboxError):
@@ -190,6 +197,13 @@ def _safe_error_message(error: object) -> str:
     raw_message = "\n".join(parts) if parts else str(error).strip()
     message = _redact_public_text(raw_message, maximum=20_000)
     return message or type(error).__name__
+
+
+def _sandbox_endpoint_export_enabled() -> bool:
+    value = (os.getenv(_SANDBOX_ENDPOINT_EXPORT_ENV) or "").strip().lower()
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return True
 
 
 def _redact_public_text(value: str, *, maximum: int) -> str:
@@ -1081,6 +1095,7 @@ class SandboxConversationService:
             "reason": "" if enabled else "管理员未配置",
             "persistentEnabled": bool(tools.persistent),
             "persistentReason": "" if tools.persistent else "管理员未配置快照版 Tool",
+            "endpointExportEnabled": _sandbox_endpoint_export_enabled(),
         }
 
     def _tools(self) -> SandboxToolPair:
@@ -1386,6 +1401,19 @@ class SandboxConversationService:
                 if isinstance(context_window, int)
                 else {}
             ),
+        }
+
+    def export_endpoint(self, session_id: str, owner_id: str) -> dict[str, object]:
+        """Return the raw Sandbox endpoint only when explicitly enabled."""
+        if not _sandbox_endpoint_export_enabled():
+            raise SandboxPermissionError("管理员未启用 Sandbox Endpoint 导出。")
+        session = self._owned(session_id, owner_id)
+        if not session.cloud.endpoint:
+            raise SandboxSessionUnavailableError("AgentKit Session 暂无可用 Endpoint。")
+        return {
+            "endpoint": session.cloud.endpoint,
+            "sessionId": session.cloud.instance_id,
+            "expireAt": session.cloud.expire_at,
         }
 
     async def list_models(
@@ -2100,6 +2128,8 @@ def mount_sandbox_agent_routes(
         status_code = 500
         if isinstance(error, SandboxConfigurationError):
             status_code = 503
+        elif isinstance(error, SandboxPermissionError):
+            status_code = 403
         elif isinstance(error, SandboxValidationError):
             status_code = 422
         elif isinstance(error, SandboxSessionNotFoundError):
@@ -2313,6 +2343,8 @@ def mount_sandbox_routes(
         status_code = 500
         if isinstance(error, SandboxConfigurationError):
             status_code = 503
+        elif isinstance(error, SandboxPermissionError):
+            status_code = 403
         elif isinstance(error, SandboxValidationError):
             status_code = 422
         elif isinstance(error, SandboxSessionNotFoundError):
@@ -2500,6 +2532,15 @@ def mount_sandbox_routes(
     async def _sandbox_status(session_id: str, request: Request) -> dict[str, object]:
         try:
             return service.status(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+
+    @app.get("/web/sandbox/sessions/{session_id}/endpoint")
+    async def _export_sandbox_endpoint(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        try:
+            return service.export_endpoint(session_id, owner_resolver(request))
         except SandboxError as error:
             raise _http_error(error) from error
 
