@@ -4,6 +4,7 @@ import { requestSignal } from "./timeout";
 import type { Block } from "../blocks";
 
 const SANDBOX_API = "/web/sandbox/sessions";
+const CODEX_PROJECT_UPLOAD_API = "/web/sandbox/codex-project-upload";
 const LIST_TIMEOUT_MS = 30_000;
 const START_TIMEOUT_MS = 330_000;
 const CONNECT_TIMEOUT_MS = 60_000;
@@ -11,6 +12,8 @@ const MESSAGE_TIMEOUT_MS = 600_000;
 const CLOSE_TIMEOUT_MS = 15_000;
 const SETTINGS_TIMEOUT_MS = 60_000;
 const UPLOAD_TIMEOUT_MS = 330_000;
+const CODEX_PROJECT_UPLOAD_TIMEOUT_MS = 30_000;
+export const CODEX_PROJECT_UPLOAD_AUTHORIZATION_TTL_SECONDS = 60 * 60;
 
 export const SANDBOX_DISPLAY_NAME_MAX_LENGTH = 40;
 export type SandboxAgentKind = "openclaw" | "hermes";
@@ -99,6 +102,12 @@ export interface SandboxEndpointExport {
   endpoint: string;
   sessionId: string;
   expireAt?: string;
+}
+
+export interface CodexProjectUploadAuthorization {
+  authorizationCode: string;
+  expireAt: string;
+  studioUrl: string;
 }
 
 export interface SandboxUploadedFile {
@@ -296,6 +305,9 @@ export interface AgentKitSandboxClient {
     sessionId: string,
     options?: SandboxRequestOptions,
   ): Promise<SandboxEndpointExport>;
+  createCodexProjectUploadAuthorization(
+    options?: SandboxRequestOptions,
+  ): Promise<CodexProjectUploadAuthorization>;
   listModels(
     sessionId: string,
     options?: SandboxRequestOptions,
@@ -1176,6 +1188,49 @@ export const sandboxClient: AgentKitSandboxClient = {
       ...(typeof value.expireAt === "string"
         ? { expireAt: value.expireAt }
         : {}),
+    };
+  },
+
+  async createCodexProjectUploadAuthorization(options = {}) {
+    const response = await fetch(
+      withAuth(`${CODEX_PROJECT_UPLOAD_API}/authorizations`),
+      {
+        method: "POST",
+        headers: sandboxHeaders({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          ttlSeconds: CODEX_PROJECT_UPLOAD_AUTHORIZATION_TTL_SECONDS,
+        }),
+        signal: requestSignal(
+          options.signal,
+          CODEX_PROJECT_UPLOAD_TIMEOUT_MS,
+        ),
+      },
+    );
+    if (!response.ok) {
+      throw await responseError(
+        response,
+        "无法生成 Codex 项目上传授权码。",
+      );
+    }
+    const value = recordOf(await response.json());
+    if (
+      typeof value?.authorizationCode !== "string" ||
+      !value.authorizationCode.trim() ||
+      typeof value.expireAt !== "string" ||
+      !value.expireAt.trim()
+    ) {
+      throw new Error("Studio 返回了无效的 Codex 项目上传授权码。");
+    }
+    const studioUrl = typeof value.studioUrl === "string" && value.studioUrl.trim()
+      ? value.studioUrl.trim()
+      : window.location.origin;
+    return {
+      authorizationCode: value.authorizationCode,
+      expireAt: value.expireAt,
+      studioUrl,
     };
   },
 

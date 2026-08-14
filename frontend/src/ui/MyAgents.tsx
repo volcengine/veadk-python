@@ -386,6 +386,7 @@ export interface MyAgentsProps {
   canCreate: boolean;
   runtimeScope: RuntimeScope;
   onCreateAgent: (region: string) => void;
+  onOpenCodexProjectUpload?: () => void;
   onUseAgent: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails: (agent: MyAgentCardData) => void;
   onCreateSandboxAgent: (kind: "codex" | SandboxAgentKind) => void;
@@ -407,6 +408,7 @@ export function MyAgents({
   canCreate,
   runtimeScope,
   onCreateAgent,
+  onOpenCodexProjectUpload,
   onUseAgent,
   onViewAgentDetails,
   onCreateSandboxAgent,
@@ -649,6 +651,8 @@ export function MyAgents({
       ? () => onCreateAgent(defaultCloudRegion(cloudProvider))
       : () => onCreateSandboxAgent(activeType)
     : undefined;
+  const showCodexProjectUpload =
+    activeType === "codex" && canCreate && Boolean(onOpenCodexProjectUpload);
   const createDisabledReason = !canCreate
     ? "当前账号没有创建智能体权限"
     : undefined;
@@ -692,16 +696,27 @@ export function MyAgents({
             </button>
           ))}
         </nav>
-        <button
-          type="button"
-          className="my-agent-create-primary"
-          disabled={!createAgent}
-          title={createDisabledReason}
-          onClick={() => createAgent?.()}
-        >
-          <AddIcon />
-          <span>创建智能体</span>
-        </button>
+        <div className="my-agent-type-actions">
+          {showCodexProjectUpload ? (
+            <button
+              type="button"
+              className="my-agent-create-secondary"
+              onClick={onOpenCodexProjectUpload}
+            >
+              <span>本地Codex项目上传</span>
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="my-agent-create-primary"
+            disabled={!createAgent}
+            title={createDisabledReason}
+            onClick={() => createAgent?.()}
+          >
+            <AddIcon />
+            <span>创建智能体</span>
+          </button>
+        </div>
       </div>
 
       <section
@@ -752,6 +767,15 @@ export function MyAgents({
                 </EmptyMessage.Title>
                 {canCreate ? (
                   <EmptyMessage.ActionRow>
+                    {activeType === "codex" && onOpenCodexProjectUpload ? (
+                      <Button
+                        color="secondary"
+                        size="lg"
+                        onClick={onOpenCodexProjectUpload}
+                      >
+                        本地Codex项目上传
+                      </Button>
+                    ) : null}
                     <Button
                       color="primary"
                       size="lg"

@@ -1,0 +1,367 @@
+.sandbox-project-upload-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: hsl(var(--foreground) / 0.24);
+  backdrop-filter: blur(3px);
+}
+
+.sandbox-project-upload-dialog {
+  width: min(680px, calc(100vw - 40px));
+  max-height: min(760px, calc(100vh - 40px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  box-shadow: 0 20px 56px hsl(var(--foreground) / 0.2);
+  animation: sandbox-project-upload-enter 180ms ease-out both;
+}
+
+.sandbox-project-upload-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.sandbox-project-upload-head h2,
+.sandbox-project-upload-head p {
+  margin: 0;
+}
+
+.sandbox-project-upload-head h2 {
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.sandbox-project-upload-head p {
+  margin-top: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.sandbox-project-upload-close {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  flex: 0 0 32px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+
+.sandbox-project-upload-close:hover {
+  border-color: hsl(var(--border));
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+
+.sandbox-project-upload-close svg {
+  width: 17px;
+  height: 17px;
+}
+
+.sandbox-project-upload-body {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 14px;
+  padding: 16px 22px 20px;
+}
+
+.sandbox-project-upload-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid hsl(var(--destructive) / 0.22);
+  border-radius: 8px;
+  background: hsl(var(--destructive) / 0.05);
+  color: hsl(var(--destructive));
+  font-size: 12px;
+}
+
+.sandbox-project-upload-error span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sandbox-project-upload-steps {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sandbox-project-upload-steps li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background));
+}
+
+.sandbox-project-upload-steps li > span {
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.sandbox-project-upload-steps strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.sandbox-project-upload-steps p {
+  margin: 4px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.sandbox-project-upload-command {
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background));
+}
+
+.sandbox-project-upload-command-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.sandbox-project-upload-command-head > div {
+  min-width: 0;
+}
+
+.sandbox-project-upload-command-head span {
+  min-width: 0;
+  color: hsl(var(--foreground));
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.sandbox-project-upload-command-head p {
+  margin: 4px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sandbox-project-upload-command-head button,
+.sandbox-project-upload-error button,
+.sandbox-project-upload-actions button {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sandbox-project-upload-command-head button,
+.sandbox-project-upload-error button {
+  padding: 0 10px;
+}
+
+.sandbox-project-upload-command-head button:hover:not(:disabled),
+.sandbox-project-upload-error button:hover,
+.sandbox-project-upload-actions button:hover {
+  background: hsl(var(--secondary));
+}
+
+.sandbox-project-upload-command-head button:disabled {
+  cursor: default;
+  opacity: 0.56;
+}
+
+.sandbox-project-upload-command-head svg,
+.sandbox-project-upload-error svg,
+.sandbox-project-upload-actions svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.sandbox-project-upload-command pre {
+  max-height: 230px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sandbox-project-upload-command code {
+  font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Consolas,
+    "Liberation Mono", Menlo, monospace;
+}
+
+.sandbox-project-upload-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 0 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.sandbox-project-upload-loading i {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  border: 2px solid hsl(var(--foreground) / 0.16);
+  border-top-color: hsl(var(--foreground));
+  border-radius: 50%;
+  animation: sandbox-project-upload-spin 800ms linear infinite;
+}
+
+.sandbox-project-upload-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.sandbox-project-upload-meta > div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background));
+}
+
+.sandbox-project-upload-meta dt,
+.sandbox-project-upload-meta dd {
+  margin: 0;
+}
+
+.sandbox-project-upload-meta dt {
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+}
+
+.sandbox-project-upload-meta dd {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.sandbox-project-upload-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid hsl(var(--border));
+}
+
+.sandbox-project-upload-actions button {
+  min-width: 86px;
+  padding: 0 14px;
+}
+
+.sandbox-project-upload-actions .is-primary {
+  border-color: hsl(var(--foreground));
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+}
+
+.sandbox-project-upload-actions .is-primary:hover {
+  background: hsl(var(--foreground) / 0.9);
+}
+
+.sandbox-project-upload-dialog button:focus-visible,
+.sandbox-project-upload-command pre:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.34);
+  outline-offset: 2px;
+}
+
+@keyframes sandbox-project-upload-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes sandbox-project-upload-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 640px) {
+  .sandbox-project-upload-backdrop {
+    padding: 10px;
+  }
+
+  .sandbox-project-upload-dialog {
+    width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+  }
+
+  .sandbox-project-upload-head,
+  .sandbox-project-upload-body {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .sandbox-project-upload-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .sandbox-project-upload-actions button {
+    flex: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sandbox-project-upload-dialog,
+  .sandbox-project-upload-loading i {
+    animation: none;
+  }
+}

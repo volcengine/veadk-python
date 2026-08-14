@@ -27,6 +27,7 @@ import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
+import veadk.cli.frontend_sandbox as frontend_sandbox
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerEvent,
@@ -1004,6 +1005,130 @@ def test_sandbox_persistent_create_requires_snapshot_tool(
     assert "快照" in missing.text
     assert temporary.status_code == 200
     assert temporary.json()["persistent"] is False
+
+
+def test_codex_project_upload_authorization_creates_persistent_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STUDIO_CODEX_PROJECT_UPLOAD_SECRET", "test-secret")
+    frontend_sandbox._CODEX_PROJECT_UPLOAD_CONSUMED_JTIS.clear()
+    gateway = _FakeGateway()
+
+    with TestClient(_app(gateway)) as client:
+        authorization = client.post(
+            "/web/sandbox/codex-project-upload/authorizations",
+            headers={
+                "X-Test-User": "alice",
+                "X-Test-Creator": "alice@example.com",
+                "X-Forwarded-Proto": "https",
+                "X-Forwarded-Host": "studio.example.com",
+            },
+            json={"ttlSeconds": 120},
+        )
+        code = authorization.json()["authorizationCode"]
+        created = client.post(
+            "/web/sandbox/codex-project-upload/sessions",
+            json={
+                "authorizationCode": code,
+                "projectName": "My Repo",
+            },
+        )
+        reused = client.post(
+            "/web/sandbox/codex-project-upload/sessions",
+            json={
+                "authorizationCode": code,
+                "projectName": "My Repo",
+            },
+        )
+        listed = client.get(
+            "/web/sandbox/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert authorization.status_code == 200
+    assert authorization.headers["cache-control"] == "no-store"
+    assert authorization.json()["studioUrl"] == "https://studio.example.com"
+    assert authorization.json()["expireAt"].endswith("Z")
+    assert created.status_code == 200
+    assert created.headers["cache-control"] == "no-store"
+    assert created.json()["sessionId"] == "remote-1"
+    assert created.json()["displayName"] == "codex-My Repo"
+    assert created.json()["remoteRepoDir"] == "/home/gem/My-Repo"
+    assert created.json()["endpoint"].endswith("Authorization=secret")
+    assert reused.status_code == 403
+    assert gateway.sessions["remote-1"].tool_id == "tool-studio-snapshot"
+    assert gateway.sessions["remote-1"].created_by == "alice"
+    assert gateway.sessions["remote-1"].creator_name == "alice@example.com"
+    assert gateway.display_names == ["codex-My Repo"]
+    assert "Authorization=secret" not in listed.text
+
+
+def test_codex_project_upload_session_accepts_custom_home_and_temporary_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STUDIO_CODEX_PROJECT_UPLOAD_SECRET", "test-secret")
+    frontend_sandbox._CODEX_PROJECT_UPLOAD_CONSUMED_JTIS.clear()
+    gateway = _FakeGateway()
+
+    with TestClient(_app(gateway)) as client:
+        authorization = client.post(
+            "/web/sandbox/codex-project-upload/authorizations",
+            headers={"X-Test-User": "alice"},
+        )
+        created = client.post(
+            "/web/sandbox/codex-project-upload/sessions",
+            json={
+                "authorizationCode": authorization.json()["authorizationCode"],
+                "projectName": "codex-demo/project",
+                "persistent": False,
+                "remoteHome": "/workspace/.",
+            },
+        )
+
+    assert created.status_code == 200
+    assert created.json()["displayName"] == "codex-demo/project"
+    assert created.json()["remoteRepoDir"] == "/workspace/codex-demo-project"
+    assert gateway.sessions[created.json()["sessionId"]].tool_id == "tool-studio"
+    assert gateway.display_names == ["codex-demo/project"]
+
+
+def test_codex_project_upload_rejects_invalid_and_expired_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STUDIO_CODEX_PROJECT_UPLOAD_SECRET", "test-secret")
+    frontend_sandbox._CODEX_PROJECT_UPLOAD_CONSUMED_JTIS.clear()
+    gateway = _FakeGateway()
+
+    with TestClient(_app(gateway)) as client:
+        authorization = client.post(
+            "/web/sandbox/codex-project-upload/authorizations",
+            headers={"X-Test-User": "alice"},
+            json={"ttlSeconds": 60},
+        )
+        code = authorization.json()["authorizationCode"]
+        tampered = client.post(
+            "/web/sandbox/codex-project-upload/sessions",
+            json={"authorizationCode": f"{code}x", "projectName": "repo"},
+        )
+        invalid_request = client.post(
+            "/web/sandbox/codex-project-upload/sessions",
+            json={
+                "authorizationCode": code,
+                "projectName": "repo",
+                "persistent": "yes",
+            },
+        )
+        expired_at = int(frontend_sandbox.time.time()) + 61
+        monkeypatch.setattr(frontend_sandbox.time, "time", lambda: expired_at)
+        expired = client.post(
+            "/web/sandbox/codex-project-upload/sessions",
+            json={"authorizationCode": code, "projectName": "repo"},
+        )
+
+    assert tampered.status_code == 403
+    assert invalid_request.status_code == 422
+    assert expired.status_code == 403
+    assert gateway.created == 0
 
 
 def test_sandbox_snapshot_is_wakeable_for_admin_only() -> None:

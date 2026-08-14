@@ -200,6 +200,7 @@ import {
 import { SandboxAgentDetails } from "./ui/SandboxAgentDetails";
 import { SandboxAgentWorkspace } from "./ui/SandboxAgentWorkspace";
 import { SandboxComposer } from "./ui/SandboxComposer";
+import { SandboxProjectUploadDialog } from "./ui/SandboxProjectUploadDialog";
 import { sandboxSnapshotTurns } from "./ui/sandboxCommands";
 import { useSandboxCodexCommands } from "./ui/useSandboxCodexCommands";
 import { StudioConfirmDialog } from "./ui/StudioConfirmDialog";
@@ -884,6 +885,7 @@ export default function App() {
   const [sandboxLaunchKind, setSandboxLaunchKind] =
     useState<"codex" | SandboxAgentKind>("codex");
   const [sandboxLaunchFromAgents, setSandboxLaunchFromAgents] = useState(false);
+  const [sandboxProjectUploadOpen, setSandboxProjectUploadOpen] = useState(false);
   const [sandboxAgentRefreshKey, setSandboxAgentRefreshKey] = useState(0);
   const [sandboxAgentDetailTarget, setSandboxAgentDetailTarget] =
     useState<SandboxAgentResource | null>(null);
@@ -5352,6 +5354,7 @@ export default function App() {
                 canCreate={canCreateAgents}
                 runtimeScope={access.capabilities.runtimeScope}
                 onCreateAgent={openAgentCreateFromMyAgents}
+                onOpenCodexProjectUpload={() => setSandboxProjectUploadOpen(true)}
                 onUseAgent={(agent) =>
                   connectMyAgent(agent, { source: "my_agents" })
                 }
@@ -6027,6 +6030,12 @@ export default function App() {
         onConfirm={(displayName, persistent) =>
           void launchSandboxSession(displayName, persistent)
         }
+      />
+
+      <SandboxProjectUploadDialog
+        open={sandboxProjectUploadOpen}
+        onClose={() => setSandboxProjectUploadOpen(false)}
+        onRefreshAgents={() => setSandboxAgentRefreshKey((current) => current + 1)}
       />
 
       {sandboxThreadDeleteTarget ? (
