@@ -116,8 +116,193 @@ _PROCESS_EXIT_PATH = f"{MIGRATION_ROOT}/diagnostics/migration/process-exit.json"
 _DELIVERY_STATUS_PATH = f"{MIGRATION_ROOT}/delivery/migration-status.json"
 _DELIVERY_RESULT_PATH = f"{MIGRATION_ROOT}/delivery/migration-result.json"
 _DELIVERY_ARTIFACT_PATH = f"{MIGRATION_ROOT}/delivery/migration-result.zip"
+_ACTIVITY_LOG_PATHS = tuple(
+    f"{MIGRATION_ROOT}/work/agentic/logs/codex-attempt-{attempt}.jsonl"
+    for attempt in range(1, 4)
+)
+_MAX_ACTIVITY_LOG_BYTES = 16 * 1024 * 1024
+_MAX_ACTIVITY_TEXT_CHARS = 12_000
+_MAX_ACTIVITY_ITEMS = 200
+_ACTIVITY_COMPLETE_STATES = {
+    "succeeded",
+    "succeeded_with_warnings",
+    "partial",
+    "failed",
+    "cancelled",
+    "expired",
+}
+_ACTIVITY_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b("
+    r"[a-z0-9_.-]*(?:api[_-]?key|access[_-]?key|secret[_-]?key|"
+    r"token|secret|password|passwd|pwd)[a-z0-9_.-]*"
+    r")(\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;，；!?！？]+)"
+)
+_ACTIVITY_BEARER_RE = re.compile(r"(?i)\b(bearer\s+)[a-z0-9._~+/=-]+")
+_ACTIVITY_CREDENTIAL_RE = re.compile(
+    r"(?i)\b(?:ark|sk)-[a-z0-9_-]{12,}\b|\bAK[A-Z0-9]{16,}\b"
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _redact_activity_text(value: str) -> str:
+    text = "".join(
+        character for character in value if character in "\n\t" or ord(character) >= 32
+    ).strip()
+    text = _ACTIVITY_SECRET_ASSIGNMENT_RE.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}[已隐藏]",
+        text,
+    )
+    text = _ACTIVITY_BEARER_RE.sub(
+        lambda match: f"{match.group(1)}[已隐藏]",
+        text,
+    )
+    text = _ACTIVITY_CREDENTIAL_RE.sub("[已隐藏]", text)
+    if len(text) > _MAX_ACTIVITY_TEXT_CHARS:
+        return f"{text[:_MAX_ACTIVITY_TEXT_CHARS].rstrip()}\n…内容已截断"
+    return text
+
+
+def _activity_status(event_type: str, item: dict[str, object]) -> str:
+    status = str(item.get("status") or "").lower()
+    if event_type.endswith(".completed") or status in {"completed", "done"}:
+        return "completed"
+    if event_type.endswith(".failed") or status in {"failed", "error"}:
+        return "failed"
+    return "running"
+
+
+def _command_activity_title(command: str, status: str) -> str:
+    normalized = command.casefold()
+    if any(
+        marker in normalized
+        for marker in ("validate", "verify", "pytest", "compileall", " test")
+    ):
+        action = "迁移校验"
+    elif any(marker in normalized for marker in ("zip ", "tar ", "package")):
+        action = "产物打包"
+    elif any(
+        marker in normalized
+        for marker in ("pip install", "uv sync", "npm install", "pnpm install")
+    ):
+        action = "依赖准备"
+    else:
+        action = "迁移步骤"
+    if status == "completed":
+        return f"已完成{action}"
+    if status == "failed":
+        return f"{action}未完成"
+    return f"正在执行{action}"
+
+
+def _parse_activity_log(content: bytes, attempt: int) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    item_indexes: dict[str, int] = {}
+
+    def upsert(item: dict[str, str]) -> None:
+        item_id = item["id"]
+        index = item_indexes.get(item_id)
+        if index is None:
+            item_indexes[item_id] = len(items)
+            items.append(item)
+        else:
+            items[index] = item
+
+    for line_number, line in enumerate(
+        content.decode("utf-8", errors="replace").splitlines(),
+        start=1,
+    ):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get("type") or "")
+        raw_item = event.get("item")
+        item = raw_item if isinstance(raw_item, dict) else {}
+        item_type = str(item.get("type") or "")
+        raw_item_id = item.get("id")
+        item_id = (
+            str(raw_item_id)
+            if isinstance(raw_item_id, (str, int)) and str(raw_item_id)
+            else f"event-{line_number}"
+        )
+        activity_id = f"{attempt}:{item_id}"
+        status = _activity_status(event_type, item)
+
+        if item_type in {"reasoning", "agent_message"}:
+            raw_text = item.get("text")
+            if not isinstance(raw_text, str):
+                continue
+            detail = _redact_activity_text(raw_text)
+            if not detail:
+                continue
+            upsert(
+                {
+                    "id": activity_id,
+                    "kind": "reasoning" if item_type == "reasoning" else "message",
+                    "status": status,
+                    "title": "Codex 思考" if item_type == "reasoning" else "Codex 更新",
+                    "detail": detail,
+                }
+            )
+            continue
+
+        if item_type == "todo_list":
+            raw_todos = item.get("items")
+            todos = raw_todos if isinstance(raw_todos, list) else []
+            completed = sum(
+                1
+                for todo in todos
+                if isinstance(todo, dict)
+                and (
+                    todo.get("completed") is True
+                    or str(todo.get("status") or "").lower() in {"completed", "done"}
+                )
+            )
+            todo_status = "completed" if todos and completed == len(todos) else status
+            upsert(
+                {
+                    "id": activity_id,
+                    "kind": "plan",
+                    "status": todo_status,
+                    "title": "Codex 正在按计划迁移",
+                    "detail": f"已完成 {completed}/{len(todos)} 项",
+                }
+            )
+            continue
+
+        if item_type == "command_execution":
+            command = item.get("command")
+            upsert(
+                {
+                    "id": activity_id,
+                    "kind": "command",
+                    "status": status,
+                    "title": _command_activity_title(
+                        command if isinstance(command, str) else "",
+                        status,
+                    ),
+                }
+            )
+            continue
+
+        if event_type in {"turn.completed", "turn.failed"}:
+            turn_status = "completed" if event_type == "turn.completed" else "failed"
+            upsert(
+                {
+                    "id": f"{attempt}:turn",
+                    "kind": "status",
+                    "status": turn_status,
+                    "title": (
+                        "Codex 已完成本轮执行"
+                        if turn_status == "completed"
+                        else "Codex 本轮执行未完成"
+                    ),
+                }
+            )
+    return items
 
 
 class MigrationError(RuntimeError):
@@ -2619,6 +2804,34 @@ class MigrationService:
         )
         return self.get_task(task_id, owner_id)
 
+    def activity(self, task_id: str, owner_id: str) -> dict[str, object]:
+        session = self._session(task_id, owner_id)
+        task = self._task_from_session(session)
+        confirmation = task.get("confirmation")
+        framework = (
+            str(confirmation.get("framework") or "")
+            if isinstance(confirmation, dict)
+            else ""
+        )
+        if framework not in {"dify", "any"}:
+            return {"available": False, "complete": False, "items": []}
+
+        items: list[dict[str, str]] = []
+        for attempt, path in enumerate(_ACTIVITY_LOG_PATHS, start=1):
+            content = self._read(
+                session,
+                path,
+                max_bytes=_MAX_ACTIVITY_LOG_BYTES,
+                optional=True,
+            )
+            if content is not None:
+                items.extend(_parse_activity_log(content, attempt))
+        return {
+            "available": True,
+            "complete": task["state"] in _ACTIVITY_COMPLETE_STATES,
+            "items": items[-_MAX_ACTIVITY_ITEMS:],
+        }
+
     def artifact(self, task_id: str, owner_id: str) -> dict[str, object]:
         session = self._session(task_id, owner_id)
         task = self._task_from_session(session)
@@ -2864,8 +3077,7 @@ class MigrationService:
         task = self._task_from_session(session)
         artifact_status = task.get("artifact")
         if (
-            task.get("state")
-            not in {"succeeded", "succeeded_with_warnings", "partial"}
+            task.get("state") not in {"succeeded", "succeeded_with_warnings", "partial"}
             or not isinstance(artifact_status, dict)
             or not artifact_status.get("downloadReady")
         ):

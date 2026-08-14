@@ -10,6 +10,7 @@ import {
   confirmMigrationTask,
   createMigrationTask,
   downloadMigrationArtifact,
+  getMigrationActivity,
   getMigrationArtifact,
   getMigrationArtifactFile,
   getMigrationCapabilities,
@@ -20,11 +21,14 @@ import {
   submitMigrationAnalysisAnswers,
   uploadMigrationSource,
   type MigrationAnalysis,
+  type MigrationActivity,
+  type MigrationActivityItem,
   type MigrationArtifact,
   type MigrationCapabilities,
   type MigrationFramework,
   type MigrationTask,
 } from "../adk/migrations";
+import type { Block } from "../blocks";
 import {
   deployAgentkitProject,
   type DeployStage,
@@ -39,6 +43,7 @@ import type { AgentProject } from "../create/project";
 import type { NetworkConfig } from "../create/types";
 import type { EnvVar } from "../create/veadkCatalog";
 import CodeEditor from "../ui/CodeEditor";
+import { Blocks } from "../ui/Blocks";
 import { Markdown } from "../ui/Markdown";
 import { StudioConfirmDialog } from "../ui/StudioConfirmDialog";
 import { NewChatCompactSelect } from "../ui/new-chat-modes/NewChatCompactSelect";
@@ -48,6 +53,7 @@ import {
   type DeploymentTaskUpdate,
 } from "../ui/ProjectPreview";
 import { TextShimmer } from "../ui/text-shimmer/TextShimmer";
+import { useStickToBottom } from "../ui/useStickToBottom";
 import {
   BackIcon,
   CloseIcon,
@@ -61,9 +67,11 @@ import "./MigrationWorkspace.css";
 
 const MAX_SOURCE_BYTES = 50 * 1024 * 1024;
 const POLL_INTERVAL_MS = 1_200;
+const ACTIVITY_POLL_INTERVAL_MS = 3_000;
 const LIST_POLL_INTERVAL_MS = 5_000;
 const MAX_VISIBLE_FILES = 500;
 const SECRET_ENV_KEYS = new Set(["MODEL_AGENT_API_KEY"]);
+const ignoreMigrationAction = () => undefined;
 
 function isSecretEnvironmentKey(key: string): boolean {
   return (
@@ -402,6 +410,77 @@ function AnalysisSummary({ analysis }: { analysis: MigrationAnalysis }) {
   );
 }
 
+function migrationActivityBlock(item: MigrationActivityItem): Block | null {
+  if (item.kind === "reasoning" && item.detail) {
+    return {
+      kind: "thinking",
+      text: item.detail,
+      done: item.status !== "running",
+    };
+  }
+  if (item.kind === "message" && item.detail) {
+    return { kind: "text", text: item.detail };
+  }
+  return null;
+}
+
+function MigrationActivityFeed({
+  activity,
+  loading,
+  error,
+}: {
+  activity: MigrationActivity | null;
+  loading: boolean;
+  error: string;
+}) {
+  const items = activity?.items ?? [];
+
+  return (
+    <section className="migration-activity" aria-label="Codex 执行动态">
+      <div className="migration-activity__heading">
+        <span
+          className={`migration-activity__marker${activity?.complete ? " is-complete" : ""}`}
+          aria-hidden="true"
+        />
+        <strong>Codex 执行动态</strong>
+      </div>
+      {items.length > 0 ? (
+        <div className="migration-activity__stream">
+          {items.map((item) => {
+            const block = migrationActivityBlock(item);
+            return block ? (
+              <Blocks
+                key={item.id}
+                blocks={[block]}
+                onAction={ignoreMigrationAction}
+              />
+            ) : (
+              <div
+                className="migration-activity__status"
+                data-status={item.status}
+                key={item.id}
+              >
+                <span className="migration-activity__marker" aria-hidden="true" />
+                <span>
+                  <strong>{item.title}</strong>
+                  {item.detail ? <small>{item.detail}</small> : null}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : loading || !activity?.complete ? (
+        <TextShimmer>Codex 正在开始迁移…</TextShimmer>
+      ) : null}
+      {error ? (
+        <p className="migration-activity__error" role="status">
+          {error}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 function ArtifactBrowser({
   task,
   artifact,
@@ -581,6 +660,9 @@ export function MigrationWorkspace({
   const [artifactError, setArtifactError] = useState("");
   const [artifactErrorRetryable, setArtifactErrorRetryable] = useState(false);
   const [artifactReload, setArtifactReload] = useState(0);
+  const [activity, setActivity] = useState<MigrationActivity | null>(null);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityError, setActivityError] = useState("");
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const [deploymentOpen, setDeploymentOpen] = useState(false);
   const [deployRegion, setDeployRegion] = useState(initialDeployRegion);
@@ -589,6 +671,19 @@ export function MigrationWorkspace({
     Record<string, string>
   >({});
   const task = selectedTask(tasks, selectedTaskId);
+  const latestActivity = activity?.items[activity.items.length - 1];
+  const activityKey = [
+    activity?.items.length ?? 0,
+    latestActivity?.id ?? "",
+    latestActivity?.status ?? "",
+    latestActivity?.detail?.length ?? 0,
+  ].join(":");
+  const {
+    ref: conversationRef,
+    onScroll: handleConversationScroll,
+  } = useStickToBottom<HTMLDivElement>(
+    `${task?.id ?? "new"}:${task?.state ?? "new"}:${activityKey}`,
+  );
 
   async function reconcileTaskState(
     taskId: string,
@@ -729,6 +824,57 @@ export function MigrationWorkspace({
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [task?.id, task?.state]);
+
+  useEffect(() => {
+    const conversation = conversationRef.current;
+    if (!conversation) return;
+    conversation.scrollTop = conversation.scrollHeight;
+    handleConversationScroll();
+  }, [selectedTaskId, conversationRef, handleConversationScroll]);
+
+  useEffect(() => {
+    setActivity(null);
+    setActivityError("");
+    setActivityLoading(false);
+    if (
+      !task?.confirmation?.framework ||
+      !["dify", "any"].includes(task.confirmation.framework)
+    ) {
+      return;
+    }
+
+    const controller = new AbortController();
+    let timer: number | undefined;
+    const poll = async () => {
+      setActivityLoading(true);
+      try {
+        const next = await getMigrationActivity(task.id, controller.signal);
+        if (controller.signal.aborted) return;
+        setActivity(next);
+        setActivityError("");
+        if (!next.complete && isActiveState(task.state)) {
+          timer = window.setTimeout(() => void poll(), ACTIVITY_POLL_INTERVAL_MS);
+        }
+      } catch (cause) {
+        if (controller.signal.aborted) return;
+        setActivityError("暂时无法读取执行动态，迁移任务仍在继续。");
+        if (
+          isActiveState(task.state) &&
+          cause instanceof MigrationApiError &&
+          cause.retryable
+        ) {
+          timer = window.setTimeout(() => void poll(), ACTIVITY_POLL_INTERVAL_MS);
+        }
+      } finally {
+        if (!controller.signal.aborted) setActivityLoading(false);
+      }
+    };
+    void poll();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [task?.id, task?.confirmation?.framework, task?.state]);
 
   useEffect(() => {
     if (
@@ -1255,7 +1401,13 @@ export function MigrationWorkspace({
             ) : null}
           </header>
 
-          <div className="migration-conversation" role="log" aria-live="polite">
+          <div
+            className="migration-conversation"
+            role="log"
+            aria-live="polite"
+            ref={conversationRef}
+            onScroll={handleConversationScroll}
+          >
           {!capability?.enabled && !loading ? (
             <div className="migration-system-state is-error" role="alert">
               <strong>迁移能力暂不可用</strong>
@@ -1364,6 +1516,14 @@ export function MigrationWorkspace({
                   ) : (
                     <p>{taskDisplayMessage(task)}</p>
                   )}
+                  {task.confirmation?.framework &&
+                  ["dify", "any"].includes(task.confirmation.framework) ? (
+                    <MigrationActivityFeed
+                      activity={activity}
+                      loading={activityLoading}
+                      error={activityError}
+                    />
+                  ) : null}
                 </div>
               </article>
             </>

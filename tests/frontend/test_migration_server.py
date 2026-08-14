@@ -534,6 +534,272 @@ def test_migration_capability_and_session_contract_are_bounded() -> None:
     assert "owner-1" not in json.dumps(request)
 
 
+def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id, framework="any", entry=None)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id, framework="any", entry=None),
+    )
+    events = [
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "reasoning-1",
+                "type": "reasoning",
+                "text": "正在分析源项目结构。",
+            },
+        },
+        {
+            "type": "item.updated",
+            "item": {
+                "id": "plan-1",
+                "type": "todo_list",
+                "items": [
+                    {"text": "inspect", "completed": True},
+                    {"text": "migrate", "completed": False},
+                ],
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "command-1",
+                "type": "command_execution",
+                "status": "completed",
+                "command": "API_KEY=raw-secret bash validate_runtime.sh",
+                "aggregated_output": "raw-secret",
+                "exit_code": 0,
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "message-1",
+                "type": "agent_message",
+                "text": "正在修复配置，API_KEY=raw-secret。",
+            },
+        },
+        {"type": "turn.completed", "usage": {"input_tokens": 10}},
+    ]
+    gateway.files[
+        (
+            task_id,
+            f"{MIGRATION_ROOT}/work/agentic/logs/codex-attempt-1.jsonl",
+        )
+    ] = (
+        "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n{"
+    ).encode()
+
+    activity = service.activity(task_id, "owner-1")
+
+    assert activity["available"] is True
+    assert activity["complete"] is False
+    assert activity["items"] == [
+        {
+            "id": "1:reasoning-1",
+            "kind": "reasoning",
+            "status": "completed",
+            "title": "Codex 思考",
+            "detail": "正在分析源项目结构。",
+        },
+        {
+            "id": "1:plan-1",
+            "kind": "plan",
+            "status": "running",
+            "title": "Codex 正在按计划迁移",
+            "detail": "已完成 1/2 项",
+        },
+        {
+            "id": "1:command-1",
+            "kind": "command",
+            "status": "completed",
+            "title": "已完成迁移校验",
+        },
+        {
+            "id": "1:message-1",
+            "kind": "message",
+            "status": "completed",
+            "title": "Codex 更新",
+            "detail": "正在修复配置，API_KEY=[已隐藏]",
+        },
+        {
+            "id": "1:turn",
+            "kind": "status",
+            "status": "completed",
+            "title": "Codex 已完成本轮执行",
+        },
+    ]
+    serialized = json.dumps(activity, ensure_ascii=False)
+    assert "raw-secret" not in serialized
+    assert "正在分析源项目结构" in serialized
+
+    with pytest.raises(MigrationError) as wrong_owner:
+        service.activity(task_id, "owner-2")
+    assert wrong_owner.value.status_code == 404
+
+
+def test_agentic_activity_handles_incremental_and_malformed_events() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id, framework="dify", entry=None)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id, framework="dify", entry=None),
+    )
+    events: list[object] = [
+        ["ignored"],
+        {
+            "type": "item.updated",
+            "item": {
+                "id": "reasoning-live",
+                "type": "reasoning",
+                "text": "Authorization: Bearer private-token-value",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "reasoning-live",
+                "type": "reasoning",
+                "text": "x" * 12_001,
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {"type": "reasoning", "text": 123},
+        },
+        {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": "\u0000\n\t"},
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "agent_message",
+                "text": "正在整理迁移结果。",
+            },
+        },
+        {
+            "type": "item.failed",
+            "item": {
+                "id": "package",
+                "type": "command_execution",
+                "command": "zip result.zip output",
+            },
+        },
+        {
+            "type": "item.started",
+            "item": {
+                "id": "install",
+                "type": "command_execution",
+                "command": "pip install -r requirements.txt",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": 3,
+                "type": "command_execution",
+                "command": "python migrate.py",
+            },
+        },
+        {
+            "type": "item.updated",
+            "item": {
+                "id": "plan",
+                "type": "todo_list",
+                "items": [
+                    {"status": "done"},
+                    {"completed": True},
+                ],
+            },
+        },
+        {"type": "turn.failed"},
+    ]
+    gateway.files[
+        (
+            task_id,
+            f"{MIGRATION_ROOT}/work/agentic/logs/codex-attempt-2.jsonl",
+        )
+    ] = ("not-json\n" + "\n".join(json.dumps(event) for event in events)).encode()
+
+    activity = service.activity(task_id, "owner-1")
+
+    assert activity["available"] is True
+    assert activity["complete"] is False
+    items = activity["items"]
+    assert isinstance(items, list)
+    assert items[0]["id"] == "2:reasoning-live"
+    assert items[0]["status"] == "completed"
+    assert str(items[0]["detail"]).endswith("…内容已截断")
+    assert next(item for item in items if item["id"] == "2:package") == {
+        "id": "2:package",
+        "kind": "command",
+        "status": "failed",
+        "title": "产物打包未完成",
+    }
+    assert next(item for item in items if item["id"] == "2:install")["title"] == (
+        "正在执行依赖准备"
+    )
+    assert next(item for item in items if item["id"] == "2:3")["title"] == (
+        "已完成迁移步骤"
+    )
+    assert next(item for item in items if item["id"] == "2:plan")["status"] == (
+        "completed"
+    )
+    assert items[-1]["title"] == "Codex 本轮执行未完成"
+    assert "private-token-value" not in json.dumps(activity)
+
+    status_path = f"{MIGRATION_ROOT}/delivery/migration-status.json"
+    gateway.files[(task_id, status_path)] = json.dumps(
+        {
+            "schema_version": 1,
+            "run_id": task_id,
+            "sequence": 2,
+            "state": "failed",
+            "phase": "migration",
+            "message": "Migration failed",
+            "artifact": {
+                "state": "unavailable",
+                "preview_ready": False,
+                "download_ready": False,
+                "deploy_ready": False,
+            },
+            "updated_at": "2026-08-11T08:20:00Z",
+            "error": {
+                "code": "MIGRATION_FAILED",
+                "message": "Migration failed",
+                "retryable": False,
+            },
+        }
+    ).encode()
+    assert service.activity(task_id, "owner-1")["complete"] is True
+
+
+def test_structured_activity_is_not_available() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+
+    assert service.activity(task_id, "owner-1") == {
+        "available": False,
+        "complete": False,
+        "items": [],
+    }
+
+
 def test_session_uses_the_versioned_migration_protocol_and_runtime_preflight() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)

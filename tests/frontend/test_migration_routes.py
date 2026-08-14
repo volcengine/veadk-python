@@ -79,6 +79,9 @@ class RouteService:
     def artifact(self, task_id: str, owner_id: str) -> dict[str, object]:
         return self.record("artifact", task_id, owner_id)
 
+    def activity(self, task_id: str, owner_id: str) -> dict[str, object]:
+        return self.record("activity", task_id, owner_id)
+
     def download(self, task_id: str, owner_id: str) -> tuple[bytes, str]:
         self.calls.append(("download", (task_id, owner_id)))
         return b"zip", "migration.zip"
@@ -154,6 +157,7 @@ def test_all_migration_routes_delegate_with_owner_and_return_artifacts() -> None
             },
         ),
         client.post(f"/web/agent-migrations/tasks/{TASK_ID}/stop", headers=headers),
+        client.get(f"/web/agent-migrations/tasks/{TASK_ID}/activity", headers=headers),
         client.get(f"/web/agent-migrations/tasks/{TASK_ID}/artifact", headers=headers),
     ]
     download = client.get(
@@ -190,6 +194,7 @@ def test_all_migration_routes_delegate_with_owner_and_return_artifacts() -> None
         "submit_answers",
         "confirm",
         "stop",
+        "activity",
         "artifact",
         "download",
         "preview_file",

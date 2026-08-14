@@ -119,6 +119,27 @@ export interface MigrationTask {
   };
 }
 
+export type MigrationActivityKind =
+  | "reasoning"
+  | "message"
+  | "plan"
+  | "command"
+  | "status";
+
+export interface MigrationActivityItem {
+  id: string;
+  kind: MigrationActivityKind;
+  status: "running" | "completed" | "failed";
+  title: string;
+  detail?: string;
+}
+
+export interface MigrationActivity {
+  available: boolean;
+  complete: boolean;
+  items: MigrationActivityItem[];
+}
+
 export interface MigrationArtifact {
   schema_version: 1;
   run_id?: string;
@@ -207,6 +228,20 @@ const TASK_STATES = new Set<MigrationTaskState>([
   "failed",
   "cancelled",
   "expired",
+]);
+
+const ACTIVITY_KINDS = new Set<MigrationActivityKind>([
+  "reasoning",
+  "message",
+  "plan",
+  "command",
+  "status",
+]);
+
+const ACTIVITY_STATES = new Set<MigrationActivityItem["status"]>([
+  "running",
+  "completed",
+  "failed",
 ]);
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -407,6 +442,42 @@ function normalizeTask(value: unknown): MigrationTask {
     };
   }
   return normalized;
+}
+
+function normalizeActivity(value: unknown): MigrationActivity {
+  const activity = record(value, "迁移执行动态");
+  if (
+    typeof activity.available !== "boolean" ||
+    typeof activity.complete !== "boolean" ||
+    !Array.isArray(activity.items)
+  ) {
+    throw new Error("迁移执行动态格式错误。");
+  }
+  return {
+    available: activity.available,
+    complete: activity.complete,
+    items: activity.items.map((value) => {
+      const item = record(value, "迁移执行动态项");
+      if (
+        typeof item.id !== "string" ||
+        typeof item.kind !== "string" ||
+        !ACTIVITY_KINDS.has(item.kind as MigrationActivityKind) ||
+        typeof item.status !== "string" ||
+        !ACTIVITY_STATES.has(item.status as MigrationActivityItem["status"]) ||
+        typeof item.title !== "string" ||
+        (item.detail !== undefined && typeof item.detail !== "string")
+      ) {
+        throw new Error("迁移执行动态项格式错误。");
+      }
+      return {
+        id: item.id,
+        kind: item.kind as MigrationActivityKind,
+        status: item.status as MigrationActivityItem["status"],
+        title: item.title,
+        ...(typeof item.detail === "string" ? { detail: item.detail } : {}),
+      };
+    }),
+  };
 }
 
 function normalizeArtifact(value: unknown): MigrationArtifact {
@@ -713,6 +784,21 @@ export async function getMigrationTask(
     await json(
       await request(`/tasks/${encodeURIComponent(taskId)}`, { signal }),
       "读取迁移会话失败",
+    ),
+  );
+}
+
+export async function getMigrationActivity(
+  taskId: string,
+  signal?: AbortSignal,
+): Promise<MigrationActivity> {
+  return normalizeActivity(
+    await json(
+      await request(
+        `/tasks/${encodeURIComponent(taskId)}/activity`,
+        { signal, cache: "no-store" },
+      ),
+      "读取迁移执行动态失败",
     ),
   );
 }

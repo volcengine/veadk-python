@@ -33,6 +33,7 @@ test("exposes a typed migration API with bounded transfer requests", () => {
   assert.match(source, /export async function uploadMigrationSource/);
   assert.match(source, /export async function confirmMigrationTask/);
   assert.match(source, /export async function stopMigrationTask/);
+  assert.match(source, /export async function getMigrationActivity/);
   assert.match(source, /export async function getMigrationArtifact/);
   assert.match(source, /export async function downloadMigrationArtifact/);
   assert.match(source, /TRANSFER_REQUEST_TIMEOUT_MS/);
@@ -83,6 +84,15 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(source, /getMigrationTask/);
   assert.match(source, /confirmMigrationTask/);
   assert.match(source, /stopMigrationTask/);
+  assert.match(source, /getMigrationActivity/);
+  assert.match(source, /function MigrationActivityFeed/);
+  assert.match(source, /import \{ Blocks \} from "\.\.\/ui\/Blocks"/);
+  assert.match(source, /useStickToBottom<HTMLDivElement>/);
+  assert.match(source, /kind: "thinking"/);
+  assert.match(source, /kind: "text"/);
+  assert.match(source, /Codex 执行动态/);
+  assert.match(source, /暂时无法读取执行动态，迁移任务仍在继续/);
+  assert.match(source, /\["dify", "any"\]\.includes/);
   assert.match(source, /downloadMigrationArtifact/);
   assert.match(source, /task\.canUpload/);
   assert.match(source, /task\?\.canConfirm/);
@@ -198,5 +208,7 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   );
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(styles, /\.migration-transfer-progress__marker/);
+  assert.match(styles, /\.migration-activity/);
+  assert.match(styles, /\.migration-activity__marker/);
   assert.doesNotMatch(styles, /\.migration-transfer-progress > div > span/);
 });

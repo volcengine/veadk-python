@@ -343,6 +343,99 @@
   font-size: 12px;
 }
 
+.migration-activity {
+  width: 100%;
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.migration-activity__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  color: hsl(var(--muted-foreground));
+}
+
+.migration-activity__heading strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.migration-activity__marker {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 50%;
+  background: hsl(var(--background));
+}
+
+.migration-activity__marker.is-complete,
+.migration-activity__status[data-status="completed"] > .migration-activity__marker {
+  border-color: hsl(var(--foreground) / 0.45);
+  background: hsl(var(--foreground) / 0.45);
+}
+
+.migration-activity__status[data-status="running"] > .migration-activity__marker {
+  border-color: hsl(var(--ring));
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.1);
+}
+
+.migration-activity__status[data-status="failed"] > .migration-activity__marker {
+  border-color: hsl(var(--destructive));
+  background: hsl(var(--destructive));
+}
+
+.migration-activity .block-thinking,
+.migration-activity .bubble {
+  max-width: 100%;
+}
+
+.migration-activity__stream {
+  display: grid;
+  gap: 8px;
+}
+
+.migration-activity__status {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  color: hsl(var(--muted-foreground));
+}
+
+.migration-activity__status > .migration-activity__marker {
+  margin-top: 7px;
+}
+
+.migration-activity__status > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.migration-activity__status strong {
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.migration-activity__status small {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.migration-activity__error {
+  margin: 2px 0 0 !important;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
 .migration-transfer-progress {
   width: 100%;
   max-width: var(--migration-content-width);

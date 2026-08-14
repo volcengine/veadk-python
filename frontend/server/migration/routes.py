@@ -226,6 +226,18 @@ def mount_migration_routes(
             task_id=task_id,
         )
 
+    @app.get("/web/agent-migrations/tasks/{task_id}/activity")
+    async def activity(
+        task_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        return await invoke(
+            "activity",
+            lambda: service.activity(task_id, owner_id),
+            task_id=task_id,
+        )
+
     @app.get("/web/agent-migrations/tasks/{task_id}/artifact")
     async def artifact(
         task_id: str,
