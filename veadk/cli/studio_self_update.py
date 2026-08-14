@@ -28,10 +28,11 @@ import time
 import traceback
 import uuid
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from fastapi import HTTPException, Request
 
@@ -154,6 +155,7 @@ class StudioSelfUpdater:
         self._vefaas_log_lines: list[str] = []
         self._vefaas_log_revision = 0
         self._vefaas_logs_expires_at = 0.0
+        self._vefaas_logs_visible = True
 
     def status(
         self,
@@ -314,6 +316,13 @@ class StudioSelfUpdater:
             revision_number=revision_number,
             local_lines=str(progress["errorLog"]).splitlines(),
         )
+        if progress["progressStage"] == "complete":
+            progress["updateLogs"] = _tail_log_lines(
+                [
+                    *progress["updateLogs"],
+                    "更新完成：新 Revision 已接管服务",
+                ]
+            )
         return {
             "enabled": True,
             "currentVersion": current,
@@ -457,6 +466,7 @@ class StudioSelfUpdater:
         self._vefaas_log_lines = []
         self._vefaas_log_revision = 0
         self._vefaas_logs_expires_at = 0.0
+        self._vefaas_logs_visible = True
 
     def _record_failure(
         self,
@@ -499,6 +509,7 @@ class StudioSelfUpdater:
             "errorStage": self._error_stage,
             "errorLog": "\n".join(self._diagnostic_lines),
             "updateLogs": _tail_log_lines(self._diagnostic_lines),
+            "updateLogsVisible": self._vefaas_logs_visible,
             "consoleUrl": self._console_url(),
         }
 
@@ -556,7 +567,7 @@ class StudioSelfUpdater:
         """Read the active Revision log without delaying every status poll."""
         now = time.monotonic()
         if (
-            self._vefaas_log_lines
+            (self._vefaas_log_lines or not self._vefaas_logs_visible)
             and revision_number == self._vefaas_log_revision
             and now < self._vefaas_logs_expires_at
         ):
@@ -576,7 +587,7 @@ class StudioSelfUpdater:
             raw_lines = service._get_application_logs(
                 self._settings.application_id,
                 revision_number=revision_number or None,
-                limit=_UPDATE_LOG_MAX_LINES,
+                limit=_UPDATE_LOG_MAX_BYTES,
             )
             safe_lines = [
                 _redact_diagnostic(
@@ -588,7 +599,13 @@ class StudioSelfUpdater:
             self._vefaas_log_lines = _tail_log_lines(safe_lines)
             self._vefaas_log_revision = revision_number
             self._vefaas_logs_expires_at = now + _UPDATE_LOG_CACHE_SECONDS
-        except Exception:
+            self._vefaas_logs_visible = True
+        except Exception as error:
+            if _is_log_query_permission_denied(error):
+                self._vefaas_log_lines = []
+                self._vefaas_log_revision = revision_number
+                self._vefaas_logs_expires_at = now + _UPDATE_LOG_CACHE_SECONDS
+                self._vefaas_logs_visible = False
             logger.debug("Failed to read VeFaaS update logs", exc_info=True)
         return self._vefaas_log_lines
 
@@ -804,11 +821,48 @@ def _redact_diagnostic(text: str, secrets: tuple[str, ...]) -> str:
     return re.sub(r"(https?://[^\s?]+)\?[^\s]+", r"\1?[REDACTED]", redacted)
 
 
+def _is_log_query_permission_denied(error: BaseException) -> bool:
+    """Recognize explicit authorization failures without hiding other errors."""
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "accessdenied",
+            "access denied",
+            "permission denied",
+            "forbidden",
+            "unauthorizedoperation",
+            "not authorized",
+        )
+    )
+
+
 def _tail_log_lines(lines: list[str]) -> list[str]:
     """Keep the newest complete log lines inside the response budget."""
-    flattened = [line for item in lines for line in str(item).splitlines()][
-        -_UPDATE_LOG_MAX_LINES:
-    ]
+    flattened: list[str] = []
+    for item in lines:
+        for raw_line in str(item).splitlines():
+            line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw_line).strip()
+            if not line or line == "--- End of CP Log ---":
+                continue
+            if re.match(r"^%\s+Total\s+%\s+Received\s+%\s+Xferd\b", line):
+                continue
+            if re.match(r"^Dload\s+Upload\s+Total\s+Spent\s+Left\s+Speed\b", line):
+                continue
+            if re.match(
+                r"^\d{1,3}\s+\S+\s+\d{1,3}\s+\S+\s+\d+\s+\d+\s+\S+",
+                line,
+            ):
+                continue
+            if line == "+ cat s.json" or "Output application s config json:" in line:
+                continue
+            if line.startswith("{") and '"Envs":[' in line:
+                continue
+            if "执行日志内容较多" in line and "更多日志通过日志下载链接查看" in line:
+                line = "VeFaaS 日志内容较多，当前仅显示末尾内容。"
+            if not flattened or flattened[-1] != line:
+                flattened.append(line)
+    flattened = flattened[-_UPDATE_LOG_MAX_LINES:]
     selected: list[str] = []
     size = 0
     for line in reversed(flattened):

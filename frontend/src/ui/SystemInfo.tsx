@@ -6,13 +6,47 @@ import {
   type SandboxToolInfo,
   type StudioRole,
 } from "../adk/client";
+import type { CloudProvider } from "../adk/cloudProvider";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
+import {
+  identityUserPoolConsoleUrl,
+  sandboxToolConsoleUrl,
+  tosConsoleUrl,
+} from "./systemInfoConsoleLinks";
 import "./SystemInfo.css";
 
 export interface SystemInfoProps {
   version: string;
   localMode: boolean;
   role: StudioRole;
+  provider: CloudProvider;
+  region: string;
+}
+
+interface ConsoleLinkProps {
+  href: string | null;
+  label: string;
+  children: string;
+}
+
+function ConsoleLink({ href, label, children }: ConsoleLinkProps) {
+  if (!href) return <span>{children}</span>;
+  return (
+    <a
+      className="system-info-resource-link"
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={label}
+      title={label}
+    >
+      <span>{children}</span>
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M7.75 5.25h-2.5a1.5 1.5 0 0 0-1.5 1.5v8a1.5 1.5 0 0 0 1.5 1.5h8a1.5 1.5 0 0 0 1.5-1.5v-2.5" />
+        <path d="M10.25 3.75h6v6M16 4 9 11" />
+      </svg>
+    </a>
+  );
 }
 
 function isMissingLocalCredentials(cause: unknown): boolean {
@@ -22,7 +56,13 @@ function isMissingLocalCredentials(cause: unknown): boolean {
   );
 }
 
-export function SystemInfo({ version, localMode, role }: SystemInfoProps) {
+export function SystemInfo({
+  version,
+  localMode,
+  role,
+  provider,
+  region,
+}: SystemInfoProps) {
   const isAdmin = role === "admin";
   const [tosAddress, setTosAddress] = useState("");
   const [sandboxTools, setSandboxTools] = useState<SandboxToolInfo[]>([]);
@@ -136,10 +176,17 @@ export function SystemInfo({ version, localMode, role }: SystemInfoProps) {
                 </div>
               ) : (
                 <dl className="system-info-summary">
-                  <div>
+                  <div className="system-info-resource-row">
                     <dt>TOS 地址</dt>
-                    <dd className={tosAddress ? "" : "is-empty"}>
-                      {tosAddress || "未配置"}
+                    <dd
+                      className={`system-info-resource-value${tosAddress ? "" : " is-empty"}`}
+                    >
+                      <ConsoleLink
+                        href={tosConsoleUrl(provider, tosAddress)}
+                        label="在云控制台中打开 TOS 存储桶"
+                      >
+                        {tosAddress || "未配置"}
+                      </ConsoleLink>
                     </dd>
                   </div>
                 </dl>
@@ -173,15 +220,26 @@ export function SystemInfo({ version, localMode, role }: SystemInfoProps) {
                 <div className="system-info-tool-list">
                   {sandboxTools.map((tool) => (
                     <dl className="system-info-tool" key={tool.kind}>
-                      <div>
+                      <div className="system-info-resource-row">
                         <dt className="system-info-tool-label">
                           <span>{tool.label}</span>
                           {tool.snapshot ? (
                             <span className="system-info-tool-badge">快照版</span>
                           ) : null}
                         </dt>
-                        <dd className={tool.toolId ? "" : "is-empty"}>
-                          {tool.toolId || "未配置"}
+                        <dd
+                          className={`system-info-resource-value${tool.toolId ? "" : " is-empty"}`}
+                        >
+                          <ConsoleLink
+                            href={sandboxToolConsoleUrl(
+                              provider,
+                              region,
+                              tool.toolId,
+                            )}
+                            label={`在云控制台中打开${tool.label}`}
+                          >
+                            {tool.toolId || "未配置"}
+                          </ConsoleLink>
                         </dd>
                       </div>
                     </dl>
@@ -216,26 +274,35 @@ export function SystemInfo({ version, localMode, role }: SystemInfoProps) {
               ) : userPools.length > 0 ? (
                 <div className="system-info-pool-list">
                   {userPools.map((pool) => (
-                    <article className="system-info-pool" key={pool.uid}>
-                      <header>
-                        <h3>{pool.name || "未命名用户池"}</h3>
-                        {pool.isCurrent ? <span>当前 Studio</span> : null}
-                      </header>
-                      <dl>
-                        <div>
-                          <dt>UID</dt>
-                          <dd>{pool.uid || "—"}</dd>
-                        </div>
-                        <div>
-                          <dt>域名</dt>
-                          <dd>{pool.domain || "—"}</dd>
-                        </div>
-                        <div>
-                          <dt>区域</dt>
-                          <dd>{pool.region || "—"}</dd>
-                        </div>
-                      </dl>
-                    </article>
+                    <dl className="system-info-pool" key={pool.uid}>
+                      <div>
+                        <dt>名称</dt>
+                        <dd className="system-info-resource-value">
+                          <ConsoleLink
+                            href={identityUserPoolConsoleUrl(
+                              provider,
+                              pool.region || region,
+                              pool.uid,
+                            )}
+                            label={`在云控制台中打开用户池${pool.name ? `“${pool.name}”` : ""}`}
+                          >
+                            {pool.name || "未命名用户池"}
+                          </ConsoleLink>
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>ID</dt>
+                        <dd>{pool.uid || "—"}</dd>
+                      </div>
+                      <div>
+                        <dt>域名</dt>
+                        <dd>{pool.domain || "—"}</dd>
+                      </div>
+                      <div>
+                        <dt>区域</dt>
+                        <dd>{pool.region || "—"}</dd>
+                      </div>
+                    </dl>
                   ))}
                 </div>
               ) : (

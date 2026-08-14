@@ -23,15 +23,80 @@ from frontend.server.studio_update_resources import (
 )
 
 
-def _client(environment: dict[str, str]) -> SimpleNamespace:
+def _client(
+    environment: dict[str, str],
+    *,
+    role: str = "trn:iam::123:role/CustomerStudioRole",
+) -> SimpleNamespace:
     return SimpleNamespace(
         get_function=lambda _request: SimpleNamespace(
+            role=role,
             envs=[
                 SimpleNamespace(key=key, value=value)
                 for key, value in environment.items()
-            ]
+            ],
         )
     )
+
+
+@pytest.mark.parametrize(
+    ("provider", "region"),
+    [
+        ("volcengine", "cn-beijing"),
+        ("byteplus", "ap-southeast-1"),
+    ],
+)
+def test_reconcile_refreshes_the_default_function_role_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    region: str,
+) -> None:
+    calls: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.ensure_default_frontend_role_policy",
+        lambda role, **kwargs: calls.append({"role": role, **kwargs}) or True,
+    )
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.resolve_studio_storage_for_deploy",
+        lambda **_kwargs: pytest.fail("storage must not be reprovisioned"),
+    )
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources._provision_snapshot_tool",
+        lambda **_kwargs: pytest.fail("snapshot tools must not be reprovisioned"),
+    )
+    environment = {
+        "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
+        "VEADK_STUDIO_TOS_REGION": region,
+        "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-tool",
+        "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-tool",
+        "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-tool",
+    }
+
+    assert (
+        reconcile_studio_update_resources(
+            provider=provider,
+            region=region,
+            application_id="application-id",
+            function_id="function-id",
+            function_client=_client(
+                environment,
+                role="trn:iam::123:role/VeADKFrontendServiceRole",
+            ),
+            access_key="ak",
+            secret_key="sk",
+            session_token="token",
+        )
+        == {}
+    )
+    assert calls == [
+        {
+            "role": "trn:iam::123:role/VeADKFrontendServiceRole",
+            "access_key": "ak",
+            "secret_key": "sk",
+            "session_token": "token",
+            "provider": provider,
+        }
+    ]
 
 
 def test_reconcile_studio_update_resources_reuses_existing_resources(

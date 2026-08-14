@@ -35,6 +35,7 @@ from veadk.cli.studio_self_update import (
     StudioSelfUpdater,
     StudioUpdateSettings,
     _parse_vefaas_time,
+    _tail_log_lines,
     current_studio_display_version,
     current_studio_release_version,
     extract_studio_bundle,
@@ -69,6 +70,30 @@ def test_parse_vefaas_time_supports_application_and_function_formats() -> None:
     assert _parse_vefaas_time(
         "2026-07-26 08:53:15.942 +0000 UTC"
     ) == _parse_vefaas_time("2026-07-26T08:53:15.942Z")
+
+
+def test_update_log_lines_remove_terminal_noise_and_empty_rows() -> None:
+    assert _tail_log_lines(
+        [
+            (
+                "Start to install volcano-vefaas...\r"
+                "% Total % Received % Xferd Average Speed Time Time Time Current\r"
+                "Dload Upload Total Spent Left Speed\r"
+                "100 2048 100 2048 0 0 1024 0 0:00:02 0:00:02 --:--:-- 1024"
+            ),
+            (
+                "[WARNING] 执行日志内容较多，已自动加载尾部日志，"
+                "更多日志通过日志下载链接查看。\n"
+            ),
+            "+ cat s.json",
+            "+ node -p 'Output application s config json:'",
+            'Output application s config json: {"edition":"3.0.0"}',
+            "\x1b[2K\n--- End of CP Log ---\n",
+        ]
+    ) == [
+        "Start to install volcano-vefaas...",
+        "VeFaaS 日志内容较多，当前仅显示末尾内容。",
+    ]
     assert _parse_vefaas_time(
         "2026-07-26 16:53:15.942 +0800 CST"
     ) == _parse_vefaas_time("2026-07-26T08:53:15.942Z")
@@ -544,13 +569,66 @@ def test_vefaas_update_logs_use_provider_revision_cache_and_redaction(
     assert calls[0] == {
         "app_id": "application-id",
         "revision_number": 7,
-        "limit": 200,
+        "limit": 32 * 1024,
     }
     assert len(first) <= 200
     assert "sts-ak" not in "\n".join(first)
     assert "sts-token" not in "\n".join(first)
     assert "access_key=***" in first
     assert "https://upload.example.com/object?[REDACTED]" in first
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ValueError(
+            "Get application log failed. Response: "
+            "{'ResponseMetadata': {'Error': {'Code': 'AccessDenied'}}}"
+        ),
+        RuntimeError("Forbidden: no permission to GetApplicationRevisionLog"),
+    ],
+)
+def test_vefaas_log_permission_denial_hides_log_region(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    class _VeFaaS:
+        def __init__(self, **_kwargs: str) -> None:
+            pass
+
+        def _get_application_logs(self, *_args: Any, **_kwargs: Any) -> list[str]:
+            raise error
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("ak", "sk", "token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+
+    assert updater._load_vefaas_logs(7) == []
+    assert updater._progress_payload()["updateLogsVisible"] is False
+
+
+def test_non_permission_log_error_keeps_log_region_visible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _VeFaaS:
+        def __init__(self, **_kwargs: str) -> None:
+            pass
+
+        def _get_application_logs(self, *_args: Any, **_kwargs: Any) -> list[str]:
+            raise TimeoutError("VeFaaS log request timed out")
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("ak", "sk", "token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+
+    assert updater._load_vefaas_logs(7) == []
+    assert updater._progress_payload()["updateLogsVisible"] is True
 
 
 def test_update_routes_require_admin_and_custom_header() -> None:
@@ -855,6 +933,7 @@ def test_status_treats_newer_release_as_completed_stale_target(
     assert status["state"] == "idle"
     assert status["progressStage"] == "complete"
     assert status["targetVersion"] == manifest.version
+    assert status["updateLogs"][-1] == "更新完成：新 Revision 已接管服务"
 
 
 def test_status_reports_function_update_without_revision_release(

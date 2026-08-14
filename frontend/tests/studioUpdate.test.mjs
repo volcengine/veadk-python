@@ -85,15 +85,24 @@ test("update submission is explicit and survives a revision switch", () => {
   assert.match(controlSource, /releaseReached\(next\.currentVersion, target\)/);
   assert.match(controlSource, /targetVersionRef\.current = result\.version/);
   assert.match(controlSource, /!target && !next\.available/);
+  assert.match(controlSource, /persistUpdateHandoff\(completedTarget\)/);
   assert.match(controlSource, /window\.location\.reload\(\)/);
+  assert.match(controlSource, /handoffTargetRef\.current !== completedTarget/);
+  assert.match(controlSource, /setDialogOpen\(true\)/);
+  assert.match(controlSource, /COMPLETION_LOG_SETTLE_TIMEOUT_MS = 45_000/);
+  assert.match(controlSource, /deploymentLogComplete\(next\.updateLogs\)/);
+  assert.match(controlSource, /line\.includes\("部署应用成功"\)/);
 });
 
 test("update state survives refreshes and instance switches", () => {
   assert.match(controlSource, /STUDIO_UPDATE_STORAGE_KEY/);
   assert.match(controlSource, /window\.localStorage\.setItem/);
   assert.match(controlSource, /window\.localStorage\.getItem/);
+  assert.match(controlSource, /window\.sessionStorage\.setItem/);
+  assert.match(controlSource, /window\.sessionStorage\.getItem/);
   assert.match(controlSource, /persistPendingUpdate\(targetVersion/);
   assert.match(controlSource, /clearPendingUpdate\(\)/);
+  assert.match(controlSource, /useState\(Boolean\(initialPending\)\)/);
   assert.match(clientSource, /targetVersion\?: string/);
   assert.match(clientSource, /startedAt\?: number/);
   assert.match(clientSource, /params\.set\("targetVersion", targetVersion\)/);
@@ -145,7 +154,9 @@ test("Studio exposes detailed update stages that can be reopened", () => {
 
 test("Studio renders bounded VeFaaS logs without stealing manual scroll", () => {
   assert.match(clientSource, /updateLogs: string\[\]/);
-  assert.match(controlSource, /VeFaaS 实时部署日志/);
+  assert.match(clientSource, /updateLogsVisible: boolean/);
+  assert.match(controlSource, /部署进度/);
+  assert.doesNotMatch(controlSource, /VeFaaS 实时部署日志/);
   assert.match(controlSource, /role="log"/);
   assert.match(controlSource, /aria-live="off"/);
   assert.match(controlSource, /aria-busy=\{phase === "active"\}/);
@@ -159,4 +170,25 @@ test("Studio renders bounded VeFaaS logs without stealing manual scroll", () => 
     /followRef\.current\) root\.scrollTop = root\.scrollHeight/,
   );
   assert.match(controlStyleSource, /font-family: inherit/);
+  assert.match(controlSource, /status\.updateLogsVisible !== false/);
+  assert.match(
+    controlStyleSource,
+    /\.studio-update-dialog\.is-progress\s*\{[\s\S]*?height:\s*min\(700px, calc\(100dvh - 32px\)\)/,
+  );
+  assert.match(
+    controlStyleSource,
+    /\.studio-update-progress-body\s*\{[\s\S]*?grid-template-rows:[\s\S]*?minmax\(120px, 1fr\)/,
+  );
+  assert.match(
+    controlStyleSource,
+    /\.studio-update-progress-body \.studio-update-log-lines,\s*[\s\S]*?\{[\s\S]*?overflow-y:\s*auto/,
+  );
+});
+
+test("Studio hides only the log region when VeFaaS log permission is missing", () => {
+  assert.match(
+    controlSource,
+    /\{status\.updateLogsVisible !== false && \([\s\S]*?<StudioUpdateLog/,
+  );
+  assert.match(controlSource, /status\.updateLogsVisible !== false/g);
 });

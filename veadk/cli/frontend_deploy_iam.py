@@ -204,3 +204,24 @@ def ensure_frontend_role(
     _ensure_role_policies(svc, role_name, policy_name)
     logger.info(f"Ensured IAM role {role_name} ({trn})")
     return trn
+
+
+def ensure_default_frontend_role_policy(
+    role: str,
+    *,
+    access_key: str,
+    secret_key: str,
+    session_token: str = "",
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+) -> bool:
+    """Refresh the managed Studio role without changing customer-owned roles."""
+    role_name = str(role or "").strip().rsplit("/", 1)[-1]
+    if role_name != DEFAULT_ROLE_NAME:
+        return False
+    ensure_frontend_role(
+        access_key,
+        secret_key,
+        session_token=session_token,
+        provider=provider,
+    )
+    return True

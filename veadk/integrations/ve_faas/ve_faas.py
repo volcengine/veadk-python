@@ -14,17 +14,16 @@
 
 import json
 import re
-import time
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, cast
-from cookiecutter.main import cookiecutter
-import veadk.integrations.ve_faas as vefaas
-from veadk.version import VERSION
+
 import requests
 import volcenginesdkcore
 import volcenginesdkvefaas
+from cookiecutter.main import cookiecutter
 from volcenginesdkvefaas.models.env_for_create_function_input import (
     EnvForCreateFunctionInput,
 )
@@ -33,6 +32,7 @@ from volcenginesdkvefaas.models.tag_for_create_function_input import (
 )
 
 import veadk.config
+import veadk.integrations.ve_faas as vefaas
 from veadk.integrations.ve_apig.ve_apig import APIGateway
 from veadk.integrations.ve_faas.ve_faas_utils import (
     signed_request,
@@ -47,8 +47,11 @@ from veadk.utils.cloud_provider import (
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp, getenv
 from veadk.utils.volcengine_sign import ve_request
+from veadk.version import VERSION
 
 logger = get_logger(__name__)
+
+_APPLICATION_REVISION_LOG_MAX_BYTES = 50_000
 
 
 def _redact_release_text(text: str) -> str:
@@ -664,13 +667,14 @@ class VeFaaS:
         """
         import time
 
-        import veadk.config
         from volcenginesdkvefaas import (
             EnvForUpdateFunctionInput,
             GetReleaseStatusRequest,
             ReleaseRequest,
             UpdateFunctionRequest,
         )
+
+        import veadk.config
 
         merged = {**veadk.config.veadk_environments, **extra_envs}
         envs = [EnvForUpdateFunctionInput(key=k, value=v) for k, v in merged.items()]
@@ -1058,7 +1062,7 @@ class VeFaaS:
         app_id: str,
         *,
         revision_number: int | None = None,
-        limit: int = 200,
+        limit: int = _APPLICATION_REVISION_LOG_MAX_BYTES,
     ) -> list[str]:
         if revision_number is None:
             _, application = self._get_application_status(app_id)
@@ -1068,24 +1072,42 @@ class VeFaaS:
                 or result.get("StableRevisionNumber")
                 or 1
             )
-        response = ve_request(
-            request_body={
-                "Id": app_id,
-                "Limit": max(1, min(limit, 500)),
-                "RevisionNumber": revision_number,
-            },
-            action="GetApplicationRevisionLog",
-            ak=self.ak,
-            sk=self.sk,
-            service="vefaas",
-            version="2021-03-03",
-            region=self.region,
-            host=self._openapi_host(),
-            session_token=self.session_token,
+        request_limit = max(
+            1,
+            min(limit, _APPLICATION_REVISION_LOG_MAX_BYTES),
         )
 
+        def request_page(offset: int | None = None) -> dict[str, Any]:
+            request_body = {
+                "Id": app_id,
+                "Limit": request_limit,
+                "RevisionNumber": revision_number,
+            }
+            if offset is not None:
+                request_body["Offset"] = offset
+            return ve_request(
+                request_body=request_body,
+                action="GetApplicationRevisionLog",
+                ak=self.ak,
+                sk=self.sk,
+                service="vefaas",
+                version="2021-03-03",
+                region=self.region,
+                host=self._openapi_host(),
+                session_token=self.session_token,
+            )
+
+        response = request_page()
+
         try:
-            logs = response["Result"]["LogLines"]
+            result = response["Result"]
+            logs = result["LogLines"]
+            next_offset = int(result.get("NextOffset") or 0)
+            if next_offset > request_limit:
+                tail_response = request_page(next_offset - request_limit)
+                tail_logs = tail_response["Result"]["LogLines"]
+                # Offset is a byte position and can land in the middle of a line.
+                return tail_logs[1:] if tail_logs else []
             return logs
         except Exception as _:
             raise ValueError(f"Get application log failed. Response: {response}")
