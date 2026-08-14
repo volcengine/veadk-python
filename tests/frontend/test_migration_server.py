@@ -2192,8 +2192,35 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
     assert wrong_source.value.code == "MIGRATION_ARTIFACT_SOURCE_MISMATCH"
 
 
-def test_materialize_deployment_accepts_unverified_success_and_verifies_owner_artifact(
+@pytest.mark.parametrize(
+    ("delivery_state", "verification"),
+    [
+        (
+            "succeeded",
+            {
+                "status": "passed",
+                "checks": [{"name": "import", "status": "passed"}],
+            },
+        ),
+        (
+            "partial",
+            {
+                "status": "failed",
+                "checks": [
+                    {
+                        "name": "observability:env_config",
+                        "status": "failed",
+                        "detail": "ENABLE_APMPLUS must default to true",
+                    }
+                ],
+            },
+        ),
+    ],
+)
+def test_materialize_deployment_accepts_complete_artifact_and_verifies_owner(
     tmp_path: Path,
+    delivery_state: str,
+    verification: dict[str, object],
 ) -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
@@ -2227,7 +2254,7 @@ def test_materialize_deployment_accepts_unverified_success_and_verifies_owner_ar
                 ]
             ).hexdigest(),
         },
-        "status": "succeeded",
+        "status": delivery_state,
         "files": [
             {
                 "path": path,
@@ -2239,10 +2266,7 @@ def test_materialize_deployment_accepts_unverified_success_and_verifies_owner_ar
         ],
         "startup": {"module": "runtime/agentkit_app.py", "object": "app"},
         "environment": {"required": [], "optional": []},
-        "verification": {
-            "status": "passed",
-            "checks": [{"name": "import", "status": "passed"}],
-        },
+        "verification": verification,
         "warnings": [],
         "report": {"path": "agentkit.yaml"},
         "artifact": {
@@ -2264,7 +2288,7 @@ def test_materialize_deployment_accepts_unverified_success_and_verifies_owner_ar
             "schema_version": 1,
             "run_id": task_id,
             "sequence": 4,
-            "state": "succeeded",
+            "state": delivery_state,
             "phase": "completed",
             "message": "Migration artifact is ready",
             "artifact": {

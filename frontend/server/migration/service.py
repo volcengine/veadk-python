@@ -2000,13 +2000,13 @@ class MigrationService:
         expiry = self._session_expiry(session, request)
         artifact_status = self._artifact_status(artifact)
         if (
-            state in {"succeeded", "succeeded_with_warnings"}
+            state in {"succeeded", "succeeded_with_warnings", "partial"}
             and artifact_status["previewReady"]
             and artifact_status["downloadReady"]
         ):
-            # CLI deploy_ready reflects in-sandbox runtime verification. Studio
-            # can still deploy an integrity-checked artifact and collect the
-            # environment variables that were unavailable during migration.
+            # CLI deploy_ready reflects migration validation. Studio can still
+            # deploy an integrity-checked artifact and surface repairable issues
+            # while Runtime deployment performs the authoritative build check.
             artifact_status["deployReady"] = True
         payload: dict[str, object] = {
             "id": session.task_id,
@@ -2864,7 +2864,8 @@ class MigrationService:
         task = self._task_from_session(session)
         artifact_status = task.get("artifact")
         if (
-            task.get("state") not in {"succeeded", "succeeded_with_warnings"}
+            task.get("state")
+            not in {"succeeded", "succeeded_with_warnings", "partial"}
             or not isinstance(artifact_status, dict)
             or not artifact_status.get("downloadReady")
         ):
