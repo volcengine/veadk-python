@@ -209,6 +209,67 @@ def test_identity_user_pools_marks_the_current_studio_pool(
     assert regions == ["cn-shanghai"]
 
 
+def test_identity_user_pools_use_byteplus_default_region(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    clients: list[dict[str, Any]] = []
+
+    class _FakeIdentityClient:
+        def __init__(self, **kwargs: Any) -> None:
+            clients.append(kwargs)
+
+        def list_user_pools(self) -> list[dict[str, str]]:
+            return [
+                {
+                    "uid": "pool-byteplus",
+                    "name": "BytePlus Studio",
+                    "domain": "studio.byteplus.example.com",
+                }
+            ]
+
+    monkeypatch.delenv("VEIDENTITY_REGION", raising=False)
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-byteplus-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-byteplus-sk")
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        _FakeIdentityClient,
+    )
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+        developers="developer",
+        provider="byteplus",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/identity/user-pools",
+            headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'developer'})}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["items"] == [
+        {
+            "uid": "pool-byteplus",
+            "name": "BytePlus Studio",
+            "domain": "studio.byteplus.example.com",
+            "region": "ap-southeast-1",
+            "isCurrent": False,
+        }
+    ]
+    assert clients == [
+        {
+            "access_key": "test-byteplus-ak",
+            "secret_key": "test-byteplus-sk",
+            "session_token": "",
+            "region": "ap-southeast-1",
+            "provider": "byteplus",
+        }
+    ]
+
+
 def test_system_info_lists_configured_sandbox_tool_ids(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

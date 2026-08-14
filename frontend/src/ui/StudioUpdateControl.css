@@ -101,6 +101,39 @@
 
 .studio-update-dialog.is-progress {
   width: min(760px, calc(100vw - 32px));
+  height: min(700px, calc(100dvh - 32px));
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.studio-update-dialog.is-progress > .studio-update-progress-body,
+.studio-update-dialog.is-progress > .studio-update-error-panel {
+  grid-row: 2;
+  min-height: 0;
+}
+
+.studio-update-dialog.is-progress > .confirm-actions {
+  grid-row: 3;
+}
+
+.studio-update-progress-body {
+  display: grid;
+  grid-template-rows: auto auto minmax(120px, 1fr) auto;
+  min-height: 0;
+}
+
+.studio-update-progress-body .studio-update-live-log,
+.studio-update-error-panel .studio-update-live-log {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.studio-update-progress-body .studio-update-log-lines,
+.studio-update-error-panel .studio-update-log-lines {
+  min-height: 0;
+  max-height: none;
+  flex: 1;
+  overflow-y: auto;
 }
 
 .studio-update-dialog > .studio-update-dialog-mark {
@@ -375,7 +408,10 @@
 }
 
 .studio-update-error-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(120px, 1fr) auto;
   min-width: 0;
+  min-height: 0;
 }
 
 .studio-update-error-meta {

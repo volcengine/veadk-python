@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
 from frontend.server.storage.provisioning import resolve_studio_storage_for_deploy
+from veadk.cli.frontend_deploy_iam import ensure_default_frontend_role_policy
 from veadk.utils.cloud_provider import CloudProvider
 
 SnapshotKind = Literal["codex", "openclaw", "hermes"]
@@ -31,17 +32,21 @@ _SNAPSHOT_ENVIRONMENTS: tuple[tuple[str, SnapshotKind, str], ...] = (
 )
 
 
-def _function_environment(function_client: Any, function_id: str) -> dict[str, str]:
+def _function_config(
+    function_client: Any,
+    function_id: str,
+) -> tuple[dict[str, str], str]:
     import volcenginesdkvefaas
 
     function = function_client.get_function(
         volcenginesdkvefaas.GetFunctionRequest(id=function_id)
     )
-    return {
+    environment = {
         str(item.key): str(item.value)
         for item in (getattr(function, "envs", None) or [])
         if getattr(item, "key", None)
     }
+    return environment, str(getattr(function, "role", "") or "").strip()
 
 
 def _provision_snapshot_tool(
@@ -129,8 +134,16 @@ def reconcile_studio_update_resources(
     session_token: str,
 ) -> dict[str, str]:
     """Return environment overrides for resources missing from an older Studio."""
-    environment = _function_environment(function_client, function_id)
+    environment, function_role = _function_config(function_client, function_id)
     overrides: dict[str, str] = {}
+
+    ensure_default_frontend_role_policy(
+        function_role,
+        access_key=access_key,
+        secret_key=secret_key,
+        session_token=session_token,
+        provider=provider,
+    )
 
     if not (
         environment.get("VEADK_STUDIO_TOS_BUCKET")

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { build } from "esbuild";
 
 const read = (path) =>
   readFileSync(new URL(`../src/${path}`, import.meta.url), "utf8");
@@ -11,12 +14,36 @@ const sidebarSource = read("ui/Sidebar.tsx");
 const systemInfoSource = read("ui/SystemInfo.tsx");
 const systemInfoStylesSource = read("ui/SystemInfo.css");
 
+const linksBuild = await build({
+  entryPoints: [
+    fileURLToPath(
+      new URL("../src/ui/systemInfoConsoleLinks.ts", import.meta.url),
+    ),
+  ],
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node20",
+  write: false,
+});
+const linksModuleUrl = `data:text/javascript;base64,${Buffer.from(linksBuild.outputFiles[0].contents).toString("base64")}`;
+const {
+  identityUserPoolConsoleUrl,
+  sandboxToolConsoleUrl,
+  tosConsoleUrl,
+} = await import(linksModuleUrl);
+
 test("account menu navigates to the system information page", () => {
   assert.match(clientSource, /version: string;/);
   assert.match(appSource, /setVersion\(cfg\.version\)/);
   assert.match(
     appSource,
     /<SystemInfo[\s\S]*?version=\{version\}[\s\S]*?localMode=\{agentsSource === "local"\}[\s\S]*?role=\{access\?\.role \?\? "user"\}/,
+  );
+  assert.match(appSource, /provider=\{cloudProvider\}/);
+  assert.match(
+    appSource,
+    /region=\{studioRegion \|\| defaultCloudRegion\(cloudProvider\)\}/,
   );
   assert.match(appSource, /const \[systemInfo, setSystemInfo\] = useState\(false\)/);
   assert.match(
@@ -29,6 +56,71 @@ test("account menu navigates to the system information page", () => {
   assert.doesNotMatch(sidebarSource, /createPortal/);
 });
 
+test("builds direct console links for Volcengine and BytePlus resources", () => {
+  assert.equal(
+    tosConsoleUrl(
+      "volcengine",
+      "veadk-studio-2107625663.tos-cn-beijing.volces.com",
+    ),
+    "https://console.volcengine.com/tos/bucket/setting?id=veadk-studio-2107625663&region=cn-beijing&type=objects",
+  );
+  assert.equal(
+    tosConsoleUrl(
+      "byteplus",
+      "veadk-studio-3001037806.tos-ap-southeast-1.bytepluses.com",
+    ),
+    "https://console.byteplus.com/tos/bucket/setting?id=veadk-studio-3001037806&region=ap-southeast-1&type=objects",
+  );
+  assert.equal(
+    sandboxToolConsoleUrl("volcengine", "cn-beijing", "t-volc"),
+    "https://console.volcengine.com/agentkit/region:agentkit+cn-beijing/builtintools/t-volc/detail",
+  );
+  assert.equal(
+    sandboxToolConsoleUrl("byteplus", "ap-southeast-1", "t-byteplus"),
+    "https://console.byteplus.com/agentkit/region:agentkit+ap-southeast-1/builtintools/t-byteplus/detail",
+  );
+  assert.equal(
+    identityUserPoolConsoleUrl("volcengine", "cn-beijing", "pool-volc"),
+    "https://console.volcengine.com/identity/region:identity+cn-beijing/user-pools/pool-volc/info",
+  );
+  assert.equal(
+    identityUserPoolConsoleUrl(
+      "byteplus",
+      "ap-southeast-1",
+      "pool-byteplus",
+    ),
+    "https://console.byteplus.com/identity/region:identity+ap-southeast-1/user-pools/pool-byteplus/info",
+  );
+  assert.equal(tosConsoleUrl("volcengine", ""), null);
+  assert.equal(sandboxToolConsoleUrl("volcengine", "cn-beijing", ""), null);
+  assert.equal(
+    identityUserPoolConsoleUrl("byteplus", "ap-southeast-1", ""),
+    null,
+  );
+});
+
+test("resource text and its console icon form one compact external link", () => {
+  assert.match(systemInfoSource, /className="system-info-resource-link"/);
+  assert.match(systemInfoSource, /target="_blank"/);
+  assert.match(systemInfoSource, /rel="noreferrer"/);
+  assert.match(systemInfoSource, /aria-label=\{label\}/);
+  assert.match(
+    systemInfoStylesSource,
+    /\.system-info-resource-link\s*\{[^}]*width:\s*fit-content;[^}]*display:\s*inline-flex;[^}]*cursor:\s*pointer;/s,
+  );
+  assert.match(systemInfoStylesSource, /text-decoration-style:\s*dashed/);
+  assert.match(
+    systemInfoStylesSource,
+    /\.system-info-resource-link svg\s*\{[^}]*opacity:\s*0;/s,
+  );
+  assert.match(
+    systemInfoStylesSource,
+    /\.system-info-resource-link:hover svg,[\s\S]*?\.system-info-resource-link:focus-visible svg\s*\{[^}]*opacity:\s*1;/,
+  );
+  assert.doesNotMatch(systemInfoStylesSource, /margin-left:\s*auto/);
+  assert.match(systemInfoStylesSource, /@media \(prefers-reduced-motion: reduce\)/);
+});
+
 test("system information page lists sandbox tools and the current identity user pool", () => {
   assert.match(clientSource, /\/web\/system-info/);
   assert.match(systemInfoSource, /当前版本/);
@@ -38,8 +130,18 @@ test("system information page lists sandbox tools and the current identity user 
   assert.match(systemInfoSource, /tosAddress/);
   assert.match(systemInfoSource, />沙箱信息</);
   assert.match(systemInfoSource, /用户池/);
+  assert.match(
+    systemInfoSource,
+    /<dl className="system-info-pool"[\s\S]*?<dt>名称<\/dt>[\s\S]*?<dt>ID<\/dt>[\s\S]*?<dt>域名<\/dt>[\s\S]*?<dt>区域<\/dt>[\s\S]*?<\/dl>/,
+  );
+  assert.match(
+    systemInfoSource,
+    /<dt>名称<\/dt>[\s\S]*?<ConsoleLink[\s\S]*?identityUserPoolConsoleUrl/,
+  );
+  assert.doesNotMatch(systemInfoSource, /<dt>UID<\/dt>/);
   assert.match(systemInfoSource, /listIdentityUserPools/);
   assert.match(systemInfoSource, /pools\.filter\(\(pool\) => pool\.isCurrent\)/);
+  assert.doesNotMatch(systemInfoSource, /当前 Studio<\/span>/);
   assert.match(systemInfoSource, /重新加载/);
   assert.match(systemInfoSource, /setSandboxReloadKey/);
   assert.match(systemInfoSource, /setUserPoolsReloadKey/);
@@ -67,6 +169,18 @@ test("system information page lists sandbox tools and the current identity user 
   assert.match(
     systemInfoStylesSource,
     /\.system-info-pool\s*\{[^}]*padding:\s*4px 0;[^}]*\}/,
+  );
+  assert.match(
+    systemInfoStylesSource,
+    /\.system-info-pool\s*\{[^}]*grid-template-columns:\s*1fr;[^}]*gap:\s*8px;/s,
+  );
+  assert.match(
+    systemInfoStylesSource,
+    /\.system-info-summary > div,\s*\.system-info-tool > div,\s*\.system-info-pool > div\s*\{[^}]*grid-template-columns:\s*minmax\(140px, 0\.36fr\)\s+minmax\(0, 1fr\);[^}]*align-items:\s*center;[^}]*gap:\s*16px;/s,
+  );
+  assert.match(
+    systemInfoStylesSource,
+    /@media \(max-width:\s*520px\)[\s\S]*?\.system-info-summary > div,\s*\.system-info-tool > div,\s*\.system-info-pool > div\s*\{[^}]*grid-template-columns:\s*1fr;[^}]*gap:\s*4px;/,
   );
   assert.doesNotMatch(
     systemInfoStylesSource,

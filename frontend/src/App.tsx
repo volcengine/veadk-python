@@ -1353,6 +1353,7 @@ export default function App() {
   const [cloudProvider, setCloudProvider] =
     useState<UiConfig["provider"]>("volcengine");
   const [version, setVersion] = useState("");
+  const [studioRegion, setStudioRegion] = useState("");
   const [uiConfigLoaded, setUiConfigLoaded] = useState(false);
   const [localMode, setLocalMode] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
@@ -2389,6 +2390,7 @@ export default function App() {
       setFeatures(cfg.features);
       setAgentsSource(cfg.agentsSource);
       setCloudProvider(cfg.provider);
+      setStudioRegion(studio?.region || defaultCloudRegion(cfg.provider));
       setSiteBranding(cfg.branding);
       setVersion(cfg.version);
       setUiConfigLoaded(true);
@@ -5254,6 +5256,8 @@ export default function App() {
                 version={version}
                 localMode={agentsSource === "local"}
                 role={access?.role ?? "user"}
+                provider={cloudProvider}
+                region={studioRegion || defaultCloudRegion(cloudProvider)}
               />
             ) : applicationsView === "coding-agents" ? (
               <CodingAgentsIntegration

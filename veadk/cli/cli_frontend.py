@@ -3340,7 +3340,10 @@ def _run_frontend_server(
         return True
 
     def _identity_region() -> str:
-        return os.getenv("VEIDENTITY_REGION", "cn-beijing").strip() or "cn-beijing"
+        return (
+            os.getenv("VEIDENTITY_REGION", _default_cloud_region()).strip()
+            or _default_cloud_region()
+        )
 
     def _identity_client():
         from veadk.integrations.ve_identity.identity_client import IdentityClient
@@ -3351,6 +3354,7 @@ def _run_frontend_server(
             secret_key=sk,
             session_token=token or "",
             region=_identity_region(),
+            provider=provider,
         )
 
     def _current_studio_identity_ids(client: Any) -> tuple[str, str]:
@@ -8888,6 +8892,18 @@ def frontend_update(
             function = service_client.get_function(
                 volcenginesdkvefaas.GetFunctionRequest(id=target.function_id)
             )
+            from veadk.cli.frontend_deploy_iam import (
+                ensure_default_frontend_role_policy,
+            )
+
+            if ensure_default_frontend_role_policy(
+                str(getattr(function, "role", "") or ""),
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token,
+                provider=provider_id,
+            ):
+                click.echo("Studio IAM role policy updated.")
             current_env = {
                 item.key: item.value for item in (getattr(function, "envs", None) or [])
             }

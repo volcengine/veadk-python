@@ -18,7 +18,10 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
-from veadk.cli.frontend_deploy_iam import ensure_frontend_role
+from veadk.cli.frontend_deploy_iam import (
+    ensure_default_frontend_role_policy,
+    ensure_frontend_role,
+)
 from veadk.cli.frontend_deploy_policy import (
     FRONTEND_DEPLOY_POLICY,
     FRONTEND_DEPLOY_SYSTEM_POLICIES,
@@ -259,6 +262,71 @@ def test_frontend_policy_allows_release_download() -> None:
     assert "tos:GetObject" in actions
     assert "vefaas:GetCodeUploadAddress" in actions
     assert "vefaas:GetApplication" in actions
+    assert "vefaas:GetApplicationRevisionLog" in actions
+    assert "iam:CreatePolicy" in actions
+    assert "iam:UpdatePolicy" in actions
     assert "vefaas:CodeUploadCallback" in actions
     assert "vefaas:UpdateFunction" in actions
     assert "vefaas:ReleaseApplication" in actions
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        "VeADKFrontendServiceRole",
+        "trn:iam::123:role/VeADKFrontendServiceRole",
+    ],
+)
+def test_default_frontend_role_policy_is_refreshed_for_future_updates(
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+) -> None:
+    calls: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        "veadk.cli.frontend_deploy_iam.ensure_frontend_role",
+        lambda access_key, secret_key, **kwargs: calls.append(
+            {
+                "access_key": access_key,
+                "secret_key": secret_key,
+                **kwargs,
+            }
+        )
+        or role,
+    )
+
+    refreshed = ensure_default_frontend_role_policy(
+        role,
+        access_key="ak",
+        secret_key="sk",
+        session_token="token",
+        provider="byteplus",
+    )
+
+    assert refreshed is True
+    assert calls == [
+        {
+            "access_key": "ak",
+            "secret_key": "sk",
+            "session_token": "token",
+            "provider": "byteplus",
+        }
+    ]
+
+
+def test_custom_frontend_role_policy_is_not_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "veadk.cli.frontend_deploy_iam.ensure_frontend_role",
+        lambda *_args, **_kwargs: pytest.fail("custom roles must not be changed"),
+    )
+
+    assert (
+        ensure_default_frontend_role_policy(
+            "trn:iam::123:role/CustomerStudioRole",
+            access_key="ak",
+            secret_key="sk",
+            provider="volcengine",
+        )
+        is False
+    )

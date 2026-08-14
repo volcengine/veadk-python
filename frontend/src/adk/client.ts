@@ -2584,6 +2584,7 @@ export interface StudioUpdateStatus {
   errorStage: string;
   errorLog: string;
   updateLogs: string[];
+  updateLogsVisible: boolean;
   consoleUrl: string;
 }
 

@@ -14,23 +14,21 @@
 
 import json
 import subprocess
-
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-
 from click.testing import CliRunner
 
 from veadk.cli.cli_frontend import studio
 from veadk.cli.frontend_branding import SiteLogo
+from veadk.cli.studio_package import _stage_wheel_source, build_frontend_assets
 from veadk.cli.studio_update import (
     StudioDeploymentTarget,
     find_studio_deployments,
     load_deployed_site_logo,
 )
-from veadk.cli.studio_package import _stage_wheel_source, build_frontend_assets
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
 _PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
@@ -689,6 +687,7 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
     agent_tools: list[dict[str, object]] = []
     code_credentials: list[dict[str, object]] = []
     agent_credentials: list[dict[str, object]] = []
+    role_policy_syncs: list[dict[str, object]] = []
     stagger_delays: list[float] = []
     monkeypatch.setattr(
         "veadk.cli.studio_update.find_studio_deployments", lambda **_: [target]
@@ -729,17 +728,23 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
         "veadk.cli.studio_sandbox_tools.ensure_studio_agent_model_credential",
         lambda **kwargs: agent_credentials.append(kwargs),
     )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_deploy_iam.ensure_default_frontend_role_policy",
+        lambda role, **kwargs: role_policy_syncs.append({"role": role, **kwargs})
+        or True,
+    )
 
     class _FakeVeFaaS:
         def __init__(self, **_: str) -> None:
             self.client = SimpleNamespace(
                 get_function=lambda _request: SimpleNamespace(
+                    role="trn:iam::123:role/VeADKFrontendServiceRole",
                     envs=[
                         SimpleNamespace(
                             key="OAUTH2_USER_POOL_ID",
                             value="legacy-user-pool",
                         )
-                    ]
+                    ],
                 )
             )
 
@@ -765,6 +770,15 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
     )
 
     assert result.exit_code == 0, result.output
+    assert role_policy_syncs == [
+        {
+            "role": "trn:iam::123:role/VeADKFrontendServiceRole",
+            "access_key": "ak",
+            "secret_key": "sk",
+            "session_token": "",
+            "provider": "volcengine",
+        }
+    ]
     assert len(code_tools) == 1
     assert code_tools[0]["enable_snapshot"] is True
     assert code_tools[0]["create_min_interval"] == 0.5
@@ -1034,9 +1048,55 @@ def test_application_logs_use_latest_revision_and_bounded_limit(
     assert logs == ["building", "published"]
     assert requests[0]["request_body"] == {
         "Id": "application-id",
-        "Limit": 500,
+        "Limit": 50_000,
         "RevisionNumber": 8,
     }
+
+
+def test_application_logs_retry_with_tail_window_when_response_is_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[dict[str, Any]] = []
+    service = object.__new__(VeFaaS)
+    service.session_token = ""
+    cast(Any, service).ak = "ak"
+    cast(Any, service).sk = "sk"
+    cast(Any, service).region = "cn-beijing"
+
+    def _ve_request(**kwargs: Any) -> dict[str, Any]:
+        request_body = kwargs["request_body"]
+        requests.append(request_body)
+        if "Offset" not in request_body:
+            return {
+                "Result": {
+                    "LogLines": ["logs truncated"],
+                    "NextOffset": 70_000,
+                }
+            }
+        return {
+            "Result": {
+                "LogLines": ["partial first line", "tail one", "tail two"],
+                "NextOffset": 70_000,
+            }
+        }
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.ve_request", _ve_request)
+
+    logs = service._get_application_logs(
+        "application-id",
+        revision_number=9,
+    )
+
+    assert logs == ["tail one", "tail two"]
+    assert requests == [
+        {"Id": "application-id", "Limit": 50_000, "RevisionNumber": 9},
+        {
+            "Id": "application-id",
+            "Limit": 50_000,
+            "RevisionNumber": 9,
+            "Offset": 20_000,
+        },
+    ]
 
 
 def test_release_failure_includes_status_when_logs_are_empty(

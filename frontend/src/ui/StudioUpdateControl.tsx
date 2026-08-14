@@ -12,7 +12,9 @@ import "./StudioUpdateControl.css";
 const CHECK_INTERVAL_MS = 3 * 60 * 1000;
 const RELEASE_POLL_INTERVAL_MS = 3_000;
 const RELEASE_TIMEOUT_MS = 10 * 60 * 1000;
+const COMPLETION_LOG_SETTLE_TIMEOUT_MS = 45_000;
 const STUDIO_UPDATE_STORAGE_KEY = "veadk.studio.pending-update";
+const STUDIO_UPDATE_HANDOFF_KEY = "veadk.studio.update-handoff";
 
 type UpdatePhase = "idle" | "confirm" | "submitting" | "published" | "error";
 type PendingStudioUpdate = { targetVersion: string; startedAt: number };
@@ -48,6 +50,16 @@ function releaseReached(current: string, target: string) {
   return /^\d{14}$/.test(current) && /^\d{14}$/.test(target) && current > target;
 }
 
+function deploymentLogComplete(lines: string[] | undefined) {
+  return Boolean(
+    lines?.some(
+      (line) =>
+        line.includes("部署应用成功") ||
+        line.toLowerCase().includes("application deployed successfully"),
+    ),
+  );
+}
+
 function loadPendingUpdate(): PendingStudioUpdate | null {
   if (typeof window === "undefined") return null;
   const raw = window.localStorage.getItem(STUDIO_UPDATE_STORAGE_KEY);
@@ -73,6 +85,19 @@ function persistPendingUpdate(targetVersion: string, startedAt: number) {
 
 function clearPendingUpdate() {
   window.localStorage.removeItem(STUDIO_UPDATE_STORAGE_KEY);
+}
+
+function loadUpdateHandoff() {
+  if (typeof window === "undefined") return "";
+  return window.sessionStorage.getItem(STUDIO_UPDATE_HANDOFF_KEY) ?? "";
+}
+
+function persistUpdateHandoff(targetVersion: string) {
+  window.sessionStorage.setItem(STUDIO_UPDATE_HANDOFF_KEY, targetVersion);
+}
+
+function clearUpdateHandoff() {
+  window.sessionStorage.removeItem(STUDIO_UPDATE_HANDOFF_KEY);
 }
 
 function StudioUpdateIcon({ className }: { className?: string }) {
@@ -136,11 +161,11 @@ function StudioUpdateLog({
   }, [visibleLines]);
 
   return (
-    <section className="studio-update-live-log" aria-label="VeFaaS 实时部署日志">
+    <section className="studio-update-live-log" aria-label="部署进度">
       <div className="studio-update-log-header">
         <span>
           <i className={`is-${phase}`} aria-hidden />
-          VeFaaS 实时部署日志
+          部署进度
           <small>{phase === "active" ? "实时" : phase === "complete" ? "已完成" : "已停止"}</small>
         </span>
         <button
@@ -188,7 +213,7 @@ export function StudioUpdateControl({
   const [phase, setPhase] = useState<UpdatePhase>(
     initialPending ? "submitting" : "idle",
   );
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(Boolean(initialPending));
   const [message, setMessage] = useState("");
   const [selectedVersion, setSelectedVersion] = useState(
     initialPending?.targetVersion ?? "",
@@ -199,6 +224,8 @@ export function StudioUpdateControl({
   const versionPickerRef = useRef<HTMLDivElement>(null);
   const targetVersionRef = useRef(initialPending?.targetVersion ?? "");
   const startedAtRef = useRef(initialPending?.startedAt ?? 0);
+  const handoffTargetRef = useRef(loadUpdateHandoff());
+  const completionDetectedAtRef = useRef(0);
 
   useEffect(() => {
     if (!versionMenuOpen) return;
@@ -255,12 +282,33 @@ export function StudioUpdateControl({
             (target && releaseReached(next.currentVersion, target)) ||
             (!target && !next.available && Boolean(next.latestVersion))
           ) {
+            const now = Date.now();
+            if (!completionDetectedAtRef.current) {
+              completionDetectedAtRef.current = now;
+            }
+            if (
+              !deploymentLogComplete(next.updateLogs) &&
+              now - completionDetectedAtRef.current < COMPLETION_LOG_SETTLE_TIMEOUT_MS
+            ) {
+              return;
+            }
             window.clearInterval(timer);
+            completionDetectedAtRef.current = 0;
+            const completedTarget = target || next.latestVersion;
+            if (handoffTargetRef.current !== completedTarget) {
+              persistUpdateHandoff(completedTarget);
+              window.location.reload();
+              return;
+            }
             clearPendingUpdate();
+            clearUpdateHandoff();
+            handoffTargetRef.current = "";
             setPhase("published");
-            setMessage("Studio 已更新，刷新页面即可使用新版本");
+            setDialogOpen(true);
+            setMessage("Studio 已更新，新 Revision 已接管服务");
             return;
           }
+          completionDetectedAtRef.current = 0;
           if (next.state === "error") {
             window.clearInterval(timer);
             clearPendingUpdate();
@@ -316,6 +364,8 @@ export function StudioUpdateControl({
   const targetReleaseNotes = splitReleaseNotes(targetRelease?.changelog ?? []);
 
   const beginUpdate = async () => {
+    clearUpdateHandoff();
+    handoffTargetRef.current = "";
     targetVersionRef.current = targetVersion;
     startedAtRef.current = Date.now();
     persistPendingUpdate(targetVersion, startedAtRef.current);
@@ -451,12 +501,14 @@ export function StudioUpdateControl({
                     <dd>{status.errorId || "未生成"}</dd>
                   </div>
                 </dl>
-                <StudioUpdateLog
-                  lines={updateLogs}
-                  phase="error"
-                  copyState={logCopyState}
-                  onCopy={(lines) => void copyUpdateLog(lines)}
-                />
+                {status.updateLogsVisible !== false && (
+                  <StudioUpdateLog
+                    lines={updateLogs}
+                    phase="error"
+                    copyState={logCopyState}
+                    onCopy={(lines) => void copyUpdateLog(lines)}
+                  />
+                )}
                 {status.consoleUrl && (
                   <a
                     className="studio-update-console-link"
@@ -470,7 +522,7 @@ export function StudioUpdateControl({
                 )}
               </div>
             ) : phase === "submitting" || phase === "published" ? (
-              <>
+              <div className="studio-update-progress-body">
                 <div className="studio-update-progress-summary">
                   <div>
                     <span>目标版本</span>
@@ -509,16 +561,18 @@ export function StudioUpdateControl({
                     );
                   })}
                 </ol>
-                <StudioUpdateLog
-                  lines={updateLogs}
-                  phase={phase === "published" ? "complete" : "active"}
-                  copyState={logCopyState}
-                  onCopy={(lines) => void copyUpdateLog(lines)}
-                />
+                {status.updateLogsVisible !== false && (
+                  <StudioUpdateLog
+                    lines={updateLogs}
+                    phase={phase === "published" ? "complete" : "active"}
+                    copyState={logCopyState}
+                    onCopy={(lines) => void copyUpdateLog(lines)}
+                  />
+                )}
                 <p className="studio-update-progress-note">
                   发布阶段会短暂中断连接；关闭此窗口不会停止更新，可随时点击右上角按钮重新查看。
                 </p>
-              </>
+              </div>
             ) : (
               <>
                 <p className="confirm-text">
