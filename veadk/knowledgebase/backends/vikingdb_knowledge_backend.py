@@ -22,10 +22,10 @@ from typing import Any, Literal
 import requests
 from pydantic import Field
 from typing_extensions import override
-from volcengine.viking_knowledgebase import VikingKnowledgeBaseService
 from volcengine.auth.SignerV4 import SignerV4
 from volcengine.base.Request import Request
 from volcengine.Credentials import Credentials
+from volcengine.viking_knowledgebase import VikingKnowledgeBaseService
 
 import veadk.config  # noqa E401
 from veadk.auth.veauth.utils import (
@@ -33,12 +33,11 @@ from veadk.auth.veauth.utils import (
     get_credential_from_vefaas_iam,
 )
 from veadk.configs.database_configs import NormalTOSConfig, TOSConfig
+from veadk.integrations.ve_tos.ve_tos import VeTOS
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.entry import KnowledgebaseEntry
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp, getenv
-from veadk.integrations.ve_tos.ve_tos import VeTOS
-
 
 logger = get_logger(__name__)
 
@@ -231,6 +230,13 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             self.host = (
                 self.host or f"api-knowledgebase.mlp.{self.region}.bytepluses.com"
             )
+            if (
+                "tos_config" not in self.model_fields_set
+                and not os.getenv("DATABASE_TOS_REGION")
+                and not os.getenv("DATABASE_TOS_ENDPOINT")
+            ):
+                self.tos_config.region = self.region
+                self.tos_config.endpoint = f"tos-{self.region}.bytepluses.com"
         elif not self.region:
             self.region = os.getenv("DATABASE_VIKING_REGION", "cn-beijing")
             self.base_url = f"https://api-knowledgebase.mlp.{self.region}.volces.com"

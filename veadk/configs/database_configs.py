@@ -164,16 +164,19 @@ class TOSConfig(BaseSettings):
 
     def model_post_init(self, __context, /) -> None:
         cloud_provider = os.getenv("CLOUD_PROVIDER", "volces").lower()
+        configured_fields = set(self.model_fields_set)
 
         if cloud_provider == "byteplus":
-            self.endpoint = "tos-ap-southeast-1.bytepluses.com"
-            self.region = "ap-southeast-1"
+            if "endpoint" not in configured_fields:
+                self.endpoint = "tos-ap-southeast-1.bytepluses.com"
+            if "region" not in configured_fields:
+                self.region = "ap-southeast-1"
 
     @cached_property
     def bucket(self) -> str:
         _bucket = os.getenv("DATABASE_TOS_BUCKET") or DEFAULT_TOS_BUCKET_NAME
 
-        VeTOS(bucket_name=_bucket).create_bucket()
+        VeTOS(region=self.region, bucket_name=_bucket).create_bucket()
         return _bucket
 
 
