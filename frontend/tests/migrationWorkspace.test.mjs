@@ -186,7 +186,16 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   );
   assert.match(source, /requiredSecretEnv=\{deploymentSecretEnv\}/);
   assert.match(deploymentEnvironment, /MODEL_AGENT_API_KEY/);
+  assert.match(deploymentEnvironment, /isMigrationRuntimeEnvironmentKey/);
   assert.match(source, /migrationDeploymentEnvDefaults\(artifact, cloudProvider\)/);
+  assert.match(
+    source,
+    /artifact\.environment\.required[\s\S]*?\.filter\(isMigrationRuntimeEnvironmentKey\)/,
+  );
+  assert.match(
+    source,
+    /artifact\.environment\.optional[\s\S]*?\.filter\(isMigrationRuntimeEnvironmentKey\)/,
+  );
   assert.match(
     source,
     /options=\{\(capability\?\.frameworks \?\? \[\]\)\.map/,

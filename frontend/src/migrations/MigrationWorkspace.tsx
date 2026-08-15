@@ -62,6 +62,7 @@ import {
   UploadIcon,
 } from "./MigrationIcons";
 import {
+  isMigrationRuntimeEnvironmentKey,
   isSecretEnvironmentKey,
   migrationDeploymentEnvDefaults,
 } from "./deploymentEnvironment";
@@ -1240,12 +1241,14 @@ export function MigrationWorkspace({
     : null;
   const deploymentSecretEnv = artifact
     ? artifact.environment.required
+        .filter(isMigrationRuntimeEnvironmentKey)
         .filter(isSecretEnvironmentKey)
         .map((key) => ({ key, label: key }))
     : [];
   const deploymentEnv: EnvVar[] = artifact
     ? [
         ...artifact.environment.required
+          .filter(isMigrationRuntimeEnvironmentKey)
           .filter((key) => !isSecretEnvironmentKey(key))
           .map((key) => ({
             key,
@@ -1253,12 +1256,14 @@ export function MigrationWorkspace({
             comment: key,
             placeholder: `请输入 ${key}`,
           })),
-        ...artifact.environment.optional.map((key) => ({
-          key,
-          required: false,
-          comment: key,
-          placeholder: `可选：${key}`,
-        })),
+        ...artifact.environment.optional
+          .filter(isMigrationRuntimeEnvironmentKey)
+          .map((key) => ({
+            key,
+            required: false,
+            comment: key,
+            placeholder: `可选：${key}`,
+          })),
       ]
     : [];
 
