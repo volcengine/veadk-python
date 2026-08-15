@@ -131,7 +131,13 @@ export function formatSandboxRemainingTime(
   nowMs = Date.now(),
 ): string {
   const expireTime = Date.parse(expireAt);
-  if (!Number.isFinite(expireTime) || expireTime - nowMs < 60_000) {
+  if (!Number.isFinite(expireTime)) {
+    return "生命周期未知";
+  }
+  if (expireTime <= nowMs) {
+    return "已过期";
+  }
+  if (expireTime - nowMs < 60_000) {
     return "即将清空";
   }
   const remainingMinutes = Math.ceil((expireTime - nowMs) / 60_000);
@@ -246,6 +252,8 @@ function AgentCard({
 }) {
   const sandboxStatus = agent.sandbox?.status.toLowerCase();
   const wakeable = agent.sandbox?.resourceType === "snapshot";
+  const sandboxHasExpiry = agent.sandbox?.resourceType === "session"
+    && Number.isFinite(Date.parse(agent.sandbox.expireAt));
   const actionable = Boolean(
     agent.runtime || sandboxStatus === "ready" || sandboxStatus === "wakeable",
   );
@@ -305,17 +313,15 @@ function AgentCard({
           {agent.sandbox ? (
             <div
               className={`my-agent-expiry${
-                agent.sandbox.resourceType === "session" && agent.sandbox.persistent
-                  ? ""
-                  : " is-expiring"
+                agent.sandbox.resourceType === "snapshot" || sandboxHasExpiry
+                  ? " is-expiring"
+                  : ""
               }`}
             >
               <dt>剩余时间</dt>
               <dd>
                 {agent.sandbox.resourceType === "snapshot"
                   ? "可唤醒"
-                  : agent.sandbox.persistent
-                  ? "永不过期"
                   : formatSandboxRemainingTime(agent.sandbox.expireAt, nowMs)}
               </dd>
             </div>
@@ -447,7 +453,8 @@ export function MyAgents({
   const [remainingTimeNow, setRemainingTimeNow] = useState(() => Date.now());
   const hasExpiringSandboxAgents = sandboxAgents.some(
     (agent) =>
-      agent.sandbox?.resourceType === "session" && agent.sandbox.persistent === false,
+      agent.sandbox?.resourceType === "session"
+      && Number.isFinite(Date.parse(agent.sandbox.expireAt)),
   );
 
   useEffect(() => {

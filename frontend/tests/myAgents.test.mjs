@@ -210,13 +210,14 @@ test("shows aligned lifetime metadata for persistent and non-persistent Sandbox 
     formatSandboxRemainingTime("2026-08-11T00:00:30.000Z", now),
     "即将清空",
   );
-  assert.equal(formatSandboxRemainingTime("2026-08-10T23:59:59.000Z", now), "即将清空");
-  assert.equal(formatSandboxRemainingTime("invalid", now), "即将清空");
+  assert.equal(formatSandboxRemainingTime("2026-08-10T23:59:59.000Z", now), "已过期");
+  assert.equal(formatSandboxRemainingTime("invalid", now), "生命周期未知");
 
   assert.match(
     pageSource,
-    /className=\{`my-agent-expiry\$\{[\s\S]*?agent\.sandbox\.persistent[\s\S]*?`\}[\s\S]*?<dt>剩余时间<\/dt>[\s\S]*?agent\.sandbox\.persistent[\s\S]*?"永不过期"[\s\S]*?agent\.sandbox\.expireAt/,
+    /className=\{`my-agent-expiry\$\{[\s\S]*?sandboxHasExpiry[\s\S]*?`\}[\s\S]*?<dt>剩余时间<\/dt>[\s\S]*?formatSandboxRemainingTime\(agent\.sandbox\.expireAt, nowMs\)/,
   );
+  assert.doesNotMatch(pageSource, /agent\.sandbox\.persistent[\s\S]*?"永不过期"/);
   assert.doesNotMatch(
     pageSource,
     /<span className="my-agent-expiry"/,
