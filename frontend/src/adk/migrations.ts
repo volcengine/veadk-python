@@ -169,6 +169,7 @@ export interface MigrationArtifact {
   environment: {
     required: string[];
     optional: string[];
+    defaults: Record<string, string>;
   };
   verification: {
     status: "passed" | "failed" | "degraded";
@@ -495,6 +496,10 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
   const verification = record(artifact.verification, "校验信息");
   const report = record(artifact.report, "迁移报告");
   const descriptor = record(artifact.artifact, "产物归档");
+  const environmentDefaults =
+    environment.defaults === undefined
+      ? {}
+      : record(environment.defaults, "环境变量默认值");
   if (
     artifact.schema_version !== 1 ||
     !["succeeded", "succeeded_with_warnings", "partial"].includes(
@@ -517,6 +522,26 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
   ) {
     throw new Error("迁移产物格式错误。");
   }
+  const requiredEnvironment = stringArray(
+    environment.required,
+    "必需环境变量",
+  );
+  const optionalEnvironment = stringArray(
+    environment.optional,
+    "可选环境变量",
+  );
+  const declaredEnvironment = new Set([
+    ...requiredEnvironment,
+    ...optionalEnvironment,
+  ]);
+  const normalizedEnvironmentDefaults = Object.fromEntries(
+    Object.entries(environmentDefaults).map(([key, defaultValue]) => {
+      if (!declaredEnvironment.has(key) || typeof defaultValue !== "string") {
+        throw new Error("环境变量默认值格式错误。");
+      }
+      return [key, defaultValue];
+    }),
+  );
   return {
     schema_version: 1,
     ...(typeof artifact.run_id === "string" ? { run_id: artifact.run_id } : {}),
@@ -559,8 +584,9 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
         : {}),
     },
     environment: {
-      required: stringArray(environment.required, "必需环境变量"),
-      optional: stringArray(environment.optional, "可选环境变量"),
+      required: requiredEnvironment,
+      optional: optionalEnvironment,
+      defaults: normalizedEnvironmentDefaults,
     },
     verification: {
       status: verification.status as MigrationArtifact["verification"]["status"],

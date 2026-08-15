@@ -35,8 +35,6 @@ import {
 } from "../adk/client";
 import {
   defaultCloudRegion,
-  defaultModelApiBase,
-  defaultModelName,
   type CloudProvider,
 } from "../adk/cloudProvider";
 import type { AgentProject } from "../create/project";
@@ -63,6 +61,10 @@ import {
   PlusIcon,
   UploadIcon,
 } from "./MigrationIcons";
+import {
+  isSecretEnvironmentKey,
+  migrationDeploymentEnvDefaults,
+} from "./deploymentEnvironment";
 import "./MigrationWorkspace.css";
 
 const MAX_SOURCE_BYTES = 50 * 1024 * 1024;
@@ -70,15 +72,7 @@ const POLL_INTERVAL_MS = 1_200;
 const ACTIVITY_POLL_INTERVAL_MS = 3_000;
 const LIST_POLL_INTERVAL_MS = 5_000;
 const MAX_VISIBLE_FILES = 500;
-const SECRET_ENV_KEYS = new Set(["MODEL_AGENT_API_KEY"]);
 const ignoreMigrationAction = () => undefined;
-
-function isSecretEnvironmentKey(key: string): boolean {
-  return (
-    SECRET_ENV_KEYS.has(key) ||
-    /(?:API_KEY|SECRET|TOKEN|PASSWORD)$/.test(key)
-  );
-}
 
 const FRAMEWORK_LABELS: Record<MigrationFramework, string> = {
   langchain: "LangChain",
@@ -949,17 +943,11 @@ export function MigrationWorkspace({
 
   useEffect(() => {
     if (!artifact) return;
-    const required = new Set(artifact.environment.required);
+    const defaults = migrationDeploymentEnvDefaults(artifact, cloudProvider);
     setDeploymentEnvValues((current) => {
       const next = { ...current };
-      if (required.has("MODEL_AGENT_NAME") && !next.MODEL_AGENT_NAME?.trim()) {
-        next.MODEL_AGENT_NAME = defaultModelName(cloudProvider);
-      }
-      if (
-        required.has("MODEL_AGENT_API_BASE") &&
-        !next.MODEL_AGENT_API_BASE?.trim()
-      ) {
-        next.MODEL_AGENT_API_BASE = defaultModelApiBase(cloudProvider);
+      for (const [key, value] of Object.entries(defaults)) {
+        if (!next[key]?.trim()) next[key] = value;
       }
       return next;
     });

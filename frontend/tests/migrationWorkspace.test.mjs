@@ -11,6 +11,10 @@ const stylesUrl = new URL(
   "../src/migrations/MigrationWorkspace.css",
   import.meta.url,
 );
+const deploymentEnvironmentUrl = new URL(
+  "../src/migrations/deploymentEnvironment.ts",
+  import.meta.url,
+);
 const iconsUrl = new URL(
   "../src/migrations/MigrationIcons.tsx",
   import.meta.url,
@@ -68,6 +72,7 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.equal(existsSync(iconsUrl), true);
   const source = readFileSync(workspaceUrl, "utf8");
   const styles = readFileSync(stylesUrl, "utf8");
+  const deploymentEnvironment = readFileSync(deploymentEnvironmentUrl, "utf8");
 
   assert.doesNotMatch(source, /from "lucide-react"/);
   assert.match(source, /from "\.\/MigrationIcons"/);
@@ -169,9 +174,8 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
     /filter\(\(key\) => !key\.startsWith\("MODEL_AGENT_"\)\)/,
   );
   assert.match(source, /requiredSecretEnv=\{deploymentSecretEnv\}/);
-  assert.match(source, /MODEL_AGENT_API_KEY/);
-  assert.match(source, /defaultModelName\(cloudProvider\)/);
-  assert.match(source, /defaultModelApiBase\(cloudProvider\)/);
+  assert.match(deploymentEnvironment, /MODEL_AGENT_API_KEY/);
+  assert.match(source, /migrationDeploymentEnvDefaults\(artifact, cloudProvider\)/);
   assert.match(
     source,
     /options=\{\(capability\?\.frameworks \?\? \[\]\)\.map/,

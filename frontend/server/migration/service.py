@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
+from dotenv import dotenv_values
+
 from frontend.server.deployment_source import (
     DeploymentSourceError,
     extract_migration_source,
@@ -123,6 +125,8 @@ _MIGRATION_ACTIVITY_LOG_PATHS = tuple(
 _MAX_ACTIVITY_LOG_BYTES = 16 * 1024 * 1024
 _MAX_ACTIVITY_TEXT_CHARS = 12_000
 _MAX_ACTIVITY_ITEMS = 200
+_MAX_ENV_EXAMPLE_BYTES = 256 * 1024
+_MAX_PUBLIC_ENV_VALUE_CHARS = 16_384
 _ACTIVITY_COMPLETE_STATES = {
     "succeeded",
     "succeeded_with_warnings",
@@ -141,8 +145,75 @@ _ACTIVITY_BEARER_RE = re.compile(r"(?i)\b(bearer\s+)[a-z0-9._~+/=-]+")
 _ACTIVITY_CREDENTIAL_RE = re.compile(
     r"(?i)\b(?:ark|sk)-[a-z0-9_-]{12,}\b|\bAK[A-Z0-9]{16,}\b"
 )
+_SENSITIVE_ENV_KEY_RE = re.compile(
+    r"(?i)(?:API_KEY|ACCESS_KEY|SECRET_KEY|PRIVATE_KEY|TOKEN|SECRET|"
+    r"PASSWORD|PASSWD|PWD|CREDENTIAL)$"
+)
+_ENV_REFERENCE_RE = re.compile(r"\$\{|\$\(|`")
 
 logger = logging.getLogger(__name__)
+
+
+def _public_environment_defaults(
+    session: MigrationSandboxSession,
+    result: dict[str, object],
+    read: Callable[..., bytes | None],
+) -> dict[str, str]:
+    environment = result.get("environment")
+    files = result.get("files")
+    if not isinstance(environment, dict) or not isinstance(files, list):
+        return {}
+    declared = {
+        str(key)
+        for field in ("required", "optional")
+        for key in environment.get(field, [])
+        if isinstance(key, str)
+    }
+    descriptor = next(
+        (
+            item
+            for item in files
+            if isinstance(item, dict) and item.get("path") == ".env.example"
+        ),
+        None,
+    )
+    if descriptor is None or not isinstance(descriptor.get("size"), int):
+        return {}
+    size = int(descriptor["size"])
+    if size > _MAX_ENV_EXAMPLE_BYTES:
+        return {}
+    content = read(
+        session,
+        f"{MIGRATION_ROOT}/output/veadk/.env.example",
+        max_bytes=_MAX_ENV_EXAMPLE_BYTES,
+        optional=True,
+    )
+    if (
+        content is None
+        or len(content) != size
+        or hashlib.sha256(content).hexdigest() != descriptor.get("sha256")
+    ):
+        return {}
+    try:
+        parsed = dotenv_values(
+            stream=io.StringIO(content.decode("utf-8-sig")),
+            interpolate=False,
+        )
+    except (UnicodeDecodeError, ValueError):
+        return {}
+    defaults: dict[str, str] = {}
+    for key, value in parsed.items():
+        normalized = value.strip() if isinstance(value, str) else ""
+        if (
+            key not in declared
+            or _SENSITIVE_ENV_KEY_RE.search(key)
+            or not normalized
+            or len(normalized) > _MAX_PUBLIC_ENV_VALUE_CHARS
+            or _ENV_REFERENCE_RE.search(normalized)
+        ):
+            continue
+        defaults[key] = normalized
+    return defaults
 
 
 def _redact_activity_text(value: str) -> str:
@@ -3103,7 +3174,20 @@ class MigrationService:
     def artifact(self, task_id: str, owner_id: str) -> dict[str, object]:
         session = self._session(task_id, owner_id)
         task = self._task_from_session(session)
-        return self._artifact_result(session, task, readiness="previewReady")
+        result = self._artifact_result(session, task, readiness="previewReady")
+        environment = result["environment"]
+        assert isinstance(environment, dict)
+        return {
+            **result,
+            "environment": {
+                **environment,
+                "defaults": _public_environment_defaults(
+                    session,
+                    result,
+                    self._read,
+                ),
+            },
+        }
 
     def _artifact_result(
         self,

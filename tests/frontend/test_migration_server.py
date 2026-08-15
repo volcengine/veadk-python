@@ -50,6 +50,7 @@ from frontend.server.migration.service import (
     _analysis_result_message,
     _codex_event_extractor,
     _command_activity_title,
+    _public_environment_defaults,
     validate_source_archive,
 )
 from veadk.cli.frontend_skill_creator import _sandbox_model_config
@@ -87,6 +88,98 @@ def artifact_zip(files: dict[str, bytes]) -> bytes:
         for path, content in files.items():
             archive.writestr(path, content)
     return output.getvalue()
+
+
+def test_public_environment_defaults_require_integrity_and_hide_secrets() -> None:
+    session = MigrationSandboxSession(
+        tool_id="tool-1",
+        session_id="session-1",
+        task_id=f"migration-v1-{'1' * 32}",
+        endpoint="https://sandbox.example",
+        region="cn-beijing",
+        status="Running",
+        created_at="2026-08-15T08:00:00Z",
+        expire_at="2026-08-15T09:00:00Z",
+        owner_id="owner-1",
+    )
+    content = (
+        b"ARK_API_KEY=must-not-be-exposed\n"
+        b"SIGNING_PRIVATE_KEY=must-not-be-exposed\n"
+        b"ENABLE_APMPLUS=true\n"
+        b"MODEL_AGENT_API_BASE=${CODEX_BASE_URL}\n"
+        b"APP_HOST=0.0.0.0\n"
+        b"EMPTY=\n"
+        b"UNDECLARED=ignored\n"
+    )
+    result = {
+        "environment": {
+            "required": ["ARK_API_KEY", "SIGNING_PRIVATE_KEY"],
+            "optional": [
+                "APP_HOST",
+                "EMPTY",
+                "ENABLE_APMPLUS",
+                "MODEL_AGENT_API_BASE",
+            ],
+        },
+        "files": [
+            {
+                "path": ".env.example",
+                "size": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        ],
+    }
+
+    def read(*_args: object, **_kwargs: object) -> bytes:
+        return content
+
+    assert _public_environment_defaults(session, {}, read) == {}
+    assert (
+        _public_environment_defaults(
+            session,
+            {"environment": {"required": [], "optional": []}, "files": []},
+            read,
+        )
+        == {}
+    )
+    assert (
+        _public_environment_defaults(
+            session,
+            {
+                "environment": {"required": [], "optional": []},
+                "files": [
+                    {
+                        "path": ".env.example",
+                        "size": 256 * 1024 + 1,
+                        "sha256": "0" * 64,
+                    }
+                ],
+            },
+            read,
+        )
+        == {}
+    )
+    assert _public_environment_defaults(session, result, read) == {
+        "ENABLE_APMPLUS": "true",
+        "APP_HOST": "0.0.0.0",
+    }
+
+    result["files"][0]["sha256"] = "0" * 64
+    assert _public_environment_defaults(session, result, read) == {}
+
+    invalid_utf = b"\xff"
+    result["files"][0].update(
+        size=len(invalid_utf),
+        sha256=hashlib.sha256(invalid_utf).hexdigest(),
+    )
+    assert (
+        _public_environment_defaults(
+            session,
+            result,
+            lambda *_args, **_kwargs: invalid_utf,
+        )
+        == {}
+    )
 
 
 class FakeMigrationGateway:
@@ -2576,10 +2669,20 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
         confirmation_body(gateway, task_id),
     )
     report_content = b'{"status":"succeeded"}\n'
+    env_example_content = (
+        b"ARK_API_KEY=must-not-be-exposed\n"
+        b"MODEL_NAME=doubao-seed-2-1-pro-260628\n"
+        b"APP_HOST=0.0.0.0\n"
+        b"APP_PORT=8000\n"
+        b"ENABLE_APMPLUS=true\n"
+        b"ENABLE_LLM_SHIELD=false\n"
+        b"MODEL_AGENT_API_BASE=https://ark.cn-beijing.volces.com/api/v3\n"
+    )
     artifact = artifact_zip(
         {
             "agentkit_app.py": b"app = object()\n",
             ".agentkit/migration-plan.json": report_content,
+            ".env.example": env_example_content,
         }
     )
     artifact_sha = hashlib.sha256(artifact).hexdigest()
@@ -2613,9 +2716,25 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
                 "sha256": hashlib.sha256(report_content).hexdigest(),
                 "mode": "0644",
             },
+            {
+                "path": ".env.example",
+                "size": len(env_example_content),
+                "sha256": hashlib.sha256(env_example_content).hexdigest(),
+                "mode": "0644",
+            },
         ],
         "startup": {"module": "agentkit_app.py", "object": "app"},
-        "environment": {"required": ["MODEL_AGENT_API_KEY"], "optional": []},
+        "environment": {
+            "required": ["ARK_API_KEY"],
+            "optional": [
+                "APP_HOST",
+                "APP_PORT",
+                "ENABLE_APMPLUS",
+                "ENABLE_LLM_SHIELD",
+                "MODEL_AGENT_API_BASE",
+                "MODEL_NAME",
+            ],
+        },
         "verification": {
             "status": "passed",
             "checks": [{"name": "import", "status": "passed"}],
@@ -2637,6 +2756,9 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
     )
     gateway.files[(task_id, f"{MIGRATION_ROOT}/output/veadk/agentkit_app.py")] = (
         preview_content
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/output/veadk/.env.example")] = (
+        env_example_content
     )
     gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-status.json")] = (
         json.dumps(
@@ -2673,6 +2795,15 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
     assert task["artifact"]["previewReady"] is True
     assert task["artifact"]["deployReady"] is True
     assert manifest["cli"]["version"] == "0.52.0"
+    assert manifest["environment"]["defaults"] == {
+        "APP_HOST": "0.0.0.0",
+        "APP_PORT": "8000",
+        "ENABLE_APMPLUS": "true",
+        "ENABLE_LLM_SHIELD": "false",
+        "MODEL_AGENT_API_BASE": "https://ark.cn-beijing.volces.com/api/v3",
+        "MODEL_NAME": "doubao-seed-2-1-pro-260628",
+    }
+    assert "ARK_API_KEY" not in manifest["environment"]["defaults"]
     assert preview == preview_content
     assert media_type == "text/x-python"
     assert downloaded == artifact
