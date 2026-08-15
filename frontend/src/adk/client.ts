@@ -1935,6 +1935,24 @@ export interface DeployAgentkitResult {
   };
 }
 
+export async function checkRuntimeNameAvailability(
+  name: string,
+  region: string,
+): Promise<{ available: boolean }> {
+  const params = new URLSearchParams({ name, region });
+  const res = await apiFetch(`/web/runtime-name-availability?${params.toString()}`, {
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "检查 Runtime 名称失败"));
+  }
+  const value = (await res.json()) as { available?: unknown };
+  if (typeof value.available !== "boolean") {
+    throw new Error("检查 Runtime 名称失败：服务返回格式错误");
+  }
+  return { available: value.available };
+}
+
 export type DeployAuthentication =
   | { type: "api_key" }
   | { type: "user_pool"; userPoolUid: string };

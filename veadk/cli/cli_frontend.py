@@ -116,6 +116,9 @@ _CP_PIPELINE_RUN_RE = re.compile(
     r"Pipeline triggered successfully,\s*run ID:\s*(?P<id>\S+)"
 )
 _RUNTIME_DESCRIPTION_MAX_BYTES = 255
+_RUNTIME_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_RUNTIME_NAME_MIN_LENGTH = 4
+_RUNTIME_NAME_MAX_LENGTH = 64
 _STUDIO_STORAGE_ENV_KEYS = (
     "VEADK_STUDIO_TOS_BUCKET",
     "VEADK_STUDIO_TOS_REGION",
@@ -301,6 +304,23 @@ def _studio_account_id_from_remote_function(function: object) -> str:
 
 def _is_malformed_runtime_description_error(error: object) -> bool:
     return "invaliddescription.malformed" in str(error or "").lower()
+
+
+def _runtime_name_validation_error(name: str) -> str | None:
+    if not name:
+        return "Runtime 名称为必填项"
+    if not _RUNTIME_NAME_RE.fullmatch(name):
+        return "Runtime 名称只能包含英文字母、数字、下划线和连字符"
+    if not _RUNTIME_NAME_MIN_LENGTH <= len(name) <= _RUNTIME_NAME_MAX_LENGTH:
+        return "Runtime 名称长度须为 4-64 个字符"
+    return None
+
+
+def _runtime_deploy_error_detail(error: object, runtime_name: str) -> str:
+    detail = str(error or "")
+    if "invalidparameter.duplicatename" not in detail.lower():
+        return detail
+    return f"Runtime 名称“{runtime_name}”已存在，请修改名称后重新部署。"
 
 
 def _create_runtime_with_description_fallback(
@@ -4056,6 +4076,11 @@ def _run_frontend_server(
             )
 
         def _friendly_error(error_text: str) -> str:
+            duplicate_detail = _runtime_deploy_error_detail(
+                error_text, requested_runtime_name
+            )
+            if duplicate_detail != error_text:
+                return duplicate_detail
             if _is_tos_request_expired(error_text):
                 return (
                     "云构建拉取源码包时 TOS 临时下载签名已过期。"
@@ -4970,6 +4995,54 @@ def _run_frontend_server(
     _runtime_list_cache_ttl_seconds = 30.0
     _runtime_list_cache: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
     _runtime_list_locks: dict[tuple[Any, ...], asyncio.Lock] = {}
+
+    @app.get("/web/runtime-name-availability")
+    async def _web_runtime_name_availability(
+        request: Request,
+        response: Response,
+        name: str = "",
+        region: str = "",
+    ):
+        """Check one candidate name without exposing other Runtime details."""
+        _require_agent_management(request)
+        normalized_name = name.strip()
+        validation_error = _runtime_name_validation_error(normalized_name)
+        if validation_error:
+            raise HTTPException(status_code=400, detail=validation_error)
+        normalized_region = _coerce_cloud_region(region)
+        try:
+            from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+            from agentkit.sdk.runtime import types as _rt
+
+            ak, sk, token = _resolve_ve_credentials()
+            client = AgentkitRuntimeClient(
+                access_key=ak,
+                secret_key=sk,
+                session_token=token or "",
+                region=normalized_region,
+            )
+            runtime_filter = _rt.FiltersItemForListRuntimes.model_validate(
+                {"Name": "Name", "Values": [normalized_name]}
+            )
+            result = await asyncio.to_thread(
+                client.list_runtimes,
+                _rt.ListRuntimesRequest(
+                    max_results=1,
+                    filters=[runtime_filter],
+                ),
+            )
+            available = not any(
+                str(getattr(runtime, "name", "") or "") == normalized_name
+                for runtime in (result.agent_kit_runtimes or [])
+            )
+        except Exception as error:
+            logger.error("check Runtime name availability failed: %s", error)
+            raise HTTPException(
+                status_code=502,
+                detail="暂时无法检查 Runtime 名称，请稍后重试。",
+            ) from error
+        response.headers["Cache-Control"] = "no-store"
+        return {"available": available}
 
     @app.get("/web/runtimes")
     async def _web_runtimes(

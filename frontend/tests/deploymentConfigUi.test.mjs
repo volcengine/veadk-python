@@ -153,7 +153,7 @@ test("keeps Runtime name help and errors below the input", () => {
   );
   assert.match(
     projectPreviewSource,
-    /默认根据 Root Agent 名称生成，支持 4-64 位字母、数字、连字符和下划线/,
+    /默认根据 Root Agent 名称生成，并添加随机后缀避免重名/,
   );
   assert.doesNotMatch(projectPreviewSource, /默认根据 Root Agent 名称生成。支持/);
 });

@@ -56,7 +56,7 @@ hljs.registerLanguage("makefile", makefile);
 import type { AgentProject, ProjectFile } from "../create/project";
 import type { AgentDraft, NetworkConfig } from "../create/types";
 import { resolvedModelSource } from "../create/modelSource";
-import { normalizeRuntimeName, runtimeNameProblem } from "../create/runtimeName";
+import { generateRuntimeName, runtimeNameProblem } from "../create/runtimeName";
 import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
 import {
   FEISHU_ENV,
@@ -70,6 +70,7 @@ import {
   runtimeEnvVars,
 } from "../create/deploymentEnv";
 import {
+  checkRuntimeNameAvailability,
   listIdentityUserPools,
   revealModelApiKey,
   RuntimeProbeError,
@@ -615,6 +616,8 @@ export interface ProjectPreviewProps {
   deploymentRuntimeId?: string;
   /** Existing platform Runtime resource name when publishing an update. */
   deploymentRuntimeName?: string;
+  /** Whether a new Runtime name was explicitly edited instead of generated. */
+  deploymentRuntimeNameCustomized?: boolean;
   /** Updates the explicit Runtime name for a new deployment. */
   onDeploymentRuntimeNameChange?: (runtimeName: string) => void;
   /** Opens the persistent Agent detail as soon as deployment starts. */
@@ -761,6 +764,7 @@ export function ProjectPreview({
   deploymentActionTargetId,
   deploymentRuntimeId,
   deploymentRuntimeName,
+  deploymentRuntimeNameCustomized = false,
   onDeploymentRuntimeNameChange,
   onDeploymentStarted,
   onDeploymentTaskChange,
@@ -793,12 +797,35 @@ export function ProjectPreview({
   const inMemorySession = usesInMemorySession(agentDraft);
   const runtimeNameSource =
     agentName?.trim() || agentDraft?.name || project.name;
+  const generatedRuntimeName = useMemo(
+    () => generateRuntimeName(runtimeNameSource),
+    [runtimeNameSource],
+  );
+  const [uncontrolledRuntimeName, setUncontrolledRuntimeName] = useState<
+    string | null
+  >(null);
   const effectiveRuntimeName =
-    deploymentRuntimeName ??
-    (isRuntimeUpdate ? runtimeNameSource : normalizeRuntimeName(runtimeNameSource));
-  const runtimeNameError = isRuntimeUpdate
+    isRuntimeUpdate
+      ? (deploymentRuntimeName ?? runtimeNameSource)
+      : deploymentRuntimeNameCustomized
+        ? (deploymentRuntimeName ?? "")
+        : (uncontrolledRuntimeName ?? generatedRuntimeName);
+  const runtimeNameSyntaxError = isRuntimeUpdate
     ? null
     : runtimeNameProblem(effectiveRuntimeName);
+  const [runtimeNameConflict, setRuntimeNameConflict] = useState<{
+    key: string;
+    message: string;
+  } | null>(null);
+  const [runtimeNameChecking, setRuntimeNameChecking] = useState(false);
+  const runtimeNameCheckKey = `${deployRegion}\0${effectiveRuntimeName.trim()}`;
+  const runtimeNameCheckKeyRef = useRef(runtimeNameCheckKey);
+  runtimeNameCheckKeyRef.current = runtimeNameCheckKey;
+  const runtimeNameConflictError =
+    runtimeNameConflict?.key === runtimeNameCheckKey
+      ? runtimeNameConflict.message
+      : null;
+  const runtimeNameError = runtimeNameSyntaxError ?? runtimeNameConflictError;
   const selectedModelApiKeyId =
     agentDraft?.deployment?.modelApiKeyId?.trim() ?? "";
 
@@ -806,6 +833,11 @@ export function ProjectPreview({
   const [selected, setSelected] = useState<string | null>(
     project?.files?.[0]?.path ?? null,
   );
+
+  useEffect(() => {
+    setUncontrolledRuntimeName(null);
+    setRuntimeNameConflict(null);
+  }, [runtimeNameSource]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState(false);
   const [newPath, setNewPath] = useState("");
@@ -1257,7 +1289,7 @@ export function ProjectPreview({
   }
 
   async function requestDeploymentConfirmation() {
-    if (!onDeploy || deploying || deployDisabled) return;
+    if (!onDeploy || deploying || runtimeNameChecking || deployDisabled) return;
     if (runtimeNameError) {
       setDeployError(runtimeNameError);
       return;
@@ -1324,6 +1356,33 @@ export function ProjectPreview({
         const env = FEISHU_ENV.find((item) => item.key === missingFeishuEnv.key);
         setDeployError(`启用飞书后，请填写${env?.comment || env?.key}。`);
         return;
+      }
+    }
+    if (!isRuntimeUpdate) {
+      const checkedName = effectiveRuntimeName.trim();
+      const checkedKey = `${deployRegion}\0${checkedName}`;
+      setRuntimeNameChecking(true);
+      setDeployError(null);
+      try {
+        const result = await checkRuntimeNameAvailability(
+          checkedName,
+          deployRegion,
+        );
+        if (!mountedRef.current) return;
+        if (runtimeNameCheckKeyRef.current !== checkedKey) return;
+        if (!result.available) {
+          const message = "Runtime 名称已存在，请修改后重试。";
+          setRuntimeNameConflict({ key: checkedKey, message });
+          setDeployError(message);
+          return;
+        }
+        setRuntimeNameConflict(null);
+      } catch (error) {
+        if (!mountedRef.current) return;
+        setDeployError(error instanceof Error ? error.message : String(error));
+        return;
+      } finally {
+        if (mountedRef.current) setRuntimeNameChecking(false);
       }
     }
     setDeployConfirmOpen(true);
@@ -1979,20 +2038,27 @@ export function ProjectPreview({
                       id={runtimeNameInputId}
                       className="pp-runtime-name-input"
                       value={effectiveRuntimeName}
-                      disabled={deploying || isRuntimeUpdate}
+                      disabled={deploying || runtimeNameChecking || isRuntimeUpdate}
                       maxLength={64}
                       autoComplete="off"
                       aria-label="Runtime 名称"
                       aria-invalid={Boolean(runtimeNameError)}
                       aria-describedby={`${runtimeNameHelpId}${runtimeNameError ? ` ${runtimeNameErrorId}` : ""}`}
-                      onChange={(event) =>
-                        onDeploymentRuntimeNameChange?.(event.currentTarget.value)
-                      }
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
+                        setRuntimeNameConflict(null);
+                        setDeployError(null);
+                        if (onDeploymentRuntimeNameChange) {
+                          onDeploymentRuntimeNameChange(value);
+                        } else {
+                          setUncontrolledRuntimeName(value);
+                        }
+                      }}
                     />
                     <p id={runtimeNameHelpId} className="pp-config-note">
                       {isRuntimeUpdate
                         ? "更新时保持现有 Runtime 名称不变。"
-                        : "默认根据 Root Agent 名称生成，支持 4-64 位字母、数字、连字符和下划线"}
+                        : "默认根据 Root Agent 名称生成，并添加随机后缀避免重名；支持 4-64 位字母、数字、连字符和下划线"}
                     </p>
                     {runtimeNameError && (
                       <p
@@ -2074,6 +2140,7 @@ export function ProjectPreview({
                       disabled={
                         feishuEnabled ||
                         deploying ||
+                        runtimeNameChecking ||
                         feishuUpdating ||
                         !onFeishuEnabledChange
                       }
@@ -2745,6 +2812,7 @@ export function ProjectPreview({
                       onClick={requestDeploymentConfirmation}
                       disabled={
                         deploying ||
+                        runtimeNameChecking ||
                         feishuUpdating ||
                         deployDisabled ||
                         !!deployDisabledReason ||
@@ -2754,6 +2822,8 @@ export function ProjectPreview({
                     >
                       {deploying
                         ? `${deploymentActionLabel}中…`
+                        : runtimeNameChecking
+                          ? "正在检查名称…"
                         : deployError
                           ? `重试${deploymentActionLabel}`
                           : deploymentActionLabel}
@@ -2767,6 +2837,7 @@ export function ProjectPreview({
                 onClick={requestDeploymentConfirmation}
                 disabled={
                   deploying ||
+                  runtimeNameChecking ||
                   feishuUpdating ||
                   deployDisabled ||
                   !!deployDisabledReason ||
@@ -2776,6 +2847,8 @@ export function ProjectPreview({
               >
                 {deploying
                   ? `${deploymentActionLabel}中…`
+                  : runtimeNameChecking
+                    ? "正在检查名称…"
                   : deployError
                     ? `重试${deploymentActionLabel}`
                     : deploymentActionLabel}

@@ -1481,6 +1481,36 @@ def test_runtime_creation_retries_without_a_rejected_description() -> None:
     assert attempts == ["bad description", None]
 
 
+def test_runtime_duplicate_name_error_has_actionable_message() -> None:
+    from veadk.cli.cli_frontend import _runtime_deploy_error_detail
+
+    detail = _runtime_deploy_error_detail(
+        "CreateRuntime failed: InvalidParameter.DuplicateName",
+        "travel-agent-a1b2c3",
+    )
+
+    assert detail == ("Runtime 名称“travel-agent-a1b2c3”已存在，请修改名称后重新部署。")
+    assert _runtime_deploy_error_detail("AccessDenied", "unused") == "AccessDenied"
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("", "Runtime 名称为必填项"),
+        ("abc", "Runtime 名称长度须为 4-64 个字符"),
+        ("a" * 65, "Runtime 名称长度须为 4-64 个字符"),
+        ("valid-runtime", None),
+    ],
+)
+def test_runtime_name_validation_covers_length_boundaries(
+    name: str,
+    expected: str | None,
+) -> None:
+    from veadk.cli.cli_frontend import _runtime_name_validation_error
+
+    assert _runtime_name_validation_error(name) == expected
+
+
 def test_parse_role_members_normalizes_csv() -> None:
     assert parse_role_members(" Admin@Example.com, alice, ALICE, ") == {
         "admin@example.com",
@@ -1851,6 +1881,113 @@ def test_non_admin_runtime_list_uses_one_owner_filtered_request(
         "runtime-own",
     ]
     assert all(item["canDelete"] is True for item in admin.json()["runtimes"])
+
+
+def test_runtime_name_availability_uses_an_exact_cloud_filter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    requests: list[Any] = []
+
+    def list_runtimes(_self: Any, request: Any) -> SimpleNamespace:
+        requests.append(request)
+        requested_name = request.filters[0].values[0]
+        runtimes = (
+            [SimpleNamespace(name=requested_name)]
+            if requested_name == "existing-runtime"
+            else []
+        )
+        return SimpleNamespace(agent_kit_runtimes=runtimes, next_token="")
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "list_runtimes", list_runtimes)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+    )
+
+    with TestClient(app) as client:
+        existing = client.get(
+            "/web/runtime-name-availability",
+            params={"name": "existing-runtime", "region": "cn-beijing"},
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        available = client.get(
+            "/web/runtime-name-availability",
+            params={"name": "new-runtime", "region": "cn-beijing"},
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert existing.status_code == 200
+    assert existing.json() == {"available": False}
+    assert available.status_code == 200
+    assert available.json() == {"available": True}
+    assert [request.max_results for request in requests] == [1, 1]
+    assert [request.filters[0].name for request in requests] == ["Name", "Name"]
+    assert [request.filters[0].values for request in requests] == [
+        ["existing-runtime"],
+        ["new-runtime"],
+    ]
+
+
+def test_runtime_name_availability_rejects_invalid_names_before_cloud_access(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "list_runtimes",
+        lambda *_args, **_kwargs: pytest.fail("cloud API should not be called"),
+    )
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-name-availability",
+            params={"name": "bad runtime", "region": "cn-beijing"},
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Runtime 名称只能包含英文字母、数字、下划线和连字符"
+    )
+
+
+def test_runtime_name_availability_hides_cloud_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    def fail_list(_self: Any, _request: Any) -> None:
+        raise RuntimeError("credential=test-secret")
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "list_runtimes", fail_list)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-name-availability",
+            params={"name": "new-runtime", "region": "cn-beijing"},
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "暂时无法检查 Runtime 名称，请稍后重试。"
+    assert "test-secret" not in response.text
 
 
 def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
@@ -3063,6 +3200,49 @@ def test_single_instance_update_failure_fails_the_deployment_at_update_phase(
     assert frames[-1]["success"] is False
     assert frames[-1]["phase"] == "update"
     assert "instance update failed" in frames[-1]["error"]
+
+
+def test_deployment_maps_create_runtime_duplicate_name_to_actionable_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def launch(**_kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            success=False,
+            error=(
+                "Failed to CreateRuntime: "
+                "InvalidParameter.DuplicateName: name already exists"
+            ),
+            deploy_result=None,
+            build_result=None,
+        )
+
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "demo-agent",
+                "runtimeName": "demo-agent-a1b2c3",
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        ) as response:
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is False
+    assert frames[-1]["error"] == (
+        "Runtime 名称“demo-agent-a1b2c3”已存在，请修改名称后重新部署。"
+    )
 
 
 def test_update_deployment_rejects_incompatible_runtime_before_launch(

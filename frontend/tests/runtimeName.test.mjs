@@ -14,7 +14,13 @@ const { outputText } = ts.transpileModule(source, {
   },
 });
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
-const { normalizeRuntimeName, resolveRuntimeName, runtimeNameProblem } = await import(moduleUrl);
+const {
+  generateRuntimeName,
+  normalizeRuntimeName,
+  resolveRuntimeName,
+  runtimeNameProblem,
+  runtimeNameWithSuffix,
+} = await import(moduleUrl);
 
 test("normalizes empty and mixed-language Agent names", () => {
   assert.equal(normalizeRuntimeName("   "), "agent-runtime");
@@ -40,6 +46,13 @@ test("collapses invalid runs and truncates defaults to 64 characters", () => {
   const boundary = "a".repeat(64);
   assert.equal(normalizeRuntimeName(boundary), boundary);
   assert.equal(normalizeRuntimeName(`${boundary}b`), boundary);
+});
+
+test("adds one bounded suffix to generated Runtime names", () => {
+  assert.equal(runtimeNameWithSuffix("sales 中文 agent", "a1b2c3"), "sales-agent-a1b2c3");
+  assert.equal(runtimeNameWithSuffix("a".repeat(64), "z9y8x7").length, 64);
+  assert.equal(runtimeNameWithSuffix("a".repeat(64), "z9y8x7").endsWith("-z9y8x7"), true);
+  assert.equal(generateRuntimeName("sales agent", () => 0), "sales-agent-000000");
 });
 
 test("validates manual Runtime names without rewriting them", () => {

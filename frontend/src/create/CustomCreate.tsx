@@ -5266,6 +5266,9 @@ export function CustomCreate({
                 deploymentActionTargetId="cw-publish-primary-action"
                 deploymentRuntimeId={deploymentTarget?.runtimeId}
                 deploymentRuntimeName={deploymentRuntimeName}
+                deploymentRuntimeNameCustomized={
+                  !!deploymentTarget || !!draft.deployment?.runtimeNameCustomized
+                }
                 onDeploymentRuntimeNameChange={(runtimeName) =>
                   setDraft((current) => ({
                     ...current,
