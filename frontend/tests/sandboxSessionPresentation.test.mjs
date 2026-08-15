@@ -141,7 +141,7 @@ test("active sandbox conversation identifies the selected agent and never uses n
   assert.doesNotMatch(sandboxSessionSource, /退出后对话内容消失/);
   assert.match(sandboxSessionSource, /退出当前智能体/);
   assert.doesNotMatch(sandboxSessionSource, /退出内置智能体/);
-  assert.match(appSource, /sandboxClient\.sendMessage/);
+  assert.match(appSource, /sandboxClientForSession\.sendMessage/);
   assert.doesNotMatch(sandboxClientSource, /runSSE/);
   assert.match(stylesSource, /\.main\.is-sandbox-session::before/);
   assert.match(stylesSource, /\.sandbox-session-warning/);

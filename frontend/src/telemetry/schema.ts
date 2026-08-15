@@ -63,7 +63,9 @@ export type DeploySource =
   | "scratch"
   | "code_package"
   | "migration"
+  | "intelligent_development"
   | "feishu_automation"
+  | "intelligent_development"
   | "unknown";
 export type CreateMode =
   | "custom"

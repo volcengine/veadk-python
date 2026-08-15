@@ -192,6 +192,42 @@ export function ThinkingBlock({
   );
 }
 
+function DeliveryCard({
+  value,
+  onDeploy,
+}: {
+  value: Extract<Block, { kind: "delivery" }>["value"];
+  onDeploy?: (value: Extract<Block, { kind: "delivery" }>["value"]) => void;
+}) {
+  const validatedAt = new Date(value.validatedAt);
+  const time = Number.isNaN(validatedAt.getTime())
+    ? value.validatedAt
+    : validatedAt.toLocaleString("zh-CN", { hour12: false });
+  return (
+    <section className="delivery-card" aria-label="已验证交付物">
+      <header className="delivery-card-header">
+        <span className="delivery-card-icon" aria-hidden="true"><ShieldCheck /></span>
+        <div>
+          <strong>已验证交付物</strong>
+          <span>{value.agentName}</span>
+        </div>
+      </header>
+      <dl className="delivery-card-grid">
+        <div><dt>入口</dt><dd><code>{value.entryPoint}</code></dd></div>
+        <div><dt>文件</dt><dd>{value.fileCount}</dd></div>
+        <div><dt>大小</dt><dd>{(value.artifactSize / 1024).toFixed(1)} KiB</dd></div>
+        <div><dt>验证时间</dt><dd>{time}</dd></div>
+      </dl>
+      <p className="delivery-card-gates">
+        {value.gateSummary.length} 项门禁通过 · <code>{value.artifactSha256.slice(0, 12)}</code>
+      </p>
+      <button type="button" onClick={() => onDeploy?.(value)} disabled={!onDeploy}>
+        手动部署到 Runtime
+      </button>
+    </section>
+  );
+}
+
 /** Shown immediately after sending — identical head to ThinkingBlock so there
  *  is no layout jump when real content streams in. */
 export function ThinkingPlaceholder() {
@@ -517,6 +553,7 @@ export interface BlocksProps {
   onAuth?: (block: AuthBlock) => Promise<void>;
   onArtifactDownload?: (filename: string, version: number) => Promise<void>;
   onArtifactPreview?: (filename: string, version: number) => Promise<string>;
+  onDeployDelivery?: (delivery: Extract<Block, { kind: "delivery" }>["value"]) => void;
 }
 
 export function Blocks({
@@ -529,6 +566,7 @@ export function Blocks({
   onAuth,
   onArtifactDownload,
   onArtifactPreview,
+  onDeployDelivery,
 }: BlocksProps) {
   const lastTextBlockIndex = blocks.reduce(
     (lastIndex, block, index) => block.kind === "text" ? index : lastIndex,
@@ -571,6 +609,14 @@ export function Blocks({
             return <MediaGroup key={i} appName={appName} items={b.files} />;
           case "artifact":
             return <ArtifactCard key={i} block={b} onDownload={onArtifactDownload} onPreview={onArtifactPreview} />;
+          case "delivery":
+            return (
+              <DeliveryCard
+                key={i}
+                value={b.value}
+                onDeploy={onDeployDelivery}
+              />
+            );
           case "invocation":
             return <InvocationChips key={i} value={b.value} />;
           case "tool":

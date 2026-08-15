@@ -37,14 +37,12 @@ from frontend.server.sandbox.tool_sessions import SandboxToolPair
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.agentkit_session_metadata import (
     SESSION_DISPLAY_NAME_MAX_LENGTH,
-    SESSION_SCHEMA_VERSION_METADATA_KEY,
-    SESSION_WORKLOAD_METADATA_KEY,
     build_create_session_request,
     build_list_sessions_request,
     call_session_client,
+    session_agent_kind,
     session_creator_name,
     session_display_name,
-    session_metadata_value,
     session_username,
 )
 from veadk.cli.codex_app_server import (
@@ -95,13 +93,16 @@ _CODEX_PROJECT_HANDOFF_PAIRING_MIN_TTL_SECONDS = 60
 _CODEX_PROJECT_HANDOFF_PAIRING_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 _CODEX_PROJECT_HANDOFF_PAIRING_LENGTH = 8
 _SANDBOX_AGENT_TOOL_ENVS = {
+    "deepseek-harness": (_SANDBOX_CHAT_TOOL_ENV,),
     "openclaw": ("SANDBOX_CHAT_OPENCLAW", "SANDBOX_OPENCLAW_TOOL"),
     "hermes": ("SANDBOX_CHAT_HERMES", "SANDBOX_HERMES_TOOL"),
 }
 _SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS = {
+    "deepseek-harness": _SANDBOX_CHAT_SNAPSHOT_TOOL_ENV,
     "openclaw": "SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
     "hermes": "SANDBOX_CHAT_HERMES_SNAPSHOT",
 }
+_SANDBOX_CODEX_AGENT_KIND = "codex"
 _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 _SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
 _ACTIVE_SESSION_STATUSES = {"creating", "pending", "running", "ready", "starting"}
@@ -236,7 +237,7 @@ def _safe_error_message(error: object) -> str:
             next_error = current.__context__
         current = next_error
     raw_message = "\n".join(parts) if parts else str(error).strip()
-    message = _redact_public_text(raw_message, maximum=2_000)
+    message = _redact_public_text(raw_message, maximum=20_000)
     return message or type(error).__name__
 
 
@@ -605,8 +606,7 @@ class SandboxCloudSession:
     display_name: str = ""
     created_by: str = ""
     creator_name: str = ""
-    workload: str = ""
-    schema_version: str = ""
+    agent_kind: str = ""
     persistent: bool = False
 
 
@@ -698,6 +698,18 @@ def _session_for_tools(
 ) -> SandboxCloudSession:
     """Attach the browser-safe persistence mode derived from its Tool id."""
     return replace(session, persistent=tools.is_persistent(session.tool_id))
+
+
+def _session_matches_agent_kind(
+    session: SandboxCloudSession,
+    agent_kind: str,
+    *,
+    include_legacy: bool = False,
+) -> bool:
+    actual = session.agent_kind.strip()
+    if actual == agent_kind:
+        return True
+    return include_legacy and not actual
 
 
 @dataclass
@@ -868,10 +880,6 @@ class SandboxCodexConnection(Protocol):
         """Resolve one pending user approval."""
         raise NotImplementedError
 
-    async def interrupt(self) -> None:
-        """Interrupt the active turn if one exists."""
-        raise NotImplementedError
-
     async def close(self) -> None:
         """Close the persistent connection."""
         raise NotImplementedError
@@ -900,11 +908,7 @@ class SandboxCloudGateway(Protocol):
         display_name: str = "",
         username: str = "",
         creator_name: str = "",
-        *,
-        user_session_id: str | None = None,
-        ttl_seconds: int | None = None,
-        envs: Mapping[str, str] | None = None,
-        metadata: Mapping[str, str] | None = None,
+        agent_kind: str = "",
     ) -> SandboxCloudSession:
         """Create a fresh remote Sandbox session."""
         raise NotImplementedError
@@ -968,25 +972,6 @@ class AgentkitSandboxGateway:
             request,
         )
 
-    @staticmethod
-    def _string_mapping(
-        value: Mapping[str, str] | None,
-        *,
-        name: str,
-    ) -> dict[str, str]:
-        if value is None:
-            return {}
-        if not isinstance(value, Mapping):
-            raise ValueError(f"{name} must be a mapping of strings to strings")
-        result: dict[str, str] = {}
-        for key, item in value.items():
-            if not isinstance(key, str) or not key:
-                raise ValueError(f"{name} keys must be non-empty strings")
-            if not isinstance(item, str):
-                raise ValueError(f"{name} values must be strings")
-            result[key] = item
-        return result
-
     async def _reconcile_created_session(
         self, tool_id: str, user_session_id: str, region: str = ""
     ) -> SandboxCloudSession | None:
@@ -1048,10 +1033,7 @@ class AgentkitSandboxGateway:
             display_name=session_display_name(value),
             created_by=session_username(value),
             creator_name=session_creator_name(value),
-            workload=session_metadata_value(value, SESSION_WORKLOAD_METADATA_KEY),
-            schema_version=session_metadata_value(
-                value, SESSION_SCHEMA_VERSION_METADATA_KEY
-            ),
+            agent_kind=session_agent_kind(value),
         )
 
     @staticmethod
@@ -1222,47 +1204,20 @@ class AgentkitSandboxGateway:
         display_name: str = "",
         username: str = "",
         creator_name: str = "",
-        *,
-        user_session_id: str | None = None,
-        ttl_seconds: int | None = None,
-        envs: Mapping[str, str] | None = None,
-        metadata: Mapping[str, str] | None = None,
+        agent_kind: str = "",
     ) -> SandboxCloudSession:
-        from agentkit.sdk.tools import types as tools_types
-
-        if user_session_id is None:
-            user_session_id = _build_studio_user_session_id()
-        elif not isinstance(user_session_id, str) or not user_session_id.strip():
-            raise ValueError("user_session_id must be a non-empty string")
-        else:
-            user_session_id = user_session_id.strip()
-        if ttl_seconds is None:
-            ttl_seconds = STUDIO_SANDBOX_TTL_SECONDS
-        elif (
-            not isinstance(ttl_seconds, int)
-            or isinstance(ttl_seconds, bool)
-            or ttl_seconds <= 0
-        ):
-            raise ValueError("ttl_seconds must be a positive integer")
-
-        safe_envs = self._string_mapping(envs, name="envs")
-        safe_metadata = self._string_mapping(metadata, name="metadata")
+        user_session_id = _build_studio_user_session_id()
         regions = self._region_candidates or ("",)
         for index, region in enumerate(regions):
             request = build_create_session_request(
                 tool_id=tool_id,
-                ttl_seconds=ttl_seconds,
+                ttl_seconds=STUDIO_SANDBOX_TTL_SECONDS,
                 user_session_id=user_session_id,
                 display_name=display_name,
                 username=username,
                 creator_name=creator_name,
-                extra_metadata=safe_metadata,
+                agent_kind=agent_kind,
             )
-            if safe_envs:
-                request.envs = [
-                    tools_types.EnvsItemForCreateSession(Key=key, Value=value)
-                    for key, value in safe_envs.items()
-                ]
             create_task = asyncio.create_task(
                 self._call("create_session", request, region=region)
             )
@@ -1312,10 +1267,7 @@ class AgentkitSandboxGateway:
                 display_name=display_name,
                 created_by=username,
                 creator_name=creator_name,
-                workload=safe_metadata.get(SESSION_WORKLOAD_METADATA_KEY, ""),
-                schema_version=safe_metadata.get(
-                    SESSION_SCHEMA_VERSION_METADATA_KEY, ""
-                ),
+                agent_kind=agent_kind,
             )
         raise SandboxProvisioningError("无法在支持的地域创建 AgentKit 沙箱会话。")
 
@@ -1520,10 +1472,12 @@ class SandboxConversationService:
         gateway: SandboxCloudGateway,
         tool_id: str | None = None,
         snapshot_tool_id: str | None = None,
+        agent_kind: str = _SANDBOX_CODEX_AGENT_KIND,
     ) -> None:
         self._gateway = gateway
         self._configured_tool_id = (tool_id or "").strip()
         self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
+        self._agent_kind = agent_kind
         self._sessions: dict[tuple[str, str], SandboxConversation] = {}
         self._registry_lock = asyncio.Lock()
         self._sessions_starting = 0
@@ -1569,7 +1523,14 @@ class SandboxConversationService:
                 cloud = await self._gateway.get_session(tool_id, session_id)
             except SandboxSessionNotFoundError:
                 continue
-            return _session_for_tools(cloud, tools)
+            cloud = _session_for_tools(cloud, tools)
+            if not _session_matches_agent_kind(
+                cloud,
+                self._agent_kind,
+                include_legacy=True,
+            ):
+                continue
+            return cloud
         raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
 
     async def list_sessions(
@@ -1588,6 +1549,11 @@ class SandboxConversationService:
             sessions.update(
                 (session.instance_id, _session_for_tools(session, tools))
                 for session in found
+                if _session_matches_agent_kind(
+                    session,
+                    self._agent_kind,
+                    include_legacy=True,
+                )
             )
         return sorted(
             sessions.values(),
@@ -1696,12 +1662,22 @@ class SandboxConversationService:
             self._sessions_starting += 1
         try:
             created = await self._gateway.create_session(
-                tool_id, display_name, owner_id, creator_name
+                tool_id,
+                display_name,
+                owner_id,
+                creator_name,
+                self._agent_kind,
             )
             authoritative = await self._gateway.get_session(
                 tool_id, created.instance_id
             )
-            return _session_for_tools(authoritative, self._tools())
+            return _session_for_tools(
+                replace(
+                    authoritative,
+                    agent_kind=authoritative.agent_kind or self._agent_kind,
+                ),
+                self._tools(),
+            )
         finally:
             async with self._registry_lock:
                 self._sessions_starting -= 1
@@ -2380,7 +2356,7 @@ class SandboxConversationService:
 
 
 class SandboxAgentSessionService:
-    """List, create, and securely open managed Hermes/OpenClaw Sessions."""
+    """List, create, and securely open managed branded WebUI Sessions."""
 
     def __init__(
         self,
@@ -2389,16 +2365,22 @@ class SandboxAgentSessionService:
         kind: str,
         tool_id: str | None = None,
         snapshot_tool_id: str | None = None,
+        surface_path: str | None = None,
+        filter_agent_kind: bool = False,
     ) -> None:
         if kind not in _SANDBOX_AGENT_TOOL_ENVS:
             raise ValueError(f"Unsupported Studio sandbox agent kind: {kind}")
         self._gateway = gateway
         self.kind = kind
+        surface = (surface_path or f"/{kind}/").strip()
+        self.surface_path = f"/{surface.strip('/')}/"
+        self._filter_agent_kind = filter_agent_kind
         self._configured_tool_id = (tool_id or "").strip()
         self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
         self._workspaces: dict[
             tuple[str, str], tuple[SandboxCloudSession, str, float]
         ] = {}
+        self._created_session_ids: set[str] = set()
 
     def _tools(self) -> SandboxToolPair:
         transient = self._configured_tool_id
@@ -2443,7 +2425,16 @@ class SandboxAgentSessionService:
                 cloud = await self._gateway.get_session(tool_id, session_id)
             except SandboxSessionNotFoundError:
                 continue
-            return _session_for_tools(cloud, tools)
+            cloud = _session_for_tools(cloud, tools)
+            if (
+                self._filter_agent_kind
+                and cloud.instance_id not in self._created_session_ids
+                and not _session_matches_agent_kind(cloud, self.kind)
+            ):
+                continue
+            if self._filter_agent_kind and not cloud.agent_kind:
+                cloud = replace(cloud, agent_kind=self.kind)
+            return cloud
         raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
 
     async def list_sessions(
@@ -2458,10 +2449,17 @@ class SandboxAgentSessionService:
                 tool_id,
                 None if is_admin else owner_id,
             )
-            sessions.update(
-                (session.instance_id, _session_for_tools(session, tools))
-                for session in found
-            )
+            for session in found:
+                session = _session_for_tools(session, tools)
+                if (
+                    self._filter_agent_kind
+                    and session.instance_id not in self._created_session_ids
+                    and not _session_matches_agent_kind(session, self.kind)
+                ):
+                    continue
+                if self._filter_agent_kind and not session.agent_kind:
+                    session = replace(session, agent_kind=self.kind)
+                sessions[session.instance_id] = session
         return sorted(
             sessions.values(),
             key=lambda session: session.created_at,
@@ -2560,10 +2558,18 @@ class SandboxAgentSessionService:
             raise SandboxValidationError("persistent 必须是布尔值。")
         tool_id = self._tool_id(persistent=persistent)
         created = await self._gateway.create_session(
-            tool_id, display_name, owner_id, creator_name
+            tool_id,
+            display_name,
+            owner_id,
+            creator_name,
+            self.kind,
         )
         authoritative = await self._gateway.get_session(tool_id, created.instance_id)
-        return _session_for_tools(authoritative, self._tools())
+        self._created_session_ids.add(created.instance_id)
+        return _session_for_tools(
+            replace(authoritative, agent_kind=authoritative.agent_kind or self.kind),
+            self._tools(),
+        )
 
     async def open(
         self,
@@ -2614,6 +2620,7 @@ class SandboxAgentSessionService:
             for key, workspace in self._workspaces.items()
             if key[1] != session_id or (not is_admin and key[0] != owner_id)
         }
+        self._created_session_ids.discard(session_id)
         await self._gateway.delete_session(cloud)
 
     async def launch_terminal(
@@ -2870,7 +2877,7 @@ def mount_sandbox_agent_routes(
         prefix = agent_surface_prefix(kind, session_id, token)
         return {
             **_public_session(session, kind),
-            "webuiUrl": f"{prefix}/{kind}/",
+            "webuiUrl": f"{prefix}{service.surface_path}",
         }
 
     @app.delete("/web/{kind}/sessions/{session_id}")

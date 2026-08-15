@@ -58,6 +58,7 @@ test("identity 200 resolves as authenticated", async () => {
 });
 
 test("identity 401 keeps SSO mode unauthenticated", async () => {
+  globalThis.localStorage = { getItem: () => "alice" };
   let requests = 0;
   globalThis.fetch = async () => {
     requests += 1;

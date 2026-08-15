@@ -82,6 +82,7 @@ export interface SandboxComposerProps {
   selectedSkills: SandboxSkill[];
   onRequestSkills: () => void;
   onSelectedSkillsChange: (skills: SandboxSkill[]) => void;
+  textOnly?: boolean;
 }
 
 export function SandboxComposer({
@@ -107,6 +108,7 @@ export function SandboxComposer({
   selectedSkills,
   onRequestSkills,
   onSelectedSkillsChange,
+  textOnly = false,
 }: SandboxComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
@@ -171,7 +173,7 @@ export function SandboxComposer({
     }
     return [];
   }, [mention, models, selectedSkills, skills, slash]);
-  const menuVisible = !menuDismissed && Boolean(mention || slash);
+  const menuVisible = !textOnly && !menuDismissed && Boolean(mention || slash);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -356,6 +358,7 @@ export function SandboxComposer({
         ) : null}
 
         <div className="composer-left-controls">
+          {!textOnly && <>
           <div className="composer-menu-wrap">
             <button
               type="button"
@@ -480,10 +483,11 @@ export function SandboxComposer({
               )}
             </button>
           ) : null}
+          </>}
         </div>
 
         <div className="composer-input-stack sandbox-composer-input">
-          {selectedSkills.length > 0 ? (
+          {!textOnly && selectedSkills.length > 0 ? (
             <InvocationChips
               skillPrefix="$"
               value={{

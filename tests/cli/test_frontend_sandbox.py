@@ -292,9 +292,6 @@ class _FakeCodex:
     def resolve_approval(self, approval_id: str, decision: str) -> None:
         self.approvals.append((approval_id, decision))
 
-    async def interrupt(self) -> None:
-        self.active = False
-
     async def close(self) -> None:
         self.closed = True
 
@@ -2566,127 +2563,6 @@ async def test_gateway_filters_sessions_by_username_metadata() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gateway_create_session_preserves_default_request_behavior() -> None:
-    requests: list[dict[str, object]] = []
-
-    class _Client:
-        def create_session(self, request: object) -> SimpleNamespace:
-            requests.append(request.model_dump(by_alias=True, exclude_none=True))
-            return SimpleNamespace(
-                session_id="remote-default",
-                user_session_id=request.user_session_id,
-                endpoint="https://sandbox.example",
-            )
-
-    session = await AgentkitSandboxGateway(_Client()).create_session("tool-sdk")
-
-    assert requests == [
-        {
-            "ToolId": "tool-sdk",
-            "Ttl": 28_800,
-            "TtlUnit": "second",
-            "UserSessionId": session.user_session_id,
-        }
-    ]
-    assert session.user_session_id.startswith("studio-")
-
-
-@pytest.mark.asyncio
-async def test_gateway_create_session_accepts_caller_inputs() -> None:
-    requests: list[dict[str, object]] = []
-
-    class _Client:
-        def create_session(self, request: object) -> SimpleNamespace:
-            requests.append(request.model_dump(by_alias=True, exclude_none=True))
-            return SimpleNamespace(
-                session_id="remote-vibe",
-                user_session_id=request.user_session_id,
-                endpoint="https://sandbox.example",
-            )
-
-    session = await AgentkitSandboxGateway(_Client()).create_session(
-        "tool-sdk",
-        "Vibe Task",
-        "alice",
-        "Alice",
-        user_session_id="vibe-task-1",
-        ttl_seconds=3_600,
-        envs={"VIBE_TASK_ID": "task-1", "VIBE_MODE": "build"},
-        metadata={"veadk_workload": "vibe", "veadk_schema_version": "1"},
-    )
-
-    assert requests == [
-        {
-            "ToolId": "tool-sdk",
-            "Ttl": 3_600,
-            "TtlUnit": "second",
-            "UserSessionId": "vibe-task-1",
-            "Envs": [
-                {"Key": "VIBE_TASK_ID", "Value": "task-1"},
-                {"Key": "VIBE_MODE", "Value": "build"},
-            ],
-            "Metadata": [
-                {
-                    "Key": "veadk_display_name",
-                    "Type": "String",
-                    "Value": "Vibe Task",
-                },
-                {"Key": "Username", "Type": "String", "Value": "alice"},
-                {
-                    "Key": "veadk_creator_name",
-                    "Type": "String",
-                    "Value": "Alice",
-                },
-                {
-                    "Key": "veadk_schema_version",
-                    "Type": "String",
-                    "Value": "1",
-                },
-                {
-                    "Key": "veadk_workload",
-                    "Type": "String",
-                    "Value": "vibe",
-                },
-            ],
-        }
-    ]
-    assert session.user_session_id == "vibe-task-1"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("kwargs", "message"),
-    [
-        ({"user_session_id": ""}, "user_session_id"),
-        ({"user_session_id": 1}, "user_session_id"),
-        ({"ttl_seconds": 0}, "ttl_seconds"),
-        ({"ttl_seconds": True}, "ttl_seconds"),
-        ({"envs": [("KEY", "value")]}, "envs"),
-        ({"envs": {"KEY": 1}}, "envs"),
-        ({"metadata": {"": "value"}}, "metadata"),
-        ({"metadata": {"key": 1}}, "metadata"),
-        (
-            {"metadata": {"veadk_display_name": "override"}},
-            "metadata",
-        ),
-    ],
-)
-async def test_gateway_create_session_rejects_unsafe_caller_inputs(
-    kwargs: dict[str, object],
-    message: str,
-) -> None:
-    class _Client:
-        def create_session(self, request: object) -> None:
-            raise AssertionError(f"unexpected cloud call: {request}")
-
-    with pytest.raises(ValueError, match=message):
-        await AgentkitSandboxGateway(_Client()).create_session(
-            "tool-sdk",
-            **kwargs,
-        )
-
-
-@pytest.mark.asyncio
 async def test_gateway_creates_session_with_username_metadata() -> None:
     requests: list[dict[str, object]] = []
 
@@ -3058,15 +2934,7 @@ async def test_cancelled_create_is_deleted_after_sdk_call_finishes(
             deleted.append(str(request.session_id))
 
     gateway = AgentkitSandboxGateway(_Client())
-    task = asyncio.create_task(
-        gateway.create_session(
-            "tool-1",
-            user_session_id="vibe-task-cancelled",
-            ttl_seconds=3_600,
-            envs={"VIBE_TASK_ID": "task-cancelled"},
-            metadata={"veadk_workload": "vibe"},
-        )
-    )
+    task = asyncio.create_task(gateway.create_session("tool-1"))
     await asyncio.sleep(0)
     task.cancel()
 
@@ -3077,11 +2945,4 @@ async def test_cancelled_create_is_deleted_after_sdk_call_finishes(
     assert deleted == ["remote-1"]
     assert len(created) == 1
     assert created[0].tool_id == "tool-1"
-    assert created[0].user_session_id == "vibe-task-cancelled"
-    assert created[0].ttl == 3_600
-    assert [(item.key, item.value) for item in created[0].envs] == [
-        ("VIBE_TASK_ID", "task-cancelled")
-    ]
-    assert [(item.key, item.value) for item in created[0].metadata] == [
-        ("veadk_workload", "vibe")
-    ]
+    assert created[0].envs is None

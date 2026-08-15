@@ -243,6 +243,7 @@ export interface SandboxSession {
   expireAt: string;
   persistent: boolean;
   toolType: string;
+  intelligentDevelopment: boolean;
   createdBy: string;
   threadId: string;
   cwd: string;
@@ -331,6 +332,14 @@ export interface AgentKitSandboxClient {
     message: SandboxMessage,
     options?: SandboxRequestOptions,
   ): Promise<SandboxReply>;
+  verifyDelivery(
+    sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxReply>;
+  interruptSession(
+    sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<void>;
   getStatus(
     sessionId: string,
     options?: SandboxRequestOptions,
@@ -460,6 +469,7 @@ export interface SandboxSessionSettings {
 
 interface SessionResponse {
   sessionId: string;
+  toolName?: string;
   userSessionId?: string;
   displayName?: string;
   status: string;
@@ -521,6 +531,8 @@ interface SandboxStreamPayload {
   usage?: unknown;
   threadTotal?: unknown;
   modelContextWindow?: unknown;
+  delivery?: unknown;
+  payload?: unknown;
 }
 
 function sandboxHeaders(headers?: HeadersInit): Headers {
@@ -582,6 +594,7 @@ function parseSession(
     expireAt: data.expireAt ?? "",
     persistent: data.persistent !== false,
     toolType: data.toolType ?? "",
+    intelligentDevelopment: data.toolName === "intelligent-development",
     createdBy: data.createdBy ?? "",
     threadId: data.threadId ?? "",
     cwd: data.cwd ?? "",
@@ -946,6 +959,77 @@ async function parseSandboxStream(
       );
     }
     if (event === "activity") applyActivity(payload);
+    if (event === "verification.stage.started") {
+      const detail = recordOf(payload.payload);
+      if (typeof detail?.name === "string") {
+        blocks.push({
+          kind: "thinking",
+          text: `正在验证：${detail.name}`,
+          done: false,
+        });
+        emitBlocks();
+      }
+    }
+    if (event === "verification.step.finished") {
+      const detail = recordOf(payload.payload);
+      if (typeof detail?.name === "string") {
+        const existing = [...blocks].reverse().findIndex(
+          (block) => block.kind === "thinking" && block.text === `正在验证：${detail.name}`,
+        );
+        if (existing >= 0) {
+          const index = blocks.length - existing - 1;
+          blocks[index] = {
+            kind: "thinking",
+            text: `${detail.passed === true ? "已通过" : "未通过"}：${detail.name}`,
+            done: true,
+          };
+        }
+        emitBlocks();
+      }
+    }
+    if (event === "development.failed") {
+      const detail = recordOf(payload.payload);
+      blocks.push({
+        kind: "text",
+        text: typeof detail?.message === "string"
+          ? `验证未通过：${detail.message}。请继续在当前会话中修复后重试。`
+          : "验证未通过，请继续在当前会话中修复后重试。",
+      });
+      emitBlocks();
+    }
+    if (event === "development.succeeded") {
+      const eventPayload = recordOf(payload.payload);
+      const eventData = recordOf(eventPayload?.delivery);
+      if (
+        eventData &&
+        typeof eventData.sessionId === "string" &&
+        typeof eventData.artifactSha256 === "string" &&
+        typeof eventData.validationReportSha256 === "string" &&
+        typeof eventData.agentName === "string" &&
+        typeof eventData.entryPoint === "string" &&
+        typeof eventData.fileCount === "number" &&
+        typeof eventData.artifactSize === "number" &&
+        typeof eventData.validatedAt === "string" &&
+        Array.isArray(eventData.gateSummary) &&
+        eventData.gateSummary.every((item) => typeof item === "string")
+      ) {
+        blocks.push({
+          kind: "delivery",
+          value: {
+            sessionId: eventData.sessionId,
+            artifactSha256: eventData.artifactSha256,
+            validationReportSha256: eventData.validationReportSha256,
+            agentName: eventData.agentName,
+            entryPoint: eventData.entryPoint,
+            fileCount: eventData.fileCount,
+            artifactSize: eventData.artifactSize,
+            validatedAt: eventData.validatedAt,
+            gateSummary: eventData.gateSummary as string[],
+          },
+        });
+        emitBlocks();
+      }
+    }
     if (event === "approval") {
       const approval = parseApproval(payload);
       if (approval) options.onApproval?.(approval);
@@ -989,6 +1073,7 @@ async function parseSandboxStream(
 }
 
 async function sandboxJson(
+  api: string,
   sessionId: string,
   action: string,
   {
@@ -1005,7 +1090,7 @@ async function sandboxJson(
 ): Promise<unknown> {
   if (!sessionId) throw new Error("缺少要操作的 AgentKit Session。");
   const response = await studioFetch(
-    `${SANDBOX_API}/${encodeURIComponent(sessionId)}/${action}`,
+    `${api}/${encodeURIComponent(sessionId)}/${action}`,
     {
       method,
       headers: sandboxHeaders(
@@ -1020,10 +1105,11 @@ async function sandboxJson(
   return response.json();
 }
 
-export const sandboxClient: AgentKitSandboxClient = {
+function createSandboxClient(api: string, config: { textOnly?: boolean } = {}): AgentKitSandboxClient {
+  return {
   async listSessions(options = {}) {
     const response = await studioFetch(
-      sandboxListUrl(SANDBOX_API, options),
+      sandboxListUrl(api, options),
       {
         method: "GET",
         headers: sandboxHeaders(),
@@ -1049,13 +1135,13 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async startSession(options = {}) {
     const response = await studioFetch(
-      SANDBOX_API,
+      api,
       {
         method: "POST",
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           displayName: options.displayName?.trim() ?? "",
-          persistent: options.persistent ?? true,
+          ...(config.textOnly ? {} : { persistent: options.persistent ?? true }),
         }),
         signal: options.signal,
       },
@@ -1221,7 +1307,7 @@ export const sandboxClient: AgentKitSandboxClient = {
   async connectSession(sessionId, options = {}) {
     if (!sessionId) throw new Error("缺少要连接的 AgentKit Session。");
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/connect`,
+      `${api}/${encodeURIComponent(sessionId)}/connect`,
       {
         method: "POST",
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
@@ -1244,7 +1330,7 @@ export const sandboxClient: AgentKitSandboxClient = {
       throw new Error("内置智能体会话缺少有效的消息内容。");
     }
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(message.sessionId)}/messages`,
+      `${api}/${encodeURIComponent(message.sessionId)}/messages`,
       {
         method: "POST",
         headers: sandboxHeaders({
@@ -1253,7 +1339,9 @@ export const sandboxClient: AgentKitSandboxClient = {
         }),
         body: JSON.stringify({
           message: message.text,
-          ...(message.skillIds?.length ? { skillIds: message.skillIds } : {}),
+          ...(!config.textOnly && message.skillIds?.length
+            ? { skillIds: message.skillIds }
+            : {}),
         }),
         signal: options.signal,
       },
@@ -1265,8 +1353,41 @@ export const sandboxClient: AgentKitSandboxClient = {
     return parseSandboxStream(response, options);
   },
 
+  async verifyDelivery(sessionId, options = {}) {
+    if (!sessionId) throw new Error("缺少要验证的智能开发 Session。");
+    const response = await studioFetch(
+      `${api}/${encodeURIComponent(sessionId)}/verify-deliver`,
+      {
+        method: "POST",
+        headers: sandboxHeaders({ Accept: "text/event-stream" }),
+        signal: options.signal,
+      },
+      MESSAGE_TIMEOUT_MS,
+    );
+    if (!response.ok) {
+      throw await responseError(response, "验证与交付失败，请稍后重试。");
+    }
+    return parseSandboxStream(response, options);
+  },
+
+  async interruptSession(sessionId, options = {}) {
+    if (!sessionId) return;
+    const response = await studioFetch(
+      `${api}/${encodeURIComponent(sessionId)}/interrupt`,
+      {
+        method: "POST",
+        headers: sandboxHeaders(),
+        signal: options.signal,
+      },
+      CLOSE_TIMEOUT_MS,
+    );
+    if (!response.ok && ![404, 409].includes(response.status)) {
+      throw await responseError(response, "无法停止当前任务。");
+    }
+  },
+
   async getStatus(sessionId, options = {}) {
-    const value = await sandboxJson(sessionId, "status", {
+    const value = await sandboxJson(api, sessionId, "status", {
       options,
       fallback: "无法读取 Codex 状态。",
     });
@@ -1286,7 +1407,7 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async getEndpoint(sessionId, options = {}) {
-    const value = recordOf(await sandboxJson(sessionId, "endpoint", {
+    const value = recordOf(await sandboxJson(api, sessionId, "endpoint", {
       options,
       fallback: "无法读取 Sandbox Endpoint。",
     }));
@@ -1401,7 +1522,7 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async listModels(sessionId, options = {}) {
-    const value = recordOf(await sandboxJson(sessionId, "models", {
+    const value = recordOf(await sandboxJson(api, sessionId, "models", {
       options,
       fallback: "无法读取 Codex 模型列表。",
     }));
@@ -1415,7 +1536,7 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async setModel(sessionId, model, options = {}) {
-    const value = recordOf(await sandboxJson(sessionId, "model", {
+    const value = recordOf(await sandboxJson(api, sessionId, "model", {
       method: "PUT",
       body: { model },
       options,
@@ -1429,7 +1550,7 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async listSkills(sessionId, forceReload = false, options = {}) {
     const query = forceReload ? "?force_reload=true" : "";
-    const value = recordOf(await sandboxJson(sessionId, `skills${query}`, {
+    const value = recordOf(await sandboxJson(api, sessionId, `skills${query}`, {
       options,
       fallback: "无法读取 Codex Skills。",
     }));
@@ -1448,7 +1569,7 @@ export const sandboxClient: AgentKitSandboxClient = {
     if (query.search) search.set("search", query.search);
     if (query.archived) search.set("archived", "true");
     const suffix = search.size ? `?${search}` : "";
-    const value = recordOf(await sandboxJson(sessionId, `threads${suffix}`, {
+    const value = recordOf(await sandboxJson(api, sessionId, `threads${suffix}`, {
       options,
       fallback: "无法读取 Codex Thread 列表。",
     }));
@@ -1467,7 +1588,7 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async newThread(sessionId, options = {}) {
-    return parseThreadSnapshot(await sandboxJson(sessionId, "threads/new", {
+    return parseThreadSnapshot(await sandboxJson(api, sessionId, "threads/new", {
       method: "POST",
       options,
       fallback: "无法创建新的 Codex Thread。",
@@ -1478,6 +1599,7 @@ export const sandboxClient: AgentKitSandboxClient = {
     if (!threadId) throw new Error("缺少要读取的 Codex Thread。");
     return parseThreadSnapshot(
       await sandboxJson(
+        api,
         sessionId,
         `threads/${encodeURIComponent(threadId)}`,
         {
@@ -1490,7 +1612,7 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async resumeThread(sessionId, threadId, options = {}) {
     return parseThreadSnapshot(
-      await sandboxJson(sessionId, "threads/resume", {
+      await sandboxJson(api, sessionId, "threads/resume", {
         method: "POST",
         body: { threadId },
         options,
@@ -1500,7 +1622,7 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async forkThread(sessionId, options = {}) {
-    return parseThreadSnapshot(await sandboxJson(sessionId, "threads/fork", {
+    return parseThreadSnapshot(await sandboxJson(api, sessionId, "threads/fork", {
       method: "POST",
       options,
       fallback: "无法分叉 Codex Thread。",
@@ -1509,7 +1631,7 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async archiveThread(sessionId, threadId, options = {}) {
     const value = recordOf(
-      await sandboxJson(sessionId, "threads/archive", {
+      await sandboxJson(api, sessionId, "threads/archive", {
         method: "POST",
         body: { threadId },
         options,
@@ -1527,7 +1649,7 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async deleteThread(sessionId, threadId, options = {}) {
     const value = recordOf(
-      await sandboxJson(sessionId, "threads/delete", {
+      await sandboxJson(api, sessionId, "threads/delete", {
         method: "POST",
         body: { threadId },
         options,
@@ -1544,7 +1666,7 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async compactThread(sessionId, options = {}) {
-    await sandboxJson(sessionId, "threads/compact", {
+    await sandboxJson(api, sessionId, "threads/compact", {
       method: "POST",
       options,
       fallback: "无法压缩 Codex Thread。",
@@ -1553,7 +1675,7 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async getSettings(sessionId, options = {}) {
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/settings`,
+      `${api}/${encodeURIComponent(sessionId)}/settings`,
       {
         method: "GET",
         headers: sandboxHeaders(),
@@ -1569,7 +1691,7 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async updatePermissions(sessionId, permissions, options = {}) {
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/permissions`,
+      `${api}/${encodeURIComponent(sessionId)}/permissions`,
       {
         method: "PUT",
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
@@ -1587,7 +1709,7 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async updateWorkspace(sessionId, cwd, options = {}) {
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/workspace`,
+      `${api}/${encodeURIComponent(sessionId)}/workspace`,
       {
         method: "PUT",
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
@@ -1609,7 +1731,7 @@ export const sandboxClient: AgentKitSandboxClient = {
   async listDirectories(sessionId, path, options = {}) {
     const query = new URLSearchParams({ path });
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/directories?${query}`,
+      `${api}/${encodeURIComponent(sessionId)}/directories?${query}`,
       {
         method: "GET",
         headers: sandboxHeaders(),
@@ -1647,7 +1769,7 @@ export const sandboxClient: AgentKitSandboxClient = {
     options = {},
   ) {
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
+      `${api}/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
       {
         method: "POST",
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
@@ -1662,18 +1784,18 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async launchTerminal(sessionId, options = {}) {
-    return launchSandboxTool(sessionId, "terminal", options);
+    return launchSandboxTool(api, sessionId, "terminal", options);
   },
 
   async launchBrowser(sessionId, options = {}) {
-    return launchSandboxTool(sessionId, "browser", options);
+    return launchSandboxTool(api, sessionId, "browser", options);
   },
 
   async uploadFile(sessionId, file, options = {}) {
     const form = new FormData();
     form.set("file", file, file.name);
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/files`,
+      `${api}/${encodeURIComponent(sessionId)}/files`,
       {
         method: "POST",
         headers: sandboxHeaders(),
@@ -1701,7 +1823,7 @@ export const sandboxClient: AgentKitSandboxClient = {
   async closeSession(sessionId, options = {}) {
     if (!sessionId) return;
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/disconnect`,
+      `${api}/${encodeURIComponent(sessionId)}/disconnect`,
       {
         method: "POST",
         headers: sandboxHeaders(),
@@ -1714,26 +1836,10 @@ export const sandboxClient: AgentKitSandboxClient = {
     }
   },
 
-  async interruptSession(sessionId, options = {}) {
-    if (!sessionId) return;
-    const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/interrupt`,
-      {
-        method: "POST",
-        headers: sandboxHeaders(),
-        signal: options.signal,
-      },
-      CLOSE_TIMEOUT_MS,
-    );
-    if (!response.ok && response.status !== 404) {
-      throw await responseError(response, "无法停止 Codex 任务。");
-    }
-  },
-
   async deleteSession(sessionId, options = {}) {
     if (!sessionId) return;
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}`,
+      `${api}/${encodeURIComponent(sessionId)}`,
       {
         method: "DELETE",
         headers: sandboxHeaders(),
@@ -1744,16 +1850,24 @@ export const sandboxClient: AgentKitSandboxClient = {
     if (!response.ok && response.status !== 404) {
       throw await responseError(response, "无法删除 Codex 智能体。");
     }
-  },
-};
+  },  };
+}
+
+
+export const sandboxClient = createSandboxClient(SANDBOX_API);
+export const intelligentDevelopmentClient = createSandboxClient(
+  "/web/intelligent-development/sessions",
+  { textOnly: true },
+);
 
 async function launchSandboxTool(
+  api: string,
   sessionId: string,
   tool: "terminal" | "browser",
   options: SandboxRequestOptions,
 ): Promise<SandboxToolLaunch> {
   const response = await studioFetch(
-    `${SANDBOX_API}/${encodeURIComponent(sessionId)}/${tool}`,
+    `${api}/${encodeURIComponent(sessionId)}/${tool}`,
     {
       method: "POST",
       headers: sandboxHeaders(),
