@@ -82,9 +82,17 @@ UPLOAD_RETRY_DELAY_SECONDS = 5.0
 SESSION_CREATE_ATTEMPTS = 6
 SESSION_CREATE_RETRY_DELAY_SECONDS = 2.0
 AGENT_NAME_MAX_CHARACTERS = 12
+MAX_HISTORY_MESSAGES = 100
+MAX_HISTORY_MESSAGE_CHARACTERS = 20_000
+MAX_HISTORY_CHARACTERS = 100_000
+MAX_CONTINUATION_MESSAGE_CHARACTERS = 20_000
 MAX_EVENT_STREAM_LINE_BYTES = 1024 * 1024
 MAX_EVENT_STREAM_DATA_BYTES = 4 * 1024 * 1024
 PAIRING_CODE_PATTERN = re.compile(r"[2-9A-HJ-KM-NP-Z]{4}-?[2-9A-HJ-KM-NP-Z]{4}")
+AMBIENT_BROWSER_CONTEXT = re.compile(
+    r"<in-app-browser-context\b[^>]*>.*?</in-app-browser-context>",
+    re.DOTALL,
+)
 
 
 class HandoffError(RuntimeError):
@@ -355,7 +363,7 @@ Generated: {timestamp}
 
 ## Transfer boundary
 
-This snapshot contains tracked and non-ignored project files plus working-tree changes. Repository `AGENTS.md` files are ordinary project files and remain in place. Local Codex prompts, conversations, databases, global configuration, Skills, and SSH keys were not transferred. GitHub authentication, when enabled, is injected through a separate ephemeral payload and is not embedded in this snapshot.
+This snapshot contains tracked and non-ignored project files plus working-tree changes. Repository `AGENTS.md` files are ordinary project files and remain in place. Codex system or developer prompts, reasoning, tool logs, databases, global configuration, Skills, and SSH keys were not transferred. Sanitized user-visible conversation history and GitHub authentication, when enabled, travel through separate ephemeral payloads and are not embedded in this snapshot.
 """
     return existing + text.encode("utf-8")
 
@@ -678,6 +686,68 @@ def agent_name(value: str) -> str:
     return cleaned
 
 
+def visible_message(value: str) -> str:
+    cleaned = AMBIENT_BROWSER_CONTEXT.sub("", value).strip()
+    marker = "## My request:"
+    if marker in cleaned:
+        cleaned = cleaned.rsplit(marker, 1)[1].strip()
+    return cleaned
+
+
+def conversation_history(source: Path | None) -> list[dict[str, str]]:
+    if source is None:
+        raise HandoffError("--history is required for a conversation handoff")
+    try:
+        raw = source.expanduser().read_text(encoding="utf-8")
+    except OSError as error:
+        raise HandoffError(f"cannot read conversation history: {source}") from error
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise HandoffError("conversation history is not valid JSON") from error
+    if not isinstance(value, dict) or value.get("schemaVersion") != 1:
+        raise HandoffError("conversation history must use schemaVersion 1")
+    raw_messages = value.get("messages")
+    if not isinstance(raw_messages, list) or not raw_messages:
+        raise HandoffError("conversation history must contain visible messages")
+    if len(raw_messages) > MAX_HISTORY_MESSAGES:
+        raise HandoffError(
+            f"conversation history exceeds {MAX_HISTORY_MESSAGES} messages"
+        )
+    messages: list[dict[str, str]] = []
+    total_characters = 0
+    for item in raw_messages:
+        if not isinstance(item, dict):
+            raise HandoffError("conversation history contains an invalid message")
+        role = item.get("role")
+        content = item.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str):
+            raise HandoffError(
+                "conversation history may contain only user and assistant messages"
+            )
+        content = visible_message(content)
+        if not content:
+            continue
+        if len(content) > MAX_HISTORY_MESSAGE_CHARACTERS:
+            raise HandoffError("conversation history contains an oversized message")
+        total_characters += len(content)
+        if total_characters > MAX_HISTORY_CHARACTERS:
+            raise HandoffError("conversation history is too large")
+        messages.append({"role": role, "content": content})
+    if not messages:
+        raise HandoffError("conversation history contains no visible messages")
+    return messages
+
+
+def continuation_message(value: str) -> str:
+    message = value.strip() or "继续"
+    if len(message) > MAX_CONTINUATION_MESSAGE_CHARACTERS:
+        raise HandoffError("--continue-message is too large")
+    if "\0" in message:
+        raise HandoffError("--continue-message contains unsupported characters")
+    return message
+
+
 def studio_url(value: str) -> str:
     parsed = urlsplit(value.strip())
     try:
@@ -912,20 +982,17 @@ def continue_in_studio(
     studio_url: str,
     session_id: str,
     pairing_code: str,
-    remote_repo: str,
+    history: list[dict[str, str]],
+    message: str,
 ) -> None:
-    message = "\n".join(
-        [
-            "继续执行从本地接力的当前任务，不要只汇报迁移结果。",
-            f"项目目录：{remote_repo}",
-            "先阅读 HANDOFF.md 并检查 Git 状态，再按照其中的当前目标、已完成工作和后续步骤直接继续执行。",
-            "保留已有改动；只有遇到无法自行解决的真实阻塞时才暂停并说明。",
-        ]
-    )
     post_event_stream(
         studio_url.rstrip("/")
         + f"/web/sandbox/codex-project-handoff/sessions/{session_id}/messages",
-        {"pairingCode": pairing_code, "message": message},
+        {
+            "pairingCode": pairing_code,
+            "history": history,
+            "message": message,
+        },
         "Studio cloud continuation",
     )
 
@@ -1177,6 +1244,11 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--remote-home", default="/home/gem")
     result.add_argument("--handoff", type=Path)
+    result.add_argument("--history", type=Path)
+    result.add_argument(
+        "--continue-message",
+        default=os.getenv("CODEX_PROJECT_HANDOFF_CONTINUE_MESSAGE", "继续"),
+    )
     result.add_argument("--output", type=Path)
     result.add_argument("--dry-run", action="store_true")
     result.add_argument("--yes", action="store_true")
@@ -1193,6 +1265,9 @@ def main(argv: list[str] | None = None) -> int:
     display_name = agent_name(args.agent_name)
     studio_base_url = studio_url(args.studio_url) if args.studio_url.strip() else ""
     one_time_code = pairing_code(args.pairing_code) if args.pairing_code.strip() else ""
+    history = conversation_history(args.history)
+    continue_message = continuation_message(args.continue_message)
+    print(f"[handoff] conversation messages: {len(history)}")
     github_credentials_enabled = state.github_remote and not args.no_github_credentials
     if args.dry_run:
         with tempfile.TemporaryDirectory(
@@ -1317,6 +1392,7 @@ def main(argv: list[str] | None = None) -> int:
             "fileCount": restored.get("fileCount"),
             "gitStatus": restored.get("gitStatus", ""),
             "githubAuth": restored.get("githubAuth", False),
+            "historyMessages": len(history),
             "restored": True,
             "continued": False,
         }
@@ -1325,7 +1401,8 @@ def main(argv: list[str] | None = None) -> int:
             studio_base_url,
             session_id,
             one_time_code,
-            remote_repo,
+            history,
+            continue_message,
         )
         result["continued"] = True
         print("[handoff] result: " + json.dumps(result, ensure_ascii=False))

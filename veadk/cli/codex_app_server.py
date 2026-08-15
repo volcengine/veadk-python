@@ -22,14 +22,16 @@ over the Session's app-server WebSocket.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import hashlib
 import json
 import math
 import posixpath
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit, urlunsplit
 
 ApprovalPolicy = Literal["untrusted", "on-request", "never"]
@@ -46,6 +48,10 @@ _REQUEST_TIMEOUT_SECONDS = 60
 _TURN_TIMEOUT_SECONDS = 600
 _APPROVAL_TIMEOUT_SECONDS = 300
 _MAX_DIRECTORY_ENTRIES = 1_000
+_IMPORTED_HISTORY_MAX_MESSAGES = 100
+_IMPORTED_HISTORY_MAX_MESSAGE_CHARACTERS = 20_000
+_IMPORTED_HISTORY_MAX_CHARACTERS = 100_000
+_IMPORTED_HISTORY_MAX_BASE64_BYTES = 700_000
 
 
 class CodexAppServerError(RuntimeError):
@@ -183,6 +189,14 @@ class CodexThreadMessage:
             "timestamp": self.timestamp,
             **({"skillNames": list(self.skill_names)} if self.skill_names else {}),
         }
+
+
+@dataclass(frozen=True)
+class CodexImportedMessage:
+    """One user-visible message imported into a new Codex thread."""
+
+    role: Literal["user", "assistant"]
+    content: str
 
 
 @dataclass(frozen=True)
@@ -736,7 +750,115 @@ class CodexAppServerSession:
             "thread/read",
             {"threadId": thread_id, "includeTurns": True},
         )
-        return self._thread_snapshot("thread/read", result)
+        snapshot = self._thread_snapshot("thread/read", result)
+        imported = await self._read_imported_history(thread_id, snapshot.cwd)
+        return _prepend_imported_history(snapshot, imported)
+
+    async def inject_history(self, messages: tuple[CodexImportedMessage, ...]) -> None:
+        """Persist visible history without starting or replaying a turn."""
+        self._ensure_thread_idle("导入历史消息")
+        if not messages:
+            return
+        await self.request(
+            "thread/inject_items",
+            {
+                "threadId": self.thread_id,
+                "items": [
+                    {
+                        "type": "message",
+                        "role": message.role,
+                        "content": [
+                            {
+                                "type": (
+                                    "input_text"
+                                    if message.role == "user"
+                                    else "output_text"
+                                ),
+                                "text": message.content,
+                            }
+                        ],
+                    }
+                    for message in messages
+                ],
+            },
+        )
+        await self._write_imported_history(messages)
+
+    async def _write_imported_history(
+        self, messages: tuple[CodexImportedMessage, ...]
+    ) -> None:
+        payload = json.dumps(
+            {
+                "schemaVersion": 1,
+                "threadId": self.thread_id,
+                "messages": [asdict(message) for message in messages],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        await self.request(
+            "fs/writeFile",
+            {
+                "path": _imported_history_path(self.thread_id, self.cwd),
+                "dataBase64": base64.b64encode(payload).decode("ascii"),
+            },
+        )
+
+    async def _read_imported_history(
+        self, thread_id: str, cwd: str
+    ) -> tuple[CodexImportedMessage, ...]:
+        for path in _imported_history_read_paths(thread_id, cwd):
+            try:
+                result = await self.request("fs/readFile", {"path": path})
+            except CodexAppServerError:
+                continue
+            encoded = result.get("dataBase64")
+            if (
+                not isinstance(encoded, str)
+                or not encoded
+                or len(encoded) > _IMPORTED_HISTORY_MAX_BASE64_BYTES
+            ):
+                continue
+            try:
+                value = json.loads(base64.b64decode(encoded, validate=True))
+            except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if (
+                not isinstance(value, dict)
+                or value.get("schemaVersion") != 1
+                or value.get("threadId") != thread_id
+                or not isinstance(value.get("messages"), list)
+            ):
+                continue
+            messages: list[CodexImportedMessage] = []
+            raw_messages = value["messages"]
+            if len(raw_messages) > _IMPORTED_HISTORY_MAX_MESSAGES:
+                continue
+            total_characters = 0
+            valid = True
+            for item in raw_messages:
+                if not isinstance(item, dict):
+                    valid = False
+                    break
+                role = item.get("role")
+                content = item.get("content")
+                if role not in {"user", "assistant"} or not isinstance(content, str):
+                    valid = False
+                    break
+                if (
+                    not content
+                    or len(content) > _IMPORTED_HISTORY_MAX_MESSAGE_CHARACTERS
+                ):
+                    valid = False
+                    break
+                total_characters += len(content)
+                if total_characters > _IMPORTED_HISTORY_MAX_CHARACTERS:
+                    valid = False
+                    break
+                messages.append(CodexImportedMessage(role=role, content=content))
+            if valid and messages:
+                return tuple(messages)
+        return ()
 
     async def fork_thread(self) -> CodexThreadSnapshot:
         """Fork and activate the current thread."""
@@ -1346,12 +1468,12 @@ class CodexAppServerSession:
         sandbox_mode, network_access = _sandbox_settings(sandbox)
         self.permissions = CodexPermissionSettings(
             approval_policy=(
-                approval_policy
+                cast(ApprovalPolicy, approval_policy)
                 if approval_policy in APPROVAL_POLICIES
                 else self.permissions.approval_policy
             ),
             approvals_reviewer=(
-                approvals_reviewer
+                cast(ApprovalsReviewer, approvals_reviewer)
                 if approvals_reviewer in APPROVALS_REVIEWERS
                 else self.permissions.approvals_reviewer
             ),
@@ -1401,9 +1523,9 @@ def permission_settings_from_payload(
     if not isinstance(network_access, bool):
         raise TypeError("网络访问配置必须是布尔值。")
     return CodexPermissionSettings(
-        approval_policy=approval_policy,
-        approvals_reviewer=approvals_reviewer,
-        sandbox_mode=sandbox_mode,
+        approval_policy=cast(ApprovalPolicy, approval_policy),
+        approvals_reviewer=cast(ApprovalsReviewer, approvals_reviewer),
+        sandbox_mode=cast(SandboxMode, sandbox_mode),
         network_access=(
             True if sandbox_mode == "danger-full-access" else network_access
         ),
@@ -1414,7 +1536,7 @@ def approval_decision_from_payload(value: object) -> ApprovalDecision:
     """Validate one browser approval decision."""
     if not isinstance(value, str) or value not in APPROVAL_DECISIONS:
         raise ValueError("审批决定无效。")
-    return value
+    return cast(ApprovalDecision, value)
 
 
 def sandbox_service_url(
@@ -1509,7 +1631,7 @@ def _sandbox_settings(
     value: object,
 ) -> tuple[SandboxMode | None, bool | None]:
     if isinstance(value, str) and value in SANDBOX_MODES:
-        return value, None
+        return cast(SandboxMode, value), None
     if not isinstance(value, dict):
         return None, None
     kind = value.get("type")
@@ -1713,6 +1835,66 @@ def _thread_summary(value: dict[str, object]) -> CodexThreadSummary | None:
         created_at=created_at,
         updated_at=updated_at if updated_at is not None else created_at,
         status=status,
+    )
+
+
+def _imported_history_path(thread_id: str, cwd: str) -> str:
+    parent = posixpath.dirname(cwd.rstrip("/")) if cwd else ""
+    directory = parent if parent not in {"", "/"} else "/tmp"
+    digest = hashlib.sha256(thread_id.encode("utf-8")).hexdigest()[:24]
+    return posixpath.join(directory, f".agentkit-studio-history-{digest}.json")
+
+
+def _imported_history_read_paths(thread_id: str, cwd: str) -> tuple[str, ...]:
+    """Cover both the original thread CWD and its selected project child."""
+    digest = hashlib.sha256(thread_id.encode("utf-8")).hexdigest()[:24]
+    filename = f".agentkit-studio-history-{digest}.json"
+    normalized = cwd.rstrip("/") if cwd else ""
+    directories = (
+        normalized if normalized not in {"", "/"} else "/tmp",
+        posixpath.dirname(normalized) if normalized else "/tmp",
+        "/tmp",
+    )
+    return tuple(
+        posixpath.join(directory, filename)
+        for index, directory in enumerate(directories)
+        if directory not in {"", "/"} and directory not in directories[:index]
+    )
+
+
+def _prepend_imported_history(
+    snapshot: CodexThreadSnapshot,
+    imported: tuple[CodexImportedMessage, ...],
+) -> CodexThreadSnapshot:
+    if not imported:
+        return snapshot
+    existing = snapshot.messages[: len(imported)]
+    if len(existing) == len(imported) and all(
+        current.role == previous.role and current.content == previous.content
+        for current, previous in zip(existing, imported, strict=True)
+    ):
+        return snapshot
+    first_timestamp = (
+        snapshot.messages[0].timestamp
+        if snapshot.messages
+        else snapshot.thread.updated_at * 1_000
+    )
+    base_timestamp = max(0, first_timestamp - len(imported) - 1)
+    imported_messages = tuple(
+        CodexThreadMessage(
+            id=f"imported-{snapshot.thread.id}-{index}",
+            role=message.role,
+            content=message.content,
+            timestamp=base_timestamp + index,
+        )
+        for index, message in enumerate(imported)
+    )
+    return CodexThreadSnapshot(
+        thread=snapshot.thread,
+        messages=imported_messages + snapshot.messages,
+        model=snapshot.model,
+        cwd=snapshot.cwd,
+        workspace_locked=snapshot.workspace_locked,
     )
 
 
@@ -1931,6 +2113,7 @@ __all__ = [
     "CodexAppServerSession",
     "CodexApproval",
     "CodexDirectoryListing",
+    "CodexImportedMessage",
     "CodexModel",
     "CodexPermissionSettings",
     "CodexSkill",

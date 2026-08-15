@@ -34,6 +34,7 @@ from veadk.cli.codex_app_server import (
     CodexAppServerEvent,
     CodexDirectoryEntry,
     CodexDirectoryListing,
+    CodexImportedMessage,
     CodexModel,
     CodexPermissionSettings,
     CodexSkill,
@@ -69,9 +70,11 @@ class _FakeCodex:
         self.active = False
         self.closed = False
         self.turns = turns
+        self.prompts: list[str] = []
         self.fail = fail
         self.approvals: list[tuple[str, str]] = []
         self.selected_skill_ids: tuple[str, ...] = ()
+        self.imported_history: tuple[CodexImportedMessage, ...] = ()
 
     async def stream_turn(
         self, prompt: str, skill_ids: tuple[str, ...] = ()
@@ -79,6 +82,7 @@ class _FakeCodex:
         self.active = True
         self.workspace_locked = True
         self.turns.append(self.thread_id)
+        self.prompts.append(prompt)
         self.selected_skill_ids = skill_ids
         try:
             if self.fail:
@@ -221,6 +225,9 @@ class _FakeCodex:
         self.thread_id = active_thread_id
         self.workspace_locked = workspace_locked
         return snapshot
+
+    async def inject_history(self, messages: tuple[CodexImportedMessage, ...]) -> None:
+        self.imported_history = messages
 
     async def fork_thread(self) -> CodexThreadSnapshot:
         return self._snapshot("thread-fork")
@@ -1129,7 +1136,11 @@ def test_codex_project_handoff_pairing_creates_temporary_session_and_continues(
             f"/web/sandbox/codex-project-handoff/sessions/{created.json()['sessionId']}/messages",
             json={
                 "pairingCode": code,
-                "message": "Read HANDOFF.md and continue the current task.",
+                "history": [
+                    {"role": "user", "content": "修复登录超时"},
+                    {"role": "assistant", "content": "我已经定位到重试逻辑。"},
+                ],
+                "message": "继续",
             },
         )
         continued_twice = client.post(
@@ -1174,9 +1185,10 @@ def test_codex_project_handoff_pairing_creates_temporary_session_and_continues(
     assert conflicting.status_code == 403
     assert continued.status_code == 200
     assert '"stage": "connecting-session"' in continued.text
+    assert '"stage": "importing-history"' in continued.text
     assert '"stage": "task-started"' in continued.text
     assert 'data: {"reason": "accepted"}' in continued.text
-    assert "reply:Read HANDOFF.md" not in continued.text
+    assert "reply:继续" not in continued.text
     assert continued_twice.status_code == 403
     assert completed_status.status_code == 200
     assert completed_status.json()["state"] == "completed"
@@ -1187,6 +1199,11 @@ def test_codex_project_handoff_pairing_creates_temporary_session_and_continues(
     assert gateway.created == 1
     assert gateway.display_names == ["完善端云接力"]
     assert gateway.connections[0].cwd == "/home/gem/My-Repo"
+    assert gateway.connections[0].imported_history == (
+        CodexImportedMessage(role="user", content="修复登录超时"),
+        CodexImportedMessage(role="assistant", content="我已经定位到重试逻辑。"),
+    )
+    assert gateway.connections[0].prompts == ["继续"]
     assert "Authorization=secret" not in listed.text
 
 
@@ -1217,6 +1234,25 @@ def test_codex_project_handoff_session_accepts_custom_home(
     assert created.json()["remoteRepoDir"] == "/workspace/codex-demo-project"
     assert gateway.sessions[created.json()["sessionId"]].tool_id == "tool-studio"
     assert gateway.display_names == ["迁移演示项目"]
+
+
+def test_codex_project_handoff_history_accepts_only_visible_messages() -> None:
+    assert frontend_sandbox._codex_project_handoff_history(
+        [
+            {"role": "user", "content": " 继续修复问题 "},
+            {"role": "assistant", "content": "已完成定位。"},
+        ]
+    ) == (
+        CodexImportedMessage(role="user", content="继续修复问题"),
+        CodexImportedMessage(role="assistant", content="已完成定位。"),
+    )
+    with pytest.raises(
+        frontend_sandbox.SandboxValidationError,
+        match="只支持用户和助手消息",
+    ):
+        frontend_sandbox._codex_project_handoff_history(
+            [{"role": "developer", "content": "hidden instructions"}]
+        )
 
 
 def test_codex_project_handoff_rejects_invalid_and_expired_pairing_code(

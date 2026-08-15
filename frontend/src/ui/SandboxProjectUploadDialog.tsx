@@ -29,7 +29,7 @@ function trimStudioUrl(value: string): string {
 function codexHandoffPrompt(pairing: CodexProjectHandoffPairing): string {
   const studioUrl = trimStudioUrl(pairing.studioUrl);
   return [
-    "使用 AgentKit Studio Plugin 端云接力当前项目和任务。",
+    "使用 AgentKit Studio Plugin 端云接力当前会话、项目和任务。",
     `Studio：${studioUrl}`,
     `配对码：${pairing.pairingCode}`,
   ].join("\n");
@@ -45,7 +45,7 @@ function installAndHandoffPrompt(pairing: CodexProjectHandoffPairing): string {
   ].join(" ");
   const studioUrl = trimStudioUrl(pairing.studioUrl);
   return [
-    "安装 AgentKit Studio Plugin 后，使用 codex-sandbox-upload Skill 端云接力当前项目和任务。请直接执行，不要让我手动打开终端。",
+    "安装 AgentKit Studio Plugin 后，使用 codex-sandbox-upload Skill 端云接力当前会话、项目和任务。请直接执行，不要让我手动打开终端。",
     `安装命令：${installCommand}`,
     `Studio：${studioUrl}`,
     `配对码：${pairing.pairingCode}`,

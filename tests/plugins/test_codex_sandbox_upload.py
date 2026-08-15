@@ -68,6 +68,24 @@ def _fixture_repo(repo: Path) -> None:
     (repo / "new.txt").write_text("new file\n", encoding="utf-8")
 
 
+def _history_file(tmp_path: Path) -> Path:
+    history = tmp_path / "conversation-history.json"
+    history.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "messages": [
+                    {"role": "user", "content": "修复登录超时"},
+                    {"role": "assistant", "content": "已定位重试逻辑。"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return history
+
+
 def test_build_and_restore_preserves_worktree_and_github_auth(
     upload_project, tmp_path: Path
 ) -> None:
@@ -155,9 +173,20 @@ def test_live_upload_requires_approval_for_secret_assignments(
     (repo / "config.py").write_text('API_KEY="abcdefghijklmnop"\n', encoding="utf-8")
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     _git(repo, "add", "config.py")
+    history = _history_file(tmp_path)
 
     with pytest.raises(upload_project.HandoffError, match="sensitive file warnings"):
-        upload_project.main(["--repo", str(repo), "--agent-name", "迁移项目", "--yes"])
+        upload_project.main(
+            [
+                "--repo",
+                str(repo),
+                "--agent-name",
+                "迁移项目",
+                "--history",
+                str(history),
+                "--yes",
+            ]
+        )
 
 
 def test_dry_run_builds_and_validates_the_actual_handoff_bundle(
@@ -166,6 +195,7 @@ def test_dry_run_builds_and_validates_the_actual_handoff_bundle(
     repo = tmp_path / "source"
     repo.mkdir()
     (repo / "app.py").write_text('print("hello")\n', encoding="utf-8")
+    history = _history_file(tmp_path)
     handoff = tmp_path / "handoff.md"
     handoff.write_text("# Continue the login timeout fix\n", encoding="utf-8")
 
@@ -180,6 +210,8 @@ def test_dry_run_builds_and_validates_the_actual_handoff_bundle(
                 "修复登录超时",
                 "--handoff",
                 str(handoff),
+                "--history",
+                str(history),
                 "--dry-run",
             ]
         )
@@ -196,6 +228,8 @@ def test_dry_run_builds_and_validates_the_actual_handoff_bundle(
                 "修复登录超时",
                 "--handoff",
                 str(handoff),
+                "--history",
+                str(history),
                 "--dry-run",
             ]
         )
@@ -210,6 +244,8 @@ def test_dry_run_builds_and_validates_the_actual_handoff_bundle(
                 "修复登录超时",
                 "--handoff",
                 str(tmp_path / "missing.md"),
+                "--history",
+                str(history),
                 "--dry-run",
             ]
         )
@@ -273,6 +309,56 @@ def test_agent_name_rejects_missing_long_or_unsafe_values(
 ) -> None:
     with pytest.raises(upload_project.HandoffError, match="agent-name"):
         upload_project.agent_name(value)
+
+
+def test_conversation_history_keeps_only_visible_user_and_assistant_text(
+    upload_project, tmp_path: Path
+) -> None:
+    history = tmp_path / "history.json"
+    history.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            '<in-app-browser-context source="ambient-ui-state">'
+                            "browser state"
+                            "</in-app-browser-context>\n\n"
+                            "## My request:\n继续修复登录超时"
+                        ),
+                    },
+                    {"role": "assistant", "content": " 已定位重试逻辑。 "},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    assert upload_project.conversation_history(history) == [
+        {"role": "user", "content": "继续修复登录超时"},
+        {"role": "assistant", "content": "已定位重试逻辑。"},
+    ]
+
+
+def test_conversation_history_rejects_hidden_roles(
+    upload_project, tmp_path: Path
+) -> None:
+    history = tmp_path / "history.json"
+    history.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "messages": [{"role": "developer", "content": "hidden instructions"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(upload_project.HandoffError, match="only user and assistant"):
+        upload_project.conversation_history(history)
 
 
 def test_studio_url_and_pairing_code_are_validated_locally(upload_project) -> None:
@@ -477,6 +563,41 @@ def test_event_stream_reports_progress_and_returns_after_cloud_accepts_task(
     assert "[handoff] progress: 云端 Codex 已接收任务，正在继续执行" in output
 
 
+def test_cloud_continuation_injects_history_before_exact_user_message(
+    upload_project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[tuple[str, dict[str, object], str]] = []
+    history = [
+        {"role": "user", "content": "修复登录超时"},
+        {"role": "assistant", "content": "已定位重试逻辑。"},
+    ]
+    monkeypatch.setattr(
+        upload_project,
+        "post_event_stream",
+        lambda url, payload, action: requests.append((url, payload, action)),
+    )
+
+    upload_project.continue_in_studio(
+        "https://studio.example",
+        "remote-1",
+        "ABCD-EFGH",
+        history,
+        "继续",
+    )
+
+    assert requests == [
+        (
+            "https://studio.example/web/sandbox/codex-project-handoff/sessions/remote-1/messages",
+            {
+                "pairingCode": "ABCD-EFGH",
+                "history": history,
+                "message": "继续",
+            },
+            "Studio cloud continuation",
+        )
+    ]
+
+
 def test_remote_restore_emits_heartbeat_while_restore_runs(
     upload_project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -522,10 +643,11 @@ def test_main_creates_temporary_session_restores_and_continues(
     repo = tmp_path / "source"
     repo.mkdir()
     (repo / "app.py").write_text('print("hello")\n', encoding="utf-8")
+    history = _history_file(tmp_path)
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     _git(repo, "add", "app.py")
     created_payloads: list[dict[str, object]] = []
-    continuations: list[tuple[str, str, str, str]] = []
+    continuations: list[tuple[str, str, str, list[dict[str, str]], str]] = []
     cleanup_calls: list[tuple[str, tuple[str, ...]]] = []
 
     def fake_post_json(url, payload, action, **kwargs):
@@ -557,8 +679,12 @@ def test_main_creates_temporary_session_restores_and_continues(
     monkeypatch.setattr(
         upload_project,
         "continue_in_studio",
-        lambda studio_url, session_id, pairing_code, remote_repo: continuations.append(
-            (studio_url, session_id, pairing_code, remote_repo)
+        lambda studio_url,
+        session_id,
+        pairing_code,
+        messages,
+        message: continuations.append(
+            (studio_url, session_id, pairing_code, messages, message)
         ),
     )
     monkeypatch.setattr(
@@ -577,6 +703,8 @@ def test_main_creates_temporary_session_restores_and_continues(
             "ABCD-EFGH",
             "--agent-name",
             "修复上传流程",
+            "--history",
+            str(history),
             "--yes",
         ]
     )
@@ -594,7 +722,11 @@ def test_main_creates_temporary_session_restores_and_continues(
             "https://studio.example",
             "remote-1",
             "ABCD-EFGH",
-            "/home/gem/source",
+            [
+                {"role": "user", "content": "修复登录超时"},
+                {"role": "assistant", "content": "已定位重试逻辑。"},
+            ],
+            "继续",
         )
     ]
     assert cleanup_calls == []

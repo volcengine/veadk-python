@@ -26,6 +26,7 @@ import pytest
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerSession,
+    CodexImportedMessage,
     CodexPermissionSettings,
     approval_decision_from_payload,
     permission_settings_from_payload,
@@ -36,6 +37,7 @@ from veadk.cli.codex_app_server import (
 class _FakeWebSocket:
     def __init__(self) -> None:
         self.messages: list[dict[str, object]] = []
+        self.files: dict[str, str] = {}
         self.queue: asyncio.Queue[str | None] = asyncio.Queue()
         self.closed = False
 
@@ -121,6 +123,20 @@ class _FakeWebSocket:
                     }
                 ]
             }
+        elif method == "fs/writeFile":
+            params = message.get("params")
+            assert isinstance(params, dict)
+            path = params.get("path")
+            data = params.get("dataBase64")
+            assert isinstance(path, str) and isinstance(data, str)
+            self.files[path] = data
+            result = {}
+        elif method == "fs/readFile":
+            params = message.get("params")
+            assert isinstance(params, dict)
+            path = params.get("path")
+            assert isinstance(path, str)
+            result = {"dataBase64": self.files.get(path, "")}
         elif method == "thread/list":
             result = {
                 "data": [
@@ -671,6 +687,54 @@ async def test_thread_commands_restore_sanitized_history() -> None:
         message.get("method") == "thread/compact/start"
         for message in websocket.messages
     )
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_inject_history_uses_model_visible_items_without_starting_turn() -> None:
+    websocket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+    await session.update_workspace("/workspace/project")
+
+    await session.inject_history(
+        (
+            CodexImportedMessage(role="user", content="修复登录超时"),
+            CodexImportedMessage(role="assistant", content="已定位重试逻辑。"),
+        )
+    )
+    snapshot = await session.read_thread("thread-1")
+
+    inject_request = next(
+        message
+        for message in websocket.messages
+        if message.get("method") == "thread/inject_items"
+    )
+    assert inject_request["params"] == {
+        "threadId": "thread-1",
+        "items": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "修复登录超时"}],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "已定位重试逻辑。"}],
+            },
+        ],
+    }
+    assert not any(
+        message.get("method") == "turn/start" for message in websocket.messages
+    )
+    assert [(message.role, message.content) for message in snapshot.messages[:2]] == [
+        ("user", "修复登录超时"),
+        ("assistant", "已定位重试逻辑。"),
+    ]
     await session.close()
 
 

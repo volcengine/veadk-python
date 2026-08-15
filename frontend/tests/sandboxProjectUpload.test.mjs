@@ -33,6 +33,13 @@ const uploadSkillSource = readFileSync(
   ),
   "utf8",
 );
+const uploadScriptSource = readFileSync(
+  new URL(
+    "../../plugins/agentkit-studio/skills/codex-sandbox-upload/scripts/upload_project.py",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 test("codex project handoff pairing code supports countdown, refresh, and status polling", () => {
   assert.match(
@@ -73,7 +80,7 @@ test("the uninstalled path asks Codex to install the Studio plugin", () => {
 
 test("the installed path generates a short cloud continuation prompt", () => {
   assert.match(dialogSource, /已经安装/);
-  assert.match(dialogSource, /端云接力当前项目和任务/);
+  assert.match(dialogSource, /端云接力当前会话、项目和任务/);
   assert.match(dialogSource, /Studio：\$\{studioUrl\}/);
   assert.match(dialogSource, /配对码：\$\{pairing\.pairingCode\}/);
   assert.match(dialogSource, /复制后粘贴到当前 Codex 任务中/);
@@ -122,7 +129,10 @@ test("GitHub credential handling stays in the upload skill instead of the dialog
   assert.match(uploadSkillSource, /verify `gh auth token --hostname github\.com` succeeds/);
   assert.match(uploadSkillSource, /GitHub authentication is transferred separately/);
   assert.match(uploadSkillSource, /temporary Studio Sandbox/);
-  assert.match(uploadSkillSource, /send the continuation message/);
+  assert.match(uploadSkillSource, /completed visible conversation/);
+  assert.match(uploadSkillSource, /thread\/inject_items/);
+  assert.match(uploadSkillSource, /otherwise use exactly `继续`/);
+  assert.match(uploadScriptSource, /"thread\/inject_items"|"history": history/);
 });
 
 test("handoff choices and prompt content reserve stable space", () => {

@@ -49,6 +49,7 @@ from veadk.cli.codex_app_server import (
     CodexAppServerEvent,
     CodexAppServerSession,
     CodexDirectoryListing,
+    CodexImportedMessage,
     CodexModel,
     CodexPermissionSettings,
     CodexSkill,
@@ -111,6 +112,10 @@ _SENSITIVE_PATTERN = re.compile(
 _CODEX_PROJECT_HANDOFF_PAIRINGS: dict[str, dict[str, object]] = {}
 _CODEX_PROJECT_HANDOFF_AGENT_NAME_MAX_LENGTH = 12
 _CODEX_PROJECT_HANDOFF_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,64}")
+_CODEX_PROJECT_HANDOFF_HISTORY_MAX_MESSAGES = 100
+_CODEX_PROJECT_HANDOFF_HISTORY_MAX_MESSAGE_CHARACTERS = 20_000
+_CODEX_PROJECT_HANDOFF_HISTORY_MAX_CHARACTERS = 100_000
+_CODEX_PROJECT_HANDOFF_CONTINUATION_MAX_CHARACTERS = 20_000
 
 
 class SandboxError(RuntimeError):
@@ -408,6 +413,36 @@ def _codex_project_handoff_id(value: object) -> str:
     return value
 
 
+def _codex_project_handoff_history(
+    value: object,
+) -> tuple[CodexImportedMessage, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise SandboxValidationError("端侧会话历史格式无效。")
+    if len(value) > _CODEX_PROJECT_HANDOFF_HISTORY_MAX_MESSAGES:
+        raise SandboxValidationError("端侧会话历史消息过多。")
+    messages: list[CodexImportedMessage] = []
+    total_characters = 0
+    for item in value:
+        if not isinstance(item, dict):
+            raise SandboxValidationError("端侧会话历史格式无效。")
+        role = item.get("role")
+        content = item.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str):
+            raise SandboxValidationError("端侧会话历史只支持用户和助手消息。")
+        content = content.strip()
+        if not content:
+            raise SandboxValidationError("端侧会话历史包含空消息。")
+        if len(content) > _CODEX_PROJECT_HANDOFF_HISTORY_MAX_MESSAGE_CHARACTERS:
+            raise SandboxValidationError("端侧会话历史单条消息过长。")
+        total_characters += len(content)
+        if total_characters > _CODEX_PROJECT_HANDOFF_HISTORY_MAX_CHARACTERS:
+            raise SandboxValidationError("端侧会话历史内容过大。")
+        messages.append(CodexImportedMessage(role=role, content=content))
+    return tuple(messages)
+
+
 def _codex_project_upload_directory_name(project_name: str) -> str:
     directory = project_name.strip().replace("/", "-").replace("\\", "-")
     directory = re.sub(r"[^A-Za-z0-9._-]+", "-", directory)
@@ -627,6 +662,10 @@ class SandboxCodexConnection(Protocol):
 
     async def read_thread(self, thread_id: str) -> CodexThreadSnapshot:
         """Read an existing thread without activating it."""
+        raise NotImplementedError
+
+    async def inject_history(self, messages: tuple[CodexImportedMessage, ...]) -> None:
+        """Import visible messages without replaying their turns."""
         raise NotImplementedError
 
     async def fork_thread(self) -> CodexThreadSnapshot:
@@ -1692,6 +1731,22 @@ class SandboxConversationService:
         except CodexAppServerError as error:
             raise SandboxInvocationError(_safe_error_message(error)) from error
         return self._public_snapshot(session, snapshot)
+
+    async def inject_history(
+        self,
+        session_id: str,
+        owner_id: str,
+        messages: tuple[CodexImportedMessage, ...],
+    ) -> None:
+        """Seed a fresh Codex thread with visible local conversation history."""
+        if not messages:
+            return
+        session = self._owned(session_id, owner_id)
+        async with session.lock:
+            try:
+                await session.codex.inject_history(messages)
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
 
     async def fork_thread(self, session_id: str, owner_id: str) -> dict[str, object]:
         """Fork and activate the current Codex thread."""
@@ -3291,12 +3346,13 @@ def mount_sandbox_routes(
         session_id: str, request: Request
     ) -> StreamingResponse:
         try:
-            data = await _request_object(request, maximum=128 * 1024)
+            data = await _request_object(request, maximum=512 * 1024)
             prompt = data.get("message")
             if not isinstance(prompt, str) or not prompt.strip():
                 raise SandboxValidationError("message must not be empty")
-            if len(prompt) > 100_000:
+            if len(prompt) > _CODEX_PROJECT_HANDOFF_CONTINUATION_MAX_CHARACTERS:
                 raise SandboxValidationError("message is too large")
+            history = _codex_project_handoff_history(data.get("history"))
             _pairing_key, pairing = _claim_codex_project_handoff_pairing(
                 data.get("pairingCode"),
                 "session-created",
@@ -3377,6 +3433,17 @@ def mount_sandbox_routes(
             try:
                 await service.connect(session_id, owner_id)
                 await service.update_workspace(session_id, owner_id, remote_repo_dir)
+                if history:
+                    progress = {
+                        "stage": "importing-history",
+                        "message": "正在迁移端侧会话历史",
+                    }
+                    yield (
+                        "event: progress\ndata: "
+                        + json.dumps(progress, ensure_ascii=False)
+                        + "\n\n"
+                    )
+                    await service.inject_history(session_id, owner_id, history)
             except Exception as error:  # noqa: BLE001 - stream boundary
                 message = _safe_error_message(error)
                 pairing.update(
