@@ -62,6 +62,7 @@ export interface EntryViewedProps {
 export type DeploySource =
   | "scratch"
   | "code_package"
+  | "migration"
   | "feishu_automation"
   | "unknown";
 export type CreateMode =
@@ -71,6 +72,7 @@ export type CreateMode =
   | "workflow"
   | "yaml_import"
   | "code_package"
+  | "migration"
   | "feishu_template"
   | "unknown";
 

@@ -1935,6 +1935,24 @@ export interface DeployAgentkitResult {
   };
 }
 
+export async function checkRuntimeNameAvailability(
+  name: string,
+  region: string,
+): Promise<{ available: boolean }> {
+  const params = new URLSearchParams({ name, region });
+  const res = await apiFetch(`/web/runtime-name-availability?${params.toString()}`, {
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "检查 Runtime 名称失败"));
+  }
+  const value = (await res.json()) as { available?: unknown };
+  if (typeof value.available !== "boolean") {
+    throw new Error("检查 Runtime 名称失败：服务返回格式错误");
+  }
+  return { available: value.available };
+}
+
 export type DeployAuthentication =
   | { type: "api_key" }
   | { type: "user_pool"; userPoolUid: string };
@@ -2203,6 +2221,7 @@ export async function deployAgentkitProject(
   },
   opts?: {
     taskId?: string;
+    migrationTaskId?: string;
     runtimeId?: string;
     runtimeName?: string;
     appName?: string;
@@ -2233,10 +2252,11 @@ export async function deployAgentkitProject(
 
   let res: Response;
   try {
+    const migrationSource = Boolean(opts?.migrationTaskId);
     opts?.onStage?.({
       level: "info",
       phase: "upload",
-      message: "正在上传代码包",
+      message: migrationSource ? "正在校验迁移产物" : "正在上传代码包",
       pct: 0,
     });
     res = await apiFetch(
@@ -2247,9 +2267,10 @@ export async function deployAgentkitProject(
         signal: controller?.signal,
         body: JSON.stringify({
           name,
-          files,
+          files: migrationSource ? [] : files,
           config,
           taskId,
+          migrationTaskId: opts?.migrationTaskId,
           runtimeId: opts?.runtimeId,
           runtimeName: opts?.runtimeName,
           appName: opts?.appName,
@@ -2270,7 +2291,7 @@ export async function deployAgentkitProject(
     opts?.onStage?.({
       level: "success",
       phase: "upload",
-      message: "代码包上传完成",
+      message: migrationSource ? "迁移产物校验完成" : "代码包上传完成",
       pct: 100,
     });
   } catch (error) {

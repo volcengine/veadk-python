@@ -152,9 +152,25 @@ server that `veadk frontend` launches — no separate backend.
 - **Code-package deployment**: upload a ZIP project from the add-Agent menu,
   inspect or edit its files in the existing code browser, then choose the
   region and public/VPC network before deploying it to AgentKit. The package
-  must contain a root `app.py`; Studio removes a single wrapping directory,
-  rejects unsafe paths, and shows upload, image build, Runtime creation, and
-  service publishing as separate deployment stages.
+  uses `agentkit.yaml` `common.entry_point` when declared and otherwise keeps
+  root `app.py` as the compatible default. Studio removes a single wrapping
+  directory, rejects unsafe paths, and shows upload, image build, Runtime
+  creation, and service publishing as separate deployment stages.
+- **Existing-project migration**: upload one local ZIP of at most 50 MiB from
+  the add-Agent menu. Studio creates one user-owned Dev Sandbox Session with a
+  one-hour TTL, then asks the preinstalled Codex to perform read-only framework,
+  entry-point, and migration-boundary analysis. Migration starts only after the
+  user confirms the framework, entry point, and open questions. Structured
+  frameworks run the preinstalled `ak migrate`; Dify and Any projects run
+  `ak migrate --execution in-place` with Codex in the same Session. State,
+  logs, and artifacts remain only under
+  `/home/gem/.studio/migration/v1/` in that Session. Preview, download, and
+  Runtime deployment stop when the Session expires. Runtime deployment resolves
+  and verifies the owned Session artifact on the server instead of trusting
+  browser-provided files or entry points. AgentKit CLI `0.51.1` is only the
+  current baseline; these CLI changes must be released as a new version. The
+  Dev Sandbox image must pin that migration-capable release and its SHA256 at
+  image build time.
 - **Built-in code execution**: selecting `代码执行` adds VeADK's `run_code`
   tool to generated Python and reveals the required `AGENTKIT_TOOL_ID` sandbox
   field and optional `AGENTKIT_TOOL_REGION` field below the built-in tool list.

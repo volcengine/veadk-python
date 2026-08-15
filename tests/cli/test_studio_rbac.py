@@ -29,6 +29,7 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from veadk.cli.cli_frontend import (
+    _adapt_migration_model_envs,
     _create_runtime_with_description_fallback,
     _is_malformed_runtime_description_error,
     _normalize_runtime_description,
@@ -89,6 +90,81 @@ def _create_studio_app(
         studio=True,
     )
     return captured["app"]
+
+
+@pytest.mark.parametrize(
+    (
+        "provider",
+        "inherited_name",
+        "inherited_base",
+        "expected_name",
+        "expected_base",
+    ),
+    [
+        (
+            "volcengine",
+            "seed-2-0-lite-260228",
+            "https://ark.ap-southeast.bytepluses.com/api/v3",
+            "doubao-seed-2-1-pro-260628",
+            "https://ark.cn-beijing.volces.com/api/v3",
+        ),
+        (
+            "byteplus",
+            "doubao-seed-2-1-pro-260628",
+            "https://ark.cn-beijing.volces.com/api/v3/",
+            "dola-seed-2-1-turbo-260628",
+            "https://ark.ap-southeast.bytepluses.com/api/v3",
+        ),
+        (
+            "volcengine",
+            "seed-2-0-lite-260228",
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "doubao-seed-2-1-pro-260628",
+            "https://ark.cn-beijing.volces.com/api/v3",
+        ),
+        (
+            "byteplus",
+            "doubao-seed-2-1-pro-260628",
+            "https://ark.ap-southeast.bytepluses.com/api/v3",
+            "dola-seed-2-1-turbo-260628",
+            "https://ark.ap-southeast.bytepluses.com/api/v3",
+        ),
+    ],
+)
+def test_migration_model_defaults_follow_studio_provider(
+    provider: str,
+    inherited_name: str,
+    inherited_base: str,
+    expected_name: str,
+    expected_base: str,
+) -> None:
+    runtime_envs = {
+        "MODEL_AGENT_NAME": inherited_name,
+        "MODEL_AGENT_API_BASE": inherited_base,
+    }
+
+    _adapt_migration_model_envs(runtime_envs, provider)
+
+    assert runtime_envs == {
+        "MODEL_AGENT_NAME": expected_name,
+        "MODEL_AGENT_API_BASE": expected_base,
+        "MODEL_NAME": expected_name,
+    }
+
+
+def test_migration_model_defaults_preserve_custom_endpoint() -> None:
+    runtime_envs = {
+        "MODEL_AGENT_NAME": "private-model",
+        "MODEL_AGENT_API_BASE": "https://models.example.com/v1",
+    }
+
+    _adapt_migration_model_envs(runtime_envs, "volcengine")
+
+    assert runtime_envs == {
+        "MODEL_AGENT_NAME": "private-model",
+        "MODEL_AGENT_API_BASE": "https://models.example.com/v1",
+        "MODEL_NAME": "private-model",
+    }
 
 
 @pytest.mark.parametrize(
@@ -647,6 +723,340 @@ def test_byteplus_deploy_agentkit_uses_iam_file_for_sdk_templates(
     assert os.environ.get("BYTEPLUS_ACCESS_KEY") is None
 
 
+def test_migration_routes_require_agent_management_role(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("SANDBOX_DEV", raising=False)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        viewer = client.get(
+            "/web/agent-migrations/capabilities",
+            headers={"X-VeADK-Local-User": "viewer"},
+        )
+        developer = client.get(
+            "/web/agent-migrations/capabilities",
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        create = client.post(
+            "/web/agent-migrations/tasks",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={"sourceFileName": "source.zip"},
+        )
+        invalid_cancel = client.post(
+            "/web/cancel-deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={},
+        )
+
+    assert viewer.status_code == 403
+    assert developer.status_code == 200
+    assert create.status_code == 503
+    assert invalid_cancel.status_code == 400
+
+
+def test_migration_capabilities_reuse_the_shared_devenv_client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.tools.client import AgentkitToolsClient
+
+    from veadk.cli.frontend_skill_creator import _sandbox_model_config
+
+    _, base_url = _sandbox_model_config("volcengine")
+    monkeypatch.setenv("SANDBOX_DEV", "tool-dev")
+    monkeypatch.setattr(
+        AgentkitToolsClient,
+        "get_tool",
+        lambda _self, _request: SimpleNamespace(
+            tool_type="DevEnv",
+            status="Ready",
+            image_url="",
+            envs=[
+                SimpleNamespace(key="CODEX_MODEL", value="model"),
+                SimpleNamespace(key="CODEX_API_KEY", value="secret"),
+                SimpleNamespace(key="CODEX_BASE_URL", value=base_url),
+            ],
+        ),
+    )
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        configured = client.get(
+            "/web/agent-migrations/capabilities",
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert configured.status_code == 200
+    assert configured.json()["enabled"] is True
+
+    missing_credentials_app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+    )
+    monkeypatch.delenv("VOLCENGINE_ACCESS_KEY")
+    monkeypatch.delenv("VOLCENGINE_SECRET_KEY")
+
+    with TestClient(missing_credentials_app) as client:
+        unavailable = client.get(
+            "/web/agent-migrations/capabilities",
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert unavailable.status_code == 200
+    assert unavailable.json()["enabled"] is False
+
+
+def test_invalid_code_package_deploy_removes_temporary_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    temporary_source = tmp_path / "invalid-code-package"
+
+    def make_temporary_source(*, prefix: str) -> str:
+        assert prefix.startswith("agentkit_deploy_")
+        temporary_source.mkdir()
+        return str(temporary_source)
+
+    monkeypatch.setattr("tempfile.mkdtemp", make_temporary_source)
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "invalid-package",
+                "files": [
+                    {
+                        "path": "agentkit.yaml",
+                        "content": "common:\n  entry_point: missing.py\n",
+                    }
+                ],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+                "createEvaluationSets": False,
+            },
+        )
+
+    assert response.status_code == 400
+    assert not temporary_source.exists()
+
+
+def test_code_package_manifest_entry_point_reaches_agentkit_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured_config: dict[str, Any] = {}
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        config_path = Path(config_file)
+        captured_config.update(yaml.safe_load(config_path.read_text()))
+        assert (config_path.parent / "runtime" / "main.py").read_text() == (
+            "app = object()\n"
+        )
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": "runtime-manifest-entry",
+                    "runtime_name": "manifest-agent",
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        )
+
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with (
+        TestClient(app) as client,
+        client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "manifest-agent",
+                "files": [
+                    {
+                        "path": "agentkit.yaml",
+                        "content": (
+                            "common:\n"
+                            "  agent_name: ignored\n"
+                            "  entry_point: runtime/main.py\n"
+                        ),
+                    },
+                    {
+                        "path": "runtime/main.py",
+                        "content": "app = object()\n",
+                    },
+                ],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+                "createEvaluationSets": False,
+            },
+        ) as response,
+    ):
+        frames = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.iter_lines()
+            if line.startswith("data: ")
+        ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert captured_config["common"]["entry_point"] == "runtime/main.py"
+
+
+def test_migration_deployment_materializes_owned_session_source_server_side(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from frontend.server.migration.service import MigrationService
+    from veadk.config import veadk_environments
+
+    captured_config: dict[str, Any] = {}
+    materialized: dict[str, str] = {}
+
+    def materialize(
+        _self: MigrationService,
+        task_id: str,
+        owner_id: str,
+        target: Path,
+    ) -> str:
+        materialized.update(task_id=task_id, owner_id=owner_id)
+        entry = target / "runtime" / "migrated.py"
+        entry.parent.mkdir(parents=True)
+        entry.write_text("app = object()\n", encoding="utf-8")
+        return "runtime/migrated.py"
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        config_path = Path(config_file)
+        captured_config.update(yaml.safe_load(config_path.read_text()))
+        assert (config_path.parent / "runtime" / "migrated.py").is_file()
+        assert not (config_path.parent / "browser.py").exists()
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": "runtime-migrated",
+                    "runtime_name": "migrated-agent",
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        )
+
+    monkeypatch.setattr(MigrationService, "materialize_deployment", materialize)
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    monkeypatch.setitem(
+        veadk_environments,
+        "MODEL_AGENT_NAME",
+        "seed-2-0-lite-260228",
+    )
+    monkeypatch.setitem(
+        veadk_environments,
+        "MODEL_AGENT_API_BASE",
+        "https://ark.ap-southeast.bytepluses.com/api/v3",
+    )
+    monkeypatch.setitem(veadk_environments, "MODEL_AGENT_API_KEY", "test-model-key")
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with (
+        TestClient(app) as client,
+        client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "migrated-agent",
+                "migrationTaskId": "migration-v1-" + "1" * 32,
+                "envs": [
+                    {"key": "MODEL_AGENT_NAME", "value": "seed-2-0-lite-260228"},
+                    {
+                        "key": "MODEL_AGENT_API_BASE",
+                        "value": "https://ark.ap-southeast.bytepluses.com/api/v3",
+                    },
+                    {"key": "MODEL_NAME", "value": "seed-2-0-lite-260228"},
+                ],
+                "files": [
+                    {
+                        "path": "browser.py",
+                        "content": "raise RuntimeError('untrusted')\n",
+                    }
+                ],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+                "createEvaluationSets": False,
+            },
+        ) as response,
+    ):
+        frames = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.iter_lines()
+            if line.startswith("data: ")
+        ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert materialized == {
+        "task_id": "migration-v1-" + "1" * 32,
+        "owner_id": "developer",
+    }
+    assert captured_config["common"]["entry_point"] == "runtime/migrated.py"
+    runtime_envs = captured_config["launch_types"]["cloud"]["runtime_envs"]
+    assert runtime_envs["MODEL_AGENT_NAME"] == "doubao-seed-2-1-pro-260628"
+    assert runtime_envs["MODEL_NAME"] == "doubao-seed-2-1-pro-260628"
+    assert runtime_envs["MODEL_AGENT_API_BASE"] == (
+        "https://ark.cn-beijing.volces.com/api/v3"
+    )
+
+
+def test_migration_deployment_rejection_removes_temporary_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from frontend.server.migration.service import MigrationError, MigrationService
+
+    temporary_source = tmp_path / "rejected-migration"
+
+    def make_temporary_source(*, prefix: str) -> str:
+        assert prefix.startswith("agentkit_deploy_")
+        temporary_source.mkdir()
+        return str(temporary_source)
+
+    def reject(*_args: object, **_kwargs: object) -> str:
+        raise MigrationError(
+            "MIGRATION_ARTIFACT_NOT_READY",
+            "artifact not ready",
+            status_code=409,
+        )
+
+    monkeypatch.setattr("tempfile.mkdtemp", make_temporary_source)
+    monkeypatch.setattr(MigrationService, "materialize_deployment", reject)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "migrated-agent",
+                "migrationTaskId": "migration-v1-" + "1" * 32,
+                "files": [],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+                "createEvaluationSets": False,
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "artifact not ready"
+    assert not temporary_source.exists()
+
+
 @pytest.mark.parametrize(
     ("provider", "region"),
     [
@@ -1071,6 +1481,36 @@ def test_runtime_creation_retries_without_a_rejected_description() -> None:
     assert attempts == ["bad description", None]
 
 
+def test_runtime_duplicate_name_error_has_actionable_message() -> None:
+    from veadk.cli.cli_frontend import _runtime_deploy_error_detail
+
+    detail = _runtime_deploy_error_detail(
+        "CreateRuntime failed: InvalidParameter.DuplicateName",
+        "travel-agent-a1b2c3",
+    )
+
+    assert detail == ("Runtime 名称“travel-agent-a1b2c3”已存在，请修改名称后重新部署。")
+    assert _runtime_deploy_error_detail("AccessDenied", "unused") == "AccessDenied"
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("", "Runtime 名称为必填项"),
+        ("abc", "Runtime 名称长度须为 4-64 个字符"),
+        ("a" * 65, "Runtime 名称长度须为 4-64 个字符"),
+        ("valid-runtime", None),
+    ],
+)
+def test_runtime_name_validation_covers_length_boundaries(
+    name: str,
+    expected: str | None,
+) -> None:
+    from veadk.cli.cli_frontend import _runtime_name_validation_error
+
+    assert _runtime_name_validation_error(name) == expected
+
+
 def test_parse_role_members_normalizes_csv() -> None:
     assert parse_role_members(" Admin@Example.com, alice, ALICE, ") == {
         "admin@example.com",
@@ -1441,6 +1881,113 @@ def test_non_admin_runtime_list_uses_one_owner_filtered_request(
         "runtime-own",
     ]
     assert all(item["canDelete"] is True for item in admin.json()["runtimes"])
+
+
+def test_runtime_name_availability_uses_an_exact_cloud_filter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    requests: list[Any] = []
+
+    def list_runtimes(_self: Any, request: Any) -> SimpleNamespace:
+        requests.append(request)
+        requested_name = request.filters[0].values[0]
+        runtimes = (
+            [SimpleNamespace(name=requested_name)]
+            if requested_name == "existing-runtime"
+            else []
+        )
+        return SimpleNamespace(agent_kit_runtimes=runtimes, next_token="")
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "list_runtimes", list_runtimes)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+    )
+
+    with TestClient(app) as client:
+        existing = client.get(
+            "/web/runtime-name-availability",
+            params={"name": "existing-runtime", "region": "cn-beijing"},
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        available = client.get(
+            "/web/runtime-name-availability",
+            params={"name": "new-runtime", "region": "cn-beijing"},
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert existing.status_code == 200
+    assert existing.json() == {"available": False}
+    assert available.status_code == 200
+    assert available.json() == {"available": True}
+    assert [request.max_results for request in requests] == [1, 1]
+    assert [request.filters[0].name for request in requests] == ["Name", "Name"]
+    assert [request.filters[0].values for request in requests] == [
+        ["existing-runtime"],
+        ["new-runtime"],
+    ]
+
+
+def test_runtime_name_availability_rejects_invalid_names_before_cloud_access(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "list_runtimes",
+        lambda *_args, **_kwargs: pytest.fail("cloud API should not be called"),
+    )
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-name-availability",
+            params={"name": "bad runtime", "region": "cn-beijing"},
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Runtime 名称只能包含英文字母、数字、下划线和连字符"
+    )
+
+
+def test_runtime_name_availability_hides_cloud_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    def fail_list(_self: Any, _request: Any) -> None:
+        raise RuntimeError("credential=test-secret")
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "list_runtimes", fail_list)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-name-availability",
+            params={"name": "new-runtime", "region": "cn-beijing"},
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "暂时无法检查 Runtime 名称，请稍后重试。"
+    assert "test-secret" not in response.text
 
 
 def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
@@ -2191,6 +2738,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         SimpleNamespace(key="MODEL_AGENT_API_KEY", value="old-raw-model-key"),
         SimpleNamespace(key="MODEL_AGENT_API_KEY_ID", value="old-key-id"),
         SimpleNamespace(key="MODEL_AGENT_API_KEY_NAME", value="old-key-name"),
+        SimpleNamespace(key="VEADK_DISABLE_EXPIRE_AT", value="true"),
     ]
     captured_config: dict[str, Any] = {}
     get_calls = 0
@@ -2392,6 +2940,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert resolved_model_keys[0]["api_key_id"] == "new-key-id"
     assert resolved_model_keys[0]["api_key_name"] == "new-key-name"
     assert resolved_model_keys[0]["cloud_provider"] == provider
+    assert "VEADK_DISABLE_EXPIRE_AT" not in cloud["runtime_envs"]
     assert "runtime_network" not in cloud
     if has_resource_tags:
         assert cloud["tos_bucket"] == "tagged-bucket"
@@ -2513,6 +3062,7 @@ def test_new_deployment_only_updates_non_default_instance_range(
     }
     assert captured_config["launch_types"]["cloud"]["runtime_auth_type"] == ("key_auth")
     runtime_envs = captured_config["launch_types"]["cloud"]["runtime_envs"]
+    assert "VEADK_DISABLE_EXPIRE_AT" not in runtime_envs
     assert "OTEL_SDK_DISABLED" not in runtime_envs
     assert "ENABLE_APMPLUS" not in runtime_envs
     assert "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY" not in runtime_envs
@@ -2526,6 +3076,32 @@ def test_new_deployment_only_updates_non_default_instance_range(
         assert request.min_instance == min_instance
         assert request.max_instance == max_instance
         assert request.release_enable is True
+
+
+def test_deployment_rejects_internal_runtime_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "demo-agent",
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+                "envs": [
+                    {"key": "VEADK_DISABLE_EXPIRE_AT", "value": "true"},
+                ],
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Reserved runtime environment variable: VEADK_DISABLE_EXPIRE_AT"
+    )
 
 
 @pytest.mark.parametrize(
@@ -2624,6 +3200,49 @@ def test_single_instance_update_failure_fails_the_deployment_at_update_phase(
     assert frames[-1]["success"] is False
     assert frames[-1]["phase"] == "update"
     assert "instance update failed" in frames[-1]["error"]
+
+
+def test_deployment_maps_create_runtime_duplicate_name_to_actionable_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def launch(**_kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            success=False,
+            error=(
+                "Failed to CreateRuntime: "
+                "InvalidParameter.DuplicateName: name already exists"
+            ),
+            deploy_result=None,
+            build_result=None,
+        )
+
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "demo-agent",
+                "runtimeName": "demo-agent-a1b2c3",
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        ) as response:
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is False
+    assert frames[-1]["error"] == (
+        "Runtime 名称“demo-agent-a1b2c3”已存在，请修改名称后重新部署。"
+    )
 
 
 def test_update_deployment_rejects_incompatible_runtime_before_launch(

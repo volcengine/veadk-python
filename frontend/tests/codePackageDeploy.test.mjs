@@ -76,10 +76,14 @@ test("uses thin hand-drawn icons for all add-agent options", () => {
   );
 });
 
-test("shows existing-project migration as a disabled coming-soon option", () => {
+test("shows existing-project migration as an enabled option", () => {
   assert.match(
     appSource,
-    /key: "migration"[\s\S]*?title: "从存量迁移"[\s\S]*?desc: "从您的 LangChain \/ Dify 等存量项目迁移至 AgentKit Runtime"[\s\S]*?status: "敬请期待"[\s\S]*?disabled: true/,
+    /key: "migration"[\s\S]*?title: "从存量迁移"[\s\S]*?desc: "从您的 LangChain \/ Dify 等存量项目迁移至 AgentKit Runtime"[\s\S]*?setCreateView\("migration"\)/,
+  );
+  assert.doesNotMatch(
+    appSource,
+    /key: "migration"[\s\S]*?status: "敬请期待"[\s\S]*?disabled: true/,
   );
   assert.match(addAgentMenuSource, /disabled=\{c\.disabled\}/);
   assert.match(
@@ -93,7 +97,13 @@ test("validates and previews uploaded zip projects before deployment", () => {
   assert.match(packageCreateSource, /from "\.\/skills\/zip"/);
   assert.match(packageCreateSource, /accept="\.zip,application\/zip"/);
   assert.match(packageCreateSource, /normalizePackageEntries/);
-  assert.match(packageCreateSource, /必须包含 app\.py/);
+  assert.match(packageCreateSource, /agentkit\.yaml/);
+  assert.match(packageCreateSource, /entry_point/);
+  assert.match(packageCreateSource, /app\.py/);
+  assert.match(
+    packageCreateSource,
+    /可使用 app\.py，或由 agentkit\.yaml 声明入口/,
+  );
   assert.match(packageCreateSource, /maxUncompressedBytes: MAX_PACKAGE_BYTES/);
   assert.match(zipSource, /options\.maxUncompressedBytes/);
   assert.match(packageCreateSource, /deploymentPrimaryPane=/);
@@ -123,10 +133,9 @@ test("shows upload, image build, runtime creation, and publish progress", () => 
     projectPreviewSource,
     /phase: "deploy", label: "创建 Runtime"/,
   );
-  assert.match(
-    clientSource,
-    /phase: "upload"[\s\S]*?message: "正在上传代码包"/,
-  );
+  assert.match(clientSource, /phase: "upload"/);
+  assert.match(clientSource, /正在上传代码包/);
+  assert.match(clientSource, /正在校验迁移产物/);
 });
 
 test("passes the selected region and network to AgentKit deployment", () => {

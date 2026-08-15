@@ -5,6 +5,7 @@ import {
   type ChangeEvent,
   type DragEvent,
 } from "react";
+import { parse } from "yaml";
 import { deployAgentkitProject, type DeployStage } from "../adk/client";
 import {
   defaultCloudRegion,
@@ -81,10 +82,60 @@ export function normalizePackageEntries(entries: ZipEntry[]): ProjectFile[] {
     if (paths.has(file.path)) throw new Error(`代码包包含重复文件：${file.path}`);
     paths.add(file.path);
   }
-  if (!paths.has("app.py")) {
-    throw new Error("代码包根目录必须包含 app.py，作为 AgentKit 启动入口。");
-  }
+  resolvePackageEntryPoint(files);
   return files;
+}
+
+export function resolvePackageEntryPoint(files: ProjectFile[]): string {
+  const paths = new Set(files.map((file) => file.path));
+  const manifest = files.find((file) => file.path === "agentkit.yaml");
+  let entryPoint = "app.py";
+  if (manifest) {
+    let value: unknown;
+    try {
+      value = parse(manifest.content);
+    } catch (cause) {
+      throw new Error(
+        `agentkit.yaml 无法解析：${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
+    if (value !== null && (typeof value !== "object" || Array.isArray(value))) {
+      throw new Error("agentkit.yaml 根节点必须是对象。");
+    }
+    const common =
+      value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>).common
+        : undefined;
+    if (
+      common !== undefined &&
+      (common === null || typeof common !== "object" || Array.isArray(common))
+    ) {
+      throw new Error("agentkit.yaml 的 common 必须是对象。");
+    }
+    const configured =
+      common && typeof common === "object" && !Array.isArray(common)
+        ? (common as Record<string, unknown>).entry_point
+        : undefined;
+    if (configured !== undefined) {
+      if (typeof configured !== "string") {
+        throw new Error("agentkit.yaml 的 common.entry_point 必须是文件路径。");
+      }
+      const cleaned = cleanEntryPath(configured);
+      if (!cleaned) {
+        throw new Error("agentkit.yaml 的 common.entry_point 不是有效文件路径。");
+      }
+      entryPoint = cleaned;
+    }
+  }
+  if (!paths.has(entryPoint)) {
+    if (manifest && entryPoint !== "app.py") {
+      throw new Error(`代码包中不存在 agentkit.yaml 声明的启动入口：${entryPoint}`);
+    }
+    throw new Error(
+      "代码包根目录必须包含 app.py，或在 agentkit.yaml 的 common.entry_point 中声明已有入口。",
+    );
+  }
+  return entryPoint;
 }
 
 export function CodePackageCreate({
@@ -246,7 +297,7 @@ export function CodePackageCreate({
               <span>
                 {project
                   ? `已识别 ${project.files.length} 个文件，点击区域可重新上传`
-                  : "点击或拖拽上传，支持 .zip 格式，最大 50 MB，根目录需包含 app.py"}
+                  : "点击或拖拽上传，支持 .zip 格式，最大 50 MB；可使用 app.py，或由 agentkit.yaml 声明入口"}
               </span>
               <div className="package-upload-actions">
                 {project && (
