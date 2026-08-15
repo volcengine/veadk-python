@@ -1,0 +1,25 @@
+{
+  "name": "agentkit-studio",
+  "version": "0.1.0",
+  "description": "Safely hand off local projects and GitHub access to an AgentKit Studio cloud sandbox.",
+  "author": {
+    "name": "VeADK",
+    "url": "https://github.com/volcengine/veadk-python"
+  },
+  "homepage": "https://github.com/volcengine/veadk-python",
+  "repository": "https://github.com/evanlowe/veadk-python-fork",
+  "license": "Apache-2.0",
+  "keywords": ["agentkit", "studio", "sandbox", "project-handoff"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "AgentKit Studio",
+    "shortDescription": "Hand off local projects to Studio safely.",
+    "longDescription": "Create a Studio cloud sandbox, restore a Git-aware project snapshot, and securely inject GitHub CLI authentication without copying Codex runtime state or SSH keys.",
+    "developerName": "VeADK",
+    "category": "Productivity",
+    "capabilities": ["Project handoff", "Sandbox upload"],
+    "defaultPrompt": [
+      "Upload this project to my AgentKit Studio sandbox."
+    ]
+  }
+}
