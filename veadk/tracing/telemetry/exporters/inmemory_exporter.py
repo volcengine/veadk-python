@@ -21,6 +21,7 @@ from opentelemetry.context import (
     set_value,
 )
 from opentelemetry.sdk.trace import ReadableSpan, export
+from opentelemetry.trace import set_span_in_context
 from typing_extensions import override
 
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
@@ -144,6 +145,7 @@ class _InMemorySpanProcessor(export.SimpleSpanProcessor):
             exporter: _InMemoryExporter instance for storing processed spans
         """
         super().__init__(exporter)
+        self._context_tokens = {}
 
     def on_start(self, span, parent_context) -> None:
         """Handle span start events with type-specific attribute setting.
@@ -165,9 +167,10 @@ class _InMemorySpanProcessor(export.SimpleSpanProcessor):
             ctx = set_value(
                 "suppress_language_model_instrumentation", True, context=ctx
             )
+            ctx = set_span_in_context(span, ctx)
 
             token = attach(ctx)  # mount context on `invocation` root span in Google ADK
-            setattr(span, "_invocation_token", token)  # for later detach
+            self._context_tokens[span.context.span_id] = token
 
         if span.name.startswith("agent_run") or span.name.startswith("invoke_agent"):
             span.set_attribute("gen_ai.operation.name", "agent")
@@ -180,8 +183,9 @@ class _InMemorySpanProcessor(export.SimpleSpanProcessor):
             ctx = set_value(
                 "suppress_language_model_instrumentation", True, context=ctx
             )
+            ctx = set_span_in_context(span, ctx)
             token = attach(ctx)
-            setattr(span, "_agent_run_token", token)  # for later detach
+            self._context_tokens[span.context.span_id] = token
 
     def on_end(self, span: ReadableSpan) -> None:
         """Handle span end events with proper context cleanup.
@@ -204,12 +208,8 @@ class _InMemorySpanProcessor(export.SimpleSpanProcessor):
                 logger.exception("Exception while exporting Span.")
             detach(token)
 
-            token = getattr(span, "_invocation_token", None)
-            if token:
-                detach(token)
-
-            token = getattr(span, "_agent_run_token", None)
-            if token:
+            token = self._context_tokens.pop(span.context.span_id, None)
+            if token is not None:
                 detach(token)
 
 
