@@ -23,20 +23,25 @@ function trimStudioUrl(value: string): string {
 function codexUploadPrompt(authorization: CodexProjectUploadAuthorization): string {
   const studioUrl = trimStudioUrl(authorization.studioUrl);
   return [
-    "请使用 codex-sandbox-upload skill 将当前项目上传到 Studio 云端 Codex Sandbox。",
+    "请使用 AgentKit Studio Plugin 内置的 codex-sandbox-upload Skill，将当前项目上传到 Studio 云端 Codex Sandbox。",
     "",
     "参数：",
     "- repo: 当前工作目录",
     `- studio_url: ${studioUrl}`,
     `- authorization_code: ${authorization.authorizationCode}`,
     "",
-    "上传完成后，请告诉我远端项目目录和恢复结果。",
+    "如果项目使用 GitHub 远端，请一并安全迁移本地 GitHub CLI 凭据，不要把 token 写入项目文件或日志。",
+    "上传完成后，请告诉我远端项目目录、恢复结果和 GitHub 凭据安装结果。",
   ].join("\n");
 }
 
 const INSTALL_COMMAND = [
-  "codex skill install codex-sandbox-upload",
-  'test -x "$HOME/.codex/skills/codex-sandbox-upload/scripts/upload_current_dir.sh"',
+  "codex plugin marketplace add evanlowe/veadk-python-fork \\",
+  "  --ref feat/codex-project-handoff-plugin \\",
+  "  --sparse .agents/plugins \\",
+  "  --sparse plugins/agentkit-studio",
+  "",
+  "codex plugin add agentkit-studio@veadk-python",
 ].join("\n");
 
 function authorizationValidityLabel(): string {
@@ -170,11 +175,14 @@ export function SandboxProjectUploadDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="sandbox-project-upload-title"
+        aria-describedby="sandbox-project-upload-description"
       >
         <header className="sandbox-project-upload-head">
           <div>
             <h2 id="sandbox-project-upload-title">迁移本地 Codex 项目</h2>
-            <p>复制 Prompt 给本地 Codex，Codex 会调用上传 Skill 创建云端智能体。</p>
+            <p id="sandbox-project-upload-description">
+              安装 AgentKit Studio Plugin 后，复制 Prompt 给本地 Codex 迁移当前项目。
+            </p>
           </div>
           <button
             ref={closeRef}
@@ -217,22 +225,40 @@ export function SandboxProjectUploadDialog({
             <li>
               <span>1</span>
               <div>
-                <strong>安装或更新上传 Skill</strong>
-                <p>已安装 <code>codex-sandbox-upload</code> 时可跳过。</p>
+                <strong>安装 AgentKit Studio Plugin</strong>
+                <p>
+                  在本地终端执行安装命令。已安装 <code>agentkit-studio</code> 时可跳过。
+                </p>
               </div>
             </li>
             <li>
               <span>2</span>
               <div>
+                <strong>确认 GitHub CLI 已登录</strong>
+                <p>
+                  如需迁移 GitHub 仓库，先运行 <code>gh auth login</code>。GitHub CLI
+                  凭据通过独立的临时载荷安全注入 Sandbox，不会写入项目快照。
+                </p>
+              </div>
+            </li>
+            <li>
+              <span>3</span>
+              <div>
                 <strong>把 Prompt 交给本地 Codex</strong>
-                <p>Codex 会使用上传 Skill 迁移当前项目，完成后可刷新列表查看。</p>
+                <p>
+                  Plugin 内置 <code>codex-sandbox-upload</code> Skill。Codex
+                  会调用它迁移当前项目，完成后可刷新列表查看。
+                </p>
               </div>
             </li>
           </ol>
 
           <section className="sandbox-project-upload-command">
             <div className="sandbox-project-upload-command-head">
-              <span>安装 Skill</span>
+              <div>
+                <span>安装 Plugin</span>
+                <p>安装后新建一个 Codex 任务，让 Plugin 内的 Skill 生效。</p>
+              </div>
               <button
                 type="button"
                 onClick={() => void copy(INSTALL_COMMAND, "install")}
