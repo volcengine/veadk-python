@@ -156,7 +156,62 @@ def test_live_upload_requires_approval_for_secret_assignments(
     _git(repo, "add", "config.py")
 
     with pytest.raises(upload_project.HandoffError, match="sensitive file warnings"):
-        upload_project.main(["--repo", str(repo), "--yes"])
+        upload_project.main(["--repo", str(repo), "--agent-name", "迁移项目", "--yes"])
+
+
+def test_dry_run_builds_and_validates_the_actual_handoff_bundle(
+    upload_project, tmp_path: Path
+) -> None:
+    repo = tmp_path / "source"
+    repo.mkdir()
+    (repo / "app.py").write_text('print("hello")\n', encoding="utf-8")
+    handoff = tmp_path / "handoff.md"
+    handoff.write_text("# Continue the login timeout fix\n", encoding="utf-8")
+
+    assert (
+        upload_project.main(
+            [
+                "--repo",
+                str(repo),
+                "--studio-url",
+                "https://studio.example",
+                "--agent-name",
+                "修复登录超时",
+                "--handoff",
+                str(handoff),
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    with pytest.raises(upload_project.HandoffError, match="studio-url"):
+        upload_project.main(
+            [
+                "--repo",
+                str(repo),
+                "--studio-url",
+                "not-a-url",
+                "--agent-name",
+                "修复登录超时",
+                "--handoff",
+                str(handoff),
+                "--dry-run",
+            ]
+        )
+    with pytest.raises(upload_project.HandoffError, match="cannot read handoff"):
+        upload_project.main(
+            [
+                "--repo",
+                str(repo),
+                "--studio-url",
+                "https://studio.example",
+                "--agent-name",
+                "修复登录超时",
+                "--handoff",
+                str(tmp_path / "missing.md"),
+                "--dry-run",
+            ]
+        )
 
 
 def test_service_url_preserves_private_endpoint_query(upload_project) -> None:
@@ -169,6 +224,208 @@ def test_service_url_preserves_private_endpoint_query(upload_project) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("完善端云接力", "完善端云接力"),
+        ("  修复   登录超时  ", "修复 登录超时"),
+        ("123456789012", "123456789012"),
+    ],
+)
+def test_agent_name_normalizes_a_concise_task_description(
+    upload_project, value: str, expected: str
+) -> None:
+    assert upload_project.agent_name(value) == expected
+
+
+@pytest.mark.parametrize("value", ["", "1234567890123", "valid\x00name"])
+def test_agent_name_rejects_missing_long_or_unsafe_values(
+    upload_project, value: str
+) -> None:
+    with pytest.raises(upload_project.HandoffError, match="agent-name"):
+        upload_project.agent_name(value)
+
+
+def test_studio_url_and_pairing_code_are_validated_locally(upload_project) -> None:
+    assert upload_project.studio_url("https://studio.example/base/") == (
+        "https://studio.example/base"
+    )
+    assert upload_project.pairing_code("abcd-efgh") == "ABCD-EFGH"
+    with pytest.raises(upload_project.HandoffError, match="studio-url"):
+        upload_project.studio_url("https://token@studio.example")
+    with pytest.raises(upload_project.HandoffError, match="pairing code"):
+        upload_project.pairing_code("invalid")
+
+
+def test_upload_retries_while_new_session_data_plane_starts(
+    upload_project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "bundle.tar.gz"
+    source.write_bytes(b"handoff")
+    attempts = 0
+    sleeps: list[float] = []
+
+    class Response:
+        status = 200
+
+        @staticmethod
+        def read() -> bytes:
+            return b'{"success":true}'
+
+    class Connection:
+        def putrequest(self, *_args) -> None:
+            pass
+
+        def putheader(self, *_args) -> None:
+            pass
+
+        def endheaders(self) -> None:
+            pass
+
+        def send(self, _chunk: bytes) -> None:
+            pass
+
+        def getresponse(self):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise ConnectionResetError("data plane is still starting")
+            return Response()
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        upload_project,
+        "connection",
+        lambda _url: (Connection(), "/v1/file/upload"),
+    )
+    monkeypatch.setattr(upload_project.time, "sleep", sleeps.append)
+
+    assert upload_project.upload_file(
+        "https://sandbox.example?Authorization=secret",
+        source,
+        "/home/gem/bundle.tar.gz",
+    ) == {"success": True}
+    assert attempts == 2
+    assert sleeps == [5.0]
+
+
+def test_idempotent_json_post_retries_a_lost_response(
+    upload_project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempts = 0
+    sleeps: list[float] = []
+
+    class Response:
+        status = 200
+
+        @staticmethod
+        def read() -> bytes:
+            return b'{"sessionId":"remote-1"}'
+
+    class Connection:
+        def request(self, *_args, **_kwargs) -> None:
+            pass
+
+        def getresponse(self):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise ConnectionResetError("response was lost")
+            return Response()
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        upload_project,
+        "connection",
+        lambda _url: (Connection(), "/handoff"),
+    )
+    monkeypatch.setattr(upload_project.time, "sleep", sleeps.append)
+
+    assert upload_project.post_json(
+        "https://studio.example/handoff",
+        {"handoffId": "a" * 32},
+        "Studio session creation",
+        attempts=2,
+        retry_delay_seconds=0.25,
+    ) == {"sessionId": "remote-1"}
+    assert attempts == 2
+    assert sleeps == [0.25]
+
+
+def test_event_stream_rejects_failed_completion_without_an_error_event(
+    upload_project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Response:
+        status = 200
+
+        def __init__(self) -> None:
+            self._lines = iter(
+                [
+                    b"event: done\n",
+                    b'data: {"reason":"failed"}\n',
+                    b"\n",
+                ]
+            )
+
+        def readline(self) -> bytes:
+            return next(self._lines, b"")
+
+    class Connection:
+        def request(self, *_args, **_kwargs) -> None:
+            pass
+
+        def getresponse(self):
+            return Response()
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        upload_project,
+        "connection",
+        lambda _url: (Connection(), "/messages"),
+    )
+
+    with pytest.raises(upload_project.HandoffError, match="failed in Studio"):
+        upload_project.post_event_stream(
+            "https://studio.example/messages", {}, "Studio cloud continuation"
+        )
+
+
+def test_remote_restore_emits_heartbeat_while_restore_runs(
+    upload_project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[dict[str, object]] = []
+
+    def fake_post_json(_url, payload, _action):
+        requests.append(payload)
+        return {
+            "data": {
+                "status": "completed",
+                "exit_code": 0,
+                "output": '{"restored":true,"fileCount":2}',
+            }
+        }
+
+    monkeypatch.setattr(upload_project, "post_json", fake_post_json)
+
+    assert upload_project.remote_restore(
+        "https://sandbox.example?Authorization=secret",
+        "/home/gem/project.tar.gz",
+        "/home/gem/.restore",
+        "/home/gem/project",
+        None,
+    ) == {"restored": True, "fileCount": 2}
+    command = requests[0]["command"]
+    assert isinstance(command, str)
+    assert 'while kill -0 "$restore_pid"' in command
+    assert "[handoff] restore in progress" in command
+
+
 def test_sanitize_remote_removes_embedded_credentials(upload_project) -> None:
     assert (
         upload_project.sanitize_remote(
@@ -176,3 +433,81 @@ def test_sanitize_remote_removes_embedded_credentials(upload_project) -> None:
         )
         == "https://github.com/example/demo.git"
     )
+
+
+def test_main_creates_temporary_session_restores_and_continues(
+    upload_project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "source"
+    repo.mkdir()
+    (repo / "app.py").write_text('print("hello")\n', encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    _git(repo, "add", "app.py")
+    created_payloads: list[dict[str, object]] = []
+    continuations: list[tuple[str, str, str, str]] = []
+
+    def fake_post_json(url, payload, action, **kwargs):
+        assert url == (
+            "https://studio.example/web/sandbox/codex-project-handoff/sessions"
+        )
+        assert action == "Studio session creation"
+        assert kwargs == {"attempts": upload_project.SESSION_CREATE_ATTEMPTS}
+        created_payloads.append(payload)
+        return {
+            "sessionId": "remote-1",
+            "displayName": "修复上传流程",
+            "endpoint": "https://sandbox.example/path?Authorization=secret",
+            "remoteRepoDir": "/home/gem/source",
+        }
+
+    monkeypatch.setattr(upload_project, "post_json", fake_post_json)
+    monkeypatch.setattr(upload_project, "upload_file", lambda *_args: {})
+    monkeypatch.setattr(
+        upload_project,
+        "remote_restore",
+        lambda *_args: {
+            "restored": True,
+            "fileCount": 1,
+            "gitStatus": "A  app.py",
+            "githubAuth": False,
+        },
+    )
+    monkeypatch.setattr(
+        upload_project,
+        "continue_in_studio",
+        lambda studio_url, session_id, pairing_code, remote_repo: continuations.append(
+            (studio_url, session_id, pairing_code, remote_repo)
+        ),
+    )
+    monkeypatch.setattr(upload_project, "cleanup_remote_artifacts", lambda *_args: None)
+
+    result = upload_project.main(
+        [
+            "--repo",
+            str(repo),
+            "--studio-url",
+            "https://studio.example",
+            "--pairing-code",
+            "ABCD-EFGH",
+            "--agent-name",
+            "修复上传流程",
+            "--yes",
+        ]
+    )
+
+    assert result == 0
+    assert len(created_payloads) == 1
+    assert created_payloads[0]["pairingCode"] == "ABCD-EFGH"
+    assert created_payloads[0]["projectName"] == "source"
+    assert created_payloads[0]["agentName"] == "修复上传流程"
+    assert created_payloads[0]["remoteHome"] == "/home/gem"
+    assert isinstance(created_payloads[0]["handoffId"], str)
+    assert len(created_payloads[0]["handoffId"]) == 32
+    assert continuations == [
+        (
+            "https://studio.example",
+            "remote-1",
+            "ABCD-EFGH",
+            "/home/gem/source",
+        )
+    ]

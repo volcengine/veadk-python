@@ -5,7 +5,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { Check, Copy } from "lucide-react";
 import type { Attachment } from "../adk/client";
 import type {
   SandboxModel,
@@ -22,6 +21,8 @@ import {
 import {
   SandboxBrowserIcon,
   SandboxAddIcon,
+  SandboxCheckIcon,
+  SandboxCopyIcon,
   SandboxFileIcon,
   SandboxImageIcon,
   SandboxPermissionsIcon,
@@ -473,9 +474,9 @@ export function SandboxComposer({
               {actions.endpointCopyState === "copying" ? (
                 <SandboxSpinnerIcon className="spin" />
               ) : actions.endpointCopyState === "copied" ? (
-                <Check aria-hidden="true" />
+                <SandboxCheckIcon />
               ) : (
-                <Copy aria-hidden="true" />
+                <SandboxCopyIcon />
               )}
             </button>
           ) : null}

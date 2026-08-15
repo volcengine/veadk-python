@@ -4,7 +4,7 @@ import { requestSignal } from "./timeout";
 import type { Block } from "../blocks";
 
 const SANDBOX_API = "/web/sandbox/sessions";
-const CODEX_PROJECT_UPLOAD_API = "/web/sandbox/codex-project-upload";
+const CODEX_PROJECT_HANDOFF_API = "/web/sandbox/codex-project-handoff";
 const LIST_TIMEOUT_MS = 30_000;
 const START_TIMEOUT_MS = 330_000;
 const CONNECT_TIMEOUT_MS = 60_000;
@@ -12,8 +12,8 @@ const MESSAGE_TIMEOUT_MS = 600_000;
 const CLOSE_TIMEOUT_MS = 15_000;
 const SETTINGS_TIMEOUT_MS = 60_000;
 const UPLOAD_TIMEOUT_MS = 330_000;
-const CODEX_PROJECT_UPLOAD_TIMEOUT_MS = 30_000;
-export const CODEX_PROJECT_UPLOAD_AUTHORIZATION_TTL_SECONDS = 60 * 60;
+const CODEX_PROJECT_HANDOFF_TIMEOUT_MS = 30_000;
+export const CODEX_PROJECT_HANDOFF_PAIRING_TTL_SECONDS = 60 * 60;
 
 export const SANDBOX_DISPLAY_NAME_MAX_LENGTH = 40;
 export type SandboxAgentKind = "deepseek-harness" | "openclaw" | "hermes";
@@ -104,10 +104,28 @@ export interface SandboxEndpointExport {
   expireAt?: string;
 }
 
-export interface CodexProjectUploadAuthorization {
-  authorizationCode: string;
+export interface CodexProjectHandoffPairing {
+  pairingCode: string;
   expireAt: string;
   studioUrl: string;
+}
+
+export type CodexProjectHandoffState =
+  | "issued"
+  | "creating"
+  | "session-created"
+  | "continuing"
+  | "completed"
+  | "failed";
+
+export interface CodexProjectHandoffStatus {
+  state: CodexProjectHandoffState;
+  expireAt: string;
+  projectName?: string;
+  agentName?: string;
+  sessionId?: string;
+  error?: string;
+  failedStage?: "creating-session" | "continuing-task";
 }
 
 export interface SandboxUploadedFile {
@@ -305,9 +323,13 @@ export interface AgentKitSandboxClient {
     sessionId: string,
     options?: SandboxRequestOptions,
   ): Promise<SandboxEndpointExport>;
-  createCodexProjectUploadAuthorization(
+  createCodexProjectHandoffPairing(
     options?: SandboxRequestOptions,
-  ): Promise<CodexProjectUploadAuthorization>;
+  ): Promise<CodexProjectHandoffPairing>;
+  getCodexProjectHandoffStatus(
+    pairingCode: string,
+    options?: SandboxRequestOptions,
+  ): Promise<CodexProjectHandoffStatus>;
   listModels(
     sessionId: string,
     options?: SandboxRequestOptions,
@@ -1191,9 +1213,9 @@ export const sandboxClient: AgentKitSandboxClient = {
     };
   },
 
-  async createCodexProjectUploadAuthorization(options = {}) {
+  async createCodexProjectHandoffPairing(options = {}) {
     const response = await fetch(
-      withAuth(`${CODEX_PROJECT_UPLOAD_API}/authorizations`),
+      withAuth(`${CODEX_PROJECT_HANDOFF_API}/pairings`),
       {
         method: "POST",
         headers: sandboxHeaders({
@@ -1201,36 +1223,89 @@ export const sandboxClient: AgentKitSandboxClient = {
           "Content-Type": "application/json",
         }),
         body: JSON.stringify({
-          ttlSeconds: CODEX_PROJECT_UPLOAD_AUTHORIZATION_TTL_SECONDS,
+          ttlSeconds: CODEX_PROJECT_HANDOFF_PAIRING_TTL_SECONDS,
         }),
         signal: requestSignal(
           options.signal,
-          CODEX_PROJECT_UPLOAD_TIMEOUT_MS,
+          CODEX_PROJECT_HANDOFF_TIMEOUT_MS,
         ),
       },
     );
     if (!response.ok) {
       throw await responseError(
         response,
-        "无法生成 Codex 项目上传授权码。",
+        "无法生成 Codex 云端接力配对码。",
       );
     }
     const value = recordOf(await response.json());
     if (
-      typeof value?.authorizationCode !== "string" ||
-      !value.authorizationCode.trim() ||
+      typeof value?.pairingCode !== "string" ||
+      !value.pairingCode.trim() ||
       typeof value.expireAt !== "string" ||
       !value.expireAt.trim()
     ) {
-      throw new Error("Studio 返回了无效的 Codex 项目上传授权码。");
+      throw new Error("Studio 返回了无效的 Codex 云端接力配对码。");
     }
     const studioUrl = typeof value.studioUrl === "string" && value.studioUrl.trim()
       ? value.studioUrl.trim()
       : window.location.origin;
     return {
-      authorizationCode: value.authorizationCode,
+      pairingCode: value.pairingCode,
       expireAt: value.expireAt,
       studioUrl,
+    };
+  },
+
+  async getCodexProjectHandoffStatus(pairingCode, options = {}) {
+    const response = await fetch(
+      withAuth(
+        `${CODEX_PROJECT_HANDOFF_API}/pairings/${encodeURIComponent(pairingCode)}`,
+      ),
+      {
+        headers: sandboxHeaders({ Accept: "application/json" }),
+        signal: requestSignal(
+          options.signal,
+          CODEX_PROJECT_HANDOFF_TIMEOUT_MS,
+        ),
+      },
+    );
+    if (!response.ok) {
+      throw await responseError(response, "无法读取端云接力状态。");
+    }
+    const value = recordOf(await response.json());
+    const states: ReadonlySet<string> = new Set([
+      "issued",
+      "creating",
+      "session-created",
+      "continuing",
+      "completed",
+      "failed",
+    ]);
+    if (
+      typeof value?.state !== "string" ||
+      !states.has(value.state) ||
+      typeof value.expireAt !== "string" ||
+      !value.expireAt.trim()
+    ) {
+      throw new Error("Studio 返回了无效的端云接力状态。");
+    }
+    return {
+      state: value.state as CodexProjectHandoffState,
+      expireAt: value.expireAt,
+      ...(typeof value.projectName === "string"
+        ? { projectName: value.projectName }
+        : {}),
+      ...(typeof value.agentName === "string"
+        ? { agentName: value.agentName }
+        : {}),
+      ...(typeof value.sessionId === "string"
+        ? { sessionId: value.sessionId }
+        : {}),
+      ...(typeof value.error === "string" ? { error: value.error } : {}),
+      ...(value.failedStage === "creating-session" ||
+      value.failedStage === "continuing-task"
+        ? { failedStage: value.failedStage }
+        : {}),
     };
   },
 

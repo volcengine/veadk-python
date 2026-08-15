@@ -1,4 +1,4 @@
 interface:
-  display_name: "Upload Project to Studio"
-  short_description: "Safely hand off a local project to Studio"
-  default_prompt: "Use $codex-sandbox-upload to upload this project to Studio."
+  display_name: "Continue Task in Studio"
+  short_description: "Hand off a local task and continue it in Studio"
+  default_prompt: "Use $codex-sandbox-upload to continue this project and task in Studio."

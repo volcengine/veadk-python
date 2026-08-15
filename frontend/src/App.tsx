@@ -3063,6 +3063,21 @@ export default function App() {
     }
   }
 
+  async function openCodexHandoffSession(sessionId: string) {
+    const resources = await sandboxClient.listSessions();
+    const session = resources.find(
+      (resource) =>
+        resource.resourceType === "session" &&
+        resource.toolName === "codex" &&
+        resource.id === sessionId,
+    );
+    if (!session) {
+      throw new Error("云端 Codex Session 暂未出现在列表中，请稍后重试。");
+    }
+    await openSandboxAgent(session, "my_agents");
+    setSandboxProjectUploadOpen(false);
+  }
+
   function openSandboxAgentDetails(session: SandboxAgentResource) {
     setSandboxAgentDetailTarget(session);
     setSandboxAgentWorkspace(null);
@@ -6137,6 +6152,7 @@ export default function App() {
         open={sandboxProjectUploadOpen}
         onClose={() => setSandboxProjectUploadOpen(false)}
         onRefreshAgents={() => setSandboxAgentRefreshKey((current) => current + 1)}
+        onOpenSession={openCodexHandoffSession}
       />
 
       {sandboxThreadDeleteTarget ? (

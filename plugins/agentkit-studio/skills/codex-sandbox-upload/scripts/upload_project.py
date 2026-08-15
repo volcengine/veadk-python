@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Build and upload a credential-safe Git project handoff to Studio."""
+"""Hand off a local Git project and continue its task in Studio."""
 
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -76,10 +77,22 @@ SECRET_ASSIGNMENT = re.compile(
 )
 MAX_SCAN_BYTES = 1024 * 1024
 MAX_BUNDLE_BYTES = 512 * 1024 * 1024
+UPLOAD_CONNECT_ATTEMPTS = 24
+UPLOAD_RETRY_DELAY_SECONDS = 5.0
+SESSION_CREATE_ATTEMPTS = 6
+SESSION_CREATE_RETRY_DELAY_SECONDS = 2.0
+AGENT_NAME_MAX_CHARACTERS = 12
+MAX_EVENT_STREAM_LINE_BYTES = 1024 * 1024
+MAX_EVENT_STREAM_DATA_BYTES = 4 * 1024 * 1024
+PAIRING_CODE_PATTERN = re.compile(r"[2-9A-HJ-KM-NP-Z]{4}-?[2-9A-HJ-KM-NP-Z]{4}")
 
 
 class HandoffError(RuntimeError):
     """A user-safe project handoff failure."""
+
+
+class RetryableHandoffError(HandoffError):
+    """A transient request failure that is safe to retry with an idempotency key."""
 
 
 @dataclass(frozen=True)
@@ -645,6 +658,47 @@ def slug(value: str) -> str:
     return output[:80] or "project"
 
 
+def agent_name(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", value.strip())
+    if not cleaned:
+        raise HandoffError(
+            "--agent-name is required; let Codex create a concise task description"
+        )
+    if len(cleaned) > AGENT_NAME_MAX_CHARACTERS:
+        raise HandoffError(
+            f"--agent-name must be at most {AGENT_NAME_MAX_CHARACTERS} characters"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in cleaned):
+        raise HandoffError("--agent-name contains unsupported control characters")
+    return cleaned
+
+
+def studio_url(value: str) -> str:
+    parsed = urlsplit(value.strip())
+    try:
+        _ = parsed.port
+    except ValueError as error:
+        raise HandoffError("--studio-url contains an invalid port") from error
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise HandoffError("--studio-url must be an HTTP(S) origin or base path")
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+
+
+def pairing_code(value: str) -> str:
+    normalized = value.strip().upper()
+    if not PAIRING_CODE_PATTERN.fullmatch(normalized):
+        raise HandoffError("the one-time pairing code has an invalid format")
+    compact = normalized.replace("-", "")
+    return f"{compact[:4]}-{compact[4:]}"
+
+
 def service_url(endpoint: str, route: str) -> str:
     parsed = urlsplit(endpoint)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -685,16 +739,56 @@ def response_json(response: http.client.HTTPResponse, action: str) -> dict[str, 
         ) from error
     if response.status < 200 or response.status >= 300:
         detail = value.get("detail") if isinstance(value, dict) else None
+        retryable = False
         if isinstance(detail, dict):
+            retryable = detail.get("retryable") is True
             detail = detail.get("message") or detail.get("code")
         message = detail if isinstance(detail, str) else f"HTTP {response.status}"
-        raise HandoffError(f"{action} failed: {message}")
+        error_type = RetryableHandoffError if retryable else HandoffError
+        raise error_type(f"{action} failed: {message}")
     if not isinstance(value, dict):
         raise HandoffError(f"{action} returned an invalid response")
     return value
 
 
-def post_json(url: str, payload: dict[str, Any], action: str) -> dict[str, Any]:
+def post_json(
+    url: str,
+    payload: dict[str, Any],
+    action: str,
+    *,
+    attempts: int = 1,
+    retry_delay_seconds: float = SESSION_CREATE_RETRY_DELAY_SECONDS,
+) -> dict[str, Any]:
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    last_error: BaseException | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        client, target = connection(url)
+        try:
+            client.request(
+                "POST",
+                target,
+                body=body,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Content-Length": str(len(body)),
+                },
+            )
+            return response_json(client.getresponse(), action)
+        except (OSError, RetryableHandoffError) as error:
+            last_error = error
+        finally:
+            client.close()
+        if attempt < attempts:
+            time.sleep(retry_delay_seconds)
+    if isinstance(last_error, RetryableHandoffError):
+        raise last_error
+    raise HandoffError(f"{action} could not connect to the service") from last_error
+
+
+def post_event_stream(url: str, payload: dict[str, Any], action: str) -> None:
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
         "utf-8"
     )
@@ -705,57 +799,138 @@ def post_json(url: str, payload: dict[str, Any], action: str) -> dict[str, Any]:
             target,
             body=body,
             headers={
-                "Accept": "application/json",
+                "Accept": "text/event-stream",
                 "Content-Type": "application/json",
                 "Content-Length": str(len(body)),
             },
         )
-        return response_json(client.getresponse(), action)
+        response = client.getresponse()
+        if response.status < 200 or response.status >= 300:
+            response_json(response, action)
+        event_name = ""
+        data_lines: list[str] = []
+        data_bytes = 0
+        saw_done = False
+        while raw_line := response.readline():
+            if len(raw_line) > MAX_EVENT_STREAM_LINE_BYTES:
+                raise HandoffError(f"{action} returned an oversized event")
+            line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+            if not line:
+                data_text = "\n".join(data_lines)
+                if event_name == "error":
+                    try:
+                        error_payload = json.loads(data_text) if data_text else {}
+                    except json.JSONDecodeError:
+                        error_payload = {}
+                    detail = error_payload.get("message")
+                    if not isinstance(detail, str) or not detail:
+                        detail = "the cloud continuation failed"
+                    raise HandoffError(f"{action} failed: {detail}")
+                if event_name == "done":
+                    try:
+                        done_payload = json.loads(data_text) if data_text else {}
+                    except json.JSONDecodeError as error:
+                        raise HandoffError(
+                            f"{action} returned an invalid completion event"
+                        ) from error
+                    if (
+                        isinstance(done_payload, dict)
+                        and done_payload.get("reason") == "failed"
+                    ):
+                        raise HandoffError(f"{action} failed in Studio")
+                    saw_done = True
+                    break
+                event_name = ""
+                data_lines = []
+                data_bytes = 0
+                continue
+            if line.startswith("event:"):
+                event_name = line[6:].strip()
+            elif line.startswith("data:"):
+                data_line = line[5:].lstrip()
+                data_bytes += len(data_line.encode("utf-8"))
+                if data_bytes > MAX_EVENT_STREAM_DATA_BYTES:
+                    raise HandoffError(f"{action} returned an oversized event")
+                data_lines.append(data_line)
+        if not saw_done:
+            raise HandoffError(f"{action} ended before Studio confirmed completion")
     except OSError as error:
         raise HandoffError(f"{action} could not connect to the service") from error
     finally:
         client.close()
 
 
+def continue_in_studio(
+    studio_url: str,
+    session_id: str,
+    pairing_code: str,
+    remote_repo: str,
+) -> None:
+    message = "\n".join(
+        [
+            "继续执行从本地接力的当前任务，不要只汇报迁移结果。",
+            f"项目目录：{remote_repo}",
+            "先阅读 HANDOFF.md 并检查 Git 状态，再按照其中的当前目标、已完成工作和后续步骤直接继续执行。",
+            "保留已有改动；只有遇到无法自行解决的真实阻塞时才暂停并说明。",
+        ]
+    )
+    post_event_stream(
+        studio_url.rstrip("/")
+        + f"/web/sandbox/codex-project-handoff/sessions/{session_id}/messages",
+        {"pairingCode": pairing_code, "message": message},
+        "Studio cloud continuation",
+    )
+
+
 def upload_file(endpoint: str, source: Path, destination: str) -> dict[str, Any]:
     url = service_url(endpoint, "/v1/file/upload")
-    boundary = "----studio-handoff-" + uuid.uuid4().hex
     name = source.name.replace('"', "")
-    preamble = (
-        f"--{boundary}\r\n"
-        'Content-Disposition: form-data; name="path"\r\n\r\n'
-        f"{destination}\r\n"
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="{name}"\r\n'
-        f"Content-Type: {mimetypes.guess_type(name)[0] or 'application/octet-stream'}"
-        "\r\n\r\n"
-    ).encode()
-    ending = f"\r\n--{boundary}--\r\n".encode("ascii")
-    client, target = connection(url)
-    try:
-        client.putrequest("POST", target)
-        client.putheader("Accept", "application/json")
-        client.putheader("Content-Type", f"multipart/form-data; boundary={boundary}")
-        client.putheader(
-            "Content-Length",
-            str(len(preamble) + source.stat().st_size + len(ending)),
-        )
-        client.endheaders()
-        client.send(preamble)
-        with source.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                client.send(chunk)
-        client.send(ending)
-        value = response_json(client.getresponse(), "Sandbox upload")
-        if value.get("success") is False:
-            raise HandoffError(
-                f"Sandbox upload failed: {value.get('error') or 'unknown error'}"
+    last_error: OSError | None = None
+    for attempt in range(1, UPLOAD_CONNECT_ATTEMPTS + 1):
+        boundary = "----studio-handoff-" + uuid.uuid4().hex
+        preamble = (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="path"\r\n\r\n'
+            f"{destination}\r\n"
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{name}"\r\n'
+            f"Content-Type: "
+            f"{mimetypes.guess_type(name)[0] or 'application/octet-stream'}"
+            "\r\n\r\n"
+        ).encode()
+        ending = f"\r\n--{boundary}--\r\n".encode("ascii")
+        client, target = connection(url)
+        try:
+            client.putrequest("POST", target)
+            client.putheader("Accept", "application/json")
+            client.putheader(
+                "Content-Type", f"multipart/form-data; boundary={boundary}"
             )
-        return value
-    except OSError as error:
-        raise HandoffError("Sandbox upload could not connect to the service") from error
-    finally:
-        client.close()
+            client.putheader(
+                "Content-Length",
+                str(len(preamble) + source.stat().st_size + len(ending)),
+            )
+            client.endheaders()
+            client.send(preamble)
+            with source.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    client.send(chunk)
+            client.send(ending)
+            value = response_json(client.getresponse(), "Sandbox upload")
+            if value.get("success") is False:
+                raise HandoffError(
+                    f"Sandbox upload failed: {value.get('error') or 'unknown error'}"
+                )
+            return value
+        except OSError as error:
+            last_error = error
+        finally:
+            client.close()
+        if attempt < UPLOAD_CONNECT_ATTEMPTS:
+            time.sleep(UPLOAD_RETRY_DELAY_SECONDS)
+    raise HandoffError(
+        "Sandbox upload could not connect to the service"
+    ) from last_error
 
 
 def nested(value: dict[str, Any], paths: Iterable[tuple[str, ...]]) -> Any:
@@ -791,11 +966,23 @@ def remote_restore(
             'rm -rf "$stage"',
             'mkdir -p "$stage"',
             'tar -xzf "$bundle" -C "$stage"',
+            'restore_output="$stage/restore-output.log"',
+            "set +e",
             'if [ -n "$github_credentials" ]; then',
-            '  python3 "$stage/restore_project.py" --stage "$stage" --repo "$repo" --github-credentials "$github_credentials"',
+            '  python3 "$stage/restore_project.py" --stage "$stage" --repo "$repo" --github-credentials "$github_credentials" >"$restore_output" 2>&1 &',
             "else",
-            '  python3 "$stage/restore_project.py" --stage "$stage" --repo "$repo"',
+            '  python3 "$stage/restore_project.py" --stage "$stage" --repo "$repo" >"$restore_output" 2>&1 &',
             "fi",
+            "restore_pid=$!",
+            'while kill -0 "$restore_pid" 2>/dev/null; do',
+            "  echo '[handoff] restore in progress'",
+            "  sleep 5",
+            "done",
+            'wait "$restore_pid"',
+            "restore_status=$?",
+            "set -e",
+            'cat "$restore_output"',
+            'if [ "$restore_status" -ne 0 ]; then exit "$restore_status"; fi',
             'rm -f "$bundle"',
             'rm -rf "$stage"',
         ]
@@ -876,6 +1063,25 @@ def cleanup_remote_file(endpoint: str, path: str) -> None:
     )
 
 
+def cleanup_remote_artifacts(endpoint: str, paths: Iterable[str]) -> None:
+    import shlex
+
+    safe_paths = [path for path in paths if path.startswith("/") and path != "/"]
+    if not safe_paths:
+        return
+    command = "\n".join(
+        [
+            "set -eu",
+            *(f"rm -rf -- {shlex.quote(path)}" for path in safe_paths),
+        ]
+    )
+    post_json(
+        service_url(endpoint, "/v1/shell/exec"),
+        {"id": "", "exec_dir": "/", "command": command},
+        "Sandbox handoff cleanup",
+    )
+
+
 def preview(state: ProjectState) -> None:
     print(f"[handoff] repo: {state.repo}")
     print(f"[handoff] files: {len(state.files)}")
@@ -907,16 +1113,19 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--repo", default=os.getcwd())
     result.add_argument("--studio-url", default=os.getenv("STUDIO_URL", ""))
     result.add_argument(
-        "--authorization-code",
-        default=os.getenv("CODEX_PROJECT_UPLOAD_AUTHORIZATION_CODE", ""),
+        "--pairing-code",
+        default=os.getenv("AGENTKIT_STUDIO_PAIRING_CODE", ""),
     )
     result.add_argument(
         "--project-name", default=os.getenv("CODEX_PROJECT_UPLOAD_PROJECT_NAME", "")
     )
+    result.add_argument(
+        "--agent-name",
+        default=os.getenv("CODEX_PROJECT_HANDOFF_AGENT_NAME", ""),
+    )
     result.add_argument("--remote-home", default="/home/gem")
     result.add_argument("--handoff", type=Path)
     result.add_argument("--output", type=Path)
-    result.add_argument("--temporary", action="store_true")
     result.add_argument("--dry-run", action="store_true")
     result.add_argument("--yes", action="store_true")
     result.add_argument("--allow-sensitive", action="store_true")
@@ -929,7 +1138,22 @@ def main(argv: list[str] | None = None) -> int:
     state = inspect_project(Path(args.repo))
     preview(state)
     project_name = args.project_name.strip() or state.repo.name
+    display_name = agent_name(args.agent_name)
+    studio_base_url = studio_url(args.studio_url) if args.studio_url.strip() else ""
+    one_time_code = pairing_code(args.pairing_code) if args.pairing_code.strip() else ""
+    github_credentials_enabled = state.github_remote and not args.no_github_credentials
     if args.dry_run:
+        with tempfile.TemporaryDirectory(
+            prefix="studio-project-handoff-preview-"
+        ) as temporary:
+            preview_bundle = build_bundle(
+                state,
+                project_name,
+                args.handoff,
+                Path(temporary),
+                github_credentials_enabled,
+            )
+            print(f"[handoff] preview bundle bytes: {preview_bundle.stat().st_size}")
         print("[handoff] dry run only; no session was created and nothing was uploaded")
         return 0
     if not args.yes:
@@ -938,12 +1162,9 @@ def main(argv: list[str] | None = None) -> int:
         raise HandoffError(
             "sensitive file warnings require explicit --allow-sensitive approval"
         )
-    if not args.studio_url.strip() or not args.authorization_code.strip():
-        raise HandoffError(
-            "--studio-url and a one-time authorization code are required"
-        )
+    if not args.studio_url.strip() or not args.pairing_code.strip():
+        raise HandoffError("--studio-url and a one-time pairing code are required")
 
-    github_credentials_enabled = state.github_remote and not args.no_github_credentials
     credential_token = github_token() if github_credentials_enabled else ""
 
     output = args.output.expanduser().resolve() if args.output else None
@@ -966,26 +1187,33 @@ def main(argv: list[str] | None = None) -> int:
             shutil.copy2(bundle, output)
             print(f"[handoff] retained local bundle: {output}")
         print(f"[handoff] bundle bytes: {bundle.stat().st_size}")
+        handoff_id = uuid.uuid4().hex
         session = post_json(
-            args.studio_url.rstrip("/") + "/web/sandbox/codex-project-upload/sessions",
+            studio_base_url + "/web/sandbox/codex-project-handoff/sessions",
             {
-                "authorizationCode": args.authorization_code,
+                "pairingCode": one_time_code,
                 "projectName": project_name,
-                "persistent": not args.temporary,
+                "agentName": display_name,
                 "remoteHome": args.remote_home,
+                "handoffId": handoff_id,
             },
             "Studio session creation",
+            attempts=SESSION_CREATE_ATTEMPTS,
         )
         endpoint = session.get("endpoint")
         remote_repo = session.get("remoteRepoDir")
         session_id = session.get("sessionId")
-        if not isinstance(endpoint, str) or not isinstance(remote_repo, str):
+        if (
+            not isinstance(endpoint, str)
+            or not isinstance(remote_repo, str)
+            or not isinstance(session_id, str)
+        ):
             raise HandoffError("Studio created an incomplete Sandbox session")
         print(
             "[handoff] session created: "
             + json.dumps(
                 {
-                    "displayName": session.get("displayName") or project_name,
+                    "displayName": session.get("displayName") or display_name,
                     "sessionId": session_id,
                     "remoteRepoDir": remote_repo,
                 },
@@ -995,13 +1223,13 @@ def main(argv: list[str] | None = None) -> int:
         remote_root = args.remote_home.rstrip("/")
         remote_bundle = f"{remote_root}/{slug(project_name)}-handoff.tar.gz"
         stage = f"{remote_root}/.studio-project-handoff/{slug(project_name)}-restore"
-        upload_file(endpoint, bundle, remote_bundle)
         remote_credentials: str | None = None
         if credentials_file is not None:
             remote_credentials = (
                 f"{remote_root}/.studio-github-credentials-{uuid.uuid4().hex}.json"
             )
         try:
+            upload_file(endpoint, bundle, remote_bundle)
             if credentials_file is not None and remote_credentials is not None:
                 upload_file(endpoint, credentials_file, remote_credentials)
             restored = remote_restore(
@@ -1017,15 +1245,27 @@ def main(argv: list[str] | None = None) -> int:
                     cleanup_remote_file(endpoint, remote_credentials)
                 except HandoffError:
                     pass
+            try:
+                cleanup_remote_artifacts(endpoint, (remote_bundle, stage))
+            except HandoffError:
+                pass
         result = {
-            "displayName": session.get("displayName") or project_name,
+            "displayName": session.get("displayName") or display_name,
             "sessionId": session_id,
             "remoteRepoDir": remote_repo,
             "fileCount": restored.get("fileCount"),
             "gitStatus": restored.get("gitStatus", ""),
             "githubAuth": restored.get("githubAuth", False),
             "restored": True,
+            "continued": False,
         }
+        continue_in_studio(
+            studio_base_url,
+            session_id,
+            one_time_code,
+            remote_repo,
+        )
+        result["continued"] = True
         print("[handoff] result: " + json.dumps(result, ensure_ascii=False))
     return 0
 

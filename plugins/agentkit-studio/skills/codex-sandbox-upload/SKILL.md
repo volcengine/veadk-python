@@ -1,11 +1,13 @@
 ---
 name: codex-sandbox-upload
-description: Safely hand off the current local project to an AgentKit Studio cloud Codex Sandbox using a Studio URL and one-time project-upload authorization code. Use when the user asks to upload, migrate, continue, or open a local repository in Studio, especially when the prompt contains studio_url and authorization_code. Preserve tracked and non-ignored working-tree files, local edits and deletions, Git branch/commit/remote metadata, AGENTS.md, a generated HANDOFF.md, and GitHub CLI authentication needed to push changes; never copy Codex system prompts, conversations, SQLite state, global configuration, local skills, or SSH private keys.
+description: Continue the current local coding task in an AgentKit Studio cloud Codex Sandbox using a Studio URL and short one-time pairing code. Use when the user asks to hand off, migrate, or continue a local repository in Studio, especially when a prompt contains a Studio address and pairing code. Summarize the active task into HANDOFF.md, create a temporary Studio Sandbox, restore tracked and non-ignored working-tree files plus Git metadata, transfer GitHub CLI authentication separately when needed, and send the cloud Session a continuation message; never copy Codex system prompts, conversations, SQLite state, global configuration, local skills, or SSH private keys.
 ---
 
-# Codex Sandbox Upload
+# Continue a Task in Studio
 
-Transfer the project, not the local Codex runtime. Build a reviewable snapshot, create one persistent Studio Sandbox with the supplied one-time code, upload the snapshot, and restore it into the directory returned by Studio.
+Transfer the project and a concise task handoff, not the local Codex runtime. Create one temporary Studio Sandbox with the supplied pairing code, restore the project, then send the continuation message so the cloud Session starts working.
+
+Accept a terse handoff prompt containing only the intent, Studio URL, and pairing code. When invoked immediately after Plugin installation, stay in the current Codex task, load this Skill explicitly if automatic discovery has not refreshed, and continue without asking the user to repeat the repository or task context.
 
 ## Boundaries
 
@@ -28,31 +30,40 @@ Do not claim that the remote environment is an exact copy of local Codex. It is 
 ## Workflow
 
 1. Resolve the repository from the user's `repo` value or the current working directory. Confirm it with `pwd`.
-2. Resolve `studio_url` and `authorization_code` from the user's prompt. Treat the authorization code as a secret: do not print it, write it to a file, or place it in the bundle.
-3. For a GitHub remote, verify `gh auth token --hostname github.com` succeeds. GitHub authentication is transferred separately from the project bundle, installed with mode `0600`, and configured for HTTPS pushes. Never print the token. Convert an SSH-form GitHub remote to HTTPS instead of copying SSH keys.
-4. Locate this Skill's `scripts/upload_current_dir.sh` and run a preview:
+2. Resolve `studio_url` and `pairing_code` from the user's prompt. Treat the pairing code as a secret: do not print it, write it to a file, or place it in the bundle.
+3. Create a concise Chinese task description for the cloud Agent name. Infer it yourself from the active task; do not ask the user to name it. Use at most 12 Unicode characters, omit punctuation and generic prefixes such as `Codex`, and describe the work rather than the repository. Examples: `完善端云接力`, `修复登录超时`, `优化订单检索`.
+4. Create a temporary Markdown handoff outside the repository. Summarize only the current user objective, decisions, completed work, remaining work, validation results, and real blockers. Do not include system or developer prompts, conversation transcripts, credentials, or unrelated context.
+5. For a GitHub remote, verify `gh auth token --hostname github.com` succeeds. GitHub authentication is transferred separately from the project bundle, installed with mode `0600`, and configured for HTTPS pushes. Never print the token. Convert an SSH-form GitHub remote to HTTPS instead of copying SSH keys.
+6. Locate this Skill's `scripts/upload_current_dir.sh` and run a preview:
 
    ```bash
-   scripts/upload_current_dir.sh --repo "$PWD" --dry-run
+   scripts/upload_current_dir.sh \
+     --repo "$PWD" \
+     --studio-url "$studio_url" \
+     --agent-name "$agent_name" \
+     --handoff "$handoff_file" \
+     --dry-run
    ```
 
-5. Review the preview's file count, size, GitHub authentication status, and sensitive-file warnings.
+7. Review the preview's file count, size, GitHub authentication status, and sensitive-file warnings.
    - If high-risk filenames or possible secret assignments are present, stop and ask whether to exclude them locally or upload them with `--allow-sensitive`.
    - If no sensitive-file warnings are present and the current user request explicitly asks to upload, that request is sufficient confirmation.
-6. Run the live handoff without echoing the authorization code or GitHub token:
+8. Run the live handoff without echoing the pairing code or GitHub token:
 
    ```bash
-   CODEX_PROJECT_UPLOAD_AUTHORIZATION_CODE="$authorization_code" \
+   AGENTKIT_STUDIO_PAIRING_CODE="$pairing_code" \
      scripts/upload_current_dir.sh \
        --repo "$PWD" \
        --studio-url "$studio_url" \
+       --agent-name "$agent_name" \
+       --handoff "$handoff_file" \
        --yes
    ```
 
-7. Report the returned Sandbox display name, session ID, remote project directory, restored file count, Git status, and whether GitHub authentication was installed. Do not start a remote task or change the remote project after restoration unless the user asks.
+9. Confirm that the script created a temporary Studio Sandbox, restored the project, and sent the continuation message. Report the Sandbox display name, session ID, remote project directory, restored file count, Git status, GitHub authentication result, and continuation status. Do not claim success when the continuation stream reports an error or closes before completion.
 
 ## Script options
 
-Use `--project-name` to override the repository basename, `--remote-home` only when Studio supports a different home, `--handoff` to append a user-supplied Markdown handoff, and `--output` to retain a local copy of the generated project bundle. Use `--temporary` only when the user explicitly requests a non-persistent Sandbox. Use `--no-github-credentials` only when the user explicitly opts out; otherwise a GitHub remote requires working local `gh` authentication.
+`--agent-name` is required for a live handoff and controls only the cloud Agent name. `--project-name` controls the bundle and remote directory and defaults to the repository basename. Use `--remote-home` only when Studio supports a different home, `--handoff` to append the task summary, and `--output` to retain a local copy of the generated project bundle. The script always creates a temporary Studio Sandbox. Use `--no-github-credentials` only when the user explicitly opts out; otherwise a GitHub remote requires working local `gh` authentication.
 
-The live command requires `--yes`. Add `--allow-sensitive` only after explicit approval for filenames or possible secret assignments identified by the preview. GitHub credentials travel in a separate ephemeral payload, never in the retained `--output` bundle, and the remote staging payload is deleted after installation. On failure, report the safe error and whether Studio already created a session; never expose the token or returned private Sandbox endpoint.
+The live command requires `--yes`. Add `--allow-sensitive` only after explicit approval for filenames or possible secret assignments identified by the preview. GitHub credentials travel in a separate ephemeral payload, never in the retained `--output` bundle, and the remote staging payload is deleted after installation. On failure, report the safe error and whether Studio already created a Session; never expose the pairing code, token, or returned private Sandbox endpoint.

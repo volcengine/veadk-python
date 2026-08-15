@@ -17,11 +17,7 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import binascii
 import contextlib
-import hashlib
-import hmac
 import json
 import os
 import posixpath
@@ -36,7 +32,6 @@ from typing import Annotated, Any, Protocol
 from fastapi import File, Request, UploadFile
 
 from frontend.server.sandbox.tool_sessions import SandboxToolPair
-
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.agentkit_session_metadata import (
     SESSION_DISPLAY_NAME_MAX_LENGTH,
@@ -84,12 +79,14 @@ STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH = SESSION_DISPLAY_NAME_MAX_LENGTH
 _SANDBOX_CHAT_TOOL_ENV = "SANDBOX_CHAT_CODEX"
 _SANDBOX_CHAT_SNAPSHOT_TOOL_ENV = "SANDBOX_CHAT_CODEX_SNAPSHOT"
 _SANDBOX_ENDPOINT_EXPORT_ENV = "STUDIO_EXPOSE_SANDBOX_ENDPOINT"
-_CODEX_PROJECT_UPLOAD_SECRET_ENV = "STUDIO_CODEX_PROJECT_UPLOAD_SECRET"
-_CODEX_PROJECT_UPLOAD_TTL_ENV = "STUDIO_CODEX_PROJECT_UPLOAD_TTL_SECONDS"
-_CODEX_PROJECT_UPLOAD_SCOPE = "codex-project-upload:create-session"
-_CODEX_PROJECT_UPLOAD_DEFAULT_TTL_SECONDS = 20 * 60
-_CODEX_PROJECT_UPLOAD_MAX_TTL_SECONDS = 60 * 60
-_CODEX_PROJECT_UPLOAD_MIN_TTL_SECONDS = 60
+_CODEX_PROJECT_HANDOFF_PAIRING_TTL_ENV = (
+    "STUDIO_CODEX_PROJECT_HANDOFF_PAIRING_TTL_SECONDS"
+)
+_CODEX_PROJECT_HANDOFF_PAIRING_DEFAULT_TTL_SECONDS = 20 * 60
+_CODEX_PROJECT_HANDOFF_PAIRING_MAX_TTL_SECONDS = 60 * 60
+_CODEX_PROJECT_HANDOFF_PAIRING_MIN_TTL_SECONDS = 60
+_CODEX_PROJECT_HANDOFF_PAIRING_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
+_CODEX_PROJECT_HANDOFF_PAIRING_LENGTH = 8
 _SANDBOX_AGENT_TOOL_ENVS = {
     "deepseek-harness": (_SANDBOX_CHAT_TOOL_ENV,),
     "openclaw": ("SANDBOX_CHAT_OPENCLAW", "SANDBOX_OPENCLAW_TOOL"),
@@ -111,8 +108,9 @@ _SENSITIVE_PATTERN = re.compile(
     r"(?i)((?:api[_-]?key|access[_-]?key|secret|token|authorization|password)"
     r"\s*[:=]\s*)(?:[\"'][^\"']*[\"']|[^\s,;]+)"
 )
-_CODEX_PROJECT_UPLOAD_FALLBACK_SECRET = secrets.token_bytes(32)
-_CODEX_PROJECT_UPLOAD_CONSUMED_JTIS: dict[str, int] = {}
+_CODEX_PROJECT_HANDOFF_PAIRINGS: dict[str, dict[str, object]] = {}
+_CODEX_PROJECT_HANDOFF_AGENT_NAME_MAX_LENGTH = 12
+_CODEX_PROJECT_HANDOFF_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,64}")
 
 
 class SandboxError(RuntimeError):
@@ -279,121 +277,104 @@ def _utc_timestamp(value: int) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(value))
 
 
-def _b64url_encode(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
-
-
-def _b64url_decode(value: str) -> bytes:
-    padding = "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode((value + padding).encode("ascii"))
-
-
-def _codex_project_upload_secret() -> bytes:
-    configured = os.getenv(_CODEX_PROJECT_UPLOAD_SECRET_ENV)
-    if configured:
-        return configured.encode("utf-8")
-    return _CODEX_PROJECT_UPLOAD_FALLBACK_SECRET
-
-
-def _codex_project_upload_ttl_seconds(value: object = None) -> int:
+def _codex_project_handoff_pairing_ttl_seconds(value: object = None) -> int:
     if value is None:
-        raw = (os.getenv(_CODEX_PROJECT_UPLOAD_TTL_ENV) or "").strip()
+        raw = (os.getenv(_CODEX_PROJECT_HANDOFF_PAIRING_TTL_ENV) or "").strip()
         if raw:
             try:
                 value = int(raw)
             except ValueError:
-                value = _CODEX_PROJECT_UPLOAD_DEFAULT_TTL_SECONDS
+                value = _CODEX_PROJECT_HANDOFF_PAIRING_DEFAULT_TTL_SECONDS
         else:
-            value = _CODEX_PROJECT_UPLOAD_DEFAULT_TTL_SECONDS
+            value = _CODEX_PROJECT_HANDOFF_PAIRING_DEFAULT_TTL_SECONDS
     if not isinstance(value, int) or isinstance(value, bool):
-        raise SandboxValidationError("授权码有效期必须是整数秒数。")
-    if value < _CODEX_PROJECT_UPLOAD_MIN_TTL_SECONDS:
+        raise SandboxValidationError("配对码有效期必须是整数秒数。")
+    if value < _CODEX_PROJECT_HANDOFF_PAIRING_MIN_TTL_SECONDS:
         raise SandboxValidationError(
-            f"授权码有效期不能少于 {_CODEX_PROJECT_UPLOAD_MIN_TTL_SECONDS} 秒。"
+            "配对码有效期不能少于 "
+            f"{_CODEX_PROJECT_HANDOFF_PAIRING_MIN_TTL_SECONDS} 秒。"
         )
-    return min(value, _CODEX_PROJECT_UPLOAD_MAX_TTL_SECONDS)
+    return min(value, _CODEX_PROJECT_HANDOFF_PAIRING_MAX_TTL_SECONDS)
 
 
-def _codex_project_upload_signature(payload: str) -> str:
-    digest = hmac.new(
-        _codex_project_upload_secret(),
-        payload.encode("ascii"),
-        hashlib.sha256,
-    ).digest()
-    return _b64url_encode(digest)
+def _cleanup_codex_project_handoff_pairings(now: int) -> None:
+    active: dict[str, dict[str, object]] = {}
+    for code, pairing in _CODEX_PROJECT_HANDOFF_PAIRINGS.items():
+        expire_at = pairing.get("exp")
+        if isinstance(expire_at, int) and expire_at > now:
+            active[code] = pairing
+    _CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
+    _CODEX_PROJECT_HANDOFF_PAIRINGS.update(active)
 
 
-def _create_codex_project_upload_authorization(
+def _format_codex_project_handoff_pairing(code: str) -> str:
+    return f"{code[:4]}-{code[4:]}"
+
+
+def _normalize_codex_project_handoff_pairing(value: object) -> str:
+    if not isinstance(value, str):
+        raise SandboxPermissionError("Codex 云端接力配对码无效或已过期。")
+    normalized = re.sub(r"[-\s]", "", value).upper()
+    if len(normalized) != _CODEX_PROJECT_HANDOFF_PAIRING_LENGTH or any(
+        character not in _CODEX_PROJECT_HANDOFF_PAIRING_ALPHABET
+        for character in normalized
+    ):
+        raise SandboxPermissionError("Codex 云端接力配对码无效或已过期。")
+    return normalized
+
+
+def _create_codex_project_handoff_pairing(
     owner_id: str,
     creator_name: str,
     ttl_seconds: int,
 ) -> tuple[str, int]:
     now = int(time.time())
     expire_at = now + ttl_seconds
-    payload = {
-        "v": 1,
-        "scope": _CODEX_PROJECT_UPLOAD_SCOPE,
-        "ownerId": owner_id,
-        "creatorName": creator_name,
-        "jti": secrets.token_urlsafe(18),
-        "iat": now,
-        "exp": expire_at,
-    }
-    encoded_payload = _b64url_encode(
-        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    )
-    signature = _codex_project_upload_signature(encoded_payload)
-    return f"v1.{encoded_payload}.{signature}", expire_at
+    _cleanup_codex_project_handoff_pairings(now)
+    for _attempt in range(16):
+        code = "".join(
+            secrets.choice(_CODEX_PROJECT_HANDOFF_PAIRING_ALPHABET)
+            for _ in range(_CODEX_PROJECT_HANDOFF_PAIRING_LENGTH)
+        )
+        if code in _CODEX_PROJECT_HANDOFF_PAIRINGS:
+            continue
+        _CODEX_PROJECT_HANDOFF_PAIRINGS[code] = {
+            "ownerId": owner_id,
+            "creatorName": creator_name,
+            "exp": expire_at,
+            "state": "issued",
+            "createdAt": now,
+        }
+        return _format_codex_project_handoff_pairing(code), expire_at
+    raise SandboxCapacityError("暂时无法生成云端接力配对码，请稍后重试。")
 
 
-def _consume_codex_project_upload_authorization(
-    authorization_code: object,
+def _claim_codex_project_handoff_pairing(
+    pairing_code: object,
+    expected_state: str,
+    claimed_state: str,
+) -> tuple[str, dict[str, object]]:
+    code = _normalize_codex_project_handoff_pairing(pairing_code)
+    _cleanup_codex_project_handoff_pairings(int(time.time()))
+    pairing = _CODEX_PROJECT_HANDOFF_PAIRINGS.get(code)
+    if pairing is None or pairing.get("state") != expected_state:
+        raise SandboxPermissionError("Codex 云端接力配对码已使用或已过期。")
+    pairing["state"] = claimed_state
+    pairing.pop("error", None)
+    pairing.pop("failedStage", None)
+    return code, pairing
+
+
+def _get_codex_project_handoff_pairing(
+    pairing_code: object,
+    owner_id: str,
 ) -> dict[str, object]:
-    if not isinstance(authorization_code, str) or not authorization_code.strip():
-        raise SandboxPermissionError("Codex 项目上传授权码无效或已过期。")
-    parts = authorization_code.strip().split(".")
-    if len(parts) != 3 or parts[0] != "v1":
-        raise SandboxPermissionError("Codex 项目上传授权码无效或已过期。")
-    encoded_payload, signature = parts[1], parts[2]
-    expected_signature = _codex_project_upload_signature(encoded_payload)
-    if not hmac.compare_digest(signature, expected_signature):
-        raise SandboxPermissionError("Codex 项目上传授权码无效或已过期。")
-    try:
-        payload = json.loads(_b64url_decode(encoded_payload))
-    except (
-        binascii.Error,
-        ValueError,
-        json.JSONDecodeError,
-        UnicodeDecodeError,
-    ) as error:
-        raise SandboxPermissionError("Codex 项目上传授权码无效或已过期。") from error
-    if not isinstance(payload, dict):
-        raise SandboxPermissionError("Codex 项目上传授权码无效或已过期。")
-    now = int(time.time())
-    active_jtis = {
-        jti: exp
-        for jti, exp in _CODEX_PROJECT_UPLOAD_CONSUMED_JTIS.items()
-        if exp > now
-    }
-    _CODEX_PROJECT_UPLOAD_CONSUMED_JTIS.clear()
-    _CODEX_PROJECT_UPLOAD_CONSUMED_JTIS.update(active_jtis)
-    exp = payload.get("exp")
-    jti = payload.get("jti")
-    owner_id = payload.get("ownerId")
-    if (
-        payload.get("scope") != _CODEX_PROJECT_UPLOAD_SCOPE
-        or not isinstance(exp, int)
-        or exp <= now
-        or not isinstance(jti, str)
-        or not jti
-        or not isinstance(owner_id, str)
-        or not owner_id
-    ):
-        raise SandboxPermissionError("Codex 项目上传授权码无效或已过期。")
-    if jti in _CODEX_PROJECT_UPLOAD_CONSUMED_JTIS:
-        raise SandboxPermissionError("Codex 项目上传授权码已使用或已过期。")
-    _CODEX_PROJECT_UPLOAD_CONSUMED_JTIS[jti] = exp
-    return payload
+    code = _normalize_codex_project_handoff_pairing(pairing_code)
+    _cleanup_codex_project_handoff_pairings(int(time.time()))
+    pairing = _CODEX_PROJECT_HANDOFF_PAIRINGS.get(code)
+    if pairing is None or pairing.get("ownerId") != owner_id:
+        raise SandboxSessionNotFoundError("端云接力请求不存在或已过期。")
+    return pairing
 
 
 def _codex_project_upload_project_name(value: object) -> str:
@@ -405,11 +386,28 @@ def _codex_project_upload_project_name(value: object) -> str:
     return cleaned or "project"
 
 
-def _codex_project_upload_display_name(project_name: str) -> str:
-    display_name = project_name
-    if not display_name.lower().startswith("codex-"):
-        display_name = f"codex-{display_name}"
-    return display_name[:STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH]
+def _codex_project_handoff_agent_name(value: object) -> str:
+    if not isinstance(value, str):
+        raise SandboxValidationError("云端 Agent 名称必须是文本。")
+    display_name = re.sub(r"\s+", " ", value.strip())
+    if not display_name:
+        raise SandboxValidationError("云端 Agent 名称不能为空。")
+    if len(display_name) > _CODEX_PROJECT_HANDOFF_AGENT_NAME_MAX_LENGTH:
+        raise SandboxValidationError(
+            "云端 Agent 名称不能超过 "
+            f"{_CODEX_PROJECT_HANDOFF_AGENT_NAME_MAX_LENGTH} 个字符。"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in display_name):
+        raise SandboxValidationError("云端 Agent 名称包含不支持的控制字符。")
+    return display_name
+
+
+def _codex_project_handoff_id(value: object) -> str:
+    if not isinstance(value, str) or not _CODEX_PROJECT_HANDOFF_ID_PATTERN.fullmatch(
+        value
+    ):
+        raise SandboxValidationError("端云接力请求 ID 无效。")
+    return value
 
 
 def _codex_project_upload_directory_name(project_name: str) -> str:
@@ -2575,16 +2573,18 @@ def mount_sandbox_routes(
             raise SandboxValidationError("请求必须是 JSON 对象。")
         return value
 
-    @app.post("/web/sandbox/codex-project-upload/authorizations")
-    async def _create_codex_project_upload_authorization_route(
+    @app.post("/web/sandbox/codex-project-handoff/pairings")
+    async def _create_codex_project_handoff_pairing_route(
         request: Request,
     ) -> JSONResponse:
         owner_id = owner_resolver(request)
         creator_name = creator_resolver(request) if creator_resolver else owner_id
         try:
             data = await _request_object(request)
-            ttl_seconds = _codex_project_upload_ttl_seconds(data.get("ttlSeconds"))
-            authorization_code, expire_at = _create_codex_project_upload_authorization(
+            ttl_seconds = _codex_project_handoff_pairing_ttl_seconds(
+                data.get("ttlSeconds")
+            )
+            pairing_code, expire_at = _create_codex_project_handoff_pairing(
                 owner_id,
                 creator_name,
                 ttl_seconds,
@@ -2593,7 +2593,7 @@ def mount_sandbox_routes(
             raise _http_error(error) from error
         response = JSONResponse(
             {
-                "authorizationCode": authorization_code,
+                "pairingCode": pairing_code,
                 "expireAt": _utc_timestamp(expire_at),
                 "studioUrl": _studio_url_for_request(request),
             }
@@ -2601,50 +2601,162 @@ def mount_sandbox_routes(
         response.headers["Cache-Control"] = "no-store"
         return response
 
-    @app.post("/web/sandbox/codex-project-upload/sessions")
+    @app.get("/web/sandbox/codex-project-handoff/pairings/{pairing_code}")
+    async def _get_codex_project_handoff_pairing_route(
+        pairing_code: str,
+        request: Request,
+    ) -> JSONResponse:
+        owner_id = owner_resolver(request)
+        try:
+            pairing = _get_codex_project_handoff_pairing(pairing_code, owner_id)
+            expire_at = pairing.get("exp")
+            if not isinstance(expire_at, int):
+                raise SandboxSessionNotFoundError("端云接力请求不存在或已过期。")
+        except SandboxError as error:
+            raise _http_error(error) from error
+        payload = {
+            "state": pairing["state"],
+            "expireAt": _utc_timestamp(expire_at),
+            **(
+                {"projectName": pairing["projectName"]}
+                if isinstance(pairing.get("projectName"), str)
+                else {}
+            ),
+            **(
+                {"agentName": pairing["agentName"]}
+                if isinstance(pairing.get("agentName"), str)
+                else {}
+            ),
+            **(
+                {"sessionId": pairing["sessionId"]}
+                if isinstance(pairing.get("sessionId"), str)
+                else {}
+            ),
+            **(
+                {"error": pairing["error"]}
+                if isinstance(pairing.get("error"), str)
+                else {}
+            ),
+            **(
+                {"failedStage": pairing["failedStage"]}
+                if isinstance(pairing.get("failedStage"), str)
+                else {}
+            ),
+        }
+        response = JSONResponse(payload)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/web/sandbox/codex-project-handoff/sessions")
     async def _create_codex_project_upload_session(
         request: Request,
     ) -> JSONResponse:
         try:
             data = await _request_object(request)
             project_name = _codex_project_upload_project_name(data.get("projectName"))
-            display_name = _codex_project_upload_display_name(project_name)
-            persistent = data.get("persistent", True)
-            if not isinstance(persistent, bool):
-                raise SandboxValidationError("persistent 必须是布尔值。")
+            display_name = _codex_project_handoff_agent_name(data.get("agentName"))
+            handoff_id = _codex_project_handoff_id(data.get("handoffId"))
+            if data.get("persistent", False) is not False:
+                raise SandboxValidationError("云端接力只支持临时 Session。")
             remote_home = _codex_project_upload_remote_home(data.get("remoteHome"))
             remote_repo_dir = posixpath.join(
                 remote_home,
                 _codex_project_upload_directory_name(project_name),
             )
-            payload = _consume_codex_project_upload_authorization(
-                data.get("authorizationCode")
+            pairing_key = _normalize_codex_project_handoff_pairing(
+                data.get("pairingCode")
             )
-            owner_id = str(payload["ownerId"])
-            creator_name = payload.get("creatorName")
+            _cleanup_codex_project_handoff_pairings(int(time.time()))
+            pairing = _CODEX_PROJECT_HANDOFF_PAIRINGS.get(pairing_key)
+            if pairing is None:
+                raise SandboxPermissionError("Codex 云端接力配对码已使用或已过期。")
+            pairing_state = pairing.get("state")
+            previous_handoff_id = pairing.get("handoffId")
+            if previous_handoff_id == handoff_id:
+                if (
+                    pairing.get("projectName") != project_name
+                    or pairing.get("agentName") != display_name
+                    or pairing.get("remoteRepoDir") != remote_repo_dir
+                ):
+                    raise SandboxValidationError(
+                        "端云接力请求 ID 不能用于不同的请求参数。"
+                    )
+                previous_response = pairing.get("sessionResponse")
+                if isinstance(previous_response, dict) and pairing_state in {
+                    "session-created",
+                    "continuing",
+                    "completed",
+                }:
+                    response = JSONResponse(dict(previous_response))
+                    response.headers["Cache-Control"] = "no-store"
+                    return response
+                if pairing_state == "creating":
+                    raise SandboxSessionUnavailableError(
+                        "云端 Agent 正在创建，请稍后重试。"
+                    )
+            if pairing_state != "issued":
+                raise SandboxPermissionError("Codex 云端接力配对码已使用或已过期。")
+            pairing["state"] = "creating"
+            pairing.pop("error", None)
+            pairing.pop("failedStage", None)
+            pairing.update(
+                {
+                    "projectName": project_name,
+                    "agentName": display_name,
+                    "handoffId": handoff_id,
+                    "requestedAt": int(time.time()),
+                }
+            )
+            owner_id = str(pairing["ownerId"])
+            creator_name = pairing.get("creatorName")
             if not isinstance(creator_name, str) or not creator_name.strip():
                 creator_name = owner_id
-            session = await service.create(
-                owner_id,
-                display_name,
-                creator_name,
-                persistent,
-            )
+            try:
+                session = await service.create(
+                    owner_id,
+                    display_name,
+                    creator_name,
+                    False,
+                )
+            except Exception as error:
+                pairing.update(
+                    {
+                        "state": "failed",
+                        "failedStage": "creating-session",
+                        "error": _safe_error_message(error),
+                    }
+                )
+                raise
             if not session.endpoint:
+                pairing.update(
+                    {
+                        "state": "failed",
+                        "failedStage": "creating-session",
+                        "error": "AgentKit Session 已创建，但暂无可用 Endpoint。",
+                    }
+                )
                 raise SandboxSessionUnavailableError(
                     "AgentKit Session 已创建，但暂无可用 Endpoint。"
                 )
+            pairing.update(
+                {
+                    "state": "session-created",
+                    "sessionId": session.instance_id,
+                    "remoteRepoDir": remote_repo_dir,
+                    "sessionCreatedAt": int(time.time()),
+                }
+            )
         except SandboxError as error:
             raise _http_error(error) from error
-        response = JSONResponse(
-            {
-                "sessionId": session.instance_id,
-                "displayName": session.display_name,
-                "endpoint": session.endpoint,
-                "remoteRepoDir": remote_repo_dir,
-                "expireAt": session.expire_at,
-            }
-        )
+        session_response = {
+            "sessionId": session.instance_id,
+            "displayName": session.display_name,
+            "endpoint": session.endpoint,
+            "remoteRepoDir": remote_repo_dir,
+            "expireAt": session.expire_at,
+        }
+        pairing["sessionResponse"] = session_response
+        response = JSONResponse(session_response)
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -3056,6 +3168,186 @@ def mount_sandbox_routes(
             "sizeBytes": len(content),
         }
 
+    async def _sandbox_message_stream(
+        session_id: str,
+        owner_id: str,
+        prompt: str,
+        skill_ids: tuple[str, ...] = (),
+    ) -> AsyncIterator[str]:
+        try:
+            async for event in service.stream_message(
+                session_id, owner_id, prompt, skill_ids
+            ):
+                if event.kind == "text":
+                    payload = {"text": event.text}
+                    yield f"event: delta\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    continue
+                if event.approval is not None:
+                    yield (
+                        "event: approval\n"
+                        f"data: {json.dumps(event.approval, ensure_ascii=False)}\n\n"
+                    )
+                    continue
+                if event.approval_resolved_id:
+                    payload = {"approvalId": event.approval_resolved_id}
+                    yield (
+                        "event: approval_resolved\n"
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    )
+                    continue
+                if event.kind == "usage" and event.usage is not None:
+                    payload = {
+                        "turnId": event.turn_id,
+                        "usage": event.usage.public_dict(),
+                        **(
+                            {"threadTotal": event.thread_total.public_dict()}
+                            if event.thread_total is not None
+                            else {}
+                        ),
+                        **(
+                            {"modelContextWindow": (event.model_context_window)}
+                            if event.model_context_window is not None
+                            else {}
+                        ),
+                    }
+                    yield (
+                        "event: usage\n"
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    )
+                    continue
+                payload = {
+                    "id": event.item_id,
+                    "kind": event.kind,
+                    "status": event.status,
+                    "text": event.text or None,
+                    "name": event.name or None,
+                    "args": event.arguments,
+                    "response": event.response,
+                }
+                yield f"event: activity\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            yield "event: done\ndata: {}\n\n"
+        except SandboxError as error:
+            payload = {
+                "code": error.code,
+                "message": str(error),
+                "retryable": error.retryable,
+            }
+            yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            yield 'event: done\ndata: {"reason": "failed"}\n\n'
+
+    def _sandbox_message_response(
+        session_id: str,
+        owner_id: str,
+        prompt: str,
+        skill_ids: tuple[str, ...] = (),
+    ) -> StreamingResponse:
+        return StreamingResponse(
+            _sandbox_message_stream(session_id, owner_id, prompt, skill_ids),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post("/web/sandbox/codex-project-handoff/sessions/{session_id}/messages")
+    async def _continue_codex_project_handoff(
+        session_id: str, request: Request
+    ) -> StreamingResponse:
+        try:
+            data = await _request_object(request, maximum=128 * 1024)
+            prompt = data.get("message")
+            if not isinstance(prompt, str) or not prompt.strip():
+                raise SandboxValidationError("message must not be empty")
+            if len(prompt) > 100_000:
+                raise SandboxValidationError("message is too large")
+            _pairing_key, pairing = _claim_codex_project_handoff_pairing(
+                data.get("pairingCode"),
+                "session-created",
+                "continuing",
+            )
+            if pairing.get("sessionId") != session_id:
+                pairing.update(
+                    {
+                        "state": "failed",
+                        "failedStage": "continuing-task",
+                        "error": "配对码与云端接力 Session 不匹配。",
+                    }
+                )
+                raise SandboxPermissionError("配对码与云端接力 Session 不匹配。")
+            owner_id = str(pairing["ownerId"])
+            remote_repo_dir = pairing.get("remoteRepoDir")
+            if not isinstance(remote_repo_dir, str) or not remote_repo_dir:
+                pairing.update(
+                    {
+                        "state": "failed",
+                        "failedStage": "continuing-task",
+                        "error": "云端接力缺少项目目录。",
+                    }
+                )
+                raise SandboxValidationError("云端接力缺少项目目录。")
+            try:
+                await service.connect(session_id, owner_id)
+                await service.update_workspace(session_id, owner_id, remote_repo_dir)
+            except SandboxError as error:
+                pairing.update(
+                    {
+                        "state": "failed",
+                        "failedStage": "continuing-task",
+                        "error": _safe_error_message(error),
+                    }
+                )
+                raise
+        except SandboxError as error:
+            raise _http_error(error) from error
+
+        async def _tracked_continuation_stream() -> AsyncIterator[str]:
+            continuation_error = ""
+            try:
+                async for frame in _sandbox_message_stream(
+                    session_id,
+                    owner_id,
+                    prompt.strip(),
+                ):
+                    if frame.startswith("event: error\n"):
+                        for line in frame.splitlines():
+                            if not line.startswith("data:"):
+                                continue
+                            try:
+                                payload = json.loads(line[5:].strip())
+                            except json.JSONDecodeError:
+                                break
+                            message = payload.get("message")
+                            if isinstance(message, str):
+                                continuation_error = _redact_public_text(
+                                    message,
+                                    maximum=2_000,
+                                )
+                            break
+                    yield frame
+            except Exception as error:
+                continuation_error = _safe_error_message(error)
+                raise
+            finally:
+                if continuation_error:
+                    pairing.update(
+                        {
+                            "state": "failed",
+                            "failedStage": "continuing-task",
+                            "error": continuation_error,
+                        }
+                    )
+                else:
+                    pairing.update(
+                        {
+                            "state": "completed",
+                            "completedAt": int(time.time()),
+                        }
+                    )
+
+        return StreamingResponse(
+            _tracked_continuation_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @app.post("/web/sandbox/sessions/{session_id}/messages")
     async def _send_sandbox_message(
         session_id: str, request: Request
@@ -3085,75 +3377,8 @@ def mount_sandbox_routes(
             service.require_owned(session_id, owner_id)
         except SandboxError as error:
             raise _http_error(error) from error
-
-        async def _stream() -> AsyncIterator[str]:
-            try:
-                async for event in service.stream_message(
-                    session_id, owner_id, prompt.strip(), skill_ids
-                ):
-                    if event.kind == "text":
-                        payload = {"text": event.text}
-                        yield f"event: delta\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                        continue
-                    if event.approval is not None:
-                        yield (
-                            "event: approval\n"
-                            f"data: {json.dumps(event.approval, ensure_ascii=False)}\n\n"
-                        )
-                        continue
-                    if event.approval_resolved_id:
-                        payload = {"approvalId": event.approval_resolved_id}
-                        yield (
-                            "event: approval_resolved\n"
-                            f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                        )
-                        continue
-                    if event.kind == "usage" and event.usage is not None:
-                        payload = {
-                            "turnId": event.turn_id,
-                            "usage": event.usage.public_dict(),
-                            **(
-                                {"threadTotal": event.thread_total.public_dict()}
-                                if event.thread_total is not None
-                                else {}
-                            ),
-                            **(
-                                {"modelContextWindow": (event.model_context_window)}
-                                if event.model_context_window is not None
-                                else {}
-                            ),
-                        }
-                        yield (
-                            "event: usage\n"
-                            f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                        )
-                        continue
-                    payload = {
-                        "id": event.item_id,
-                        "kind": event.kind,
-                        "status": event.status,
-                        "text": event.text or None,
-                        "name": event.name or None,
-                        "args": event.arguments,
-                        "response": event.response,
-                    }
-                    yield f"event: activity\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                yield "event: done\ndata: {}\n\n"
-            except SandboxError as error:
-                payload = {
-                    "code": error.code,
-                    "message": str(error),
-                    "retryable": error.retryable,
-                }
-                yield (
-                    f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                )
-                yield 'event: done\ndata: {"reason": "failed"}\n\n'
-
-        return StreamingResponse(
-            _stream(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        return _sandbox_message_response(
+            session_id, owner_id, prompt.strip(), skill_ids
         )
 
     @app.post("/web/sandbox/sessions/{session_id}/disconnect")

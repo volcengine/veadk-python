@@ -82,6 +82,58 @@
   padding: 16px 22px 20px;
 }
 
+.sandbox-project-upload-pairing-notice {
+  min-height: 38px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid hsl(43 90% 48% / 0.28);
+  border-radius: 8px;
+  background: hsl(45 96% 52% / 0.12);
+  color: hsl(38 78% 30%);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.sandbox-project-upload-pairing-notice time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.sandbox-project-upload-pairing-notice button {
+  height: 26px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.sandbox-project-upload-pairing-notice button:hover:not(:disabled) {
+  background: hsl(43 90% 48% / 0.12);
+}
+
+.sandbox-project-upload-pairing-notice button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.sandbox-project-upload-pairing-notice svg {
+  width: 14px;
+  height: 14px;
+}
+
 .sandbox-project-upload-error {
   display: flex;
   align-items: center;
@@ -100,44 +152,99 @@
   overflow-wrap: anywhere;
 }
 
-.sandbox-project-upload-steps {
-  display: grid;
-  gap: 8px;
+.sandbox-project-upload-status {
   margin: 0;
   padding: 0;
-  list-style: none;
+  border: 0;
 }
 
-.sandbox-project-upload-steps li {
+.sandbox-project-upload-status legend {
+  margin: 0 0 8px;
+  padding: 0;
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.sandbox-project-upload-status-options {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
-  gap: 10px;
-  padding: 10px 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
+  gap: 8px;
+}
+
+.sandbox-project-upload-status-options label {
+  min-width: 0;
+  min-height: 68px;
+  height: 100%;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  padding: 11px 12px;
   border: 1px solid hsl(var(--border));
   border-radius: 8px;
   background: hsl(var(--background));
+  cursor: pointer;
+  transition:
+    border-color 160ms ease-out,
+    background-color 160ms ease-out;
 }
 
-.sandbox-project-upload-steps li > span {
-  width: 24px;
-  height: 24px;
+.sandbox-project-upload-status-options label:hover {
+  background: hsl(var(--secondary));
+}
+
+.sandbox-project-upload-status-options label[data-selected="true"] {
+  border-color: hsl(var(--foreground) / 0.5);
+  background: hsl(var(--secondary));
+}
+
+.sandbox-project-upload-status-options input {
+  appearance: none;
+  width: 16px;
+  height: 16px;
   display: inline-grid;
   place-items: center;
-  border-radius: 999px;
-  background: hsl(var(--foreground));
-  color: hsl(var(--background));
-  font-size: 12px;
-  font-weight: 650;
+  margin: 1px 0 0;
+  border: 1.5px solid hsl(var(--muted-foreground));
+  border-radius: 50%;
+  background: hsl(var(--panel));
+  cursor: pointer;
 }
 
-.sandbox-project-upload-steps strong {
+.sandbox-project-upload-status-options input::before {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: hsl(var(--foreground));
+  content: "";
+  transform: scale(0);
+}
+
+.sandbox-project-upload-status-options input:checked {
+  border-color: hsl(var(--foreground));
+}
+
+.sandbox-project-upload-status-options input:checked::before {
+  transform: scale(1);
+}
+
+.sandbox-project-upload-status-options span {
+  min-width: 0;
+}
+
+.sandbox-project-upload-status-options strong {
   display: block;
   font-size: 13px;
   font-weight: 650;
   line-height: 1.35;
 }
 
-.sandbox-project-upload-steps p {
+.sandbox-project-upload-status-options small {
+  display: block;
   margin: 4px 0 0;
   color: hsl(var(--muted-foreground));
   font-size: 12px;
@@ -152,8 +259,10 @@
 }
 
 .sandbox-project-upload-command-head {
+  min-height: 64px;
+  box-sizing: border-box;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 9px 10px;
@@ -220,28 +329,41 @@
   flex: 0 0 14px;
 }
 
+.sandbox-project-upload-command-content {
+  height: clamp(132px, 22vh, 168px);
+  min-height: 0;
+  display: flex;
+}
+
 .sandbox-project-upload-command pre {
-  max-height: 230px;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
   overflow: auto;
   margin: 0;
   padding: 12px;
   color: hsl(var(--foreground));
-  font-size: 12px;
-  line-height: 1.55;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .sandbox-project-upload-command code {
-  font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Consolas,
-    "Liberation Mono", Menlo, monospace;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
 }
 
 .sandbox-project-upload-loading {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 46px;
   padding: 0 12px;
   color: hsl(var(--muted-foreground));
   font-size: 12px;
@@ -257,35 +379,152 @@
   animation: sandbox-project-upload-spin 800ms linear infinite;
 }
 
-.sandbox-project-upload-meta {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin: 0;
-}
-
-.sandbox-project-upload-meta > div {
-  min-width: 0;
-  padding: 9px 10px;
+.sandbox-project-upload-progress {
+  overflow: hidden;
   border: 1px solid hsl(var(--border));
   border-radius: 8px;
   background: hsl(var(--background));
 }
 
-.sandbox-project-upload-meta dt,
-.sandbox-project-upload-meta dd {
-  margin: 0;
+.sandbox-project-upload-progress > header {
+  min-height: 58px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 12px;
+  border-bottom: 1px solid hsl(var(--border));
 }
 
-.sandbox-project-upload-meta dt {
+.sandbox-project-upload-progress > header div {
+  min-width: 0;
+}
+
+.sandbox-project-upload-progress > header span {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.sandbox-project-upload-progress > header p {
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sandbox-project-upload-progress > header strong {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: hsl(var(--secondary));
   color: hsl(var(--muted-foreground));
   font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
-.sandbox-project-upload-meta dd {
-  margin-top: 4px;
-  overflow-wrap: anywhere;
+.sandbox-project-upload-progress > header strong[data-state="completed"] {
+  background: hsl(142 42% 94%);
+  color: hsl(142 55% 28%);
+}
+
+.sandbox-project-upload-progress > header strong[data-state="failed"] {
+  background: hsl(var(--destructive) / 0.08);
+  color: hsl(var(--destructive));
+}
+
+.sandbox-project-upload-progress ol {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  padding: 12px;
+  list-style: none;
+}
+
+.sandbox-project-upload-progress li {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.sandbox-project-upload-progress li:not(:last-child)::after {
+  width: 18px;
+  height: 1px;
+  flex: 1 1 auto;
+  margin: 0 6px;
+  background: hsl(var(--border));
+  content: "";
+}
+
+.sandbox-project-upload-progress li[data-state="active"] {
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}
+
+.sandbox-project-upload-progress li[data-state="done"] {
+  color: hsl(var(--foreground));
+}
+
+.sandbox-project-upload-progress li[data-state="failed"] {
+  color: hsl(var(--destructive));
+  font-weight: 600;
+}
+
+.sandbox-project-upload-progress-marker {
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  flex: 0 0 18px;
+  place-items: center;
+  box-sizing: border-box;
+  border: 1px solid hsl(var(--border));
+  border-radius: 50%;
+  background: hsl(var(--panel));
+}
+
+.sandbox-project-upload-progress li[data-state="active"]
+  .sandbox-project-upload-progress-marker {
+  border: 2px solid hsl(var(--foreground) / 0.2);
+  border-top-color: hsl(var(--foreground));
+  animation: sandbox-project-upload-spin 800ms linear infinite;
+}
+
+.sandbox-project-upload-progress li[data-state="done"]
+  .sandbox-project-upload-progress-marker {
+  border-color: hsl(142 42% 40% / 0.3);
+  background: hsl(142 42% 94%);
+  color: hsl(142 55% 28%);
+}
+
+.sandbox-project-upload-progress li[data-state="failed"]
+  .sandbox-project-upload-progress-marker {
+  border-color: hsl(var(--destructive) / 0.25);
+  background: hsl(var(--destructive) / 0.06);
+}
+
+.sandbox-project-upload-progress-marker svg {
+  width: 12px;
+  height: 12px;
+}
+
+.sandbox-project-upload-progress-error {
+  margin: 0;
+  padding: 0 12px 12px;
+  color: hsl(var(--destructive));
   font-size: 12px;
+  line-height: 1.5;
 }
 
 .sandbox-project-upload-actions {
@@ -312,6 +551,7 @@
 }
 
 .sandbox-project-upload-dialog button:focus-visible,
+.sandbox-project-upload-status-options input:focus-visible,
 .sandbox-project-upload-command pre:focus-visible {
   outline: 2px solid hsl(var(--ring) / 0.34);
   outline-offset: 2px;
@@ -350,18 +590,37 @@
     padding-right: 16px;
   }
 
-  .sandbox-project-upload-meta {
+  .sandbox-project-upload-pairing-notice {
+    gap: 6px;
+    padding-left: 10px;
+    font-size: 11.5px;
+  }
+
+  .sandbox-project-upload-status-options {
     grid-template-columns: 1fr;
   }
 
   .sandbox-project-upload-actions button {
     flex: 1;
   }
+
+  .sandbox-project-upload-progress ol {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 12px;
+  }
+
+  .sandbox-project-upload-progress li::after {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .sandbox-project-upload-dialog,
+  .sandbox-project-upload-status-options label,
+  .sandbox-project-upload-progress li[data-state="active"]
+    .sandbox-project-upload-progress-marker,
   .sandbox-project-upload-loading i {
     animation: none;
+    transition: none;
   }
 }

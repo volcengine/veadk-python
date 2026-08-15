@@ -106,6 +106,20 @@ function AddIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function HandoffIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <path
+        d="M2.75 5.25h8.75m0 0-2-2m2 2-2 2M13.25 10.75H4.5m0 0 2 2m-2-2 2-2"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function AgentTypeIcon({ type }: { type: AgentType }) {
   if (type === "general") return <AgentFaceIcon />;
   return <SandboxAgentIcon kind={type} />;
@@ -706,10 +720,11 @@ export function MyAgents({
           {showCodexProjectUpload ? (
             <button
               type="button"
-              className="my-agent-create-secondary"
-              onClick={onOpenCodexProjectUpload}
-            >
-              <span>本地Codex项目上传</span>
+            className="my-agent-create-secondary"
+            onClick={onOpenCodexProjectUpload}
+          >
+              <HandoffIcon />
+              <span>接力</span>
             </button>
           ) : null}
           <button
@@ -779,7 +794,8 @@ export function MyAgents({
                         size="lg"
                         onClick={onOpenCodexProjectUpload}
                       >
-                        本地Codex项目上传
+                        <HandoffIcon />
+                        接力
                       </Button>
                     ) : null}
                     <Button

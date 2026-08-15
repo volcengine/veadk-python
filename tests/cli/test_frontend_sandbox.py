@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import replace
@@ -45,8 +46,8 @@ from veadk.cli.frontend_sandbox import (
     STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH,
     AgentkitSandboxGateway,
     SandboxAgentSessionService,
-    SandboxCloudSnapshot,
     SandboxCloudSession,
+    SandboxCloudSnapshot,
     SandboxConfigurationError,
     SandboxConversationService,
     SandboxProvisioningError,
@@ -1050,16 +1051,15 @@ def test_sandbox_persistent_create_requires_snapshot_tool(
     assert temporary.json()["persistent"] is False
 
 
-def test_codex_project_upload_authorization_creates_persistent_session(
+def test_codex_project_handoff_pairing_creates_temporary_session_and_continues(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("STUDIO_CODEX_PROJECT_UPLOAD_SECRET", "test-secret")
-    frontend_sandbox._CODEX_PROJECT_UPLOAD_CONSUMED_JTIS.clear()
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
     gateway = _FakeGateway()
 
     with TestClient(_app(gateway)) as client:
-        authorization = client.post(
-            "/web/sandbox/codex-project-upload/authorizations",
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
             headers={
                 "X-Test-User": "alice",
                 "X-Test-Creator": "alice@example.com",
@@ -1068,108 +1068,206 @@ def test_codex_project_upload_authorization_creates_persistent_session(
             },
             json={"ttlSeconds": 120},
         )
-        code = authorization.json()["authorizationCode"]
+        code = pairing.json()["pairingCode"]
+        issued_status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
+        )
+        foreign_status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "bob"},
+        )
         created = client.post(
-            "/web/sandbox/codex-project-upload/sessions",
+            "/web/sandbox/codex-project-handoff/sessions",
             json={
-                "authorizationCode": code,
+                "pairingCode": code,
                 "projectName": "My Repo",
+                "agentName": "完善端云接力",
+                "handoffId": "handoff-request-0001",
             },
         )
+        created_status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
+        )
         reused = client.post(
-            "/web/sandbox/codex-project-upload/sessions",
+            "/web/sandbox/codex-project-handoff/sessions",
             json={
-                "authorizationCode": code,
+                "pairingCode": code,
                 "projectName": "My Repo",
+                "agentName": "完善端云接力",
+                "handoffId": "handoff-request-0001",
             },
+        )
+        reused_with_different_payload = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "My Repo",
+                "agentName": "另一个任务",
+                "handoffId": "handoff-request-0001",
+            },
+        )
+        conflicting = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "My Repo",
+                "agentName": "另一个任务",
+                "handoffId": "handoff-request-0002",
+            },
+        )
+        continued = client.post(
+            f"/web/sandbox/codex-project-handoff/sessions/{created.json()['sessionId']}/messages",
+            json={
+                "pairingCode": code,
+                "message": "Read HANDOFF.md and continue the current task.",
+            },
+        )
+        continued_twice = client.post(
+            f"/web/sandbox/codex-project-handoff/sessions/{created.json()['sessionId']}/messages",
+            json={
+                "pairingCode": code,
+                "message": "continue again",
+            },
+        )
+        completed_status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
         )
         listed = client.get(
             "/web/sandbox/sessions",
             headers={"X-Test-User": "alice"},
         )
 
-    assert authorization.status_code == 200
-    assert authorization.headers["cache-control"] == "no-store"
-    assert authorization.json()["studioUrl"] == "https://studio.example.com"
-    assert authorization.json()["expireAt"].endswith("Z")
+    assert pairing.status_code == 200
+    assert pairing.headers["cache-control"] == "no-store"
+    assert pairing.json()["studioUrl"] == "https://studio.example.com"
+    assert pairing.json()["expireAt"].endswith("Z")
+    assert re.fullmatch(r"[2-9A-HJ-KM-NP-Z]{4}-[2-9A-HJ-KM-NP-Z]{4}", code)
+    assert issued_status.status_code == 200
+    assert issued_status.headers["cache-control"] == "no-store"
+    assert issued_status.json()["state"] == "issued"
+    assert foreign_status.status_code == 404
     assert created.status_code == 200
     assert created.headers["cache-control"] == "no-store"
     assert created.json()["sessionId"] == "remote-1"
-    assert created.json()["displayName"] == "codex-My Repo"
+    assert created.json()["displayName"] == "完善端云接力"
     assert created.json()["remoteRepoDir"] == "/home/gem/My-Repo"
     assert created.json()["endpoint"].endswith("Authorization=secret")
-    assert reused.status_code == 403
-    assert gateway.sessions["remote-1"].tool_id == "tool-studio-snapshot"
+    assert created_status.status_code == 200
+    assert created_status.json()["state"] == "session-created"
+    assert created_status.json()["projectName"] == "My Repo"
+    assert created_status.json()["agentName"] == "完善端云接力"
+    assert created_status.json()["sessionId"] == "remote-1"
+    assert reused.status_code == 200
+    assert reused.json() == created.json()
+    assert reused_with_different_payload.status_code == 422
+    assert conflicting.status_code == 403
+    assert continued.status_code == 200
+    assert (
+        'data: {"text": "reply:Read HANDOFF.md and continue the current task."}'
+        in continued.text
+    )
+    assert "event: done" in continued.text
+    assert continued_twice.status_code == 403
+    assert completed_status.status_code == 200
+    assert completed_status.json()["state"] == "completed"
+    assert completed_status.json()["sessionId"] == "remote-1"
+    assert gateway.sessions["remote-1"].tool_id == "tool-studio"
     assert gateway.sessions["remote-1"].created_by == "alice"
     assert gateway.sessions["remote-1"].creator_name == "alice@example.com"
-    assert gateway.display_names == ["codex-My Repo"]
+    assert gateway.created == 1
+    assert gateway.display_names == ["完善端云接力"]
+    assert gateway.connections[0].cwd == "/home/gem/My-Repo"
     assert "Authorization=secret" not in listed.text
 
 
-def test_codex_project_upload_session_accepts_custom_home_and_temporary_mode(
+def test_codex_project_handoff_session_accepts_custom_home(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("STUDIO_CODEX_PROJECT_UPLOAD_SECRET", "test-secret")
-    frontend_sandbox._CODEX_PROJECT_UPLOAD_CONSUMED_JTIS.clear()
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
     gateway = _FakeGateway()
 
     with TestClient(_app(gateway)) as client:
-        authorization = client.post(
-            "/web/sandbox/codex-project-upload/authorizations",
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
             headers={"X-Test-User": "alice"},
         )
         created = client.post(
-            "/web/sandbox/codex-project-upload/sessions",
+            "/web/sandbox/codex-project-handoff/sessions",
             json={
-                "authorizationCode": authorization.json()["authorizationCode"],
+                "pairingCode": pairing.json()["pairingCode"],
                 "projectName": "codex-demo/project",
-                "persistent": False,
+                "agentName": "迁移演示项目",
+                "handoffId": "handoff-request-0003",
                 "remoteHome": "/workspace/.",
             },
         )
 
     assert created.status_code == 200
-    assert created.json()["displayName"] == "codex-demo/project"
+    assert created.json()["displayName"] == "迁移演示项目"
     assert created.json()["remoteRepoDir"] == "/workspace/codex-demo-project"
     assert gateway.sessions[created.json()["sessionId"]].tool_id == "tool-studio"
-    assert gateway.display_names == ["codex-demo/project"]
+    assert gateway.display_names == ["迁移演示项目"]
 
 
-def test_codex_project_upload_rejects_invalid_and_expired_authorization(
+def test_codex_project_handoff_rejects_invalid_and_expired_pairing_code(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("STUDIO_CODEX_PROJECT_UPLOAD_SECRET", "test-secret")
-    frontend_sandbox._CODEX_PROJECT_UPLOAD_CONSUMED_JTIS.clear()
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
     gateway = _FakeGateway()
 
     with TestClient(_app(gateway)) as client:
-        authorization = client.post(
-            "/web/sandbox/codex-project-upload/authorizations",
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
             headers={"X-Test-User": "alice"},
             json={"ttlSeconds": 60},
         )
-        code = authorization.json()["authorizationCode"]
+        code = pairing.json()["pairingCode"]
         tampered = client.post(
-            "/web/sandbox/codex-project-upload/sessions",
-            json={"authorizationCode": f"{code}x", "projectName": "repo"},
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": f"{code}x",
+                "projectName": "repo",
+                "agentName": "迁移项目",
+                "handoffId": "handoff-request-0004",
+            },
         )
         invalid_request = client.post(
-            "/web/sandbox/codex-project-upload/sessions",
+            "/web/sandbox/codex-project-handoff/sessions",
             json={
-                "authorizationCode": code,
+                "pairingCode": code,
                 "projectName": "repo",
-                "persistent": "yes",
+                "agentName": "迁移项目",
+                "handoffId": "handoff-request-0004",
+                "persistent": True,
+            },
+        )
+        invalid_name = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "repo",
+                "agentName": "这是一个超过十二个字符的云端任务名称",
+                "handoffId": "handoff-request-0004",
             },
         )
         expired_at = int(frontend_sandbox.time.time()) + 61
         monkeypatch.setattr(frontend_sandbox.time, "time", lambda: expired_at)
         expired = client.post(
-            "/web/sandbox/codex-project-upload/sessions",
-            json={"authorizationCode": code, "projectName": "repo"},
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "repo",
+                "agentName": "迁移项目",
+                "handoffId": "handoff-request-0004",
+            },
         )
 
     assert tampered.status_code == 403
     assert invalid_request.status_code == 422
+    assert invalid_name.status_code == 422
     assert expired.status_code == 403
     assert gateway.created == 0
 
