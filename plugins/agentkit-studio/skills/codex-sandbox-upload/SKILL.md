@@ -18,6 +18,7 @@ Include only:
 - Git branch, HEAD commit, sanitized remote URL, and status metadata
 - a generated `HANDOFF.md`; append the generated section when the project already has one
 - completed user and assistant messages visible in the active Codex task
+- local PNG, JPEG, GIF, or WebP images attached to those completed user messages
 
 Never include:
 
@@ -35,16 +36,18 @@ Do not place conversation history in the repository, `HANDOFF.md`, retained proj
 3. Create a concise Chinese task description for the cloud Agent name. Infer it yourself from the active task; do not ask the user to name it. Use at most 12 Unicode characters, omit punctuation and generic prefixes such as `Codex`, and describe the work rather than the repository. Examples: `完善端云接力`, `修复登录超时`, `优化订单检索`.
 4. Export the active task's completed visible conversation with the Codex app task tools:
    - Call `list_threads` and select the most recently updated active Codex task whose working directory matches the repository and whose title or summary matches the current objective.
-   - Call `read_thread` with `includeOutputs: false`, `maxOutputCharsPerItem: 20000`, and pagination until all completed turns are read or the most recent 100 visible messages are collected.
-   - Exclude the current in-progress handoff turn. Keep only `userMessage` text and visible `agentMessage` text. Exclude system/developer instructions, reasoning, tool calls and outputs, approvals, environment context, and other item types.
+   - Call `read_thread` with `includeOutputs: false`, `maxOutputCharsPerItem: 20000`, `turnLimit: 10`, and pagination until all completed turns are read or the most recent 100 visible messages are collected.
+   - Exclude the current in-progress handoff turn. Keep only completed `userMessage` content and final visible `agentMessage` text. Exclude commentary-only agent messages when the same turn has a final answer. Exclude system/developer instructions, reasoning, tool calls and outputs, approvals, environment context, and other item types.
+   - A delegated user message can contain an XML-looking `<codex_delegation>` wrapper. When the structured text part contains `codexDelegation.input`, use that value as the user-visible text and discard the wrapper. Never upload the wrapper or its `sourceThreadId`.
+   - Preserve user images. For `localImage`, record its absolute `path`. Also recognize Markdown images whose target is an absolute local path, such as `![截图](/tmp/example.png)`, and record the path plus alt text. The bundled script removes those local Markdown links from the visible text, validates ordinary non-symlink image files, and converts the bytes in memory for the one-time request. Do not copy images into the repository, `HANDOFF.md`, bundle, logs, or command output.
    - Remove injected `<in-app-browser-context>...</in-app-browser-context>` blocks. When a user message contains `## My request:`, keep the text after that marker.
-   - Preserve oldest-to-newest order. Write a temporary mode-`0600` JSON file outside the repository using this schema, without printing its contents:
+   - Preserve oldest-to-newest order. Write a temporary mode-`0600` JSON file outside the repository using schema version 2, without printing its contents:
 
      ```json
-     {"schemaVersion":1,"messages":[{"role":"user","content":"..."},{"role":"assistant","content":"..."}]}
+     {"schemaVersion":2,"messages":[{"role":"user","content":"...","images":[{"path":"/absolute/local/image.png","alt":"截图"}]},{"role":"assistant","content":"..."}]}
      ```
 
-   - Stop instead of starting an empty cloud Thread when no completed visible messages can be exported.
+   - Omit `images` when a message has none. The script accepts schema version 1 for text-only compatibility, but new exports must use version 2. Stop instead of starting an empty cloud Thread when no completed visible messages can be exported.
 5. Choose the final cloud user message. Use the user's explicit cloud instruction when one accompanies the handoff request; otherwise use exactly `继续`. Do not prepend project paths, migration explanations, or `HANDOFF.md` instructions to this visible message.
 6. Create a temporary Markdown handoff outside the repository. Summarize only the current user objective, decisions, completed work, remaining work, validation results, and real blockers. Do not include system or developer prompts, conversation transcripts, credentials, or unrelated context.
 7. For a GitHub remote, verify `gh auth token --hostname github.com` succeeds. GitHub authentication is transferred separately from the project bundle, installed with mode `0600`, and configured for HTTPS pushes. Never print the token. Convert an SSH-form GitHub remote to HTTPS instead of copying SSH keys.
@@ -83,10 +86,10 @@ Do not place conversation history in the repository, `HANDOFF.md`, retained proj
    returns after Studio confirms that the cloud Codex accepted the continuation;
    the cloud task then keeps running independently.
 
-11. Delete the temporary history and handoff files after the command returns. Confirm that the script created a temporary Studio Sandbox, restored the project, injected the visible conversation history, and sent the final continuation message. Report the Sandbox display name, session ID, remote project directory, restored file count, imported message count, Git status, GitHub authentication result, and continuation status. Do not claim success when the continuation stream reports an error or closes before completion.
+11. Delete the temporary history and handoff files after the command returns. Confirm that the script created a temporary Studio Sandbox, restored the project, injected the visible conversation history and images, and sent the final continuation message. Report the Sandbox display name, session ID, remote project directory, restored file count, imported message count, imported image count, Git status, GitHub authentication result, and continuation status. Do not claim success when the continuation stream reports an error or closes before completion.
 
 ## Script options
 
-`--agent-name` is required for a live handoff and controls only the cloud Agent name. `--history` is required and accepts only the versioned visible-message JSON described above. `--continue-message` defaults to `继续`. `--project-name` controls the bundle and remote directory and defaults to the repository basename. Use `--remote-home` only when Studio supports a different home, `--handoff` to append the task summary, and `--output` to retain a local copy of the generated project bundle. The script always creates a temporary Studio Sandbox. Use `--no-github-credentials` only when the user explicitly opts out; otherwise a GitHub remote requires working local `gh` authentication.
+`--agent-name` is required for a live handoff and controls only the cloud Agent name. `--history` is required and accepts only the versioned visible-message JSON described above. Images are limited to 10 supported files, 4 MiB per image, and 8 MiB total. `--continue-message` defaults to `继续`. `--project-name` controls the bundle and remote directory and defaults to the repository basename. Use `--remote-home` only when Studio supports a different home, `--handoff` to append the task summary, and `--output` to retain a local copy of the generated project bundle. The script always creates a temporary Studio Sandbox. Use `--no-github-credentials` only when the user explicitly opts out; otherwise a GitHub remote requires working local `gh` authentication.
 
 The live command requires `--yes`. Add `--allow-sensitive` only after explicit approval for filenames or possible secret assignments identified by the preview. Visible history travels in the one-time Studio request and is injected with `thread/inject_items` before the final `turn/start`; old messages must never be replayed as turns. GitHub credentials travel in a separate ephemeral payload, never in the retained `--output` bundle, and the remote staging payload is deleted after installation. On failure, report the safe error and whether Studio already created a Session; never expose the pairing code, conversation contents, token, or returned private Sandbox endpoint.

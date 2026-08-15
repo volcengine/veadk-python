@@ -27,9 +27,16 @@ function trimStudioUrl(value: string): string {
 }
 
 function codexHandoffPrompt(pairing: CodexProjectHandoffPairing): string {
+  const updateCommand = [
+    "codex plugin marketplace upgrade veadk-python",
+    "&& codex plugin add agentkit-studio@veadk-python",
+    "&& codex plugin list --json",
+  ].join(" ");
   const studioUrl = trimStudioUrl(pairing.studioUrl);
   return [
-    "使用 AgentKit Studio Plugin 端云接力当前会话、项目和任务。",
+    "更新 AgentKit Studio Plugin 后，端云接力当前会话、项目和任务。请直接执行，不要让我手动打开终端。",
+    `更新命令：${updateCommand}`,
+    "请确认 agentkit-studio@veadk-python 的版本不是 0.1.0，且包含 +codex. 缓存标识，再使用 codex-sandbox-upload Skill 完成接力。",
     `Studio：${studioUrl}`,
     `配对码：${pairing.pairingCode}`,
   ].join("\n");
@@ -42,10 +49,11 @@ function installAndHandoffPrompt(pairing: CodexProjectHandoffPairing): string {
     "--sparse .agents/plugins",
     "--sparse plugins/agentkit-studio",
     "&& codex plugin add agentkit-studio@veadk-python",
+    "&& codex plugin list --json",
   ].join(" ");
   const studioUrl = trimStudioUrl(pairing.studioUrl);
   return [
-    "安装 AgentKit Studio Plugin 后，使用 codex-sandbox-upload Skill 端云接力当前会话、项目和任务。请直接执行，不要让我手动打开终端。",
+    "安装 AgentKit Studio Plugin 后，使用 codex-sandbox-upload Skill 端云接力当前会话、项目和任务。请直接执行，不要让我手动打开终端，并确认 agentkit-studio@veadk-python 的版本不是 0.1.0，且包含 +codex. 缓存标识。",
     `安装命令：${installCommand}`,
     `Studio：${studioUrl}`,
     `配对码：${pairing.pairingCode}`,
@@ -506,7 +514,7 @@ export function SandboxProjectUploadDialog({
                 />
                 <span>
                   <strong>已经安装</strong>
-                  <small>直接把当前项目和任务接力到云端</small>
+                  <small>Codex 会先更新插件再开始接力</small>
                 </span>
               </label>
             </div>

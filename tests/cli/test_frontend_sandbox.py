@@ -34,6 +34,7 @@ from veadk.cli.codex_app_server import (
     CodexAppServerEvent,
     CodexDirectoryEntry,
     CodexDirectoryListing,
+    CodexImportedImage,
     CodexImportedMessage,
     CodexModel,
     CodexPermissionSettings,
@@ -1253,6 +1254,38 @@ def test_codex_project_handoff_history_accepts_only_visible_messages() -> None:
         frontend_sandbox._codex_project_handoff_history(
             [{"role": "developer", "content": "hidden instructions"}]
         )
+
+
+def test_codex_project_handoff_history_accepts_bounded_images() -> None:
+    assert frontend_sandbox._codex_project_handoff_history(
+        [
+            {
+                "role": "user",
+                "content": "请看图片",
+                "images": [
+                    {
+                        "mimeType": "image/png",
+                        "data": "iVBORw0KGgppbWFnZQ==",
+                        "name": "handoff.png",
+                        "alt": "端云接力界面",
+                    }
+                ],
+            }
+        ]
+    ) == (
+        CodexImportedMessage(
+            role="user",
+            content="请看图片",
+            images=(
+                CodexImportedImage(
+                    mime_type="image/png",
+                    data="iVBORw0KGgppbWFnZQ==",
+                    name="handoff.png",
+                    alt="端云接力界面",
+                ),
+            ),
+        ),
+    )
 
 
 def test_codex_project_handoff_rejects_invalid_and_expired_pairing_code(

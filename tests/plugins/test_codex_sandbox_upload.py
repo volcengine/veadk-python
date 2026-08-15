@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import os
@@ -341,6 +342,72 @@ def test_conversation_history_keeps_only_visible_user_and_assistant_text(
         {"role": "user", "content": "继续修复登录超时"},
         {"role": "assistant", "content": "已定位重试逻辑。"},
     ]
+
+
+def test_conversation_history_embeds_local_markdown_images_without_leaking_paths(
+    upload_project, tmp_path: Path
+) -> None:
+    image = tmp_path / "handoff.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"visible-image")
+    history = tmp_path / "history.json"
+    history.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"请看图片\n\n![端云接力界面]({image})",
+                    },
+                    {"role": "assistant", "content": "图片已收到。"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    messages = upload_project.conversation_history(history)
+
+    assert messages[0]["content"] == "请看图片"
+    assert messages[0]["images"] == [
+        {
+            "mimeType": "image/png",
+            "data": base64.b64encode(image.read_bytes()).decode("ascii"),
+            "name": "handoff.png",
+            "alt": "端云接力界面",
+        }
+    ]
+    assert str(image) not in json.dumps(messages, ensure_ascii=False)
+
+
+def test_conversation_history_rejects_symlinked_images(
+    upload_project, tmp_path: Path
+) -> None:
+    target = tmp_path / "target.png"
+    target.write_bytes(b"\x89PNG\r\n\x1a\n" + b"visible-image")
+    image = tmp_path / "handoff.png"
+    image.symlink_to(target)
+    history = tmp_path / "history.json"
+    history.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "请看图片",
+                        "images": [{"path": str(image), "alt": "截图"}],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(upload_project.HandoffError, match="symbolic link"):
+        upload_project.conversation_history(history)
 
 
 def test_conversation_history_rejects_hidden_roles(

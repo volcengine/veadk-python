@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import json
 import os
@@ -49,6 +51,7 @@ from veadk.cli.codex_app_server import (
     CodexAppServerEvent,
     CodexAppServerSession,
     CodexDirectoryListing,
+    CodexImportedImage,
     CodexImportedMessage,
     CodexModel,
     CodexPermissionSettings,
@@ -115,6 +118,12 @@ _CODEX_PROJECT_HANDOFF_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,64}")
 _CODEX_PROJECT_HANDOFF_HISTORY_MAX_MESSAGES = 100
 _CODEX_PROJECT_HANDOFF_HISTORY_MAX_MESSAGE_CHARACTERS = 20_000
 _CODEX_PROJECT_HANDOFF_HISTORY_MAX_CHARACTERS = 100_000
+_CODEX_PROJECT_HANDOFF_HISTORY_MAX_IMAGES = 10
+_CODEX_PROJECT_HANDOFF_HISTORY_MAX_IMAGE_BYTES = 4 * 1024 * 1024
+_CODEX_PROJECT_HANDOFF_HISTORY_MAX_IMAGE_TOTAL_BYTES = 8 * 1024 * 1024
+_CODEX_PROJECT_HANDOFF_HISTORY_IMAGE_MIME_TYPES = frozenset(
+    {"image/png", "image/jpeg", "image/gif", "image/webp"}
+)
 _CODEX_PROJECT_HANDOFF_CONTINUATION_MAX_CHARACTERS = 20_000
 
 
@@ -413,6 +422,18 @@ def _codex_project_handoff_id(value: object) -> str:
     return value
 
 
+def _codex_project_handoff_image_matches(mime_type: str, data: bytes) -> bool:
+    if mime_type == "image/png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if mime_type == "image/jpeg":
+        return data.startswith(b"\xff\xd8\xff")
+    if mime_type == "image/gif":
+        return data.startswith((b"GIF87a", b"GIF89a"))
+    if mime_type == "image/webp":
+        return len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP"
+    return False
+
+
 def _codex_project_handoff_history(
     value: object,
 ) -> tuple[CodexImportedMessage, ...]:
@@ -424,6 +445,8 @@ def _codex_project_handoff_history(
         raise SandboxValidationError("端侧会话历史消息过多。")
     messages: list[CodexImportedMessage] = []
     total_characters = 0
+    total_image_bytes = 0
+    total_images = 0
     for item in value:
         if not isinstance(item, dict):
             raise SandboxValidationError("端侧会话历史格式无效。")
@@ -432,14 +455,64 @@ def _codex_project_handoff_history(
         if role not in {"user", "assistant"} or not isinstance(content, str):
             raise SandboxValidationError("端侧会话历史只支持用户和助手消息。")
         content = content.strip()
-        if not content:
-            raise SandboxValidationError("端侧会话历史包含空消息。")
         if len(content) > _CODEX_PROJECT_HANDOFF_HISTORY_MAX_MESSAGE_CHARACTERS:
             raise SandboxValidationError("端侧会话历史单条消息过长。")
         total_characters += len(content)
         if total_characters > _CODEX_PROJECT_HANDOFF_HISTORY_MAX_CHARACTERS:
             raise SandboxValidationError("端侧会话历史内容过大。")
-        messages.append(CodexImportedMessage(role=role, content=content))
+        raw_images = item.get("images", [])
+        if not isinstance(raw_images, list) or (role == "assistant" and raw_images):
+            raise SandboxValidationError("端侧会话历史图片格式无效。")
+        images: list[CodexImportedImage] = []
+        for raw_image in raw_images:
+            if not isinstance(raw_image, dict):
+                raise SandboxValidationError("端侧会话历史图片格式无效。")
+            mime_type = raw_image.get("mimeType")
+            encoded = raw_image.get("data")
+            name = raw_image.get("name", "")
+            alt = raw_image.get("alt", "")
+            if (
+                mime_type not in _CODEX_PROJECT_HANDOFF_HISTORY_IMAGE_MIME_TYPES
+                or not isinstance(encoded, str)
+                or not encoded
+                or not isinstance(name, str)
+                or not isinstance(alt, str)
+                or len(name) > 255
+                or len(alt) > 500
+            ):
+                raise SandboxValidationError("端侧会话历史图片格式无效。")
+            try:
+                decoded = base64.b64decode(encoded, validate=True)
+            except (ValueError, binascii.Error) as error:
+                raise SandboxValidationError("端侧会话历史图片编码无效。") from error
+            if not _codex_project_handoff_image_matches(mime_type, decoded):
+                raise SandboxValidationError("端侧会话历史图片格式无效。")
+            image_bytes = len(decoded)
+            total_images += 1
+            total_image_bytes += image_bytes
+            if total_images > _CODEX_PROJECT_HANDOFF_HISTORY_MAX_IMAGES:
+                raise SandboxValidationError("端侧会话历史图片过多。")
+            if image_bytes > _CODEX_PROJECT_HANDOFF_HISTORY_MAX_IMAGE_BYTES:
+                raise SandboxValidationError("端侧会话历史单张图片过大。")
+            if total_image_bytes > _CODEX_PROJECT_HANDOFF_HISTORY_MAX_IMAGE_TOTAL_BYTES:
+                raise SandboxValidationError("端侧会话历史图片内容过大。")
+            images.append(
+                CodexImportedImage(
+                    mime_type=mime_type,
+                    data=encoded,
+                    name=name,
+                    alt=alt,
+                )
+            )
+        if not content and not images:
+            raise SandboxValidationError("端侧会话历史包含空消息。")
+        messages.append(
+            CodexImportedMessage(
+                role=role,
+                content=content,
+                images=tuple(images),
+            )
+        )
     return tuple(messages)
 
 
@@ -3346,7 +3419,7 @@ def mount_sandbox_routes(
         session_id: str, request: Request
     ) -> StreamingResponse:
         try:
-            data = await _request_object(request, maximum=512 * 1024)
+            data = await _request_object(request, maximum=12 * 1024 * 1024)
             prompt = data.get("message")
             if not isinstance(prompt, str) or not prompt.strip():
                 raise SandboxValidationError("message must not be empty")

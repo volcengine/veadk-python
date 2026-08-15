@@ -242,6 +242,17 @@ export function sandboxSnapshotTurns(snapshot: SandboxThreadSnapshot): Turn[] {
         },
       });
     }
+    if (message.role === "user" && message.images?.length) {
+      blocks.push({
+        kind: "attachment",
+        files: message.images.map((image, index) => ({
+          id: `${message.id}-image-${index}`,
+          mimeType: image.mimeType,
+          data: image.data,
+          name: image.alt || image.name || "图片",
+        })),
+      });
+    }
     if (message.content) blocks.push({ kind: "text", text: message.content });
     return {
       role: message.role,

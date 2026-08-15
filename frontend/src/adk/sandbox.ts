@@ -176,12 +176,20 @@ export interface SandboxThreadSummary {
   status: string;
 }
 
+export interface SandboxThreadImage {
+  mimeType: string;
+  data: string;
+  name?: string;
+  alt?: string;
+}
+
 export interface SandboxThreadMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   timestamp: number;
   skillNames?: string[];
+  images?: SandboxThreadImage[];
 }
 
 export interface SandboxThreadSnapshot {
@@ -721,12 +729,35 @@ function parseThreadSnapshot(value: unknown): SandboxThreadSnapshot {
           (name): name is string => typeof name === "string" && Boolean(name),
         )
       : [];
+    const images = Array.isArray(message.images)
+      ? message.images.flatMap((value): SandboxThreadImage[] => {
+          const image = recordOf(value);
+          if (
+            !image ||
+            typeof image.mimeType !== "string" ||
+            !image.mimeType.startsWith("image/") ||
+            typeof image.data !== "string" ||
+            !image.data
+          ) return [];
+          return [{
+            mimeType: image.mimeType,
+            data: image.data,
+            ...(typeof image.name === "string" && image.name
+              ? { name: image.name }
+              : {}),
+            ...(typeof image.alt === "string" && image.alt
+              ? { alt: image.alt }
+              : {}),
+          }];
+        })
+      : [];
     return [{
       id: message.id,
       role: message.role,
       content: message.content,
       timestamp: message.timestamp,
       ...(skillNames.length ? { skillNames } : {}),
+      ...(images.length ? { images } : {}),
     }];
   });
   return {

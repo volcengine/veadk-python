@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime as dt
 import hashlib
 import http.client
@@ -28,6 +29,7 @@ import os
 import re
 import shutil
 import ssl
+import stat
 import subprocess
 import sys
 import tarfile
@@ -85,6 +87,9 @@ AGENT_NAME_MAX_CHARACTERS = 12
 MAX_HISTORY_MESSAGES = 100
 MAX_HISTORY_MESSAGE_CHARACTERS = 20_000
 MAX_HISTORY_CHARACTERS = 100_000
+MAX_HISTORY_IMAGES = 10
+MAX_HISTORY_IMAGE_BYTES = 4 * 1024 * 1024
+MAX_HISTORY_IMAGE_TOTAL_BYTES = 8 * 1024 * 1024
 MAX_CONTINUATION_MESSAGE_CHARACTERS = 20_000
 MAX_EVENT_STREAM_LINE_BYTES = 1024 * 1024
 MAX_EVENT_STREAM_DATA_BYTES = 4 * 1024 * 1024
@@ -92,6 +97,23 @@ PAIRING_CODE_PATTERN = re.compile(r"[2-9A-HJ-KM-NP-Z]{4}-?[2-9A-HJ-KM-NP-Z]{4}")
 AMBIENT_BROWSER_CONTEXT = re.compile(
     r"<in-app-browser-context\b[^>]*>.*?</in-app-browser-context>",
     re.DOTALL,
+)
+LOCAL_IMAGE_MARKDOWN = re.compile(
+    r"!\[(?P<alt>[^\]\n]*)\]\((?:<(?P<bracketed>/[^>\n]+)>|(?P<plain>/[^)\n]+))\)"
+)
+IMAGE_MIME_SIGNATURES = (
+    ("image/png", lambda data: data.startswith(b"\x89PNG\r\n\x1a\n")),
+    ("image/jpeg", lambda data: data.startswith(b"\xff\xd8\xff")),
+    (
+        "image/gif",
+        lambda data: data.startswith((b"GIF87a", b"GIF89a")),
+    ),
+    (
+        "image/webp",
+        lambda data: len(data) >= 12
+        and data.startswith(b"RIFF")
+        and data[8:12] == b"WEBP",
+    ),
 )
 
 
@@ -694,7 +716,93 @@ def visible_message(value: str) -> str:
     return cleaned
 
 
-def conversation_history(source: Path | None) -> list[dict[str, str]]:
+def _history_image(path: Path, alt: str) -> tuple[dict[str, str], int]:
+    path = path.expanduser()
+    if not path.is_absolute():
+        raise HandoffError("conversation history image path must be absolute")
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as error:
+        if path.is_symlink():
+            raise HandoffError(
+                "conversation history image must not be a symbolic link"
+            ) from error
+        raise HandoffError("cannot read conversation history image") from error
+    try:
+        details = os.fstat(descriptor)
+        if not stat.S_ISREG(details.st_mode):
+            raise HandoffError("conversation history image is not a regular file")
+        size = details.st_size
+        if size <= 0:
+            raise HandoffError("conversation history image is empty")
+        if size > MAX_HISTORY_IMAGE_BYTES:
+            raise HandoffError("conversation history contains an oversized image")
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            data = handle.read(MAX_HISTORY_IMAGE_BYTES + 1)
+    except HandoffError:
+        raise
+    except OSError as error:
+        raise HandoffError("cannot read conversation history image") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if len(data) != size:
+        raise HandoffError("conversation history image changed while being read")
+    mime_type = next(
+        (mime for mime, matches in IMAGE_MIME_SIGNATURES if matches(data)),
+        "",
+    )
+    if not mime_type:
+        raise HandoffError("conversation history image format is not supported")
+    safe_alt = alt.strip()[:500]
+    return (
+        {
+            "mimeType": mime_type,
+            "data": base64.b64encode(data).decode("ascii"),
+            "name": path.name[:255] or "image",
+            "alt": safe_alt or path.stem[:500] or "图片",
+        },
+        size,
+    )
+
+
+def _message_image_paths(
+    content: str, raw_images: object
+) -> tuple[str, list[tuple[Path, str]]]:
+    images: list[tuple[Path, str]] = []
+    seen: set[Path] = set()
+    if raw_images is not None:
+        if not isinstance(raw_images, list):
+            raise HandoffError("conversation history images must be a list")
+        for raw_image in raw_images:
+            if not isinstance(raw_image, dict):
+                raise HandoffError("conversation history contains an invalid image")
+            raw_path = raw_image.get("path")
+            raw_alt = raw_image.get("alt", "")
+            if not isinstance(raw_path, str) or not isinstance(raw_alt, str):
+                raise HandoffError("conversation history contains an invalid image")
+            path = Path(raw_path).expanduser()
+            if path not in seen:
+                images.append((path, raw_alt))
+                seen.add(path)
+
+    def collect(match: re.Match[str]) -> str:
+        path = Path(match.group("bracketed") or match.group("plain")).expanduser()
+        if path not in seen:
+            images.append((path, match.group("alt")))
+            seen.add(path)
+        return ""
+
+    cleaned = LOCAL_IMAGE_MARKDOWN.sub(collect, content)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned, images
+
+
+def conversation_history(source: Path | None) -> list[dict[str, Any]]:
     if source is None:
         raise HandoffError("--history is required for a conversation handoff")
     try:
@@ -705,8 +813,8 @@ def conversation_history(source: Path | None) -> list[dict[str, str]]:
         value = json.loads(raw)
     except json.JSONDecodeError as error:
         raise HandoffError("conversation history is not valid JSON") from error
-    if not isinstance(value, dict) or value.get("schemaVersion") != 1:
-        raise HandoffError("conversation history must use schemaVersion 1")
+    if not isinstance(value, dict) or value.get("schemaVersion") not in {1, 2}:
+        raise HandoffError("conversation history must use schemaVersion 1 or 2")
     raw_messages = value.get("messages")
     if not isinstance(raw_messages, list) or not raw_messages:
         raise HandoffError("conversation history must contain visible messages")
@@ -714,8 +822,10 @@ def conversation_history(source: Path | None) -> list[dict[str, str]]:
         raise HandoffError(
             f"conversation history exceeds {MAX_HISTORY_MESSAGES} messages"
         )
-    messages: list[dict[str, str]] = []
+    messages: list[dict[str, Any]] = []
     total_characters = 0
+    total_image_bytes = 0
+    total_images = 0
     for item in raw_messages:
         if not isinstance(item, dict):
             raise HandoffError("conversation history contains an invalid message")
@@ -725,15 +835,37 @@ def conversation_history(source: Path | None) -> list[dict[str, str]]:
             raise HandoffError(
                 "conversation history may contain only user and assistant messages"
             )
-        content = visible_message(content)
-        if not content:
+        content, image_paths = _message_image_paths(
+            visible_message(content), item.get("images")
+        )
+        if role == "assistant" and image_paths:
+            raise HandoffError(
+                "conversation history images are supported only for user messages"
+            )
+        images: list[dict[str, str]] = []
+        for image_path, image_alt in image_paths:
+            total_images += 1
+            if total_images > MAX_HISTORY_IMAGES:
+                raise HandoffError("conversation history contains too many images")
+            image, image_bytes = _history_image(image_path, image_alt)
+            total_image_bytes += image_bytes
+            if total_image_bytes > MAX_HISTORY_IMAGE_TOTAL_BYTES:
+                raise HandoffError("conversation history images are too large")
+            images.append(image)
+        if not content and not images:
             continue
         if len(content) > MAX_HISTORY_MESSAGE_CHARACTERS:
             raise HandoffError("conversation history contains an oversized message")
         total_characters += len(content)
         if total_characters > MAX_HISTORY_CHARACTERS:
             raise HandoffError("conversation history is too large")
-        messages.append({"role": role, "content": content})
+        messages.append(
+            {
+                "role": role,
+                "content": content,
+                **({"images": images} if images else {}),
+            }
+        )
     if not messages:
         raise HandoffError("conversation history contains no visible messages")
     return messages
@@ -982,7 +1114,7 @@ def continue_in_studio(
     studio_url: str,
     session_id: str,
     pairing_code: str,
-    history: list[dict[str, str]],
+    history: list[dict[str, Any]],
     message: str,
 ) -> None:
     post_event_stream(
@@ -1267,7 +1399,9 @@ def main(argv: list[str] | None = None) -> int:
     one_time_code = pairing_code(args.pairing_code) if args.pairing_code.strip() else ""
     history = conversation_history(args.history)
     continue_message = continuation_message(args.continue_message)
+    history_images = sum(len(message.get("images", [])) for message in history)
     print(f"[handoff] conversation messages: {len(history)}")
+    print(f"[handoff] conversation images: {history_images}")
     github_credentials_enabled = state.github_remote and not args.no_github_credentials
     if args.dry_run:
         with tempfile.TemporaryDirectory(
@@ -1393,6 +1527,7 @@ def main(argv: list[str] | None = None) -> int:
             "gitStatus": restored.get("gitStatus", ""),
             "githubAuth": restored.get("githubAuth", False),
             "historyMessages": len(history),
+            "historyImages": history_images,
             "restored": True,
             "continued": False,
         }

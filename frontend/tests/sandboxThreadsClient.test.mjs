@@ -64,6 +64,14 @@ test("reads a Codex thread without activating it", async (t) => {
             role: "user",
             content: "continue work",
             timestamp: 2,
+            images: [
+              {
+                mimeType: "image/png",
+                data: "iVBORw0KGgppbWFnZQ==",
+                name: "handoff.png",
+                alt: "端云接力界面",
+              },
+            ],
           },
         ],
         cwd: "/workspace",
@@ -83,6 +91,14 @@ test("reads a Codex thread without activating it", async (t) => {
 
   assert.equal(snapshot.threadId, "thread/old");
   assert.equal(snapshot.messages[0].content, "continue work");
+  assert.deepEqual(snapshot.messages[0].images, [
+    {
+      mimeType: "image/png",
+      data: "iVBORw0KGgppbWFnZQ==",
+      name: "handoff.png",
+      alt: "端云接力界面",
+    },
+  ]);
   assert.equal(
     request.url,
     "/web/sandbox/sessions/session%2F1/threads/thread%2Fold",

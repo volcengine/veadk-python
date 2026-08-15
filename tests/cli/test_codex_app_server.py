@@ -26,6 +26,7 @@ import pytest
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerSession,
+    CodexImportedImage,
     CodexImportedMessage,
     CodexPermissionSettings,
     approval_decision_from_payload,
@@ -702,7 +703,18 @@ async def test_inject_history_uses_model_visible_items_without_starting_turn() -
 
     await session.inject_history(
         (
-            CodexImportedMessage(role="user", content="修复登录超时"),
+            CodexImportedMessage(
+                role="user",
+                content="修复登录超时",
+                images=(
+                    CodexImportedImage(
+                        mime_type="image/png",
+                        data="iVBORw0KGgppbWFnZQ==",
+                        name="handoff.png",
+                        alt="端云接力界面",
+                    ),
+                ),
+            ),
             CodexImportedMessage(role="assistant", content="已定位重试逻辑。"),
         )
     )
@@ -719,7 +731,13 @@ async def test_inject_history_uses_model_visible_items_without_starting_turn() -
             {
                 "type": "message",
                 "role": "user",
-                "content": [{"type": "input_text", "text": "修复登录超时"}],
+                "content": [
+                    {"type": "input_text", "text": "修复登录超时"},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,iVBORw0KGgppbWFnZQ==",
+                    },
+                ],
             },
             {
                 "type": "message",
@@ -735,6 +753,7 @@ async def test_inject_history_uses_model_visible_items_without_starting_turn() -
         ("user", "修复登录超时"),
         ("assistant", "已定位重试逻辑。"),
     ]
+    assert snapshot.messages[0].images[0].name == "handoff.png"
     await session.close()
 
 

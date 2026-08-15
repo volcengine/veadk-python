@@ -40,6 +40,10 @@ const uploadScriptSource = readFileSync(
   ),
   "utf8",
 );
+const sandboxCommandsSource = readFileSync(
+  new URL("../src/ui/sandboxCommands.ts", import.meta.url),
+  "utf8",
+);
 
 test("codex project handoff pairing code supports countdown, refresh, and status polling", () => {
   assert.match(
@@ -72,10 +76,19 @@ test("the uninstalled path asks Codex to install the Studio plugin", () => {
   assert.match(dialogSource, /--sparse \.agents\/plugins/);
   assert.match(dialogSource, /--sparse plugins\/agentkit-studio/);
   assert.match(dialogSource, /codex plugin add agentkit-studio@veadk-python/);
+  assert.match(dialogSource, /codex plugin list --json/);
   assert.doesNotMatch(dialogSource, /不要新建 Codex 任务/);
   assert.match(uploadSkillSource, /stay in the current Codex task/);
   assert.match(uploadSkillSource, /terse handoff prompt/);
   assert.doesNotMatch(dialogSource, /codex skill install/);
+});
+
+test("the installed path refreshes the marketplace before handoff", () => {
+  assert.match(dialogSource, /codex plugin marketplace upgrade veadk-python/);
+  assert.match(dialogSource, /codex plugin add agentkit-studio@veadk-python/);
+  assert.match(dialogSource, /codex plugin list --json/);
+  assert.match(dialogSource, /0\.1\.0/);
+  assert.match(dialogSource, /\+codex\./);
 });
 
 test("the installed path generates a short cloud continuation prompt", () => {
@@ -133,6 +146,15 @@ test("GitHub credential handling stays in the upload skill instead of the dialog
   assert.match(uploadSkillSource, /thread\/inject_items/);
   assert.match(uploadSkillSource, /otherwise use exactly `继续`/);
   assert.match(uploadScriptSource, /"thread\/inject_items"|"history": history/);
+  assert.match(uploadSkillSource, /codexDelegation\.input/);
+  assert.match(uploadSkillSource, /"schemaVersion":2/);
+});
+
+test("imported Codex history renders image attachments in the transcript", () => {
+  assert.match(sandboxClientSource, /images\?: SandboxThreadImage\[\]/);
+  assert.match(sandboxClientSource, /mimeType: image\.mimeType/);
+  assert.match(sandboxCommandsSource, /kind: "attachment"/);
+  assert.match(sandboxCommandsSource, /data: image\.data/);
 });
 
 test("handoff choices and prompt content reserve stable space", () => {

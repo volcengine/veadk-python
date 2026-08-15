@@ -51,7 +51,13 @@ _MAX_DIRECTORY_ENTRIES = 1_000
 _IMPORTED_HISTORY_MAX_MESSAGES = 100
 _IMPORTED_HISTORY_MAX_MESSAGE_CHARACTERS = 20_000
 _IMPORTED_HISTORY_MAX_CHARACTERS = 100_000
-_IMPORTED_HISTORY_MAX_BASE64_BYTES = 700_000
+_IMPORTED_HISTORY_MAX_IMAGES = 10
+_IMPORTED_HISTORY_MAX_IMAGE_BYTES = 4 * 1024 * 1024
+_IMPORTED_HISTORY_MAX_IMAGE_TOTAL_BYTES = 8 * 1024 * 1024
+_IMPORTED_HISTORY_MAX_BASE64_BYTES = 18 * 1024 * 1024
+_IMPORTED_HISTORY_IMAGE_MIME_TYPES = frozenset(
+    {"image/png", "image/jpeg", "image/gif", "image/webp"}
+)
 
 
 class CodexAppServerError(RuntimeError):
@@ -171,6 +177,29 @@ class _CodexPrivateSkill:
 
 
 @dataclass(frozen=True)
+class CodexImportedImage:
+    """One bounded image attachment imported with a visible user message."""
+
+    mime_type: str
+    data: str
+    name: str = ""
+    alt: str = ""
+
+    def data_url(self) -> str:
+        """Return a Responses API compatible in-memory image URL."""
+        return f"data:{self.mime_type};base64,{self.data}"
+
+    def public_dict(self) -> dict[str, str]:
+        """Return the browser-facing representation."""
+        return {
+            "mimeType": self.mime_type,
+            "data": self.data,
+            **({"name": self.name} if self.name else {}),
+            **({"alt": self.alt} if self.alt else {}),
+        }
+
+
+@dataclass(frozen=True)
 class CodexThreadMessage:
     """One sanitized user or assistant message restored from a Codex thread."""
 
@@ -179,6 +208,7 @@ class CodexThreadMessage:
     content: str
     timestamp: int
     skill_names: tuple[str, ...] = ()
+    images: tuple[CodexImportedImage, ...] = ()
 
     def public_dict(self) -> dict[str, object]:
         """Return the browser-facing representation."""
@@ -188,6 +218,11 @@ class CodexThreadMessage:
             "content": self.content,
             "timestamp": self.timestamp,
             **({"skillNames": list(self.skill_names)} if self.skill_names else {}),
+            **(
+                {"images": [image.public_dict() for image in self.images]}
+                if self.images
+                else {}
+            ),
         }
 
 
@@ -197,6 +232,7 @@ class CodexImportedMessage:
 
     role: Literal["user", "assistant"]
     content: str
+    images: tuple[CodexImportedImage, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -759,27 +795,41 @@ class CodexAppServerSession:
         self._ensure_thread_idle("导入历史消息")
         if not messages:
             return
+        items: list[dict[str, object]] = []
+        for message in messages:
+            if message.role == "assistant" and message.images:
+                raise CodexAppServerError(
+                    "Imported assistant messages cannot contain images"
+                )
+            content: list[dict[str, str]] = []
+            if message.content:
+                content.append(
+                    {
+                        "type": (
+                            "input_text" if message.role == "user" else "output_text"
+                        ),
+                        "text": message.content,
+                    }
+                )
+            content.extend(
+                {
+                    "type": "input_image",
+                    "image_url": image.data_url(),
+                }
+                for image in message.images
+            )
+            items.append(
+                {
+                    "type": "message",
+                    "role": message.role,
+                    "content": content,
+                }
+            )
         await self.request(
             "thread/inject_items",
             {
                 "threadId": self.thread_id,
-                "items": [
-                    {
-                        "type": "message",
-                        "role": message.role,
-                        "content": [
-                            {
-                                "type": (
-                                    "input_text"
-                                    if message.role == "user"
-                                    else "output_text"
-                                ),
-                                "text": message.content,
-                            }
-                        ],
-                    }
-                    for message in messages
-                ],
+                "items": items,
             },
         )
         await self._write_imported_history(messages)
@@ -789,7 +839,7 @@ class CodexAppServerSession:
     ) -> None:
         payload = json.dumps(
             {
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "threadId": self.thread_id,
                 "messages": [asdict(message) for message in messages],
             },
@@ -825,7 +875,7 @@ class CodexAppServerSession:
                 continue
             if (
                 not isinstance(value, dict)
-                or value.get("schemaVersion") != 1
+                or value.get("schemaVersion") not in {1, 2}
                 or value.get("threadId") != thread_id
                 or not isinstance(value.get("messages"), list)
             ):
@@ -835,6 +885,8 @@ class CodexAppServerSession:
             if len(raw_messages) > _IMPORTED_HISTORY_MAX_MESSAGES:
                 continue
             total_characters = 0
+            total_image_bytes = 0
+            total_images = 0
             valid = True
             for item in raw_messages:
                 if not isinstance(item, dict):
@@ -845,17 +897,54 @@ class CodexAppServerSession:
                 if role not in {"user", "assistant"} or not isinstance(content, str):
                     valid = False
                     break
-                if (
-                    not content
-                    or len(content) > _IMPORTED_HISTORY_MAX_MESSAGE_CHARACTERS
-                ):
+                if len(content) > _IMPORTED_HISTORY_MAX_MESSAGE_CHARACTERS:
                     valid = False
                     break
                 total_characters += len(content)
                 if total_characters > _IMPORTED_HISTORY_MAX_CHARACTERS:
                     valid = False
                     break
-                messages.append(CodexImportedMessage(role=role, content=content))
+                images: list[CodexImportedImage] = []
+                raw_images = item.get("images", [])
+                if not isinstance(raw_images, list) or (
+                    role == "assistant" and raw_images
+                ):
+                    valid = False
+                    break
+                for raw_image in raw_images:
+                    image = _imported_image(raw_image)
+                    if image is None:
+                        valid = False
+                        break
+                    try:
+                        decoded = base64.b64decode(image.data, validate=True)
+                    except ValueError:
+                        valid = False
+                        break
+                    if not _imported_image_matches(image, decoded):
+                        valid = False
+                        break
+                    image_bytes = len(decoded)
+                    total_images += 1
+                    total_image_bytes += image_bytes
+                    if (
+                        total_images > _IMPORTED_HISTORY_MAX_IMAGES
+                        or image_bytes > _IMPORTED_HISTORY_MAX_IMAGE_BYTES
+                        or total_image_bytes > _IMPORTED_HISTORY_MAX_IMAGE_TOTAL_BYTES
+                    ):
+                        valid = False
+                        break
+                    images.append(image)
+                if not valid or (not content and not images):
+                    valid = False
+                    break
+                messages.append(
+                    CodexImportedMessage(
+                        role=role,
+                        content=content,
+                        images=tuple(images),
+                    )
+                )
             if valid and messages:
                 return tuple(messages)
         return ()
@@ -1862,6 +1951,43 @@ def _imported_history_read_paths(thread_id: str, cwd: str) -> tuple[str, ...]:
     )
 
 
+def _imported_image(value: object) -> CodexImportedImage | None:
+    if not isinstance(value, dict):
+        return None
+    mime_type = value.get("mime_type", value.get("mimeType"))
+    data = value.get("data")
+    name = value.get("name", "")
+    alt = value.get("alt", "")
+    if (
+        mime_type not in _IMPORTED_HISTORY_IMAGE_MIME_TYPES
+        or not isinstance(data, str)
+        or not data
+        or not isinstance(name, str)
+        or not isinstance(alt, str)
+        or len(name) > 255
+        or len(alt) > 500
+    ):
+        return None
+    return CodexImportedImage(
+        mime_type=mime_type,
+        data=data,
+        name=name,
+        alt=alt,
+    )
+
+
+def _imported_image_matches(image: CodexImportedImage, data: bytes) -> bool:
+    if image.mime_type == "image/png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if image.mime_type == "image/jpeg":
+        return data.startswith(b"\xff\xd8\xff")
+    if image.mime_type == "image/gif":
+        return data.startswith((b"GIF87a", b"GIF89a"))
+    if image.mime_type == "image/webp":
+        return len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP"
+    return False
+
+
 def _prepend_imported_history(
     snapshot: CodexThreadSnapshot,
     imported: tuple[CodexImportedMessage, ...],
@@ -1870,7 +1996,9 @@ def _prepend_imported_history(
         return snapshot
     existing = snapshot.messages[: len(imported)]
     if len(existing) == len(imported) and all(
-        current.role == previous.role and current.content == previous.content
+        current.role == previous.role
+        and current.content == previous.content
+        and current.images == previous.images
         for current, previous in zip(existing, imported, strict=True)
     ):
         return snapshot
@@ -1886,6 +2014,7 @@ def _prepend_imported_history(
             role=message.role,
             content=message.content,
             timestamp=base_timestamp + index,
+            images=message.images,
         )
         for index, message in enumerate(imported)
     )
@@ -2113,6 +2242,7 @@ __all__ = [
     "CodexAppServerSession",
     "CodexApproval",
     "CodexDirectoryListing",
+    "CodexImportedImage",
     "CodexImportedMessage",
     "CodexModel",
     "CodexPermissionSettings",
