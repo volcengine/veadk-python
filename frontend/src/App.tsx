@@ -155,6 +155,7 @@ import {
   type SandboxPermissions,
   type SandboxSession as SandboxSessionInfo,
   type SandboxSkill,
+  type SandboxThreadSnapshot,
   type SandboxThreadSummary,
   type SandboxToolLaunch,
 } from "./adk/sandbox";
@@ -304,6 +305,29 @@ const EMPTY_STRING_ARR: string[] = [];
 
 function emptyInvocation(): FrontendInvocation {
   return { skills: [] };
+}
+
+async function loadSandboxThreadHistory(
+  session: SandboxSessionInfo,
+): Promise<SandboxThreadSnapshot | null> {
+  let readError: unknown;
+  if (session.threadId) {
+    try {
+      const snapshot = await sandboxClient.readThread(session.id, session.threadId);
+      if (snapshot.messages.length > 0) return snapshot;
+    } catch (cause) {
+      readError = cause;
+    }
+  }
+
+  const page = await sandboxClient.listThreads(session.id);
+  const latest = page.threads.find((thread) => thread.id !== session.threadId) ??
+    page.threads[0];
+  if (!latest) {
+    if (readError) throw readError;
+    return null;
+  }
+  return sandboxClient.resumeThread(session.id, latest.id);
 }
 
 function activeWorkspaceDraftKey(userId: string): string {
@@ -3028,6 +3052,7 @@ export default function App() {
       }
       if (session.toolName === "codex") {
         const connected = await sandboxClient.connectSession(session.id);
+        const snapshot = await loadSandboxThreadHistory(connected);
         operation.succeed({
           sandboxStatus: telemetrySandboxStatus(connected.status),
         });
@@ -3037,8 +3062,20 @@ export default function App() {
         setInput("");
         setInvocation(emptyInvocation());
         releaseAllSandboxPreviews();
-        setSandboxTurns([]);
-        setSandboxSession(connected);
+        if (snapshot) {
+          setSandboxTurns(sandboxSnapshotTurns(snapshot));
+          setSandboxSession({
+            ...connected,
+            threadId: snapshot.threadId,
+            cwd: snapshot.cwd ?? connected.cwd,
+            workspaceLocked: snapshot.workspaceLocked,
+            permissions: snapshot.permissions,
+            ...(snapshot.model ? { model: snapshot.model } : {}),
+          });
+        } else {
+          setSandboxTurns([]);
+          setSandboxSession(connected);
+        }
         setSandboxAgentDetailTarget(null);
         setSandboxAgentWorkspace(null);
         setMyAgents(false);

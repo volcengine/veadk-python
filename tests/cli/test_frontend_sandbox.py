@@ -28,7 +28,7 @@ import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
-import veadk.cli.frontend_sandbox as frontend_sandbox
+from veadk.cli import frontend_sandbox
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerEvent,
@@ -213,6 +213,14 @@ class _FakeCodex:
 
     async def resume_thread(self, thread_id: str) -> CodexThreadSnapshot:
         return self._snapshot(thread_id)
+
+    async def read_thread(self, thread_id: str) -> CodexThreadSnapshot:
+        active_thread_id = self.thread_id
+        workspace_locked = self.workspace_locked
+        snapshot = self._snapshot(thread_id)
+        self.thread_id = active_thread_id
+        self.workspace_locked = workspace_locked
+        return snapshot
 
     async def fork_thread(self) -> CodexThreadSnapshot:
         return self._snapshot("thread-fork")
@@ -1453,6 +1461,7 @@ def test_sandbox_codex_commands_skills_threads_and_token_usage() -> None:
             json={"model": "gpt-next"},
         )
         threads = client.get(f"{root}/threads", headers=headers)
+        history = client.get(f"{root}/threads/thread-old", headers=headers)
         resumed = client.post(
             f"{root}/threads/resume",
             headers=headers,
@@ -1487,6 +1496,8 @@ def test_sandbox_codex_commands_skills_threads_and_token_usage() -> None:
     assert '"modelContextWindow": 200000' in token_reply.text
     assert model.json() == {"model": "gpt-next"}
     assert threads.json()["threads"][0]["id"] == "thread-old"
+    assert history.json()["threadId"] == "thread-old"
+    assert history.json()["messages"][0]["content"] == "restored"
     assert resumed.json()["messages"][0]["skillNames"] == ["review"]
     assert forked.json()["threadId"] == "thread-fork"
     assert compacted.json() == {"started": True}

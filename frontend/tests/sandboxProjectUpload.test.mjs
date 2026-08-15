@@ -107,6 +107,10 @@ test("handoff progress can open the completed Codex session", () => {
   assert.match(dialogSource, /onOpenSession/);
   assert.match(appSource, /async function openCodexHandoffSession/);
   assert.match(appSource, /await sandboxClient\.listSessions\(\)/);
+  assert.match(appSource, /await sandboxClient\.readThread\(/);
+  assert.match(appSource, /await sandboxClient\.listThreads\(/);
+  assert.match(appSource, /return sandboxClient\.resumeThread\(/);
+  assert.match(appSource, /setSandboxTurns\(sandboxSnapshotTurns\(snapshot\)\)/);
   assert.match(appSource, /await openSandboxAgent\(session, "my_agents"\)/);
   assert.match(appSource, /onOpenSession=\{openCodexHandoffSession\}/);
 });

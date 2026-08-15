@@ -41,6 +41,55 @@ const moduleUrl = `data:text/javascript;base64,${Buffer.from(
 ).toString("base64")}`;
 const { sandboxClient } = await import(moduleUrl);
 
+test("reads a Codex thread without activating it", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  let request;
+  globalThis.fetch = async (url, init) => {
+    request = { url, init };
+    return new Response(
+      JSON.stringify({
+        thread: {
+          id: "thread/old",
+          preview: "continue work",
+          cwd: "/workspace",
+          updatedAt: 2,
+        },
+        threadId: "thread/old",
+        messages: [
+          {
+            id: "message-1",
+            role: "user",
+            content: "continue work",
+            timestamp: 2,
+          },
+        ],
+        cwd: "/workspace",
+        workspaceLocked: true,
+        permissions: {
+          approvalPolicy: "never",
+          approvalsReviewer: "user",
+          sandboxMode: "workspace-write",
+          networkAccess: true,
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+
+  const snapshot = await sandboxClient.readThread("session/1", "thread/old");
+
+  assert.equal(snapshot.threadId, "thread/old");
+  assert.equal(snapshot.messages[0].content, "continue work");
+  assert.equal(
+    request.url,
+    "/web/sandbox/sessions/session%2F1/threads/thread%2Fold",
+  );
+  assert.equal(request.init.method, "GET");
+});
+
 test("deletes a Codex thread through the standard delete endpoint", async (t) => {
   const previousFetch = globalThis.fetch;
   t.after(() => {

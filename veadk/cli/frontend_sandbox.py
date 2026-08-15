@@ -212,9 +212,7 @@ def _safe_error_message(error: object) -> str:
 
 def _sandbox_endpoint_export_enabled() -> bool:
     value = (os.getenv(_SANDBOX_ENDPOINT_EXPORT_ENV) or "").strip().lower()
-    if value in {"0", "false", "no", "off"}:
-        return False
-    return True
+    return value not in {"0", "false", "no", "off"}
 
 
 def _redact_public_text(value: str, *, maximum: int) -> str:
@@ -1682,6 +1680,19 @@ class SandboxConversationService:
                 raise SandboxInvocationError(_safe_error_message(error)) from error
         return self._public_snapshot(session, snapshot)
 
+    async def read_thread(
+        self, session_id: str, owner_id: str, thread_id: str
+    ) -> dict[str, object]:
+        """Read a Codex thread without changing the active conversation."""
+        session = self._owned(session_id, owner_id)
+        try:
+            snapshot = await session.codex.read_thread(thread_id)
+        except ValueError as error:
+            raise SandboxValidationError(str(error)) from error
+        except CodexAppServerError as error:
+            raise SandboxInvocationError(_safe_error_message(error)) from error
+        return self._public_snapshot(session, snapshot)
+
     async def fork_thread(self, session_id: str, owner_id: str) -> dict[str, object]:
         """Fork and activate the current Codex thread."""
         session = self._owned(session_id, owner_id)
@@ -2998,6 +3009,21 @@ def mount_sandbox_routes(
         except SandboxError as error:
             raise _http_error(error) from error
 
+    @app.get("/web/sandbox/sessions/{session_id}/threads/{thread_id}")
+    async def _read_sandbox_thread(
+        session_id: str, thread_id: str, request: Request
+    ) -> dict[str, object]:
+        try:
+            if not thread_id.strip() or len(thread_id) > 2_000:
+                raise SandboxValidationError("Thread ID 格式无效。")
+            return await service.read_thread(
+                session_id,
+                owner_resolver(request),
+                thread_id,
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+
     @app.post("/web/sandbox/sessions/{session_id}/threads/resume")
     async def _resume_sandbox_thread(
         session_id: str, request: Request
@@ -3324,7 +3350,7 @@ def mount_sandbox_routes(
                             break
             except asyncio.CancelledError:
                 raise
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - background task boundary
                 continuation_error = _safe_error_message(error)
             if continuation_error:
                 pairing.update(
@@ -3351,7 +3377,7 @@ def mount_sandbox_routes(
             try:
                 await service.connect(session_id, owner_id)
                 await service.update_workspace(session_id, owner_id, remote_repo_dir)
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - stream boundary
                 message = _safe_error_message(error)
                 pairing.update(
                     {

@@ -350,6 +350,11 @@ export interface AgentKitSandboxClient {
     query?: { cursor?: string; search?: string; archived?: boolean },
     options?: SandboxRequestOptions,
   ): Promise<SandboxThreadPage>;
+  readThread(
+    sessionId: string,
+    threadId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxThreadSnapshot>;
   newThread(
     sessionId: string,
     options?: SandboxRequestOptions,
@@ -1383,6 +1388,20 @@ export const sandboxClient: AgentKitSandboxClient = {
       options,
       fallback: "无法创建新的 Codex Thread。",
     }));
+  },
+
+  async readThread(sessionId, threadId, options = {}) {
+    if (!threadId) throw new Error("缺少要读取的 Codex Thread。");
+    return parseThreadSnapshot(
+      await sandboxJson(
+        sessionId,
+        `threads/${encodeURIComponent(threadId)}`,
+        {
+          options,
+          fallback: "无法读取 Codex 历史消息。",
+        },
+      ),
+    );
   },
 
   async resumeThread(sessionId, threadId, options = {}) {
