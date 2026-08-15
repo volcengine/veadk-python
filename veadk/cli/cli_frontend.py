@@ -44,6 +44,13 @@ from pydantic import BaseModel, Field
 
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
+from veadk.cli.studio_model_catalog import (
+    is_byteplus_model,
+    is_provider_modelark_base_url,
+    modelark_base_url,
+    provider_allows_model,
+    studio_agent_model_name,
+)
 from veadk.cli.studio_telemetry import studio_telemetry_config
 from veadk.utils.cloud_provider import (
     DEFAULT_BYTEPLUS_REGION,
@@ -109,6 +116,9 @@ _CP_PIPELINE_RUN_RE = re.compile(
     r"Pipeline triggered successfully,\s*run ID:\s*(?P<id>\S+)"
 )
 _RUNTIME_DESCRIPTION_MAX_BYTES = 255
+_RUNTIME_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_RUNTIME_NAME_MIN_LENGTH = 4
+_RUNTIME_NAME_MAX_LENGTH = 64
 _STUDIO_STORAGE_ENV_KEYS = (
     "VEADK_STUDIO_TOS_BUCKET",
     "VEADK_STUDIO_TOS_REGION",
@@ -124,6 +134,48 @@ _STUDIO_STORAGE_ENV_KEYS = (
     "DATABASE_TOS_REGION",
     "DATABASE_TOS_ENDPOINT",
 )
+
+
+def _adapt_migration_model_envs(
+    runtime_envs: dict[str, str],
+    provider: str,
+) -> None:
+    """Keep inherited migration model defaults on the Studio cloud provider."""
+    current_base = runtime_envs.get("MODEL_AGENT_API_BASE", "").strip()
+    other_provider = "volcengine" if provider == "byteplus" else "byteplus"
+    base_is_missing = not current_base
+    base_is_other_provider = bool(current_base) and is_provider_modelark_base_url(
+        other_provider,
+        current_base,
+    )
+    if base_is_missing or base_is_other_provider:
+        runtime_envs["MODEL_AGENT_API_BASE"] = modelark_base_url(provider)
+        runtime_envs["MODEL_AGENT_NAME"] = studio_agent_model_name(provider)
+    elif not is_provider_modelark_base_url(provider, current_base):
+        current_model = runtime_envs.get("MODEL_AGENT_NAME", "").strip()
+        if current_model and not runtime_envs.get("MODEL_NAME", "").strip():
+            runtime_envs["MODEL_NAME"] = current_model
+        return
+
+    else:
+        current_model = runtime_envs.get("MODEL_AGENT_NAME", "").strip()
+        model_is_other_provider = (
+            is_byteplus_model(current_model)
+            if provider == "volcengine"
+            else not provider_allows_model(provider, current_model)
+        )
+        if not current_model or model_is_other_provider:
+            runtime_envs["MODEL_AGENT_NAME"] = studio_agent_model_name(provider)
+
+    selected_model = runtime_envs["MODEL_AGENT_NAME"]
+    legacy_model = runtime_envs.get("MODEL_NAME", "").strip()
+    legacy_is_other_provider = (
+        is_byteplus_model(legacy_model)
+        if provider == "volcengine"
+        else not provider_allows_model(provider, legacy_model)
+    )
+    if not legacy_model or legacy_is_other_provider:
+        runtime_envs["MODEL_NAME"] = selected_model
 
 
 def _studio_storage_environment(
@@ -252,6 +304,23 @@ def _studio_account_id_from_remote_function(function: object) -> str:
 
 def _is_malformed_runtime_description_error(error: object) -> bool:
     return "invaliddescription.malformed" in str(error or "").lower()
+
+
+def _runtime_name_validation_error(name: str) -> str | None:
+    if not name:
+        return "Runtime 名称为必填项"
+    if not _RUNTIME_NAME_RE.fullmatch(name):
+        return "Runtime 名称只能包含英文字母、数字、下划线和连字符"
+    if not _RUNTIME_NAME_MIN_LENGTH <= len(name) <= _RUNTIME_NAME_MAX_LENGTH:
+        return "Runtime 名称长度须为 4-64 个字符"
+    return None
+
+
+def _runtime_deploy_error_detail(error: object, runtime_name: str) -> str:
+    detail = str(error or "")
+    if "invalidparameter.duplicatename" not in detail.lower():
+        return detail
+    return f"Runtime 名称“{runtime_name}”已存在，请修改名称后重新部署。"
 
 
 def _create_runtime_with_description_fallback(
@@ -1696,6 +1765,36 @@ def _run_frontend_server(
     def _sandbox_is_admin(request: Request) -> bool:
         return _request_role(request) == StudioRole.ADMIN
 
+    from frontend.server.migration.gateway import MigrationSandboxGateway
+    from frontend.server.migration.routes import mount_migration_routes
+    from frontend.server.migration.service import MigrationError, MigrationService
+
+    def _migration_owner(request: Request) -> str:
+        principal = _require_agent_management(request)
+        return principal.owner_id if principal is not None else "local"
+
+    def _migration_creator(request: Request) -> str:
+        principal = _require_agent_management(request)
+        return (
+            (principal.display_name or principal.owner_id)
+            if principal is not None
+            else "local"
+        )
+
+    migration_service = MigrationService(
+        MigrationSandboxGateway(
+            tools_client_factory=_sandbox_client,
+            region=os.getenv("AGENTKIT_SANDBOX_REGION"),
+        )
+    )
+    # Register exact migration routes before the dynamic sandbox-agent routes.
+    mount_migration_routes(
+        app,
+        migration_service,
+        owner_resolver=_migration_owner,
+        creator_resolver=_migration_creator,
+    )
+
     sandbox_gateway = AgentkitSandboxGateway(
         _sandbox_client,
         region_candidates=sandbox_region_candidates(
@@ -1812,6 +1911,7 @@ def _run_frontend_server(
             *_STUDIO_STORAGE_ENV_KEYS,
         }
     )
+    _RESERVED_RUNTIME_ENV_KEYS = frozenset({"VEADK_DISABLE_EXPIRE_AT"})
 
     def _collect_runtime_envs() -> dict[str, str]:
         """Return env vars that should be injected into a deployed runtime."""
@@ -1825,7 +1925,6 @@ def _run_frontend_server(
                 continue
             if k in _ENV_EXACT or any(k.startswith(p) for p in _ENV_PREFIXES):
                 out[str(k)] = str(v)
-        out["VEADK_DISABLE_EXPIRE_AT"] = "true"
         if provider == "byteplus":
             out["CLOUD_PROVIDER"] = "byteplus"
             out["AGENTKIT_CLOUD_PROVIDER"] = "byteplus"
@@ -3535,6 +3634,7 @@ def _run_frontend_server(
         runtime_id = (data.get("runtimeId") or "").strip()
         requested_runtime_name = (data.get("runtimeName") or agent_name).strip()
         files = data.get("files", [])
+        migration_task_id = str(data.get("migrationTaskId") or "").strip()
         config = data.get("config", {})
         task_id = str(data.get("taskId") or f"deploy-{id(request)}").strip()
         create_evaluation_sets = data.get("createEvaluationSets", True)
@@ -3542,7 +3642,7 @@ def _run_frontend_server(
         owner_id = principal.owner_id if principal else ""
         if not agent_name:
             raise HTTPException(status_code=400, detail="Agent name is required")
-        if not files:
+        if not files and not migration_task_id:
             raise HTTPException(status_code=400, detail="No files provided")
         if not isinstance(create_evaluation_sets, bool):
             raise HTTPException(
@@ -3670,6 +3770,11 @@ def _run_frontend_server(
                     status_code=400,
                     detail=f"Invalid environment variable name: {key}",
                 )
+            if key in _RESERVED_RUNTIME_ENV_KEYS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Reserved runtime environment variable: {key}",
+                )
             requested_runtime_envs[key] = str(item.get("value") or "")
         extra_runtime_envs = {
             key: value
@@ -3743,35 +3848,56 @@ def _run_frontend_server(
                     else:
                         os.environ[key] = value
 
-        # Write the generated project (+ agentkit.yaml) into a temp dir. Passing
-        # config_file makes the SDK resolve THIS dir as the project dir, so the
-        # live server process is never chdir'd.
+        # Materialize one validated source tree. Migration source is resolved
+        # server-side from the caller-owned Session; browser files are ignored.
         temp_dir = tempfile.mkdtemp(prefix=f"agentkit_deploy_{agent_name}_")
         base = PathlibPath(temp_dir).resolve()
-        for fi in files:
-            fp = fi.get("path", "")
-            if not fp or fp == "__init__.py":
-                continue
-            full = (base / fp).resolve()
-            if not full.is_relative_to(base):
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                raise HTTPException(status_code=400, detail=f"Illegal file path: {fp}")
-            full.parent.mkdir(parents=True, exist_ok=True)
-            full.write_text(fi.get("content", ""), encoding="utf-8")
-        if not (base / "app.py").exists():
+        try:
+            if migration_task_id:
+                entry_point = await asyncio.to_thread(
+                    migration_service.materialize_deployment,
+                    migration_task_id,
+                    owner_id or "local",
+                    base,
+                )
+            else:
+                from frontend.server.deployment_source import (
+                    DeploymentSourceError,
+                    write_inline_source,
+                )
+
+                try:
+                    entry_point = write_inline_source(base, files)
+                except DeploymentSourceError as error:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=str(error),
+                    ) from error
+        except MigrationError as error:
             shutil.rmtree(temp_dir, ignore_errors=True)
-            raise HTTPException(status_code=400, detail="No app.py found in files")
+            logger.warning(
+                "migration deployment source rejected task_id=%s code=%s",
+                migration_task_id,
+                error.code,
+            )
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            ) from error
+        except Exception:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
 
         # Collect env vars from the deployer's environment to forward into the
         # created runtime. The AgentKit platform only injects what we pass here,
         # so we explicitly forward the VeADK/Volcengine/tool-related vars the
-        # agent needs at boot. User-provided envs (from the UI) take priority
-        # over our defaults.
+        # agent needs at boot. User-provided custom model endpoints take priority;
+        # official endpoints from the other provider are corrected below.
         runtime_envs = _collect_runtime_envs()
         if existing_runtime is not None:
             for item in getattr(existing_runtime, "envs", None) or []:
                 key = str(getattr(item, "key", "") or "").strip()
-                if key:
+                if key and key not in _RESERVED_RUNTIME_ENV_KEYS:
                     runtime_envs[key] = str(getattr(item, "value", "") or "")
         for k, v in extra_runtime_envs.items():
             runtime_envs[k] = v
@@ -3804,6 +3930,8 @@ def _run_frontend_server(
                     "set MODEL_AGENT_API_KEY before deploying.",
                     e,
                 )
+        if migration_task_id:
+            _adapt_migration_model_envs(runtime_envs, provider)
         if feishu_enabled:
             runtime_envs.update(
                 {
@@ -3877,7 +4005,7 @@ def _run_frontend_server(
         agentkit_config = {
             "common": {
                 "agent_name": agent_name,
-                "entry_point": "app.py",
+                "entry_point": entry_point,
                 "description": _normalize_runtime_description(data.get("description")),
                 "python_version": "3.12",
                 "launch_type": "cloud",
@@ -3948,6 +4076,11 @@ def _run_frontend_server(
             )
 
         def _friendly_error(error_text: str) -> str:
+            duplicate_detail = _runtime_deploy_error_detail(
+                error_text, requested_runtime_name
+            )
+            if duplicate_detail != error_text:
+                return duplicate_detail
             if _is_tos_request_expired(error_text):
                 return (
                     "云构建拉取源码包时 TOS 临时下载签名已过期。"
@@ -4862,6 +4995,54 @@ def _run_frontend_server(
     _runtime_list_cache_ttl_seconds = 30.0
     _runtime_list_cache: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
     _runtime_list_locks: dict[tuple[Any, ...], asyncio.Lock] = {}
+
+    @app.get("/web/runtime-name-availability")
+    async def _web_runtime_name_availability(
+        request: Request,
+        response: Response,
+        name: str = "",
+        region: str = "",
+    ):
+        """Check one candidate name without exposing other Runtime details."""
+        _require_agent_management(request)
+        normalized_name = name.strip()
+        validation_error = _runtime_name_validation_error(normalized_name)
+        if validation_error:
+            raise HTTPException(status_code=400, detail=validation_error)
+        normalized_region = _coerce_cloud_region(region)
+        try:
+            from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+            from agentkit.sdk.runtime import types as _rt
+
+            ak, sk, token = _resolve_ve_credentials()
+            client = AgentkitRuntimeClient(
+                access_key=ak,
+                secret_key=sk,
+                session_token=token or "",
+                region=normalized_region,
+            )
+            runtime_filter = _rt.FiltersItemForListRuntimes.model_validate(
+                {"Name": "Name", "Values": [normalized_name]}
+            )
+            result = await asyncio.to_thread(
+                client.list_runtimes,
+                _rt.ListRuntimesRequest(
+                    max_results=1,
+                    filters=[runtime_filter],
+                ),
+            )
+            available = not any(
+                str(getattr(runtime, "name", "") or "") == normalized_name
+                for runtime in (result.agent_kit_runtimes or [])
+            )
+        except Exception as error:
+            logger.error("check Runtime name availability failed: %s", error)
+            raise HTTPException(
+                status_code=502,
+                detail="暂时无法检查 Runtime 名称，请稍后重试。",
+            ) from error
+        response.headers["Cache-Control"] = "no-store"
+        return {"available": available}
 
     @app.get("/web/runtimes")
     async def _web_runtimes(

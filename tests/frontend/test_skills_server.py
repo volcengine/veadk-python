@@ -677,7 +677,10 @@ def test_workbench_byteplus_uses_default_and_catalog_models(
     assert regions == ["ap-southeast-1"]
     assert capability["enabled"] is True
     assert capability["models"] == [
-        {"id": "seed-2-0-lite-260228", "label": "seed-2-0-lite-260228"},
+        {
+            "id": "dola-seed-2-1-turbo-260628",
+            "label": "dola-seed-2-1-turbo-260628",
+        },
         {"id": "deepseek-v4-flash-260425", "label": "DeepSeek V4 Flash"},
         {"id": "seed-2-0-mini-260215", "label": "seed-2-0-mini-260215"},
     ]

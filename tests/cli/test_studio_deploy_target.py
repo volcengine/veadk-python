@@ -1329,7 +1329,9 @@ def test_studio_deploy_byteplus_auto_provisions_four_sandbox_tools(
     assert len(dev_tools) == 1
     assert {str(call["kind"]) for call in agent_tools} == {"openclaw", "hermes"}
     assert {bool(call["enable_snapshot"]) for call in agent_tools} == {False, True}
-    assert {str(call["model_name"]) for call in agent_tools} == {"seed-2-0-lite-260228"}
+    assert {str(call["model_name"]) for call in agent_tools} == {
+        "dola-seed-2-1-turbo-260628"
+    }
     assert len(code_tools + dev_tools + agent_tools) == 7
     assert {
         float(call["create_min_interval"])
@@ -1338,10 +1340,10 @@ def test_studio_deploy_byteplus_auto_provisions_four_sandbox_tools(
     assert {str(call["provider"]) for call in code_credentials} == {"byteplus"}
     code_credentials_by_tool = {str(call["tool_id"]): call for call in code_credentials}
     assert code_credentials_by_tool["chat-tool"]["model_name"] == (
-        "seed-2-0-lite-260228"
+        "dola-seed-2-1-turbo-260628"
     )
     assert code_credentials_by_tool["chat-snapshot-tool"]["model_name"] == (
-        "seed-2-0-lite-260228"
+        "dola-seed-2-1-turbo-260628"
     )
     assert code_credentials_by_tool["dev-tool"]["model_name"] is None
     assert {str(call["provider"]) for call in agent_credentials} == {"byteplus"}
