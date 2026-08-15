@@ -208,7 +208,7 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(styles, /\.migration-workspace\s*\{[\s\S]*?grid-template-columns/);
   assert.match(
     styles,
-    /@media \(max-width: 980px\)[\s\S]*?\.migration-artifact-browser\s*\{[\s\S]*?grid-template-rows:/,
+    /@media \(max-width: 1120px\)[\s\S]*?\.migration-artifact-browser\s*\{[\s\S]*?grid-template-rows:/,
   );
   assert.match(styles, /overflow-wrap:\s*anywhere/);
   assert.match(styles, /--migration-content-width:\s*1180px/);
