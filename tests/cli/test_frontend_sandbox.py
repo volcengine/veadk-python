@@ -1165,11 +1165,10 @@ def test_codex_project_handoff_pairing_creates_temporary_session_and_continues(
     assert reused_with_different_payload.status_code == 422
     assert conflicting.status_code == 403
     assert continued.status_code == 200
-    assert (
-        'data: {"text": "reply:Read HANDOFF.md and continue the current task."}'
-        in continued.text
-    )
-    assert "event: done" in continued.text
+    assert '"stage": "connecting-session"' in continued.text
+    assert '"stage": "task-started"' in continued.text
+    assert 'data: {"reason": "accepted"}' in continued.text
+    assert "reply:Read HANDOFF.md" not in continued.text
     assert continued_twice.status_code == 403
     assert completed_status.status_code == 200
     assert completed_status.json()["state"] == "completed"

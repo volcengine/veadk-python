@@ -158,6 +158,8 @@ function progressRank(status: CodexProjectHandoffStatus): number {
       return 2;
     case "continuing":
       return 3;
+    case "running":
+      return 4;
     case "completed":
       return 4;
     case "failed":
@@ -186,6 +188,8 @@ function handoffStatusLabel(status: CodexProjectHandoffStatus): string {
       return "正在迁移项目";
     case "continuing":
       return "正在启动云端任务";
+    case "running":
+      return "云端执行中";
     case "completed":
       return "接力完成";
     case "failed":
@@ -310,7 +314,8 @@ export function SandboxProjectUploadDialog({
 
   useEffect(() => {
     if (
-      handoffStatus?.state !== "completed" ||
+      (handoffStatus?.state !== "running" &&
+        handoffStatus?.state !== "completed") ||
       !pairing ||
       completionNotifiedRef.current === pairing.pairingCode
     ) return;
@@ -587,7 +592,8 @@ export function SandboxProjectUploadDialog({
           <button type="button" onClick={onClose}>
             关闭
           </button>
-          {handoffStatus?.state === "completed" && handoffStatus.sessionId ? (
+          {(handoffStatus?.state === "running" ||
+            handoffStatus?.state === "completed") && handoffStatus.sessionId ? (
             <button
               type="button"
               className="is-primary"

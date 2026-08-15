@@ -115,6 +115,7 @@ export type CodexProjectHandoffState =
   | "creating"
   | "session-created"
   | "continuing"
+  | "running"
   | "completed"
   | "failed";
 
@@ -1278,6 +1279,7 @@ export const sandboxClient: AgentKitSandboxClient = {
       "creating",
       "session-created",
       "continuing",
+      "running",
       "completed",
       "failed",
     ]);

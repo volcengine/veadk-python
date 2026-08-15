@@ -95,6 +95,11 @@ class RetryableHandoffError(HandoffError):
     """A transient request failure that is safe to retry with an idempotency key."""
 
 
+def report_progress(message: str) -> None:
+    """Emit a flush-safe progress line for the invoking Codex task."""
+    print(f"[handoff] progress: {message}", flush=True)
+
+
 @dataclass(frozen=True)
 class ProjectState:
     repo: Path
@@ -707,6 +712,37 @@ def service_url(endpoint: str, route: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, ""))
 
 
+def tls_context() -> ssl.SSLContext:
+    """Build a verified TLS context that also trusts the macOS keychain."""
+    context = ssl.create_default_context()
+    if sys.platform != "darwin":
+        return context
+    security = shutil.which("security")
+    if not security:
+        return context
+    certificate_data = bytearray()
+    for keychain in (
+        "",
+        "/Library/Keychains/System.keychain",
+        "/System/Library/Keychains/SystemRootCertificates.keychain",
+    ):
+        command = [security, "find-certificate", "-a", "-p"]
+        if keychain:
+            command.append(keychain)
+        certificates = subprocess.run(
+            command,
+            capture_output=True,
+            check=False,
+        )
+        if certificates.returncode == 0:
+            certificate_data.extend(certificates.stdout)
+    if b"-----BEGIN CERTIFICATE-----" in certificate_data:
+        context.load_verify_locations(
+            cadata=certificate_data.decode("utf-8", errors="replace")
+        )
+    return context
+
+
 def connection(url: str) -> tuple[http.client.HTTPConnection, str]:
     parsed = urlsplit(url)
     host = parsed.hostname
@@ -717,7 +753,7 @@ def connection(url: str) -> tuple[http.client.HTTPConnection, str]:
             host,
             parsed.port or 443,
             timeout=330,
-            context=ssl.create_default_context(),
+            context=tls_context(),
         )
     elif parsed.scheme == "http":
         client = http.client.HTTPConnection(host, parsed.port or 80, timeout=330)
@@ -777,6 +813,10 @@ def post_json(
                 },
             )
             return response_json(client.getresponse(), action)
+        except ssl.SSLCertVerificationError as error:
+            raise HandoffError(
+                f"{action} could not verify the service TLS certificate"
+            ) from error
         except (OSError, RetryableHandoffError) as error:
             last_error = error
         finally:
@@ -826,6 +866,14 @@ def post_event_stream(url: str, payload: dict[str, Any], action: str) -> None:
                     if not isinstance(detail, str) or not detail:
                         detail = "the cloud continuation failed"
                     raise HandoffError(f"{action} failed: {detail}")
+                if event_name == "progress":
+                    try:
+                        progress_payload = json.loads(data_text) if data_text else {}
+                    except json.JSONDecodeError:
+                        progress_payload = {}
+                    progress_message = progress_payload.get("message")
+                    if isinstance(progress_message, str) and progress_message.strip():
+                        report_progress(progress_message.strip())
                 if event_name == "done":
                     try:
                         done_payload = json.loads(data_text) if data_text else {}
@@ -922,6 +970,10 @@ def upload_file(endpoint: str, source: Path, destination: str) -> dict[str, Any]
                     f"Sandbox upload failed: {value.get('error') or 'unknown error'}"
                 )
             return value
+        except ssl.SSLCertVerificationError as error:
+            raise HandoffError(
+                "Sandbox upload could not verify the service TLS certificate"
+            ) from error
         except OSError as error:
             last_error = error
         finally:
@@ -1188,6 +1240,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[handoff] retained local bundle: {output}")
         print(f"[handoff] bundle bytes: {bundle.stat().st_size}")
         handoff_id = uuid.uuid4().hex
+        report_progress("正在创建云端 Session")
         session = post_json(
             studio_base_url + "/web/sandbox/codex-project-handoff/sessions",
             {
@@ -1220,6 +1273,7 @@ def main(argv: list[str] | None = None) -> int:
                 ensure_ascii=False,
             )
         )
+        report_progress("云端 Session 已创建")
         remote_root = args.remote_home.rstrip("/")
         remote_bundle = f"{remote_root}/{slug(project_name)}-handoff.tar.gz"
         stage = f"{remote_root}/.studio-project-handoff/{slug(project_name)}-restore"
@@ -1228,10 +1282,13 @@ def main(argv: list[str] | None = None) -> int:
             remote_credentials = (
                 f"{remote_root}/.studio-github-credentials-{uuid.uuid4().hex}.json"
             )
+        restore_completed = False
         try:
+            report_progress("正在上传项目")
             upload_file(endpoint, bundle, remote_bundle)
             if credentials_file is not None and remote_credentials is not None:
                 upload_file(endpoint, credentials_file, remote_credentials)
+            report_progress("正在恢复项目")
             restored = remote_restore(
                 endpoint,
                 remote_bundle,
@@ -1239,16 +1296,20 @@ def main(argv: list[str] | None = None) -> int:
                 remote_repo,
                 remote_credentials,
             )
+            restore_completed = True
+            report_progress("项目恢复完成")
         finally:
-            if remote_credentials:
+            if not restore_completed:
+                report_progress("正在清理临时文件")
+                if remote_credentials:
+                    try:
+                        cleanup_remote_file(endpoint, remote_credentials)
+                    except HandoffError:
+                        pass
                 try:
-                    cleanup_remote_file(endpoint, remote_credentials)
+                    cleanup_remote_artifacts(endpoint, (remote_bundle, stage))
                 except HandoffError:
                     pass
-            try:
-                cleanup_remote_artifacts(endpoint, (remote_bundle, stage))
-            except HandoffError:
-                pass
         result = {
             "displayName": session.get("displayName") or display_name,
             "sessionId": session_id,
@@ -1259,6 +1320,7 @@ def main(argv: list[str] | None = None) -> int:
             "restored": True,
             "continued": False,
         }
+        report_progress("正在发送续跑任务")
         continue_in_studio(
             studio_base_url,
             session_id,

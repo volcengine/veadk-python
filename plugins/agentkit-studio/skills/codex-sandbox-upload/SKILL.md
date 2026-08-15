@@ -60,6 +60,11 @@ Do not claim that the remote environment is an exact copy of local Codex. It is 
        --yes
    ```
 
+   Keep the command attached until it returns. Relay each `[handoff] progress:`
+   line as concise progress to the user instead of waiting silently. The command
+   returns after Studio confirms that the cloud Codex accepted the continuation;
+   the cloud task then keeps running independently.
+
 9. Confirm that the script created a temporary Studio Sandbox, restored the project, and sent the continuation message. Report the Sandbox display name, session ID, remote project directory, restored file count, Git status, GitHub authentication result, and continuation status. Do not claim success when the continuation stream reports an error or closes before completion.
 
 ## Script options

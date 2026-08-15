@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -224,6 +225,34 @@ def test_service_url_preserves_private_endpoint_query(upload_project) -> None:
     )
 
 
+def test_tls_context_loads_macos_keychain_certificates(
+    upload_project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loaded: list[str] = []
+
+    class Context:
+        def load_verify_locations(self, *, cadata: str) -> None:
+            loaded.append(cadata)
+
+    monkeypatch.setattr(upload_project.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        upload_project.shutil, "which", lambda _name: "/usr/bin/security"
+    )
+    monkeypatch.setattr(upload_project.ssl, "create_default_context", Context)
+    monkeypatch.setattr(
+        upload_project.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=b"-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----\n",
+        ),
+    )
+
+    assert isinstance(upload_project.tls_context(), Context)
+    assert len(loaded) == 1
+    assert loaded[0].count("-----BEGIN CERTIFICATE-----") == 3
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -396,6 +425,58 @@ def test_event_stream_rejects_failed_completion_without_an_error_event(
         )
 
 
+def test_event_stream_reports_progress_and_returns_after_cloud_accepts_task(
+    upload_project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class Response:
+        status = 200
+
+        def __init__(self) -> None:
+            self._lines = iter(
+                [
+                    b"event: progress\n",
+                    '{"stage":"connecting-session","message":"正在连接云端 Session"}',
+                    b"\n",
+                    b"event: progress\n",
+                    '{"stage":"task-started","message":"云端 Codex 已接收任务，正在继续执行"}',
+                    b"\n",
+                    b"event: done\n",
+                    b'data: {"reason":"accepted"}\n',
+                    b"\n",
+                ]
+            )
+
+        def readline(self) -> bytes:
+            line = next(self._lines, b"")
+            if isinstance(line, str):
+                return f"data: {line}\n".encode()
+            return line
+
+    class Connection:
+        def request(self, *_args, **_kwargs) -> None:
+            pass
+
+        def getresponse(self):
+            return Response()
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        upload_project,
+        "connection",
+        lambda _url: (Connection(), "/messages"),
+    )
+
+    upload_project.post_event_stream(
+        "https://studio.example/messages", {}, "Studio cloud continuation"
+    )
+
+    output = capsys.readouterr().out
+    assert "[handoff] progress: 正在连接云端 Session" in output
+    assert "[handoff] progress: 云端 Codex 已接收任务，正在继续执行" in output
+
+
 def test_remote_restore_emits_heartbeat_while_restore_runs(
     upload_project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -445,6 +526,7 @@ def test_main_creates_temporary_session_restores_and_continues(
     _git(repo, "add", "app.py")
     created_payloads: list[dict[str, object]] = []
     continuations: list[tuple[str, str, str, str]] = []
+    cleanup_calls: list[tuple[str, tuple[str, ...]]] = []
 
     def fake_post_json(url, payload, action, **kwargs):
         assert url == (
@@ -479,7 +561,11 @@ def test_main_creates_temporary_session_restores_and_continues(
             (studio_url, session_id, pairing_code, remote_repo)
         ),
     )
-    monkeypatch.setattr(upload_project, "cleanup_remote_artifacts", lambda *_args: None)
+    monkeypatch.setattr(
+        upload_project,
+        "cleanup_remote_artifacts",
+        lambda endpoint, paths: cleanup_calls.append((endpoint, tuple(paths))),
+    )
 
     result = upload_project.main(
         [
@@ -511,3 +597,4 @@ def test_main_creates_temporary_session_restores_and_continues(
             "/home/gem/source",
         )
     ]
+    assert cleanup_calls == []

@@ -434,6 +434,11 @@
   color: hsl(142 55% 28%);
 }
 
+.sandbox-project-upload-progress > header strong[data-state="running"] {
+  background: hsl(210 72% 94%);
+  color: hsl(213 62% 34%);
+}
+
 .sandbox-project-upload-progress > header strong[data-state="failed"] {
   background: hsl(var(--destructive) / 0.08);
   color: hsl(var(--destructive));
@@ -451,21 +456,33 @@
 .sandbox-project-upload-progress li {
   position: relative;
   min-width: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
-  gap: 7px;
+  column-gap: 7px;
+  padding-right: 28px;
   color: hsl(var(--muted-foreground));
   font-size: 11.5px;
   line-height: 1.4;
 }
 
+.sandbox-project-upload-progress li > span:last-child {
+  min-width: 0;
+  white-space: nowrap;
+}
+
 .sandbox-project-upload-progress li:not(:last-child)::after {
-  width: 18px;
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  width: 16px;
   height: 1px;
-  flex: 1 1 auto;
-  margin: 0 6px;
   background: hsl(var(--border));
   content: "";
+}
+
+.sandbox-project-upload-progress li:last-child {
+  padding-right: 0;
 }
 
 .sandbox-project-upload-progress li[data-state="active"] {
@@ -611,6 +628,10 @@
 
   .sandbox-project-upload-progress li::after {
     display: none;
+  }
+
+  .sandbox-project-upload-progress li {
+    padding-right: 0;
   }
 }
 

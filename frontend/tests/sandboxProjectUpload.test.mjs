@@ -101,6 +101,9 @@ test("handoff progress can open the completed Codex session", () => {
   assert.match(dialogSource, /恢复项目/);
   assert.match(dialogSource, /发送续跑任务/);
   assert.match(dialogSource, /进入 Codex/);
+  assert.match(sandboxClientSource, /\| "running"/);
+  assert.match(dialogSource, /handoffStatus\?\.state === "running"/);
+  assert.match(dialogSource, /return "云端执行中"/);
   assert.match(dialogSource, /onOpenSession/);
   assert.match(appSource, /async function openCodexHandoffSession/);
   assert.match(appSource, /await sandboxClient\.listSessions\(\)/);
@@ -124,6 +127,17 @@ test("handoff choices and prompt content reserve stable space", () => {
   assert.match(dialogStyles, /\.sandbox-project-upload-command-content\s*\{[\s\S]*?height:\s*clamp\(/);
   assert.match(dialogSource, /className="sandbox-project-upload-command-content"/);
   assert.doesNotMatch(dialogSource, /pluginStatus === "installed" \? "云端接力 Prompt"/);
+});
+
+test("handoff progress labels stay on one line without connector pressure", () => {
+  assert.match(
+    dialogStyles,
+    /\.sandbox-project-upload-progress li > span:last-child\s*\{[\s\S]*?white-space:\s*nowrap/,
+  );
+  assert.match(
+    dialogStyles,
+    /\.sandbox-project-upload-progress li:not\(:last-child\)::after\s*\{[\s\S]*?position:\s*absolute/,
+  );
 });
 
 test("the Codex project handoff entry is named 接力", () => {

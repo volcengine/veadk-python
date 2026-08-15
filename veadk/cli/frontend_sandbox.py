@@ -2685,6 +2685,7 @@ def mount_sandbox_routes(
                 if isinstance(previous_response, dict) and pairing_state in {
                     "session-created",
                     "continuing",
+                    "running",
                     "completed",
                 }:
                     response = JSONResponse(dict(previous_response))
@@ -2738,6 +2739,18 @@ def mount_sandbox_routes(
                 raise SandboxSessionUnavailableError(
                     "AgentKit Session 已创建，但暂无可用 Endpoint。"
                 )
+            try:
+                conversation = await service.connect(session.instance_id, owner_id)
+                session = conversation.cloud
+            except Exception as error:
+                pairing.update(
+                    {
+                        "state": "failed",
+                        "failedStage": "creating-session",
+                        "error": _safe_error_message(error),
+                    }
+                )
+                raise
             pairing.update(
                 {
                     "state": "session-created",
@@ -3283,22 +3296,10 @@ def mount_sandbox_routes(
                     }
                 )
                 raise SandboxValidationError("云端接力缺少项目目录。")
-            try:
-                await service.connect(session_id, owner_id)
-                await service.update_workspace(session_id, owner_id, remote_repo_dir)
-            except SandboxError as error:
-                pairing.update(
-                    {
-                        "state": "failed",
-                        "failedStage": "continuing-task",
-                        "error": _safe_error_message(error),
-                    }
-                )
-                raise
         except SandboxError as error:
             raise _http_error(error) from error
 
-        async def _tracked_continuation_stream() -> AsyncIterator[str]:
+        async def _run_continuation() -> None:
             continuation_error = ""
             try:
                 async for frame in _sandbox_message_stream(
@@ -3321,29 +3322,89 @@ def mount_sandbox_routes(
                                     maximum=2_000,
                                 )
                             break
-                    yield frame
+            except asyncio.CancelledError:
+                raise
             except Exception as error:
                 continuation_error = _safe_error_message(error)
-                raise
-            finally:
-                if continuation_error:
-                    pairing.update(
-                        {
-                            "state": "failed",
-                            "failedStage": "continuing-task",
-                            "error": continuation_error,
-                        }
-                    )
-                else:
-                    pairing.update(
-                        {
-                            "state": "completed",
-                            "completedAt": int(time.time()),
-                        }
+            if continuation_error:
+                pairing.update(
+                    {
+                        "state": "failed",
+                        "failedStage": "continuing-task",
+                        "error": continuation_error,
+                    }
+                )
+            else:
+                pairing.update(
+                    {
+                        "state": "completed",
+                        "completedAt": int(time.time()),
+                    }
+                )
+
+        async def _start_continuation_stream() -> AsyncIterator[str]:
+            progress = {
+                "stage": "connecting-session",
+                "message": "正在连接云端 Session",
+            }
+            yield f"event: progress\ndata: {json.dumps(progress, ensure_ascii=False)}\n\n"
+            try:
+                await service.connect(session_id, owner_id)
+                await service.update_workspace(session_id, owner_id, remote_repo_dir)
+            except Exception as error:
+                message = _safe_error_message(error)
+                pairing.update(
+                    {
+                        "state": "failed",
+                        "failedStage": "continuing-task",
+                        "error": message,
+                    }
+                )
+                payload = {
+                    "code": getattr(error, "code", "SANDBOX_ERROR"),
+                    "message": message,
+                    "retryable": getattr(error, "retryable", False),
+                }
+                yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                yield 'event: done\ndata: {"reason": "failed"}\n\n'
+                return
+
+            pairing.update(
+                {
+                    "state": "running",
+                    "taskStartedAt": int(time.time()),
+                }
+            )
+            continuation_task = asyncio.create_task(
+                _run_continuation(),
+                name=f"codex-project-handoff-{session_id}",
+            )
+            pairing["continuationTask"] = continuation_task
+
+            def _release_continuation_task(task: asyncio.Task[None]) -> None:
+                if pairing.get("continuationTask") is task:
+                    pairing.pop("continuationTask", None)
+                if task.cancelled():
+                    return
+                error = task.exception()
+                if error is not None:
+                    logger.warning(
+                        "Codex project handoff task failed for %s: %s",
+                        session_id,
+                        _safe_error_message(error),
                     )
 
+            continuation_task.add_done_callback(_release_continuation_task)
+            accepted = {
+                "stage": "task-started",
+                "message": "云端 Codex 已接收任务，正在继续执行",
+                "sessionId": session_id,
+            }
+            yield f"event: progress\ndata: {json.dumps(accepted, ensure_ascii=False)}\n\n"
+            yield 'event: done\ndata: {"reason": "accepted"}\n\n'
+
         return StreamingResponse(
-            _tracked_continuation_stream(),
+            _start_continuation_stream(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
