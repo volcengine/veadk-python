@@ -278,14 +278,30 @@ function formatDate(value: string | number): string {
   });
 }
 
-function remainingLabel(task: MigrationTask, now: number): string {
+function migrationExpiryCopy(
+  task: MigrationTask,
+  now: number,
+): { title: string; detail: string } {
   const expiry = new Date(task.expiresAt).getTime();
-  if (!Number.isFinite(expiry)) return "迁移环境保留 1 小时";
-  if (task.state === "expired" || now >= expiry) return "已过期";
+  if (!Number.isFinite(expiry)) {
+    return {
+      title: "迁移环境保留 1 小时",
+      detail: "过期后无法查看会话，也无法预览、下载或部署产物",
+    };
+  }
+  if (task.state === "expired" || now >= expiry) {
+    return {
+      title: "迁移环境已过期",
+      detail: "会话和产物已无法访问",
+    };
+  }
   const remaining = Math.max(0, expiry - now);
   const minutes = Math.floor(remaining / 60_000);
   const seconds = Math.floor((remaining % 60_000) / 1_000);
-  return `剩余 ${minutes}:${String(seconds).padStart(2, "0")}`;
+  return {
+    title: `迁移环境将在 ${minutes} 分 ${seconds} 秒后过期`,
+    detail: "过期后无法查看会话，也无法预览、下载或部署产物",
+  };
 }
 
 function expireTasksAtDeadline(
@@ -1334,6 +1350,7 @@ export function MigrationWorkspace({
   const composerFile = sourceFile;
   const composerBusy = action === "create" || action === "upload";
   const showComposer = !task || task.canUpload;
+  const expiryCopy = task ? migrationExpiryCopy(task, now) : null;
 
   return (
     <>
@@ -1414,7 +1431,12 @@ export function MigrationWorkspace({
                     {action === "stop" ? "正在终止…" : "终止迁移"}
                   </button>
                 ) : null}
-                <span className="migration-ttl">{remainingLabel(task, now)}</span>
+                {expiryCopy ? (
+                  <div className="migration-ttl" aria-live="off">
+                    <strong>{expiryCopy.title}</strong>
+                    <small>{expiryCopy.detail}</small>
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </header>

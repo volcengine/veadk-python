@@ -136,6 +136,17 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(source, /重新读取/);
   assert.match(source, /function expireTasksAtDeadline/);
   assert.match(source, /setTasks\(\(current\) => expireTasksAtDeadline/);
+  assert.match(source, /function migrationExpiryCopy/);
+  assert.match(source, /迁移环境将在 \$\{minutes\} 分 \$\{seconds\} 秒后过期/);
+  assert.match(source, /过期后无法查看会话，也无法预览、下载或部署产物/);
+  assert.match(source, /会话和产物已无法访问/);
+  assert.doesNotMatch(source, /剩余 \$\{minutes\}:/);
+  assert.match(
+    source,
+    /className="migration-ttl" aria-live="off"[\s\S]*?<strong>[\s\S]*?<small>/,
+  );
+  assert.match(styles, /\.migration-ttl strong/);
+  assert.match(styles, /\.migration-ttl small/);
   assert.match(source, /path: "migration-result\.json"/);
   assert.doesNotMatch(
     source,

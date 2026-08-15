@@ -220,9 +220,25 @@
 
 .migration-ttl {
   flex: 0 0 auto;
-  color: hsl(var(--muted-foreground));
+  display: grid;
+  justify-items: end;
+  gap: 1px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.migration-ttl strong {
+  color: hsl(var(--foreground));
   font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
   font-variant-numeric: tabular-nums;
+}
+
+.migration-ttl small {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .migration-main__header-actions {
