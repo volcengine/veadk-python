@@ -4,8 +4,10 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type MouseEventHandler,
   type WheelEvent,
 } from "react";
+import { Share } from "@openai/apps-sdk-ui/components/Icon";
 import {
   ArrowLeft,
   Check,
@@ -81,6 +83,7 @@ import {
   eventsToTurns,
   sessionTitle,
   type Block,
+  type IntelligentDevelopmentReleaseRef,
   type Turn,
   type TurnActivityDetail,
 } from "./blocks";
@@ -122,14 +125,17 @@ import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
 import { Composer } from "./ui/Composer";
 import { InvocationChips } from "./ui/InvocationChips";
 import { MediaGroup } from "./ui/Media";
-import { QuickCreate, type QuickCreateKind } from "./ui/QuickCreate";
 import { StackCards } from "./ui/AddAgentMenu";
 import { IntelligentCreate } from "./create/IntelligentCreate";
+import { IntelligentDeployment } from "./create/IntelligentDeployment";
 import { CustomCreate } from "./create/CustomCreate";
-import { TemplateCreate } from "./create/TemplateCreate";
-import { WorkflowCreate } from "./create/WorkflowCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
+import { MigrationWorkspace } from "./migrations/MigrationWorkspace";
 import type { AgentDraft } from "./create/types";
+import {
+  hydrateRuntimeModelSelection,
+  isRuntimeModelSelectionEnv,
+} from "./create/modelSource";
 import {
   loadWorkspaceDrafts,
   workspaceDraftsKey,
@@ -150,6 +156,7 @@ import {
   NEW_CHAT_TASK_TOOLS,
 } from "./ui/new-chat-modes/taskTools";
 import {
+  intelligentDevelopmentClient,
   sandboxClient,
   type SandboxApproval,
   type SandboxApprovalDecision,
@@ -163,7 +170,10 @@ import {
   type SandboxThreadSummary,
   type SandboxToolLaunch,
 } from "./adk/sandbox";
-import { getSandboxCapability } from "./adk/newChatCapabilities";
+import {
+  getSandboxAgentCapability,
+  getSandboxCapability,
+} from "./adk/newChatCapabilities";
 import { getSkillWorkbenchCapability } from "./ui/skill-workbench/api";
 import {
   createVideoTask,
@@ -208,8 +218,6 @@ import { SandboxProjectUploadDialog } from "./ui/SandboxProjectUploadDialog";
 import { sandboxSnapshotTurns } from "./ui/sandboxCommands";
 import { useSandboxCodexCommands } from "./ui/useSandboxCodexCommands";
 import { StudioConfirmDialog } from "./ui/StudioConfirmDialog";
-import { VibeTaskWorkspace } from "./ui/vibe/VibeTaskWorkspace";
-import { vibeClient, type VibeTask } from "./adk/vibe";
 import byteplusLogo from "./assets/byteplus.svg";
 import defaultSiteLogo from "./assets/logo.svg";
 import {
@@ -219,6 +227,24 @@ import {
 } from "./ui/icons/FeedbackIcons";
 
 interface IssueFeedbackTarget {
+  turn: Turn;
+  input: string;
+}
+
+interface ShareMessageTarget {
+  targetTurn: HTMLElement;
+}
+
+interface ResponseAnnotationTarget {
+  selectionId: number;
+  turn: Turn;
+  input: string;
+  selectedText: string;
+  anchor: ResponseAnnotationAnchor;
+}
+
+interface ResponseAnnotationContext {
+  enabled: boolean;
   turn: Turn;
   input: string;
 }
@@ -247,8 +273,14 @@ interface NewChatCapabilitiesState {
 async function probeNewChatCapabilities(
   agentId: string,
 ): Promise<NewChatCapabilitiesState> {
-  const [sandboxResult, skillResult, harnessResult] = await Promise.allSettled([
+  const [
+    sandboxResult,
+    deepseekHarnessResult,
+    skillResult,
+    harnessResult,
+  ] = await Promise.allSettled([
     getSandboxCapability(),
+    getSandboxAgentCapability("deepseek-harness"),
     getSkillWorkbenchCapability(),
     agentId ? listSessionBuiltinTools(agentId) : Promise.resolve<string[]>([]),
   ]);
@@ -270,9 +302,8 @@ async function probeNewChatCapabilities(
   };
 }
 
-type CreateMode = QuickCreateKind | "package";
-
-type CreateView = "menu" | CreateMode | null;
+type CreateView = "custom" | "package" | "migration" | null;
+type AppView = CreateView | "intelligent";
 type CustomCreateMode = "custom" | "yaml_import";
 
 // Persist the last view so a page refresh restores where the user was.
@@ -372,18 +403,29 @@ function mentionableDescendants(node: AgentNode): AgentTarget[] {
   return targets;
 }
 
-function loadView(): CreateView {
+function loadView(): AppView {
   const v = typeof localStorage !== "undefined" ? localStorage.getItem(LS.view) : null;
-  return v === "menu" || v === "intelligent" || v === "custom" || v === "template" || v === "workflow"
-    ? v
-    : null;
+  if (v === "intelligent") return v;
+  if (["menu", "custom", "template", "workflow"].includes(v ?? "")) {
+    return "custom";
+  }
+  return v === "package" || v === "migration" ? v : null;
 }
 import { TraceDrawer } from "./ui/TraceDrawer";
 import { LoginPage } from "./ui/LoginPage";
 import { AuthExpiredDialog } from "./ui/AuthExpiredDialog";
 import { IssueFeedbackDialog } from "./ui/IssueFeedbackDialog";
+import { ShareMessageDialog } from "./ui/ShareMessageDialog";
+import { ResponseAnnotationPopover } from "./ui/ResponseAnnotationPopover";
+import {
+  formatResponseAnnotationComment,
+  responseSelectionWithin,
+  type ResponseAnnotationAnchor,
+} from "./ui/responseAnnotation";
 import { PlatformFeedback } from "./ui/PlatformFeedback";
 import { Markdown } from "./ui/Markdown";
+import { withAuth } from "./adk/auth";
+import { withLocalUser } from "./adk/identity";
 import {
   clearLocalUser,
   logout,
@@ -405,6 +447,7 @@ import {
   identifyTelemetryUser,
   initTelemetry,
   setTelemetryContext,
+  trackStudioEntryViewed,
   trackStudioSessionStarted,
   type AgentConnectStartedProps,
   type AgentConnectSucceededProps,
@@ -558,6 +601,7 @@ function turnHasVisibleContent(turn: Turn): boolean {
     if (b.kind === "text") return b.text.trim().length > 0;
     if (b.kind === "attachment") return b.files.length > 0;
     if (b.kind === "artifact") return b.files.length > 0;
+    if (b.kind === "delivery") return true;
     if (b.kind === "tool") return !(b.name === A2UI_TOOL_NAME && b.done);
     if (b.kind === "agent-transfer") return false;
     if (b.kind === "a2ui") return buildSurfaces(b.messages).some((s) => s.components[s.rootId]);
@@ -679,6 +723,24 @@ function CopyButton({ text }: { text: string }) {
       }}
     >
       {copied ? <Check className="icon" /> : <Copy className="icon" />}
+    </button>
+  );
+}
+
+function ShareMessageButton({
+  onClick,
+}: {
+  onClick: MouseEventHandler<HTMLButtonElement>;
+}) {
+  return (
+    <button
+      type="button"
+      className="icon-btn"
+      aria-label="分享为图片"
+      title="分享为图片"
+      onClick={onClick}
+    >
+      <Share className="icon" aria-hidden="true" />
     </button>
   );
 }
@@ -903,6 +965,7 @@ export default function App() {
   const [sandboxThreadDeleteTarget, setSandboxThreadDeleteTarget] =
     useState<SandboxThreadSummary | null>(null);
   const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
+  const intelligentCreateAbortRef = useRef<AbortController | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
   const sandboxSessionIdRef = useRef(sandboxSession?.id ?? "");
   const sandboxActiveAssistantTurnIdRef = useRef("");
@@ -1030,18 +1093,43 @@ export default function App() {
   const [newChatSkillTarget, setNewChatSkillTarget] =
     useState<NewChatSkillTarget | null>(null);
   const [newChatTask, setNewChatTask] = useState<NewChatTask | null>(null);
-  const [vibeTasks, setVibeTasks] = useState<VibeTask[]>([]);
-  const [selectedVibeTaskId, setSelectedVibeTaskId] = useState("");
-  const selectedVibeTask = vibeTasks.find((task) => task.taskId === selectedVibeTaskId) ?? null;
-  const updateVibeTask = useCallback((next: VibeTask) => {
-    setVibeTasks((current) => {
-      const index = current.findIndex((task) => task.taskId === next.taskId);
-      if (index < 0) return [next, ...current];
-      const updated = [...current];
-      updated[index] = next;
-      return updated;
-    });
-  }, []);
+  const [intelligentCapabilities, setIntelligentCapabilities] = useState<{
+    enabled: boolean;
+    reason: string;
+  } | null>(null);
+  const [intelligentCapabilitiesLoading, setIntelligentCapabilitiesLoading] =
+    useState(true);
+  const [intelligentCapabilitiesError, setIntelligentCapabilitiesError] =
+    useState("");
+  const [intelligentCreating, setIntelligentCreating] = useState(false);
+  const [intelligentDeployment, setIntelligentDeploymentState] =
+    useState<IntelligentDevelopmentReleaseRef | null>(null);
+  const setIntelligentDeployment = useCallback(
+    (delivery: IntelligentDevelopmentReleaseRef | null) => {
+      setIntelligentDeploymentState(delivery);
+      const url = new URL(window.location.href);
+      if (delivery) {
+        url.searchParams.set("view", "runtime-deploy");
+        url.searchParams.set("source", "intelligent-development");
+        url.searchParams.set("sessionId", delivery.sessionId);
+        url.searchParams.set("artifactSha256", delivery.artifactSha256);
+        url.searchParams.set(
+          "validationReportSha256",
+          delivery.validationReportSha256,
+        );
+      } else {
+        for (const key of [
+          "view",
+          "source",
+          "sessionId",
+          "artifactSha256",
+          "validationReportSha256",
+        ]) url.searchParams.delete(key);
+      }
+      window.history.replaceState(null, "", url);
+    },
+    [],
+  );
   const [videoTask, setVideoTask] = useState<VideoGenerationTask | null>(null);
   const [videoTaskDialogOpen, setVideoTaskDialogOpen] = useState(false);
   const videoTaskRef = useRef<VideoGenerationTask | null>(null);
@@ -1097,16 +1185,22 @@ export default function App() {
     streamPresentationTimersRef.current.delete(sid);
     setStreamPresentationSids((current) => new Set(current).add(sid));
   };
+  const completeStreamPresentation = (sid: string) => {
+    const timer = streamPresentationTimersRef.current.get(sid);
+    if (timer !== undefined) window.clearTimeout(timer);
+    streamPresentationTimersRef.current.delete(sid);
+    setStreamPresentationSids((current) => {
+      if (!current.has(sid)) return current;
+      const next = new Set(current);
+      next.delete(sid);
+      return next;
+    });
+  };
   const finishStreamPresentation = (sid: string) => {
     const previousTimer = streamPresentationTimersRef.current.get(sid);
     if (previousTimer !== undefined) window.clearTimeout(previousTimer);
     const timer = window.setTimeout(() => {
-      streamPresentationTimersRef.current.delete(sid);
-      setStreamPresentationSids((current) => {
-        const next = new Set(current);
-        next.delete(sid);
-        return next;
-      });
+      completeStreamPresentation(sid);
     }, 2400);
     streamPresentationTimersRef.current.set(sid, timer);
   };
@@ -1358,8 +1452,16 @@ export default function App() {
   );
   const [issueFeedbackTarget, setIssueFeedbackTarget] =
     useState<IssueFeedbackTarget | null>(null);
+  const [shareMessageTarget, setShareMessageTarget] =
+    useState<ShareMessageTarget | null>(null);
+  const [responseAnnotationTarget, setResponseAnnotationTarget] =
+    useState<ResponseAnnotationTarget | null>(null);
   const [platformFeedbackOrigin, setPlatformFeedbackOrigin] =
     useState<string | null>(null);
+
+  useEffect(() => {
+    setResponseAnnotationTarget(null);
+  }, [appName, sessionId]);
   const [traceOpen, setTraceOpen] = useState(false);
   const [traceEndTimeMs, setTraceEndTimeMs] = useState<number>();
   const [greeting, setGreeting] = useState(pickGreeting);
@@ -1384,6 +1486,7 @@ export default function App() {
     history: true,
     addAgent: true,
     manageAgents: true,
+    agentUsage: false,
     addAgentkit: true,
   });
   const [agentsSource, setAgentsSource] = useState<"local" | "cloud">("cloud");
@@ -1391,6 +1494,7 @@ export default function App() {
   const [cloudProvider, setCloudProvider] =
     useState<UiConfig["provider"]>("volcengine");
   const [version, setVersion] = useState("");
+  const [studioRegion, setStudioRegion] = useState("");
   const [uiConfigLoaded, setUiConfigLoaded] = useState(false);
   const [localMode, setLocalMode] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
@@ -1419,7 +1523,13 @@ export default function App() {
     : conversationBusy;
   const activeConversationPresenting =
     activeConversationBusy || (!sandboxSession && presentingStream);
+  const sandboxClientForSession = sandboxSession?.intelligentDevelopment === true
+    ? intelligentDevelopmentClient
+    : sandboxClient;
   const sandboxCommands = useSandboxCodexCommands({
+    client: sandboxClientForSession,
+    allowSkillSelection: sandboxSession?.intelligentDevelopment !== true,
+    allowThreadManagement: sandboxSession?.intelligentDevelopment !== true,
     session: sandboxSession,
     conversationBusy: sandboxBusy,
     onInputChange: setInput,
@@ -1633,7 +1743,7 @@ export default function App() {
       });
     }
   };
-  const [createView, setCreateView] = useState<CreateView>(loadView);
+  const [createView, setCreateView] = useState<AppView>(loadView);
   const [deploymentTasks, setDeploymentTasks] = useState<
     DeploymentTaskUpdate[]
   >([]);
@@ -2128,10 +2238,10 @@ export default function App() {
       const fallbackRegion = runtimeUpdateTarget?.region ?? newRuntimeRegion;
       const agentId = await connectRuntime(
         result.runtimeId,
-        result.agentName,
+        result.runtimeName,
         result.region ?? fallbackRegion,
         result.version,
-        { waitForReady: true },
+        { waitForReady: true, agentName: result.agentName },
       );
       setConnections(loadConnections());
       setAgentInfoRefreshKey((key) => key + 1);
@@ -2155,6 +2265,88 @@ export default function App() {
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   const turnNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const responseAnnotationSelectionIdRef = useRef(0);
+  const responseAnnotationContextsRef = useRef<
+    Map<number, ResponseAnnotationContext>
+  >(new Map());
+  const responseAnnotationRuntimeAvailable = connections.some(
+    (connection) =>
+      Boolean(connection.runtimeId && connection.region) &&
+      connection.apps.some((app) => remoteAppId(connection.id, app) === appName),
+  );
+  useLayoutEffect(() => {
+    const contexts = new Map<number, ResponseAnnotationContext>();
+    turns.forEach((turn, index) => {
+      const feedbackEventId = turn.meta?.eventId ?? "";
+      const canRate = Boolean(
+        responseAnnotationRuntimeAvailable && feedbackEventId && turnText(turn),
+      );
+      const turnIsStreaming = index === turns.length - 1 && (
+        activeConversationBusy || presentingStream
+      );
+      contexts.set(index, {
+        enabled: Boolean(
+          canRate &&
+          cloudProvider !== "byteplus" &&
+          !turnIsStreaming &&
+          !turnAwaitingAuth(turn)
+        ),
+        turn,
+        input: canRate ? previousUserTurnText(turns, index) : "",
+      });
+    });
+    responseAnnotationContextsRef.current = contexts;
+  }, [
+    activeConversationBusy,
+    cloudProvider,
+    presentingStream,
+    responseAnnotationRuntimeAvailable,
+    turns,
+  ]);
+  const openResponseAnnotation = useCallback(() => {
+    const selection = window.getSelection();
+    const anchorElement = selection?.anchorNode instanceof Element
+      ? selection.anchorNode
+      : selection?.anchorNode?.parentElement;
+    const container = anchorElement?.closest<HTMLDivElement>(".turn--assistant");
+    if (!container) return;
+    const turnIndex = Number(container.dataset.responseAnnotationIndex);
+    if (!Number.isInteger(turnIndex)) return;
+    const context = responseAnnotationContextsRef.current.get(turnIndex);
+    if (!context?.enabled) return;
+    const selected = responseSelectionWithin(container, selection);
+    if (!selected) return;
+    setResponseAnnotationTarget({
+      selectionId: ++responseAnnotationSelectionIdRef.current,
+      turn: context.turn,
+      input: context.input,
+      selectedText: selected.text,
+      anchor: selected.anchor,
+    });
+  }, []);
+  useEffect(() => {
+    let selectionFrame: number | null = null;
+    const queueSelection = (event: MouseEvent | KeyboardEvent) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest(".response-annotation-popover")
+      ) {
+        return;
+      }
+      if (selectionFrame !== null) window.cancelAnimationFrame(selectionFrame);
+      selectionFrame = window.requestAnimationFrame(() => {
+        selectionFrame = null;
+        openResponseAnnotation();
+      });
+    };
+    document.addEventListener("mouseup", queueSelection, true);
+    document.addEventListener("keyup", queueSelection, true);
+    return () => {
+      if (selectionFrame !== null) window.cancelAnimationFrame(selectionFrame);
+      document.removeEventListener("mouseup", queueSelection, true);
+      document.removeEventListener("keyup", queueSelection, true);
+    };
+  }, [openResponseAnnotation]);
   const conversationAutoFollowRef = useRef(true);
   const conversationSmoothScrollRef = useRef(false);
   const conversationSmoothTimerRef = useRef<number | null>(null);
@@ -2332,31 +2524,85 @@ export default function App() {
   }, [localMode, userId]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !userId) {
-      setVibeTasks([]);
-      setSelectedVibeTaskId("");
-      return;
-    }
+    if (authStatus !== "authenticated" || !userId || intelligentDeployment) return;
+    const query = new URLSearchParams(window.location.search);
+    if (
+      query.get("view") !== "runtime-deploy" ||
+      query.get("source") !== "intelligent-development"
+    ) return;
+    const sessionId = query.get("sessionId") ?? "";
+    const artifactSha256 = query.get("artifactSha256") ?? "";
+    const validationReportSha256 = query.get("validationReportSha256") ?? "";
+    if (!sessionId || !artifactSha256 || !validationReportSha256) return;
     const controller = new AbortController();
-    void vibeClient.list(controller.signal)
-      .then((tasks) => {
-        setVibeTasks(tasks);
-        setSelectedVibeTaskId((current) => {
-          if (current && tasks.some((task) => task.taskId === current)) return current;
-          const recoverable = tasks.find(
-            (task) => !["completed", "partial", "blocked", "failed", "cancelled", "expired"].includes(task.state),
-          );
-          return recoverable?.taskId ?? tasks[0]?.taskId ?? "";
+    const params = new URLSearchParams({
+      sessionId,
+      artifactSha256,
+      validationReportSha256,
+    });
+    void fetch(withAuth(`/web/intelligent-development/releases/summary?${params}`), {
+      headers: withLocalUser({ Accept: "application/json" }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`无法恢复已验证交付物（HTTP ${response.status}）`);
+        return response.json() as Promise<IntelligentDevelopmentReleaseRef>;
+      })
+      .then((delivery) => {
+        if (!controller.signal.aborted) setIntelligentDeploymentState({
+          ...delivery,
+          validatedAt: delivery.validatedAt || "",
+          gateSummary: delivery.gateSummary || [],
         });
       })
       .catch((cause) => {
         if (!controller.signal.aborted) {
-          setError(cause instanceof Error ? cause.message : String(cause));
+          setIntelligentCapabilitiesError(
+            cause instanceof Error ? cause.message : String(cause),
+          );
+        }
+      });
+    return () => controller.abort();
+  }, [authStatus, intelligentDeployment, userId]);
+
+  useEffect(() => {
+    if (!addMenu && createView !== "intelligent") return;
+    if (authStatus !== "authenticated" || !userId) {
+      setIntelligentCapabilities(null);
+      setIntelligentCapabilitiesError("");
+      setIntelligentCapabilitiesLoading(true);
+      return;
+    }
+    const controller = new AbortController();
+    setIntelligentCapabilitiesLoading(true);
+    setIntelligentCapabilitiesError("");
+    void fetch(withAuth("/web/intelligent-development/capabilities"), {
+      headers: withLocalUser({ Accept: "application/json" }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`智能开发能力检查失败（HTTP ${response.status}）`);
+        return response.json() as Promise<{ enabled?: unknown; reason?: unknown }>;
+      })
+      .then((value) => {
+        if (controller.signal.aborted) return;
+        setIntelligentCapabilities({
+          enabled: value.enabled === true,
+          reason: typeof value.reason === "string" ? value.reason : "",
+        });
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted) {
+          setIntelligentCapabilitiesError(
+            cause instanceof Error ? cause.message : String(cause),
+          );
         }
       })
-;
+      .finally(() => {
+        if (!controller.signal.aborted) setIntelligentCapabilitiesLoading(false);
+      });
     return () => controller.abort();
-  }, [authStatus, userId]);
+  }, [addMenu, authStatus, createView, userId]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || !userId) {
@@ -2436,10 +2682,13 @@ export default function App() {
         studioVersion: studio?.version || cfg.version,
         environment,
         cloudProvider: cfg.provider,
+        accountId: studio?.accountId ?? "",
       });
+      trackStudioEntryViewed({ authState: "anonymous" });
       setFeatures(cfg.features);
       setAgentsSource(cfg.agentsSource);
       setCloudProvider(cfg.provider);
+      setStudioRegion(studio?.region || defaultCloudRegion(cfg.provider));
       setSiteBranding(cfg.branding);
       setVersion(cfg.version);
       setUiConfigLoaded(true);
@@ -2457,6 +2706,7 @@ export default function App() {
     if (!userUniqueId) return;
     identifyTelemetryUser({
       userUniqueId,
+      accountId: access.telemetry.accountId ?? "",
       userRole: access.role === "admin" ? "admin" : "member",
       userSource: localMode ? "local" : "sso",
     });
@@ -2857,6 +3107,7 @@ export default function App() {
   useEffect(
     () => () => {
       sandboxLaunchAbortRef.current?.abort();
+      intelligentCreateAbortRef.current?.abort();
       sandboxMessageAbortRef.current?.abort();
     },
     [],
@@ -2970,7 +3221,7 @@ export default function App() {
     setSandboxLaunchError("");
     if (
       !sandboxSession &&
-      newChatMode === "temporary" &&
+      newChatMode !== "agent" &&
       !sandboxLaunchFromAgents
     ) {
       setNewChatMode("agent");
@@ -3011,7 +3262,40 @@ export default function App() {
         setMyAgents(true);
         return;
       }
-      if (sandboxLaunchKind !== "codex") return;
+      if (sandboxLaunchKind !== "codex") {
+        const workspace = await sandboxClient.openAgentSession(
+          sandboxLaunchKind,
+          createdSession.id,
+          { signal: controller.signal },
+        );
+        if (sandboxLaunchAbortRef.current !== controller) return;
+        viewSidRef.current = "";
+        setSessionId("");
+        setPendingTurns([]);
+        setInput("");
+        setInvocation(emptyInvocation());
+        setNewChatMode(
+          sandboxLaunchKind === "deepseek-harness" ? "deepseek-harness" : "agent",
+        );
+        discardDraftAttachments(attachments);
+        setAttachments([]);
+        releaseAllSandboxPreviews();
+        setSandboxTurns([]);
+        setSandboxSession(null);
+        setCreateView(null);
+        setSkillCenter(false);
+        setAddAgent(false);
+        setAddMenu(false);
+        setSearchView(false);
+        setManageAgents(false);
+        setAgentDetailTarget(null);
+        setMyAgents(false);
+        setSandboxAgentDetailTarget(null);
+        setSandboxAgentWorkspace(workspace);
+        setSandboxLaunchOpen(false);
+        setSandboxLaunchState("confirm");
+        return;
+      }
       const nextSession = await sandboxClient.connectSession(createdSession.id, {
         signal: controller.signal,
       });
@@ -3203,7 +3487,10 @@ export default function App() {
     const closingSession = sandboxSession;
     setSandboxSession(null);
     if (closingSession) {
-      void sandboxClient
+      const closingClient = closingSession.intelligentDevelopment
+        ? intelligentDevelopmentClient
+        : sandboxClient;
+      void closingClient
         .closeSession(closingSession.id)
         .catch((closeError) => setError(String(closeError)));
     }
@@ -3218,8 +3505,8 @@ export default function App() {
     setSandboxToolLoading(true);
     try {
       const launch = kind === "terminal"
-        ? await sandboxClient.launchTerminal(activeSession.id)
-        : await sandboxClient.launchBrowser(activeSession.id);
+        ? await sandboxClientForSession.launchTerminal(activeSession.id)
+        : await sandboxClientForSession.launchBrowser(activeSession.id);
       setSandboxToolLaunch(launch);
     } catch (cause) {
       setSandboxToolError(
@@ -3263,7 +3550,7 @@ export default function App() {
     setSandboxSettingsBusy(true);
     setSandboxSettingsError("");
     try {
-      const permissions = await sandboxClient.updatePermissions(
+      const permissions = await sandboxClientForSession.updatePermissions(
         activeSession.id,
         value,
       );
@@ -3310,7 +3597,7 @@ export default function App() {
     async (path: string) => {
       const activeSessionId = sandboxSession?.id;
       if (!activeSessionId) throw new Error("当前没有已连接的 Sandbox。");
-      return sandboxClient.listDirectories(activeSessionId, path);
+      return sandboxClientForSession.listDirectories(activeSessionId, path);
     },
     [sandboxSession?.id],
   );
@@ -3325,7 +3612,7 @@ export default function App() {
     setSandboxSettingsBusy(true);
     setSandboxSettingsError("");
     try {
-      const applied = await sandboxClient.updateWorkspace(
+      const applied = await sandboxClientForSession.updateWorkspace(
         activeSession.id,
         cwd,
       );
@@ -3361,7 +3648,7 @@ export default function App() {
     setSandboxApprovalBusy(true);
     setSandboxApprovalError("");
     try {
-      await sandboxClient.resolveApproval(
+      await sandboxClientForSession.resolveApproval(
         activeSession.id,
         activeApproval.id,
         decision,
@@ -3409,7 +3696,7 @@ export default function App() {
       const uploadResults = await Promise.all(
         drafts.map(async ({ file, attachment }) => {
           try {
-            const uploaded = await sandboxClient.uploadFile(
+            const uploaded = await sandboxClientForSession.uploadFile(
               activeSession.id,
               file,
             );
@@ -3487,7 +3774,10 @@ export default function App() {
     const activeSessionId = sandboxSession?.id;
     sandboxMessageAbortRef.current?.abort();
     if (activeSessionId) {
-      void sandboxClient
+      const client = sandboxSession?.intelligentDevelopment
+        ? intelligentDevelopmentClient
+        : sandboxClient;
+      void client
         .interruptSession(activeSessionId)
         .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
     }
@@ -3582,7 +3872,7 @@ export default function App() {
         : current,
     );
     try {
-      const reply = await sandboxClient.sendMessage(
+      const reply = await sandboxClientForSession.sendMessage(
         {
           sessionId: activeSession.id,
           text: prompt,
@@ -3682,7 +3972,9 @@ export default function App() {
         }
         return next;
       });
-      void sandboxCommands.refreshThreads();
+      if (!activeSession.intelligentDevelopment) {
+        void sandboxCommands.refreshThreads();
+      }
     } catch (messageError) {
       operation.fail({
         sessionId: String(activeSession.id),
@@ -3713,7 +4005,7 @@ export default function App() {
           }`,
       );
       try {
-        const settings = await sandboxClient.getSettings(activeSession.id);
+        const settings = await sandboxClientForSession.getSettings(activeSession.id);
         setSandboxSession((current) =>
           current?.id === activeSession.id
             ? { ...current, ...settings }
@@ -3735,6 +4027,134 @@ export default function App() {
             ? { ...current, busy: false }
             : current,
         );
+      }
+    }
+  }
+
+  async function sendIntelligentInitialMessage(
+    activeSession: SandboxSessionInfo,
+    goal: string,
+    controller: AbortController,
+  ) {
+    const userTurnId = crypto.randomUUID();
+    const assistantTurnId = crypto.randomUUID();
+    setSandboxTurns([
+      {
+        role: "user",
+        blocks: [{ kind: "text", text: goal }],
+        meta: { localId: userTurnId, ts: Date.now() / 1000 },
+      },
+      {
+        role: "assistant",
+        blocks: [],
+        meta: { localId: assistantTurnId },
+      },
+    ]);
+    setSandboxBusy(true);
+    setSandboxSession((current) =>
+      current?.id === activeSession.id
+        ? { ...current, busy: true, workspaceLocked: true }
+        : current,
+    );
+    try {
+      const reply = await intelligentDevelopmentClient.sendMessage(
+        { sessionId: activeSession.id, text: goal },
+        {
+          signal: controller.signal,
+          onBlocks: (blocks) => {
+            if (
+              controller.signal.aborted ||
+              intelligentCreateAbortRef.current !== controller ||
+              sandboxSessionIdRef.current !== activeSession.id
+            ) return;
+            setSandboxTurns((current) => current.map((turn) =>
+              turn.meta?.localId === assistantTurnId ? { ...turn, blocks } : turn
+            ));
+          },
+          onApproval: (approval) => {
+            if (!controller.signal.aborted) setSandboxApproval(approval);
+          },
+          onApprovalResolved: (approvalId) => {
+            if (!controller.signal.aborted) {
+              setSandboxApproval((current) => current?.id === approvalId ? null : current);
+            }
+          },
+        },
+      );
+      if (
+        controller.signal.aborted ||
+        intelligentCreateAbortRef.current !== controller ||
+        sandboxSessionIdRef.current !== activeSession.id
+      ) return;
+      setSandboxTurns((current) => current.map((turn) =>
+        turn.meta?.localId === assistantTurnId
+          ? { ...turn, blocks: reply.blocks, meta: { ...turn.meta, ts: Date.now() / 1000 } }
+          : turn
+      ));
+    } catch (cause) {
+      if (controller.signal.aborted || intelligentCreateAbortRef.current !== controller) return;
+      setSandboxTurns((current) => current.filter(
+        (turn) => turn.meta?.localId !== assistantTurnId,
+      ));
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (intelligentCreateAbortRef.current === controller) {
+        intelligentCreateAbortRef.current = null;
+      }
+      if (sandboxSessionIdRef.current !== activeSession.id) return;
+      setSandboxBusy(false);
+      setSandboxSession((current) =>
+        current?.id === activeSession.id ? { ...current, busy: false } : current,
+      );
+    }
+  }
+
+  async function verifyIntelligentDevelopment() {
+    const activeSession = sandboxSession;
+    if (!activeSession?.intelligentDevelopment || sandboxBusy) return;
+    const assistantTurnId = crypto.randomUUID();
+    setSandboxTurns((current) => [
+      ...current,
+      {
+        role: "system",
+        blocks: [],
+        activity: {
+          id: crypto.randomUUID(),
+          title: "正在独立验证并生成交付物",
+        },
+        meta: { localId: crypto.randomUUID(), ts: Date.now() / 1000 },
+      },
+      { role: "assistant", blocks: [], meta: { localId: assistantTurnId } },
+    ]);
+    const controller = new AbortController();
+    sandboxMessageAbortRef.current?.abort();
+    sandboxMessageAbortRef.current = controller;
+    setSandboxBusy(true);
+    try {
+      const reply = await intelligentDevelopmentClient.verifyDelivery(
+        activeSession.id,
+        {
+          signal: controller.signal,
+          onBlocks: (blocks) => {
+            setSandboxTurns((current) => current.map((turn) =>
+              turn.meta?.localId === assistantTurnId ? { ...turn, blocks } : turn
+            ));
+          },
+        },
+      );
+      setSandboxTurns((current) => current.map((turn) =>
+        turn.meta?.localId === assistantTurnId
+          ? { ...turn, blocks: reply.blocks, meta: { ...turn.meta, ts: Date.now() / 1000 } }
+          : turn
+      ));
+    } catch (cause) {
+      if ((cause as Error)?.name !== "AbortError") {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    } finally {
+      if (sandboxMessageAbortRef.current === controller) {
+        sandboxMessageAbortRef.current = null;
+        setSandboxBusy(false);
       }
     }
   }
@@ -3787,8 +4207,10 @@ export default function App() {
   }
 
   function openNewChat() {
+    intelligentCreateAbortRef.current?.abort();
+    intelligentCreateAbortRef.current = null;
+    setIntelligentDeployment(null);
     setPlatformFeedbackOrigin(null);
-    setSelectedVibeTaskId("");
     setCreateView(null);
     setSkillCenter(false);
     setSkillCenterLaunch(null);
@@ -4513,6 +4935,7 @@ export default function App() {
 
   const canCreateAgents = access.capabilities.createAgents;
   const canManageAgents = access.capabilities.manageAgents;
+  const canViewAgentUsage = features.agentUsage && canManageAgents;
   const visibleCreateView = canCreateAgents ? createView : null;
   const showAddMenu = canCreateAgents && addMenu;
   const showAddAgent = canCreateAgents && addAgent;
@@ -4638,16 +5061,23 @@ export default function App() {
     turn: Turn,
     rating: MessageFeedbackRating | null,
     input = "",
-  ) => {
+    comment = "",
+    reportGlobalError = true,
+  ): Promise<string | null> => {
     const eventId = turn.meta?.eventId;
     const sid = sessionId;
-    if (!eventId || !sid || !currentRuntime) return;
-    if (cloudProvider === "byteplus") return;
+    if (!eventId || !sid || !currentRuntime) {
+      return "当前回复暂不支持加入评测集";
+    }
+    if (cloudProvider === "byteplus") {
+      return "BytePlus 暂不支持 AgentKit 评测集";
+    }
     const output = turnText(turn);
     const previousFeedback = turn.meta?.feedback;
     const optimisticFeedback = {
       ...previousFeedback,
       rating,
+      comment,
       syncStatus: "syncing" as const,
       updatedAt: Date.now() / 1000,
     };
@@ -4671,6 +5101,7 @@ export default function App() {
         rating,
         input,
         output,
+        comment,
         createdAt: turn.meta?.ts
           ? new Date(turn.meta.ts * 1000).toISOString()
           : undefined,
@@ -4683,6 +5114,7 @@ export default function App() {
         sessionId: sid,
         eventId,
         rating,
+        comment,
       });
       setTurnsFor(sid, (current) =>
         current.map((item) =>
@@ -4716,6 +5148,7 @@ export default function App() {
           rating: feedback.rating,
           input,
           output,
+          comment,
           createdAt: turn.meta?.ts
             ? new Date(turn.meta.ts * 1000).toISOString()
             : undefined,
@@ -4728,6 +5161,9 @@ export default function App() {
         });
       }
     } catch (feedbackError) {
+      const feedbackErrorMessage = feedbackError instanceof Error
+        ? feedbackError.message
+        : String(feedbackError);
       setTurnsFor(sid, (current) =>
         current.map((item) =>
           item.meta?.eventId === eventId
@@ -4747,18 +5183,16 @@ export default function App() {
           rating: previousFeedback?.rating ?? null,
           input,
           output,
+          comment: previousFeedback?.comment ?? "",
           createdAt: turn.meta?.ts
             ? new Date(turn.meta.ts * 1000).toISOString()
             : undefined,
         });
       }
-      if (viewSidRef.current === sid) {
-        setError(
-          feedbackError instanceof Error
-            ? feedbackError.message
-            : String(feedbackError),
-        );
+      if (reportGlobalError && viewSidRef.current === sid) {
+        setError(feedbackErrorMessage);
       }
+      return feedbackErrorMessage;
     } finally {
       setFeedbackPendingIds((current) => {
         const next = new Set(current);
@@ -4766,6 +5200,20 @@ export default function App() {
         return next;
       });
     }
+    return null;
+  };
+
+  const submitResponseAnnotation = async (note: string) => {
+    const target = responseAnnotationTarget;
+    if (!target) return;
+    const errorMessage = await rateAssistantTurn(
+      target.turn,
+      "bad",
+      target.input,
+      formatResponseAnnotationComment(target.selectedText, note),
+      false,
+    );
+    if (errorMessage) throw new Error(errorMessage);
   };
 
   // Refresh the selected Agent before leaving the current page, then open a
@@ -4996,7 +5444,7 @@ export default function App() {
         activePage={sidebarActivePage}
         streamingSids={streamingSids}
         evaluatingSids={evaluatingSids}
-        sandboxHistory={sandboxSession
+        sandboxHistory={sandboxSession && !sandboxSession.intelligentDevelopment
           ? {
               threads: sandboxCommands.threads,
               currentThreadId: sandboxSession.threadId,
@@ -5159,14 +5607,30 @@ export default function App() {
             {sandboxSession && (
               <SandboxSessionWarning
                 agentName={
-                  sandboxSession.toolName === "codex"
-                    ? "Codex"
-                    : sandboxSession.toolName === "openclaw"
-                      ? "OpenClaw"
-                      : "Hermes"
+                  sandboxSession.intelligentDevelopment
+                    ? "智能开发"
+                    : sandboxSession.toolName === "codex"
+                      ? "Codex"
+                      : sandboxSession.toolName === "deepseek-harness"
+                        ? "DeepSeek Harness"
+                        : sandboxSession.toolName === "openclaw"
+                          ? "OpenClaw"
+                          : "Hermes"
                 }
                 onExit={startNewChat}
               />
+            )}
+            {sandboxSession?.intelligentDevelopment && (
+              <div className="intelligent-verify-bar">
+                <span>开发完成后，由 Studio 独立执行真实 AgentKit 验证。</span>
+                <button
+                  type="button"
+                  disabled={sandboxBusy || sandboxCommands.commandBusy}
+                  onClick={() => void verifyIntelligentDevelopment()}
+                >
+                  验证并生成交付物
+                </button>
+              </div>
             )}
             {sandboxSession ? (
               <SandboxComposer
@@ -5210,6 +5674,7 @@ export default function App() {
                 selectedSkills={sandboxCommands.selectedSkills}
                 onRequestSkills={() => void sandboxCommands.loadSkills()}
                 onSelectedSkillsChange={sandboxCommands.setSelectedSkills}
+                textOnly={sandboxSession.intelligentDevelopment}
               />
             ) : (
               <Composer
@@ -5227,28 +5692,6 @@ export default function App() {
                 onVideoSubmit={startVideoTask}
                 onSubmit={() => {
                 const text = input;
-                if (
-                  !sandboxSession &&
-                  turns.length === 0 &&
-                  newChatWorkspaceMode === "vibe"
-                ) {
-                  if (!text.trim()) return;
-                  void (async () => {
-                    setError("");
-                    try {
-                      const task = await vibeClient.create(text.trim());
-                      updateVibeTask(task);
-                      setSelectedVibeTaskId(task.taskId);
-                      setInput("");
-                      setError("");
-                    } catch (error) {
-                      setError(
-                        error instanceof Error ? error.message : "Vibe Task 创建失败",
-                      );
-                    }
-                  })();
-                  return;
-                }
                 if (
                   !sandboxSession &&
                   turns.length === 0 &&
@@ -5315,6 +5758,7 @@ export default function App() {
                   ? false
                   : !userId ||
                     newChatMode === "temporary" ||
+                    newChatMode === "deepseek-harness" ||
                     (newChatWorkspaceMode === "agent" &&
                       newChatMode === "agent" &&
                       !appName) ||
@@ -5395,6 +5839,10 @@ export default function App() {
               onSkillActionChange={setNewChatSkillAction}
               onSkillTargetChange={setNewChatSkillTarget}
               temporaryEnabled={newChatCapabilitiesReady && newChatCapabilities.temporaryEnabled}
+              deepseekHarnessEnabled={
+                newChatCapabilitiesReady &&
+                newChatCapabilities.deepseekHarnessEnabled
+              }
               harnessEnabled={newChatCapabilitiesReady && newChatCapabilities.harnessEnabled}
               builtinTools={
                 newChatCapabilitiesReady ? newChatCapabilities.builtinTools : []
@@ -5405,6 +5853,16 @@ export default function App() {
                   setNewChatTask(null);
                   setNewChatMode(mode);
                   openSandboxLaunch();
+                  return;
+                }
+                if (
+                  mode === "deepseek-harness" &&
+                  !newChatCapabilities.deepseekHarnessEnabled
+                ) return;
+                if (mode === "deepseek-harness") {
+                  setNewChatTask(null);
+                  setNewChatMode(mode);
+                  openSandboxLaunch("deepseek-harness");
                   return;
                 }
                 setNewChatMode(mode);
@@ -5455,6 +5913,8 @@ export default function App() {
                 version={version}
                 localMode={agentsSource === "local"}
                 role={access?.role ?? "user"}
+                provider={cloudProvider}
+                region={studioRegion || defaultCloudRegion(cloudProvider)}
               />
             ) : applicationsView === "coding-agents" ? (
               <CodingAgentsIntegration
@@ -5536,6 +5996,7 @@ export default function App() {
                 loadingAgentInfo={capabilitiesLoading}
                 canCreate={canCreateAgents}
                 canUpdate={canCreateAgents || canManageAgents}
+                canViewUsage={canViewAgentUsage}
                 loadingAgents={agentLibraryLoading}
                 agentsError={agentLibraryError}
                 deploymentTasks={deploymentTasks}
@@ -5592,19 +6053,29 @@ export default function App() {
                     return;
                   }
                   const runtimeEnvValues = Object.fromEntries(
-                    capability.runtime.envs.map(({ key, value }) => [key, value]),
+                    capability.runtime.envs
+                      .filter(({ key }) => !isRuntimeModelSelectionEnv(key))
+                      .map(({ key, value }) => [key, value]),
                   );
-                  const hydratedDraft: AgentDraft = {
-                    ...nextDraft,
-                    deployment: {
-                      ...(nextDraft.deployment ?? { feishuEnabled: false }),
-                      network: capability.runtime.network,
-                      envValues: {
-                        ...runtimeEnvValues,
-                        ...(nextDraft.deployment?.envValues ?? {}),
+                  const draftEnvValues = Object.fromEntries(
+                    Object.entries(nextDraft.deployment?.envValues ?? {}).filter(
+                      ([key]) => !isRuntimeModelSelectionEnv(key),
+                    ),
+                  );
+                  const hydratedDraft = hydrateRuntimeModelSelection(
+                    {
+                      ...nextDraft,
+                      deployment: {
+                        ...(nextDraft.deployment ?? { feishuEnabled: false }),
+                        network: capability.runtime.network,
+                        envValues: {
+                          ...runtimeEnvValues,
+                          ...draftEnvValues,
+                        },
                       },
                     },
-                  };
+                    capability.runtime.envs,
+                  );
                   setManageAgents(false);
                   setImportedDraft(hydratedDraft);
                   setCustomCreateMode("custom");
@@ -5650,7 +6121,39 @@ export default function App() {
                     onClick: () => {
                       setAddMenu(false);
                       setImportedDraft(null);
-                      setCreateView("menu");
+                      setCustomCreateMode("custom");
+                      setRuntimeUpdateTarget(null);
+                      setFocusedDeploymentTaskId("");
+                      setFocusedWorkspaceAgentId("");
+                      setEditingDraftId(`draft-${Date.now().toString(36)}`);
+                      editingDraftBaselineRef.current = null;
+                      setCreateView("custom");
+                    },
+                  },
+                  {
+                    key: "intelligent",
+                    icon: ScratchIcon,
+                    title: "智能模式",
+                    desc: intelligentCapabilitiesError
+                      || intelligentCapabilities?.reason
+                      || "描述目标，在开发会话中生成、调试并验证 VeADK Agent。",
+                    status: intelligentCapabilitiesLoading
+                      ? "能力检查中"
+                      : intelligentCapabilities?.enabled
+                        ? undefined
+                        : "暂不可用",
+                    disabled:
+                      intelligentCapabilitiesLoading ||
+                      intelligentCapabilities?.enabled !== true,
+                    onClick: () => {
+                      setAddMenu(false);
+                      setImportedDraft(null);
+                      setRuntimeUpdateTarget(null);
+                      setFocusedDeploymentTaskId("");
+                      setFocusedWorkspaceAgentId("");
+                      setEditingDraftId("");
+                      editingDraftBaselineRef.current = null;
+                      setCreateView("intelligent");
                     },
                   },
                   {
@@ -5669,9 +6172,11 @@ export default function App() {
                     icon: MigrationIcon,
                     title: "从存量迁移",
                     desc: "从您的 LangChain / Dify 等存量项目迁移至 AgentKit Runtime",
-                    status: "敬请期待",
-                    disabled: true,
-                    onClick: () => undefined,
+                    onClick: () => {
+                      setAddMenu(false);
+                      setImportedDraft(null);
+                      setCreateView("migration");
+                    },
                   },
                 ]}
               />
@@ -5717,7 +6222,7 @@ export default function App() {
                 }}
                 onArtifactSourceOpen={openFromSearch}
               />
-            ) : visibleCreateView !== null && !hasCreds ? (
+            ) : visibleCreateView !== null && !["menu", "intelligent"].includes(visibleCreateView) && !hasCreds ? (
               <div
                 style={{
                   display: "flex",
@@ -5752,46 +6257,89 @@ export default function App() {
                   后重试。
                 </div>
               </div>
-            ) : visibleCreateView === "menu" ? (
-              <QuickCreate
-                onSelect={(k) => {
-                  setImportedDraft(null);
-                  setRuntimeUpdateTarget(null);
-                  setFocusedDeploymentTaskId("");
-                  setFocusedWorkspaceAgentId("");
-                  if (k === "custom") setCustomCreateMode("custom");
-                  setEditingDraftId(
-                    k === "custom" ? `draft-${Date.now().toString(36)}` : "",
-                  );
-                  editingDraftBaselineRef.current = null;
-                  setCreateView(k);
-                }}
-                onImport={(d) => {
-                  setImportedDraft(d);
-                  setCustomCreateMode("yaml_import");
-                  setRuntimeUpdateTarget(null);
-                  setFocusedDeploymentTaskId("");
-                  setFocusedWorkspaceAgentId("");
-                  setEditingDraftId(`draft-${Date.now().toString(36)}`);
-                  editingDraftBaselineRef.current = null;
-                  setCreateView("custom");
-                }}
+            ) : intelligentDeployment ? (
+              <IntelligentDeployment
+                delivery={intelligentDeployment}
+                cloudProvider={cloudProvider}
+                initialDeployRegion={newRuntimeRegion}
+                onBack={() => setIntelligentDeployment(null)}
+                onAgentAdded={onAgentAdded}
+                onDeploymentTaskChange={updateDeploymentTask}
+                onDeploymentStarted={startDeployment}
+                onDeploymentComplete={finishDeployment}
               />
             ) : visibleCreateView === "intelligent" ? (
               <IntelligentCreate
-                userId={userId}
-                cloudProvider={cloudProvider}
-                onBack={() => setCreateView("menu")}
-                onCreate={onCreate}
-                onAgentAdded={onAgentAdded}
-                onDeploymentTaskChange={updateDeploymentTask}
+                capabilities={intelligentCapabilities}
+                loading={intelligentCapabilitiesLoading}
+                creating={intelligentCreating}
+                error={intelligentCapabilitiesError}
+                onBack={() => {
+                  setCreateView(null);
+                  setAddMenu(true);
+                }}
+                onCreate={async (goal) => {
+                  if (intelligentCreating) return;
+                  intelligentCreateAbortRef.current?.abort();
+                  const controller = new AbortController();
+                  intelligentCreateAbortRef.current = controller;
+                  setIntelligentCreating(true);
+                  setIntelligentCapabilitiesError("");
+                  try {
+                    const created = await intelligentDevelopmentClient.startSession({
+                      displayName: goal.slice(0, 40),
+                      signal: controller.signal,
+                    });
+                    const connected = await intelligentDevelopmentClient.connectSession(
+                      created.id,
+                      { signal: controller.signal },
+                    );
+                    if (
+                      controller.signal.aborted ||
+                      intelligentCreateAbortRef.current !== controller
+                    ) return;
+                    viewSidRef.current = "";
+                    setSessionId("");
+                    setPendingTurns([]);
+                    setInput("");
+                    setInvocation(emptyInvocation());
+                    discardDraftAttachments(attachments);
+                    setAttachments([]);
+                    releaseAllSandboxPreviews();
+                    setSandboxTurns([]);
+                    setSandboxSession(connected);
+                    setCreateView(null);
+                    setSkillCenter(false);
+                    setAddAgent(false);
+                    setAddMenu(false);
+                    setSearchView(false);
+                    setManageAgents(false);
+                    setAgentDetailTarget(null);
+                    setMyAgents(false);
+                    await sendIntelligentInitialMessage(connected, goal, controller);
+                  } catch (cause) {
+                    if ((cause as Error)?.name !== "AbortError") {
+                      setIntelligentCapabilitiesError(
+                        cause instanceof Error ? cause.message : "智能开发会话创建失败",
+                      );
+                    }
+                  } finally {
+                    if (intelligentCreateAbortRef.current === controller) {
+                      intelligentCreateAbortRef.current = null;
+                      setIntelligentCreating(false);
+                    }
+                  }
+                }}
               />
             ) : visibleCreateView === "custom" ? (
               <CustomCreate
                 key={editingDraftId || "custom"}
                 cloudProvider={cloudProvider}
                 initialDraft={importedDraft ?? undefined}
-                onBack={() => setCreateView("menu")}
+                onBack={() => {
+                  setCreateView(null);
+                  setAddMenu(true);
+                }}
                 onCreate={onCreate}
                 onAgentAdded={onAgentAdded}
                 features={features}
@@ -5827,18 +6375,6 @@ export default function App() {
                 onDeploymentStarted={startDeployment}
                 onDeploymentComplete={finishDeployment}
               />
-            ) : visibleCreateView === "template" ? (
-              <TemplateCreate
-                cloudProvider={cloudProvider}
-                onBack={() => setCreateView("menu")}
-                onCreate={onCreate}
-              />
-            ) : visibleCreateView === "workflow" ? (
-              <WorkflowCreate
-                cloudProvider={cloudProvider}
-                onBack={() => setCreateView("menu")}
-                onCreate={onCreate}
-              />
             ) : visibleCreateView === "package" ? (
               <CodePackageCreate
                 cloudProvider={cloudProvider}
@@ -5852,17 +6388,18 @@ export default function App() {
                 onDeploymentComplete={finishDeployment}
                 initialDeployRegion={newRuntimeRegion}
               />
-            ) : selectedVibeTask ? (
-              <VibeTaskWorkspace
-                task={selectedVibeTask}
-                tasks={vibeTasks}
-                onSelectTask={(task) => setSelectedVibeTaskId(task.taskId)}
-                onTaskChange={updateVibeTask}
-                onDeleted={(taskId) => {
-                  setVibeTasks((current) => current.filter((task) => task.taskId !== taskId));
-                  setSelectedVibeTaskId("");
-                  setNewChatWorkspaceMode("vibe");
+            ) : visibleCreateView === "migration" ? (
+              <MigrationWorkspace
+                cloudProvider={cloudProvider}
+                onBack={() => {
+                  setCreateView(null);
+                  setAddMenu(true);
                 }}
+                onAgentAdded={onAgentAdded}
+                onDeploymentTaskChange={updateDeploymentTask}
+                onDeploymentStarted={startDeployment}
+                onDeploymentComplete={finishDeployment}
+                initialDeployRegion={newRuntimeRegion}
               />
             ) : turns.length === 0 && !newChatCapabilitiesReady ? (
               <div className="session-loading">
@@ -5934,7 +6471,10 @@ export default function App() {
                       <Markdown text={text} />
                     </div>
                   )}
-                  <div className="turn-actions turn-actions--right">
+                  <div
+                    className="turn-actions turn-actions--right"
+                    data-share-image-exclude="true"
+                  >
                     {turn.meta?.ts && <span className="meta-text">{fmtTime(turn.meta.ts)}</span>}
                     <CopyButton text={text} />
                   </div>
@@ -5965,9 +6505,20 @@ export default function App() {
               currentRuntime && feedbackEventId && turnText(turn),
             );
             const feedbackInput = canRate ? previousUserTurnText(turns, i) : "";
+            const turnIsStreaming = isLast && (
+              activeConversationBusy || presentingStream
+            );
+            const canAnnotate = Boolean(
+              canRate &&
+              cloudProvider !== "byteplus" &&
+              !turnIsStreaming &&
+              !turnAwaitingAuth(turn),
+            );
             return (
               <motion.div
                 key={i}
+                data-share-message-source="true"
+                data-response-annotation-index={i}
                 ref={(node) => {
                   if (!feedbackEventId) return;
                   if (node) {
@@ -5982,6 +6533,10 @@ export default function App() {
                   feedbackTargetEventId &&
                   feedbackTargetEventId === feedbackEventId ? "is-feedback-target" : "",
                 ].filter(Boolean).join(" ")}
+                tabIndex={canAnnotate ? 0 : undefined}
+                aria-label={canAnnotate
+                  ? "模型回复；选中文字后可添加批注"
+                  : undefined}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}
@@ -6009,6 +6564,11 @@ export default function App() {
                       blocks={turn.blocks}
                       streaming={isLast && (activeConversationBusy || presentingStream)}
                       onStreamFrame={isLast ? followConversationStreamFrame : undefined}
+                      onStreamComplete={
+                        isLast && !activeConversationBusy && presentingStream
+                          ? () => completeStreamPresentation(sessionId)
+                          : undefined
+                      }
                       onAction={onAction}
                       onAuth={onAuth}
                       onArtifactDownload={(filename, version) =>
@@ -6017,6 +6577,7 @@ export default function App() {
                       onArtifactPreview={(filename, version) =>
                         previewArtifact(appName, userId, sessionId, filename, version)
                       }
+                      onDeployDelivery={setIntelligentDeployment}
                     />
                     {/* Finalized turn that produced no visible answer (e.g. only
                         thinking + an empty A2UI surface) — show a fallback note. */}
@@ -6027,7 +6588,7 @@ export default function App() {
                         thinking/streaming or waiting on an OAuth card; reveal it
                         only once the reply is done. */}
                     {!(isLast && activeConversationBusy) && !turnAwaitingAuth(turn) && (
-                      <div className="turn-meta">
+                      <div className="turn-meta" data-share-image-exclude="true">
                         {sandboxSession && turn.meta?.sandboxUsage ? (
                           <SandboxTokenUsageRow usage={turn.meta.sandboxUsage} />
                         ) : null}
@@ -6112,6 +6673,14 @@ export default function App() {
                             </>
                           )}
                           <CopyButton text={turnText(turn)} />
+                          <ShareMessageButton
+                            onClick={(event) => {
+                              const targetTurn = event.currentTarget.closest<HTMLElement>(
+                                "[data-share-message-source]",
+                              );
+                              if (targetTurn) setShareMessageTarget({ targetTurn });
+                            }}
+                          />
                         </div>
                         {turn.meta && <span className="meta-text">{fmtMeta(turn.meta)}</span>}
                       </div>
@@ -6152,6 +6721,27 @@ export default function App() {
         <IssueFeedbackDialog
           onClose={() => setIssueFeedbackTarget(null)}
           onSubmit={submitIssueFeedbackForTurn}
+        />
+      )}
+
+      {shareMessageTarget && (
+        <ShareMessageDialog
+          targetTurn={shareMessageTarget.targetTurn}
+          onClose={() => setShareMessageTarget(null)}
+        />
+      )}
+
+      {responseAnnotationTarget && sessionId && (
+        <ResponseAnnotationPopover
+          key={responseAnnotationTarget.selectionId}
+          anchor={responseAnnotationTarget.anchor}
+          selectedText={responseAnnotationTarget.selectedText}
+          onClose={() => setResponseAnnotationTarget((current) =>
+            current?.selectionId === responseAnnotationTarget.selectionId
+              ? null
+              : current
+          )}
+          onSubmit={submitResponseAnnotation}
         />
       )}
 
@@ -6204,7 +6794,7 @@ export default function App() {
       {sandboxSession ? (
         <>
           <SandboxToolDialog
-            open={sandboxToolKind !== null}
+            open={!sandboxSession.intelligentDevelopment && sandboxToolKind !== null}
             kind={sandboxToolKind ?? "terminal"}
             launch={sandboxToolLaunch}
             loading={sandboxToolLoading}
@@ -6220,7 +6810,7 @@ export default function App() {
             }}
           />
           <SandboxPermissionsDialog
-            open={sandboxPermissionsOpen}
+            open={!sandboxSession.intelligentDevelopment && sandboxPermissionsOpen}
             value={sandboxSession.permissions}
             busy={sandboxSettingsBusy || sandboxBusy}
             error={sandboxSettingsError}
@@ -6232,7 +6822,7 @@ export default function App() {
             }}
           />
           <SandboxWorkspaceDialog
-            open={sandboxWorkspaceOpen}
+            open={!sandboxSession.intelligentDevelopment && sandboxWorkspaceOpen}
             cwd={sandboxSession.cwd}
             locked={sandboxSession.workspaceLocked}
             busy={sandboxSettingsBusy}
@@ -6246,7 +6836,7 @@ export default function App() {
             }}
           />
           <SandboxThreadsDialog
-            open={sandboxCommands.threadsOpen}
+            open={!sandboxSession.intelligentDevelopment && sandboxCommands.threadsOpen}
             threads={sandboxCommands.threads}
             currentThreadId={sandboxSession.threadId}
             loading={sandboxCommands.threadsLoading}
@@ -6291,7 +6881,8 @@ export default function App() {
                 className="confirm-btn confirm-btn--danger"
                 onClick={() => {
                   setImportedDraft(null);
-                  setCreateView("menu");
+                  setCreateView(null);
+                  setAddMenu(true);
                   setConfirmLeave(false);
                 }}
               >

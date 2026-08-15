@@ -19,6 +19,7 @@ import json
 from pathlib import PurePosixPath
 import shlex
 from typing import Any, Callable, TypeVar
+from uuid import uuid4
 
 import requests
 from agentkit.toolkit.cli.sandbox.sandbox_client import (
@@ -136,6 +137,7 @@ class SandboxRemoteTransport:
         *,
         media_type: str = "application/octet-stream",
         max_bytes: int = _MAX_TRANSFER_BYTES,
+        mode: int | None = None,
     ) -> None:
         path = _exact_file_path(path)
         if not isinstance(content, bytes):
@@ -144,6 +146,10 @@ class SandboxRemoteTransport:
             raise ValueError("max_bytes must not be negative")
         if len(content) > max_bytes:
             raise SandboxRemoteSizeError("Sandbox upload exceeds the limit")
+        if mode is not None and (
+            isinstance(mode, bool) or not isinstance(mode, int) or mode & ~0o777
+        ):
+            raise ValueError("mode must be a permission mode")
 
         def operation() -> None:
             response = requests.post(
@@ -155,6 +161,28 @@ class SandboxRemoteTransport:
             self._check_response(response, retry_conflict=False)
 
         await self._read_retry(operation, "upload Sandbox file", retry_conflict=False)
+        if mode is not None:
+            marker = uuid4().hex
+            source = (
+                "import json,os,stat\n"
+                f"path={path!r}; expected={mode}; marker={marker!r}\n"
+                "fd=os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0))\n"
+                "try:\n"
+                " st=os.fstat(fd)\n"
+                " if not stat.S_ISREG(st.st_mode): raise ValueError('not regular')\n"
+                " os.fchmod(fd,expected)\n"
+                " st=os.fstat(fd)\n"
+                " if stat.S_IMODE(st.st_mode)!=expected: raise ValueError('mode mismatch')\n"
+                "finally: os.close(fd)\n"
+                "print(json.dumps({'marker':marker}))\n"
+            )
+            result = await self.exec_json(
+                f"python3 -c {shlex.quote(source)}", timeout=12
+            )
+            if result != {"marker": marker}:
+                raise SandboxRemoteResponseError(
+                    "Sandbox upload permission verification failed"
+                )
 
     async def download(
         self, path: str, *, max_bytes: int = _MAX_TRANSFER_BYTES

@@ -124,6 +124,10 @@ def test_inline_source_rejects_file_directory_path_collisions(
         )
 
 
+def test_path_collision_check_handles_root_marker() -> None:
+    deployment_source._reject_path_collisions({"."})
+
+
 def test_migration_source_extracts_only_manifest_files(tmp_path: Path) -> None:
     content = b"app = object()\n"
     archive = _archive({"runtime/app.py": content})
@@ -281,6 +285,28 @@ def test_migration_source_rejects_unlisted_archive_entry(tmp_path: Path) -> None
                 "startup": {"module": "app.py"},
             },
         )
+
+
+def test_migration_source_rejects_archive_member_with_manifest_size_mismatch(
+    tmp_path: Path,
+) -> None:
+    content = b"app = object()\n"
+    with pytest.raises(DeploymentSourceError, match="ZIP 与文件清单不一致"):
+        extract_migration_source(
+            tmp_path,
+            _archive({"app.py": content}),
+            {
+                "files": [
+                    {
+                        "path": "app.py",
+                        "size": len(content) + 1,
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                    }
+                ],
+                "startup": {"module": "app.py"},
+            },
+        )
+    assert not (tmp_path / "app.py").exists()
 
 
 def test_migration_source_rejects_file_directory_path_collisions(

@@ -48,6 +48,18 @@ export interface AttachmentView {
   previewUrl?: string;
 }
 
+export interface IntelligentDevelopmentReleaseRef {
+  sessionId: string;
+  artifactSha256: string;
+  validationReportSha256: string;
+  agentName: string;
+  entryPoint: string;
+  fileCount: number;
+  artifactSize: number;
+  validatedAt: string;
+  gateSummary: string[];
+}
+
 export type Block =
   | { kind: "thinking"; text: string; done: boolean }
   | { kind: "text"; text: string }
@@ -58,6 +70,10 @@ export type Block =
   | {
       kind: "artifact";
       files: { filename: string; version: number }[];
+    }
+  | {
+      kind: "delivery";
+      value: IntelligentDevelopmentReleaseRef;
     }
   | { kind: "invocation"; value: FrontendInvocation }
   | {

@@ -256,6 +256,22 @@ def test_project_handoff_pairing_authorizes_only_terminal_session_routes(
     assert "/web/sandbox/codex-project-handoff/pairings" not in captured["exempt_paths"]
 
 
+def test_no_sso_identity_endpoint_selects_local_username_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        identity = client.get("/oauth2/userinfo")
+        auth_config = client.get("/web/auth-config")
+
+    assert identity.status_code == 404
+    assert identity.json() == {"status": "unauthenticated"}
+    assert auth_config.status_code == 200
+    assert auth_config.json() == {"providers": []}
+
+
 def test_identity_user_pools_marks_the_current_studio_pool(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
