@@ -29,6 +29,7 @@ from frontend.server.deployment_source import DeploymentSourceError
 from frontend.server.intelligent_development import release_path
 from frontend.server.intelligent_development_source import (
     IntelligentDevelopmentSourceNotFound,
+    materialize_intelligent_development_preview,
     materialize_intelligent_development_source,
 )
 from veadk.cli.frontend_sandbox import SandboxCloudSession
@@ -261,6 +262,20 @@ async def _materialize(
     )
 
 
+async def _preview(
+    tmp_path: Path,
+    request: dict[str, object],
+    downloads: dict[str, bytes],
+):
+    FakeTransport.downloads = downloads
+    return await materialize_intelligent_development_preview(
+        tmp_path,
+        request,
+        owner_id=OWNER_ID,
+        service=FakeService(_cloud()),
+    )
+
+
 @pytest.mark.asyncio
 async def test_materializes_only_server_downloaded_verified_source(
     tmp_path: Path,
@@ -274,6 +289,15 @@ async def test_materializes_only_server_downloaded_verified_source(
     assert result.artifact_sha256 == request["artifactSha256"]
     assert result.validation_report_sha256 == request[REPORT_DIGEST_FIELD]
     assert result.file_count == 3
+    assert result.verified is True
+    assert [(item.path, item.content) for item in result.files] == [
+        (
+            "agentkit.yaml",
+            "common:\n  agent_name: trusted-agent\n  entry_point: app.py\n",
+        ),
+        ("app.py", "root_agent = object()\n"),
+        ("pkg/helper.py", "VALUE = 1\n"),
+    ]
     assert result.artifact_size == len(
         downloads[
             f"{release_path(result.artifact_sha256, result.validation_report_sha256)}/artifact.zip"
@@ -289,6 +313,50 @@ async def test_materializes_only_server_downloaded_verified_source(
         20 * 1024 * 1024,
         2 * 1024 * 1024,
     ]
+
+
+@pytest.mark.asyncio
+async def test_source_preview_omits_binary_files_without_rejecting_delivery(
+    tmp_path: Path,
+) -> None:
+    artifact = _zip(
+        [
+            (
+                "agentkit.yaml",
+                b"common:\n  agent_name: trusted-agent\n  entry_point: app.py\n",
+            ),
+            ("app.py", b"root_agent = object()\n"),
+            ("logo.png", b"\x89PNG\x00\x01\xff"),
+        ]
+    )
+    request, downloads = _release_files(artifact=artifact)
+
+    result = await _materialize(tmp_path, request, downloads)
+
+    assert [item.path for item in result.files] == ["agentkit.yaml", "app.py"]
+    assert result.file_count == 3
+
+
+@pytest.mark.asyncio
+async def test_unverified_snapshot_is_previewable_but_not_deployable(
+    tmp_path: Path,
+) -> None:
+    report = _report(status="unverified", failed_gate="runtime-cleanup")
+    report_value = json.loads(report)
+    report_value["validationSummary"] = "未收到完整验证结果"
+    request, downloads = _release_files(report=_json_bytes(report_value))
+
+    preview = await _preview(tmp_path / "preview", request, downloads)
+
+    assert preview.verified is False
+    assert preview.validation_summary == "未收到完整验证结果"
+    assert [item.path for item in preview.files] == [
+        "agentkit.yaml",
+        "app.py",
+        "pkg/helper.py",
+    ]
+    with pytest.raises(DeploymentSourceError, match="未通过全部门禁"):
+        await _materialize(tmp_path / "deploy", request, downloads)
 
 
 @pytest.mark.asyncio

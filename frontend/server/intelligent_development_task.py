@@ -48,7 +48,7 @@ from frontend.server.sandbox_remote import SandboxRemoteTransport
 CredentialResolver = Callable[[], StudioCredentials]
 
 COMPLETION_SCHEMA_VERSION = "1"
-COMPLETION_FILE_PREFIX = ".studio-intelligent-development-"
+COMPLETION_FILE_PREFIX = ".intelligent-development-result-"
 _TASK_ROOT = "/home/gem/.intelligent-development/tasks"
 _MAX_COMPLETION_BYTES = 256 * 1024
 _MAX_MANIFEST_BYTES = 256 * 1024
@@ -141,16 +141,16 @@ class TaskCredentialLease:
 
 def intent_gate_prompt(user_message: str, *, expire_at: str) -> str:
     """Build the non-mutating stage-one request for the same Codex Thread."""
-    return f"""You are Studio's stage-one intent gate for VeADK Agent development.
+    return f"""You are the read-only intent gate for a VeADK Agent development task.
 Classify the latest user request using the existing Thread context. Do not build, edit files,
 run commands, use tools, access the network, or request credentials in this turn.
 
 In scope: creating, modifying, debugging, testing, explaining, or cloud-validating a VeADK
-Agent in the current Workspace, including a follow-up refinement of the current Agent.
+Agent in the current project, including a follow-up refinement of the current Agent.
 Out of scope: unrelated content work, another Agent framework, standalone cloud administration,
 or production Runtime operations. Ask exactly one concise question only when its answer changes
 the product result, architecture, authority, or safety. Lesser gaps should be reversible
-assumptions. The Sandbox and Thread expire at {expire_at or "the server-provided time"}.
+assumptions. The development session and Thread expire at {expire_at or "the server-provided time"}.
 
 Return one JSON object and nothing else with exactly these fields:
 {{"decision":"accept|clarify|reject","message":"user-facing Chinese text for clarify/reject,
@@ -182,13 +182,17 @@ def builder_prompt(
     criteria = json.dumps(
         list(decision.acceptance_criteria), ensure_ascii=False, separators=(",", ":")
     )
-    return f"""$veadk-agent-development
+    return f"""Use the preinstalled veadk-agent-development Skill for this task. Read and follow it
+as the authoritative development and validation guidance.
 
-Continue as Studio's VeADK builder for the accepted request below. Follow the injected Skill
-as the authoritative development context. Work autonomously in the current Workspace through
-implementation, local evidence, and the bounded AgentKit cloud-validation loop. The user's task
-submission already authorizes temporary validation resources, so do not ask for a second
-validation confirmation. Never perform production deployment.
+Work autonomously in the current project directory. The primary objective is to deliver a
+coherent, runnable, deployable VeADK project. Its real behavior must satisfy the accepted criteria
+and pass the bounded AgentKit cloud-validation loop. Implement the complete project, including a
+valid agentkit.yaml, entry point, dependencies, configuration, and focused tests.
+Do not stop at scaffolding, local checks, or a successful build: carry the project through
+temporary cloud deployment, readiness checks, representative invocation, log inspection, and
+cleanup. The task submission already authorizes temporary validation resources, so do not ask
+for a second validation confirmation. Never perform production deployment.
 
 Accepted goal: {decision.intent_summary}
 Acceptance criteria: {criteria}
@@ -197,29 +201,28 @@ Latest user request:
 {user_message}
 </latest-user-request>
 
-The Sandbox and this Thread expire at {expire_at or "the server-provided time"}. Studio measured
-{remaining_lifetime_minutes} whole minutes remaining when this task started; this server-side
-measurement is authoritative, so do not infer that the Session is expired from the date alone.
-Before cloud work, confirm the measured lifetime is still sufficient. AgentKit CLI is installed.
-For every process that needs
-the task cloud credentials—including AgentKit commands and local model/service probes—invoke it
-through this exact launcher as the first argv element:
+The development session and this Thread expire at {expire_at or "the server-provided time"}. The service measured
+{remaining_lifetime_minutes} whole minutes remaining when this task started. This measurement is
+authoritative, so do not infer that the Session is expired from the date alone. Before cloud work,
+confirm that the measured lifetime is still sufficient. AgentKit CLI is installed. Invoke every
+process that needs the task cloud credentials—including AgentKit commands and local model/service
+probes—through this exact launcher as the first argv element:
 {launcher_path}
 For example: `{launcher_path} ak status --help`. Never read, print, copy, edit, source, package,
 or describe the launcher or its credential file. Keep all secret-bearing data out of commands,
 logs, project files, and responses.
 
-Cloud validation targets region {json.dumps(validation_region, ensure_ascii=False)} and the
-existing AgentKit project {json.dumps(validation_project, ensure_ascii=False)}. Treat the
-project as control-plane context: set `launch_types.cloud.project_name` to that exact project
-and do not derive project_name from the unique validation Runtime or other disposable resource
-names. `NotFound.Project` is a configuration failure to correct, not an IAM failure.
+Cloud validation targets region {json.dumps(validation_region, ensure_ascii=False)} and existing AgentKit project {json.dumps(validation_project, ensure_ascii=False)}.
+Treat that project as control-plane context: set `launch_types.cloud.project_name` to that exact
+project and do not derive project_name from the unique validation Runtime or other disposable resource names.
+`NotFound.Project` is a configuration failure to correct, not an IAM failure.
 
 Keep user-facing progress and results in product language. Do not expose command lines,
-Sandbox internals, filesystem paths, launcher details, or internal tool names to the user.
+environment internals, filesystem paths, launcher details, or internal tool names to the user.
 
-At the end of this turn, write exactly one UTF-8 JSON object to {completion_path}. Do this even
-for a non-verified terminal result. It must contain exactly:
+After implementation and validation, write exactly one UTF-8 JSON object to {completion_path},
+including for a non-verified terminal result. This is secondary reporting metadata and must not
+replace the project or its validation work. It must contain exactly:
 {{"schemaVersion":"1","status":"verified|partial|blocked|indeterminate|failed",
 "summary":"short non-secret result","runtimeName":"idv- prefixed validation Runtime name or empty",
 "attemptCount":0,
@@ -231,7 +234,9 @@ Use attemptCount 0, 1, or 2. Set `verified` only when every gate is true, repres
 behavior meets the current criteria, and Runtime deletion or confirmed absence is complete. Do
 not put command output, prompts, responses, credentials, endpoints, or tokens in this contract.
 After the successful final build and validation, do not change deliverable source before writing
-the contract; Studio packages the final Workspace itself."""
+the contract; the service packages the final project directory itself. Read the contract back and verify
+its exact schema. Then give a concise user-facing summary of what was built, which tests and cloud
+checks passed, whether the project is ready to deploy, and any remaining limitation."""
 
 
 def _json_object(value: str) -> dict[str, object]:
@@ -511,7 +516,7 @@ def _delivery_manifest_metadata(content: bytes) -> tuple[str, str]:
 
 
 class DeliveryPublisher:
-    """Package Codex-validated source; do not independently re-run validation."""
+    """Package an immutable source snapshot without re-running validation."""
 
     def __init__(self, transport: SandboxRemoteTransport) -> None:
         self._transport = transport
@@ -522,33 +527,44 @@ class DeliveryPublisher:
         session_id: str,
         project_root: str,
         task_root: str,
-        completion: CompletionContract,
+        completion: CompletionContract | None,
         exact_secrets: tuple[str, ...],
+        acceptance_criteria: tuple[str, ...] = (),
     ) -> DeliveryReference:
-        if not completion.verified:
-            raise ValueError("Only verified completion can be published")
         token = uuid4().hex
         worker_path = f"{task_root}/delivery-{token}.py"
         request_path = f"{task_root}/delivery-{token}.json"
         secret_path = f"{task_root}/delivery-secrets-{token}.json"
         now = datetime.now(timezone.utc).isoformat()
+        verified = completion is not None and completion.verified
+        gates = (
+            completion.gates
+            if completion is not None
+            else {name: False for name in _REQUIRED_GATES}
+        )
+        summary = completion.summary if completion is not None else "未收到完整验证结果"
         steps = [
             {
                 "name": name,
-                "passed": completion.gates[name],
+                "passed": gates[name],
                 "recordedAt": now,
             }
             for name in _REQUIRED_GATES
         ]
         report = {
-            "status": "passed",
+            "status": "passed" if verified else "unverified",
             "sessionId": session_id,
             "validatedAt": now,
+            "validationSummary": summary,
             "runtimeNameHash": hashlib.sha256(
-                completion.runtime_name.encode()
+                (completion.runtime_name if completion is not None else "").encode()
             ).hexdigest(),
-            "attemptCount": completion.attempt_count,
-            "acceptanceCriteria": list(completion.acceptance_criteria),
+            "attemptCount": completion.attempt_count if completion is not None else 0,
+            "acceptanceCriteria": list(
+                completion.acceptance_criteria
+                if completion is not None
+                else acceptance_criteria
+            ),
             "steps": steps,
         }
         manifest_bytes = await self._transport.download(
@@ -584,7 +600,14 @@ class DeliveryPublisher:
                 f"python3 {shlex.quote(worker_path)} {shlex.quote(request_path)}",
                 timeout=180,
             )
-            return self._reference(value, session_id, now)
+            return self._reference(
+                value,
+                session_id,
+                now,
+                verified=verified,
+                validation_summary=summary,
+                gate_summary=tuple(name for name in _REQUIRED_GATES if gates[name]),
+            )
         finally:
             await self._unlink_many(secret_path, request_path, worker_path)
 
@@ -599,7 +622,13 @@ class DeliveryPublisher:
 
     @staticmethod
     def _reference(
-        value: Mapping[str, object], session_id: str, validated_at: str
+        value: Mapping[str, object],
+        session_id: str,
+        validated_at: str,
+        *,
+        verified: bool,
+        validation_summary: str,
+        gate_summary: tuple[str, ...],
     ) -> DeliveryReference:
         digest = value.get("artifactSha256")
         report_digest = value.get("validationReportSha256")
@@ -645,7 +674,9 @@ class DeliveryPublisher:
             entry_point,
             file_count,
             validated_at,
-            _REQUIRED_GATES,
+            gate_summary,
+            verified,
+            validation_summary,
         )
 
 

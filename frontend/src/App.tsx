@@ -918,6 +918,48 @@ function sessionUsageKey(app: string, session: string): string {
   return `${app}\u0001${session}`;
 }
 
+async function fetchIntelligentDevelopmentRelease(
+  sessionId: string,
+  artifactSha256: string,
+  validationReportSha256: string,
+  signal?: AbortSignal,
+): Promise<IntelligentDevelopmentReleaseRef> {
+  const params = new URLSearchParams({
+    sessionId,
+    artifactSha256,
+    validationReportSha256,
+  });
+  const response = await fetch(
+    withAuth(`/web/intelligent-development/releases/summary?${params}`),
+    { headers: withLocalUser({ Accept: "application/json" }), signal },
+  );
+  if (!response.ok) {
+    throw new Error(`无法读取源码快照（HTTP ${response.status}）`);
+  }
+  const value = await response.json() as Partial<IntelligentDevelopmentReleaseRef>;
+  if (
+    value.sessionId !== sessionId
+    || value.artifactSha256 !== artifactSha256
+    || value.validationReportSha256 !== validationReportSha256
+    || typeof value.agentName !== "string"
+    || typeof value.entryPoint !== "string"
+    || typeof value.fileCount !== "number"
+    || typeof value.artifactSize !== "number"
+    || typeof value.validatedAt !== "string"
+    || typeof value.verified !== "boolean"
+    || typeof value.validationSummary !== "string"
+    || !Array.isArray(value.gateSummary)
+    || !value.gateSummary.every((item) => typeof item === "string")
+    || !Array.isArray(value.files)
+    || !value.files.every(
+      (item) => item && typeof item.path === "string" && typeof item.content === "string",
+    )
+  ) {
+    throw new Error("源码快照的响应格式无效。");
+  }
+  return value as IntelligentDevelopmentReleaseRef;
+}
+
 export default function App() {
   const [apps, setApps] = useState<string[]>([]);
   const [appName, setAppName] = useState("");
@@ -1132,6 +1174,15 @@ export default function App() {
       }
       window.history.replaceState(null, "", url);
     },
+    [],
+  );
+  const resolveIntelligentDelivery = useCallback(
+    (delivery: IntelligentDevelopmentReleaseRef) =>
+      fetchIntelligentDevelopmentRelease(
+        delivery.sessionId,
+        delivery.artifactSha256,
+        delivery.validationReportSha256,
+      ),
     [],
   );
   const [videoTask, setVideoTask] = useState<VideoGenerationTask | null>(null);
@@ -2543,21 +2594,21 @@ export default function App() {
     const validationReportSha256 = query.get("validationReportSha256") ?? "";
     if (!sessionId || !artifactSha256 || !validationReportSha256) return;
     const controller = new AbortController();
-    const params = new URLSearchParams({
+    void fetchIntelligentDevelopmentRelease(
       sessionId,
       artifactSha256,
       validationReportSha256,
-    });
-    void fetch(withAuth(`/web/intelligent-development/releases/summary?${params}`), {
-      headers: withLocalUser({ Accept: "application/json" }),
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`无法恢复已验证交付物（HTTP ${response.status}）`);
-        return response.json() as Promise<IntelligentDevelopmentReleaseRef>;
-      })
+      controller.signal,
+    )
       .then((delivery) => {
-        if (!controller.signal.aborted) setIntelligentDeploymentState({
+        if (controller.signal.aborted) return;
+        if (!delivery.verified) {
+          setIntelligentCapabilitiesError(
+            "该源码尚未通过完整云端验证，请返回对话继续修复和重验。",
+          );
+          return;
+        }
+        setIntelligentDeploymentState({
           ...delivery,
           validatedAt: delivery.validatedAt || "",
           gateSummary: delivery.gateSummary || [],
@@ -6517,6 +6568,7 @@ export default function App() {
                       onArtifactPreview={(filename, version) =>
                         previewArtifact(appName, userId, sessionId, filename, version)
                       }
+                      onResolveDelivery={resolveIntelligentDelivery}
                       onDeployDelivery={setIntelligentDeployment}
                     />
                     {/* Finalized turn that produced no visible answer (e.g. only

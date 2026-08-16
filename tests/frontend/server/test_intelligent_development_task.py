@@ -122,7 +122,9 @@ def test_builder_context_uses_launcher_without_secret_values() -> None:
         validation_region="cn-beijing",
         validation_project="default",
     )
-    assert "$veadk-agent-development" in prompt
+    assert "Use the preinstalled veadk-agent-development Skill" in prompt
+    assert "$veadk-agent-development" not in prompt
+    assert "injected Skill" not in prompt
     assert "/secure/task/launcher" in prompt
     assert "VOLCENGINE_SECRET_KEY" not in prompt
     assert "production deployment" in prompt
@@ -131,6 +133,13 @@ def test_builder_context_uses_launcher_without_secret_values() -> None:
     assert "cn-beijing" in prompt
     assert 'existing AgentKit project "default"' in prompt
     assert "do not derive project_name" in prompt
+    assert "Do not stop at scaffolding, local checks, or a successful build" in prompt
+    assert "coherent, runnable, deployable" in prompt
+    assert "concise user-facing summary" in prompt
+    assert "entire final assistant response" not in prompt
+    assert "If time is running short" not in prompt
+    assert "Studio" not in prompt
+    assert "Sandbox" not in prompt
 
 
 @pytest.mark.asyncio
@@ -330,6 +339,28 @@ async def test_delivery_publisher_sends_server_parsed_manifest_contract() -> Non
     assert delivery.entry_point == "weather.py"
     assert delivery.artifact_sha256 == artifact_digest
     assert delivery.validation_report_sha256 == report_digest
+    assert delivery.verified is True
+
+    source_only = await DeliveryPublisher(remote).publish(  # type: ignore[arg-type]
+        session_id="session",
+        project_root="/home/gem/workspace/session",
+        task_root="/home/gem/.intelligent-development/tasks/task",
+        completion=None,
+        exact_secrets=("SECRET_EXACT",),
+        acceptance_criteria=("返回天气",),
+    )
+    requests = [
+        json.loads(content)
+        for path, (content, _mode) in remote.uploads.items()
+        if path.endswith(".json") and "secrets" not in path
+    ]
+    unverified_request = next(
+        item for item in requests if item["report"]["status"] == "unverified"
+    )
+    assert unverified_request["report"]["acceptanceCriteria"] == ["返回天气"]
+    assert unverified_request["report"]["validationSummary"] == "未收到完整验证结果"
+    assert source_only.verified is False
+    assert source_only.gate_summary == ()
 
 
 def _run_delivery_worker(

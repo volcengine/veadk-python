@@ -955,9 +955,10 @@ async function parseSandboxStream(
       );
     }
     if (event === "activity") applyActivity(payload);
-    if (event === "development.succeeded") {
+    if (event === "development.source_ready" || event === "development.succeeded") {
       const eventPayload = recordOf(payload.payload);
       const eventData = recordOf(eventPayload?.delivery);
+      const expectedVerified = event === "development.succeeded";
       if (
         eventData &&
         typeof eventData.sessionId === "string" &&
@@ -968,10 +969,12 @@ async function parseSandboxStream(
         typeof eventData.fileCount === "number" &&
         typeof eventData.artifactSize === "number" &&
         typeof eventData.validatedAt === "string" &&
+        eventData.verified === expectedVerified &&
+        typeof eventData.validationSummary === "string" &&
         Array.isArray(eventData.gateSummary) &&
         eventData.gateSummary.every((item) => typeof item === "string")
       ) {
-        blocks.push({
+        const delivery: Block = {
           kind: "delivery",
           value: {
             sessionId: eventData.sessionId,
@@ -983,8 +986,18 @@ async function parseSandboxStream(
             artifactSize: eventData.artifactSize,
             validatedAt: eventData.validatedAt,
             gateSummary: eventData.gateSummary as string[],
+            verified: eventData.verified,
+            validationSummary: eventData.validationSummary,
           },
-        });
+        };
+        const existing = blocks.findIndex(
+          (block) => block.kind === "delivery"
+            && block.value.sessionId === eventData.sessionId
+            && block.value.artifactSha256 === eventData.artifactSha256
+            && block.value.validationReportSha256 === eventData.validationReportSha256,
+        );
+        if (existing === -1) blocks.push(delivery);
+        else blocks[existing] = delivery;
         emitBlocks();
       }
     }
