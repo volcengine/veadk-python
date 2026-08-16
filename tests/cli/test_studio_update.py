@@ -682,7 +682,7 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
     }
 
 
-def test_volcengine_studio_update_repairs_missing_snapshot_tools(
+def test_volcengine_studio_update_repairs_missing_snapshot_tools_and_oauth_callback(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -693,6 +693,8 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
     code_credentials: list[dict[str, object]] = []
     agent_credentials: list[dict[str, object]] = []
     role_policy_syncs: list[dict[str, object]] = []
+    identity_clients: list[dict[str, object]] = []
+    identity_callbacks: list[dict[str, object]] = []
     stagger_delays: list[float] = []
     monkeypatch.setattr(
         "veadk.cli.studio_update.find_studio_deployments", lambda **_: [target]
@@ -739,6 +741,18 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
         or True,
     )
 
+    class _FakeIdentityClient:
+        def __init__(self, **kwargs: object) -> None:
+            identity_clients.append(kwargs)
+
+        def register_callback_for_user_pool_client(self, **kwargs: object) -> None:
+            identity_callbacks.append(kwargs)
+
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        _FakeIdentityClient,
+    )
+
     class _FakeVeFaaS:
         def __init__(self, **_: str) -> None:
             self.client = SimpleNamespace(
@@ -748,7 +762,15 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
                         SimpleNamespace(
                             key="OAUTH2_USER_POOL_ID",
                             value="legacy-user-pool",
-                        )
+                        ),
+                        SimpleNamespace(
+                            key="OAUTH2_USER_POOL_CLIENT_ID",
+                            value="legacy-user-pool-client",
+                        ),
+                        SimpleNamespace(
+                            key="VEIDENTITY_REGION",
+                            value="cn-shanghai",
+                        ),
                     ],
                 )
             )
@@ -784,6 +806,25 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
             "provider": "volcengine",
         }
     ]
+    assert identity_clients == [
+        {
+            "access_key": "ak",
+            "secret_key": "sk",
+            "session_token": "",
+            "region": "cn-shanghai",
+            "provider": "volcengine",
+        }
+    ]
+    assert identity_callbacks == [
+        {
+            "user_pool_uid": "legacy-user-pool",
+            "client_uid": "legacy-user-pool-client",
+            "callback_url": "https://studio.example.com/oauth2/callback",
+            "web_origin": "https://studio.example.com",
+            "dismiss_login_page_enabled": False,
+            "skip_consent_enabled": True,
+        }
+    ]
     assert len(code_tools) == 1
     assert code_tools[0]["enable_snapshot"] is True
     assert code_tools[0]["create_min_interval"] == 0.5
@@ -804,6 +845,7 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
         "VEADK_STUDIO_DEPLOY_REGION": "cn-beijing",
         "VEADK_STUDIO_PROJECT": "default",
         "VEADK_STUDIO_ACCOUNT_ID": "123",
+        "OAUTH2_REDIRECT_URI": "https://studio.example.com/oauth2/callback",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
         "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",

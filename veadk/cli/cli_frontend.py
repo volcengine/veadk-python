@@ -9271,6 +9271,8 @@ def frontend_update(
         service_client = getattr(service, "client", None)
         current_env: dict[str, str] = {}
         remote_function: object | None = None
+        user_pool_id = ""
+        user_pool_client_id = ""
         if service_client is not None:
             import volcenginesdkvefaas
 
@@ -9298,6 +9300,9 @@ def frontend_update(
                 or current_env.get("OAUTH2_USER_POOL_ID")
                 or ""
             ).strip()
+            user_pool_client_id = str(
+                current_env.get("OAUTH2_USER_POOL_CLIENT_ID") or ""
+            ).strip()
             if user_pool_id:
                 environment_overrides.update(
                     {
@@ -9316,6 +9321,35 @@ def frontend_update(
         environment_overrides[STUDIO_KNOWLEDGE_SIGNING_KEY_ENV] = (
             resolve_studio_knowledge_signing_key(current_env)
         )
+
+        public_url = target.url.rstrip("/")
+        if public_url and user_pool_id and user_pool_client_id:
+            redirect_uri = f"{public_url}/oauth2/callback"
+            environment_overrides["OAUTH2_REDIRECT_URI"] = redirect_uri
+            from veadk.integrations.ve_identity.identity_client import IdentityClient
+
+            identity_client = IdentityClient(
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token,
+                region=str(current_env.get("VEIDENTITY_REGION") or target.region),
+                provider=provider_id,
+            )
+            try:
+                identity_client.register_callback_for_user_pool_client(
+                    user_pool_uid=user_pool_id,
+                    client_uid=user_pool_client_id,
+                    callback_url=redirect_uri,
+                    web_origin=public_url,
+                    dismiss_login_page_enabled=False,
+                    skip_consent_enabled=True,
+                )
+                click.echo(f"Registered SSO callback: {redirect_uri}")
+            except Exception as error:
+                click.echo(
+                    f"Warning: Could not register the SSO callback ({error}). Add "
+                    f"{redirect_uri} to the user-pool client's allowed callback URLs manually."
+                )
 
         studio_account_id = str(
             current_env.get("VEADK_STUDIO_ACCOUNT_ID") or ""
