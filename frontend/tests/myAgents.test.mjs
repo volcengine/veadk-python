@@ -107,11 +107,19 @@ test("keeps a primary create action visible above the scrolling results", () => 
   );
   assert.match(
     pageSource,
-    /<Button[\s\S]*?color="secondary"[\s\S]*?<HandoffIcon \/>[\s\S]*?接力/,
+    /<Button[\s\S]*?color="discovery"[\s\S]*?<HandoffIcon \/>[\s\S]*?接力/,
   );
   assert.match(
     pageStyles,
     /\.my-agent-create-secondary\s*\{[\s\S]*?height: 32px;[\s\S]*?gap: 6px;[\s\S]*?font-size: 12\.5px;/,
+  );
+  assert.match(
+    pageStyles,
+    /\.my-agent-create-secondary\s*\{[\s\S]*?background: var\(--color-background-discovery-solid\);[\s\S]*?color: var\(--color-text-discovery-solid\)/,
+  );
+  assert.match(
+    pageStyles,
+    /\.my-agent-create-secondary:hover:not\(:disabled\)\s*\{[\s\S]*?background: var\(--color-background-discovery-solid-hover\)/,
   );
   assert.match(
     pageStyles,

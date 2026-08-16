@@ -156,6 +156,25 @@ test("the dialog uses the requested copy and normal body typography", () => {
   assert.doesNotMatch(dialogStyles, /ui-monospace|SFMono-Regular|Consolas/);
 });
 
+test("the dialog title shows the Apps SDK UI Beta badge", () => {
+  assert.match(
+    dialogSource,
+    /import \{ Badge \} from "@openai\/apps-sdk-ui\/components\/Badge"/,
+  );
+  assert.match(
+    dialogSource,
+    /className="sandbox-project-upload-title-row"[\s\S]*?<h2 id="sandbox-project-upload-title">接力到云端继续执行<\/h2>[\s\S]*?<Badge[\s\S]*?className="sandbox-project-upload-beta"[\s\S]*?color="discovery"[\s\S]*?size="sm"[\s\S]*?pill[\s\S]*?>[\s\S]*?Beta[\s\S]*?<\/Badge>/,
+  );
+  assert.match(
+    dialogStyles,
+    /\.sandbox-project-upload-title-row\s*\{[\s\S]*?display: flex;[\s\S]*?align-items: center;[\s\S]*?gap: 8px;/,
+  );
+  assert.match(
+    dialogStyles,
+    /\.sandbox-project-upload-title-row \.sandbox-project-upload-beta\s*\{[\s\S]*?height: 18px;[\s\S]*?font-size: 10px;[\s\S]*?font-weight: 600;/,
+  );
+});
+
 test("handoff progress can open the completed Codex session", () => {
   assert.match(dialogSource, /等待端侧请求/);
   assert.match(dialogSource, /创建云端 Session/);

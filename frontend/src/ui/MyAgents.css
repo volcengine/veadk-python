@@ -141,19 +141,34 @@
   justify-content: center;
   gap: 6px;
   padding: 0 13px;
-  border: 1px solid hsl(var(--border));
+  border: 1px solid var(--color-background-discovery-solid);
   border-radius: 8px;
-  background: hsl(var(--panel));
-  color: hsl(var(--foreground));
+  background: var(--color-background-discovery-solid);
+  color: var(--color-text-discovery-solid);
   cursor: pointer;
   font: inherit;
   font-size: 12.5px;
   font-weight: 500;
   line-height: 1;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
 }
 
-.my-agent-create-secondary:hover {
+.my-agent-create-secondary:hover:not(:disabled) {
+  border-color: var(--color-background-discovery-solid-hover);
+  background: var(--color-background-discovery-solid-hover);
+}
+
+.my-agent-create-secondary:active:not(:disabled) {
+  border-color: var(--color-background-discovery-solid-active);
+  background: var(--color-background-discovery-solid-active);
+}
+
+.my-agent-create-secondary:disabled {
+  border-color: hsl(var(--border));
   background: hsl(var(--secondary));
+  color: hsl(var(--muted-foreground));
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .my-agent-results {
@@ -640,6 +655,10 @@
   outline-offset: -2px;
 }
 
+.my-agent-create-secondary:focus-visible {
+  outline-color: var(--color-ring-discovery-solid);
+}
+
 @keyframes my-agent-card-enter {
   from {
     opacity: 0;
@@ -695,6 +714,7 @@
   .my-agent-card,
   .my-agent-actions button,
   .my-agent-type-pill,
+  .my-agent-create-secondary,
   .my-agent-create-primary,
   .my-agent-search {
     transition: none;

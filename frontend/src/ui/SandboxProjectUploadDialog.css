@@ -37,6 +37,20 @@
   margin: 0;
 }
 
+.sandbox-project-upload-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sandbox-project-upload-title-row .sandbox-project-upload-beta {
+  height: 18px;
+  padding-inline: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
 .sandbox-project-upload-head h2 {
   font-size: 17px;
   font-weight: 650;

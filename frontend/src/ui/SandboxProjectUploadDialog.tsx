@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type SVGProps } from "react";
 import { createPortal } from "react-dom";
+import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import {
   sandboxClient,
   type CodexProjectHandoffPairing,
@@ -449,7 +450,17 @@ export function SandboxProjectUploadDialog({
       >
         <header className="sandbox-project-upload-head">
           <div>
-            <h2 id="sandbox-project-upload-title">接力到云端继续执行</h2>
+            <div className="sandbox-project-upload-title-row">
+              <h2 id="sandbox-project-upload-title">接力到云端继续执行</h2>
+              <Badge
+                className="sandbox-project-upload-beta"
+                color="discovery"
+                size="sm"
+                pill
+              >
+                Beta
+              </Badge>
+            </div>
             <p id="sandbox-project-upload-description">
               复制 Prompt 到你的 Codex，它会迁移项目并在云端继续您的任务
             </p>

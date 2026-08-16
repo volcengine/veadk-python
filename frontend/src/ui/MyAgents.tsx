@@ -720,9 +720,9 @@ export function MyAgents({
           {showCodexProjectUpload ? (
             <button
               type="button"
-            className="my-agent-create-secondary"
-            onClick={onOpenCodexProjectUpload}
-          >
+              className="my-agent-create-secondary"
+              onClick={onOpenCodexProjectUpload}
+            >
               <HandoffIcon />
               <span>接力</span>
             </button>
@@ -790,7 +790,7 @@ export function MyAgents({
                   <EmptyMessage.ActionRow>
                     {activeType === "codex" && onOpenCodexProjectUpload ? (
                       <Button
-                        color="secondary"
+                        color="discovery"
                         size="lg"
                         onClick={onOpenCodexProjectUpload}
                       >
