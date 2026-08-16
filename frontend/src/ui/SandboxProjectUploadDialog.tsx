@@ -28,35 +28,24 @@ function trimStudioUrl(value: string): string {
 }
 
 function codexHandoffPrompt(pairing: CodexProjectHandoffPairing): string {
-  const updateCommand = [
-    "codex plugin marketplace upgrade veadk-python",
-    "&& codex plugin add agentkit-studio@veadk-python",
-    "&& codex plugin list --json",
-  ].join(" ");
   const studioUrl = trimStudioUrl(pairing.studioUrl);
   return [
-    "更新 AgentKit Studio Plugin 后，端云接力当前会话、项目和任务。请直接执行，不要让我手动打开终端。",
-    `更新命令：${updateCommand}`,
-    "请确认 agentkit-studio@veadk-python 的版本不是 0.1.0，且包含 +codex. 缓存标识，再使用 $agentkit-codex-handoff Skill 完成接力。",
+    "使用 AgentKit Studio Plugin 端云接力当前会话、项目和任务。请直接执行，不要让我手动打开终端。",
     `Studio：${studioUrl}`,
     `配对码：${pairing.pairingCode}`,
   ].join("\n");
 }
 
-function installAndHandoffPrompt(pairing: CodexProjectHandoffPairing): string {
+function installPluginPrompt(): string {
   const installCommand = [
     "codex plugin marketplace add volcengine/veadk-python",
     "--sparse .agents/plugins",
     "--sparse plugins/agentkit-studio",
     "&& codex plugin add agentkit-studio@veadk-python",
-    "&& codex plugin list --json",
   ].join(" ");
-  const studioUrl = trimStudioUrl(pairing.studioUrl);
   return [
-    "安装 AgentKit Studio Plugin 后，使用 $agentkit-codex-handoff Skill 端云接力当前会话、项目和任务。请直接执行，不要让我手动打开终端，并确认 agentkit-studio@veadk-python 的版本不是 0.1.0，且包含 +codex. 缓存标识。",
+    "请安装 AgentKit Studio Plugin。请直接执行以下安装命令，不要让我手动打开终端。",
     `安装命令：${installCommand}`,
-    `Studio：${studioUrl}`,
-    `配对码：${pairing.pairingCode}`,
   ].join("\n");
 }
 
@@ -245,7 +234,7 @@ export function SandboxProjectUploadDialog({
     if (!pairing) return "";
     return pluginStatus === "installed"
       ? codexPrompt
-      : installAndHandoffPrompt(pairing);
+      : installPluginPrompt();
   }, [codexPrompt, pairing, pluginStatus]);
 
   useEffect(() => {
@@ -523,7 +512,7 @@ export function SandboxProjectUploadDialog({
                 />
                 <span>
                   <strong>未安装或不确定</strong>
-                  <small>Codex 会自动执行安装命令并验证结果</small>
+                  <small>复制提示词，让 Codex 自动安装插件</small>
                 </span>
               </label>
               <label data-selected={pluginStatus === "installed" ? "true" : undefined}>
@@ -536,7 +525,7 @@ export function SandboxProjectUploadDialog({
                 />
                 <span>
                   <strong>已经安装</strong>
-                  <small>Codex 会先更新插件再开始接力</small>
+                  <small>复制提示词，即可开始接力</small>
                 </span>
               </label>
             </div>

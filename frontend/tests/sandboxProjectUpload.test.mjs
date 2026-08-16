@@ -79,9 +79,10 @@ test("codex project handoff pairing code supports countdown, refresh, and status
   assert.doesNotMatch(dialogSource, /<dt>Studio 地址<\/dt>/);
 });
 
-test("the uninstalled path asks Codex to install the Studio plugin from the official repository", () => {
+test("the uninstalled path only asks Codex to install the Studio plugin", () => {
   assert.match(dialogSource, /未安装或不确定/);
   assert.match(dialogSource, /不要让我手动打开终端/);
+  assert.match(dialogSource, /function installPluginPrompt\(\): string/);
   assert.match(
     dialogSource,
     /codex plugin marketplace add volcengine\/veadk-python/,
@@ -89,8 +90,7 @@ test("the uninstalled path asks Codex to install the Studio plugin from the offi
   assert.match(dialogSource, /--sparse \.agents\/plugins/);
   assert.match(dialogSource, /--sparse plugins\/agentkit-studio/);
   assert.match(dialogSource, /codex plugin add agentkit-studio@veadk-python/);
-  assert.match(dialogSource, /codex plugin list --json/);
-  assert.match(dialogSource, /\$agentkit-codex-handoff Skill/);
+  assert.doesNotMatch(dialogSource, /installAndHandoffPrompt/);
   assert.doesNotMatch(dialogSource, /evanlowe\/veadk-python-fork/);
   assert.doesNotMatch(dialogSource, /feat\/codex-project-handoff-plugin/);
   assert.doesNotMatch(dialogSource, /不要新建 Codex 任务/);
@@ -124,17 +124,17 @@ test("the frontend and plugin copies of the handoff skill stay synchronized", ()
   assert.match(frontendUploadSkillSource, /name: agentkit-codex-handoff/);
 });
 
-test("the installed path refreshes the marketplace before handoff", () => {
-  assert.match(dialogSource, /codex plugin marketplace upgrade veadk-python/);
-  assert.match(dialogSource, /codex plugin add agentkit-studio@veadk-python/);
-  assert.match(dialogSource, /codex plugin list --json/);
-  assert.match(dialogSource, /0\.1\.0/);
-  assert.match(dialogSource, /\+codex\./);
+test("the installed path does not expose plugin maintenance details", () => {
+  assert.doesNotMatch(dialogSource, /codex plugin marketplace upgrade/);
+  assert.doesNotMatch(dialogSource, /codex plugin list --json/);
+  assert.doesNotMatch(dialogSource, /0\.1\.0/);
+  assert.doesNotMatch(dialogSource, /\+codex\./);
+  assert.doesNotMatch(dialogSource, /\$agentkit-codex-handoff Skill/);
 });
 
 test("the installed path generates a short cloud continuation prompt", () => {
   assert.match(dialogSource, /已经安装/);
-  assert.match(dialogSource, /端云接力当前会话、项目和任务/);
+  assert.match(dialogSource, /使用 AgentKit Studio Plugin 端云接力当前会话、项目和任务/);
   assert.match(dialogSource, /Studio：\$\{studioUrl\}/);
   assert.match(dialogSource, /配对码：\$\{pairing\.pairingCode\}/);
   assert.match(dialogSource, /复制后粘贴到当前 Codex 任务中/);
