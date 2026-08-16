@@ -49,11 +49,11 @@ test("renders the three Library sections with Agent detail style tabs", () => {
   );
   assert.match(
     librarySource,
-    /<ArtifactLibrary[\s\S]*?sources=\{artifactSources\}[\s\S]*?userId=\{artifactUserId\}[\s\S]*?active=\{activeTab === "artifacts"\}[\s\S]*?activationRevision=\{activationRevisions\.artifacts\}/,
+    /<ArtifactLibrary[\s\S]*?items=\{artifactItems\}[\s\S]*?userId=\{artifactUserId\}[\s\S]*?active=\{activeTab === "artifacts"\}[\s\S]*?activationRevision=\{activationRevisions\.artifacts\}/,
   );
   assert.match(
     appSource,
-    /artifactSources=\{appName[\s\S]*?appName, agentName: labelOf\(appName\), sessions[\s\S]*?artifactUserId=\{userId\}/,
+    /artifactSources=\{appName[\s\S]*?appName,[\s\S]*?agentName: labelOf\(appName\),[\s\S]*?sessions/,
   );
   assert.match(appSource, /onArtifactActivate=\{\(\) => \{[\s\S]*?refreshSessions\(appName\)/);
   assert.match(libraryStyles, /\.library-tabs button\s*\{[\s\S]*?font-size:\s*15px/);
@@ -68,6 +68,18 @@ test("refreshes the active Library resource on initial open and every tab activa
   assert.match(librarySource, /if \(activeTab === "artifacts"\)/);
   assert.match(librarySource, /artifactActivateRef\.current\?\.\(\)/);
   assert.match(appSource, /sessionRefreshRequestRef\.current !== request/);
+});
+
+test("keeps artifact candidates stable across unrelated App renders", () => {
+  assert.match(librarySource, /const artifactCandidateSnapshot = useMemo\(/);
+  assert.match(librarySource, /JSON\.stringify\(candidates\)/);
+  assert.match(librarySource, /const artifactCandidateCache = useRef\(artifactCandidateSnapshot\)/);
+  assert.match(
+    librarySource,
+    /artifactCandidateCache\.current\.key !== artifactCandidateSnapshot\.key/,
+  );
+  assert.match(librarySource, /const artifactCandidates = artifactCandidateCache\.current\.candidates/);
+  assert.doesNotMatch(appSource, /const artifactSources = useMemo\(/);
 });
 
 test("keeps Library tab selection keyboard accessible", () => {

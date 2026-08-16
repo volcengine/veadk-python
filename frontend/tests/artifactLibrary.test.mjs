@@ -18,6 +18,14 @@ const iconSource = readFileSync(
   new URL("../src/ui/icons/LibraryIcons.tsx", import.meta.url),
   "utf8",
 );
+const actionMenuSource = readFileSync(
+  new URL("../src/ui/StudioActionMenu.tsx", import.meta.url),
+  "utf8",
+);
+const editDialogSource = readFileSync(
+  new URL("../src/ui/ArtifactEditDialog.tsx", import.meta.url),
+  "utf8",
+);
 
 test("collects real chat artifact deltas without mock records", () => {
   assert.match(modelSource, /event\.actions\?\.artifactDelta \?\? event\.actions\?\.artifact_delta/);
@@ -25,6 +33,15 @@ test("collects real chat artifact deltas without mock records", () => {
   assert.match(modelSource, /sessionTitle\(session\.events\)/);
   assert.match(modelSource, /if \(\/\\\.preview\\\.webp\$\/i\.test\(record\.filename\)\) continue/);
   assert.doesNotMatch(pageSource, /MOCK_ARTIFACTS|MOCK_SESSIONS|downloadMockArtifact/);
+});
+
+test("extracts generated image and video URLs with tool provenance", () => {
+  assert.match(modelSource, /toolName === "image_generate"/);
+  assert.match(modelSource, /\["video_generate", "video_task_query"\]/);
+  assert.match(modelSource, /const successList = payload\.success_list/);
+  assert.match(modelSource, /const directUrl = payload\.video_url/);
+  assert.match(modelSource, /taskId: output\.taskId/);
+  assert.match(modelSource, /invocationId: event\.invocationId \?\? event\.invocation_id/);
 });
 
 test("uses the existing ADK preview and download endpoints", () => {
@@ -48,13 +65,51 @@ test("keeps one type-filtered view with search, preview and download", () => {
     assert.match(pageSource, new RegExp(`label: "${label}"`));
   }
   assert.match(pageSource, /setActiveType\(\(current\) => current === type\.id \? null : type\.id\)/);
-  assert.match(pageSource, /<span className="artifact-type-badge">\{ARTIFACT_LABELS\[artifact\.type\]\}<\/span>/);
-  assert.match(pageSource, /来自会话：\{artifact\.sessionTitle\}/);
-  assert.match(pageSource, /aria-label=\{`预览 \$\{artifact\.name\}`\}/);
-  assert.match(pageSource, /aria-label=\{`下载 \$\{artifact\.name\}`\}/);
+  assert.doesNotMatch(pageSource, /artifact-type-badge/);
+  assert.match(pageSource, /<table className="artifact-library-table">/);
+  for (const heading of ["名称", "来源", "修改时间", "操作"]) {
+    assert.match(pageSource, new RegExp(`>${heading}<`));
+  }
+  assert.doesNotMatch(pageSource, /<th[^>]*>大小<\/th>/);
+  assert.doesNotMatch(pageSource, /artifact-library-table__size-column/);
+  assert.doesNotMatch(pageSource, /artifact-library-table__version-column/);
+  assert.match(pageSource, /\{artifact\.agentName\} \/ \{artifact\.sessionTitle\}/);
+  assert.match(pageSource, /className="library-artifact-preview-trigger"/);
+  assert.match(pageSource, /onClick=\{\(\) => onPreview\(artifact\)\}/);
+  assert.match(pageSource, /className="library-artifact-row-size"/);
+  assert.match(pageSource, /label: downloadPending \? "下载中" : "下载"/);
+  assert.match(pageSource, /label: "编辑信息"/);
+  assert.match(pageSource, /label: "删除产物"/);
+  assert.doesNotMatch(pageSource, /className="library-artifact-action"/);
   assert.match(pageSource, /<img src=\{previewUrl\}/);
   assert.match(pageSource, /<video src=\{previewUrl\} controls/);
   assert.match(pageSource, /<iframe src=\{previewUrl\}/);
+});
+
+test("supports managed artifacts and preserves their source provenance", () => {
+  assert.match(pageSource, /onEdit\?:/);
+  assert.match(pageSource, /onDelete\?:/);
+  assert.match(pageSource, /onOpenSource\?:/);
+  assert.match(pageSource, /<StudioConfirmDialog/);
+  assert.match(pageSource, /<ArtifactEditDialog/);
+  assert.match(pageSource, /<dt>Agent<\/dt>/);
+  assert.match(pageSource, /<dt>会话<\/dt>/);
+  assert.match(pageSource, /<dt>生成工具<\/dt>/);
+  assert.match(modelSource, /agentId\?: string/);
+  assert.match(modelSource, /runtimeId\?: string/);
+  assert.match(modelSource, /eventId\?: string/);
+  assert.match(modelSource, /invocationId\?: string/);
+});
+
+test("shared artifact controls are keyboard accessible", () => {
+  assert.match(actionMenuSource, /aria-haspopup="menu"/);
+  assert.match(actionMenuSource, /role="menuitem"/);
+  assert.match(actionMenuSource, /\["ArrowDown", "ArrowUp", "Home", "End"\]/);
+  assert.match(actionMenuSource, /window\.addEventListener\("pointerdown", closeOnPointerDown\)/);
+  assert.match(actionMenuSource, /event\.key !== "Escape"/);
+  assert.match(editDialogSource, /event\.key !== "Tab"/);
+  assert.match(pageSource, /event\.key !== "Tab"/);
+  assert.match(pageSource, /document\.body\.style\.overflow = "hidden"/);
 });
 
 test("covers loading, failure, retry, empty and unavailable-preview states", () => {
@@ -86,4 +141,5 @@ test("uses repository icons and responsive reduced-motion styles", () => {
   assert.match(pageStyles, /@media \(max-width: 720px\)/);
   assert.match(pageStyles, /@media \(prefers-reduced-motion: reduce\)/);
   assert.doesNotMatch(pageStyles, /font-family/);
+  assert.match(pageStyles, /\.library-artifact-thumbnail\s*\{[\s\S]*?width:\s*32px;[\s\S]*?height:\s*32px;[\s\S]*?flex:\s*0 0 32px;/);
 });

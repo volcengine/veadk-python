@@ -1,7 +1,17 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { CloudProvider } from "../adk/cloudProvider";
 import { ArtifactLibrary } from "./ArtifactLibrary";
-import type { ArtifactSessionSource } from "./artifactLibraryModel";
+import {
+  collectArtifactIngestCandidates,
+  type ArtifactLibraryItem,
+  type ArtifactSessionSource,
+} from "./artifactLibraryModel";
+import {
+  deleteStoredArtifact,
+  downloadStoredArtifact,
+  syncStoredArtifacts,
+  updateStoredArtifact,
+} from "./artifactLibraryApi";
 import { KnowledgeLibrary } from "./KnowledgeLibrary";
 import {
   SkillCenterView,
@@ -27,6 +37,7 @@ export interface LibraryViewProps {
   artifactSources?: readonly ArtifactSessionSource[];
   artifactUserId?: string;
   onArtifactActivate?: () => void | Promise<void>;
+  onArtifactSourceOpen?: (appName: string, sessionId: string) => void;
 }
 
 export function LibraryView({
@@ -38,6 +49,7 @@ export function LibraryView({
   artifactSources = [],
   artifactUserId = "",
   onArtifactActivate,
+  onArtifactSourceOpen,
 }: LibraryViewProps) {
   const [mountedTabs, setMountedTabs] = useState<ReadonlySet<LibraryTab>>(
     () => new Set<LibraryTab>(["skills", activeTab]),
@@ -46,6 +58,18 @@ export function LibraryView({
     Record<LibraryTab, number>
   >({ skills: 0, knowledge: 0, artifacts: 0 });
   const artifactActivateRef = useRef(onArtifactActivate);
+  const [artifactItems, setArtifactItems] = useState<ArtifactLibraryItem[]>([]);
+  const [artifactLoading, setArtifactLoading] = useState(false);
+  const [artifactError, setArtifactError] = useState("");
+  const artifactCandidateSnapshot = useMemo(() => {
+    const candidates = collectArtifactIngestCandidates(artifactSources);
+    return { key: JSON.stringify(candidates), candidates };
+  }, [artifactSources]);
+  const artifactCandidateCache = useRef(artifactCandidateSnapshot);
+  if (artifactCandidateCache.current.key !== artifactCandidateSnapshot.key) {
+    artifactCandidateCache.current = artifactCandidateSnapshot;
+  }
+  const artifactCandidates = artifactCandidateCache.current.candidates;
 
   useEffect(() => {
     artifactActivateRef.current = onArtifactActivate;
@@ -65,6 +89,22 @@ export function LibraryView({
       void artifactActivateRef.current?.();
     }
   }, [activeTab, activationRevisions.artifacts]);
+
+  const loadArtifacts = useCallback(async () => {
+    setArtifactLoading(true);
+    setArtifactError("");
+    try {
+      setArtifactItems(await syncStoredArtifacts(artifactCandidates));
+    } catch (reason) {
+      setArtifactError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setArtifactLoading(false);
+    }
+  }, [artifactCandidates]);
+
+  useEffect(() => {
+    if (activeTab === "artifacts") void loadArtifacts();
+  }, [activeTab, activationRevisions.artifacts, loadArtifacts]);
 
   const selectTab = (tab: LibraryTab) => {
     setMountedTabs((current) => {
@@ -167,10 +207,19 @@ export function LibraryView({
             hidden={activeTab !== "artifacts"}
           >
             <ArtifactLibrary
-              sources={artifactSources}
+              items={artifactItems}
               userId={artifactUserId}
               active={activeTab === "artifacts"}
               activationRevision={activationRevisions.artifacts}
+              loading={artifactLoading}
+              error={artifactError}
+              onRetry={() => void loadArtifacts()}
+              onEdit={updateStoredArtifact}
+              onDelete={deleteStoredArtifact}
+              onDownload={downloadStoredArtifact}
+              onOpenSource={onArtifactSourceOpen
+                ? (artifact) => onArtifactSourceOpen(artifact.appName, artifact.sessionId)
+                : undefined}
             />
           </div>
         ) : null}

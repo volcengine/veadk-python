@@ -1,12 +1,9 @@
 import {
-  useEffect,
-  useRef,
-  useState,
   type ReactNode,
-  type SVGProps,
 } from "react";
 import "./MyAgents.css";
 import "./LibraryResourceCard.css";
+import { StudioActionMenu } from "./StudioActionMenu";
 
 export interface LibraryResourceCardAction {
   label: string;
@@ -46,16 +43,6 @@ interface LibraryResourceCardActionsProps {
   menuActions: readonly LibraryResourceCardMenuAction[];
 }
 
-function ResourceMoreIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
-      <circle cx="5.5" cy="12" r="1.4" />
-      <circle cx="12" cy="12" r="1.4" />
-      <circle cx="18.5" cy="12" r="1.4" />
-    </svg>
-  );
-}
-
 function LibraryResourceCardActions({
   secondaryAction,
   primaryAction,
@@ -63,25 +50,6 @@ function LibraryResourceCardActions({
   menuAriaLabel,
   menuActions,
 }: LibraryResourceCardActionsProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const closeMenu = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false);
-    };
-    window.addEventListener("pointerdown", closeMenu);
-    window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      window.removeEventListener("pointerdown", closeMenu);
-      window.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [menuOpen]);
-
   return (
     <footer className="library-resource-card__actions">
       <button
@@ -102,38 +70,19 @@ function LibraryResourceCardActions({
       >
         {primaryAction.label}
       </button>
-      <div className="library-resource-card__menu" ref={menuRef}>
-        <button
-          type="button"
-          className="library-resource-card__action library-resource-card__more"
-          aria-label={menuLabel}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          onClick={() => setMenuOpen((current) => !current)}
-        >
-          <ResourceMoreIcon />
-        </button>
-        {menuOpen ? (
-          <div className="library-resource-card__popover" role="menu" aria-label={menuAriaLabel}>
-            {menuActions.map((action) => (
-              <button
-                key={action.label}
-                type="button"
-                role="menuitem"
-                className={`library-resource-card__menu-action${action.danger ? " is-danger" : ""}`}
-                disabled={action.disabled}
-                title={action.title}
-                onClick={() => {
-                  setMenuOpen(false);
-                  action.onClick();
-                }}
-              >
-                {action.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </div>
+      <StudioActionMenu
+        label={menuLabel}
+        menuLabel={menuAriaLabel}
+        className="library-resource-card__action library-resource-card__more"
+        placement="top-end"
+        items={menuActions.map((action) => ({
+          label: action.label,
+          onSelect: action.onClick,
+          disabled: action.disabled,
+          danger: action.danger,
+          title: action.title,
+        }))}
+      />
     </footer>
   );
 }

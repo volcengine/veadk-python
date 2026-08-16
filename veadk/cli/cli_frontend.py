@@ -1777,6 +1777,20 @@ def _run_frontend_server(
         identity_resolver=_video_owner,
     )
 
+    from frontend.server.artifacts import (
+        create_service as create_artifact_service,
+    )
+    from frontend.server.artifacts import mount_routes as mount_artifact_routes
+
+    mount_artifact_routes(
+        app,
+        service=create_artifact_service(
+            provider=provider,
+            resolve_credentials=_resolve_ve_credentials,
+        ),
+        identity_resolver=_video_owner,
+    )
+
     from frontend.server.model_catalog import (
         build_model_catalog_service,
         mount_model_catalog_routes,
