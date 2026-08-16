@@ -166,142 +166,57 @@
   overflow-wrap: anywhere;
 }
 
-.sandbox-project-upload-status {
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.sandbox-project-upload-status legend {
-  margin: 0 0 8px;
-  padding: 0;
-  color: hsl(var(--foreground));
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 1.45;
-}
-
-.sandbox-project-upload-status-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-auto-rows: 1fr;
-  gap: 8px;
-}
-
-.sandbox-project-upload-status-options label {
-  min-width: 0;
-  min-height: 68px;
-  height: 100%;
-  box-sizing: border-box;
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  align-items: start;
-  gap: 9px;
-  padding: 11px 12px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 8px;
-  background: hsl(var(--background));
-  cursor: pointer;
-  transition:
-    border-color 160ms ease-out,
-    background-color 160ms ease-out;
-}
-
-.sandbox-project-upload-status-options label:hover {
-  background: hsl(var(--secondary));
-}
-
-.sandbox-project-upload-status-options label[data-selected="true"] {
-  border-color: hsl(var(--foreground) / 0.5);
-  background: hsl(var(--secondary));
-}
-
-.sandbox-project-upload-status-options input {
-  appearance: none;
-  width: 16px;
-  height: 16px;
-  display: inline-grid;
-  place-items: center;
-  margin: 1px 0 0;
-  border: 1.5px solid hsl(var(--muted-foreground));
-  border-radius: 50%;
-  background: hsl(var(--panel));
-  cursor: pointer;
-}
-
-.sandbox-project-upload-status-options input::before {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: hsl(var(--foreground));
-  content: "";
-  transform: scale(0);
-}
-
-.sandbox-project-upload-status-options input:checked {
-  border-color: hsl(var(--foreground));
-}
-
-.sandbox-project-upload-status-options input:checked::before {
-  transform: scale(1);
-}
-
-.sandbox-project-upload-status-options span {
-  min-width: 0;
-}
-
-.sandbox-project-upload-status-options strong {
-  display: block;
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 1.35;
-}
-
-.sandbox-project-upload-status-options small {
-  display: block;
-  margin: 4px 0 0;
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.sandbox-project-upload-command {
+.sandbox-project-upload-stage {
   overflow: hidden;
   border: 1px solid hsl(var(--border));
   border-radius: 8px;
   background: hsl(var(--background));
 }
 
-.sandbox-project-upload-command-head {
+.sandbox-project-upload-stage-head {
   min-height: 64px;
   box-sizing: border-box;
-  display: flex;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 9px 10px;
+  gap: 10px;
+  padding: 10px 12px;
   border-bottom: 1px solid hsl(var(--border));
 }
 
-.sandbox-project-upload-command-head > div {
-  min-width: 0;
-}
-
-.sandbox-project-upload-command-head span {
-  min-width: 0;
-  color: hsl(var(--foreground));
-  font-size: 12.5px;
+.sandbox-project-upload-stage-number {
+  width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+  font-size: 11.5px;
   font-weight: 650;
+  line-height: 1;
 }
 
-.sandbox-project-upload-command-head p {
-  margin: 4px 0 0;
+.sandbox-project-upload-stage-head > div {
+  min-width: 0;
+}
+
+.sandbox-project-upload-stage-head h3 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.sandbox-project-upload-stage-head p {
+  margin: 3px 0 0;
   color: hsl(var(--muted-foreground));
   font-size: 12px;
   line-height: 1.45;
 }
 
-.sandbox-project-upload-command-head button,
+.sandbox-project-upload-stage-head button,
 .sandbox-project-upload-error button,
 .sandbox-project-upload-actions button {
   height: 32px;
@@ -319,23 +234,23 @@
   cursor: pointer;
 }
 
-.sandbox-project-upload-command-head button,
+.sandbox-project-upload-stage-head button,
 .sandbox-project-upload-error button {
   padding: 0 10px;
 }
 
-.sandbox-project-upload-command-head button:hover:not(:disabled),
+.sandbox-project-upload-stage-head button:hover:not(:disabled),
 .sandbox-project-upload-error button:hover,
 .sandbox-project-upload-actions button:hover {
   background: hsl(var(--secondary));
 }
 
-.sandbox-project-upload-command-head button:disabled {
+.sandbox-project-upload-stage-head button:disabled {
   cursor: default;
   opacity: 0.56;
 }
 
-.sandbox-project-upload-command-head svg,
+.sandbox-project-upload-stage-head svg,
 .sandbox-project-upload-error svg,
 .sandbox-project-upload-actions svg {
   width: 14px;
@@ -343,17 +258,14 @@
   flex: 0 0 14px;
 }
 
-.sandbox-project-upload-command-content {
-  height: clamp(132px, 22vh, 168px);
-  min-height: 0;
+.sandbox-project-upload-prompt {
+  min-height: 92px;
   display: flex;
 }
 
-.sandbox-project-upload-command pre {
+.sandbox-project-upload-prompt pre {
   width: 100%;
-  height: 100%;
   box-sizing: border-box;
-  overflow: auto;
   margin: 0;
   padding: 12px;
   color: hsl(var(--foreground));
@@ -365,7 +277,7 @@
   overflow-wrap: anywhere;
 }
 
-.sandbox-project-upload-command code {
+.sandbox-project-upload-prompt code {
   font-family: inherit;
   font-size: 13px;
   font-weight: 400;
@@ -373,7 +285,7 @@
 
 .sandbox-project-upload-loading {
   width: 100%;
-  height: 100%;
+  min-height: 92px;
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -393,11 +305,17 @@
   animation: sandbox-project-upload-spin 800ms linear infinite;
 }
 
+.sandbox-project-upload-stage > .sandbox-project-upload-pairing-notice {
+  margin: 10px 10px 0;
+}
+
+.sandbox-project-upload-stage > .sandbox-project-upload-pairing-notice +
+  .sandbox-project-upload-prompt {
+  min-height: 104px;
+}
+
 .sandbox-project-upload-progress {
-  overflow: hidden;
-  border: 1px solid hsl(var(--border));
-  border-radius: 8px;
-  background: hsl(var(--background));
+  border-top: 1px solid hsl(var(--border));
 }
 
 .sandbox-project-upload-progress > header {
@@ -582,8 +500,7 @@
 }
 
 .sandbox-project-upload-dialog button:focus-visible,
-.sandbox-project-upload-status-options input:focus-visible,
-.sandbox-project-upload-command pre:focus-visible {
+.sandbox-project-upload-prompt pre:focus-visible {
   outline: 2px solid hsl(var(--ring) / 0.34);
   outline-offset: 2px;
 }
@@ -627,8 +544,13 @@
     font-size: 11.5px;
   }
 
-  .sandbox-project-upload-status-options {
-    grid-template-columns: 1fr;
+  .sandbox-project-upload-stage-head {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .sandbox-project-upload-stage-head button {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .sandbox-project-upload-actions button {
@@ -651,7 +573,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .sandbox-project-upload-dialog,
-  .sandbox-project-upload-status-options label,
   .sandbox-project-upload-progress li[data-state="active"]
     .sandbox-project-upload-progress-marker,
   .sandbox-project-upload-loading i {

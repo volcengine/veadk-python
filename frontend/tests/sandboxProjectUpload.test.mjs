@@ -79,8 +79,9 @@ test("codex project handoff pairing code supports countdown, refresh, and status
   assert.doesNotMatch(dialogSource, /<dt>Studio 地址<\/dt>/);
 });
 
-test("the uninstalled path only asks Codex to install the Studio plugin", () => {
-  assert.match(dialogSource, /未安装或不确定/);
+test("the install step only asks Codex to install the Studio plugin", () => {
+  assert.match(dialogSource, /<h3>安装插件<\/h3>/);
+  assert.match(dialogSource, /复制安装提示词/);
   assert.match(dialogSource, /不要让我手动打开终端/);
   assert.match(dialogSource, /function installPluginPrompt\(\): string/);
   assert.match(
@@ -124,7 +125,7 @@ test("the frontend and plugin copies of the handoff skill stay synchronized", ()
   assert.match(frontendUploadSkillSource, /name: agentkit-codex-handoff/);
 });
 
-test("the installed path does not expose plugin maintenance details", () => {
+test("the dialog does not expose plugin maintenance details", () => {
   assert.doesNotMatch(dialogSource, /codex plugin marketplace upgrade/);
   assert.doesNotMatch(dialogSource, /codex plugin list --json/);
   assert.doesNotMatch(dialogSource, /0\.1\.0/);
@@ -132,12 +133,13 @@ test("the installed path does not expose plugin maintenance details", () => {
   assert.doesNotMatch(dialogSource, /\$agentkit-codex-handoff Skill/);
 });
 
-test("the installed path generates a short cloud continuation prompt", () => {
-  assert.match(dialogSource, /已经安装/);
+test("the handoff step generates a short cloud continuation prompt", () => {
+  assert.match(dialogSource, /<h3>任务接力<\/h3>/);
+  assert.match(dialogSource, /复制接力提示词/);
   assert.match(dialogSource, /使用 AgentKit Studio Plugin 端云接力当前会话、项目和任务/);
   assert.match(dialogSource, /Studio：\$\{studioUrl\}/);
   assert.match(dialogSource, /配对码：\$\{pairing\.pairingCode\}/);
-  assert.match(dialogSource, /复制后粘贴到当前 Codex 任务中/);
+  assert.match(dialogSource, /插件安装完成后复制/);
   assert.doesNotMatch(dialogSource, /authorization_code/);
   assert.doesNotMatch(dialogSource, /repo: 当前工作目录/);
 });
@@ -145,13 +147,13 @@ test("the installed path generates a short cloud continuation prompt", () => {
 test("the dialog uses the requested copy and normal body typography", () => {
   assert.match(
     dialogSource,
-    /复制 Prompt 到你的 Codex，它会迁移项目并在云端继续您的任务/,
+    /按顺序复制两段提示词，Codex 会安装插件并将当前任务接力到云端/,
   );
-  assert.match(dialogSource, /<span>提示词<\/span>/);
-  assert.match(dialogSource, /复制提示词/);
+  assert.match(dialogSource, /复制安装提示词/);
+  assert.match(dialogSource, /复制接力提示词/);
   assert.match(
     dialogStyles,
-    /\.sandbox-project-upload-command code\s*\{[\s\S]*?font-family:\s*inherit/,
+    /\.sandbox-project-upload-prompt code\s*\{[\s\S]*?font-family:\s*inherit/,
   );
   assert.doesNotMatch(dialogStyles, /ui-monospace|SFMono-Regular|Consolas/);
 });
@@ -231,12 +233,22 @@ test("imported Codex history renders image attachments in the transcript", () =>
   assert.match(sandboxCommandsSource, /data: image\.data/);
 });
 
-test("handoff choices and prompt content reserve stable space", () => {
-  assert.match(dialogStyles, /\.sandbox-project-upload-status-options\s*\{[\s\S]*?grid-auto-rows:\s*1fr/);
-  assert.match(dialogStyles, /\.sandbox-project-upload-status-options label\s*\{[\s\S]*?min-height:\s*68px/);
-  assert.match(dialogStyles, /\.sandbox-project-upload-command-content\s*\{[\s\S]*?height:\s*clamp\(/);
-  assert.match(dialogSource, /className="sandbox-project-upload-command-content"/);
-  assert.doesNotMatch(dialogSource, /pluginStatus === "installed" \? "云端接力 Prompt"/);
+test("install and handoff are fixed sequential steps with independent copy actions", () => {
+  assert.doesNotMatch(dialogSource, /PluginStatus|pluginStatus|type="radio"/);
+  assert.doesNotMatch(dialogSource, /是否已经安装 AgentKit Studio Plugin/);
+  assert.match(dialogSource, /type CopyTarget = "install" \| "handoff" \| ""/);
+  assert.match(dialogSource, /copy\(installPrompt, "install"\)/);
+  assert.match(dialogSource, /copy\(handoffPrompt, "handoff"\)/);
+  assert.equal(
+    dialogSource.match(/className="sandbox-project-upload-stage"/g)?.length,
+    2,
+  );
+  assert.match(
+    dialogSource,
+    /<h3>安装插件<\/h3>[\s\S]*?<h3>任务接力<\/h3>/,
+  );
+  assert.match(dialogStyles, /\.sandbox-project-upload-prompt\s*\{[\s\S]*?min-height:\s*92px/);
+  assert.match(dialogSource, /className="sandbox-project-upload-prompt"/);
 });
 
 test("handoff progress labels stay on one line without connector pressure", () => {

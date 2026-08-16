@@ -8,8 +8,7 @@ import {
 } from "../adk/sandbox";
 import "./SandboxProjectUploadDialog.css";
 
-type PluginStatus = "not-installed" | "installed";
-type CopyTarget = PluginStatus | "";
+type CopyTarget = "install" | "handoff" | "";
 
 interface DialogError {
   message: string;
@@ -213,8 +212,6 @@ export function SandboxProjectUploadDialog({
   const requestRef = useRef(0);
   const copyTimerRef = useRef<number | undefined>(undefined);
   const completionNotifiedRef = useRef("");
-  const [pluginStatus, setPluginStatus] =
-    useState<PluginStatus>("not-installed");
   const [pairing, setPairing] = useState<CodexProjectHandoffPairing | null>(null);
   const [handoffStatus, setHandoffStatus] =
     useState<CodexProjectHandoffStatus | null>(null);
@@ -226,22 +223,14 @@ export function SandboxProjectUploadDialog({
   const [copyTarget, setCopyTarget] = useState<CopyTarget>("");
   onCloseRef.current = onClose;
 
-  const codexPrompt = useMemo(
+  const installPrompt = useMemo(() => installPluginPrompt(), []);
+  const handoffPrompt = useMemo(
     () => pairing ? codexHandoffPrompt(pairing) : "",
     [pairing],
   );
-  const activePrompt = useMemo(() => {
-    if (!pairing) return "";
-    return pluginStatus === "installed"
-      ? codexPrompt
-      : installPluginPrompt();
-  }, [codexPrompt, pairing, pluginStatus]);
 
   useEffect(() => {
-    if (!open) {
-      setPluginStatus("not-installed");
-      return;
-    }
+    if (!open) return;
     setPairing(null);
     setHandoffStatus(null);
     setError(null);
@@ -451,7 +440,7 @@ export function SandboxProjectUploadDialog({
               </Badge>
             </div>
             <p id="sandbox-project-upload-description">
-              复制 Prompt 到你的 Codex，它会迁移项目并在云端继续您的任务
+              按顺序复制两段提示词，Codex 会安装插件并将当前任务接力到云端
             </p>
           </div>
           <button
@@ -481,130 +470,121 @@ export function SandboxProjectUploadDialog({
             </div>
           ) : null}
 
-          <div className="sandbox-project-upload-pairing-notice" role="status">
-            <span>
-              {loading
-                ? "正在生成新的配对码"
-                : pairingExpired
-                  ? "配对码已过期"
-                  : <>配对码有效期剩余 <time>{countdown}</time></>}
-            </span>
-            <button
-              type="button"
-              disabled={loading}
-              onClick={() => setPairingRetryKey((current) => current + 1)}
-            >
-              <RefreshIcon />
-              {loading ? "刷新中" : "刷新配对码"}
-            </button>
-          </div>
-
-          <fieldset className="sandbox-project-upload-status">
-            <legend>是否已经安装 AgentKit Studio Plugin？</legend>
-            <div className="sandbox-project-upload-status-options">
-              <label data-selected={pluginStatus === "not-installed" ? "true" : undefined}>
-                <input
-                  type="radio"
-                  name="sandbox-project-upload-plugin-status"
-                  value="not-installed"
-                  checked={pluginStatus === "not-installed"}
-                  onChange={() => setPluginStatus("not-installed")}
-                />
-                <span>
-                  <strong>未安装或不确定</strong>
-                  <small>复制提示词，让 Codex 自动安装插件</small>
-                </span>
-              </label>
-              <label data-selected={pluginStatus === "installed" ? "true" : undefined}>
-                <input
-                  type="radio"
-                  name="sandbox-project-upload-plugin-status"
-                  value="installed"
-                  checked={pluginStatus === "installed"}
-                  onChange={() => setPluginStatus("installed")}
-                />
-                <span>
-                  <strong>已经安装</strong>
-                  <small>复制提示词，即可开始接力</small>
-                </span>
-              </label>
-            </div>
-          </fieldset>
-
-          <section className="sandbox-project-upload-command">
-            <div className="sandbox-project-upload-command-head">
+          <section className="sandbox-project-upload-stage">
+            <div className="sandbox-project-upload-stage-head">
+              <span className="sandbox-project-upload-stage-number">1</span>
               <div>
-                <span>提示词</span>
-                <p>复制后粘贴到当前 Codex 任务中。</p>
+                <h3>安装插件</h3>
+                <p>首次使用时，复制到当前 Codex 任务，让 Codex 自动完成安装。</p>
               </div>
               <button
                 type="button"
-                onClick={() => void copy(activePrompt, pluginStatus)}
-                disabled={!activePrompt || loading || copyTarget !== ""}
+                onClick={() => void copy(installPrompt, "install")}
+                disabled={copyTarget !== ""}
               >
-                {copyTarget === pluginStatus ? <CheckIcon /> : <CopyIcon />}
-                {copyTarget === pluginStatus ? "已复制" : "复制提示词"}
+                {copyTarget === "install" ? <CheckIcon /> : <CopyIcon />}
+                {copyTarget === "install" ? "已复制" : "复制安装提示词"}
               </button>
             </div>
-            <div className="sandbox-project-upload-command-content">
+            <div className="sandbox-project-upload-prompt">
+              <pre tabIndex={0}><code>{installPrompt}</code></pre>
+            </div>
+          </section>
+
+          <section className="sandbox-project-upload-stage">
+            <div className="sandbox-project-upload-stage-head">
+              <span className="sandbox-project-upload-stage-number">2</span>
+              <div>
+                <h3>任务接力</h3>
+                <p>插件安装完成后复制，Codex 会迁移当前项目并继续执行任务。</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void copy(handoffPrompt, "handoff")}
+                disabled={!handoffPrompt || loading || copyTarget !== ""}
+              >
+                {copyTarget === "handoff" ? <CheckIcon /> : <CopyIcon />}
+                {copyTarget === "handoff" ? "已复制" : "复制接力提示词"}
+              </button>
+            </div>
+
+            <div className="sandbox-project-upload-pairing-notice" role="status">
+              <span>
+                {loading
+                  ? "正在生成新的配对码"
+                  : pairingExpired
+                    ? "配对码已过期"
+                    : <>配对码有效期剩余 <time>{countdown}</time></>}
+              </span>
+              <button
+                type="button"
+                disabled={loading}
+                onClick={() => setPairingRetryKey((current) => current + 1)}
+              >
+                <RefreshIcon />
+                {loading ? "刷新中" : "刷新配对码"}
+              </button>
+            </div>
+
+            <div className="sandbox-project-upload-prompt">
               {loading ? (
                 <div className="sandbox-project-upload-loading" role="status">
                   <i aria-hidden="true" />正在生成配对码
                 </div>
-              ) : activePrompt ? (
-                <pre tabIndex={0}><code>{activePrompt}</code></pre>
+              ) : handoffPrompt ? (
+                <pre tabIndex={0}><code>{handoffPrompt}</code></pre>
               ) : (
                 <div className="sandbox-project-upload-loading">配对码尚未生成。</div>
               )}
             </div>
-          </section>
 
-          {pairing && handoffStatus ? (
-            <section
-              className="sandbox-project-upload-progress"
-              aria-live="polite"
-              aria-label="端云接力状态"
-            >
-              <header>
-                <div>
-                  <span>接力状态</span>
-                  {handoffStatus.state !== "issued" ? (
-                    <p>
-                      已收到{handoffStatus.agentName
-                        ? `“${handoffStatus.agentName}”`
-                        : handoffStatus.projectName
-                          ? `“${handoffStatus.projectName}”`
-                        : "当前项目"}的端云接力请求
-                    </p>
-                  ) : (
-                    <p>复制提示词后，Codex 的请求会显示在这里。</p>
-                  )}
-                </div>
-                <strong data-state={handoffStatus.state}>
-                  {handoffStatusLabel(handoffStatus)}
-                </strong>
-              </header>
-              <ol>
-                {HANDOFF_PROGRESS_STEPS.map((step, index) => {
-                  const state = progressStepState(handoffStatus, index);
-                  return (
-                    <li key={step.id} data-state={state}>
-                      <span className="sandbox-project-upload-progress-marker">
-                        {state === "done" ? <CheckIcon /> : null}
-                        {state === "failed" ? <CloseIcon /> : null}
-                      </span>
-                      <span>{step.label}</span>
-                    </li>
-                  );
-                })}
-              </ol>
-              {handoffStatus.state === "failed" && handoffStatus.error ? (
-                <p className="sandbox-project-upload-progress-error" role="alert">
-                  {handoffStatus.error}
-                </p>
-              ) : null}
-            </section>
-          ) : null}
+            {pairing && handoffStatus ? (
+              <section
+                className="sandbox-project-upload-progress"
+                aria-live="polite"
+                aria-label="端云接力状态"
+              >
+                <header>
+                  <div>
+                    <span>接力状态</span>
+                    {handoffStatus.state !== "issued" ? (
+                      <p>
+                        已收到{handoffStatus.agentName
+                          ? `“${handoffStatus.agentName}”`
+                          : handoffStatus.projectName
+                            ? `“${handoffStatus.projectName}”`
+                            : "当前项目"}的端云接力请求
+                      </p>
+                    ) : (
+                      <p>复制接力提示词后，Codex 的请求会显示在这里。</p>
+                    )}
+                  </div>
+                  <strong data-state={handoffStatus.state}>
+                    {handoffStatusLabel(handoffStatus)}
+                  </strong>
+                </header>
+                <ol>
+                  {HANDOFF_PROGRESS_STEPS.map((step, index) => {
+                    const state = progressStepState(handoffStatus, index);
+                    return (
+                      <li key={step.id} data-state={state}>
+                        <span className="sandbox-project-upload-progress-marker">
+                          {state === "done" ? <CheckIcon /> : null}
+                          {state === "failed" ? <CloseIcon /> : null}
+                        </span>
+                        <span>{step.label}</span>
+                      </li>
+                    );
+                  })}
+                </ol>
+                {handoffStatus.state === "failed" && handoffStatus.error ? (
+                  <p className="sandbox-project-upload-progress-error" role="alert">
+                    {handoffStatus.error}
+                  </p>
+                ) : null}
+              </section>
+            ) : null}
+          </section>
         </div>
 
         <footer className="sandbox-project-upload-actions">
