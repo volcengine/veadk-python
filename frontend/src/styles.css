@@ -2166,13 +2166,30 @@ body {
   color: hsl(var(--primary));
 }
 .delivery-card-icon svg { width: 18px; height: 18px; }
+.delivery-card.is-unverified .delivery-card-icon {
+  color: hsl(var(--muted-foreground));
+}
 .delivery-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 0; }
 .delivery-card-grid div { min-width: 0; }
 .delivery-card-grid dt { color: hsl(var(--muted-foreground)); font-size: 11px; }
 .delivery-card-grid dd { overflow: hidden; margin: 2px 0 0; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .delivery-card-gates { margin: 0; color: hsl(var(--muted-foreground)); font-size: 12px; }
-.delivery-card > button {
-  justify-self: start;
+.delivery-card-guidance {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.55;
+}
+.delivery-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.delivery-card-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-height: 34px;
   padding: 0 14px;
   border: 1px solid hsl(var(--primary));
@@ -2184,8 +2201,15 @@ body {
   font-weight: 600;
   cursor: pointer;
 }
-.delivery-card > button:disabled { cursor: not-allowed; opacity: .5; }
-.delivery-card > button:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.delivery-card-actions button svg { width: 14px; height: 14px; }
+.delivery-card-actions .delivery-card-secondary {
+  border-color: hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+.delivery-card-actions button:disabled { cursor: not-allowed; opacity: .5; }
+.delivery-card-actions button:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.delivery-card-error { margin: 0; color: hsl(var(--destructive)); font-size: 12px; }
 .trusted-source-pane {
   display: grid;
   gap: 14px;
@@ -2225,7 +2249,8 @@ body {
 .trusted-source-pane p { color: hsl(var(--muted-foreground)); font-size: 12px; line-height: 1.6; }
 @media (max-width: 640px) {
   .delivery-card-grid { grid-template-columns: minmax(0, 1fr); }
-  .delivery-card > button { width: 100%; }
+  .delivery-card-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .delivery-card-actions button { width: 100%; }
 }
 .artifact-preview {
   position: fixed;

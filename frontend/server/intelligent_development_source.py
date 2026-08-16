@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Server-authoritative materialization of verified intelligent-development source."""
+"""Server-authoritative preview and deployment materialization of source snapshots."""
 
 from __future__ import annotations
 
@@ -68,6 +68,12 @@ class IntelligentDevelopmentSourceIntegrityError(DeploymentSourceError):
 
 
 @dataclass(frozen=True)
+class TrustedSourceFile:
+    path: str
+    content: str
+
+
+@dataclass(frozen=True)
 class TrustedDeploymentSource:
     entry_point: str
     agent_name: str
@@ -77,6 +83,25 @@ class TrustedDeploymentSource:
     artifact_size: int
     validated_at: str
     gate_summary: tuple[str, ...]
+    verified: bool
+    validation_summary: str
+    files: tuple[TrustedSourceFile, ...]
+
+
+def _text_source_files(destination: Path) -> tuple[TrustedSourceFile, ...]:
+    files: list[TrustedSourceFile] = []
+    for path in sorted(destination.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        content = path.read_bytes()
+        if b"\x00" in content:
+            continue
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        files.append(TrustedSourceFile(path.relative_to(destination).as_posix(), text))
+    return tuple(files)
 
 
 def _digest(value: bytes) -> str:
@@ -100,14 +125,15 @@ def _request_digest(source: Mapping[str, object], field: str) -> str:
     return value
 
 
-async def materialize_intelligent_development_source(
+async def _materialize_intelligent_development_source(
     destination: Path,
     source: Mapping[str, object],
     *,
     owner_id: str,
     service: SandboxConversationService,
+    require_verified: bool,
 ) -> TrustedDeploymentSource:
-    """Authorize, verify both digests, and safely materialize one immutable release."""
+    """Authorize, verify both digests, and safely materialize one immutable snapshot."""
     from frontend.server.intelligent_development_routes import (
         resolve_intelligent_development_session,
     )
@@ -186,17 +212,23 @@ async def materialize_intelligent_development_source(
         else set()
     )
     if (
-        report_value.get("status") != "passed"
-        or report_value.get("sessionId") != session_id
+        report_value.get("sessionId") != session_id
         or report_value.get("artifactSha256") != artifact_digest
         or descriptor.get("sessionId") != session_id
         or report_value.get("agentName") != descriptor.get("agentName")
         or report_value.get("entryPoint") != descriptor.get("entryPoint")
         or report_value.get("fileCount") != descriptor.get("fileCount")
-        or not _REQUIRED_GATES.issubset(passed)
         or report_value.get("artifactGate") is not True
     ):
         raise DeploymentSourceError("交付物验证报告未通过全部门禁。")
+    verified = report_value.get("status") == "passed" and _REQUIRED_GATES.issubset(
+        passed
+    )
+    if require_verified and not verified:
+        raise DeploymentSourceError("交付物验证报告未通过全部门禁。")
+    validation_summary = report_value.get("validationSummary")
+    if not isinstance(validation_summary, str) or not validation_summary.strip():
+        validation_summary = "云端验证已通过" if verified else "验证结果尚未确认"
     file_count = descriptor.get("fileCount")
     artifact_size = descriptor.get("artifactSize")
     agent_name = descriptor.get("agentName")
@@ -241,6 +273,7 @@ async def materialize_intelligent_development_source(
     except (zipfile.BadZipFile, RuntimeError) as error:
         raise DeploymentSourceError("交付物 ZIP 格式无效。") from error
     resolved_entry = extract_migration_source(destination, artifact, manifest)
+    source_files = _text_source_files(destination)
     return TrustedDeploymentSource(
         resolved_entry,
         agent_name,
@@ -250,6 +283,43 @@ async def materialize_intelligent_development_source(
         artifact_size,
         str(report_value.get("validatedAt") or ""),
         tuple(sorted(str(name) for name in passed)),
+        verified,
+        validation_summary.strip(),
+        source_files,
+    )
+
+
+async def materialize_intelligent_development_source(
+    destination: Path,
+    source: Mapping[str, object],
+    *,
+    owner_id: str,
+    service: SandboxConversationService,
+) -> TrustedDeploymentSource:
+    """Materialize a snapshot only when every deployment gate is verified."""
+    return await _materialize_intelligent_development_source(
+        destination,
+        source,
+        owner_id=owner_id,
+        service=service,
+        require_verified=True,
+    )
+
+
+async def materialize_intelligent_development_preview(
+    destination: Path,
+    source: Mapping[str, object],
+    *,
+    owner_id: str,
+    service: SandboxConversationService,
+) -> TrustedDeploymentSource:
+    """Materialize a digest-bound snapshot without authorizing deployment."""
+    return await _materialize_intelligent_development_source(
+        destination,
+        source,
+        owner_id=owner_id,
+        service=service,
+        require_verified=False,
     )
 
 
@@ -258,5 +328,7 @@ __all__ = [
     "IntelligentDevelopmentSourceNotFound",
     "IntelligentDevelopmentSourceStale",
     "TrustedDeploymentSource",
+    "TrustedSourceFile",
+    "materialize_intelligent_development_preview",
     "materialize_intelligent_development_source",
 ]

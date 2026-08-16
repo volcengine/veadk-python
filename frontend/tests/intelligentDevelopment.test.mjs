@@ -86,6 +86,10 @@ const deliveryIconSource = readFileSync(
   new URL("../src/ui/icons/DeliveryVerifiedIcon.tsx", import.meta.url),
   "utf8",
 );
+const codeBrowserSource = readFileSync(
+  new URL("../src/ui/CodeBrowserDialog.tsx", import.meta.url),
+  "utf8",
+);
 
 function sseResponse(frames) {
   return new Response(frames.join("\n\n") + "\n\n", {
@@ -101,6 +105,13 @@ function deliveryEvent(delivery) {
   ].join("\n");
 }
 
+function sourceReadyEvent(delivery) {
+  return [
+    "event: development.source_ready",
+    `data: ${JSON.stringify({ payload: { delivery } })}`,
+  ].join("\n");
+}
+
 const delivery = {
   sessionId: "dev/session-1",
   artifactSha256: "a".repeat(64),
@@ -111,6 +122,8 @@ const delivery = {
   artifactSize: 2048,
   validatedAt: "2026-08-14T10:00:00Z",
   gateSummary: ["ruff", "pytest"],
+  verified: true,
+  validationSummary: "云端验证已通过",
 };
 
 test("text-only intelligent client uses its fixed endpoint and omits skills", async (t) => {
@@ -174,7 +187,7 @@ test("normal sandbox client keeps the existing endpoint and skill payload", asyn
   });
 });
 
-test("the automatic message stream accepts only a typed delivery event", async (t) => {
+test("source-ready delivery is upgraded in place only by the verified event", async (t) => {
   const previousFetch = globalThis.fetch;
   const writes = [];
   const previousStorage = globalThis.localStorage;
@@ -191,6 +204,11 @@ test("the automatic message stream accepts only a typed delivery event", async (
     requestedUrl = url;
     return sseResponse([
       `event: delta\ndata: ${JSON.stringify({ text: JSON.stringify({ delivery }) })}`,
+      sourceReadyEvent({
+        ...delivery,
+        verified: false,
+        validationSummary: "正在确认验证状态",
+      }),
       deliveryEvent({
         ...delivery,
         releasePath: "/remote/releases/secret",
@@ -214,6 +232,30 @@ test("the automatic message stream accepts only a typed delivery event", async (
   assert.equal("releasePath" in reply.blocks[1].value, false);
   assert.equal("validationReportPath" in reply.blocks[1].value, false);
   assert.deepEqual(writes, []);
+});
+
+test("missing completion still exposes source while deployment stays unverified", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const source = {
+    ...delivery,
+    verified: false,
+    gateSummary: [],
+    validationSummary: "未收到完整验证结果",
+  };
+  globalThis.fetch = async () => sseResponse([
+    sourceReadyEvent(source),
+    "event: done\ndata: {}",
+  ]);
+
+  const reply = await intelligentDevelopmentClient.sendMessage({
+    sessionId: "dev-1",
+    text: "build it",
+  });
+
+  assert.deepEqual(reply.blocks, [{ kind: "delivery", value: source }]);
 });
 
 test("model text that resembles a delivery cannot create a delivery block", async (t) => {
@@ -261,24 +303,38 @@ test("intelligent streams preserve thinking and assistant message order", async 
   assert.equal(updates.some((blocks) => blocks[0]?.done === false), true);
 });
 
-test("delivery reference and CTA stay browser-safe and open the shared deploy UI", () => {
+test("delivery card always exposes source and gates manual deployment on verification", () => {
   const releaseInterface = blocksSource.match(
     /export interface IntelligentDevelopmentReleaseRef \{([\s\S]*?)\n\}/,
   )?.[1] ?? "";
-  assert.doesNotMatch(releaseInterface, /path|url|localStorage/i);
-  assert.match(blocksUiSource, /onClick=\{\(\) => onDeploy\?\.\(value\)\}/);
+  assert.match(releaseInterface, /files\?: ProjectFile\[\]/);
+  assert.match(releaseInterface, /verified: boolean/);
+  assert.match(releaseInterface, /validationSummary: string/);
+  assert.doesNotMatch(releaseInterface, /releasePath|validationReportPath|url|localStorage/i);
+  assert.match(blocksUiSource, /查看源码/);
   assert.match(blocksUiSource, /手动部署到 Runtime/);
+  assert.match(blocksUiSource, /disabled=\{\s*!value\.verified/);
+  assert.match(blocksUiSource, /验证通过后即可手动部署/);
+  assert.match(
+    blocksUiSource,
+    /value\.verified \? <DeliveryVerifiedIcon \/> : <DeliverySourceIcon \/>/,
+  );
+  assert.match(blocksUiSource, /<CodeBrowserDialog[\s\S]*?readOnly/);
+  assert.match(codeBrowserSource, /readOnly\?: boolean/);
+  assert.match(codeBrowserSource, /readOnly=\{readOnly\}/);
   assert.match(appSource, /onDeployDelivery=\{setIntelligentDeployment\}/);
+  assert.match(appSource, /onResolveDelivery=\{resolveIntelligentDelivery\}/);
   assert.match(appSource, /<IntelligentDeployment[\s\S]*?delivery=\{intelligentDeployment\}/);
   assert.match(deploymentSource, /<ProjectPreview/);
   assert.doesNotMatch(deploymentSource, /localStorage|releasePath|validationReportPath/);
 });
 
-test("trusted deployment sends no browser files and generates its Runtime name once", () => {
+test("trusted deployment previews verified files but never deploys browser file bytes", () => {
   assert.match(
     deploymentSource,
-    /const \[project, setProject\] = useState<AgentProject>\(\(\) => \(\{[\s\S]*?name: generateRuntimeName\(delivery\.agentName\),[\s\S]*?files: EMPTY_FILES/,
+    /const \[project, setProject\] = useState<AgentProject>\(\(\) => \(\{[\s\S]*?name: generateRuntimeName\(delivery\.agentName\),[\s\S]*?files: delivery\.files \?\? \[\]/,
   );
+  assert.doesNotMatch(deploymentSource, /EMPTY_FILES/);
   assert.match(deploymentSource, /deployAgentkitProject\([\s\S]*?candidate\.name,\s*\[\],/);
   assert.match(
     deploymentSource,

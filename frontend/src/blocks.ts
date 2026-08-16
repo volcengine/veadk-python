@@ -19,6 +19,7 @@ import type {
 } from "./adk/client";
 import type { A2uiMessage } from "./a2ui/types";
 import type { SandboxTokenUsage } from "./adk/sandbox";
+import type { ProjectFile } from "./create/project";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
 const VALIDATED_JSON_KEY = "validated_a2ui_json";
@@ -58,6 +59,9 @@ export interface IntelligentDevelopmentReleaseRef {
   artifactSize: number;
   validatedAt: string;
   gateSummary: string[];
+  verified: boolean;
+  validationSummary: string;
+  files?: ProjectFile[];
 }
 
 export type Block =

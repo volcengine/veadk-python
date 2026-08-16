@@ -79,6 +79,8 @@ class DeliveryReference:
     file_count: int
     validated_at: str
     gate_summary: tuple[str, ...]
+    verified: bool
+    validation_summary: str
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -91,6 +93,8 @@ class DeliveryReference:
             "fileCount": self.file_count,
             "validatedAt": self.validated_at,
             "gateSummary": list(self.gate_summary),
+            "verified": self.verified,
+            "validationSummary": self.validation_summary,
         }
 
 
@@ -114,7 +118,10 @@ EXCLUDED_NAMES = {".git", ".agentkit", "node_modules", ".venv", "venv", "__pycac
 FORBIDDEN_DIRECTORIES = {".aws", ".ssh", ".kube"}
 FORBIDDEN_FILE_NAMES = {"id_rsa", "id_ed25519"}
 FORBIDDEN_SUFFIXES = {".key", ".pem", ".crt", ".secret", ".p12", ".pfx"}
-COMPLETION_PREFIX = ".studio-intelligent-development-"
+COMPLETION_PREFIXES = (
+    ".intelligent-development-result-",
+    ".studio-intelligent-development-",
+)
 
 def fail(message):
     raise ValueError(message)
@@ -186,7 +193,7 @@ def collect_project(path, secrets):
         for name in sorted(names):
             candidate = current_path / name
             relative = relative_root / name
-            if name in EXCLUDED_NAMES or name.startswith(COMPLETION_PREFIX):
+            if name in EXCLUDED_NAMES or name.startswith(COMPLETION_PREFIXES):
                 continue
             lower_name = name.lower()
             if lower_name == ".env" or (lower_name.startswith(".env.") and lower_name != ".env.example"):

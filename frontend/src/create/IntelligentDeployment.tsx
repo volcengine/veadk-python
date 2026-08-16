@@ -12,8 +12,6 @@ import { generateRuntimeName, runtimeNameProblem } from "./runtimeName";
 import type { AgentProject } from "./project";
 import type { NetworkConfig } from "./types";
 
-const EMPTY_FILES: AgentProject["files"] = [];
-
 export interface IntelligentDeploymentProps {
   delivery: IntelligentDevelopmentReleaseRef;
   onBack: () => void;
@@ -43,7 +41,7 @@ export function IntelligentDeployment({
   const [runtimeNameChecking, setRuntimeNameChecking] = useState(false);
   const [project, setProject] = useState<AgentProject>(() => ({
     name: generateRuntimeName(delivery.agentName),
-    files: EMPTY_FILES,
+    files: delivery.files ?? [],
   }));
   const runtimeNameError = runtimeNameProblem(project.name);
   useEffect(() => {

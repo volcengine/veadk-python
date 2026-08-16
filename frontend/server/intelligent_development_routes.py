@@ -65,7 +65,6 @@ INTELLIGENT_DEVELOPMENT_AGENT_KIND = "intelligent-development"
 INTELLIGENT_DEVELOPMENT_WORKLOAD = INTELLIGENT_DEVELOPMENT_AGENT_KIND
 INTELLIGENT_DEVELOPMENT_SCHEMA_VERSION = "1"
 _PROJECT_ROOT = "/home/gem/workspace"
-_DEVELOPMENT_SKILL_NAME = "veadk-agent-development"
 _SAFE_WORKSPACE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _INTENT_TURN_TIMEOUT_SECONDS = 120
 _BUILDER_TURN_TIMEOUT_SECONDS = 3_300
@@ -300,18 +299,6 @@ async def _prepare_workspace(session: SandboxCloudSession) -> str:
     return workspace
 
 
-async def _development_skill_id(
-    service: SandboxConversationService,
-    session_id: str,
-    owner_id: str,
-) -> str:
-    skills = await service.list_skills(session_id, owner_id, force_reload=True)
-    matches = [skill for skill in skills if skill.name == _DEVELOPMENT_SKILL_NAME]
-    if len(matches) != 1:
-        raise SandboxConfigurationError("智能开发能力尚未正确安装。")
-    return matches[0].id
-
-
 def _conversation_event_sse(event: SandboxStreamEvent) -> str | None:
     if event.kind == "text":
         payload = {"text": event.text}
@@ -484,13 +471,13 @@ def mount_intelligent_development_routes(
         from pathlib import Path
         from frontend.server.deployment_source import DeploymentSourceError
         from frontend.server.intelligent_development_source import (
-            materialize_intelligent_development_source,
+            materialize_intelligent_development_preview,
         )
 
         owner = owner_resolver(request)
         destination = Path(tempfile.mkdtemp(prefix="intelligent-summary-"))
         try:
-            trusted = await materialize_intelligent_development_source(
+            trusted = await materialize_intelligent_development_preview(
                 destination,
                 {
                     "kind": "intelligentDevelopment",
@@ -510,7 +497,7 @@ def mount_intelligent_development_routes(
         except Exception as error:
             raise HTTPException(
                 status_code=502,
-                detail="无法校验已验证交付物。",
+                detail="无法校验源码快照。",
             ) from error
         finally:
             shutil.rmtree(destination, ignore_errors=True)
@@ -524,6 +511,11 @@ def mount_intelligent_development_routes(
             "artifactSize": trusted.artifact_size,
             "validatedAt": trusted.validated_at,
             "gateSummary": list(trusted.gate_summary),
+            "verified": trusted.verified,
+            "validationSummary": trusted.validation_summary,
+            "files": [
+                {"path": item.path, "content": item.content} for item in trusted.files
+            ],
         }
 
     @app.post(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions/{{session_id}}/interrupt")
@@ -652,9 +644,6 @@ def mount_intelligent_development_routes(
                     return
 
                 transport = SandboxRemoteTransport(cloud.endpoint)
-                development_skill_id = await _development_skill_id(
-                    service, session_id, owner
-                )
                 yield _progress_sse("需求已确认，正在准备开发环境。")
                 if decision.changes_delivery:
                     await invalidate_current_delivery(transport)
@@ -685,7 +674,6 @@ def mount_intelligent_development_routes(
                         validation_region=validation_region,
                         validation_project=validation_project,
                     ),
-                    skill_ids=(development_skill_id,),
                     turn_timeout_seconds=_BUILDER_TURN_TIMEOUT_SECONDS,
                 ):
                     progress = _command_progress(event)
@@ -700,31 +688,66 @@ def mount_intelligent_development_routes(
                     completion = await read_completion_contract(
                         transport, completion_path
                     )
-                except Exception:
+                except Exception as error:
                     completion = None
+                    logger.warning(
+                        "Intelligent development completion contract was unavailable for %s: %s",
+                        session_id,
+                        type(error).__name__,
+                    )
+                if completion is not None and completion.verified:
+                    yield _progress_sse(
+                        "Agent 已完成实现、检查和临时云端验证，已生成可部署交付物。"
+                    )
                 if completion is None:
                     payload = {
                         "text": (
-                            "\n\nStudio 未收到完整的交付证据，因此本轮不会标记为“已验证”。"
-                            "你可以在当前 Thread 继续修复和重验。"
+                            "\n\n未收到完整的交付证据，本轮不会标记为“已验证”。"
+                            "生成的源码仍可查看；你可以在当前对话中继续修复和重验。"
                         )
                     }
                     yield (
                         "event: delta\n"
                         f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                     )
-                if completion is not None and completion.verified:
-                    delivery = await DeliveryPublisher(transport).publish(
-                        session_id=cloud.instance_id,
-                        project_root=project_root,
-                        task_root=lease.root,
-                        completion=completion,
-                        exact_secrets=lease.exact_secrets,
+                elif not completion.verified:
+                    payload = {
+                        "text": (
+                            "\n\n本轮未达到完整验证条件："
+                            f"{completion.summary}。你可以在当前对话中继续修复和重验。"
+                        )
+                    }
+                    yield (
+                        "event: delta\n"
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                     )
+                yield _progress_sse("正在生成安全的源码快照。")
+                delivery = await DeliveryPublisher(transport).publish(
+                    session_id=cloud.instance_id,
+                    project_root=project_root,
+                    task_root=lease.root,
+                    completion=completion,
+                    exact_secrets=lease.exact_secrets,
+                    acceptance_criteria=decision.acceptance_criteria,
+                )
 
                 await cleanup_task_files()
 
                 if delivery is not None:
+                    source_delivery = delivery.as_dict()
+                    source_delivery["verified"] = False
+                    if completion is not None and completion.verified:
+                        source_delivery["validationSummary"] = "正在确认验证状态"
+                    source_event = {"payload": {"delivery": source_delivery}}
+                    yield (
+                        "event: development.source_ready\n"
+                        f"data: {json.dumps(source_event, ensure_ascii=False)}\n\n"
+                    )
+                if (
+                    delivery is not None
+                    and completion is not None
+                    and completion.verified
+                ):
                     event = {
                         "payload": {"delivery": delivery.as_dict()},
                     }

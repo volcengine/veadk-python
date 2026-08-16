@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 from httpx import Response
 
 from frontend.server import intelligent_development_routes as routes
+from frontend.server import intelligent_development_source as source_module
 from frontend.server.intelligent_development import StudioCredentials
 from frontend.server.intelligent_development_task import CompletionContract
 from veadk.cli.codex_app_server import (
@@ -281,6 +282,61 @@ def test_connect_locks_fixed_workspace_and_enables_autonomous_builder() -> None:
     assert gateway.codex.permissions == routes._BUILDER_PERMISSIONS
 
 
+def test_release_summary_returns_materialized_text_files_before_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    trusted = SimpleNamespace(
+        artifact_sha256="a" * 64,
+        validation_report_sha256="b" * 64,
+        agent_name="weather",
+        entry_point="app.py",
+        file_count=3,
+        artifact_size=2048,
+        validated_at="2026-08-15T00:00:00Z",
+        gate_summary=("ak-build", "runtime-cleanup"),
+        verified=False,
+        validation_summary="未收到完整验证结果",
+        files=(
+            SimpleNamespace(path="agentkit.yaml", content="common: {}\n"),
+            SimpleNamespace(path="app.py", content="root_agent = object()\n"),
+        ),
+    )
+    materialize = AsyncMock(return_value=trusted)
+    monkeypatch.setattr(
+        source_module,
+        "materialize_intelligent_development_preview",
+        materialize,
+    )
+
+    with TestClient(_app(gateway)) as client:
+        response = client.get(
+            "/web/intelligent-development/releases/summary",
+            headers={"X-Test-User": "alice"},
+            params={
+                "sessionId": "dev-session",
+                "artifactSha256": "a" * 64,
+                "validationReportSha256": "b" * 64,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["files"] == [
+        {"path": "agentkit.yaml", "content": "common: {}\n"},
+        {"path": "app.py", "content": "root_agent = object()\n"},
+    ]
+    assert response.json()["verified"] is False
+    assert response.json()["validationSummary"] == "未收到完整验证结果"
+    source = materialize.await_args.args[1]
+    assert source == {
+        "kind": "intelligentDevelopment",
+        "sessionId": "dev-session",
+        "artifactSha256": "a" * 64,
+        "validationReportSha256": "b" * 64,
+    }
+    assert materialize.await_args.kwargs["owner_id"] == "alice"
+
+
 def test_intent_reject_is_user_facing_and_never_uploads_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -304,28 +360,28 @@ def test_intent_reject_is_user_facing_and_never_uploads_credentials(
     assert call["skillIds"] == ()
 
 
-@pytest.mark.parametrize(
-    "skills",
-    [
-        (),
-        (
-            CodexSkill("skill-a", "veadk-agent-development"),
-            CodexSkill("skill-b", "veadk-agent-development"),
-        ),
-    ],
-)
-def test_builder_requires_one_discovered_authoritative_skill(
-    skills: tuple[CodexSkill, ...],
+def test_builder_uses_preinstalled_skill_without_discovery_or_injection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
-    gateway.codex.skills = skills
-    gateway.codex.turns = [[_gate()]]
-    credentials = AsyncMock()
-    invalidate = AsyncMock()
-    monkeypatch.setattr(routes, "create_credential_lease", credentials)
-    monkeypatch.setattr(routes, "invalidate_current_delivery", invalidate)
+    gateway.codex.skills = ()
+    gateway.codex.turns = [
+        [_gate()],
+        [CodexAppServerEvent(kind="text", text="已完成实现")],
+    ]
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    monkeypatch.setattr(
+        routes, "create_credential_lease", AsyncMock(return_value=lease)
+    )
+    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(
+        routes, "read_completion_contract", AsyncMock(return_value=_partial())
+    )
+    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(
+        routes, "DeliveryPublisher", lambda _transport: _publisher_mock()
+    )
 
     with TestClient(_app(gateway)) as client:
         _connect(client)
@@ -336,10 +392,12 @@ def test_builder_requires_one_discovered_authoritative_skill(
         )
 
     assert response.status_code == 200
-    assert "智能开发能力尚未正确安装" in response.text
-    credentials.assert_not_awaited()
-    invalidate.assert_not_awaited()
-    assert len(gateway.codex.calls) == 1
+    assert len(gateway.codex.calls) == 2
+    builder = gateway.codex.calls[1]
+    assert builder["skillIds"] == ()
+    assert "Use the preinstalled veadk-agent-development Skill" in str(
+        builder["prompt"]
+    )
 
 
 @dataclass
@@ -383,6 +441,55 @@ def _partial() -> CompletionContract:
             )
         },
         (),
+    )
+
+
+def _delivery_dict(*, verified: bool = False) -> dict[str, object]:
+    return {
+        "sessionId": "dev-session",
+        "artifactSha256": "a" * 64,
+        "artifactSize": 100,
+        "validationReportSha256": "b" * 64,
+        "agentName": "weather",
+        "entryPoint": "app.py",
+        "fileCount": 3,
+        "validatedAt": "2026-08-15T00:00:00Z",
+        "gateSummary": ["ak-build", "runtime-cleanup"] if verified else [],
+        "verified": verified,
+        "validationSummary": "验证完成" if verified else "未收到完整验证结果",
+    }
+
+
+def _publisher_mock(*, verified: bool = False) -> SimpleNamespace:
+    delivery = SimpleNamespace(as_dict=lambda: _delivery_dict(verified=verified))
+    return SimpleNamespace(publish=AsyncMock(return_value=delivery))
+
+
+def _verified_contract_text() -> str:
+    return json.dumps(
+        {
+            "schemaVersion": "1",
+            "status": "verified",
+            "summary": "验证完成",
+            "runtimeName": "idv-weather-123",
+            "attemptCount": 1,
+            "gates": {
+                name: True
+                for name in (
+                    "local-checks",
+                    "service-probe",
+                    "ak-config",
+                    "ak-build",
+                    "ak-deploy",
+                    "runtime-ready",
+                    "acceptance-invoke",
+                    "runtime-logs",
+                    "runtime-cleanup",
+                )
+            },
+            "acceptanceCriteria": ["返回天气和数据时间"],
+        },
+        ensure_ascii=False,
     )
 
 
@@ -441,6 +548,8 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
     )
     remove = AsyncMock()
     monkeypatch.setattr(routes, "remove_completion_file", remove)
+    publisher = _publisher_mock()
+    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
     with TestClient(_app(gateway)) as client:
         _connect(client)
         response = client.post(
@@ -472,12 +581,13 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
     )
     assert "shell" not in response.text
     assert "/task/launcher" not in response.text
+    assert "event: development.source_ready" in response.text
     assert "development.succeeded" not in response.text
     assert len(gateway.codex.calls) == 2
     assert str(gateway.codex.calls[1]["prompt"]).startswith(
-        "$veadk-agent-development\n"
+        "Use the preinstalled veadk-agent-development Skill"
     )
-    assert gateway.codex.calls[1]["skillIds"] == ("skill-veadk",)
+    assert gateway.codex.calls[1]["skillIds"] == ()
     assert lease.launcher_path in str(gateway.codex.calls[1]["prompt"])
     assert (
         gateway.codex.calls[1]["timeout_seconds"]
@@ -485,6 +595,7 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
     )
     invalidate.assert_awaited_once()
     remove.assert_awaited_once()
+    publisher.publish.assert_awaited_once()
     assert lease.cleaned is True
 
 
@@ -514,6 +625,9 @@ def test_follow_up_runs_a_new_gate_and_build_cycle_in_the_same_thread(
         routes, "read_completion_contract", AsyncMock(return_value=_partial())
     )
     monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(
+        routes, "DeliveryPublisher", lambda _transport: _publisher_mock()
+    )
 
     with TestClient(_app(gateway)) as client:
         _connect(client)
@@ -534,9 +648,9 @@ def test_follow_up_runs_a_new_gate_and_build_cycle_in_the_same_thread(
     assert "第二轮优化完成" in second.text
     assert len(gateway.codex.calls) == 4
     assert gateway.codex.calls[0]["skillIds"] == ()
-    assert gateway.codex.calls[1]["skillIds"] == ("skill-veadk",)
+    assert gateway.codex.calls[1]["skillIds"] == ()
     assert gateway.codex.calls[2]["skillIds"] == ()
-    assert gateway.codex.calls[3]["skillIds"] == ("skill-veadk",)
+    assert gateway.codex.calls[3]["skillIds"] == ()
     assert gateway.codex.thread_id == "thread-1"
     assert invalidate.await_count == 2
     assert all(lease.cleaned for lease in leases)
@@ -599,6 +713,9 @@ def test_interrupt_waits_for_task_cleanup_before_allowing_the_next_turn(
         routes, "read_completion_contract", AsyncMock(return_value=_partial())
     )
     monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(
+        routes, "DeliveryPublisher", lambda _transport: _publisher_mock()
+    )
 
     with TestClient(_app(gateway)) as client:
         _connect(client)
@@ -658,20 +775,7 @@ def test_verified_contract_emits_typed_delivery_only_after_cleanup(
         routes, "read_completion_contract", AsyncMock(return_value=verified)
     )
     monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
-    delivery = SimpleNamespace(
-        as_dict=lambda: {
-            "sessionId": "dev-session",
-            "artifactSha256": "a" * 64,
-            "artifactSize": 100,
-            "validationReportSha256": "b" * 64,
-            "agentName": "weather",
-            "entryPoint": "app.py",
-            "fileCount": 3,
-            "validatedAt": "2026-08-15T00:00:00Z",
-            "gateSummary": ["ak-build", "runtime-cleanup"],
-        }
-    )
-    publisher = SimpleNamespace(publish=AsyncMock(return_value=delivery))
+    publisher = _publisher_mock(verified=True)
     monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
     with TestClient(_app(gateway)) as client:
         _connect(client)
@@ -681,8 +785,90 @@ def test_verified_contract_emits_typed_delivery_only_after_cleanup(
             json={"message": "做一个天气 Agent"},
         )
     assert lease.cleaned is True
+    assert "event: development.source_ready" in response.text
     assert "event: development.succeeded" in response.text
+    assert response.text.index("event: development.source_ready") < response.text.index(
+        "event: development.succeeded"
+    )
     assert '"agentName": "weather"' in response.text
+    publisher.publish.assert_awaited_once()
+
+
+def test_missing_completion_still_emits_source_but_never_verified_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [_gate()],
+        [CodexAppServerEvent(kind="text", text="已生成源码，但验证结果未确认。")],
+    ]
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    monkeypatch.setattr(
+        routes, "create_credential_lease", AsyncMock(return_value=lease)
+    )
+    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    read_completion = AsyncMock(side_effect=FileNotFoundError("missing completion"))
+    monkeypatch.setattr(routes, "read_completion_contract", read_completion)
+    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    publisher = _publisher_mock()
+    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "做一个天气 Agent"},
+        )
+
+    assert response.status_code == 200
+    assert "已生成源码，但验证结果未确认" in response.text
+    assert "event: development.source_ready" in response.text
+    assert '"verified": false' in response.text
+    assert "event: development.succeeded" not in response.text
+    assert read_completion.await_count == 1
+    assert len(gateway.codex.calls) == 2
+    assert publisher.publish.await_args.kwargs["completion"] is None
+    assert lease.cleaned is True
+
+
+def test_builder_response_cannot_replace_a_missing_completion_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [_gate()],
+        [CodexAppServerEvent(kind="text", text=_verified_contract_text())],
+    ]
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    monkeypatch.setattr(
+        routes, "create_credential_lease", AsyncMock(return_value=lease)
+    )
+    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    read_completion = AsyncMock(side_effect=FileNotFoundError("missing completion"))
+    monkeypatch.setattr(routes, "read_completion_contract", read_completion)
+    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    publisher = _publisher_mock()
+    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "做一个天气 Agent"},
+        )
+
+    assert response.status_code == 200
+    assert "schemaVersion" in response.text
+    assert "event: development.source_ready" in response.text
+    assert "event: development.succeeded" not in response.text
+    assert len(gateway.codex.calls) == 2
+    assert read_completion.await_count == 1
+    assert publisher.publish.await_args.kwargs["completion"] is None
+    assert lease.cleaned is True
 
 
 def test_builder_failure_still_cleans_credentials(

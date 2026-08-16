@@ -13,7 +13,9 @@ import { BuiltinToolHeader } from "./builtin-tools/BuiltinToolHeader";
 import { ToolDisclosureIcon } from "./builtin-tools/icons";
 import { getBuiltinToolDefinition } from "./builtin-tools/registry";
 import { AgentKitLogoIcon } from "./icons/AgentKitLogoIcon";
+import { DeliverySourceIcon } from "./icons/DeliverySourceIcon";
 import { DeliveryVerifiedIcon } from "./icons/DeliveryVerifiedIcon";
+import { CodeBrowserDialog } from "./CodeBrowserDialog";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
 const STREAM_FRAME_INTERVAL_MS = 28;
@@ -195,37 +197,141 @@ export function ThinkingBlock({
 
 function DeliveryCard({
   value,
+  onResolve,
   onDeploy,
 }: {
   value: Extract<Block, { kind: "delivery" }>["value"];
+  onResolve?: (
+    value: Extract<Block, { kind: "delivery" }>["value"],
+  ) => Promise<Extract<Block, { kind: "delivery" }>["value"]>;
   onDeploy?: (value: Extract<Block, { kind: "delivery" }>["value"]) => void;
 }) {
+  const [resolved, setResolved] = useState<
+    Extract<Block, { kind: "delivery" }>["value"] | null
+  >(value.files ? value : null);
+  const [codeOpen, setCodeOpen] = useState(false);
+  const [busyAction, setBusyAction] = useState<"source" | "deploy" | null>(null);
+  const [error, setError] = useState("");
   const validatedAt = new Date(value.validatedAt);
-  const time = Number.isNaN(validatedAt.getTime())
-    ? value.validatedAt
-    : validatedAt.toLocaleString("zh-CN", { hour12: false });
+  const time = !value.validatedAt
+    ? "刚刚"
+    : Number.isNaN(validatedAt.getTime())
+      ? value.validatedAt
+      : validatedAt.toLocaleString("zh-CN", { hour12: false });
+
+  async function resolveDelivery() {
+    if (resolved) return resolved;
+    if (!onResolve) throw new Error("暂时无法读取生成的源码，请稍后重试。");
+    const delivery = await onResolve(value);
+    setResolved(delivery);
+    return delivery;
+  }
+
+  async function openSource() {
+    setBusyAction("source");
+    setError("");
+    try {
+      await resolveDelivery();
+      setCodeOpen(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function deploy() {
+    setBusyAction("deploy");
+    setError("");
+    try {
+      onDeploy?.(await resolveDelivery());
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   return (
-    <section className="delivery-card" aria-label="已验证交付物">
-      <header className="delivery-card-header">
-        <span className="delivery-card-icon"><DeliveryVerifiedIcon /></span>
-        <div>
-          <strong>已验证交付物</strong>
-          <span>{value.agentName}</span>
+    <>
+      <section
+        className={`delivery-card${value.verified ? " is-verified" : " is-unverified"}`}
+        aria-label={value.verified ? "已验证交付物" : "生成的 Agent 源码"}
+      >
+        <header className="delivery-card-header">
+          <span className="delivery-card-icon">
+            {value.verified ? <DeliveryVerifiedIcon /> : <DeliverySourceIcon />}
+          </span>
+          <div>
+            <strong>{value.verified ? "已验证交付物" : "生成的 Agent 源码"}</strong>
+            <span>{value.agentName}</span>
+          </div>
+        </header>
+        <dl className="delivery-card-grid">
+          <div>
+            <dt>入口</dt>
+            <dd><code>{value.entryPoint}</code></dd>
+          </div>
+          <div>
+            <dt>文件数</dt>
+            <dd>{value.fileCount}</dd>
+          </div>
+          <div>
+            <dt>大小</dt>
+            <dd>{(value.artifactSize / 1024).toFixed(1)} KiB</dd>
+          </div>
+          <div>
+            <dt>{value.verified ? "验证时间" : "生成时间"}</dt>
+            <dd>{time}</dd>
+          </div>
+        </dl>
+        <p className="delivery-card-gates">
+          {value.verified
+            ? `${value.gateSummary.length} 项检查通过`
+            : `验证尚未确认：${value.validationSummary}`} ·{" "}
+          <code>{value.artifactSha256.slice(0, 12)}</code>
+        </p>
+        {!value.verified ? (
+          <p className="delivery-card-guidance">
+            源码已安全保存。请在当前对话中继续修复并重新完成云端验证，验证通过后即可手动部署。
+          </p>
+        ) : null}
+        <div className="delivery-card-actions">
+          <button
+            type="button"
+            className="delivery-card-secondary"
+            onClick={() => void openSource()}
+            disabled={!onResolve || busyAction !== null}
+          >
+            {busyAction === "source" ? (
+              <Loader2 className="spin" aria-hidden="true" />
+            ) : null}
+            查看源码
+          </button>
+          <button
+            type="button"
+            onClick={() => void deploy()}
+            disabled={
+              !value.verified || !onDeploy || !onResolve || busyAction !== null
+            }
+            title={value.verified ? undefined : "完成云端验证后可部署"}
+          >
+            {busyAction === "deploy" ? (
+              <Loader2 className="spin" aria-hidden="true" />
+            ) : null}
+            手动部署到 Runtime
+          </button>
         </div>
-      </header>
-      <dl className="delivery-card-grid">
-        <div><dt>入口</dt><dd><code>{value.entryPoint}</code></dd></div>
-        <div><dt>文件数</dt><dd>{value.fileCount}</dd></div>
-        <div><dt>大小</dt><dd>{(value.artifactSize / 1024).toFixed(1)} KiB</dd></div>
-        <div><dt>验证时间</dt><dd>{time}</dd></div>
-      </dl>
-      <p className="delivery-card-gates">
-        {value.gateSummary.length} 项检查通过 · <code>{value.artifactSha256.slice(0, 12)}</code>
-      </p>
-      <button type="button" onClick={() => onDeploy?.(value)} disabled={!onDeploy}>
-        手动部署到 Runtime
-      </button>
-    </section>
+        {error ? <p className="delivery-card-error" role="alert">{error}</p> : null}
+      </section>
+      <CodeBrowserDialog
+        project={{ name: value.agentName, files: resolved?.files ?? [] }}
+        open={codeOpen}
+        onClose={() => setCodeOpen(false)}
+        onChange={() => {}}
+        readOnly
+      />
+    </>
   );
 }
 
@@ -554,6 +660,9 @@ export interface BlocksProps {
   onAuth?: (block: AuthBlock) => Promise<void>;
   onArtifactDownload?: (filename: string, version: number) => Promise<void>;
   onArtifactPreview?: (filename: string, version: number) => Promise<string>;
+  onResolveDelivery?: (
+    delivery: Extract<Block, { kind: "delivery" }>["value"],
+  ) => Promise<Extract<Block, { kind: "delivery" }>["value"]>;
   onDeployDelivery?: (delivery: Extract<Block, { kind: "delivery" }>["value"]) => void;
 }
 
@@ -567,6 +676,7 @@ export function Blocks({
   onAuth,
   onArtifactDownload,
   onArtifactPreview,
+  onResolveDelivery,
   onDeployDelivery,
 }: BlocksProps) {
   const lastTextBlockIndex = blocks.reduce(
@@ -615,6 +725,7 @@ export function Blocks({
               <DeliveryCard
                 key={i}
                 value={b.value}
+                onResolve={onResolveDelivery}
                 onDeploy={onDeployDelivery}
               />
             );
