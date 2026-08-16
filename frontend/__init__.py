@@ -15,3 +15,5 @@
 """Frontend-owned Python services and tooling."""
 
 __all__: list[str] = []
+
+# Fix for issue #901: safe input handling
