@@ -55,7 +55,9 @@ test("sandbox access is isolated behind a reusable typed client", () => {
   assert.match(sandboxClientSource, /signal\?: AbortSignal/);
   assert.match(sandboxClientSource, /\/web\/sandbox\/sessions/);
   assert.match(sandboxClientSource, /withAuth/);
-  assert.match(sandboxClientSource, /withLocalUser/);
+  assert.match(sandboxClientSource, /studioFetch/);
+  assert.doesNotMatch(sandboxClientSource, /\bfetch\(/);
+  assert.doesNotMatch(sandboxClientSource, /requestSignal/);
   assert.match(sandboxClientSource, /Accept: "text\/event-stream"/);
   assert.match(sandboxClientSource, /onBlocks\?: \(blocks: Block\[\]\) => void/);
   assert.match(sandboxClientSource, /event === "activity"/);

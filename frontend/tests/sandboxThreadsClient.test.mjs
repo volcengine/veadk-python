@@ -14,7 +14,7 @@ function memoryStorage() {
   };
 }
 
-globalThis.window = {
+globalThis.window = Object.assign(new EventTarget(), {
   location: {
     search: "",
     pathname: "/",
@@ -22,14 +22,21 @@ globalThis.window = {
     origin: "http://localhost",
   },
   history: { replaceState() {} },
-};
+});
 globalThis.sessionStorage = memoryStorage();
 globalThis.localStorage = memoryStorage();
 
 const result = await build({
-  entryPoints: [
-    fileURLToPath(new URL("../src/adk/sandbox.ts", import.meta.url)),
-  ],
+  stdin: {
+    contents: `
+      export { sandboxClient } from "./src/adk/sandbox.ts";
+      export {
+        AUTHENTICATION_REQUIRED_EVENT,
+        authenticationRestored,
+      } from "./src/adk/authSession.ts";
+    `,
+    resolveDir: fileURLToPath(new URL("..", import.meta.url)),
+  },
   bundle: true,
   format: "esm",
   platform: "node",
@@ -39,7 +46,110 @@ const result = await build({
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(
   result.outputFiles[0].contents,
 ).toString("base64")}`;
-const { sandboxClient } = await import(moduleUrl);
+const {
+  AUTHENTICATION_REQUIRED_EVENT,
+  authenticationRestored,
+  sandboxClient,
+} = await import(moduleUrl);
+
+test("retries a sandbox message after Studio authentication is restored", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    authenticationRestored();
+  });
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, init });
+    if (requests.length === 1) {
+      const loginPage = new Response("<html>login</html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      });
+      Object.defineProperties(loginPage, {
+        redirected: { value: true },
+        url: { value: "https://example.userpool.auth.example.com/oauth2/login" },
+      });
+      return loginPage;
+    }
+    return new Response(
+      [
+        'event: delta\ndata: {"text":"恢复成功"}',
+        "event: done\ndata: {}",
+        "",
+      ].join("\n\n"),
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    );
+  };
+
+  const authenticationRequired = new Promise((resolve) => {
+    window.addEventListener(AUTHENTICATION_REQUIRED_EVENT, resolve, {
+      once: true,
+    });
+  });
+  const pending = sandboxClient.sendMessage({
+    sessionId: "session-1",
+    text: "你好",
+  });
+  await authenticationRequired;
+  authenticationRestored();
+
+  const result = await pending;
+
+  assert.equal(result.text, "恢复成功");
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].url, "/web/sandbox/sessions/session-1/messages");
+  assert.equal(requests[1].url, requests[0].url);
+  assert.equal(requests[1].init.body, requests[0].init.body);
+});
+
+test("retries sandbox settings after a confirmed expired Studio session", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    authenticationRestored();
+  });
+  const settingsUrl = "/web/sandbox/sessions/session-1/settings";
+  let settingsRequests = 0;
+  globalThis.fetch = async (url) => {
+    if (url === settingsUrl) {
+      settingsRequests += 1;
+      if (settingsRequests === 1) return new Response("", { status: 401 });
+      return Response.json({
+        threadId: "thread-1",
+        cwd: "/workspace",
+        workspaceLocked: false,
+        busy: false,
+      });
+    }
+    if (url === "/oauth2/userinfo") {
+      return new Response("", { status: 401 });
+    }
+    if (url === "/web/auth-config") {
+      return Response.json({
+        providers: [
+          { id: "oidc", label: "SSO", loginUrl: "/oauth2/login" },
+        ],
+      });
+    }
+    throw new Error(`unexpected request: ${url}`);
+  };
+
+  const authenticationRequired = new Promise((resolve) => {
+    window.addEventListener(AUTHENTICATION_REQUIRED_EVENT, resolve, {
+      once: true,
+    });
+  });
+  const pending = sandboxClient.getSettings("session-1");
+  await authenticationRequired;
+  authenticationRestored();
+
+  const settings = await pending;
+
+  assert.equal(settings.threadId, "thread-1");
+  assert.equal(settings.cwd, "/workspace");
+  assert.equal(settingsRequests, 2);
+});
 
 test("reads a Codex thread without activating it", async (t) => {
   const previousFetch = globalThis.fetch;
