@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import ANY
 
 import pytest
 from click.testing import CliRunner
@@ -331,6 +332,7 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert update["function_id"] == "function-app-id"
     assert update["environment_overrides"] == {
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
+        "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
     }
 
 
@@ -451,6 +453,7 @@ def test_studio_update_supports_byteplus_provider(
         "AGENTKIT_CLOUD_PROVIDER": "byteplus",
         "BYTEPLUS_REGION": "ap-southeast-1",
         "DATABASE_VIKING_REGION": "cn-hongkong",
+        "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
     }
 
 
@@ -605,6 +608,7 @@ def test_studio_update_explicit_branding_overrides_cloud_values(
     assert update["environment_overrides"] == {
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_SITE_TITLE": "新标题",
+        "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
     }
 
 
@@ -674,6 +678,7 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
         "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool-new",
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool-new",
         "SANDBOX_DEV": "dev-tool-new",
+        "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
     }
 
 
@@ -802,6 +807,7 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools(
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
         "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",
+        "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
     }
 
 
