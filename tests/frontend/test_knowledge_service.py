@@ -482,6 +482,76 @@ def test_create_injects_owner_envelope_and_ignores_client_owner_fields() -> None
     assert result.description == "Team docs"
 
 
+def test_delete_managed_knowledge_base_removes_provider_before_agentkit() -> None:
+    events: list[str] = []
+
+    class OrderedAgentKitGateway(FakeAgentKitGateway):
+        def delete(self, knowledge_id: str, *, region: str) -> None:
+            events.append("agentkit")
+            super().delete(knowledge_id, region=region)
+
+    class OrderedProvisioner(FakeKnowledgeProvisioner):
+        def delete(self, **kwargs: str) -> None:
+            events.append("provider")
+            super().delete(**kwargs)
+
+    agentkit = OrderedAgentKitGateway([])
+    provisioner = OrderedProvisioner()
+    service, _, _ = auto_create_service(
+        agentkit=agentkit,
+        provisioner=provisioner,
+    )
+    identity = KnowledgeIdentity(
+        owner_id="user-1",
+        owner_label="Alice",
+        can_bind_provider=True,
+    )
+    created = service.create(
+        CreateKnowledgeBaseBody(name="support", description="Team docs"),
+        identity=identity,
+        region="cn-beijing",
+    )
+    events.clear()
+
+    service.delete(created.id, identity=identity, region="cn-beijing")
+
+    assert events == ["provider", "agentkit"]
+    assert created.id not in agentkit.records
+
+
+def test_delete_rejects_managed_record_when_signing_key_changed() -> None:
+    service, agentkit, provisioner = auto_create_service()
+    identity = KnowledgeIdentity(
+        owner_id="user-1",
+        owner_label="Alice",
+        can_bind_provider=True,
+    )
+    created = service.create(
+        CreateKnowledgeBaseBody(name="support", description="Team docs"),
+        identity=identity,
+        region="cn-beijing",
+    )
+    provisioner.deleted.clear()
+    service_with_rotated_key = KnowledgeService(
+        agentkit,
+        lambda record, connection: FakeDocumentGateway(),
+        signing_key=b"rotated-test-only-key",
+        provisioner=provisioner,
+    )
+
+    with pytest.raises(KnowledgeAccessError) as captured:
+        service_with_rotated_key.delete(
+            created.id,
+            identity=KnowledgeIdentity("admin", "Admin", is_admin=True),
+            region="cn-beijing",
+        )
+
+    assert captured.value.status_code == 409
+    assert captured.value.error_code == "KNOWLEDGE_METADATA_SIGNATURE_INVALID"
+    assert provisioner.deleted == []
+    assert created.id in agentkit.records
+
+
 def test_list_filters_regular_users_and_admin_sees_every_owner() -> None:
     service, _, _ = service_for(
         [

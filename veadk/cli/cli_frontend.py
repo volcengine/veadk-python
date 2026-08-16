@@ -90,13 +90,14 @@ _SENSITIVE_LOG_PATTERNS = (
     re.compile(
         r'"?(?:accessKeyId|secretAccessKey|apiKey|clientSecret|privateKey|'
         r"accessToken|sessionToken|securityToken|refreshToken|idToken|jwtToken|"
-        r'crToken|password|credential|signature)"?\s*[:=]',
+        r'crToken|password|credential|signature|signingKey)"?\s*[:=]',
         re.IGNORECASE,
     ),
     re.compile(
         r"(?:access[_ -]?key(?:[_ -]?id)?|secret[_ -]?key|api[_ -]?key|"
         r"client[_ -]?secret|private[_ -]?key|(?:access|session|security|refresh|"
-        r"id|jwt|cr)[_ -]?token|password|credential|signature)"
+        r"id|jwt|cr)[_ -]?token|password|credential|signature|"
+        r"signing[_ -]?key)"
         r"\s*(?:=|:|\s)\s*\S+",
         re.IGNORECASE,
     ),
@@ -449,7 +450,7 @@ def _redact_debug_text(text: str) -> str:
     return re.sub(
         r"(?i)((?:api[_-]?key|access[_-]?key(?:[_-]?id)?|secret[_-]?key|"
         r"auth[_-]?token|access[_-]?token|client[_-]?secret|credential|"
-        r"signature|secret|password|token)\s*[:=]\s*)"
+        r"signature|signing[_-]?key|secret|password|token)\s*[:=]\s*)"
         r"(?:[\"'][^\"']*[\"']|[^\s,;]+)",
         r"\1***",
         redacted,
@@ -8323,6 +8324,11 @@ def frontend_deploy(
     """
     import shutil
 
+    from veadk.cli.studio_knowledge_signing import (
+        STUDIO_KNOWLEDGE_SIGNING_KEY_ENV,
+        resolve_studio_knowledge_signing_key,
+        studio_knowledge_signing_namespace,
+    )
     from veadk.config import veadk_environments
 
     provider_id = normalize_cloud_provider(provider)
@@ -8738,6 +8744,23 @@ def frontend_deploy(
     hermes_snapshot_tool_id = resolved_sandbox_tool_ids.get("hermes_snapshot", "")
     dev_tool_id = resolved_sandbox_tool_ids.get("dev", "")
 
+    knowledge_signing_key = resolve_studio_knowledge_signing_key(
+        {
+            STUDIO_KNOWLEDGE_SIGNING_KEY_ENV: (
+                veadk_environments.get(STUDIO_KNOWLEDGE_SIGNING_KEY_ENV)
+                or os.getenv(STUDIO_KNOWLEDGE_SIGNING_KEY_ENV, "")
+            )
+        },
+        seed=sk,
+        namespace=studio_knowledge_signing_namespace(
+            provider_id,
+            studio_account_id,
+            user_pool_id,
+            allowed_client_id,
+            vefaas_app_name,
+        ),
+    )
+
     # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
     # (i.e. the deployer's whole .env) as function env vars. The frontend must
     # NOT receive the deployer's secrets (VOLCENGINE_ACCESS_KEY/SECRET_KEY, model
@@ -8792,6 +8815,7 @@ def frontend_deploy(
     veadk_environments["VEADK_STUDIO_PROJECT"] = project
     studio_deploy_id = _new_studio_deploy_id()
     veadk_environments["VEADK_STUDIO_DEPLOY_ID"] = studio_deploy_id
+    veadk_environments[STUDIO_KNOWLEDGE_SIGNING_KEY_ENV] = knowledge_signing_key
     veadk_environments["VEADK_STUDIO_USER_POOL_ID"] = user_pool_id
     veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] = region
     if studio_account_id:
@@ -9116,6 +9140,10 @@ def frontend_update(
         find_studio_deployments,
         load_deployed_site_logo,
     )
+    from veadk.cli.studio_knowledge_signing import (
+        STUDIO_KNOWLEDGE_SIGNING_KEY_ENV,
+        resolve_studio_knowledge_signing_key,
+    )
     from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
     provider_id = normalize_cloud_provider(provider)
@@ -9264,6 +9292,10 @@ def frontend_update(
                         "VEADK_STUDIO_PROJECT": target.project,
                     }
                 )
+
+        environment_overrides[STUDIO_KNOWLEDGE_SIGNING_KEY_ENV] = (
+            resolve_studio_knowledge_signing_key(current_env)
+        )
 
         studio_account_id = str(
             current_env.get("VEADK_STUDIO_ACCOUNT_ID") or ""

@@ -901,18 +901,22 @@ def test_debug_text_redacts_environment_and_inline_markers(
     environment_marker = "public-environment-marker-123"
     inline_marker = "public-inline-marker-456"
     bearer_marker = "public-bearer-marker-789"
+    signing_marker = "public-signing-marker-012"
     monkeypatch.setenv("SMOKEY_REDACTION_PROBE", environment_marker)
 
     redacted = _redact_debug_text(
         f"env={environment_marker}\n"
         f"authToken={inline_marker}\n"
+        f"signingKey={signing_marker}\n"
         f"Authorization: Bearer {bearer_marker}"
     )
 
     assert environment_marker not in redacted
     assert inline_marker not in redacted
     assert bearer_marker not in redacted
+    assert signing_marker not in redacted
     assert "authToken=***" in redacted
+    assert "signingKey=***" in redacted
     assert "Bearer ***" in redacted
 
 

@@ -680,7 +680,7 @@ class KnowledgeService:
         region: str,
     ) -> KnowledgeItem:
         record = self._authorized_record(knowledge_id, identity, region)
-        _, metadata = self._decode_record_description(record)
+        _, metadata = self._verified_record_description(record)
         if metadata:
             owner = KnowledgeIdentity(
                 owner_id=metadata["veadk:owner"],
@@ -716,18 +716,32 @@ class KnowledgeService:
         region: str,
     ) -> None:
         record = self._authorized_record(knowledge_id, identity, region)
-        _, metadata = self._decode_record_description(record)
+        _, metadata = self._verified_record_description(record)
         if metadata.get("veadk:provider-managed") == "true":
             if self._provisioner is None:
                 raise KnowledgeAccessError(
                     "知识库删除服务尚未配置。",
                     status_code=503,
                 )
+            logger.info(
+                "Deleting Studio-managed knowledge provider knowledge_id=%s "
+                "provider_id=%s region=%s",
+                record.id,
+                record.provider_knowledge_id,
+                record.region or region,
+            )
             self._provisioner.delete(
                 name=metadata.get("veadk:provider-name") or record.name,
                 provider_knowledge_id=record.provider_knowledge_id,
                 project_name=record.project_name or "default",
                 region=record.region or region,
+            )
+            logger.info(
+                "Deleted Studio-managed knowledge provider knowledge_id=%s "
+                "provider_id=%s region=%s",
+                record.id,
+                record.provider_knowledge_id,
+                record.region or region,
             )
         self._agentkit.delete(knowledge_id, region=region)
 
@@ -1075,6 +1089,22 @@ class KnowledgeService:
             project_name=record.project_name,
             region=record.region,
         )
+
+    def _verified_record_description(
+        self,
+        record: KnowledgeRecord,
+    ) -> tuple[str, dict[str, str]]:
+        description, metadata = self._decode_record_description(record)
+        has_envelope = "veadkmeta_v" in record.description or "[veadk-meta:" in (
+            record.description
+        )
+        if has_envelope and not metadata:
+            raise KnowledgeAccessError(
+                "知识库所有权元数据校验失败，已拒绝修改或删除。请联系管理员检查 Studio 签名配置。",
+                status_code=409,
+                error_code="KNOWLEDGE_METADATA_SIGNATURE_INVALID",
+            )
+        return description, metadata
 
     def _to_item(
         self,

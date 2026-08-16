@@ -1490,7 +1490,7 @@ export function KnowledgeLibrary({
         setCreateDocumentBase(null);
       }} />}
       {selected && editDocument && <EditKnowledgeDocumentDialog base={selected} item={editDocument} onClose={() => setEditDocument(null)} onUpdated={(item) => { const next = documentsRef.current.map((candidate) => candidate.id === item.id ? item : candidate); documentsRef.current = next; setDocuments(next); setEditDocument(null); }} />}
-      {deleteBaseTarget && <StudioConfirmDialog title="删除知识库？" description={`删除后，${deleteBaseTarget.name} 将从 AgentKit 解除关联。Provider 中的数据是否保留由云服务端决定。`} confirmLabel={deleting ? "删除中" : "删除"} variant="danger" busy={deleting} onCancel={() => setDeleteBaseTarget(null)} onConfirm={() => void confirmDeleteBase()} />}
+      {deleteBaseTarget && <StudioConfirmDialog title="删除知识库？" description={`将删除 ${deleteBaseTarget.name} 的 AgentKit 关联；如果它由 Studio 创建，也会同时删除 Provider 资源。此操作无法撤销。`} confirmLabel={deleting ? "删除中" : "删除"} variant="danger" busy={deleting} onCancel={() => setDeleteBaseTarget(null)} onConfirm={() => void confirmDeleteBase()} />}
       {deleteDocumentTarget && <StudioConfirmDialog title="删除知识？" description={`将从 Provider 知识库中删除 ${deleteDocumentTarget.name || deleteDocumentTarget.id}，此操作无法撤销。`} confirmLabel={deleting ? "删除中" : "删除"} variant="danger" busy={deleting} onCancel={() => setDeleteDocumentTarget(null)} onConfirm={() => void confirmDeleteDocument()} />}
     </section>
   );
