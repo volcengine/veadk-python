@@ -498,7 +498,16 @@ def test_tos_store_rejects_unsafe_file_name_even_without_route_validation(
     assert captured.value.status_code == 400
 
 
-def test_tos_upload_rejects_cross_region_studio_bucket(tmp_path: Path) -> None:
+def test_tos_upload_uses_region_scoped_bucket_when_studio_bucket_mismatches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agentkit.toolkit.volcengine.services.tos_service import TOSService
+
+    monkeypatch.setattr(
+        TOSService,
+        "generate_bucket_name",
+        staticmethod(lambda: "agentkit-platform-3001037806"),
+    )
     store = TosKnowledgeUploadStore(
         provider="volcengine",
         resolve_credentials=lambda: ("ak", "sk", None),
@@ -507,20 +516,30 @@ def test_tos_upload_rejects_cross_region_studio_bucket(tmp_path: Path) -> None:
             "VEADK_STUDIO_TOS_REGION": "cn-beijing",
         },
     )
-    source = tmp_path / "upload.pdf"
-    source.write_bytes(b"%PDF-test")
 
-    with pytest.raises(KnowledgeAccessError) as captured:
-        store.put(
-            source=source,
-            owner_id="alice",
-            knowledge_id="kb-1",
-            region="cn-shanghai",
-            file_name="report.pdf",
-            mime_type="application/pdf",
-        )
+    target = store._target("cn-shanghai")
 
-    assert captured.value.status_code == 409
+    assert target.mode == "generated"
+    assert target.bucket == "agentkit-platform-3001037806-ve-cn-shanghai"
+
+
+def test_tos_upload_prefers_explicit_knowledge_storage() -> None:
+    store = TosKnowledgeUploadStore(
+        provider="byteplus",
+        resolve_credentials=lambda: ("ak", "sk", None),
+        source={
+            "VEADK_STUDIO_TOS_BUCKET": "studio-control-plane",
+            "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
+            "VEADK_KNOWLEDGE_TOS_BUCKET": "knowledge-data-plane",
+            "VEADK_KNOWLEDGE_TOS_REGION": "cn-hongkong",
+        },
+    )
+
+    target = store._target("ap-southeast-1")
+
+    assert target.mode == "configured"
+    assert target.bucket == "knowledge-data-plane"
+    assert target.region == "cn-hongkong"
 
 
 def test_tos_store_only_deletes_objects_in_the_owned_knowledge_scope(

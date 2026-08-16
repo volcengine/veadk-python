@@ -498,17 +498,41 @@ class TosKnowledgeUploadStore:
                 "知识库地域为空，无法上传文件。", status_code=409
             )
         environment = self._environment if self._environment is not None else os.environ
-        configured = StudioStorageConfig.from_env(self._provider, environment)
+        knowledge_storage_keys = {
+            "VEADK_STUDIO_TOS_BUCKET": "VEADK_KNOWLEDGE_TOS_BUCKET",
+            "VEADK_STUDIO_TOS_REGION": "VEADK_KNOWLEDGE_TOS_REGION",
+        }
+        knowledge_storage_requested = any(
+            str(environment.get(key) or "").strip()
+            for key in knowledge_storage_keys.values()
+        )
+        if knowledge_storage_requested:
+            knowledge_environment = dict(environment)
+            for target_key, source_key in knowledge_storage_keys.items():
+                knowledge_environment[target_key] = str(
+                    environment.get(source_key) or ""
+                ).strip()
+            configured = StudioStorageConfig.from_env(
+                self._provider,
+                knowledge_environment,
+            )
+            if not configured.configured:
+                raise KnowledgeAccessError(
+                    "知识库存储配置不完整，请同时配置 Bucket 和地域。",
+                    status_code=503,
+                )
+            if configured.region != normalized_region:
+                raise KnowledgeAccessError(
+                    "知识库存储地域与知识库地域不一致，请联系管理员调整配置。",
+                    status_code=409,
+                )
+        else:
+            configured = StudioStorageConfig.from_env(self._provider, environment)
         prefix = (
             str(environment.get("VEADK_KNOWLEDGE_TOS_PREFIX") or "").strip("/")
             or _DEFAULT_PREFIX
         )
-        if configured.configured:
-            if configured.region != normalized_region:
-                raise KnowledgeAccessError(
-                    "Studio TOS 存储地域与知识库地域不一致，请联系管理员调整配置。",
-                    status_code=409,
-                )
+        if configured.configured and configured.region == normalized_region:
             return _UploadTarget(
                 bucket=configured.bucket,
                 region=configured.region,
