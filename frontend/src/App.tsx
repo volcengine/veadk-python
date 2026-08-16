@@ -5593,12 +5593,20 @@ export default function App() {
                 skillInitialWorkspace={skillCenterLaunch}
                 onSkillInitialWorkspaceConsumed={() => setSkillCenterLaunch(null)}
                 artifactSources={appName
-                  ? [{ appName, agentName: labelOf(appName), sessions }]
+                  ? [{
+                      appName,
+                      agentId: currentConn?.runtimeId ?? appName,
+                      agentName: labelOf(appName),
+                      runtimeId: currentConn?.runtimeId,
+                      region: currentConn?.region,
+                      sessions,
+                    }]
                   : []}
                 artifactUserId={userId}
                 onArtifactActivate={() => {
                   if (appName && userId) void refreshSessions(appName);
                 }}
+                onArtifactSourceOpen={openFromSearch}
               />
             ) : visibleCreateView !== null && !hasCreds ? (
               <div
