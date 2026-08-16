@@ -131,7 +131,7 @@ export function IntelligentDeployment({
       backLabel="返回开发会话"
       deploymentPrimaryPane={
         <section className="trusted-source-pane" aria-label="已验证源码">
-          <div className="trusted-source-pane__badge">已通过独立验证</div>
+          <div className="trusted-source-pane__badge">已通过 Codex 云端验证</div>
           <h2>{delivery.agentName}</h2>
           <label className="trusted-source-pane__runtime-name">
             <span>Runtime 名称</span>

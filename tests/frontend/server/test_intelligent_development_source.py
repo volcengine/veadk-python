@@ -8,13 +8,11 @@ import struct
 import zipfile
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
-
 import pytest
 
 from frontend.server import intelligent_development_source as source_module
 from frontend.server.deployment_source import DeploymentSourceError
-from frontend.server.intelligent_development import RELEASE_ROOT
+from frontend.server.intelligent_development import release_path
 from frontend.server.intelligent_development_source import (
     IntelligentDevelopmentSourceNotFound,
     materialize_intelligent_development_source,
@@ -26,15 +24,15 @@ SESSION_ID = "session-1"
 OWNER_ID = "owner-1"
 REPORT_DIGEST_FIELD = "validationReportSha256"
 REQUIRED_GATES = (
-    "compile",
-    "service-contract",
+    "local-checks",
+    "service-probe",
     "ak-config",
     "ak-build",
     "ak-deploy",
-    "runtime-tag",
     "runtime-ready",
-    "invoke",
-    "logs",
+    "acceptance-invoke",
+    "runtime-logs",
+    "runtime-cleanup",
 )
 
 
@@ -52,7 +50,10 @@ def _zip(
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         for name, content in entries or [
-            ("agentkit.yaml", b"common:\n  agent_name: trusted-agent\n  entry_point: app.py\n"),
+            (
+                "agentkit.yaml",
+                b"common:\n  agent_name: trusted-agent\n  entry_point: app.py\n",
+            ),
             ("app.py", b"root_agent = object()\n"),
             ("pkg/helper.py", b"VALUE = 1\n"),
         ]:
@@ -87,9 +88,7 @@ def _report(
         "agentName": "trusted-agent",
         "entryPoint": "app.py",
         "fileCount": 3,
-        "steps": [
-            {"name": name, "passed": name != failed_gate} for name in gates
-        ],
+        "steps": [{"name": name, "passed": name != failed_gate} for name in gates],
     }
     if artifact_sha256 is not None:
         value["artifactSha256"] = artifact_sha256
@@ -117,7 +116,7 @@ def _release_files(
             report_value.setdefault("artifactSha256", artifact_digest)
             report = _json_bytes(report_value)
     report_digest = _digest(report)
-    release = f"{RELEASE_ROOT}/{artifact_digest}"
+    release = release_path(artifact_digest, report_digest)
     if file_count is None:
         try:
             with zipfile.ZipFile(io.BytesIO(artifact)) as archive:
@@ -152,9 +151,16 @@ def _release_files(
         report = _json_bytes(report_value)
         report_digest = _digest(report)
         descriptor[REPORT_DIGEST_FIELD] = report_digest
-        descriptor["validationReportPath"] = (
-            f"{release}/validation/{report_digest}.json"
-        )
+    release = release_path(artifact_digest, report_digest)
+    descriptor.update(
+        {
+            "releasePath": release,
+            "artifactPath": f"{release}/artifact.zip",
+            "descriptorPath": f"{release}/descriptor.json",
+            "validationReportPath": f"{release}/validation/{report_digest}.json",
+        }
+    )
+    descriptor.update(descriptor_updates or {})
     pointer = {
         "artifactSha256": artifact_digest,
         REPORT_DIGEST_FIELD: report_digest,
@@ -242,7 +248,9 @@ async def _materialize(
 
 
 @pytest.mark.asyncio
-async def test_materializes_only_server_downloaded_verified_source(tmp_path: Path) -> None:
+async def test_materializes_only_server_downloaded_verified_source(
+    tmp_path: Path,
+) -> None:
     request, downloads = _release_files()
 
     result = await _materialize(tmp_path, request, downloads)
@@ -252,7 +260,11 @@ async def test_materializes_only_server_downloaded_verified_source(tmp_path: Pat
     assert result.artifact_sha256 == request["artifactSha256"]
     assert result.validation_report_sha256 == request[REPORT_DIGEST_FIELD]
     assert result.file_count == 3
-    assert result.artifact_size == len(downloads[f"{RELEASE_ROOT}/{result.artifact_sha256}/artifact.zip"])
+    assert result.artifact_size == len(
+        downloads[
+            f"{release_path(result.artifact_sha256, result.validation_report_sha256)}/artifact.zip"
+        ]
+    )
     assert (tmp_path / "app.py").read_bytes() == b"root_agent = object()\n"
     assert (tmp_path / "pkg/helper.py").read_bytes() == b"VALUE = 1\n"
     transport = FakeTransport.instances[0]
@@ -270,12 +282,22 @@ async def test_materializes_only_server_downloaded_verified_source(tmp_path: Pat
     ("owner_id", "cloud", "error"),
     [
         ("admin-1", _cloud(), IntelligentDevelopmentSourceNotFound),
-        ("owner-1", _cloud(created_by="foreign-1"), IntelligentDevelopmentSourceNotFound),
+        (
+            "owner-1",
+            _cloud(created_by="foreign-1"),
+            IntelligentDevelopmentSourceNotFound,
+        ),
         ("owner-1", _cloud(agent_kind="codex"), IntelligentDevelopmentSourceNotFound),
         ("owner-1", _cloud(agent_kind="other"), IntelligentDevelopmentSourceNotFound),
         ("owner-1", _cloud(status="Expired"), IntelligentDevelopmentSourceNotFound),
     ],
-    ids=("admin-no-bypass", "foreign", "ordinary-agent-kind", "wrong-agent-kind", "expired"),
+    ids=(
+        "admin-no-bypass",
+        "foreign",
+        "ordinary-agent-kind",
+        "wrong-agent-kind",
+        "expired",
+    ),
 )
 async def test_rejects_unowned_or_ineligible_sessions_before_remote_access(
     tmp_path: Path,
@@ -285,9 +307,7 @@ async def test_rejects_unowned_or_ineligible_sessions_before_remote_access(
 ) -> None:
     request, downloads = _release_files()
     with pytest.raises(error):
-        await _materialize(
-            tmp_path, request, downloads, cloud=cloud, owner_id=owner_id
-        )
+        await _materialize(tmp_path, request, downloads, cloud=cloud, owner_id=owner_id)
     assert FakeTransport.instances == []
 
 
@@ -302,7 +322,14 @@ async def test_rejects_unowned_or_ineligible_sessions_before_remote_access(
         {"artifactSha256": "A" * 64},
         {REPORT_DIGEST_FIELD: "not-a-digest"},
     ],
-    ids=("missing-field", "extra-field", "wrong-kind", "empty-session", "uppercase-digest", "bad-report-digest"),
+    ids=(
+        "missing-field",
+        "extra-field",
+        "wrong-kind",
+        "empty-session",
+        "uppercase-digest",
+        "bad-report-digest",
+    ),
 )
 async def test_rejects_malformed_source_before_session_resolution(
     tmp_path: Path, request_update: dict[str, object]
@@ -357,7 +384,10 @@ async def test_rejects_each_download_digest_mismatch(
     tmp_path: Path, target: str
 ) -> None:
     request, downloads = _release_files()
-    release = f"{RELEASE_ROOT}/{request['artifactSha256']}"
+    release = release_path(
+        str(request["artifactSha256"]),
+        str(request[REPORT_DIGEST_FIELD]),
+    )
     path = (
         f"{release}/artifact.zip"
         if target == "artifact"
@@ -408,10 +438,24 @@ async def test_validation_report_requires_every_named_gate(
         _report(session_id="other-session"),
         _report(artifact_gate=False),
         _report(artifact_sha256="f" * 64),
-        _report(failed_gate="invoke"),
-        _json_bytes({"status": "passed", "sessionId": SESSION_ID, "artifactGate": True, "steps": {}}),
+        _report(failed_gate="acceptance-invoke"),
+        _json_bytes(
+            {
+                "status": "passed",
+                "sessionId": SESSION_ID,
+                "artifactGate": True,
+                "steps": {},
+            }
+        ),
     ],
-    ids=("status", "session-binding", "artifact-gate", "artifact-digest-binding", "failed-step", "steps-shape"),
+    ids=(
+        "status",
+        "session-binding",
+        "artifact-gate",
+        "artifact-digest-binding",
+        "failed-step",
+        "steps-shape",
+    ),
 )
 async def test_validation_report_fails_closed_for_each_report_binding(
     tmp_path: Path, report: bytes
@@ -488,9 +532,7 @@ async def test_rejects_duplicate_zip_member(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_rejects_file_directory_collision(tmp_path: Path) -> None:
-    artifact = _zip(
-        [("app.py", b"root_agent = object()\n"), ("app.py/config", b"bad")]
-    )
+    artifact = _zip([("app.py", b"root_agent = object()\n"), ("app.py/config", b"bad")])
     request, downloads = _release_files(artifact=artifact, entry_point="app.py")
     with pytest.raises(DeploymentSourceError, match="文件与目录路径冲突"):
         await _materialize(tmp_path, request, downloads)
@@ -532,9 +574,7 @@ async def test_rejects_file_count_limit_before_reading_zip_members(
 async def test_descriptor_entrypoint_and_file_count_must_match_archive(
     tmp_path: Path, entry_point: str, file_count: int, message: str
 ) -> None:
-    request, downloads = _release_files(
-        entry_point=entry_point, file_count=file_count
-    )
+    request, downloads = _release_files(entry_point=entry_point, file_count=file_count)
     with pytest.raises(DeploymentSourceError, match=message):
         await _materialize(tmp_path, request, downloads)
 

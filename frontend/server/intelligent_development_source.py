@@ -24,12 +24,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from frontend.server.deployment_source import DeploymentSourceError, extract_migration_source
+from frontend.server.deployment_source import (
+    DeploymentSourceError,
+    extract_migration_source,
+)
 from veadk.cli.frontend_sandbox import (
     SandboxSessionNotFoundError,
     SandboxSessionUnavailableError,
 )
-from frontend.server.intelligent_development import RELEASE_ROOT
+from frontend.server.intelligent_development import release_path
 from frontend.server.sandbox_remote import SandboxRemoteTransport
 from veadk.cli.frontend_sandbox import SandboxConversationService
 
@@ -40,15 +43,15 @@ _MAX_FILE_COUNT = 2_000
 _MAX_REPORT_BYTES = 2 * 1024 * 1024
 _MAX_DESCRIPTOR_BYTES = 256 * 1024
 _REQUIRED_GATES = {
-    "compile",
-    "service-contract",
+    "local-checks",
+    "service-probe",
     "ak-config",
     "ak-build",
     "ak-deploy",
-    "runtime-tag",
     "runtime-ready",
-    "invoke",
-    "logs",
+    "acceptance-invoke",
+    "runtime-logs",
+    "runtime-cleanup",
 }
 
 
@@ -109,12 +112,16 @@ async def materialize_intelligent_development_source(
         resolve_intelligent_development_session,
     )
 
-    if set(source) != {
-        "kind",
-        "sessionId",
-        "artifactSha256",
-        "validationReportSha256",
-    } or source.get("kind") != "intelligentDevelopment":
+    if (
+        set(source)
+        != {
+            "kind",
+            "sessionId",
+            "artifactSha256",
+            "validationReportSha256",
+        }
+        or source.get("kind") != "intelligentDevelopment"
+    ):
         raise DeploymentSourceError("智能开发部署来源格式无效。")
     session_id = source.get("sessionId")
     if not isinstance(session_id, str) or not session_id:
@@ -128,7 +135,7 @@ async def materialize_intelligent_development_source(
     except (SandboxSessionNotFoundError, SandboxSessionUnavailableError) as error:
         raise IntelligentDevelopmentSourceNotFound(str(error)) from error
     transport = SandboxRemoteTransport(cloud.endpoint)
-    release = f"{RELEASE_ROOT}/{artifact_digest}"
+    release = release_path(artifact_digest, report_digest)
     pointer = _object(
         await transport.download(
             "/home/gem/.intelligent-development/published.json",
@@ -169,11 +176,15 @@ async def materialize_intelligent_development_source(
         raise IntelligentDevelopmentSourceStale("交付物描述与请求不一致。")
     report_value = _object(report, "validation report")
     steps = report_value.get("steps")
-    passed = {
-        item.get("name")
-        for item in steps
-        if isinstance(item, dict) and item.get("passed") is True
-    } if isinstance(steps, list) else set()
+    passed = (
+        {
+            item.get("name")
+            for item in steps
+            if isinstance(item, dict) and item.get("passed") is True
+        }
+        if isinstance(steps, list)
+        else set()
+    )
     if (
         report_value.get("status") != "passed"
         or report_value.get("sessionId") != session_id
@@ -209,6 +220,7 @@ async def materialize_intelligent_development_source(
     }
     # Reuse the hardened archive verifier by deriving its exact manifest from ZIP bytes.
     import io
+
     try:
         with zipfile.ZipFile(io.BytesIO(artifact)) as archive:
             files = [info for info in archive.infolist() if not info.is_dir()]

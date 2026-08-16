@@ -76,7 +76,7 @@ export function IntelligentCreate({
         </button>
         <div>
           <h1 id="intelligent-create-title">智能模式</h1>
-          <p>描述目标后进入开发会话，持续沟通、调试并交付可部署的 VeADK Agent。</p>
+          <p>描述目标后，AI 会自动判断意图、构建、调试并完成临时云端验证。</p>
         </div>
       </header>
 
@@ -86,7 +86,7 @@ export function IntelligentCreate({
             <span className="ic-create-icon-wrap"><IntelligentCreateIcon /></span>
             <div>
               <h2>从目标开始</h2>
-              <p>说明 Agent 要解决的问题、业务约束和验收标准；创建后仍可在会话中补充。</p>
+              <p>只需说明 Agent 要解决的问题；会改变结果的关键信息，AI 才会追问。</p>
             </div>
           </div>
           <label className="ic-goal-label" htmlFor="intelligent-goal">目标描述</label>
@@ -108,9 +108,9 @@ export function IntelligentCreate({
           ) : null}
           {error ? <p className="ic-error" role="alert">{error}</p> : null}
           <div className="ic-actions">
-            <span>Enter 创建 · Shift+Enter 换行</span>
+            <span>开发环境保留最多 8 小时，可在同一 Thread 持续优化</span>
             <button type="button" className="ic-primary" onClick={() => void submit()} disabled={submitDisabled}>
-              {creating ? "正在准备开发环境…" : "进入开发会话"}
+              {creating ? "正在准备开发环境…" : "开始构建"}
             </button>
           </div>
         </section>

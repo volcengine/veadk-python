@@ -210,7 +210,7 @@ def _validate_byteplus_vefaas_application_name(name: str) -> None:
     )
 
 
-def _validate_distinct_sandbox_tool_ids(tool_ids: dict[str, object]) -> None:
+def _validate_distinct_sandbox_tool_ids(tool_ids: Mapping[str, object]) -> None:
     """Reject one Tool id serving both transient and snapshot sessions."""
     labels = {
         "codex": "Codex",
@@ -1920,16 +1920,10 @@ def _run_frontend_server(
             provider=provider,
         ),
     )
-    from frontend.server.intelligent_development import (
-        IntelligentDevelopmentVerifier,
-        StudioCredentials,
-    )
+    from frontend.server.intelligent_development import StudioCredentials
     from frontend.server.intelligent_development_routes import (
         IntelligentDevelopmentGateway,
         mount_intelligent_development_routes,
-    )
-    from frontend.server.intelligent_development_runtime import (
-        IntelligentDevelopmentRuntimeOperations,
     )
 
     intelligent_development_tool_id = (os.getenv("SANDBOX_DEV") or "").strip()
@@ -1999,33 +1993,24 @@ def _run_frontend_server(
         _sandbox_is_admin,
         _sandbox_creator,
     )
+
     def _intelligent_development_credentials() -> StudioCredentials:
         access_key, secret_key, session_token = _resolve_ve_credentials()
         return StudioCredentials(access_key, secret_key, session_token)
-
-    intelligent_runtime_operations = IntelligentDevelopmentRuntimeOperations(
-        _default_cloud_region
-    )
-
-    def _intelligent_development_verifier(event_sink):
-        return IntelligentDevelopmentVerifier(
-            _intelligent_development_credentials,
-            event_sink=event_sink,
-            runtime_operation=intelligent_runtime_operations,
-        )
 
     mount_intelligent_development_routes(
         app,
         intelligent_development_service,
         _intelligent_development_owner,
         _sandbox_creator,
-        _intelligent_development_verifier,
+        _intelligent_development_credentials,
         configured=bool(intelligent_development_tool_id),
-        cleanup_stale_runtimes=lambda: (
-            intelligent_runtime_operations.cleanup_stale_validation_runtimes(
-                _intelligent_development_credentials
-            )
+        validation_region=(
+            os.getenv("VEADK_STUDIO_DEPLOY_REGION")
+            or os.getenv("AGENTKIT_SANDBOX_REGION")
+            or default_region(provider)
         ),
+        validation_project=os.getenv("VEADK_STUDIO_PROJECT") or "default",
     )
     mount_sandbox_agent_routes(
         app,
@@ -4054,18 +4039,19 @@ def _run_frontend_server(
 
         # Materialize one validated source tree. Migration source is resolved
         # server-side from the caller-owned Session; browser files are ignored.
+        from frontend.server.deployment_source import (
+            DeploymentSourceError,
+            write_inline_source,
+        )
+        from frontend.server.intelligent_development_source import (
+            IntelligentDevelopmentSourceIntegrityError,
+            IntelligentDevelopmentSourceNotFound,
+            IntelligentDevelopmentSourceStale,
+        )
+
         temp_dir = tempfile.mkdtemp(prefix=f"agentkit_deploy_{agent_name}_")
         base = PathlibPath(temp_dir).resolve()
         try:
-            from frontend.server.deployment_source import (
-                DeploymentSourceError,
-                write_inline_source,
-            )
-            from frontend.server.intelligent_development_source import (
-                IntelligentDevelopmentSourceIntegrityError,
-                IntelligentDevelopmentSourceNotFound,
-                IntelligentDevelopmentSourceStale,
-            )
             if source.get("kind") == "migration":
                 entry_point = await asyncio.to_thread(
                     migration_service.materialize_deployment,
@@ -4078,6 +4064,7 @@ def _run_frontend_server(
                 from frontend.server.intelligent_development_source import (
                     materialize_intelligent_development_source,
                 )
+
                 materialized = await materialize_intelligent_development_source(
                     base,
                     source,

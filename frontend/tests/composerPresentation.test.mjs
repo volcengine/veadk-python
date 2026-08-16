@@ -181,7 +181,7 @@ test("renders a normal-font session id with an inline copy action", () => {
   );
 });
 
-test("uses the selected Agent display name outside dedicated sandbox sessions", () => {
+test("uses product-specific composer copy for Agent and sandbox sessions", () => {
   assert.match(
     appSource,
     /<SandboxComposer[\s\S]*?appName=\{appName\}/,
@@ -190,7 +190,10 @@ test("uses the selected Agent display name outside dedicated sandbox sessions", 
   assert.match(composerSource, /`向 \$\{agentName\} 发消息…`/);
   assert.match(composerSource, /请先选择智能体/);
   assert.doesNotMatch(composerSource, /给智能体发消息/);
-  assert.match(sandboxComposerSource, /placeholder="向 AgentKit 沙箱发送消息/);
+  assert.match(
+    sandboxComposerSource,
+    /textOnly\s*\?\s*"继续描述你想构建或优化的 VeADK Agent…"\s*:\s*"向 AgentKit 沙箱发送消息，输入 \/ 查看命令，输入 \$ 调用 Skill…"/,
+  );
 });
 
 test("composer slot keeps the input full width in the centered welcome layout", () => {

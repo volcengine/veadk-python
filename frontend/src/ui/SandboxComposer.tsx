@@ -509,7 +509,11 @@ export function SandboxComposer({
             rows={1}
             value={value}
             disabled={disabled}
-            placeholder="向 AgentKit 沙箱发送消息，输入 / 查看命令，输入 $ 调用 Skill…"
+            placeholder={
+              textOnly
+                ? "继续描述你想构建或优化的 VeADK Agent…"
+                : "向 AgentKit 沙箱发送消息，输入 / 查看命令，输入 $ 调用 Skill…"
+            }
             aria-expanded={menuVisible}
             onChange={(event) => updateValue(event.target.value)}
             onBlur={() => window.setTimeout(() => setMenuDismissed(true), 0)}
