@@ -36,13 +36,14 @@ def test_default_studio_deploy_requires_all_reachable_actions() -> None:
     specs = _default_specs()
     actions = [spec.action for spec in specs]
 
-    assert len(actions) == 38
+    assert len(actions) == 39
     assert len(actions) == len(set(actions))
     assert "id:CreateUserPool" in actions
     assert "iam:UpdatePolicy" in actions
     assert "tos:CreateBucket" in actions
     assert "agentkit:CreateTool" in actions
     assert "apig:CreateGateway" in actions
+    assert "apig:UpdateRoute" in actions
     assert "vefaas:CreateApplication" in actions
     assert "vefaas:DeleteApplication" in actions
 
@@ -65,6 +66,7 @@ def test_existing_resources_remove_unreachable_create_and_cleanup_actions() -> N
     assert "tos:CreateBucket" not in actions
     assert "agentkit:CreateTool" not in actions
     assert "apig:CreateGateway" not in actions
+    assert "apig:UpdateRoute" in actions
     assert "vefaas:DeleteApplication" not in actions
     assert "id:UpdateUserPoolClient" in actions
     assert "agentkit:UpdateTool" in actions
@@ -272,7 +274,7 @@ def test_cli_precheck_only_exits_before_cloud_writes(monkeypatch) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert "All 38 required IAM Actions are satisfied." in result.output
+    assert "All 39 required IAM Actions are satisfied." in result.output
     assert "Pre-check only: no cloud resources were created." in result.output
 
 

@@ -46,8 +46,7 @@ class APIGateway:
         configuration.sk = self.sk
         configuration.session_token = self.session_token
         configuration.region = region
-        if provider == "byteplus":
-            configuration.host = f"https://{self.openapi_host}"
+        configuration.host = f"https://{self.openapi_host}"
 
         self.api_client = volcenginesdkcore.ApiClient(configuration=configuration)
         self.apig_20221112_client = APIG20221112Api(api_client=self.api_client)
