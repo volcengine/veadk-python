@@ -28,6 +28,8 @@ import hashlib
 import json
 import math
 import posixpath
+import re
+import secrets
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import asdict, dataclass
@@ -47,6 +49,7 @@ APPROVAL_DECISIONS = frozenset({"accept", "acceptForSession", "decline", "cancel
 _REQUEST_TIMEOUT_SECONDS = 60
 _TURN_TIMEOUT_SECONDS = 600
 _APPROVAL_TIMEOUT_SECONDS = 300
+_IMPORTED_HISTORY_INJECT_TIMEOUT_SECONDS = 180
 _MAX_DIRECTORY_ENTRIES = 1_000
 _IMPORTED_HISTORY_MAX_MESSAGES = 100
 _IMPORTED_HISTORY_MAX_MESSAGE_CHARACTERS = 20_000
@@ -55,6 +58,10 @@ _IMPORTED_HISTORY_MAX_IMAGES = 10
 _IMPORTED_HISTORY_MAX_IMAGE_BYTES = 4 * 1024 * 1024
 _IMPORTED_HISTORY_MAX_IMAGE_TOTAL_BYTES = 8 * 1024 * 1024
 _IMPORTED_HISTORY_MAX_BASE64_BYTES = 18 * 1024 * 1024
+_IMPORTED_HISTORY_PART_BYTES = 512 * 1024
+_IMPORTED_HISTORY_MAX_PARTS = 64
+_IMPORTED_HISTORY_READ_TIMEOUT_SECONDS = 15
+_APP_SERVER_MAX_MESSAGE_BYTES = _IMPORTED_HISTORY_MAX_BASE64_BYTES + 2 * 1024 * 1024
 _IMPORTED_HISTORY_IMAGE_MIME_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/gif", "image/webp"}
 )
@@ -375,6 +382,7 @@ class CodexAppServerSession:
         self._websocket: Any | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._server_request_tasks: set[asyncio.Task[None]] = set()
+        self._connect_lock = asyncio.Lock()
         self._send_lock = asyncio.Lock()
         self._next_request_id = 1
         self._pending_requests: dict[int, asyncio.Future[dict[str, object]]] = {}
@@ -393,6 +401,9 @@ class CodexAppServerSession:
         self._thread_token_total: CodexTokenUsage | None = None
         self._usage_by_turn_id: dict[str, CodexTokenUsage] = {}
         self._model_context_window: int | None = None
+        self._imported_history_by_thread: dict[
+            str, tuple[CodexImportedMessage, ...]
+        ] = {}
         self.thread_id = ""
         self.cwd = ""
         self.model = ""
@@ -419,47 +430,83 @@ class CodexAppServerSession:
         return self._model_context_window
 
     async def connect(self) -> None:
-        """Connect, initialize the app-server, and create a fresh thread."""
-        if self._websocket is not None:
-            return
-        if self._closed:
-            raise CodexAppServerError("Codex app-server connection is closed.")
-        try:
-            url = _app_server_url(self._endpoint)
-            if self._websocket_factory is not None:
-                self._websocket = await self._websocket_factory(url)
-            else:
-                import websockets
+        """Connect to app-server, resuming the active thread after transport loss."""
+        async with self._connect_lock:
+            if self._websocket is not None:
+                return
+            if self._closed:
+                raise CodexAppServerError("Codex app-server connection is closed.")
+            active_thread_id = self.thread_id
+            try:
+                url = _app_server_url(self._endpoint)
+                if self._websocket_factory is not None:
+                    self._websocket = await self._websocket_factory(url)
+                else:
+                    import websockets
 
-                self._websocket = await websockets.connect(
-                    url,
-                    open_timeout=30,
-                    close_timeout=5,
-                    max_size=8 * 1024 * 1024,
-                )
-        except Exception as error:
-            raise CodexAppServerError(
-                "无法连接 AgentKit Session 中的 Codex 服务。"
-            ) from error
-        self._reader_task = asyncio.create_task(self._read_messages())
-        try:
-            await self.request(
-                "initialize",
-                {
-                    "clientInfo": {
-                        "name": "agentkit_codex_app_server_client",
-                        "title": "AgentKit Studio",
-                        "version": "1",
+                    self._websocket = await websockets.connect(
+                        url,
+                        open_timeout=30,
+                        close_timeout=5,
+                        ping_timeout=60,
+                        max_size=_APP_SERVER_MAX_MESSAGE_BYTES,
+                    )
+            except Exception as error:
+                raise CodexAppServerError(
+                    "无法连接 AgentKit Session 中的 Codex 服务。"
+                ) from error
+            self._reader_task = asyncio.create_task(self._read_messages())
+            try:
+                await self.request(
+                    "initialize",
+                    {
+                        "clientInfo": {
+                            "name": "agentkit_codex_app_server_client",
+                            "title": "AgentKit Studio",
+                            "version": "1",
+                        },
+                        "capabilities": {"experimentalApi": True},
                     },
-                    "capabilities": {"experimentalApi": True},
-                },
-            )
-            await self.notify("initialized")
-            snapshot = await self.request("thread/start", {})
-            self._apply_thread_snapshot(snapshot)
-        except Exception:
-            await self.close()
-            raise
+                )
+                await self.notify("initialized")
+                if active_thread_id:
+                    try:
+                        snapshot = await self.request(
+                            "thread/resume",
+                            {
+                                "threadId": active_thread_id,
+                                **self._thread_options(),
+                            },
+                        )
+                    except CodexAppServerError as error:
+                        if "no rollout found for thread id" not in str(error):
+                            raise
+                        snapshot = await self.request(
+                            "thread/start",
+                            self._thread_options(),
+                        )
+                        self._activate_thread_snapshot("thread/start", snapshot)
+                    else:
+                        self._activate_thread_snapshot("thread/resume", snapshot)
+                else:
+                    snapshot = await self.request("thread/start", {})
+                    self._apply_thread_snapshot(snapshot)
+            except Exception:
+                if active_thread_id:
+                    failed_socket = self._websocket
+                    failed_reader = self._reader_task
+                    self._websocket = None
+                    self._reader_task = None
+                    if failed_socket is not None:
+                        with contextlib.suppress(Exception):
+                            await failed_socket.close()
+                    if failed_reader is not None:
+                        failed_reader.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await failed_reader
+                else:
+                    await self.close()
+                raise
 
     async def request(
         self,
@@ -469,6 +516,8 @@ class CodexAppServerSession:
         timeout: float = _REQUEST_TIMEOUT_SECONDS,
     ) -> dict[str, object]:
         """Send one JSON-RPC request and validate its object result."""
+        if self._websocket is None:
+            await self.connect()
         if self._websocket is None or self._closed:
             raise CodexAppServerError("Codex app-server 尚未连接。")
         request_id = self._next_request_id
@@ -504,6 +553,7 @@ class CodexAppServerSession:
         self, prompt: str, skill_ids: tuple[str, ...] = ()
     ) -> AsyncIterator[CodexAppServerEvent]:
         """Start one Codex turn and stream its public events."""
+        await self.connect()
         if self.active:
             raise CodexAppServerError("当前 Codex 任务仍在运行。")
         if not self.thread_id:
@@ -787,7 +837,11 @@ class CodexAppServerSession:
             {"threadId": thread_id, "includeTurns": True},
         )
         snapshot = self._thread_snapshot("thread/read", result)
-        imported = await self._read_imported_history(thread_id, snapshot.cwd)
+        imported = self._imported_history_by_thread.get(thread_id)
+        if imported is None:
+            imported = await self._read_imported_history(thread_id, snapshot.cwd)
+            if imported:
+                self._imported_history_by_thread[thread_id] = imported
         return _prepend_imported_history(snapshot, imported)
 
     async def inject_history(self, messages: tuple[CodexImportedMessage, ...]) -> None:
@@ -831,8 +885,10 @@ class CodexAppServerSession:
                 "threadId": self.thread_id,
                 "items": items,
             },
+            timeout=_IMPORTED_HISTORY_INJECT_TIMEOUT_SECONDS,
         )
         await self._write_imported_history(messages)
+        self._imported_history_by_thread[self.thread_id] = messages
 
     async def _write_imported_history(
         self, messages: tuple[CodexImportedMessage, ...]
@@ -846,11 +902,40 @@ class CodexAppServerSession:
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
+        if len(payload) > _IMPORTED_HISTORY_MAX_BASE64_BYTES:
+            raise CodexAppServerError("Imported history payload is too large")
+        path = _imported_history_path(self.thread_id, self.cwd)
+        parts = tuple(
+            payload[offset : offset + _IMPORTED_HISTORY_PART_BYTES]
+            for offset in range(0, len(payload), _IMPORTED_HISTORY_PART_BYTES)
+        )
+        if not parts or len(parts) > _IMPORTED_HISTORY_MAX_PARTS:
+            raise CodexAppServerError("Imported history has too many storage parts")
+        for index, part in enumerate(parts):
+            await self.request(
+                "fs/writeFile",
+                {
+                    "path": _imported_history_part_path(path, index),
+                    "dataBase64": base64.b64encode(part).decode("ascii"),
+                },
+            )
+        manifest = json.dumps(
+            {
+                "schemaVersion": 1,
+                "storage": "chunked",
+                "threadId": self.thread_id,
+                "partCount": len(parts),
+                "sizeBytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
         await self.request(
             "fs/writeFile",
             {
-                "path": _imported_history_path(self.thread_id, self.cwd),
-                "dataBase64": base64.b64encode(payload).decode("ascii"),
+                "path": path,
+                "dataBase64": base64.b64encode(manifest).decode("ascii"),
             },
         )
 
@@ -859,7 +944,11 @@ class CodexAppServerSession:
     ) -> tuple[CodexImportedMessage, ...]:
         for path in _imported_history_read_paths(thread_id, cwd):
             try:
-                result = await self.request("fs/readFile", {"path": path})
+                result = await self.request(
+                    "fs/readFile",
+                    {"path": path},
+                    timeout=_IMPORTED_HISTORY_READ_TIMEOUT_SECONDS,
+                )
             except CodexAppServerError:
                 continue
             encoded = result.get("dataBase64")
@@ -870,9 +959,22 @@ class CodexAppServerSession:
             ):
                 continue
             try:
-                value = json.loads(base64.b64decode(encoded, validate=True))
+                stored = base64.b64decode(encoded, validate=True)
+                value = json.loads(stored)
             except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
                 continue
+            if isinstance(value, dict) and value.get("storage") == "chunked":
+                stored = await self._read_imported_history_parts(
+                    path,
+                    thread_id,
+                    value,
+                )
+                if stored is None:
+                    continue
+                try:
+                    value = json.loads(stored)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
             if (
                 not isinstance(value, dict)
                 or value.get("schemaVersion") not in {1, 2}
@@ -948,6 +1050,53 @@ class CodexAppServerSession:
             if valid and messages:
                 return tuple(messages)
         return ()
+
+    async def _read_imported_history_parts(
+        self,
+        path: str,
+        thread_id: str,
+        manifest: dict[str, object],
+    ) -> bytes | None:
+        part_count = manifest.get("partCount")
+        size_bytes = manifest.get("sizeBytes")
+        digest = manifest.get("sha256")
+        if (
+            manifest.get("schemaVersion") != 1
+            or manifest.get("threadId") != thread_id
+            or not isinstance(part_count, int)
+            or not 1 <= part_count <= _IMPORTED_HISTORY_MAX_PARTS
+            or not isinstance(size_bytes, int)
+            or not 1 <= size_bytes <= _IMPORTED_HISTORY_MAX_BASE64_BYTES
+            or not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        ):
+            return None
+        parts: list[bytes] = []
+        for index in range(part_count):
+            try:
+                result = await self.request(
+                    "fs/readFile",
+                    {"path": _imported_history_part_path(path, index)},
+                    timeout=_IMPORTED_HISTORY_READ_TIMEOUT_SECONDS,
+                )
+            except CodexAppServerError:
+                return None
+            encoded = result.get("dataBase64")
+            if not isinstance(encoded, str) or not encoded:
+                return None
+            try:
+                part = base64.b64decode(encoded, validate=True)
+            except ValueError:
+                return None
+            if not part or len(part) > _IMPORTED_HISTORY_PART_BYTES:
+                return None
+            parts.append(part)
+        payload = b"".join(parts)
+        if len(payload) != size_bytes:
+            return None
+        if not secrets.compare_digest(hashlib.sha256(payload).hexdigest(), digest):
+            return None
+        return payload
 
     async def fork_thread(self) -> CodexThreadSnapshot:
         """Fork and activate the current thread."""
@@ -1144,9 +1293,10 @@ class CodexAppServerSession:
 
     async def _read_messages(self) -> None:
         failure: CodexAppServerError | None = None
+        websocket = self._websocket
         try:
-            assert self._websocket is not None
-            async for raw_message in self._websocket:
+            assert websocket is not None
+            async for raw_message in websocket:
                 if not isinstance(raw_message, str):
                     raise CodexAppServerError(
                         "Codex app-server 返回了不支持的二进制消息。"
@@ -1189,6 +1339,10 @@ class CodexAppServerSession:
                     future.set_exception(failure)
             if self._turn_completion is not None and not self._turn_completion.done():
                 self._turn_completion.set_exception(failure)
+        if self._websocket is websocket:
+            self._websocket = None
+        if self._reader_task is asyncio.current_task():
+            self._reader_task = None
 
     def _handle_response(self, message: dict[str, object]) -> None:
         request_id = message.get("id")
@@ -1932,6 +2086,10 @@ def _imported_history_path(thread_id: str, cwd: str) -> str:
     directory = parent if parent not in {"", "/"} else "/tmp"
     digest = hashlib.sha256(thread_id.encode("utf-8")).hexdigest()[:24]
     return posixpath.join(directory, f".agentkit-studio-history-{digest}.json")
+
+
+def _imported_history_part_path(path: str, index: int) -> str:
+    return f"{path}.part-{index + 1:02d}"
 
 
 def _imported_history_read_paths(thread_id: str, cwd: str) -> tuple[str, ...]:

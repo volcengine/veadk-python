@@ -301,11 +301,8 @@ export function SandboxProjectUploadDialog({
         );
         if (stopped) return;
         setHandoffStatus(value);
-        if (value.state === "completed") return;
-        timer = window.setTimeout(
-          () => void poll(),
-          value.state === "failed" ? 3000 : 1500,
-        );
+        if (value.state === "completed" || value.state === "failed") return;
+        timer = window.setTimeout(() => void poll(), 1500);
         return;
       } catch (cause) {
         if ((cause as Error)?.name === "AbortError" || stopped) return;
@@ -681,7 +678,9 @@ export function SandboxProjectUploadDialog({
           <button type="button" onClick={onClose}>
             关闭
           </button>
-          {handoffStatus?.state === "completed" && handoffStatus.sessionId ? (
+          {(handoffStatus?.state === "running" ||
+            handoffStatus?.state === "completed") &&
+          handoffStatus.sessionId ? (
             <button
               type="button"
               className="is-primary"

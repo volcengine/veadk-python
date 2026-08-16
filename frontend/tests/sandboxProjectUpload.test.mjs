@@ -212,7 +212,7 @@ test("the dialog title shows the Apps SDK UI Beta badge", () => {
   );
 });
 
-test("handoff progress can open the completed Codex session", () => {
+test("handoff progress can open the Codex session as soon as it is running", () => {
   assert.match(dialogSource, /等待端侧请求/);
   assert.match(dialogSource, /创建云端 Session/);
   assert.match(dialogSource, /恢复项目/);
@@ -221,11 +221,7 @@ test("handoff progress can open the completed Codex session", () => {
   assert.match(sandboxClientSource, /\| "running"/);
   assert.match(
     dialogSource,
-    /handoffStatus\?\.state === "completed" && handoffStatus\.sessionId/,
-  );
-  assert.doesNotMatch(
-    dialogSource,
-    /handoffStatus\?\.state === "running" \|\|/,
+    /\(handoffStatus\?\.state === "running" \|\|[\s\S]*?handoffStatus\?\.state === "completed"\)[\s\S]*?handoffStatus\.sessionId/,
   );
   assert.match(dialogSource, /return "云端执行中"/);
   assert.match(dialogSource, /onOpenSession/);
@@ -246,8 +242,7 @@ test("handoff upload and restore failures stop on the restore step", () => {
     dialogSource,
     /status\.failedStage === "uploading-project"[\s\S]*?status\.failedStage === "restoring-project"[\s\S]*?return 2/,
   );
-  assert.match(dialogSource, /value\.state === "failed" \? 3000 : 1500/);
-  assert.doesNotMatch(
+  assert.match(
     dialogSource,
     /value\.state === "completed" \|\| value\.state === "failed"/,
   );

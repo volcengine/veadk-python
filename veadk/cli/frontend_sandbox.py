@@ -56,6 +56,7 @@ from veadk.cli.codex_app_server import (
     CodexModel,
     CodexPermissionSettings,
     CodexSkill,
+    CodexThreadMessage,
     CodexThreadSnapshot,
     CodexThreadSummary,
     CodexTokenUsage,
@@ -116,6 +117,7 @@ _CODEX_PROJECT_HANDOFF_PAIRINGS: dict[str, dict[str, object]] = {}
 _CODEX_PROJECT_HANDOFF_AGENT_NAME_MAX_LENGTH = 12
 _CODEX_PROJECT_HANDOFF_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,64}")
 _CODEX_PROJECT_HANDOFF_HISTORY_MAX_MESSAGES = 100
+_SANDBOX_THREAD_HISTORY_MAX_MESSAGES = 200
 _CODEX_PROJECT_HANDOFF_HISTORY_MAX_MESSAGE_CHARACTERS = 20_000
 _CODEX_PROJECT_HANDOFF_HISTORY_MAX_CHARACTERS = 100_000
 _CODEX_PROJECT_HANDOFF_HISTORY_MAX_IMAGES = 10
@@ -654,6 +656,9 @@ class SandboxConversation:
         default_factory=lambda: time.monotonic() + STUDIO_SANDBOX_TTL_SECONDS
     )
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    pending_prompt: str = ""
+    pending_prompt_timestamp: int = 0
+    background_turn: asyncio.Task[None] | None = None
 
 
 @dataclass(frozen=True)
@@ -694,12 +699,20 @@ class SandboxCodexConnection(Protocol):
         """Whether the first turn has already started."""
         raise NotImplementedError
 
+    async def connect(self) -> None:
+        """Ensure the app-server transport is connected."""
+        raise NotImplementedError
+
     async def stream_turn(
         self, prompt: str, skill_ids: tuple[str, ...] = ()
     ) -> AsyncIterator[CodexAppServerEvent]:
         """Run and stream one turn."""
         if False:
             yield CodexAppServerEvent()
+
+    async def interrupt(self) -> None:
+        """Interrupt the active turn when the user explicitly requests it."""
+        raise NotImplementedError
 
     @property
     def thread_token_total(self) -> CodexTokenUsage | None:
@@ -1578,11 +1591,19 @@ class SandboxConversationService:
         key = (owner_id, session_id)
         existing = self._sessions.get(key)
         if existing is not None:
+            try:
+                await existing.codex.connect()
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
             return existing
         await self.cleanup_expired()
         async with self._registry_lock:
             existing = self._sessions.get(key)
             if existing is not None:
+                try:
+                    await existing.codex.connect()
+                except CodexAppServerError as error:
+                    raise SandboxInvocationError(_safe_error_message(error)) from error
                 return existing
             if len(self._sessions) + self._sessions_starting >= (
                 STUDIO_SANDBOX_MAX_ACTIVE
@@ -1633,37 +1654,99 @@ class SandboxConversationService:
         skill_ids: tuple[str, ...] = (),
     ) -> AsyncIterator[SandboxStreamEvent]:
         session = self._owned(session_id, owner_id)
-        async with session.lock:
+        if session.background_turn is not None and not session.background_turn.done():
+            raise SandboxSessionUnavailableError("当前 Codex 任务仍在运行。")
+        queue: asyncio.Queue[SandboxStreamEvent | SandboxError | None] = asyncio.Queue()
+        listening = True
+
+        async def _run_turn() -> None:
+            nonlocal listening
             try:
-                events = (
-                    session.codex.stream_turn(prompt, skill_ids)
-                    if skill_ids
-                    else session.codex.stream_turn(prompt)
-                )
-                async for event in events:
-                    if event.kind:
-                        yield SandboxStreamEvent(
-                            kind=event.kind,
-                            item_id=event.item_id,
-                            status=event.status,
-                            text=_public_event_text(event.text),
-                            name=_safe_error_message(event.name),
-                            arguments=_safe_public_value(event.arguments),
-                            response=_safe_public_value(event.response),
-                            thread_id=session.codex.thread_id,
-                            approval=(
-                                _safe_public_value(event.approval.public_dict())
-                                if event.approval is not None
-                                else None
-                            ),
-                            approval_resolved_id=(event.approval_resolved_id),
-                            turn_id=event.turn_id,
-                            usage=event.usage,
-                            thread_total=event.thread_total,
-                            model_context_window=event.model_context_window,
+                async with session.lock:
+                    session.pending_prompt = prompt
+                    session.pending_prompt_timestamp = int(time.time() * 1_000)
+                    try:
+                        events = (
+                            session.codex.stream_turn(prompt, skill_ids)
+                            if skill_ids
+                            else session.codex.stream_turn(prompt)
                         )
+                        async for event in events:
+                            if event.kind and listening:
+                                queue.put_nowait(
+                                    SandboxStreamEvent(
+                                        kind=event.kind,
+                                        item_id=event.item_id,
+                                        status=event.status,
+                                        text=_public_event_text(event.text),
+                                        name=_safe_error_message(event.name),
+                                        arguments=_safe_public_value(event.arguments),
+                                        response=_safe_public_value(event.response),
+                                        thread_id=session.codex.thread_id,
+                                        approval=(
+                                            _safe_public_value(
+                                                event.approval.public_dict()
+                                            )
+                                            if event.approval is not None
+                                            else None
+                                        ),
+                                        approval_resolved_id=(
+                                            event.approval_resolved_id
+                                        ),
+                                        turn_id=event.turn_id,
+                                        usage=event.usage,
+                                        thread_total=event.thread_total,
+                                        model_context_window=(
+                                            event.model_context_window
+                                        ),
+                                    )
+                                )
+                    finally:
+                        session.pending_prompt = ""
+                        session.pending_prompt_timestamp = 0
             except CodexAppServerError as error:
-                raise SandboxInvocationError(_safe_error_message(error)) from error
+                if listening:
+                    queue.put_nowait(SandboxInvocationError(_safe_error_message(error)))
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001 - background task boundary
+                if listening:
+                    queue.put_nowait(SandboxInvocationError(_safe_error_message(error)))
+            finally:
+                if listening:
+                    queue.put_nowait(None)
+
+        turn = asyncio.create_task(
+            _run_turn(),
+            name=f"sandbox-turn-{session_id}",
+        )
+        session.background_turn = turn
+
+        def _release_turn(task: asyncio.Task[None]) -> None:
+            if session.background_turn is task:
+                session.background_turn = None
+            if not task.cancelled():
+                task.exception()
+
+        turn.add_done_callback(_release_turn)
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    return
+                if isinstance(event, SandboxError):
+                    raise event
+                yield event
+        finally:
+            listening = False
+
+    async def interrupt(self, session_id: str, owner_id: str) -> None:
+        """Stop a turn only after an explicit user action."""
+        session = self._owned(session_id, owner_id)
+        try:
+            await session.codex.interrupt()
+        except CodexAppServerError as error:
+            raise SandboxInvocationError(_safe_error_message(error)) from error
 
     def settings(self, session_id: str, owner_id: str) -> dict[str, object]:
         """Return the current permissions, workspace, and lock state."""
@@ -1751,45 +1834,63 @@ class SandboxConversationService:
     def _public_snapshot(
         self, session: SandboxConversation, snapshot: CodexThreadSnapshot
     ) -> dict[str, object]:
-        value = _safe_public_value(snapshot.public_dict(session.codex.permissions))
+        raw_value = snapshot.public_dict(session.codex.permissions)
+        raw_value.pop("messages", None)
+        value = _safe_public_value(raw_value)
         if not isinstance(value, dict):
             raise SandboxInvocationError("Codex Thread 响应格式无效。")
-        public_messages = value.get("messages")
-        if isinstance(public_messages, list):
-            for public_message, message in zip(
-                public_messages,
-                snapshot.messages,
-                strict=False,
-            ):
-                if not message.images or not isinstance(public_message, dict):
-                    continue
-                public_message["images"] = [
+        value["messages"] = [
+            {
+                "id": _redact_public_text(message.id, maximum=500),
+                "role": message.role,
+                "content": _redact_public_text(message.content, maximum=20_000),
+                "timestamp": message.timestamp,
+                **(
                     {
-                        "mimeType": image.mime_type,
-                        "data": image.data,
-                        **(
-                            {
-                                "name": _redact_public_text(
-                                    image.name,
-                                    maximum=255,
-                                )
-                            }
-                            if image.name
-                            else {}
-                        ),
-                        **(
-                            {
-                                "alt": _redact_public_text(
-                                    image.alt,
-                                    maximum=500,
-                                )
-                            }
-                            if image.alt
-                            else {}
-                        ),
+                        "skillNames": [
+                            _redact_public_text(name, maximum=200)
+                            for name in message.skill_names
+                        ]
                     }
-                    for image in message.images
-                ]
+                    if message.skill_names
+                    else {}
+                ),
+                **(
+                    {
+                        "images": [
+                            {
+                                "mimeType": image.mime_type,
+                                "data": image.data,
+                                **(
+                                    {
+                                        "name": _redact_public_text(
+                                            image.name,
+                                            maximum=255,
+                                        )
+                                    }
+                                    if image.name
+                                    else {}
+                                ),
+                                **(
+                                    {
+                                        "alt": _redact_public_text(
+                                            image.alt,
+                                            maximum=500,
+                                        )
+                                    }
+                                    if image.alt
+                                    else {}
+                                ),
+                            }
+                            for image in message.images
+                        ]
+                    }
+                    if message.images
+                    else {}
+                ),
+            }
+            for message in snapshot.messages[-_SANDBOX_THREAD_HISTORY_MAX_MESSAGES:]
+        ]
         return value
 
     async def new_thread(self, session_id: str, owner_id: str) -> dict[str, object]:
@@ -1847,6 +1948,27 @@ class SandboxConversationService:
             raise SandboxValidationError(str(error)) from error
         except CodexAppServerError as error:
             raise SandboxInvocationError(_safe_error_message(error)) from error
+        pending_prompt = session.pending_prompt
+        pending_timestamp = session.pending_prompt_timestamp
+        if pending_prompt and not any(
+            message.role == "user"
+            and message.content == pending_prompt
+            and message.timestamp >= pending_timestamp - 2_000
+            for message in snapshot.messages[-4:]
+        ):
+            snapshot = replace(
+                snapshot,
+                messages=snapshot.messages
+                + (
+                    CodexThreadMessage(
+                        id=f"pending-{thread_id}-{pending_timestamp}",
+                        role="user",
+                        content=pending_prompt,
+                        timestamp=pending_timestamp,
+                    ),
+                ),
+                workspace_locked=True,
+            )
         return self._public_snapshot(session, snapshot)
 
     async def inject_history(
@@ -2061,6 +2183,8 @@ class SandboxConversationService:
     async def close(self, session_id: str, owner_id: str) -> None:
         """Disconnect the local bridge without deleting the cloud Session."""
         session = self._owned(session_id, owner_id)
+        if session.background_turn is not None and not session.background_turn.done():
+            return
         async with session.lock:
             self._sessions.pop((owner_id, session_id), None)
             await session.codex.close()
@@ -3832,6 +3956,16 @@ def mount_sandbox_routes(
         except SandboxError as error:
             raise _http_error(error) from error
         return {"disconnected": True}
+
+    @app.post("/web/sandbox/sessions/{session_id}/interrupt")
+    async def _interrupt_sandbox_session(
+        session_id: str, request: Request
+    ) -> dict[str, bool]:
+        try:
+            await service.interrupt(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"interrupted": True}
 
     @app.delete("/web/sandbox/sessions/{session_id}")
     async def _delete_sandbox_session(

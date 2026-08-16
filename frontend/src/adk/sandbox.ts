@@ -436,6 +436,10 @@ export interface AgentKitSandboxClient {
     sessionId: string,
     options?: SandboxRequestOptions,
   ): Promise<void>;
+  interruptSession(
+    sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<void>;
   deleteSession(
     sessionId: string,
     options?: SandboxRequestOptions,
@@ -1679,6 +1683,21 @@ export const sandboxClient: AgentKitSandboxClient = {
     );
     if (!response.ok && response.status !== 404) {
       throw await responseError(response, "无法断开 Codex 智能体连接。");
+    }
+  },
+
+  async interruptSession(sessionId, options = {}) {
+    if (!sessionId) return;
+    const response = await fetch(
+      withAuth(`${SANDBOX_API}/${encodeURIComponent(sessionId)}/interrupt`),
+      {
+        method: "POST",
+        headers: sandboxHeaders(),
+        signal: requestSignal(options.signal, CLOSE_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok && response.status !== 404) {
+      throw await responseError(response, "无法停止 Codex 任务。");
     }
   },
 

@@ -330,6 +330,23 @@ async function loadSandboxThreadHistory(
   return sandboxClient.resumeThread(session.id, latest.id);
 }
 
+function sandboxSnapshotTurnsForStatus(
+  snapshot: SandboxThreadSnapshot,
+  busy: boolean,
+): Turn[] {
+  const snapshotTurns = sandboxSnapshotTurns(snapshot);
+  const lastTurn = snapshotTurns[snapshotTurns.length - 1];
+  if (!busy || lastTurn?.role !== "user") return snapshotTurns;
+  return [
+    ...snapshotTurns,
+    {
+      role: "assistant",
+      blocks: [],
+      meta: { localId: `sandbox-background-${snapshot.threadId}` },
+    },
+  ];
+}
+
 function activeWorkspaceDraftKey(userId: string): string {
   return `${workspaceDraftsKey(userId)}.active`;
 }
@@ -1478,6 +1495,72 @@ export default function App() {
     },
     onError: setError,
   });
+  useEffect(() => {
+    const activeSession = sandboxSession;
+    if (!activeSession || !sandboxBusy || sandboxMessageAbortRef.current) return;
+    let stopped = false;
+    let timer: number | undefined;
+    const controller = new AbortController();
+
+    const syncBackgroundTurn = async () => {
+      try {
+        const status = await sandboxClient.getStatus(activeSession.id, {
+          signal: controller.signal,
+        });
+        if (stopped || sandboxSessionIdRef.current !== activeSession.id) return;
+        const snapshot = status.threadId
+          ? await sandboxClient.readThread(activeSession.id, status.threadId, {
+              signal: controller.signal,
+            })
+          : null;
+        if (stopped || sandboxSessionIdRef.current !== activeSession.id) return;
+        if (snapshot) {
+          setSandboxTurns(sandboxSnapshotTurnsForStatus(snapshot, status.busy));
+        }
+        setSandboxSession((current) =>
+          current?.id === activeSession.id
+            ? {
+                ...current,
+                ...status,
+                ...(snapshot
+                  ? {
+                      threadId: snapshot.threadId,
+                      cwd: snapshot.cwd ?? status.cwd,
+                      model: snapshot.model ?? status.model,
+                      workspaceLocked: snapshot.workspaceLocked,
+                      permissions: snapshot.permissions,
+                    }
+                  : {}),
+              }
+            : current
+        );
+        setSandboxBusy(status.busy);
+        if (!status.busy) {
+          const lastMessage = snapshot?.messages[snapshot.messages.length - 1];
+          if (lastMessage?.role === "user") {
+            setError("云端 Codex 已结束，但没有生成回复，请重新发送任务。");
+          }
+          return;
+        }
+      } catch (cause) {
+        if ((cause as Error)?.name === "AbortError" || stopped) return;
+        setSandboxBusy(false);
+        setSandboxSession((current) =>
+          current?.id === activeSession.id ? { ...current, busy: false } : current
+        );
+        setError(cause instanceof Error ? cause.message : String(cause));
+        return;
+      }
+      timer = window.setTimeout(syncBackgroundTurn, 1500);
+    };
+
+    timer = window.setTimeout(syncBackgroundTurn, 1500);
+    return () => {
+      stopped = true;
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [sandboxBusy, sandboxSession?.id]);
   const activeAgent = activeAgentBySession[sessionId] ?? "";
   const seenAgents = seenAgentsBySession[sessionId] ?? EMPTY_STRING_SET;
   const execPath = execPathBySession[sessionId] ?? EMPTY_STRING_ARR;
@@ -3063,7 +3146,7 @@ export default function App() {
         setInvocation(emptyInvocation());
         releaseAllSandboxPreviews();
         if (snapshot) {
-          setSandboxTurns(sandboxSnapshotTurns(snapshot));
+          setSandboxTurns(sandboxSnapshotTurnsForStatus(snapshot, connected.busy));
           setSandboxSession({
             ...connected,
             threadId: snapshot.threadId,
@@ -3076,6 +3159,7 @@ export default function App() {
           setSandboxTurns([]);
           setSandboxSession(connected);
         }
+        setSandboxBusy(connected.busy);
         setSandboxAgentDetailTarget(null);
         setSandboxAgentWorkspace(null);
         setMyAgents(false);
@@ -3458,7 +3542,13 @@ export default function App() {
   }
 
   function stopSandboxGeneration() {
+    const activeSessionId = sandboxSession?.id;
     sandboxMessageAbortRef.current?.abort();
+    if (activeSessionId) {
+      void sandboxClient
+        .interruptSession(activeSessionId)
+        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    }
   }
 
   async function sendSandboxMessage(

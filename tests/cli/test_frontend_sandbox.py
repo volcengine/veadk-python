@@ -77,6 +77,9 @@ class _FakeCodex:
         self.selected_skill_ids: tuple[str, ...] = ()
         self.imported_history: tuple[CodexImportedMessage, ...] = ()
 
+    async def connect(self) -> None:
+        return None
+
     async def stream_turn(
         self, prompt: str, skill_ids: tuple[str, ...] = ()
     ) -> AsyncIterator[CodexAppServerEvent]:
@@ -129,6 +132,9 @@ class _FakeCodex:
                 )
         finally:
             self.active = False
+
+    async def interrupt(self) -> None:
+        self.active = False
 
     async def list_models(self) -> tuple[CodexModel, ...]:
         return (
@@ -872,12 +878,13 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sandbox_client_disconnect_interrupts_only_the_active_turn() -> None:
+async def test_sandbox_client_disconnect_keeps_the_cloud_turn_running() -> None:
     class _CancellableCodex(_FakeCodex):
         def __init__(self, turns: list[str]) -> None:
             super().__init__(turns)
             self.partial_sent = asyncio.Event()
-            self.cancelled = asyncio.Event()
+            self.release = asyncio.Event()
+            self.settled = asyncio.Event()
 
         async def stream_turn(
             self, prompt: str, skill_ids: tuple[str, ...] = ()
@@ -890,10 +897,11 @@ async def test_sandbox_client_disconnect_interrupts_only_the_active_turn() -> No
             try:
                 yield CodexAppServerEvent(kind="text", text="partial")
                 self.partial_sent.set()
-                await asyncio.Event().wait()
+                await self.release.wait()
+                yield CodexAppServerEvent(kind="text", text="completed")
             finally:
                 self.active = False
-                self.cancelled.set()
+                self.settled.set()
 
     class _CancellableGateway(_FakeGateway):
         async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
@@ -945,15 +953,68 @@ async def test_sandbox_client_disconnect_interrupts_only_the_active_turn() -> No
         send,
     )
 
-    await asyncio.wait_for(connection.cancelled.wait(), timeout=1)
     assert any(b"partial" in message.get("body", b"") for message in response_messages)
-    assert connection.active is False
+    assert connection.active is True
+    assert connection.settled.is_set() is False
     assert connection.closed is False
+    connection.release.set()
+    await asyncio.wait_for(connection.settled.wait(), timeout=1)
+    assert connection.active is False
     follow_up = [
         event
         async for event in service.stream_message("remote-existing", "alice", "again")
     ]
     assert [event.text for event in follow_up] == ["reply:again"]
+
+
+@pytest.mark.asyncio
+async def test_read_thread_exposes_pending_prompt_while_turn_is_running() -> None:
+    class _PendingCodex(_FakeCodex):
+        def __init__(self, turns: list[str]) -> None:
+            super().__init__(turns)
+            self.release = asyncio.Event()
+
+        async def stream_turn(
+            self, prompt: str, skill_ids: tuple[str, ...] = ()
+        ) -> AsyncIterator[CodexAppServerEvent]:
+            del prompt, skill_ids
+            self.active = True
+            self.workspace_locked = True
+            try:
+                yield CodexAppServerEvent(kind="thinking", status="running")
+                await self.release.wait()
+            finally:
+                self.active = False
+
+    class _PendingGateway(_FakeGateway):
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            del session
+            connection = _PendingCodex(self.thread_ids)
+            self.connections.append(connection)
+            return connection
+
+    service = SandboxConversationService(_PendingGateway(), tool_id="tool-studio")
+    await service.connect("remote-existing", "alice")
+    events = service.stream_message("remote-existing", "alice", "继续")
+
+    first = await anext(events)
+    assert first.kind == "thinking"
+    with pytest.raises(frontend_sandbox.SandboxSessionUnavailableError):
+        await anext(service.stream_message("remote-existing", "alice", "重复发送"))
+    snapshot = await service.read_thread("remote-existing", "alice", "thread-1")
+    assert snapshot["messages"][-1]["role"] == "user"
+    assert snapshot["messages"][-1]["content"] == "继续"
+
+    await events.aclose()
+    connection = service._owned("remote-existing", "alice").codex
+    assert isinstance(connection, _PendingCodex)
+    assert connection.active is True
+    connection.release.set()
+    background_turn = service._owned("remote-existing", "alice").background_turn
+    assert background_turn is not None
+    await background_turn
+    settled = await service.read_thread("remote-existing", "alice", "thread-1")
+    assert settled["messages"][-1]["role"] == "assistant"
 
 
 def test_sandbox_routes_select_and_resolve_both_tool_variants() -> None:
@@ -1558,6 +1619,33 @@ def test_public_thread_snapshot_preserves_validated_imported_image_data() -> Non
             "alt": "端云接力界面",
         }
     ]
+
+
+def test_public_thread_snapshot_keeps_complete_handoff_history_and_pending_turn() -> (
+    None
+):
+    snapshot = CodexThreadSnapshot(
+        thread=CodexThreadSummary(id="thread-1"),
+        messages=tuple(
+            CodexThreadMessage(
+                id=f"message-{index}",
+                role="user" if index % 2 == 0 else "assistant",
+                content="继续" if index == 100 else f"message {index}",
+                timestamp=index,
+            )
+            for index in range(101)
+        ),
+    )
+    service = SandboxConversationService(_FakeGateway(), tool_id="tool-studio")
+    session = SimpleNamespace(
+        codex=SimpleNamespace(permissions=CodexPermissionSettings())
+    )
+
+    value = service._public_snapshot(session, snapshot)
+
+    assert len(value["messages"]) == 101
+    assert value["messages"][0]["content"] == "message 0"
+    assert value["messages"][-1]["content"] == "继续"
 
 
 def test_codex_project_handoff_rejects_invalid_and_expired_pairing_code(

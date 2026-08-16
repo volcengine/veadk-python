@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -500,6 +501,104 @@ async def test_clean_socket_close_rejects_pending_requests() -> None:
 
 
 @pytest.mark.asyncio
+async def test_clean_socket_close_reconnects_and_resumes_existing_thread() -> None:
+    first = _FakeWebSocket()
+    second = _FakeWebSocket()
+    sockets = [first, second]
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return sockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=factory,
+    )
+    await session.connect()
+    await first.queue.put(None)
+    assert session._reader_task is not None
+    await session._reader_task
+
+    await session.connect()
+
+    resumed = [
+        message
+        for message in second.messages
+        if message.get("method") == "thread/resume"
+    ]
+    assert resumed[0]["params"]["threadId"] == "thread-1"
+    assert not any(
+        message.get("method") == "thread/start" for message in second.messages
+    )
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_request_reconnects_before_reading_thread_after_socket_close() -> None:
+    first = _FakeWebSocket()
+    second = _FakeWebSocket()
+    sockets = [first, second]
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return sockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=factory,
+    )
+    await session.connect()
+    await first.queue.put(None)
+    assert session._reader_task is not None
+    await session._reader_task
+
+    snapshot = await session.read_thread("thread-1")
+
+    assert snapshot.thread.id == "thread-1"
+    assert [message.content for message in snapshot.messages] == [
+        "inspect this",
+        "Looks good.",
+    ]
+    assert [message.get("method") for message in second.messages[:4]] == [
+        "initialize",
+        "initialized",
+        "thread/resume",
+        "thread/read",
+    ]
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_starts_fresh_thread_when_active_rollout_is_missing() -> None:
+    first = _FakeWebSocket()
+    second = _MissingRolloutWebSocket()
+    sockets = [first, second]
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return sockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=factory,
+    )
+    await session.connect()
+    session.thread_id = "thread-empty"
+    await first.queue.put(None)
+    assert session._reader_task is not None
+    await session._reader_task
+
+    snapshot = await session.read_thread("thread-old")
+
+    assert snapshot.thread.id == "thread-old"
+    assert [message.get("method") for message in second.messages[:5]] == [
+        "initialize",
+        "initialized",
+        "thread/resume",
+        "thread/start",
+        "thread/read",
+    ]
+    await session.close()
+
+
+@pytest.mark.asyncio
 async def test_send_failure_preserves_transport_error_as_cause() -> None:
     websocket = _SendFailureWebSocket()
     session = CodexAppServerSession(
@@ -754,6 +853,83 @@ async def test_inject_history_uses_model_visible_items_without_starting_turn() -
         ("assistant", "已定位重试逻辑。"),
     ]
     assert snapshot.messages[0].images[0].name == "handoff.png"
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_imported_history_survives_app_server_transport_reconnect() -> None:
+    first = _FakeWebSocket()
+    second = _FakeWebSocket()
+    sockets = [first, second]
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return sockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=factory,
+    )
+    await session.connect()
+    imported = (
+        CodexImportedMessage(role="user", content="端侧历史"),
+        CodexImportedMessage(role="assistant", content="历史回复"),
+    )
+    await session.inject_history(imported)
+    await first.queue.put(None)
+    assert session._reader_task is not None
+    await session._reader_task
+
+    snapshot = await session.read_thread("thread-1")
+
+    assert [(message.role, message.content) for message in snapshot.messages] == [
+        ("user", "端侧历史"),
+        ("assistant", "历史回复"),
+        ("user", "inspect this"),
+        ("assistant", "Looks good."),
+    ]
+    assert not any(
+        message.get("method") == "fs/readFile" for message in second.messages
+    )
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_persisted_imported_history_is_chunked_and_restored() -> None:
+    websocket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+    image_data = base64.b64encode(
+        b"\x89PNG\r\n\x1a\n" + b"\0" * (2 * 1024 * 1024)
+    ).decode("ascii")
+    imported = (
+        CodexImportedMessage(
+            role="user",
+            content="包含大图的端侧历史",
+            images=(CodexImportedImage(mime_type="image/png", data=image_data),),
+        ),
+        CodexImportedMessage(role="assistant", content="历史回复"),
+    )
+
+    await session.inject_history(imported)
+    session._imported_history_by_thread.clear()
+    snapshot = await session.read_thread("thread-1")
+
+    assert snapshot.messages[0].content == "包含大图的端侧历史"
+    assert snapshot.messages[0].images[0].data == image_data
+    history_paths = tuple(
+        path for path in websocket.files if ".agentkit-studio-history-" in path
+    )
+    assert any(path.endswith(".part-01") for path in history_paths)
+    assert any(path.endswith(".part-02") for path in history_paths)
+    manifest_path = next(path for path in history_paths if path.endswith(".json"))
+    manifest = json.loads(
+        base64.b64decode(websocket.files[manifest_path], validate=True)
+    )
+    assert manifest["storage"] == "chunked"
+    assert manifest["partCount"] == 6
     await session.close()
 
 
