@@ -54,17 +54,25 @@ const errorDetailsSource = readFileSync(
   new URL("../src/ui/skills/SkillErrorDetails.tsx", import.meta.url),
   "utf8",
 );
+const resourceCardSource = readFileSync(
+  new URL("../src/ui/LibraryResourceCard.tsx", import.meta.url),
+  "utf8",
+);
+const resourceCardStylesSource = readFileSync(
+  new URL("../src/ui/LibraryResourceCard.css", import.meta.url),
+  "utf8",
+);
 test("skill center uses the Studio page shell and opens spaces as a detail page", () => {
   assert.doesNotMatch(skillCenterSource, /Find Skill|findskill|SKILL_URL|skill-frame/);
   assert.match(skillCenterSource, /defaultCloudRegion\(cloudProvider\)/);
   assert.match(skillCenterSource, /cloudRegionOptions\(cloudProvider\)/);
   assert.match(skillCenterSource, /Promise\.allSettled\(requests\.map/);
   assert.doesNotMatch(skillCenterSource, /changeRegion\(|skillcenter-region-pills/);
-  assert.match(skillCenterSource, /<h1>技能<\/h1>/);
-  assert.match(skillCenterSource, /管理您的 Skill 空间，创建、查看和优化技能/);
+  assert.doesNotMatch(skillCenterSource, /<h1>技能<\/h1>/);
+  assert.match(skillCenterSource, /skillcenter-list-toolbar library-resource-toolbar/);
   assert.match(skillCenterSource, /className="my-agent-search"/);
   assert.match(skillCenterSource, /className="my-agent-grid"/);
-  assert.match(skillCenterSource, /className="my-agent-card skillcenter-space-card"/);
+  assert.match(skillCenterSource, /<LibraryResourceCard[\s\S]*?className="skillcenter-space-card"/);
   assert.match(skillCenterSource, /className="skillcenter-page-heading skillcenter-page-heading--back"/);
   assert.doesNotMatch(skillCenterSource, /skillcenter-browser|点击 Skill 空间以查看详情/);
   assert.doesNotMatch(skillCenterSource, /items\[0\]/);
@@ -80,6 +88,9 @@ test("space and skill requests are paged server-side without sending browser cre
   assert.match(skillCenterSource, /spaceRegions\.map\(\(region\) => \(\{ region, page: 1 \}\)\)/);
   assert.match(skillCenterSource, /new IntersectionObserver\(/);
   assert.match(skillCenterSource, /rootMargin: "240px 0px"/);
+  assert.match(skillCenterSource, /active = true/);
+  assert.match(skillCenterSource, /activationRevision = 0/);
+  assert.match(skillCenterSource, /\[active, activationRevision, fetchSpacePages, spaceRegions, spaceRevision\]/);
   assert.doesNotMatch(skillCenterSource, /<Pager page=\{spacePage\}/);
   assert.match(skillCenterSource, /<Pager page=\{skillPage\}/);
   assert.doesNotMatch(skillCenterSource, /VOLCENGINE_ACCESS_KEY|VOLCENGINE_SECRET_KEY/);
@@ -123,23 +134,24 @@ test("skill details render external markdown with raw HTML disabled", () => {
   assert.match(skillCenterSource, /selectedSpace\?\.region \|\| defaultCloudRegion\(cloudProvider\)/);
 });
 
-test("skills navigation sits immediately below agents", () => {
+test("Library navigation replaces Skills immediately below agents", () => {
   const agents = sidebarSource.indexOf('className={`new-chat new-chat--agents');
-  const skills = sidebarSource.indexOf('className={`new-chat new-chat--skills');
-  const search = sidebarSource.indexOf('{show("search")', skills);
+  const library = sidebarSource.indexOf('className={`new-chat new-chat--library');
+  const search = sidebarSource.indexOf('{show("search")', library);
 
-  assert.ok(agents >= 0 && skills > agents);
-  assert.ok(search > skills);
+  assert.ok(agents >= 0 && library > agents);
+  assert.ok(search > library);
   assert.match(
     sidebarSource,
-    /import \{ ToolsSkills \} from "@openai\/apps-sdk-ui\/components\/Icon"/,
+    /import \{ BookOpen \} from "@openai\/apps-sdk-ui\/components\/Icon";/,
   );
+  assert.doesNotMatch(sidebarSource, /function LibraryIcon/);
   assert.match(
     sidebarSource.slice(agents, search),
-    /<ToolsSkills className="icon" aria-hidden="true" \/>/,
+    /<BookOpen className="icon" \/>/,
   );
   assert.doesNotMatch(sidebarSource.slice(agents, search), /sidebar-nav-slot/);
-  assert.match(sidebarSource.slice(agents, search), />技能<\/span>/);
+  assert.match(sidebarSource.slice(agents, search), />库<\/span>/);
 });
 
 test("Skill workbench supports one to three independent model and style groups", () => {
@@ -226,8 +238,9 @@ test("managed Skill APIs cover space creation, archives, deletion, and full file
   assert.match(managementClientSource, /export async function downloadManagedSkillArchive/);
   assert.match(managementDialogsSource, /await validateSkillArchive\(selected\)/);
   assert.match(managementDialogsSource, /export function EditSkillSpaceDialog/);
-  assert.match(skillCenterSource, /role="menuitem"[^>]*>编辑空间<\/button>/);
-  assert.match(skillCenterSource, /role="menuitem"[^>]*>删除空间<\/button>/);
+  assert.match(skillCenterSource, /label: "编辑空间"/);
+  assert.match(skillCenterSource, /label: "删除空间"/);
+  assert.match(resourceCardSource, /role="menuitem"/);
   assert.match(managementDialogsSource, /不会自动上传/);
   assert.match(managementDialogsSource, /!validation \|\| validating \|\| submitting/);
 });
@@ -235,22 +248,22 @@ test("managed Skill APIs cover space creation, archives, deletion, and full file
 test("skill pages match the Studio page spacing, search, and card grid", () => {
   assert.match(skillStylesSource, /\.skillcenter\s*\{[^}]*overflow:\s*hidden;[^}]*padding:\s*32px 32px 0;/);
   assert.match(skillCenterSource, /import "\.\/MyAgents\.css"/);
-  assert.match(skillCenterSource, /className="my-agents-header"/);
+  assert.doesNotMatch(skillCenterSource, /className="my-agents-header"/);
   assert.match(skillCenterSource, /className="my-agent-results"[\s\S]{0,120}ref=\{spaceResultsRef\}/);
   assert.match(myAgentsStylesSource, /\.my-agent-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fill, minmax\(min\(280px, 100%\), 1fr\)\);/);
   assert.match(myAgentsStylesSource, /\.my-agent-card-content\s*\{[^}]*border-radius:\s*12px;/);
-  assert.match(skillStylesSource, /\.my-agent-card\.skillcenter-space-card:hover\s*\{\s*transform:\s*none;/);
-  assert.doesNotMatch(skillStylesSource, /\.my-agent-card\.skillcenter-space-card:hover \.my-agent-card-content/);
+  assert.match(resourceCardStylesSource, /\.my-agent-card\.library-resource-card:hover\s*\{[^}]*transform:\s*none;/);
   assert.doesNotMatch(stylesSource, /\.skillcenter-browser\s*\{/);
 });
 
 test("Skill space cards keep menus usable and load more while scrolling", () => {
   assert.match(skillCenterSource, /onScroll=\{handleSpaceResultsScroll\}/);
   assert.match(skillCenterSource, /results\.scrollHeight - results\.scrollTop - results\.clientHeight <= 240/);
-  assert.match(skillCenterSource, /event\.stopPropagation\(\);\s*setOpenSpaceMenuId/);
-  assert.match(skillCenterSource, /onPointerDown=\{\(event\) => event\.stopPropagation\(\)\}/);
-  assert.match(skillStylesSource, /\.my-agent-card\.skillcenter-space-card\s*\{\s*overflow:\s*visible;/);
-  assert.match(skillStylesSource, /\.my-agent-actions\.skillcenter-card-actions\s*\{[^}]*z-index:\s*2;/);
+  assert.match(skillCenterSource, /menuLabel=\{`更多空间操作：\$\{space\.name\}`\}/);
+  assert.match(resourceCardSource, /window\.addEventListener\("pointerdown", closeMenu\)/);
+  assert.match(resourceCardSource, /event\.key === "Escape"/);
+  assert.match(resourceCardStylesSource, /\.library-resource-card\s*\{[^}]*overflow:\s*visible;/);
+  assert.match(resourceCardStylesSource, /\.library-resource-card__actions\s*\{[^}]*z-index:\s*2;/);
 });
 
 test("Skill upload uses a large drag-and-drop target", () => {
@@ -269,19 +282,18 @@ test("Skill pages avoid decorative icons and use a semantic table", () => {
   assert.doesNotMatch(skillCenterSource, /<th scope="col">版本<\/th>/);
   assert.match(skillCenterSource, /className="skillcenter-table__version-badge"/);
   assert.match(skillCenterSource, /className="skillcenter-detail-facts"/);
-  assert.match(skillCenterSource, /<dl className="my-agent-meta">/);
+  assert.match(resourceCardSource, /<dl className="my-agent-meta">/);
   assert.doesNotMatch(skillCenterSource, /from "lucide-react"/);
 });
 
 test("skill space cards expose direct actions and structured metadata", () => {
-  assert.match(skillCenterSource, /className="my-agent-actions skillcenter-card-actions"/);
-  assert.match(skillCenterSource, />添加技能<\/button>/);
-  assert.match(skillCenterSource, />查看详情<\/button>/);
-  assert.match(skillCenterSource, /aria-label=\{`更多空间操作：\$\{space\.name\}`\}/);
-  assert.match(skillCenterSource, /role="menu" aria-label=\{`\$\{space\.name\}空间操作`\}/);
+  assert.match(skillCenterSource, /secondaryAction=\{\{ label: "添加技能"/);
+  assert.match(skillCenterSource, /primaryAction=\{\{ label: "查看详情"/);
+  assert.match(skillCenterSource, /menuLabel=\{`更多空间操作：\$\{space\.name\}`\}/);
+  assert.match(skillCenterSource, /menuAriaLabel=\{`\$\{space\.name\}空间操作`\}/);
   assert.doesNotMatch(skillCenterSource, /<small>地域<\/small>/);
-  assert.match(skillCenterSource, /<dt>技能数量<\/dt><dd>/);
-  assert.match(skillCenterSource, /<dt>更新时间<\/dt><dd>/);
+  assert.match(skillCenterSource, /label: "技能数量"/);
+  assert.match(skillCenterSource, /label: "更新时间"/);
   assert.doesNotMatch(skillCenterSource, /<small>Project<\/small>/);
   assert.doesNotMatch(skillCenterSource, /<span>地域<\/span>/);
   const detailToolbarStart = skillCenterSource.indexOf('className="skillcenter-detail-facts"');
@@ -296,8 +308,8 @@ test("Skill running states, actions, and candidate loading use the requested vis
   assert.doesNotMatch(skillStylesSource, /\.skillcenter-space-card\s*\{[^}]*min-height:\s*196px/);
   assert.match(skillStylesSource, /\.skillcenter-primary-action,[\s\S]*?height:\s*36px/);
   assert.match(skillStylesSource, /\.skillcenter-primary-action,[\s\S]*?box-sizing:\s*border-box/);
-  assert.match(skillStylesSource, /\.my-agent-actions\.skillcenter-card-actions\s*\{[^}]*grid-template-columns:/);
-  assert.match(myAgentsStylesSource, /\.my-agent-actions button\s*\{[^}]*min-height:\s*28px/);
+  assert.match(resourceCardStylesSource, /\.library-resource-card__actions\s*\{[^}]*grid-template-columns:/);
+  assert.match(resourceCardStylesSource, /\.library-resource-card \.library-resource-card__action\s*\{[^}]*min-height:\s*28px;[^}]*font-size:\s*12px;/);
   assert.match(generationSource, /className="skill-generation__spinner"/);
   assert.match(generationSource, /className="skill-generation__summary-row"><span>风格<\/span>/);
   assert.match(generationSource, /className="skill-generation__summary-row"><span>模型<\/span>/);

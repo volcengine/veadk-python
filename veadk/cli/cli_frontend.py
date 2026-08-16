@@ -24,6 +24,7 @@ runtimes (the UI is still served).
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -1655,6 +1656,97 @@ def _run_frontend_server(
         if provider == "volcengine" and candidate.startswith("ap-"):
             return _default_cloud_region()
         return candidate or _default_cloud_region()
+
+    def _knowledge_regions() -> tuple[str, ...]:
+        return (
+            ("ap-southeast-1",)
+            if provider == "byteplus"
+            else ("cn-beijing", "cn-shanghai")
+        )
+
+    def _knowledge_create_regions() -> tuple[str, ...]:
+        return ("ap-southeast-1",) if provider == "byteplus" else ("cn-beijing",)
+
+    from frontend.server.knowledge import (
+        KnowledgeIdentity,
+        KnowledgeService,
+        SdkAgentKitKnowledgeGateway,
+        TosKnowledgeUploadStore,
+        VikingKnowledgeBaseProvisioner,
+        build_viking_document_gateway_factory,
+        mount_knowledge_routes,
+    )
+
+    def _knowledge_identity(request: Request) -> KnowledgeIdentity:
+        principal = _current_principal(request)
+        if access_policy.enabled and principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        owner_id = principal.owner_id if principal is not None else "local"
+        owner_label = (
+            (principal.display_name or principal.owner_id).strip()
+            if principal is not None
+            else "local"
+        )
+        role = access_policy.role_for(principal)
+        return KnowledgeIdentity(
+            owner_id=owner_id,
+            owner_label=owner_label,
+            is_admin=role == StudioRole.ADMIN,
+            can_bind_provider=role in (StudioRole.ADMIN, StudioRole.DEVELOPER),
+        )
+
+    def _knowledge_signing_key() -> bytes:
+        explicit = os.getenv("VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY", "").strip()
+        if explicit:
+            return explicit.encode("utf-8")
+        oauth_secret = os.getenv("OAUTH2_CLIENT_SECRET", "").strip()
+        if oauth_secret:
+            return oauth_secret.encode("utf-8")
+        try:
+            _, cloud_secret, _ = _resolve_ve_credentials()
+        except HTTPException:
+            # Keep Studio bootable without cloud credentials. Knowledge writes
+            # already require those credentials, so an ephemeral key is only
+            # used by local or test instances that cannot persist cloud data.
+            return os.urandom(32)
+        return hashlib.sha256(
+            b"veadk-studio-knowledge-signing-v1\0" + cloud_secret.encode("utf-8")
+        ).digest()
+
+    def _knowledge_client(region: str):
+        from agentkit.sdk.knowledge.client import AgentkitKnowledgeClient
+
+        access_key, secret_key, session_token = _resolve_ve_credentials()
+        return AgentkitKnowledgeClient(
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token or "",
+            region=region,
+        )
+
+    mount_knowledge_routes(
+        app,
+        service=KnowledgeService(
+            SdkAgentKitKnowledgeGateway(_knowledge_client),
+            build_viking_document_gateway_factory(
+                provider=provider,
+                resolve_credentials=_resolve_ve_credentials,
+            ),
+            signing_key=_knowledge_signing_key(),
+            provisioner=VikingKnowledgeBaseProvisioner(
+                provider=provider,
+                resolve_credentials=_resolve_ve_credentials,
+            ),
+            upload_store=TosKnowledgeUploadStore(
+                provider=provider,
+                resolve_credentials=_resolve_ve_credentials,
+            ),
+        ),
+        identity_resolver=_knowledge_identity,
+        region_resolver=_coerce_cloud_region,
+        region_candidates_resolver=_knowledge_regions,
+        create_region_candidates_resolver=_knowledge_create_regions,
+    )
 
     from frontend.server.video.routes import (
         build_video_service,

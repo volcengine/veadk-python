@@ -58,6 +58,15 @@ server that `veadk frontend` launches — no separate backend.
   require Agent-management access.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
+- **Library hub**: manage Skills, user-owned AgentKit knowledge bases, and chat
+  artifacts from one sidebar entry. Knowledge documents support verified
+  JPG/PNG, PDF/PPTX/DOCX/XLSX/TXT uploads and public webpage imports. Studio
+  fetches webpages server-side with SSRF protections, extracts the main content
+  as Markdown, and stores it through the existing private TOS-to-Viking flow.
+  AgentKit knowledge names use its native identifier rules: 1-48 characters,
+  starting with a letter and containing only letters, numbers, or underscores.
+  Descriptions are limited to 80 characters so the signed owner marker remains
+  within AgentKit's 200-character provider limit.
 - **Automation directory**: browse development and message-channel integrations
   from the Studio sidebar. The local Coding Agents integration detects Trae,
   Claude Code, and Codex across macOS, Linux, and Windows, then globally installs
