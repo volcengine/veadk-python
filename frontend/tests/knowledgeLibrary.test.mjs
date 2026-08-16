@@ -503,7 +503,7 @@ test("provides a responsive card overview and a focused detail view", () => {
   assert.match(stylesSource, /\.knowledge-document-table-wrap\s*\{[^}]*overflow:\s*auto;/);
   assert.match(stylesSource, /\.knowledge-documents__body\.is-table\s*\{[^}]*flex:\s*1;[^}]*border:\s*0;/);
   assert.match(stylesSource, /\.knowledge-library \.knowledge-primary-button span\s*\{[^}]*color:\s*inherit;/);
-  assert.match(stylesSource, /\.knowledge-back-button\s*\{[^}]*border:\s*1px solid hsl\(var\(--border\)\);/);
+  assert.match(stylesSource, /\.knowledge-back-button\s*\{[^}]*border:\s*1px solid transparent;[^}]*background:\s*transparent;/);
   assert.match(stylesSource, /\.knowledge-detail-meta\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1\.25fr\)[^}]*width:\s*calc\(100% - 64px\);[^}]*border-radius:\s*12px;[^}]*background:\s*hsl\(var\(--panel\)\);/);
   assert.match(stylesSource, /\.knowledge-detail-meta dt\s*\{[^}]*font-size:\s*12px;/);
   assert.match(stylesSource, /\.knowledge-detail-meta dd\s*\{[^}]*font-size:\s*13\.5px;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/);
