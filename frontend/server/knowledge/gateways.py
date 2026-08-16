@@ -260,6 +260,20 @@ def _provider_list_docs(collection: Any, **kwargs: Any) -> list[Any]:
         raise
 
 
+def _provider_list_points(collection: Any, **kwargs: Any) -> list[Any]:
+    """Request attachment links when supported by the installed Viking SDK."""
+    try:
+        return collection.list_points(get_attachment_link=True, **kwargs)
+    except TypeError as error:
+        message = str(error)
+        if (
+            "unexpected keyword argument" not in message
+            or "get_attachment_link" not in message
+        ):
+            raise
+        return collection.list_points(**kwargs)
+
+
 def _credential_value(payload: dict[str, Any], aliases: set[str]) -> str:
     pending: list[tuple[dict[str, Any], int]] = [(payload, 0)]
     while pending:
@@ -614,11 +628,11 @@ class VikingDocumentGateway:
     ) -> tuple[list[dict[str, Any]], bool]:
         with _VIKING_SDK_LOCK:
             points = _provider_call(
-                lambda: self._collection().list_points(
+                lambda: _provider_list_points(
+                    self._collection(),
                     offset=offset,
                     limit=limit + 1,
                     doc_ids=[document_id],
-                    get_attachment_link=True,
                     project=self._project_name,
                     resource_id=self._resource_id,
                 )

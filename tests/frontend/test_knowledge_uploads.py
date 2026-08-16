@@ -649,11 +649,6 @@ def test_tos_store_only_deletes_objects_in_the_owned_knowledge_scope(
     assert fake_client.deleted == [
         {
             "bucket": "studio-bucket",
-            "key": "veadk-studio/v1/knowledge/users/"
-            "alice%40example.com/kb%2Fsupport/0123456789abcdef/source.pdf",
-        },
-        {
-            "bucket": "studio-bucket",
             "key": metadata_key,
         },
         {
@@ -664,6 +659,11 @@ def test_tos_store_only_deletes_objects_in_the_owned_knowledge_scope(
         {
             "bucket": "studio-bucket",
             "key": metadata_key,
+        },
+        {
+            "bucket": "studio-bucket",
+            "key": "veadk-studio/v1/knowledge/users/"
+            "alice%40example.com/kb%2Fsupport/0123456789abcdef/source.pdf",
         },
     ]
 
@@ -721,7 +721,6 @@ def test_tos_store_legacy_cleanup_accepts_one_encoded_owner_segment_only(
         )
 
     assert fake_client.deleted == [
-        {"bucket": "studio-bucket", "key": valid_key},
         {
             "bucket": "studio-bucket",
             "key": (
@@ -729,6 +728,7 @@ def test_tos_store_legacy_cleanup_accepts_one_encoded_owner_segment_only(
                 f"{hashlib.sha256(f'studio-bucket/{valid_key}'.encode()).hexdigest()}.json"
             ),
         },
+        {"bucket": "studio-bucket", "key": valid_key},
     ]
 
 
@@ -1015,8 +1015,29 @@ def test_update_document_keeps_internal_metadata_and_updates_sidecar() -> None:
     assert uploads.metadata["tos://bucket/object.pdf"] == updated["metadata"]
 
 
-def test_delete_document_removes_managed_source_after_provider_document() -> None:
+def test_delete_document_removes_managed_source_before_provider_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service, documents, uploads = _knowledge_service()
+    events: list[str] = []
+    original_delete_managed = uploads.delete_managed
+    original_delete_document = documents.delete
+    monkeypatch.setattr(
+        uploads,
+        "delete_managed",
+        lambda **kwargs: (
+            events.append("storage"),
+            original_delete_managed(**kwargs),
+        )[1],
+    )
+    monkeypatch.setattr(
+        documents,
+        "delete",
+        lambda document_id: (
+            events.append("provider"),
+            original_delete_document(document_id),
+        )[1],
+    )
 
     service.delete_document(
         "kb-1",
@@ -1026,6 +1047,7 @@ def test_delete_document_removes_managed_source_after_provider_document() -> Non
     )
 
     assert documents.deleted == ["doc-1"]
+    assert events == ["storage", "provider"]
     assert uploads.managed_deletes == [
         {
             "tos_path": "tos://bucket/object.pdf",
@@ -1073,21 +1095,48 @@ def test_admin_delete_on_legacy_association_requests_owner_agnostic_cleanup() ->
     ]
 
 
-def test_source_cleanup_failure_does_not_mask_provider_deletion(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+def test_source_cleanup_failure_is_returned_before_provider_deletion() -> None:
     service, documents, uploads = _knowledge_service()
     uploads.cleanup_failure = RuntimeError("TOS unavailable")
 
-    service.delete_document(
-        "kb-1",
-        "doc-1",
-        identity=KnowledgeIdentity("user-1", "Alice"),
-        region="cn-beijing",
+    with pytest.raises(RuntimeError, match="TOS unavailable"):
+        service.delete_document(
+            "kb-1",
+            "doc-1",
+            identity=KnowledgeIdentity("user-1", "Alice"),
+            region="cn-beijing",
+        )
+
+    assert documents.deleted == []
+
+
+def test_delete_route_returns_source_cleanup_error_details() -> None:
+    service, documents, uploads = _knowledge_service()
+    uploads.cleanup_failure = RuntimeError("TOS unavailable")
+    app = FastAPI()
+    mount_knowledge_routes(
+        app,
+        service=service,
+        identity_resolver=lambda request: KnowledgeIdentity("user-1", "Alice"),
+        region_resolver=lambda value: value or "cn-beijing",
     )
 
-    assert documents.deleted == ["doc-1"]
-    assert "Failed to clean up deleted knowledge source" in caplog.text
+    response = TestClient(app).delete(
+        "/web/knowledge-bases/kb-1/documents/doc-1",
+        params={"region": "cn-beijing"},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == {
+        "status": 502,
+        "errorCode": "KNOWLEDGE_UPSTREAM_ERROR",
+        "message": "TOS unavailable",
+        "requestId": "",
+        "diagnostics": {
+            "errors": [{"exceptionType": "RuntimeError"}],
+        },
+    }
+    assert documents.deleted == []
 
 
 class _WebImporter:

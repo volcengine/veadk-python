@@ -1525,6 +1525,70 @@ def test_viking_preview_uses_native_points_and_normalizes_attachments() -> None:
     assert has_more is True
 
 
+def test_viking_preview_supports_sdk_without_attachment_link_parameter() -> None:
+    points = [
+        SimpleNamespace(
+            point_id="point-1",
+            chunk_id="chunk-1",
+            chunk_title="Text",
+            content="content",
+            chunk_attachment=None,
+            table_chunk_fields=None,
+        )
+    ]
+
+    class Collection:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, object] = {}
+
+        def list_points(
+            self,
+            *,
+            offset: int,
+            limit: int,
+            doc_ids: list[str],
+            project: str,
+            resource_id: str,
+        ):
+            self.kwargs = {
+                "offset": offset,
+                "limit": limit,
+                "doc_ids": doc_ids,
+                "project": project,
+                "resource_id": resource_id,
+            }
+            return points
+
+    collection = Collection()
+    gateway = VikingDocumentGateway(
+        lambda: collection,
+        project_name="default",
+        resource_id="kb-provider",
+    )
+
+    chunks, has_more = gateway.preview("doc-1", offset=0, limit=10)
+
+    assert collection.kwargs == {
+        "offset": 0,
+        "limit": 11,
+        "doc_ids": ["doc-1"],
+        "project": "default",
+        "resource_id": "kb-provider",
+    }
+    assert chunks == [
+        {
+            "id": "point-1",
+            "title": "Text",
+            "content": "content",
+            "attachmentUrl": "",
+            "attachmentType": "",
+            "attachment": None,
+            "tableFields": None,
+        }
+    ]
+    assert has_more is False
+
+
 def test_viking_provisioner_uses_native_resource_id_and_explicit_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

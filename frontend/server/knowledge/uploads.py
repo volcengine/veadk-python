@@ -331,11 +331,11 @@ class TosKnowledgeUploadStore:
     def delete(self, upload: StoredKnowledgeUpload) -> None:
         target = self._target(upload.region)
         client = self._client(target)
-        client.delete_object(bucket=upload.bucket, key=upload.key)
         client.delete_object(
             bucket=upload.bucket,
             key=_metadata_key(target, upload.bucket, upload.key),
         )
+        client.delete_object(bucket=upload.bucket, key=upload.key)
 
     def put_metadata(
         self,
@@ -447,11 +447,11 @@ class TosKnowledgeUploadStore:
             return False
         target, bucket, key = resolved
         client = self._client(target)
-        client.delete_object(bucket=bucket, key=key)
         client.delete_object(
             bucket=bucket,
             key=_metadata_key(target, bucket, key),
         )
+        client.delete_object(bucket=bucket, key=key)
         return True
 
     def _managed_key(

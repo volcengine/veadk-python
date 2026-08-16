@@ -951,23 +951,16 @@ class KnowledgeService:
     ) -> None:
         record, gateway = self._document_context(knowledge_id, identity, region)
         document = gateway.get(document_id)
-        gateway.delete(document_id)
         tos_path = str(document.get("tosPath") or "").strip()
-        if self._upload_store is None or not tos_path:
-            return
-        owner_id = self._to_item(record, identity).owner_id
-        try:
+        if self._upload_store is not None and tos_path:
+            owner_id = self._to_item(record, identity).owner_id
             self._upload_store.delete_managed(
                 tos_path=tos_path,
                 owner_id=owner_id,
                 knowledge_id=knowledge_id,
                 region=region,
             )
-        except Exception as cleanup_error:  # noqa: BLE001
-            logger.warning(
-                "Failed to clean up deleted knowledge source error_type=%s",
-                type(cleanup_error).__name__,
-            )
+        gateway.delete(document_id)
 
     def _documents(
         self,
