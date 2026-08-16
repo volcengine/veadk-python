@@ -258,6 +258,58 @@
   flex: 0 0 14px;
 }
 
+.sandbox-project-upload-install-tabs {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  height: 36px;
+  margin: 10px 10px 0;
+  padding: 3px;
+  box-sizing: border-box;
+  border: 1px solid hsl(var(--border) / 0.58);
+  border-radius: 8px;
+  background: hsl(var(--secondary) / 0.58);
+}
+
+.sandbox-project-upload-install-tabs > span {
+  position: absolute;
+  z-index: 0;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border: 1px solid hsl(var(--border) / 0.72);
+  border-radius: 6px;
+  background: hsl(var(--background));
+  transform: translateX(0);
+  transition: transform 180ms ease-out;
+}
+
+.sandbox-project-upload-install-tabs.is-terminal > span {
+  transform: translateX(100%);
+}
+
+.sandbox-project-upload-install-tabs button {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  text-align: center;
+  transition: color 160ms ease-out;
+}
+
+.sandbox-project-upload-install-tabs button:hover,
+.sandbox-project-upload-install-tabs button[aria-selected="true"] {
+  color: hsl(var(--foreground));
+}
+
 .sandbox-project-upload-prompt {
   min-height: 92px;
   display: flex;
@@ -281,6 +333,12 @@
   font-family: inherit;
   font-size: 13px;
   font-weight: 400;
+}
+
+.sandbox-project-upload-prompt.is-command code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 12px;
 }
 
 .sandbox-project-upload-loading {
@@ -500,6 +558,7 @@
 }
 
 .sandbox-project-upload-dialog button:focus-visible,
+.sandbox-project-upload-install-tabs button:focus-visible,
 .sandbox-project-upload-prompt pre:focus-visible {
   outline: 2px solid hsl(var(--ring) / 0.34);
   outline-offset: 2px;
@@ -573,6 +632,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .sandbox-project-upload-dialog,
+  .sandbox-project-upload-install-tabs > span,
+  .sandbox-project-upload-install-tabs button,
   .sandbox-project-upload-progress li[data-state="active"]
     .sandbox-project-upload-progress-marker,
   .sandbox-project-upload-loading i {

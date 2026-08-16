@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type SVGProps } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type SVGProps,
+} from "react";
 import { createPortal } from "react-dom";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import {
@@ -8,7 +15,8 @@ import {
 } from "../adk/sandbox";
 import "./SandboxProjectUploadDialog.css";
 
-type CopyTarget = "install" | "handoff" | "";
+type InstallMethod = "conversation" | "terminal";
+type CopyTarget = "install-conversation" | "install-terminal" | "handoff" | "";
 
 interface DialogError {
   message: string;
@@ -35,16 +43,19 @@ function codexHandoffPrompt(pairing: CodexProjectHandoffPairing): string {
   ].join("\n");
 }
 
-function installPluginPrompt(): string {
-  const installCommand = [
+function installPluginCommand(): string {
+  return [
     "codex plugin marketplace add volcengine/veadk-python",
     "--sparse .agents/plugins",
     "--sparse plugins/agentkit-studio",
     "&& codex plugin add agentkit-studio@veadk-python",
   ].join(" ");
+}
+
+function installPluginPrompt(): string {
   return [
     "请安装 AgentKit Studio Plugin。请直接执行以下安装命令，不要让我手动打开终端。",
-    `安装命令：${installCommand}`,
+    `安装命令：${installPluginCommand()}`,
   ].join("\n");
 }
 
@@ -212,6 +223,8 @@ export function SandboxProjectUploadDialog({
   const requestRef = useRef(0);
   const copyTimerRef = useRef<number | undefined>(undefined);
   const completionNotifiedRef = useRef("");
+  const [installMethod, setInstallMethod] =
+    useState<InstallMethod>("conversation");
   const [pairing, setPairing] = useState<CodexProjectHandoffPairing | null>(null);
   const [handoffStatus, setHandoffStatus] =
     useState<CodexProjectHandoffStatus | null>(null);
@@ -224,6 +237,7 @@ export function SandboxProjectUploadDialog({
   onCloseRef.current = onClose;
 
   const installPrompt = useMemo(() => installPluginPrompt(), []);
+  const installCommand = useMemo(() => installPluginCommand(), []);
   const handoffPrompt = useMemo(
     () => pairing ? codexHandoffPrompt(pairing) : "",
     [pairing],
@@ -233,6 +247,7 @@ export function SandboxProjectUploadDialog({
     if (!open) return;
     setPairing(null);
     setHandoffStatus(null);
+    setInstallMethod("conversation");
     setError(null);
     setCopyTarget("");
     setEnteringSession(false);
@@ -404,6 +419,28 @@ export function SandboxProjectUploadDialog({
     }
   }
 
+  function selectInstallMethod(method: InstallMethod) {
+    setInstallMethod(method);
+    document.getElementById(`sandbox-project-upload-install-${method}-tab`)?.focus();
+  }
+
+  function handleInstallTabKeyDown(
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+  ) {
+    const methods: readonly InstallMethod[] = ["conversation", "terminal"];
+    const currentIndex = methods.indexOf(installMethod);
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % methods.length;
+    if (event.key === "ArrowLeft") {
+      nextIndex = (currentIndex - 1 + methods.length) % methods.length;
+    }
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = methods.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    selectInstallMethod(methods[nextIndex]);
+  }
+
   const countdown = pairing
     ? formatPairingCountdown(pairing.expireAt, countdownNow)
     : "00:00:00";
@@ -475,19 +512,72 @@ export function SandboxProjectUploadDialog({
               <span className="sandbox-project-upload-stage-number">1</span>
               <div>
                 <h3>安装插件</h3>
-                <p>首次使用时，复制到当前 Codex 任务，让 Codex 自动完成安装。</p>
+                <p>首次使用时，请选择一种安装方式。</p>
               </div>
               <button
                 type="button"
-                onClick={() => void copy(installPrompt, "install")}
+                onClick={() => void copy(
+                  installMethod === "conversation" ? installPrompt : installCommand,
+                  installMethod === "conversation"
+                    ? "install-conversation"
+                    : "install-terminal",
+                )}
                 disabled={copyTarget !== ""}
               >
-                {copyTarget === "install" ? <CheckIcon /> : <CopyIcon />}
-                {copyTarget === "install" ? "已复制" : "复制安装提示词"}
+                {copyTarget === `install-${installMethod}`
+                  ? <CheckIcon />
+                  : <CopyIcon />}
+                {copyTarget === `install-${installMethod}`
+                  ? "已复制"
+                  : installMethod === "conversation"
+                    ? "复制安装提示词"
+                    : "复制安装命令"}
               </button>
             </div>
-            <div className="sandbox-project-upload-prompt">
-              <pre tabIndex={0}><code>{installPrompt}</code></pre>
+
+            <div
+              className={`sandbox-project-upload-install-tabs is-${installMethod}`}
+              role="tablist"
+              aria-label="插件安装方式"
+            >
+              <span aria-hidden="true" />
+              <button
+                id="sandbox-project-upload-install-conversation-tab"
+                type="button"
+                role="tab"
+                aria-controls="sandbox-project-upload-install-panel"
+                aria-selected={installMethod === "conversation"}
+                tabIndex={installMethod === "conversation" ? 0 : -1}
+                onClick={() => setInstallMethod("conversation")}
+                onKeyDown={handleInstallTabKeyDown}
+              >
+                与 Codex 对话安装
+              </button>
+              <button
+                id="sandbox-project-upload-install-terminal-tab"
+                type="button"
+                role="tab"
+                aria-controls="sandbox-project-upload-install-panel"
+                aria-selected={installMethod === "terminal"}
+                tabIndex={installMethod === "terminal" ? 0 : -1}
+                onClick={() => setInstallMethod("terminal")}
+                onKeyDown={handleInstallTabKeyDown}
+              >
+                从终端安装
+              </button>
+            </div>
+
+            <div
+              id="sandbox-project-upload-install-panel"
+              className={`sandbox-project-upload-prompt${
+                installMethod === "terminal" ? " is-command" : ""
+              }`}
+              role="tabpanel"
+              aria-labelledby={`sandbox-project-upload-install-${installMethod}-tab`}
+            >
+              <pre tabIndex={0}>
+                <code>{installMethod === "conversation" ? installPrompt : installCommand}</code>
+              </pre>
             </div>
           </section>
 

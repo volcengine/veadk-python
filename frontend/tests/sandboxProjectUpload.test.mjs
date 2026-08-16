@@ -91,6 +91,7 @@ test("codex project handoff pairing code supports countdown, refresh, and status
 test("the install step only asks Codex to install the Studio plugin", () => {
   assert.match(dialogSource, /<h3>安装插件<\/h3>/);
   assert.match(dialogSource, /复制安装提示词/);
+  assert.match(dialogSource, /复制安装命令/);
   assert.match(dialogSource, /不要让我手动打开终端/);
   assert.match(dialogSource, /function installPluginPrompt\(\): string/);
   assert.match(
@@ -107,6 +108,28 @@ test("the install step only asks Codex to install the Studio plugin", () => {
   assert.match(frontendUploadSkillSource, /stay in the current Codex task/);
   assert.match(frontendUploadSkillSource, /terse handoff prompt/);
   assert.doesNotMatch(dialogSource, /codex skill install/);
+});
+
+test("the install step switches between Codex conversation and terminal tabs", () => {
+  assert.match(dialogSource, /type InstallMethod = "conversation" \| "terminal"/);
+  assert.match(dialogSource, /role="tablist"/);
+  assert.match(dialogSource, /aria-label="插件安装方式"/);
+  assert.match(dialogSource, /与 Codex 对话安装/);
+  assert.match(dialogSource, /从终端安装/);
+  assert.match(dialogSource, /role="tabpanel"/);
+  assert.match(dialogSource, /ArrowRight/);
+  assert.match(dialogSource, /ArrowLeft/);
+  assert.match(dialogSource, /event\.key === "Home"/);
+  assert.match(dialogSource, /event\.key === "End"/);
+  assert.match(dialogSource, /installMethod === "conversation" \? installPrompt : installCommand/);
+  assert.match(
+    dialogStyles,
+    /\.sandbox-project-upload-install-tabs\s*\{[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/,
+  );
+  assert.match(
+    dialogStyles,
+    /\.sandbox-project-upload-prompt\.is-command code\s*\{[\s\S]*?font-family: ui-monospace/,
+  );
 });
 
 test("the frontend and plugin copies of the handoff skill stay synchronized", () => {
@@ -164,7 +187,10 @@ test("the dialog uses the requested copy and normal body typography", () => {
     dialogStyles,
     /\.sandbox-project-upload-prompt code\s*\{[\s\S]*?font-family:\s*inherit/,
   );
-  assert.doesNotMatch(dialogStyles, /ui-monospace|SFMono-Regular|Consolas/);
+  assert.match(
+    dialogStyles,
+    /\.sandbox-project-upload-prompt\.is-command code\s*\{[\s\S]*?font-family:\s*ui-monospace/,
+  );
 });
 
 test("the dialog title shows the Apps SDK UI Beta badge", () => {
@@ -245,8 +271,11 @@ test("imported Codex history renders image attachments in the transcript", () =>
 test("install and handoff are fixed sequential steps with independent copy actions", () => {
   assert.doesNotMatch(dialogSource, /PluginStatus|pluginStatus|type="radio"/);
   assert.doesNotMatch(dialogSource, /是否已经安装 AgentKit Studio Plugin/);
-  assert.match(dialogSource, /type CopyTarget = "install" \| "handoff" \| ""/);
-  assert.match(dialogSource, /copy\(installPrompt, "install"\)/);
+  assert.match(
+    dialogSource,
+    /type CopyTarget = "install-conversation" \| "install-terminal" \| "handoff" \| ""/,
+  );
+  assert.match(dialogSource, /\? "install-conversation"[\s\S]*?: "install-terminal"/);
   assert.match(dialogSource, /copy\(handoffPrompt, "handoff"\)/);
   assert.equal(
     dialogSource.match(/className="sandbox-project-upload-stage"/g)?.length,
