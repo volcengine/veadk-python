@@ -273,6 +273,14 @@ class TosKnowledgeUploadStore:
             raise ValueError("VEADK_KNOWLEDGE_MAX_FILE_BYTES must be positive")
         self._prepared_targets: set[tuple[str, str]] = set()
         self._lock = RLock()
+        configured_account_id = str(
+            environment.get("VEADK_STUDIO_ACCOUNT_ID") or ""
+        ).strip()
+        self._account_id = (
+            configured_account_id
+            if re.fullmatch(r"[0-9]+", configured_account_id)
+            else None
+        )
 
     def put(
         self,
@@ -541,9 +549,8 @@ class TosKnowledgeUploadStore:
                 mode="configured",
             )
 
-        from agentkit.toolkit.volcengine.services.tos_service import TOSService
-
-        base_bucket = str(TOSService.generate_bucket_name() or "").strip().casefold()
+        account_id = self._resolve_account_id(normalized_region)
+        base_bucket = f"agentkit-platform-{account_id}".casefold()
         region_segment = "-".join(
             part
             for part in re.split(r"[^a-z0-9]+", normalized_region.casefold())
@@ -564,6 +571,39 @@ class TosKnowledgeUploadStore:
             prefix=prefix,
             mode="generated",
         )
+
+    def _resolve_account_id(self, normalized_region: str) -> str:
+        with self._lock:
+            if self._account_id is not None:
+                return self._account_id
+
+            from frontend.server.storage.provisioning import (
+                StudioStorageProvisioningError,
+                resolve_studio_account_id_for_deploy,
+            )
+
+            access_key, secret_key, session_token = self._resolve_credentials()
+            try:
+                account_id = resolve_studio_account_id_for_deploy(
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    session_token=session_token or "",
+                    region=(
+                        "ap-southeast-1"
+                        if self._provider == "byteplus"
+                        else normalized_region
+                    ),
+                    provider=self._provider,
+                )
+            except StudioStorageProvisioningError as error:
+                raise KnowledgeAccessError(str(error), status_code=503) from error
+            if not re.fullmatch(r"[0-9]+", account_id):
+                raise KnowledgeAccessError(
+                    "云账号 ID 格式无效，无法生成知识库存储桶名称。",
+                    status_code=503,
+                )
+            self._account_id = account_id
+            return account_id
 
     def _client(self, target: _UploadTarget) -> Any:
         config = StudioStorageConfig(

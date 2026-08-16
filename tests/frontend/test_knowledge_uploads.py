@@ -258,22 +258,14 @@ class _TosBucketError(RuntimeError):
     ],
 )
 def test_generated_bucket_name_is_provider_and_region_scoped(
-    monkeypatch: pytest.MonkeyPatch,
     provider: StudioProvider,
     regions: tuple[str, str],
     provider_tag: str,
 ) -> None:
-    from agentkit.toolkit.volcengine.services.tos_service import TOSService
-
-    monkeypatch.setattr(
-        TOSService,
-        "generate_bucket_name",
-        staticmethod(lambda: "agentkit-platform-3001037806"),
-    )
     store = TosKnowledgeUploadStore(
         provider=provider,
         resolve_credentials=lambda: ("ak", "sk", None),
-        source={},
+        source={"VEADK_STUDIO_ACCOUNT_ID": "3001037806"},
     )
 
     targets = [store._target(region) for region in regions]
@@ -289,6 +281,82 @@ def test_generated_bucket_name_is_provider_and_region_scoped(
     assert targets[0].bucket != targets[1].bucket
 
 
+@pytest.mark.parametrize(
+    ("provider", "region", "account_region", "provider_tag"),
+    [
+        ("volcengine", "cn-beijing", "cn-beijing", "ve"),
+        ("byteplus", "ap-southeast-1", "ap-southeast-1", "bp"),
+    ],
+)
+def test_generated_bucket_resolves_account_id_with_runtime_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: StudioProvider,
+    region: str,
+    account_region: str,
+    provider_tag: str,
+) -> None:
+    captured: dict[str, object] = {}
+    calls = 0
+
+    def _resolve_account_id(**kwargs: object) -> str:
+        nonlocal calls
+        calls += 1
+        captured.update(kwargs)
+        return "3001037806"
+
+    monkeypatch.setattr(
+        "frontend.server.storage.provisioning.resolve_studio_account_id_for_deploy",
+        _resolve_account_id,
+    )
+    store = TosKnowledgeUploadStore(
+        provider=provider,
+        resolve_credentials=lambda: ("role-ak", "role-sk", "role-token"),
+        source={},
+    )
+
+    target = store._target(region)
+    repeated_target = store._target(region)
+
+    expected_data_region = "cn-hongkong" if provider == "byteplus" else region
+    assert target.bucket == (
+        f"agentkit-platform-3001037806-{provider_tag}-{expected_data_region}"
+    )
+    assert captured == {
+        "access_key": "role-ak",
+        "secret_key": "role-sk",
+        "session_token": "role-token",
+        "region": account_region,
+        "provider": provider,
+    }
+    assert repeated_target == target
+    assert calls == 1
+
+
+def test_generated_bucket_preserves_account_resolution_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from frontend.server.storage.provisioning import StudioStorageProvisioningError
+
+    def _resolve_account_id(**_: object) -> str:
+        raise StudioStorageProvisioningError("无法获取当前云账号 ID：STS denied")
+
+    monkeypatch.setattr(
+        "frontend.server.storage.provisioning.resolve_studio_account_id_for_deploy",
+        _resolve_account_id,
+    )
+    store = TosKnowledgeUploadStore(
+        provider="volcengine",
+        resolve_credentials=lambda: ("role-ak", "role-sk", "role-token"),
+        source={},
+    )
+
+    with pytest.raises(KnowledgeAccessError) as captured:
+        store._target("cn-beijing")
+
+    assert captured.value.status_code == 503
+    assert str(captured.value) == "无法获取当前云账号 ID：STS denied"
+
+
 @pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
 def test_generated_bucket_owned_by_current_account_allows_upload(
     monkeypatch: pytest.MonkeyPatch,
@@ -296,21 +364,15 @@ def test_generated_bucket_owned_by_current_account_allows_upload(
     provider: StudioProvider,
 ) -> None:
     import tos
-    from agentkit.toolkit.volcengine.services.tos_service import TOSService
 
     fake_client = _FakeTosClient()
     fake_client.create_bucket_error = _TosBucketError("BucketAlreadyOwnedByYou")
-    monkeypatch.setattr(
-        TOSService,
-        "generate_bucket_name",
-        staticmethod(lambda: "agentkit-platform-3001037806"),
-    )
     monkeypatch.setattr(tos, "TosClientV2", lambda **kwargs: fake_client)
     region = "cn-beijing" if provider == "volcengine" else "ap-southeast-1"
     store = TosKnowledgeUploadStore(
         provider=provider,
         resolve_credentials=lambda: ("ak", "sk", None),
-        source={},
+        source={"VEADK_STUDIO_ACCOUNT_ID": "3001037806"},
     )
     source = tmp_path / "guide.pdf"
     source.write_bytes(b"%PDF-test")
@@ -335,21 +397,15 @@ def test_generated_bucket_owned_by_another_account_fails_before_upload(
     provider: StudioProvider,
 ) -> None:
     import tos
-    from agentkit.toolkit.volcengine.services.tos_service import TOSService
 
     fake_client = _FakeTosClient()
     fake_client.create_bucket_error = _TosBucketError("BucketAlreadyExists")
-    monkeypatch.setattr(
-        TOSService,
-        "generate_bucket_name",
-        staticmethod(lambda: "agentkit-platform-3001037806"),
-    )
     monkeypatch.setattr(tos, "TosClientV2", lambda **kwargs: fake_client)
     region = "cn-beijing" if provider == "volcengine" else "ap-southeast-1"
     store = TosKnowledgeUploadStore(
         provider=provider,
         resolve_credentials=lambda: ("ak", "sk", None),
-        source={},
+        source={"VEADK_STUDIO_ACCOUNT_ID": "3001037806"},
     )
     source = tmp_path / "guide.pdf"
     source.write_bytes(b"%PDF-test")
@@ -498,22 +554,14 @@ def test_tos_store_rejects_unsafe_file_name_even_without_route_validation(
     assert captured.value.status_code == 400
 
 
-def test_tos_upload_uses_region_scoped_bucket_when_studio_bucket_mismatches(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from agentkit.toolkit.volcengine.services.tos_service import TOSService
-
-    monkeypatch.setattr(
-        TOSService,
-        "generate_bucket_name",
-        staticmethod(lambda: "agentkit-platform-3001037806"),
-    )
+def test_tos_upload_uses_region_scoped_bucket_when_studio_bucket_mismatches() -> None:
     store = TosKnowledgeUploadStore(
         provider="volcengine",
         resolve_credentials=lambda: ("ak", "sk", None),
         source={
             "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
             "VEADK_STUDIO_TOS_REGION": "cn-beijing",
+            "VEADK_STUDIO_ACCOUNT_ID": "3001037806",
         },
     )
 
@@ -941,7 +989,7 @@ def test_agentkit_failure_removes_new_tos_object(tmp_path: Path) -> None:
 
 
 def test_update_document_keeps_internal_metadata_and_updates_sidecar() -> None:
-    service, documents, uploads = _knowledge_service()
+    service, _documents, uploads = _knowledge_service()
     uploads.metadata["tos://bucket/object.pdf"] = {
         "team": "support",
         "_veadk_source_url": "https://example.com/guide",
