@@ -80,7 +80,7 @@ export function IntelligentCreate({
         </div>
       </header>
 
-      <main className="ic-main">
+      <div className="ic-main">
         <section className="ic-panel ic-goal-panel">
           <div className="ic-goal-heading">
             <span className="ic-create-icon-wrap"><IntelligentCreateIcon /></span>
@@ -109,12 +109,18 @@ export function IntelligentCreate({
           {error ? <p className="ic-error" role="alert">{error}</p> : null}
           <div className="ic-actions">
             <span>开发环境保留最多 8 小时，可在同一 Thread 持续优化</span>
-            <button type="button" className="ic-primary" onClick={() => void submit()} disabled={submitDisabled}>
+            <button
+              type="button"
+              className="ic-primary"
+              onClick={() => void submit()}
+              disabled={submitDisabled}
+              aria-busy={creating}
+            >
               {creating ? "正在准备开发环境…" : "开始构建"}
             </button>
           </div>
         </section>
-      </main>
+      </div>
     </section>
   );
 }

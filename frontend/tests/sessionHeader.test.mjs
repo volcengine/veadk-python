@@ -35,7 +35,7 @@ test("keeps Agent selection state without a global conversation header", () => {
 
 test("does not add a sandbox title row above the main content", () => {
   assert.doesNotMatch(appSource, /<Navbar\b/);
-  assert.match(appSource, /<section className="main-shell">\s*<main className=/);
+  assert.match(appSource, /<section className="main-shell">\s*<main\s+className=/);
 });
 
 test("opens new chat even when no Agent is active", () => {

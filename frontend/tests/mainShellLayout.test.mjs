@@ -13,7 +13,7 @@ const stylesSource = readFileSync(
 );
 
 test("the main shell renders content without a top navigation row", () => {
-  assert.match(appSource, /<section className="main-shell">\s*<main className=/);
+  assert.match(appSource, /<section className="main-shell">\s*<main\s+className=/);
   assert.doesNotMatch(appSource, /<Navbar\b/);
   assert.match(stylesSource, /\.main-shell\s*\{[^}]*min-height:\s*0[^}]*display:\s*flex/);
   assert.match(stylesSource, /\.main\s*\{[^}]*flex:\s*1[^}]*margin:\s*10px;/);
