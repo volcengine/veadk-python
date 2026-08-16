@@ -1,3 +1,17 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from __future__ import annotations
 
 import pytest
@@ -32,7 +46,9 @@ class Response:
 
 
 @pytest.mark.asyncio
-async def test_exec_is_single_attempt_and_reports_ambiguous_failure(monkeypatch) -> None:
+async def test_exec_is_single_attempt_and_reports_ambiguous_failure(
+    monkeypatch,
+) -> None:
     calls = 0
 
     def post(*args, **kwargs):
@@ -154,13 +170,17 @@ def test_transport_rejects_nonpositive_attempt_count() -> None:
 async def test_exec_text_rejects_malformed_success_response(
     monkeypatch, payload, message
 ) -> None:
-    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: Response(payload=payload))
+    monkeypatch.setattr(
+        requests, "post", lambda *args, **kwargs: Response(payload=payload)
+    )
     with pytest.raises(SandboxRemoteResponseError, match=message):
         await SandboxRemoteTransport("https://sandbox").exec_text("read")
 
 
 @pytest.mark.asyncio
-async def test_exec_text_downloads_complete_output_and_requires_utf8(monkeypatch) -> None:
+async def test_exec_text_downloads_complete_output_and_requires_utf8(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         requests,
         "post",
@@ -249,7 +269,9 @@ async def test_read_retry_reports_transient_exhaustion_and_nontransient_http(
 ) -> None:
     monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response(503))
     with pytest.raises(SandboxRemoteError, match="Failed to download") as transient:
-        await SandboxRemoteTransport("https://sandbox", read_attempts=1).download("/file")
+        await SandboxRemoteTransport("https://sandbox", read_attempts=1).download(
+            "/file"
+        )
     assert transient.value.retryable is True
 
     monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response(404))
@@ -259,7 +281,9 @@ async def test_read_retry_reports_transient_exhaustion_and_nontransient_http(
 
 
 @pytest.mark.asyncio
-async def test_exec_rejects_nonobject_json_and_preserves_response_error(monkeypatch) -> None:
+async def test_exec_rejects_nonobject_json_and_preserves_response_error(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         requests, "post", lambda *args, **kwargs: Response(payload=["unexpected"])
     )

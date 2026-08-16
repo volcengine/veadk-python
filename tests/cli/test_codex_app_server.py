@@ -533,9 +533,7 @@ async def test_expired_transport_reconnects_and_resumes_the_same_thread() -> Non
     assert [event.text for event in second if event.kind == "text"] == ["完成"]
     assert session.thread_id == original_thread
     assert websockets == []
-    second_methods = [
-        message.get("method") for message in session._websocket.messages
-    ]
+    second_methods = [message.get("method") for message in session._websocket.messages]
     assert "thread/resume" in second_methods
     assert "thread/start" not in second_methods
     assert second_methods.count("turn/start") == 1
