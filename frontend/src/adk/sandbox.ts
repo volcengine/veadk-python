@@ -545,6 +545,18 @@ async function responseError(response: Response, fallback: string): Promise<Erro
   return new Error(detailText ? `${summary}：${detailText}` : summary);
 }
 
+async function responseJson(
+  response: Response,
+  fallback: string,
+): Promise<unknown> {
+  const text = await response.text().catch(() => "");
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new Error(`${fallback} Studio 服务响应异常，请刷新后重试。`);
+  }
+}
+
 function parseSession(
   data: SessionResponse,
   toolName: SandboxSession["toolName"] = "codex",
@@ -1278,7 +1290,9 @@ export const sandboxClient: AgentKitSandboxClient = {
         "无法生成 Codex 云端接力配对码。",
       );
     }
-    const value = recordOf(await response.json());
+    const value = recordOf(
+      await responseJson(response, "无法生成 Codex 云端接力配对码。"),
+    );
     if (
       typeof value?.pairingCode !== "string" ||
       !value.pairingCode.trim() ||
@@ -1313,7 +1327,9 @@ export const sandboxClient: AgentKitSandboxClient = {
     if (!response.ok) {
       throw await responseError(response, "无法读取端云接力状态。");
     }
-    const value = recordOf(await response.json());
+    const value = recordOf(
+      await responseJson(response, "无法读取端云接力状态。"),
+    );
     const states: ReadonlySet<string> = new Set([
       "issued",
       "creating",

@@ -70,6 +70,15 @@ test("codex project handoff pairing code supports countdown, refresh, and status
   );
   assert.match(dialogSource, /createCodexProjectHandoffPairing/);
   assert.match(sandboxClientSource, /getCodexProjectHandoffStatus/);
+  assert.match(sandboxClientSource, /async function responseJson/);
+  assert.match(
+    sandboxClientSource,
+    /Studio 服务响应异常，请刷新后重试/,
+  );
+  assert.doesNotMatch(
+    sandboxClientSource,
+    /getCodexProjectHandoffStatus[\s\S]*?recordOf\(await response\.json\(\)\)/,
+  );
   assert.match(sandboxClientSource, /typeof value\.agentName === "string"/);
   assert.match(dialogSource, /getCodexProjectHandoffStatus/);
   assert.match(dialogSource, /handoffStatus\.agentName/);
