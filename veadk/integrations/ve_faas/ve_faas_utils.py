@@ -400,7 +400,7 @@ def create_api_gateway_trigger(
         "UpstreamList": [{"Type": "VeFaas", "UpstreamId": upstream_id, "Weight": 100}],
         "ServiceId": service_id,
         "MatchRule": {
-            "Method": ["POST", "GET", "PUT", "DELETE", "HEAD", "OPTIONS"],
+            "Method": ["POST", "GET", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
             "Path": {"MatchType": "Prefix", "MatchContent": "/"},
         },
         "AdvancedSetting": {

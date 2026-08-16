@@ -87,10 +87,8 @@ import {
 } from "./blocks";
 import { Sidebar, type SidebarPage } from "./ui/Sidebar";
 import { AgentInfoPanel } from "./ui/AgentTopology";
-import {
-  SkillCenterView,
-  type SkillCenterWorkspaceLaunch,
-} from "./ui/SkillCenter";
+import type { SkillCenterWorkspaceLaunch } from "./ui/SkillCenter";
+import { LibraryView, type LibraryTab } from "./ui/LibraryView";
 import { AddAgentKitView } from "./ui/AddAgentKit";
 import { AgentWorkspace } from "./ui/AgentWorkspace";
 import {
@@ -864,6 +862,7 @@ export default function App() {
   const [sessions, setSessions] = useState<AdkSession[]>([]);
   const [sessionId, setSessionId] = useState("");
   const creatingSessionRef = useRef<Promise<string> | null>(null);
+  const sessionRefreshRequestRef = useRef(0);
   const [initializingSession, setInitializingSession] = useState(false);
   const [pendingTurns, setPendingTurns] = useState<Turn[]>([]);
   const [sandboxSession, setSandboxSession] =
@@ -1566,6 +1565,7 @@ export default function App() {
   // flashing the notice in the common, configured case).
   const [hasCreds, setHasCreds] = useState(true);
   const [skillCenter, setSkillCenter] = useState(false);
+  const [libraryTab, setLibraryTab] = useState<LibraryTab>("skills");
   const [skillCenterLaunch, setSkillCenterLaunch] =
     useState<SkillCenterWorkspaceLaunch | null>(null);
   const [addAgent, setAddAgent] = useState(false);
@@ -2808,6 +2808,8 @@ export default function App() {
   }
 
   async function refreshSessions(app: string): Promise<AdkSession[]> {
+    const request = sessionRefreshRequestRef.current + 1;
+    sessionRefreshRequestRef.current = request;
     try {
       const list = await listSessions(app, userId);
       // Hydrate events so the sidebar can show a title per session.
@@ -2825,6 +2827,7 @@ export default function App() {
       const hydrated = results.flatMap((result) =>
         result.status === "fulfilled" ? [result.value] : [],
       );
+      if (sessionRefreshRequestRef.current !== request) return hydrated;
       setTokenUsageBySession((current) => {
         const next = { ...current };
         for (const session of hydrated) {
@@ -2837,7 +2840,7 @@ export default function App() {
       setSessions(hydrated);
       return hydrated;
     } catch (e) {
-      setError(String(e));
+      if (sessionRefreshRequestRef.current === request) setError(String(e));
       return [];
     }
   }
@@ -4857,7 +4860,7 @@ export default function App() {
   const sidebarActivePage: SidebarPage = platformFeedbackOrigin !== null
     ? "feedback"
     : skillCenter
-      ? "skills"
+      ? "library"
       : systemInfo
         ? null
         : applicationsView
@@ -4940,7 +4943,7 @@ export default function App() {
           setAddMenu(true);
           setError("");
         }}
-        onSkillCenter={() => {
+        onLibrary={() => {
           if (sandboxSession) exitSandboxSession();
           setCreateView(null);
           setAddAgent(false);
@@ -4954,6 +4957,7 @@ export default function App() {
           setSystemInfo(false);
           setApplicationsView(null);
           setSkillCenterLaunch(null);
+          setLibraryTab("skills");
           setSkillCenter(true);
           setError("");
         }}
@@ -5148,6 +5152,7 @@ export default function App() {
                   setInput("");
                   setError("");
                   setSkillCenterLaunch(launch);
+                  setLibraryTab("skills");
                   setSkillCenter(true);
                   return;
                 }
@@ -5581,10 +5586,19 @@ export default function App() {
                 onCancel={() => setAddAgent(false)}
               />
             ) : skillCenter ? (
-              <SkillCenterView
+              <LibraryView
                 cloudProvider={cloudProvider}
-                initialWorkspace={skillCenterLaunch}
-                onInitialWorkspaceConsumed={() => setSkillCenterLaunch(null)}
+                activeTab={libraryTab}
+                onTabChange={setLibraryTab}
+                skillInitialWorkspace={skillCenterLaunch}
+                onSkillInitialWorkspaceConsumed={() => setSkillCenterLaunch(null)}
+                artifactSources={appName
+                  ? [{ appName, agentName: labelOf(appName), sessions }]
+                  : []}
+                artifactUserId={userId}
+                onArtifactActivate={() => {
+                  if (appName && userId) void refreshSessions(appName);
+                }}
               />
             ) : visibleCreateView !== null && !hasCreds ? (
               <div

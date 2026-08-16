@@ -51,6 +51,8 @@ dependencies = [
     "python-frontmatter==1.1.0",
     "PyYAML>=6.0.2",
     "tos>=2.8.4", # For TOS storage and Viking DB
+    "httpx>=0.27,<1", # Secure server-side webpage fetching for Studio knowledge imports
+    "trafilatura>=2.0,<2.1", # Extract webpage main content as Markdown for knowledge imports
 ]
 
 [project.scripts]

@@ -29,12 +29,17 @@ from volcenginesdkcore.interceptor.interceptors.build_request_interceptor import
 from volcenginesdkcore.rest import ApiException
 
 from veadk.cli.cli_frontend import (
-    _safe_exception_detail,
     _resolve_or_create_studio_identity_resources,
     _resolve_studio_cloud_credentials,
     _resolve_studio_identity_region,
+    _safe_exception_detail,
     _validate_distinct_sandbox_tool_ids,
     studio,
+)
+from veadk.cli.studio_knowledge_signing import (
+    STUDIO_KNOWLEDGE_SIGNING_KEY_ENV,
+    resolve_studio_knowledge_signing_key,
+    studio_knowledge_signing_namespace,
 )
 from veadk.config import veadk_environments
 from veadk.integrations.ve_identity.identity_client import IdentityClient
@@ -51,6 +56,7 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SANDBOX_CHAT_OPENCLAW_SNAPSHOT", raising=False)
     monkeypatch.delenv("SANDBOX_CHAT_HERMES_SNAPSHOT", raising=False)
     monkeypatch.delenv("SANDBOX_DEV", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY", raising=False)
     monkeypatch.setattr(
         "veadk.cli.studio_deploy_serverless_iam.ensure_serverless_application_role",
         lambda *_, **__: None,
@@ -97,6 +103,41 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "frontend.server.storage.provisioning.resolve_studio_account_id_for_deploy",
         lambda **_kwargs: "2100123456",
+    )
+
+
+def test_knowledge_signing_key_is_stable_and_scoped() -> None:
+    first = resolve_studio_knowledge_signing_key(
+        {},
+        seed="deploy-secret",
+        namespace=studio_knowledge_signing_namespace(
+            "byteplus", "3001037806", "pool-id", "client-id", "studio-app"
+        ),
+    )
+
+    assert first == resolve_studio_knowledge_signing_key(
+        {},
+        seed="deploy-secret",
+        namespace=studio_knowledge_signing_namespace(
+            "byteplus", "3001037806", "pool-id", "client-id", "studio-app"
+        ),
+    )
+    assert len(first) == 64
+    assert first != resolve_studio_knowledge_signing_key(
+        {},
+        seed="deploy-secret",
+        namespace=studio_knowledge_signing_namespace(
+            "volcengine", "3001037806", "pool-id", "client-id", "studio-app"
+        ),
+    )
+    assert "deploy-secret" not in first
+    assert (
+        resolve_studio_knowledge_signing_key(
+            {STUDIO_KNOWLEDGE_SIGNING_KEY_ENV: "preserved-key"},
+            seed="different-secret",
+            namespace="different-namespace",
+        )
+        == "preserved-key"
     )
 
 
@@ -944,6 +985,8 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] == expected_region
     assert veadk_environments["VEADK_STUDIO_PROJECT"] == expected_project
     assert veadk_environments["VEADK_STUDIO_ACCOUNT_ID"] == "2100123456"
+    assert len(veadk_environments["VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY"]) == 64
+    assert veadk_environments["VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY"] != "sk"
     assert veadk_environments["VEADK_STUDIO_TOS_BUCKET"] == ("veadk-studio-2100123456")
     assert veadk_environments["VEADK_STUDIO_TOS_REGION"] == expected_region
     assert "VEADK_STUDIO_UPDATE_REGION" not in veadk_environments

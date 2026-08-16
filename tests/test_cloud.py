@@ -14,6 +14,7 @@
 
 import os
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -98,6 +99,7 @@ def test_apig_uses_session_token() -> None:
 
     assert gateway.session_token == "test_session_token"
     assert gateway.api_client.configuration.session_token == "test_session_token"
+    assert gateway.api_client.configuration.host == "https://open.volcengineapi.com"
 
 
 def test_vefaas_passes_session_token_to_apig() -> None:
@@ -116,6 +118,64 @@ def test_vefaas_passes_session_token_to_apig() -> None:
         session_token="test_session_token",
         provider="volcengine",
     )
+
+
+def test_vefaas_application_route_adds_patch_without_losing_configuration() -> None:
+    service = object.__new__(VeFaaS)
+    service.get_application_route = Mock(
+        return_value=("gateway-id", "service-id", "route-id")
+    )
+    route = SimpleNamespace(
+        id="route-id",
+        name="default",
+        enable=True,
+        priority=100,
+        match_rule=SimpleNamespace(
+            method=["GET", "POST"],
+            path=SimpleNamespace(match_content="/", match_type="Prefix"),
+        ),
+        upstream_list=[
+            SimpleNamespace(
+                ai_provider_settings=None,
+                upstream_id="upstream-id",
+                version=None,
+                weight=100,
+            )
+        ],
+        advanced_setting=SimpleNamespace(
+            cors_policy_setting=SimpleNamespace(
+                allow_credentials=True,
+                allow_headers=["*"],
+                allow_methods=["GET", "POST"],
+                allow_origins=[SimpleNamespace(match_type="regex", value=".*")],
+                enable=True,
+                expose_headers=None,
+                max_age=None,
+            ),
+            timeout_setting=SimpleNamespace(enable=False, timeout=30),
+        ),
+    )
+    get_route = Mock()
+    get_route.return_value.get.return_value = SimpleNamespace(route=route)
+    update_route = Mock()
+    update_route.return_value.get.return_value = None
+    service.apig_client = SimpleNamespace(
+        apig_20221112_client=SimpleNamespace(
+            get_route=get_route,
+            update_route=update_route,
+        )
+    )
+
+    assert service.ensure_application_route_methods("application-id") is True
+
+    request = update_route.call_args.args[0]
+    assert request.match_rule.method == ["GET", "POST", "PATCH"]
+    assert request.upstream_list[0].upstream_id == "upstream-id"
+    assert request.advanced_setting.cors_policy_setting.allow_methods == [
+        "GET",
+        "POST",
+        "PATCH",
+    ]
 
 
 def test_vefaas_code_upload_callback_uses_configured_region() -> None:

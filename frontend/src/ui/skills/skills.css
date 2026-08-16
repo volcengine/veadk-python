@@ -107,7 +107,7 @@
   margin-top: 24px;
 }
 .skillcenter-toolbar-actions { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.my-agent-type-bar.skillcenter-list-toolbar { justify-content: flex-end; }
+.my-agent-type-bar.skillcenter-list-toolbar { justify-content: space-between; margin-top: 0; }
 .skillcenter-detail-facts { min-width: 0; display: flex; align-items: center; gap: 24px; }
 .skillcenter-detail-facts > div { min-width: 72px; display: grid; gap: 3px; }
 .skillcenter-detail-facts span { color: hsl(var(--muted-foreground)); font-size: 10.5px; line-height: 1.2; }
@@ -199,41 +199,9 @@
   margin-top: 28px;
   padding-bottom: 56px;
 }
-.skillcenter-space-card {
-  position: relative;
-}
-.my-agent-card.skillcenter-space-card { overflow: visible; }
-.my-agent-card.skillcenter-space-card:hover { transform: none; }
 .skillcenter-back:focus-visible,
 .skillcenter-primary-action:focus-visible,
 .skillcenter-secondary-action:focus-visible { outline: 2px solid hsl(var(--ring) / .35); outline-offset: 2px; }
-.my-agent-actions.skillcenter-card-actions {
-  z-index: 2;
-  grid-template-columns: repeat(2, minmax(0, 1fr)) 28px;
-}
-.skillcenter-card-actions .skillcenter-card-more {
-  width: 28px;
-  min-height: 28px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  cursor: pointer;
-}
-.skillcenter-card-more:hover,
-.skillcenter-card-more[aria-expanded="true"] { background: hsl(var(--background) / .72); color: hsl(var(--foreground)); }
-.skillcenter-card-actions button:focus-visible { outline: 2px solid hsl(var(--ring) / .35); outline-offset: 1px; }
-.skillcenter-card-menu { position: relative; z-index: 30; }
-.skillcenter-card-more svg { width: 16px; height: 16px; }
-.skillcenter-card-menu__popover { position: absolute; z-index: 20; right: 0; bottom: calc(100% + 6px); width: 132px; box-sizing: border-box; padding: 4px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--panel)); box-shadow: 0 12px 28px hsl(var(--foreground) / .14); }
-.skillcenter-card-menu__popover button { width: 100%; min-height: 32px; display: flex; align-items: center; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: hsl(var(--foreground)); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
-.skillcenter-card-menu__popover button:hover,
-.skillcenter-card-menu__popover button:focus-visible { outline: 0; background: hsl(var(--secondary)); }
-.skillcenter-card-menu__popover button.is-danger { color: hsl(var(--destructive)); }
-.skillcenter-card-menu__popover button:disabled { cursor: not-allowed; opacity: .48; }
 
 .skillcenter-table-wrap { min-width: 0; overflow-x: auto; border: 1px solid hsl(var(--border)); border-radius: 12px; background: hsl(var(--panel)); }
 .skillcenter-table { width: 100%; min-width: 720px; border-collapse: collapse; table-layout: fixed; }
