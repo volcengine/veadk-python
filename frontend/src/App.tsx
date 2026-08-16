@@ -967,6 +967,10 @@ export default function App() {
   const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
   const intelligentCreateAbortRef = useRef<AbortController | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
+  const sandboxStopWaitRef = useRef<{
+    controller: AbortController;
+    promise: Promise<boolean>;
+  } | null>(null);
   const sandboxSessionIdRef = useRef(sandboxSession?.id ?? "");
   const sandboxActiveAssistantTurnIdRef = useRef("");
   const sandboxUploadRunRef = useRef(0);
@@ -2381,6 +2385,10 @@ export default function App() {
     conversationSmoothTimerRef.current = window.setTimeout(() => {
       conversationSmoothScrollRef.current = false;
       conversationSmoothTimerRef.current = null;
+      const current = scrollRef.current;
+      if (current && conversationAutoFollowRef.current) {
+        current.scrollTop = current.scrollHeight;
+      }
     }, 450);
   }, [conversationScrollKey, turns.length]);
   useLayoutEffect(() => {
@@ -3771,15 +3779,41 @@ export default function App() {
   }
 
   function stopSandboxGeneration() {
-    const activeSessionId = sandboxSession?.id;
-    sandboxMessageAbortRef.current?.abort();
-    if (activeSessionId) {
-      const client = sandboxSession?.intelligentDevelopment
-        ? intelligentDevelopmentClient
-        : sandboxClient;
-      void client
-        .interruptSession(activeSessionId)
-        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    const controller = sandboxMessageAbortRef.current;
+    const activeSession = sandboxSession;
+    if (!controller) return;
+    if (activeSession?.intelligentDevelopment) {
+      if (sandboxStopWaitRef.current?.controller === controller) return;
+      const promise = intelligentDevelopmentClient
+        .interruptSession(activeSession.id)
+        .then(() => {
+          if (sandboxStopWaitRef.current?.controller === controller) {
+            controller.abort();
+          }
+          return true;
+        })
+        .catch((cause) => {
+          if (sandboxStopWaitRef.current?.controller === controller) {
+            sandboxStopWaitRef.current = null;
+          }
+          if (
+            sandboxSessionIdRef.current === activeSession.id &&
+            sandboxMessageAbortRef.current === controller
+          ) {
+            setError(cause instanceof Error ? cause.message : String(cause));
+          }
+          return false;
+        });
+      sandboxStopWaitRef.current = { controller, promise };
+      return;
+    }
+    controller.abort();
+    if (activeSession) {
+      void sandboxClient.interruptSession(activeSession.id).catch((cause) => {
+        if (sandboxSessionIdRef.current === activeSession.id) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+        }
+      });
     }
   }
 
@@ -3787,8 +3821,9 @@ export default function App() {
     text: string,
     messageAttachments: Attachment[] = [],
     selectedSkills: SandboxSkill[] = [],
+    activeSessionOverride?: SandboxSessionInfo,
   ) {
-    const activeSession = sandboxSession;
+    const activeSession = activeSessionOverride ?? sandboxSession;
     const readyAttachments = messageAttachments.filter(
       (attachment) => attachment.status === "ready" && attachment.uri,
     );
@@ -3871,8 +3906,11 @@ export default function App() {
         ? { ...current, busy: true, workspaceLocked: true }
         : current,
     );
+    const activeClient = activeSession.intelligentDevelopment
+      ? intelligentDevelopmentClient
+      : sandboxClient;
     try {
-      const reply = await sandboxClientForSession.sendMessage(
+      const reply = await activeClient.sendMessage(
         {
           sessionId: activeSession.id,
           text: prompt,
@@ -4005,7 +4043,7 @@ export default function App() {
           }`,
       );
       try {
-        const settings = await sandboxClientForSession.getSettings(activeSession.id);
+        const settings = await activeClient.getSettings(activeSession.id);
         setSandboxSession((current) =>
           current?.id === activeSession.id
             ? { ...current, ...settings }
@@ -4016,6 +4054,20 @@ export default function App() {
       }
     } finally {
       if (sandboxMessageAbortRef.current === controller) {
+        const stopWait = sandboxStopWaitRef.current;
+        if (stopWait?.controller === controller) {
+          const cleanupConfirmed = await stopWait.promise;
+          if (sandboxStopWaitRef.current === stopWait) {
+            sandboxStopWaitRef.current = null;
+          }
+          if (cleanupConfirmed) {
+            setSandboxTurns((current) => current.filter(
+              (turn) =>
+                turn.meta?.localId !== assistantTurnId || turn.blocks.length > 0,
+            ));
+            appendSandboxActivity(activeSession.id, "已停止，可继续输入");
+          }
+        }
         sandboxMessageAbortRef.current = null;
         if (sandboxActiveAssistantTurnIdRef.current === assistantTurnId) {
           sandboxActiveAssistantTurnIdRef.current = "";
@@ -4028,84 +4080,6 @@ export default function App() {
             : current,
         );
       }
-    }
-  }
-
-  async function sendIntelligentInitialMessage(
-    activeSession: SandboxSessionInfo,
-    goal: string,
-    controller: AbortController,
-  ) {
-    const userTurnId = crypto.randomUUID();
-    const assistantTurnId = crypto.randomUUID();
-    setSandboxTurns([
-      {
-        role: "user",
-        blocks: [{ kind: "text", text: goal }],
-        meta: { localId: userTurnId, ts: Date.now() / 1000 },
-      },
-      {
-        role: "assistant",
-        blocks: [],
-        meta: { localId: assistantTurnId },
-      },
-    ]);
-    setSandboxBusy(true);
-    setSandboxSession((current) =>
-      current?.id === activeSession.id
-        ? { ...current, busy: true, workspaceLocked: true }
-        : current,
-    );
-    try {
-      const reply = await intelligentDevelopmentClient.sendMessage(
-        { sessionId: activeSession.id, text: goal },
-        {
-          signal: controller.signal,
-          onBlocks: (blocks) => {
-            if (
-              controller.signal.aborted ||
-              intelligentCreateAbortRef.current !== controller ||
-              sandboxSessionIdRef.current !== activeSession.id
-            ) return;
-            setSandboxTurns((current) => current.map((turn) =>
-              turn.meta?.localId === assistantTurnId ? { ...turn, blocks } : turn
-            ));
-          },
-          onApproval: (approval) => {
-            if (!controller.signal.aborted) setSandboxApproval(approval);
-          },
-          onApprovalResolved: (approvalId) => {
-            if (!controller.signal.aborted) {
-              setSandboxApproval((current) => current?.id === approvalId ? null : current);
-            }
-          },
-        },
-      );
-      if (
-        controller.signal.aborted ||
-        intelligentCreateAbortRef.current !== controller ||
-        sandboxSessionIdRef.current !== activeSession.id
-      ) return;
-      setSandboxTurns((current) => current.map((turn) =>
-        turn.meta?.localId === assistantTurnId
-          ? { ...turn, blocks: reply.blocks, meta: { ...turn.meta, ts: Date.now() / 1000 } }
-          : turn
-      ));
-    } catch (cause) {
-      if (controller.signal.aborted || intelligentCreateAbortRef.current !== controller) return;
-      setSandboxTurns((current) => current.filter(
-        (turn) => turn.meta?.localId !== assistantTurnId,
-      ));
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      if (intelligentCreateAbortRef.current === controller) {
-        intelligentCreateAbortRef.current = null;
-      }
-      if (sandboxSessionIdRef.current !== activeSession.id) return;
-      setSandboxBusy(false);
-      setSandboxSession((current) =>
-        current?.id === activeSession.id ? { ...current, busy: false } : current,
-      );
     }
   }
 
@@ -4160,8 +4134,7 @@ export default function App() {
   }
 
   function openNewChat() {
-    intelligentCreateAbortRef.current?.abort();
-    intelligentCreateAbortRef.current = null;
+    cancelIntelligentPreparation();
     setIntelligentDeployment(null);
     setPlatformFeedbackOrigin(null);
     setCreateView(null);
@@ -4178,6 +4151,12 @@ export default function App() {
     setSystemInfo(false);
     setApplicationsView(null);
     startNewChat();
+  }
+
+  function cancelIntelligentPreparation() {
+    intelligentCreateAbortRef.current?.abort();
+    intelligentCreateAbortRef.current = null;
+    setIntelligentCreating(false);
   }
 
   async function removeSession(id: string) {
@@ -5575,6 +5554,11 @@ export default function App() {
                     ? sandboxSession.expireAt
                     : undefined
                 }
+                exitLabel={
+                  sandboxSession.intelligentDevelopment
+                    ? "退出开发环境"
+                    : undefined
+                }
                 onExit={startNewChat}
               />
             )}
@@ -5822,7 +5806,13 @@ export default function App() {
         );
         return (
           <section className="main-shell">
-            <main className={`main${sandboxSession ? " is-sandbox-session" : ""}`}>
+            <main
+              className={`main${sandboxSession ? " is-sandbox-session" : ""}${
+                sandboxSession?.intelligentDevelopment
+                  ? " is-intelligent-development"
+                  : ""
+              }`}
+            >
             {error && <div className="error" role="alert">{error}</div>}
             {draftStorageError && (
               <div className="error" role="alert">
@@ -6221,6 +6211,7 @@ export default function App() {
                 creating={intelligentCreating}
                 error={intelligentCapabilitiesError}
                 onBack={() => {
+                  cancelIntelligentPreparation();
                   setCreateView(null);
                   setAddMenu(true);
                 }}
@@ -6253,6 +6244,7 @@ export default function App() {
                     setAttachments([]);
                     releaseAllSandboxPreviews();
                     setSandboxTurns([]);
+                    sandboxSessionIdRef.current = connected.id;
                     setSandboxSession(connected);
                     setCreateView(null);
                     setSkillCenter(false);
@@ -6262,7 +6254,9 @@ export default function App() {
                     setManageAgents(false);
                     setAgentDetailTarget(null);
                     setMyAgents(false);
-                    await sendIntelligentInitialMessage(connected, goal, controller);
+                    intelligentCreateAbortRef.current = null;
+                    setIntelligentCreating(false);
+                    await sendSandboxMessage(goal, [], [], connected);
                   } catch (cause) {
                     if ((cause as Error)?.name !== "AbortError") {
                       setIntelligentCapabilitiesError(

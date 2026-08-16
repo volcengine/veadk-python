@@ -1065,7 +1065,11 @@ async function sandboxJson(
 
 function createSandboxClient(
   api: string,
-  config: { textOnly?: boolean; messageTimeoutMs?: number } = {},
+  config: {
+    textOnly?: boolean;
+    messageTimeoutMs?: number;
+    interruptTimeoutMs?: number;
+  } = {},
 ): AgentKitSandboxClient {
   return {
   async listSessions(options = {}) {
@@ -1323,7 +1327,7 @@ function createSandboxClient(
         headers: sandboxHeaders(),
         signal: options.signal,
       },
-      CLOSE_TIMEOUT_MS,
+      config.interruptTimeoutMs ?? CLOSE_TIMEOUT_MS,
     );
     if (!response.ok && ![404, 409].includes(response.status)) {
       throw await responseError(response, "无法停止当前任务。");
@@ -1801,7 +1805,11 @@ function createSandboxClient(
 export const sandboxClient = createSandboxClient(SANDBOX_API);
 export const intelligentDevelopmentClient = createSandboxClient(
   "/web/intelligent-development/sessions",
-  { textOnly: true, messageTimeoutMs: 3_600_000 },
+  {
+    textOnly: true,
+    messageTimeoutMs: 3_600_000,
+    interruptTimeoutMs: 45_000,
+  },
 );
 
 async function launchSandboxTool(

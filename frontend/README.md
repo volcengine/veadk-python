@@ -28,6 +28,16 @@ server that `veadk frontend` launches — no separate backend.
   AgentKit. Connected Harness agents expose supported image, video, and
   presentation task types; Studio mounts only missing task tools for the
   current session and preserves tools already supplied by the Agent.
+- **Intelligent Agent development**: describe the intended VeADK Agent once and
+  Studio automatically runs intent gating, implementation, local checks, a
+  temporary cloud deployment, acceptance calls, log inspection, and cleanup.
+  Public Codex reasoning updates and Assistant replies use the normal
+  conversation renderer; credentials, raw Sandbox paths, and internal commands
+  stay hidden. The same eight-hour Sandbox, Workspace, and Codex Thread can run
+  repeated optimize-and-verify cycles. Stopping preserves received output and
+  blocks the next submission until cleanup finishes. A successful cycle ends
+  with a verified-delivery card and the existing manual Runtime deployment
+  flow; no separate “start verification” action is required.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Agent context rail** keeps the selected Agent's description, model, tools,
   skills, and optional live multi-Agent topology together in the conversation's

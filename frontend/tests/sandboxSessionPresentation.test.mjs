@@ -137,11 +137,15 @@ test("sandbox launch dialog covers confirmation loading failure and retry", () =
 });
 
 test("active sandbox conversation identifies the selected agent and never uses normal sessions", () => {
-  assert.match(sandboxSessionSource, /当前您在使用 \{agentName\} 智能体/);
+  assert.match(sandboxSessionSource, /当前您在使用 \$\{agentName\} 智能体/);
   assert.doesNotMatch(sandboxSessionSource, /退出后对话内容消失/);
   assert.match(sandboxSessionSource, /退出当前智能体/);
   assert.doesNotMatch(sandboxSessionSource, /退出内置智能体/);
-  assert.match(appSource, /sandboxClientForSession\.sendMessage/);
+  assert.match(
+    appSource,
+    /const activeClient = activeSession\.intelligentDevelopment[\s\S]*?\? intelligentDevelopmentClient[\s\S]*?: sandboxClient/,
+  );
+  assert.match(appSource, /activeClient\.sendMessage/);
   assert.doesNotMatch(sandboxClientSource, /runSSE/);
   assert.match(stylesSource, /\.main\.is-sandbox-session::before/);
   assert.match(stylesSource, /\.sandbox-session-warning/);

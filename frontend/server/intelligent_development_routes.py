@@ -91,7 +91,9 @@ _COMMAND_PROGRESS = (
     (re.compile(r"(?:^|[\s;&|])ak\s+config\b"), "正在准备临时验证配置。"),
     (re.compile(r"(?:^|[\s;&|])ak\s+init\b"), "正在初始化 Agent 项目。"),
     (
-        re.compile(r"(?:^|[\s;&|])(pytest|ruff|pyright|mypy|python[^\s]*\s+-m\s+(pytest|compileall))\b"),
+        re.compile(
+            r"(?:^|[\s;&|])(pytest|ruff|pyright|mypy|python[^\s]*\s+-m\s+(pytest|compileall))\b"
+        ),
         "正在执行本地检查。",
     ),
     (re.compile(r"(?:^|[\s;&|])(curl|wget)\b[^\n]*?/ping\b"), "正在检查本地服务。"),
@@ -276,9 +278,7 @@ def _remaining_lifetime_minutes(expire_at: str) -> int:
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
     except ValueError as error:
-        raise SandboxSessionUnavailableError(
-            "开发环境过期时间无效。"
-        ) from error
+        raise SandboxSessionUnavailableError("开发环境过期时间无效。") from error
     return max(0, int((expires_at - datetime.now(timezone.utc)).total_seconds() // 60))
 
 
@@ -313,9 +313,20 @@ async def _development_skill_id(
 
 
 def _conversation_event_sse(event: SandboxStreamEvent) -> str | None:
-    if event.kind in {"text", "commentary"}:
+    if event.kind == "text":
         payload = {"text": event.text}
         return f"event: delta\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+    if event.kind in {"commentary", "thinking"}:
+        payload = {
+            "id": event.item_id,
+            "kind": "thinking",
+            "status": event.status,
+            "text": event.text,
+            "name": None,
+            "args": None,
+            "response": None,
+        }
+        return f"event: activity\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
     if event.kind == "usage" and event.usage is not None:
         payload = {
             "turnId": event.turn_id,
@@ -518,10 +529,16 @@ def mount_intelligent_development_routes(
     @app.post(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions/{{session_id}}/interrupt")
     async def _interrupt(session_id: str, request: Request) -> dict[str, bool]:
         owner = owner_resolver(request)
+        lock_key = (owner, session_id)
         try:
             await resolve_intelligent_development_session(service, session_id, owner)
             conversation = service._owned(session_id, owner)
+            async with task_locks_guard:
+                task_lock = task_locks.get(lock_key)
             await conversation.codex.interrupt()
+            if task_lock is not None:
+                await task_lock.acquire()
+                task_lock.release()
         except SandboxError as error:
             raise _http_error(error) from error
         return {"interrupted": True}
@@ -615,6 +632,10 @@ def mount_intelligent_development_routes(
                 ):
                     if event.kind == "text":
                         gate_text += event.text
+                    else:
+                        public_event = _conversation_event_sse(event)
+                        if public_event is not None:
+                            yield public_event
                 try:
                     decision = parse_intent_decision(gate_text)
                 except ValueError as error:
@@ -645,7 +666,9 @@ def mount_intelligent_development_routes(
                 lease = await create_credential_lease(
                     cloud.endpoint, credential_resolver
                 )
-                yield _progress_sse("开发环境已就绪，正在实现、测试并完成临时云端验证。")
+                yield _progress_sse(
+                    "开发环境已就绪，正在实现、测试并完成临时云端验证。"
+                )
                 delivery = None
                 async for event in service.stream_message(
                     session_id,

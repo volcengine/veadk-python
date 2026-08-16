@@ -13,6 +13,7 @@ import { BuiltinToolHeader } from "./builtin-tools/BuiltinToolHeader";
 import { ToolDisclosureIcon } from "./builtin-tools/icons";
 import { getBuiltinToolDefinition } from "./builtin-tools/registry";
 import { AgentKitLogoIcon } from "./icons/AgentKitLogoIcon";
+import { DeliveryVerifiedIcon } from "./icons/DeliveryVerifiedIcon";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
 const STREAM_FRAME_INTERVAL_MS = 28;
@@ -206,7 +207,7 @@ function DeliveryCard({
   return (
     <section className="delivery-card" aria-label="已验证交付物">
       <header className="delivery-card-header">
-        <span className="delivery-card-icon" aria-hidden="true"><ShieldCheck /></span>
+        <span className="delivery-card-icon"><DeliveryVerifiedIcon /></span>
         <div>
           <strong>已验证交付物</strong>
           <span>{value.agentName}</span>
@@ -214,12 +215,12 @@ function DeliveryCard({
       </header>
       <dl className="delivery-card-grid">
         <div><dt>入口</dt><dd><code>{value.entryPoint}</code></dd></div>
-        <div><dt>文件</dt><dd>{value.fileCount}</dd></div>
+        <div><dt>文件数</dt><dd>{value.fileCount}</dd></div>
         <div><dt>大小</dt><dd>{(value.artifactSize / 1024).toFixed(1)} KiB</dd></div>
         <div><dt>验证时间</dt><dd>{time}</dd></div>
       </dl>
       <p className="delivery-card-gates">
-        {value.gateSummary.length} 项门禁通过 · <code>{value.artifactSha256.slice(0, 12)}</code>
+        {value.gateSummary.length} 项检查通过 · <code>{value.artifactSha256.slice(0, 12)}</code>
       </p>
       <button type="button" onClick={() => onDeploy?.(value)} disabled={!onDeploy}>
         手动部署到 Runtime

@@ -74,6 +74,18 @@ const sharedStyles = readFileSync(
   new URL("../src/styles.css", import.meta.url),
   "utf8",
 );
+const sandboxSessionSource = readFileSync(
+  new URL("../src/ui/SandboxSession.tsx", import.meta.url),
+  "utf8",
+);
+const sandboxSessionStyles = readFileSync(
+  new URL("../src/ui/SandboxSession.css", import.meta.url),
+  "utf8",
+);
+const deliveryIconSource = readFileSync(
+  new URL("../src/ui/icons/DeliveryVerifiedIcon.tsx", import.meta.url),
+  "utf8",
+);
 
 function sseResponse(frames) {
   return new Response(frames.join("\n\n") + "\n\n", {
@@ -223,6 +235,32 @@ test("model text that resembles a delivery cannot create a delivery block", asyn
   assert.equal(reply.text.includes("development.succeeded"), true);
 });
 
+test("intelligent streams preserve thinking and assistant message order", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const updates = [];
+  globalThis.fetch = async () => sseResponse([
+    'event: activity\ndata: {"id":"thought-1","kind":"thinking","status":"running","text":"先明确验收标准"}',
+    'event: delta\ndata: {"text":"我会先实现核心能力。"}',
+    'event: activity\ndata: {"id":"thought-1","kind":"thinking","status":"done","text":"验收标准已经明确"}',
+    'event: delta\ndata: {"text":"然后完成真实验证。"}',
+    'event: done\ndata: {}',
+  ]);
+
+  const reply = await intelligentDevelopmentClient.sendMessage(
+    { sessionId: "dev-1", text: "构建 Agent" },
+    { onBlocks: (blocks) => updates.push(structuredClone(blocks)) },
+  );
+
+  assert.deepEqual(reply.blocks, [
+    { kind: "thinking", text: "验收标准已经明确", done: true },
+    { kind: "text", text: "我会先实现核心能力。然后完成真实验证。" },
+  ]);
+  assert.equal(updates.some((blocks) => blocks[0]?.done === false), true);
+});
+
 test("delivery reference and CTA stay browser-safe and open the shared deploy UI", () => {
   const releaseInterface = blocksSource.match(
     /export interface IntelligentDevelopmentReleaseRef \{([\s\S]*?)\n\}/,
@@ -262,6 +300,71 @@ test("intelligent goal input shares IME handling and semantic responsive styles"
     sharedStyles,
     /@media \(max-width: 640px\)[\s\S]*?\.delivery-card-grid[\s\S]*?grid-template-columns: minmax\(0, 1fr\)/,
   );
+  assert.doesNotMatch(createSource, /<main className="ic-main"/);
+  assert.match(createSource, /className="ic-primary"[\s\S]*?aria-busy=\{creating\}/);
+  assert.match(createStyles, /\.ic-root \{[\s\S]*?overflow: hidden/);
+  assert.match(createStyles, /\.ic-main \{[\s\S]*?flex: 1[\s\S]*?min-height: 0/);
+  assert.match(createStyles, /\.ic-actions > span \{[^}]*font-size: 12px/);
+});
+
+test("intelligent preparation ends before the first build turn and resets on navigation", () => {
+  assert.match(
+    appSource,
+    /function cancelIntelligentPreparation\(\)[\s\S]*?intelligentCreateAbortRef\.current\?\.abort\(\)[\s\S]*?setIntelligentCreating\(false\)/,
+  );
+  assert.match(
+    appSource,
+    /function openNewChat\(\)[\s\S]*?cancelIntelligentPreparation\(\)/,
+  );
+  assert.match(
+    appSource,
+    /onBack=\{\(\) => \{[\s\S]*?cancelIntelligentPreparation\(\)[\s\S]*?setCreateView\(null\)/,
+  );
+  assert.match(
+    appSource,
+    /setSandboxSession\(connected\)[\s\S]*?setIntelligentCreating\(false\)[\s\S]*?await sendSandboxMessage\(goal, \[\], \[\], connected\)/,
+  );
+  assert.doesNotMatch(appSource, /function sendIntelligentInitialMessage\(/);
+  assert.match(createSource, /const submitDisabled = loading \|\| creating \|\| unavailable \|\| !goal\.trim\(\)/);
+  assert.match(createSource, /\{creating \? "正在准备开发环境…" : "开始构建"\}/);
+});
+
+test("intelligent conversation keeps the Studio visual language and stable controls", () => {
+  assert.match(
+    appSource,
+    /sandboxSession\?\.intelligentDevelopment\s*\?\s*" is-intelligent-development"\s*:\s*""/,
+  );
+  assert.match(
+    sandboxSessionStyles,
+    /\.main\.is-sandbox-session\.is-intelligent-development \{[^}]*background: hsl\(var\(--panel\)\)/,
+  );
+  assert.match(
+    sandboxSessionStyles,
+    /\.main\.is-sandbox-session\.is-intelligent-development::before \{[^}]*display: none/,
+  );
+  assert.match(
+    sandboxSessionStyles,
+    /\.sandbox-session-warning\.is-expiring \{[\s\S]*?grid-template-columns: minmax\(0, 1fr\) auto/,
+  );
+  assert.match(
+    sandboxSessionStyles,
+    /\.sandbox-session-warning button \{[^}]*white-space: nowrap/,
+  );
+  assert.match(sandboxSessionSource, /exitLabel = "退出当前智能体"/);
+  assert.match(
+    appSource,
+    /exitLabel=\{[\s\S]*?sandboxSession\.intelligentDevelopment[\s\S]*?\? "退出开发环境"[\s\S]*?: undefined[\s\S]*?\}/,
+  );
+});
+
+test("verified delivery uses repository-owned visuals and user-facing copy", () => {
+  assert.match(deliveryIconSource, /export function DeliveryVerifiedIcon/);
+  assert.match(deliveryIconSource, /viewBox="0 0 24 24"/);
+  assert.match(deliveryIconSource, /aria-hidden="true"/);
+  assert.doesNotMatch(deliveryIconSource, /lucide-react|<img|data:image/);
+  assert.match(blocksUiSource, /<DeliveryVerifiedIcon \/>/);
+  assert.match(blocksUiSource, /<dt>文件数<\/dt>/);
+  assert.match(blocksUiSource, /项检查通过/);
 });
 
 // Keep the construction under test explicit: intelligent mode is configured once,
@@ -270,7 +373,7 @@ test("client exports remain separately configured", () => {
   assert.match(sandboxSource, /export const sandboxClient = createSandboxClient\(SANDBOX_API\)/);
   assert.match(
     sandboxSource,
-    /export const intelligentDevelopmentClient = createSandboxClient\(\s*"\/web\/intelligent-development\/sessions",\s*\{ textOnly: true, messageTimeoutMs: 3_600_000 \}/,
+    /export const intelligentDevelopmentClient = createSandboxClient\(\s*"\/web\/intelligent-development\/sessions",\s*\{[\s\S]*?textOnly: true,[\s\S]*?messageTimeoutMs: 3_600_000,[\s\S]*?interruptTimeoutMs: 45_000/,
   );
   assert.doesNotMatch(sandboxSource, /verifyDelivery\(/);
   assert.doesNotMatch(appSource, /验证并生成交付物|verifyIntelligentDevelopment/);

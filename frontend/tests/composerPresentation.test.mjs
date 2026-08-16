@@ -67,6 +67,10 @@ test("smoothly positions new turns and follows streamed output until interrupted
     /!conversationAutoFollowRef\.current \|\|[\s\S]*?conversationSmoothScrollRef\.current[\s\S]*?el\.scrollTop = el\.scrollHeight/,
   );
   assert.match(
+    appSource,
+    /conversationSmoothScrollRef\.current = false;[\s\S]*?const current = scrollRef\.current;[\s\S]*?conversationAutoFollowRef\.current[\s\S]*?current\.scrollTop = current\.scrollHeight/,
+  );
+  assert.match(
     stylesSource,
     /\.transcript\.is-streaming\s*\{[^}]*overflow-anchor:\s*none/,
   );

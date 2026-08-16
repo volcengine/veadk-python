@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 import json
+from threading import Event, Thread
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
+from httpx import Response
 
 from frontend.server import intelligent_development_routes as routes
 from frontend.server.intelligent_development import StudioCredentials
@@ -59,7 +62,7 @@ class _FakeCodex:
         self.workspace_locked = locked
         self.active = False
         self.closed = False
-        self.skills = (
+        self.skills: tuple[CodexSkill, ...] = (
             CodexSkill(
                 id="skill-veadk",
                 name="veadk-agent-development",
@@ -375,7 +378,15 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.turns = [
-        [_gate()],
+        [
+            CodexAppServerEvent(
+                kind="commentary",
+                item_id="gate-progress-1",
+                status="running",
+                text="正在判断目标是否属于 VeADK Agent 开发。",
+            ),
+            _gate(),
+        ],
         [
             CodexAppServerEvent(
                 kind="commentary",
@@ -387,7 +398,9 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
                 item_id="build-1",
                 status="running",
                 name="运行命令",
-                arguments={"command": "/task/launcher ak build --config-file agentkit.yaml"},
+                arguments={
+                    "command": "/task/launcher ak build --config-file agentkit.yaml"
+                },
             ),
             CodexAppServerEvent(kind="text", text="已完成本地实现"),
             CodexAppServerEvent(
@@ -423,12 +436,26 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
         )
     assert response.status_code == 200
     assert "正在理解需求并整理验收标准" in response.text
+    assert "正在判断目标是否属于 VeADK Agent 开发" in response.text
     assert "需求已确认，正在准备开发环境" in response.text
     assert "正在实现并验证天气 Agent" in response.text
     assert "正在构建临时验证版本" in response.text
     assert "已完成本地实现" in response.text
     assert "event: usage" in response.text
-    assert "event: activity" not in response.text
+    assert response.text.count("event: activity") == 2
+    assert response.text.count('"kind": "thinking"') == 2
+    assert response.text.index("正在理解需求并整理验收标准") < response.text.index(
+        "正在判断目标是否属于 VeADK Agent 开发"
+    )
+    assert response.text.index(
+        "正在判断目标是否属于 VeADK Agent 开发"
+    ) < response.text.index("需求已确认，正在准备开发环境")
+    assert response.text.index("需求已确认，正在准备开发环境") < response.text.index(
+        "正在实现并验证天气 Agent"
+    )
+    assert response.text.index("正在实现并验证天气 Agent") < response.text.index(
+        "已完成本地实现"
+    )
     assert "shell" not in response.text
     assert "/task/launcher" not in response.text
     assert "development.succeeded" not in response.text
@@ -444,6 +471,157 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
     )
     invalidate.assert_awaited_once()
     remove.assert_awaited_once()
+    assert lease.cleaned is True
+
+
+def test_follow_up_runs_a_new_gate_and_build_cycle_in_the_same_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [_gate()],
+        [CodexAppServerEvent(kind="text", text="第一轮完成")],
+        [_gate(changes=True)],
+        [CodexAppServerEvent(kind="text", text="第二轮优化完成")],
+    ]
+    leases = [
+        _Lease(_Remote(gateway.sessions["dev-session"].endpoint)),
+        _Lease(_Remote(gateway.sessions["dev-session"].endpoint)),
+    ]
+    monkeypatch.setattr(
+        routes,
+        "create_credential_lease",
+        AsyncMock(side_effect=leases),
+    )
+    invalidate = AsyncMock()
+    monkeypatch.setattr(routes, "invalidate_current_delivery", invalidate)
+    monkeypatch.setattr(
+        routes, "read_completion_contract", AsyncMock(return_value=_partial())
+    )
+    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        first = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "做一个天气 Agent"},
+        )
+        second = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "把输出改成固定 JSON"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert "第一轮完成" in first.text
+    assert "第二轮优化完成" in second.text
+    assert len(gateway.codex.calls) == 4
+    assert gateway.codex.calls[0]["skillIds"] == ()
+    assert gateway.codex.calls[1]["skillIds"] == ("skill-veadk",)
+    assert gateway.codex.calls[2]["skillIds"] == ()
+    assert gateway.codex.calls[3]["skillIds"] == ("skill-veadk",)
+    assert gateway.codex.thread_id == "thread-1"
+    assert invalidate.await_count == 2
+    assert all(lease.cleaned for lease in leases)
+
+
+class _InterruptibleCodex(_FakeCodex):
+    def __init__(self) -> None:
+        super().__init__()
+        self.builder_started = Event()
+
+    async def stream_turn(
+        self,
+        prompt: str,
+        skill_ids: tuple[str, ...] = (),
+        **options: object,
+    ) -> AsyncIterator[CodexAppServerEvent]:
+        self.calls.append({"prompt": prompt, "skillIds": skill_ids, **options})
+        if len(self.calls) == 1:
+            yield _gate()
+            return
+        self.active = True
+        self.builder_started.set()
+        while self.active:
+            await asyncio.sleep(0.01)
+
+
+@dataclass
+class _BlockingCleanupLease(_Lease):
+    cleanup_started: Event | None = None
+    cleanup_allowed: Event | None = None
+
+    async def cleanup(self) -> None:
+        assert self.cleanup_started is not None
+        assert self.cleanup_allowed is not None
+        self.cleanup_attempts += 1
+        self.cleanup_started.set()
+        while not self.cleanup_allowed.is_set():
+            await asyncio.sleep(0.01)
+        self.cleaned = True
+
+
+def test_interrupt_waits_for_task_cleanup_before_allowing_the_next_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.codex = _InterruptibleCodex()
+    gateway.sessions["dev-session"] = _cloud()
+    cleanup_started = Event()
+    cleanup_allowed = Event()
+    lease = _BlockingCleanupLease(
+        _Remote(gateway.sessions["dev-session"].endpoint),
+        cleanup_started=cleanup_started,
+        cleanup_allowed=cleanup_allowed,
+    )
+    monkeypatch.setattr(
+        routes, "create_credential_lease", AsyncMock(return_value=lease)
+    )
+    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(
+        routes, "read_completion_contract", AsyncMock(return_value=_partial())
+    )
+    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        message_result: dict[str, Response] = {}
+        interrupt_result: dict[str, Response] = {}
+
+        def send_message() -> None:
+            message_result["response"] = client.post(
+                "/web/intelligent-development/sessions/dev-session/messages",
+                headers={"X-Test-User": "alice"},
+                json={"message": "做一个天气 Agent"},
+            )
+
+        def interrupt() -> None:
+            interrupt_result["response"] = client.post(
+                "/web/intelligent-development/sessions/dev-session/interrupt",
+                headers={"X-Test-User": "alice"},
+            )
+
+        message_thread = Thread(target=send_message)
+        message_thread.start()
+        assert gateway.codex.builder_started.wait(timeout=2)
+
+        interrupt_thread = Thread(target=interrupt)
+        interrupt_thread.start()
+        assert cleanup_started.wait(timeout=2)
+        interrupt_thread.join(timeout=0.1)
+        waited_for_cleanup = interrupt_thread.is_alive()
+        cleanup_allowed.set()
+        interrupt_thread.join(timeout=2)
+        message_thread.join(timeout=2)
+
+    assert waited_for_cleanup, "interrupt returned before cleanup finished"
+    assert not interrupt_thread.is_alive()
+    assert not message_thread.is_alive()
+    assert interrupt_result["response"].status_code == 200
+    assert message_result["response"].status_code == 200
     assert lease.cleaned is True
 
 
