@@ -6048,10 +6048,15 @@ def _run_frontend_server(
                     "/favicon.ico",
                     "/web/auth-config",
                     "/web/site-logo",
+                    "/web/sandbox/codex-project-handoff/sessions",
                     "/web/sandbox/codex-project-upload/sessions",
                     "/web/ui-config",
                 },
-                exempt_prefixes={"/assets", "/skillhub"},
+                exempt_prefixes={
+                    "/assets",
+                    "/skillhub",
+                    "/web/sandbox/codex-project-handoff/sessions/",
+                },
             )
             logger.info(
                 f"OAuth2 SSO enabled (provider={provider_id}, redirect_uri={redirect_uri})"
