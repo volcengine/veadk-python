@@ -790,6 +790,7 @@ export function MyAgents({
                   <EmptyMessage.ActionRow>
                     {activeType === "codex" && onOpenCodexProjectUpload ? (
                       <Button
+                        className="my-agent-handoff-button"
                         color="discovery"
                         size="lg"
                         onClick={onOpenCodexProjectUpload}

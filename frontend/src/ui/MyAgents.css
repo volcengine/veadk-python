@@ -141,34 +141,98 @@
   justify-content: center;
   gap: 6px;
   padding: 0 13px;
-  border: 1px solid var(--color-background-discovery-solid);
+  border: 1px solid var(--purple-500);
   border-radius: 8px;
-  background: var(--color-background-discovery-solid);
-  color: var(--color-text-discovery-solid);
+  background-color: var(--purple-500);
+  background-image: linear-gradient(
+    105deg,
+    var(--blue-500) 0%,
+    var(--purple-500) 36%,
+    color-mix(in srgb, var(--purple-400) 94%, var(--purple-500)) 60%,
+    var(--blue-500) 100%
+  );
+  background-position: 32% 50%;
+  background-size: 160% 100%;
+  color: var(--white);
   cursor: pointer;
   font: inherit;
   font-size: 12.5px;
   font-weight: 500;
   line-height: 1;
-  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    background-position 180ms ease,
+    color 160ms ease;
 }
 
 .my-agent-create-secondary:hover:not(:disabled) {
-  border-color: var(--color-background-discovery-solid-hover);
-  background: var(--color-background-discovery-solid-hover);
+  border-color: var(--purple-400);
+  background-position: 68% 50%;
 }
 
 .my-agent-create-secondary:active:not(:disabled) {
-  border-color: var(--color-background-discovery-solid-active);
-  background: var(--color-background-discovery-solid-active);
+  border-color: var(--purple-500);
+  background-color: var(--purple-500);
+  background-image: linear-gradient(
+    105deg,
+    var(--blue-500) 0%,
+    var(--purple-500) 46%,
+    var(--blue-500) 100%
+  );
+  background-position: 32% 50%;
+  background-size: 160% 100%;
 }
 
 .my-agent-create-secondary:disabled {
   border-color: hsl(var(--border));
   background: hsl(var(--secondary));
+  background-image: none;
   color: hsl(var(--muted-foreground));
   cursor: not-allowed;
   opacity: 0.58;
+}
+
+.my-agent-handoff-button {
+  color: var(--white);
+}
+
+.my-agent-handoff-button::before {
+  background-color: var(--purple-500);
+  background-image: linear-gradient(
+    105deg,
+    var(--blue-500) 0%,
+    var(--purple-500) 36%,
+    color-mix(in srgb, var(--purple-400) 94%, var(--purple-500)) 60%,
+    var(--blue-500) 100%
+  );
+  background-position: 32% 50%;
+  background-size: 160% 100%;
+  transition-property:
+    opacity,
+    background-color,
+    background-position,
+    transform,
+    box-shadow,
+    border-color;
+}
+
+.my-agent-handoff-button:hover:not(:disabled)::before {
+  background-position: 68% 50%;
+}
+
+.my-agent-handoff-button:active:not(:disabled)::before {
+  background-color: var(--purple-500);
+  background-image: linear-gradient(
+    105deg,
+    var(--blue-500) 0%,
+    var(--purple-500) 46%,
+    var(--blue-500) 100%
+  );
+}
+
+.my-agent-handoff-button:disabled::before {
+  background-image: none;
 }
 
 .my-agent-results {

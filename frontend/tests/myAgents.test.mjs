@@ -107,7 +107,7 @@ test("keeps a primary create action visible above the scrolling results", () => 
   );
   assert.match(
     pageSource,
-    /<Button[\s\S]*?color="discovery"[\s\S]*?<HandoffIcon \/>[\s\S]*?接力/,
+    /<Button[\s\S]*?className="my-agent-handoff-button"[\s\S]*?color="discovery"[\s\S]*?<HandoffIcon \/>[\s\S]*?接力/,
   );
   assert.match(
     pageStyles,
@@ -115,11 +115,15 @@ test("keeps a primary create action visible above the scrolling results", () => 
   );
   assert.match(
     pageStyles,
-    /\.my-agent-create-secondary\s*\{[\s\S]*?background: var\(--color-background-discovery-solid\);[\s\S]*?color: var\(--color-text-discovery-solid\)/,
+    /\.my-agent-create-secondary\s*\{[\s\S]*?background-image: linear-gradient\([\s\S]*?var\(--blue-500\)[\s\S]*?var\(--purple-500\)[\s\S]*?var\(--purple-400\)[\s\S]*?color: var\(--white\)/,
   );
   assert.match(
     pageStyles,
-    /\.my-agent-create-secondary:hover:not\(:disabled\)\s*\{[\s\S]*?background: var\(--color-background-discovery-solid-hover\)/,
+    /\.my-agent-create-secondary:hover:not\(:disabled\)\s*\{[\s\S]*?background-position: 68% 50%/,
+  );
+  assert.match(
+    pageStyles,
+    /\.my-agent-handoff-button::before\s*\{[\s\S]*?background-image: linear-gradient\([\s\S]*?var\(--blue-500\)[\s\S]*?var\(--purple-500\)[\s\S]*?var\(--purple-400\)/,
   );
   assert.match(
     pageStyles,
