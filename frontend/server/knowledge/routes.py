@@ -21,7 +21,7 @@ import logging
 import re
 import tempfile
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Protocol
@@ -604,7 +604,7 @@ def mount_knowledge_routes(
                 "_veadk_source_url": safe_url,
                 "_veadk_source_title": imported.title.strip()[:512],
                 "_veadk_content_format": "markdown",
-                "_veadk_fetched_at": datetime.now(UTC).isoformat(),
+                "_veadk_fetched_at": datetime.now(timezone.utc).isoformat(),
             }
             temp_path: Path | None = None
             try:
