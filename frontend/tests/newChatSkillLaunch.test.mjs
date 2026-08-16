@@ -30,8 +30,8 @@ test("routes homepage Skill submissions into the Skill workbench", () => {
     appSource,
     /newChatWorkspaceMode === "skill"[\s\S]*?initialIntent: text\.trim\(\)[\s\S]*?setSkillCenterLaunch\(launch\)/,
   );
-  assert.match(appSource, /setSkillCenter\(true\)/);
-  assert.match(appSource, /<SkillCenterView[\s\S]*?initialWorkspace=\{skillCenterLaunch\}/);
+  assert.match(appSource, /setLibraryTab\("skills"\)[\s\S]*?setSkillCenter\(true\)/);
+  assert.match(appSource, /<LibraryView[\s\S]*?skillInitialWorkspace=\{skillCenterLaunch\}/);
   assert.match(composerSource, /onSkillTargetChange/);
   assert.match(controlsSource, /onOptimizationSourceChange/);
 });

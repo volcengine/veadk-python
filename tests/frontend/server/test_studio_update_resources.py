@@ -65,6 +65,7 @@ def test_reconcile_refreshes_the_default_function_role_policy(
         lambda **_kwargs: pytest.fail("snapshot tools must not be reprovisioned"),
     )
     environment = {
+        "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": "stable-key",
         "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
         "VEADK_STUDIO_TOS_REGION": region,
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-tool",
@@ -103,6 +104,7 @@ def test_reconcile_studio_update_resources_reuses_existing_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     environment = {
+        "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": "stable-key",
         "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
         "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-tool",
@@ -155,6 +157,10 @@ def test_reconcile_studio_update_resources_provisions_missing_resources(
         "frontend.server.studio_update_resources._provision_snapshot_tool",
         _tool,
     )
+    monkeypatch.setattr(
+        "veadk.cli.studio_knowledge_signing.resolve_studio_knowledge_signing_key",
+        lambda _environment: "generated-key",
+    )
 
     overrides = reconcile_studio_update_resources(
         provider="byteplus",
@@ -168,6 +174,7 @@ def test_reconcile_studio_update_resources_provisions_missing_resources(
     )
 
     assert overrides == {
+        "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": "generated-key",
         "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
         "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-tool",
@@ -212,6 +219,7 @@ def test_reconcile_studio_update_resources_only_repairs_missing_items(
         function_id="function-id",
         function_client=_client(
             {
+                "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": "stable-key",
                 "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
                 "VEADK_STUDIO_TOS_REGION": "cn-beijing",
                 "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-tool",

@@ -139,6 +139,16 @@ def reconcile_studio_update_resources(
     environment, function_role = _function_config(function_client, function_id)
     overrides: dict[str, str] = {}
 
+    from veadk.cli.studio_knowledge_signing import (
+        STUDIO_KNOWLEDGE_SIGNING_KEY_ENV,
+        resolve_studio_knowledge_signing_key,
+    )
+
+    if not str(environment.get(STUDIO_KNOWLEDGE_SIGNING_KEY_ENV) or "").strip():
+        overrides[STUDIO_KNOWLEDGE_SIGNING_KEY_ENV] = (
+            resolve_studio_knowledge_signing_key(environment)
+        )
+
     ensure_default_frontend_role_policy(
         function_role,
         access_key=access_key,

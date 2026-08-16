@@ -579,6 +579,7 @@ class VeFaaS:
                 f"VeFaaS function {function_name} with ID {function_id} updated."
             )
             url = self._release_application(app_id)
+            self.ensure_application_route_methods(app_id)
             logger.info(
                 f"VeFaaS application {application_name} with ID {app_id} released."
             )
@@ -623,6 +624,101 @@ class VeFaaS:
         ]
         route_id = cloud_resource["framework"]["triggers"][0]["Routes"][0]["Id"]
         return gateway_id, service_id, route_id
+
+    def ensure_application_route_methods(
+        self,
+        app_id: str,
+        required_methods: tuple[str, ...] = ("PATCH",),
+    ) -> bool:
+        """Add missing HTTP methods to an application's generated APIG route."""
+        from volcenginesdkapig20221112 import (
+            AdvancedSettingForUpdateRouteInput,
+            AllowOriginForUpdateRouteInput,
+            CorsPolicySettingForUpdateRouteInput,
+            GetRouteRequest,
+            MatchRuleForUpdateRouteInput,
+            PathForUpdateRouteInput,
+            TimeoutSettingForUpdateRouteInput,
+            UpdateRouteRequest,
+            UpstreamListForUpdateRouteInput,
+        )
+
+        route_ids = self.get_application_route(app_id=app_id)
+        if route_ids is None:
+            raise ValueError(f"Application route not found for {app_id}")
+        _, _, route_id = route_ids
+        response = self.apig_client.apig_20221112_client.get_route(
+            GetRouteRequest(id=route_id),
+            async_req=True,
+        ).get()
+        route = response.route
+        methods = list(route.match_rule.method or [])
+        missing = [method for method in required_methods if method not in methods]
+        if not missing:
+            return False
+        methods.extend(missing)
+
+        path = route.match_rule.path
+        cors = getattr(route.advanced_setting, "cors_policy_setting", None)
+        cors_methods = list(getattr(cors, "allow_methods", None) or [])
+        cors_methods.extend(method for method in missing if method not in cors_methods)
+        cors_update = None
+        if cors is not None:
+            cors_update = CorsPolicySettingForUpdateRouteInput(
+                allow_credentials=cors.allow_credentials,
+                allow_headers=cors.allow_headers,
+                allow_methods=cors_methods,
+                allow_origins=[
+                    AllowOriginForUpdateRouteInput(
+                        match_type=origin.match_type,
+                        value=origin.value,
+                    )
+                    for origin in (cors.allow_origins or [])
+                ],
+                enable=cors.enable,
+                expose_headers=cors.expose_headers,
+                max_age=cors.max_age,
+            )
+        timeout = getattr(route.advanced_setting, "timeout_setting", None)
+        timeout_update = (
+            TimeoutSettingForUpdateRouteInput(
+                enable=timeout.enable,
+                timeout=timeout.timeout,
+            )
+            if timeout is not None
+            else None
+        )
+
+        self.apig_client.apig_20221112_client.update_route(
+            UpdateRouteRequest(
+                id=route.id,
+                name=route.name,
+                enable=route.enable,
+                priority=route.priority,
+                match_rule=MatchRuleForUpdateRouteInput(
+                    method=methods,
+                    path=PathForUpdateRouteInput(
+                        match_content=path.match_content,
+                        match_type=path.match_type,
+                    ),
+                ),
+                upstream_list=[
+                    UpstreamListForUpdateRouteInput(
+                        ai_provider_settings=upstream.ai_provider_settings,
+                        upstream_id=upstream.upstream_id,
+                        version=upstream.version,
+                        weight=upstream.weight,
+                    )
+                    for upstream in route.upstream_list
+                ],
+                advanced_setting=AdvancedSettingForUpdateRouteInput(
+                    cors_policy_setting=cors_update,
+                    timeout_setting=timeout_update,
+                ),
+            ),
+            async_req=True,
+        ).get()
+        return True
 
     def find_app_id_by_name(self, name: str):
         apps = self._list_application(app_name=name)
@@ -770,6 +866,7 @@ class VeFaaS:
             logger.info(f"VeFaaS application {name} with ID {app_id} created.")
             logger.info(f"Start to release VeFaaS application {app_id}.")
             url = self._release_application(app_id)
+            self.ensure_application_route_methods(app_id)
             logger.info(f"VeFaaS application {name} with ID {app_id} released.")
         except Exception:
             if keep_failed_deploy:
@@ -1040,6 +1137,7 @@ class VeFaaS:
         while True:
             try:
                 url = self._release_application(app_id)
+                self.ensure_application_route_methods(app_id)
                 logger.info(f"VeFaaS application {name} with ID {app_id} released.")
                 break
             except Exception:

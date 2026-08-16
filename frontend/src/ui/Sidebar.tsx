@@ -14,7 +14,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { ToolsSkills } from "@openai/apps-sdk-ui/components/Icon";
+import { BookOpen } from "@openai/apps-sdk-ui/components/Icon";
 import type {
   AdkSession,
   SiteBranding,
@@ -35,7 +35,7 @@ const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 export type SidebarPage =
   | "new-chat"
   | "agents"
-  | "skills"
+  | "library"
   | "applications"
   | "search"
   | "feedback"
@@ -91,7 +91,7 @@ export interface SidebarProps {
   onNewChat: () => void;
   onSearch: () => void;
   onQuickCreate: () => void;
-  onSkillCenter: () => void;
+  onLibrary: () => void;
   onAddAgent: () => void;
   onMyAgents: () => void;
   onApplications: () => void;
@@ -257,7 +257,7 @@ export function Sidebar({
   onNewChat,
   onSearch,
   onQuickCreate,
-  onSkillCenter,
+  onLibrary,
   onAddAgent,
   onMyAgents,
   onApplications,
@@ -367,20 +367,18 @@ export function Sidebar({
           <AgentFaceIcon />
           <span className="sidebar-nav-label">智能体</span>
         </button>
-        {show("skillCenter") ? (
-          <button
-            className={`new-chat new-chat--skills${
-              activePage === "skills" ? " is-active" : ""
-            }`}
-            onClick={onSkillCenter}
-            aria-label="技能"
-            aria-current={activePage === "skills" ? "page" : undefined}
-            title="技能"
-          >
-            <ToolsSkills className="icon" aria-hidden="true" />
-            <span className="sidebar-nav-label">技能</span>
-          </button>
-        ) : null}
+        <button
+          className={`new-chat new-chat--library${
+            activePage === "library" ? " is-active" : ""
+          }`}
+          onClick={onLibrary}
+          aria-label="库"
+          aria-current={activePage === "library" ? "page" : undefined}
+          title="库"
+        >
+          <BookOpen className="icon" />
+          <span className="sidebar-nav-label">库</span>
+        </button>
         {show("search") && (
           <SearchButton active={activePage === "search"} onClick={onSearch} />
         )}

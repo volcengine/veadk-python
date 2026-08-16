@@ -268,6 +268,13 @@ def required_permission_specs(
                 ),
             )
         )
+    specs.append(
+        _permission(
+            "apig:UpdateRoute",
+            "开放 Studio API 所需的 HTTP 方法",
+            "Enable the HTTP methods required by Studio APIs",
+        )
+    )
     specs.extend(_VEFAAS_PERMISSIONS)
     if not keep_failed_deploy:
         specs.extend(

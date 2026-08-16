@@ -25,6 +25,7 @@ from typing import Any
 import pytest
 
 from fastapi import FastAPI
+from fastapi.responses import Response
 from fastapi.testclient import TestClient
 
 from veadk.cli.cli_frontend import _run_frontend_server
@@ -77,6 +78,25 @@ def _create_frontend_app(
 def _assert_sdk_call_is_off_event_loop() -> None:
     with pytest.raises(RuntimeError, match="no running event loop"):
         asyncio.get_running_loop()
+
+
+def test_frontend_server_compresses_large_static_responses(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    @app.get("/compression-probe")
+    def compression_probe() -> Response:
+        return Response(".library-card{}" * 4096, media_type="text/css")
+
+    response = TestClient(app).get(
+        "/compression-probe",
+        headers={"Accept-Encoding": "gzip"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-encoding"] == "gzip"
+    assert "Accept-Encoding" in response.headers["vary"]
 
 
 def test_list_a2a_spaces_paginates_and_maps_names(

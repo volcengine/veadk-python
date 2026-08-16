@@ -24,6 +24,7 @@ runtimes (the UI is still served).
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -89,13 +90,14 @@ _SENSITIVE_LOG_PATTERNS = (
     re.compile(
         r'"?(?:accessKeyId|secretAccessKey|apiKey|clientSecret|privateKey|'
         r"accessToken|sessionToken|securityToken|refreshToken|idToken|jwtToken|"
-        r'crToken|password|credential|signature)"?\s*[:=]',
+        r'crToken|password|credential|signature|signingKey)"?\s*[:=]',
         re.IGNORECASE,
     ),
     re.compile(
         r"(?:access[_ -]?key(?:[_ -]?id)?|secret[_ -]?key|api[_ -]?key|"
         r"client[_ -]?secret|private[_ -]?key|(?:access|session|security|refresh|"
-        r"id|jwt|cr)[_ -]?token|password|credential|signature)"
+        r"id|jwt|cr)[_ -]?token|password|credential|signature|"
+        r"signing[_ -]?key)"
         r"\s*(?:=|:|\s)\s*\S+",
         re.IGNORECASE,
     ),
@@ -448,7 +450,7 @@ def _redact_debug_text(text: str) -> str:
     return re.sub(
         r"(?i)((?:api[_-]?key|access[_-]?key(?:[_-]?id)?|secret[_-]?key|"
         r"auth[_-]?token|access[_-]?token|client[_-]?secret|credential|"
-        r"signature|secret|password|token)\s*[:=]\s*)"
+        r"signature|signing[_-]?key|secret|password|token)\s*[:=]\s*)"
         r"(?:[\"'][^\"']*[\"']|[^\s,;]+)",
         r"\1***",
         redacted,
@@ -1278,6 +1280,14 @@ def _run_frontend_server(
         web=False,  # we serve our own UI, not the bundled ADK dev UI
     )
 
+    # Studio's production bundle includes large CSS assets. Compress them at
+    # the application boundary so cloud API gateways do not have to stream the
+    # uncompressed response to every browser. Starlette automatically skips
+    # responses that must not be buffered, including server-sent events.
+    from starlette.middleware.gzip import GZipMiddleware
+
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
+
     adk_server = None
     for route in app.routes:
         if getattr(route, "path", "") != "/run_sse":
@@ -1655,6 +1665,97 @@ def _run_frontend_server(
         if provider == "volcengine" and candidate.startswith("ap-"):
             return _default_cloud_region()
         return candidate or _default_cloud_region()
+
+    def _knowledge_regions() -> tuple[str, ...]:
+        return (
+            ("ap-southeast-1",)
+            if provider == "byteplus"
+            else ("cn-beijing", "cn-shanghai")
+        )
+
+    def _knowledge_create_regions() -> tuple[str, ...]:
+        return ("ap-southeast-1",) if provider == "byteplus" else ("cn-beijing",)
+
+    from frontend.server.knowledge import (
+        KnowledgeIdentity,
+        KnowledgeService,
+        SdkAgentKitKnowledgeGateway,
+        TosKnowledgeUploadStore,
+        VikingKnowledgeBaseProvisioner,
+        build_viking_document_gateway_factory,
+        mount_knowledge_routes,
+    )
+
+    def _knowledge_identity(request: Request) -> KnowledgeIdentity:
+        principal = _current_principal(request)
+        if access_policy.enabled and principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        owner_id = principal.owner_id if principal is not None else "local"
+        owner_label = (
+            (principal.display_name or principal.owner_id).strip()
+            if principal is not None
+            else "local"
+        )
+        role = access_policy.role_for(principal)
+        return KnowledgeIdentity(
+            owner_id=owner_id,
+            owner_label=owner_label,
+            is_admin=role == StudioRole.ADMIN,
+            can_bind_provider=role in (StudioRole.ADMIN, StudioRole.DEVELOPER),
+        )
+
+    def _knowledge_signing_key() -> bytes:
+        explicit = os.getenv("VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY", "").strip()
+        if explicit:
+            return explicit.encode("utf-8")
+        oauth_secret = os.getenv("OAUTH2_CLIENT_SECRET", "").strip()
+        if oauth_secret:
+            return oauth_secret.encode("utf-8")
+        try:
+            _, cloud_secret, _ = _resolve_ve_credentials()
+        except HTTPException:
+            # Keep Studio bootable without cloud credentials. Knowledge writes
+            # already require those credentials, so an ephemeral key is only
+            # used by local or test instances that cannot persist cloud data.
+            return os.urandom(32)
+        return hashlib.sha256(
+            b"veadk-studio-knowledge-signing-v1\0" + cloud_secret.encode("utf-8")
+        ).digest()
+
+    def _knowledge_client(region: str):
+        from agentkit.sdk.knowledge.client import AgentkitKnowledgeClient
+
+        access_key, secret_key, session_token = _resolve_ve_credentials()
+        return AgentkitKnowledgeClient(
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token or "",
+            region=region,
+        )
+
+    mount_knowledge_routes(
+        app,
+        service=KnowledgeService(
+            SdkAgentKitKnowledgeGateway(_knowledge_client),
+            build_viking_document_gateway_factory(
+                provider=provider,
+                resolve_credentials=_resolve_ve_credentials,
+            ),
+            signing_key=_knowledge_signing_key(),
+            provisioner=VikingKnowledgeBaseProvisioner(
+                provider=provider,
+                resolve_credentials=_resolve_ve_credentials,
+            ),
+            upload_store=TosKnowledgeUploadStore(
+                provider=provider,
+                resolve_credentials=_resolve_ve_credentials,
+            ),
+        ),
+        identity_resolver=_knowledge_identity,
+        region_resolver=_coerce_cloud_region,
+        region_candidates_resolver=_knowledge_regions,
+        create_region_candidates_resolver=_knowledge_create_regions,
+    )
 
     from frontend.server.video.routes import (
         build_video_service,
@@ -8223,6 +8324,11 @@ def frontend_deploy(
     """
     import shutil
 
+    from veadk.cli.studio_knowledge_signing import (
+        STUDIO_KNOWLEDGE_SIGNING_KEY_ENV,
+        resolve_studio_knowledge_signing_key,
+        studio_knowledge_signing_namespace,
+    )
     from veadk.config import veadk_environments
 
     provider_id = normalize_cloud_provider(provider)
@@ -8638,6 +8744,23 @@ def frontend_deploy(
     hermes_snapshot_tool_id = resolved_sandbox_tool_ids.get("hermes_snapshot", "")
     dev_tool_id = resolved_sandbox_tool_ids.get("dev", "")
 
+    knowledge_signing_key = resolve_studio_knowledge_signing_key(
+        {
+            STUDIO_KNOWLEDGE_SIGNING_KEY_ENV: (
+                veadk_environments.get(STUDIO_KNOWLEDGE_SIGNING_KEY_ENV)
+                or os.getenv(STUDIO_KNOWLEDGE_SIGNING_KEY_ENV, "")
+            )
+        },
+        seed=sk,
+        namespace=studio_knowledge_signing_namespace(
+            provider_id,
+            studio_account_id,
+            user_pool_id,
+            allowed_client_id,
+            vefaas_app_name,
+        ),
+    )
+
     # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
     # (i.e. the deployer's whole .env) as function env vars. The frontend must
     # NOT receive the deployer's secrets (VOLCENGINE_ACCESS_KEY/SECRET_KEY, model
@@ -8692,6 +8815,7 @@ def frontend_deploy(
     veadk_environments["VEADK_STUDIO_PROJECT"] = project
     studio_deploy_id = _new_studio_deploy_id()
     veadk_environments["VEADK_STUDIO_DEPLOY_ID"] = studio_deploy_id
+    veadk_environments[STUDIO_KNOWLEDGE_SIGNING_KEY_ENV] = knowledge_signing_key
     veadk_environments["VEADK_STUDIO_USER_POOL_ID"] = user_pool_id
     veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] = region
     if studio_account_id:
@@ -9016,6 +9140,10 @@ def frontend_update(
         find_studio_deployments,
         load_deployed_site_logo,
     )
+    from veadk.cli.studio_knowledge_signing import (
+        STUDIO_KNOWLEDGE_SIGNING_KEY_ENV,
+        resolve_studio_knowledge_signing_key,
+    )
     from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
     provider_id = normalize_cloud_provider(provider)
@@ -9164,6 +9292,10 @@ def frontend_update(
                         "VEADK_STUDIO_PROJECT": target.project,
                     }
                 )
+
+        environment_overrides[STUDIO_KNOWLEDGE_SIGNING_KEY_ENV] = (
+            resolve_studio_knowledge_signing_key(current_env)
+        )
 
         studio_account_id = str(
             current_env.get("VEADK_STUDIO_ACCOUNT_ID") or ""
