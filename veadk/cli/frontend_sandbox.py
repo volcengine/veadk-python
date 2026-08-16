@@ -3574,18 +3574,24 @@ def mount_sandbox_routes(
                     owner_id,
                     prompt.strip(),
                 )
-                try:
-                    event = await asyncio.wait_for(
-                        anext(events),
-                        timeout=_CODEX_PROJECT_HANDOFF_FIRST_EVENT_TIMEOUT_SECONDS,
-                    )
-                except StopAsyncIteration:
-                    event = None
-                except TimeoutError:
+                first_event_task = asyncio.ensure_future(anext(events))
+                completed, _ = await asyncio.wait(
+                    (first_event_task,),
+                    timeout=_CODEX_PROJECT_HANDOFF_FIRST_EVENT_TIMEOUT_SECONDS,
+                )
+                if not completed:
+                    first_event_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await first_event_task
                     continuation_error = (
                         "云端模型连接异常，暂未收到响应。请刷新配对码后重试。"
                     )
                     event = None
+                else:
+                    try:
+                        event = first_event_task.result()
+                    except StopAsyncIteration:
+                        event = None
                 while event is not None:
                     approval_id = (
                         event.approval.get("id")

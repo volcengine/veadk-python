@@ -1275,9 +1275,11 @@ def test_codex_project_handoff_first_event_timeout_interrupts_and_fails_pairing(
                 await asyncio.Event().wait()
                 if False:
                     yield CodexAppServerEvent()
+            except asyncio.CancelledError as error:
+                self.cancelled = True
+                raise CodexAppServerError("cancelled while waiting") from error
             finally:
                 self.active = False
-                self.cancelled = True
 
     class _StalledGateway(_FakeGateway):
         async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
