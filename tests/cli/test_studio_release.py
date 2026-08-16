@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from veadk.cli.studio_dependencies import (
+    BYTEPLUS_STUDIO_DEPENDENCY_WHEELS,
     StudioDependencyWheel,
     stage_studio_dependency_wheels,
     write_studio_dependency_manifest,
@@ -283,6 +284,22 @@ def test_stage_dependency_wheels_copies_only_verified_content(
 
     assert [path.name for path in staged] == [dependency.filename]
     assert staged[0].read_bytes() == content
+
+
+def test_byteplus_dependencies_bundle_web_import_charset_normalizer() -> None:
+    dependencies = {
+        dependency.filename: dependency
+        for dependency in BYTEPLUS_STUDIO_DEPENDENCY_WHEELS
+    }
+
+    charset_wheels = [
+        dependency
+        for filename, dependency in dependencies.items()
+        if filename.startswith("charset_normalizer-3.4.9-")
+    ]
+    assert len(charset_wheels) == 1
+    assert "cp312-cp312-manylinux" in charset_wheels[0].filename
+    assert len(charset_wheels[0].sha256) == 64
 
 
 def test_stage_dependency_wheels_prefers_domestic_mirrors(
