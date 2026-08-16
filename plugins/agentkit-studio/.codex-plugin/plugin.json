@@ -1,13 +1,13 @@
 {
   "name": "agentkit-studio",
-  "version": "0.1.1+codex.20260816015419",
+  "version": "0.1.1+codex.20260816135433",
   "description": "Continue local Codex conversations and coding tasks in an AgentKit Studio cloud sandbox.",
   "author": {
     "name": "VeADK",
     "url": "https://github.com/volcengine/veadk-python"
   },
   "homepage": "https://github.com/volcengine/veadk-python",
-  "repository": "https://github.com/evanlowe/veadk-python-fork",
+  "repository": "https://github.com/volcengine/veadk-python",
   "license": "Apache-2.0",
   "keywords": [
     "agentkit",

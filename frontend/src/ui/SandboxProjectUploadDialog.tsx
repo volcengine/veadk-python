@@ -36,7 +36,7 @@ function codexHandoffPrompt(pairing: CodexProjectHandoffPairing): string {
   return [
     "更新 AgentKit Studio Plugin 后，端云接力当前会话、项目和任务。请直接执行，不要让我手动打开终端。",
     `更新命令：${updateCommand}`,
-    "请确认 agentkit-studio@veadk-python 的版本不是 0.1.0，且包含 +codex. 缓存标识，再使用 codex-sandbox-upload Skill 完成接力。",
+    "请确认 agentkit-studio@veadk-python 的版本不是 0.1.0，且包含 +codex. 缓存标识，再使用 $agentkit-codex-handoff Skill 完成接力。",
     `Studio：${studioUrl}`,
     `配对码：${pairing.pairingCode}`,
   ].join("\n");
@@ -44,8 +44,7 @@ function codexHandoffPrompt(pairing: CodexProjectHandoffPairing): string {
 
 function installAndHandoffPrompt(pairing: CodexProjectHandoffPairing): string {
   const installCommand = [
-    "codex plugin marketplace add evanlowe/veadk-python-fork",
-    "--ref feat/codex-project-handoff-plugin",
+    "codex plugin marketplace add volcengine/veadk-python",
     "--sparse .agents/plugins",
     "--sparse plugins/agentkit-studio",
     "&& codex plugin add agentkit-studio@veadk-python",
@@ -53,7 +52,7 @@ function installAndHandoffPrompt(pairing: CodexProjectHandoffPairing): string {
   ].join(" ");
   const studioUrl = trimStudioUrl(pairing.studioUrl);
   return [
-    "安装 AgentKit Studio Plugin 后，使用 codex-sandbox-upload Skill 端云接力当前会话、项目和任务。请直接执行，不要让我手动打开终端，并确认 agentkit-studio@veadk-python 的版本不是 0.1.0，且包含 +codex. 缓存标识。",
+    "安装 AgentKit Studio Plugin 后，使用 $agentkit-codex-handoff Skill 端云接力当前会话、项目和任务。请直接执行，不要让我手动打开终端，并确认 agentkit-studio@veadk-python 的版本不是 0.1.0，且包含 +codex. 缓存标识。",
     `安装命令：${installCommand}`,
     `Studio：${studioUrl}`,
     `配对码：${pairing.pairingCode}`,

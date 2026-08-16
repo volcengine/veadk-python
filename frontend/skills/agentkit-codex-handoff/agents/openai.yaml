@@ -1,4 +1,4 @@
 interface:
   display_name: "Continue Task in Studio"
   short_description: "Continue a local Codex conversation in Studio"
-  default_prompt: "Use $codex-sandbox-upload to continue this conversation, project, and task in Studio."
+  default_prompt: "Use $agentkit-codex-handoff to continue this conversation, project, and task in Studio."

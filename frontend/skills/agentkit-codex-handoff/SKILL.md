@@ -1,5 +1,5 @@
 ---
-name: codex-sandbox-upload
+name: agentkit-codex-handoff
 description: Continue the current local Codex conversation and coding task in an AgentKit Studio cloud Codex Sandbox using a Studio URL and short one-time pairing code. Use when the user asks to hand off, migrate, or continue a local repository in Studio, especially when a prompt contains a Studio address and pairing code. Export only completed user-visible user and assistant messages from the active Codex task, create a temporary Studio Sandbox, restore tracked and non-ignored working-tree files plus Git metadata, inject that visible history into the cloud Thread, transfer GitHub CLI authentication separately when needed, and send one final continuation message; never copy system or developer prompts, reasoning, tool logs, SQLite state, global configuration, local skills, or SSH private keys.
 ---
 

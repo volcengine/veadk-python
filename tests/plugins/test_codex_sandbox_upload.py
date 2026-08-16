@@ -29,7 +29,7 @@ import pytest
 
 SCRIPT = (
     Path(__file__).parents[2]
-    / "plugins/agentkit-studio/skills/codex-sandbox-upload/scripts/upload_project.py"
+    / "plugins/agentkit-studio/skills/agentkit-codex-handoff/scripts/upload_project.py"
 )
 
 

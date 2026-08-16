@@ -26,16 +26,30 @@ const appSource = readFileSync(
   new URL("../src/App.tsx", import.meta.url),
   "utf8",
 );
-const uploadSkillSource = readFileSync(
+const frontendUploadSkillSource = readFileSync(
   new URL(
-    "../../plugins/agentkit-studio/skills/codex-sandbox-upload/SKILL.md",
+    "../skills/agentkit-codex-handoff/SKILL.md",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const pluginUploadSkillSource = readFileSync(
+  new URL(
+    "../../plugins/agentkit-studio/skills/agentkit-codex-handoff/SKILL.md",
     import.meta.url,
   ),
   "utf8",
 );
 const uploadScriptSource = readFileSync(
   new URL(
-    "../../plugins/agentkit-studio/skills/codex-sandbox-upload/scripts/upload_project.py",
+    "../skills/agentkit-codex-handoff/scripts/upload_project.py",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const pluginUploadScriptSource = readFileSync(
+  new URL(
+    "../../plugins/agentkit-studio/skills/agentkit-codex-handoff/scripts/upload_project.py",
     import.meta.url,
   ),
   "utf8",
@@ -65,22 +79,49 @@ test("codex project handoff pairing code supports countdown, refresh, and status
   assert.doesNotMatch(dialogSource, /<dt>Studio 地址<\/dt>/);
 });
 
-test("the uninstalled path asks Codex to install the Studio plugin", () => {
+test("the uninstalled path asks Codex to install the Studio plugin from the official repository", () => {
   assert.match(dialogSource, /未安装或不确定/);
   assert.match(dialogSource, /不要让我手动打开终端/);
   assert.match(
     dialogSource,
-    /codex plugin marketplace add evanlowe\/veadk-python-fork/,
+    /codex plugin marketplace add volcengine\/veadk-python/,
   );
-  assert.match(dialogSource, /--ref feat\/codex-project-handoff-plugin/);
   assert.match(dialogSource, /--sparse \.agents\/plugins/);
   assert.match(dialogSource, /--sparse plugins\/agentkit-studio/);
   assert.match(dialogSource, /codex plugin add agentkit-studio@veadk-python/);
   assert.match(dialogSource, /codex plugin list --json/);
+  assert.match(dialogSource, /\$agentkit-codex-handoff Skill/);
+  assert.doesNotMatch(dialogSource, /evanlowe\/veadk-python-fork/);
+  assert.doesNotMatch(dialogSource, /feat\/codex-project-handoff-plugin/);
   assert.doesNotMatch(dialogSource, /不要新建 Codex 任务/);
-  assert.match(uploadSkillSource, /stay in the current Codex task/);
-  assert.match(uploadSkillSource, /terse handoff prompt/);
+  assert.match(frontendUploadSkillSource, /stay in the current Codex task/);
+  assert.match(frontendUploadSkillSource, /terse handoff prompt/);
   assert.doesNotMatch(dialogSource, /codex skill install/);
+});
+
+test("the frontend and plugin copies of the handoff skill stay synchronized", () => {
+  for (const relativePath of [
+    "SKILL.md",
+    "agents/openai.yaml",
+    "scripts/upload_current_dir.sh",
+    "scripts/upload_project.py",
+  ]) {
+    const frontendCopy = readFileSync(
+      new URL(`../skills/agentkit-codex-handoff/${relativePath}`, import.meta.url),
+      "utf8",
+    );
+    const pluginCopy = readFileSync(
+      new URL(
+        `../../plugins/agentkit-studio/skills/agentkit-codex-handoff/${relativePath}`,
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    assert.equal(frontendCopy, pluginCopy, `${relativePath} must stay synchronized`);
+  }
+  assert.equal(frontendUploadSkillSource, pluginUploadSkillSource);
+  assert.equal(uploadScriptSource, pluginUploadScriptSource);
+  assert.match(frontendUploadSkillSource, /name: agentkit-codex-handoff/);
 });
 
 test("the installed path refreshes the marketplace before handoff", () => {
@@ -153,15 +194,15 @@ test("GitHub credential handling stays in the upload skill instead of the dialog
   assert.doesNotMatch(dialogSource, /gh auth login/);
   assert.doesNotMatch(dialogSource, /GitHub CLI 凭据/);
   assert.doesNotMatch(dialogSource, /GitHub 凭据安装结果/);
-  assert.match(uploadSkillSource, /verify `gh auth token --hostname github\.com` succeeds/);
-  assert.match(uploadSkillSource, /GitHub authentication is transferred separately/);
-  assert.match(uploadSkillSource, /temporary Studio Sandbox/);
-  assert.match(uploadSkillSource, /completed visible conversation/);
-  assert.match(uploadSkillSource, /thread\/inject_items/);
-  assert.match(uploadSkillSource, /otherwise use exactly `继续`/);
+  assert.match(frontendUploadSkillSource, /verify `gh auth token --hostname github\.com` succeeds/);
+  assert.match(frontendUploadSkillSource, /GitHub authentication is transferred separately/);
+  assert.match(frontendUploadSkillSource, /temporary Studio Sandbox/);
+  assert.match(frontendUploadSkillSource, /completed visible conversation/);
+  assert.match(frontendUploadSkillSource, /thread\/inject_items/);
+  assert.match(frontendUploadSkillSource, /otherwise use exactly `继续`/);
   assert.match(uploadScriptSource, /"thread\/inject_items"|"history": history/);
-  assert.match(uploadSkillSource, /codexDelegation\.input/);
-  assert.match(uploadSkillSource, /"schemaVersion":2/);
+  assert.match(frontendUploadSkillSource, /codexDelegation\.input/);
+  assert.match(frontendUploadSkillSource, /"schemaVersion":2/);
 });
 
 test("imported Codex history renders image attachments in the transcript", () => {
