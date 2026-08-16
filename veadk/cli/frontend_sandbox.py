@@ -125,6 +125,14 @@ _CODEX_PROJECT_HANDOFF_HISTORY_IMAGE_MIME_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/gif", "image/webp"}
 )
 _CODEX_PROJECT_HANDOFF_CONTINUATION_MAX_CHARACTERS = 20_000
+_CODEX_PROJECT_HANDOFF_FIRST_EVENT_TIMEOUT_SECONDS = 120
+_CODEX_PROJECT_HANDOFF_PROGRESS_HEARTBEAT_SECONDS = 15
+_CODEX_PROJECT_HANDOFF_PERMISSIONS = CodexPermissionSettings(
+    approval_policy="never",
+    approvals_reviewer="auto_review",
+    sandbox_mode="danger-full-access",
+    network_access=True,
+)
 
 
 class SandboxError(RuntimeError):
@@ -3554,41 +3562,82 @@ def mount_sandbox_routes(
         except SandboxError as error:
             raise _http_error(error) from error
 
+        continuation_events: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+
         async def _run_continuation() -> None:
             continuation_error = ""
+            saw_visible_reply = False
+            reported_activity_ids: set[str] = set()
             try:
-                async for frame in _sandbox_message_stream(
+                events = service.stream_message(
                     session_id,
                     owner_id,
                     prompt.strip(),
-                ):
-                    if frame.startswith("event: error\n"):
-                        for line in frame.splitlines():
-                            if not line.startswith("data:"):
-                                continue
-                            try:
-                                payload = json.loads(line[5:].strip())
-                            except json.JSONDecodeError:
-                                break
-                            message = payload.get("message")
-                            if isinstance(message, str):
-                                continuation_error = _redact_public_text(
-                                    message,
-                                    maximum=2_000,
-                                )
-                            break
+                )
+                try:
+                    event = await asyncio.wait_for(
+                        anext(events),
+                        timeout=_CODEX_PROJECT_HANDOFF_FIRST_EVENT_TIMEOUT_SECONDS,
+                    )
+                except StopAsyncIteration:
+                    event = None
+                except TimeoutError:
+                    continuation_error = (
+                        "云端模型连接异常，暂未收到响应。请刷新配对码后重试。"
+                    )
+                    event = None
+                while event is not None:
+                    approval_id = (
+                        event.approval.get("id")
+                        if isinstance(event.approval, dict)
+                        else None
+                    )
+                    if isinstance(approval_id, str) and approval_id:
+                        service.resolve_approval(
+                            session_id,
+                            owner_id,
+                            approval_id,
+                            "acceptForSession",
+                        )
+                        continuation_events.put_nowait(
+                            ("progress", "云端 Codex 已自动批准继续执行")
+                        )
+                    elif event.kind == "text" and event.text:
+                        if not saw_visible_reply:
+                            continuation_events.put_nowait(
+                                ("progress", "云端 Codex 正在生成回复")
+                            )
+                        saw_visible_reply = True
+                    elif event.kind in {"thinking", "tool"}:
+                        activity_id = event.item_id or f"{event.kind}:{event.name}"
+                        if activity_id not in reported_activity_ids:
+                            reported_activity_ids.add(activity_id)
+                            activity = (
+                                event.name
+                                if event.kind == "tool" and event.name
+                                else "云端 Codex 正在分析任务"
+                            )
+                            continuation_events.put_nowait(("progress", activity))
+                    try:
+                        event = await anext(events)
+                    except StopAsyncIteration:
+                        event = None
             except asyncio.CancelledError:
                 raise
             except Exception as error:  # noqa: BLE001 - background task boundary
                 continuation_error = _safe_error_message(error)
+            if not continuation_error and not saw_visible_reply:
+                continuation_error = "云端 Codex 已结束，但没有生成可见回复，请重试。"
             if continuation_error:
                 pairing.update(
                     {
                         "state": "failed",
                         "failedStage": "continuing-task",
                         "error": continuation_error,
+                        "failedAt": int(time.time()),
                     }
                 )
+                continuation_events.put_nowait(("error", continuation_error))
             else:
                 pairing.update(
                     {
@@ -3596,6 +3645,7 @@ def mount_sandbox_routes(
                         "completedAt": int(time.time()),
                     }
                 )
+                continuation_events.put_nowait(("completed", None))
 
         async def _start_continuation_stream() -> AsyncIterator[str]:
             progress = {
@@ -3606,6 +3656,11 @@ def mount_sandbox_routes(
             try:
                 await service.connect(session_id, owner_id)
                 await service.update_workspace(session_id, owner_id, remote_repo_dir)
+                await service.update_permissions(
+                    session_id,
+                    owner_id,
+                    _CODEX_PROJECT_HANDOFF_PERMISSIONS,
+                )
                 if history:
                     progress = {
                         "stage": "importing-history",
@@ -3667,7 +3722,61 @@ def mount_sandbox_routes(
                 "sessionId": session_id,
             }
             yield f"event: progress\ndata: {json.dumps(accepted, ensure_ascii=False)}\n\n"
-            yield 'event: done\ndata: {"reason": "accepted"}\n\n'
+            while True:
+                try:
+                    event_kind, event_value = await asyncio.wait_for(
+                        continuation_events.get(),
+                        timeout=_CODEX_PROJECT_HANDOFF_PROGRESS_HEARTBEAT_SECONDS,
+                    )
+                except TimeoutError:
+                    heartbeat = {
+                        "stage": "task-running",
+                        "message": "云端任务仍在执行",
+                        "sessionId": session_id,
+                    }
+                    yield (
+                        "event: progress\ndata: "
+                        + json.dumps(heartbeat, ensure_ascii=False)
+                        + "\n\n"
+                    )
+                    continue
+                if event_kind == "progress" and isinstance(event_value, str):
+                    progress = {
+                        "stage": "task-running",
+                        "message": _redact_public_text(event_value, maximum=500),
+                        "sessionId": session_id,
+                    }
+                    yield (
+                        "event: progress\ndata: "
+                        + json.dumps(progress, ensure_ascii=False)
+                        + "\n\n"
+                    )
+                    continue
+                if event_kind == "error" and isinstance(event_value, str):
+                    payload = {
+                        "code": "SANDBOX_INVOCATION_FAILED",
+                        "message": event_value,
+                        "retryable": False,
+                    }
+                    yield (
+                        "event: error\ndata: "
+                        + json.dumps(payload, ensure_ascii=False)
+                        + "\n\n"
+                    )
+                    yield 'event: done\ndata: {"reason": "failed"}\n\n'
+                    return
+                completed = {
+                    "stage": "task-completed",
+                    "message": "云端任务已继续执行并生成回复",
+                    "sessionId": session_id,
+                }
+                yield (
+                    "event: progress\ndata: "
+                    + json.dumps(completed, ensure_ascii=False)
+                    + "\n\n"
+                )
+                yield 'event: done\ndata: {"reason": "completed"}\n\n'
+                return
 
         return StreamingResponse(
             _start_continuation_stream(),

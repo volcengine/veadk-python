@@ -344,6 +344,27 @@ def test_conversation_history_keeps_only_visible_user_and_assistant_text(
     ]
 
 
+def test_conversation_history_preserves_consecutive_progress_messages_exactly(
+    upload_project, tmp_path: Path
+) -> None:
+    history = tmp_path / "history.json"
+    expected = [
+        {"role": "user", "content": "把当前任务接力到云端"},
+        {"role": "assistant", "content": "已选中当前任务并导出可见对话。"},
+        {"role": "assistant", "content": "预检通过，现在创建临时 Sandbox。"},
+        {"role": "assistant", "content": "管理员未配置 Sandbox Tool。"},
+    ]
+    history.write_text(
+        json.dumps(
+            {"schemaVersion": 2, "messages": expected},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    assert upload_project.conversation_history(history) == expected
+
+
 def test_conversation_history_embeds_local_markdown_images_without_leaking_paths(
     upload_project, tmp_path: Path
 ) -> None:
@@ -578,7 +599,7 @@ def test_event_stream_rejects_failed_completion_without_an_error_event(
         )
 
 
-def test_event_stream_reports_progress_and_returns_after_cloud_accepts_task(
+def test_event_stream_reports_progress_until_cloud_continuation_completes(
     upload_project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     class Response:
@@ -593,8 +614,14 @@ def test_event_stream_reports_progress_and_returns_after_cloud_accepts_task(
                     b"event: progress\n",
                     '{"stage":"task-started","message":"云端 Codex 已接收任务，正在继续执行"}',
                     b"\n",
+                    b"event: progress\n",
+                    '{"stage":"task-running","message":"云端 Codex 正在生成回复"}',
+                    b"\n",
+                    b"event: progress\n",
+                    '{"stage":"task-completed","message":"云端任务已继续执行并生成回复"}',
+                    b"\n",
                     b"event: done\n",
-                    b'data: {"reason":"accepted"}\n',
+                    b'data: {"reason":"completed"}\n',
                     b"\n",
                 ]
             )
@@ -628,6 +655,8 @@ def test_event_stream_reports_progress_and_returns_after_cloud_accepts_task(
     output = capsys.readouterr().out
     assert "[handoff] progress: 正在连接云端 Session" in output
     assert "[handoff] progress: 云端 Codex 已接收任务，正在继续执行" in output
+    assert "[handoff] progress: 云端 Codex 正在生成回复" in output
+    assert "[handoff] progress: 云端任务已继续执行并生成回复" in output
 
 
 def test_cloud_continuation_injects_history_before_exact_user_message(

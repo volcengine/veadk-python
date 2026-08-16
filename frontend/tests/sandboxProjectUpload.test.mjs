@@ -219,7 +219,14 @@ test("handoff progress can open the completed Codex session", () => {
   assert.match(dialogSource, /发送续跑任务/);
   assert.match(dialogSource, /进入 Codex/);
   assert.match(sandboxClientSource, /\| "running"/);
-  assert.match(dialogSource, /handoffStatus\?\.state === "running"/);
+  assert.match(
+    dialogSource,
+    /handoffStatus\?\.state === "completed" && handoffStatus\.sessionId/,
+  );
+  assert.doesNotMatch(
+    dialogSource,
+    /handoffStatus\?\.state === "running" \|\|/,
+  );
   assert.match(dialogSource, /return "云端执行中"/);
   assert.match(dialogSource, /onOpenSession/);
   assert.match(appSource, /async function openCodexHandoffSession/);
@@ -253,12 +260,26 @@ test("GitHub credential handling stays in the upload skill instead of the dialog
   assert.match(frontendUploadSkillSource, /verify `gh auth token --hostname github\.com` succeeds/);
   assert.match(frontendUploadSkillSource, /GitHub authentication is transferred separately/);
   assert.match(frontendUploadSkillSource, /temporary Studio Sandbox/);
-  assert.match(frontendUploadSkillSource, /completed visible conversation/);
+  assert.match(frontendUploadSkillSource, /complete visible conversation/);
   assert.match(frontendUploadSkillSource, /thread\/inject_items/);
   assert.match(frontendUploadSkillSource, /otherwise use exactly `继续`/);
   assert.match(uploadScriptSource, /"thread\/inject_items"|"history": history/);
   assert.match(frontendUploadSkillSource, /codexDelegation\.input/);
   assert.match(frontendUploadSkillSource, /"schemaVersion":2/);
+});
+
+test("the handoff skill preserves all prior visible messages exactly", () => {
+  assert.match(frontendUploadSkillSource, /Exclude that entire turn only/);
+  assert.match(frontendUploadSkillSource, /do not exclude any older turn based on `completed`, `interrupted`, failed, or other status/);
+  assert.match(frontendUploadSkillSource, /page\.nextCursor/);
+  assert.match(frontendUploadSkillSource, /whenever `page\.hasMore` is true/);
+  assert.match(frontendUploadSkillSource, /Reassemble pages and turns oldest-to-newest/);
+  assert.match(frontendUploadSkillSource, /keep every `userMessage` and every `agentMessage` exactly once/);
+  assert.match(frontendUploadSkillSource, /including progress commentary before a final answer/);
+  assert.match(frontendUploadSkillSource, /do not merge, summarize, deduplicate, or replace them with the final answer/);
+  assert.match(frontendUploadSkillSource, /never on turn status or `agentMessage\.phase`/);
+  assert.match(frontendUploadSkillSource, /compare the JSON message count with the number of eligible `userMessage` and `agentMessage` items/);
+  assert.doesNotMatch(frontendUploadSkillSource, /Exclude commentary-only agent messages/);
 });
 
 test("imported Codex history renders image attachments in the transcript", () => {

@@ -1189,7 +1189,7 @@ def test_codex_project_handoff_pairing_creates_temporary_session_and_continues(
     assert '"stage": "connecting-session"' in continued.text
     assert '"stage": "importing-history"' in continued.text
     assert '"stage": "task-started"' in continued.text
-    assert 'data: {"reason": "accepted"}' in continued.text
+    assert 'data: {"reason": "completed"}' in continued.text
     assert "reply:继续" not in continued.text
     assert continued_twice.status_code == 403
     assert completed_status.status_code == 200
@@ -1206,7 +1206,126 @@ def test_codex_project_handoff_pairing_creates_temporary_session_and_continues(
         CodexImportedMessage(role="assistant", content="我已经定位到重试逻辑。"),
     )
     assert gateway.connections[0].prompts == ["继续"]
+    assert gateway.connections[0].permissions == CodexPermissionSettings(
+        approval_policy="never",
+        approvals_reviewer="auto_review",
+        sandbox_mode="danger-full-access",
+        network_access=True,
+    )
     assert "Authorization=secret" not in listed.text
+
+
+def test_codex_project_handoff_continuation_failure_reaches_edge_and_pairing() -> None:
+    class _FailStreamGateway(_FakeGateway):
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            del session
+            connection = _FakeCodex(self.thread_ids, fail=True)
+            self.connections.append(connection)
+            return connection
+
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
+    with TestClient(_app(_FailStreamGateway())) as client:
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
+            headers={"X-Test-User": "alice"},
+        )
+        code = pairing.json()["pairingCode"]
+        created = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "Repo",
+                "agentName": "继续失败任务",
+                "handoffId": "handoff-request-failed-turn",
+            },
+        )
+        continued = client.post(
+            f"/web/sandbox/codex-project-handoff/sessions/{created.json()['sessionId']}/messages",
+            json={"pairingCode": code, "message": "继续"},
+        )
+        status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert continued.status_code == 200
+    assert "event: error" in continued.text
+    assert 'data: {"reason": "failed"}' in continued.text
+    assert "failed" in continued.text
+    assert status.json()["state"] == "failed"
+    assert status.json()["failedStage"] == "continuing-task"
+    assert status.json()["error"].startswith("failed")
+
+
+def test_codex_project_handoff_first_event_timeout_interrupts_and_fails_pairing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _StalledCodex(_FakeCodex):
+        def __init__(self, turns: list[str]) -> None:
+            super().__init__(turns)
+            self.cancelled = False
+
+        async def stream_turn(
+            self, prompt: str, skill_ids: tuple[str, ...] = ()
+        ) -> AsyncIterator[CodexAppServerEvent]:
+            del prompt, skill_ids
+            self.active = True
+            self.workspace_locked = True
+            try:
+                await asyncio.Event().wait()
+                if False:
+                    yield CodexAppServerEvent()
+            finally:
+                self.active = False
+                self.cancelled = True
+
+    class _StalledGateway(_FakeGateway):
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            del session
+            connection = _StalledCodex(self.thread_ids)
+            self.connections.append(connection)
+            return connection
+
+    monkeypatch.setattr(
+        frontend_sandbox,
+        "_CODEX_PROJECT_HANDOFF_FIRST_EVENT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
+    gateway = _StalledGateway()
+    with TestClient(_app(gateway)) as client:
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
+            headers={"X-Test-User": "alice"},
+        )
+        code = pairing.json()["pairingCode"]
+        created = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "Repo",
+                "agentName": "连接超时任务",
+                "handoffId": "handoff-request-stalled-turn",
+            },
+        )
+        continued = client.post(
+            f"/web/sandbox/codex-project-handoff/sessions/{created.json()['sessionId']}/messages",
+            json={"pairingCode": code, "message": "继续"},
+        )
+        status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert continued.status_code == 200
+    assert "event: error" in continued.text
+    assert 'data: {"reason": "failed"}' in continued.text
+    assert "云端模型连接异常" in continued.text
+    assert status.json()["state"] == "failed"
+    assert status.json()["failedStage"] == "continuing-task"
+    assert "云端模型连接异常" in status.json()["error"]
+    assert gateway.connections[0].cancelled is True
+    assert gateway.connections[0].active is False
 
 
 def test_codex_project_handoff_upload_failure_is_visible_and_session_is_reused(

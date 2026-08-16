@@ -1,6 +1,6 @@
 {
   "name": "agentkit-studio",
-  "version": "0.1.1+codex.20260816135433",
+  "version": "0.1.1+codex.20260816111057",
   "description": "Continue local Codex conversations and coding tasks in an AgentKit Studio cloud sandbox.",
   "author": {
     "name": "VeADK",

@@ -681,8 +681,7 @@ export function SandboxProjectUploadDialog({
           <button type="button" onClick={onClose}>
             关闭
           </button>
-          {(handoffStatus?.state === "running" ||
-            handoffStatus?.state === "completed") && handoffStatus.sessionId ? (
+          {handoffStatus?.state === "completed" && handoffStatus.sessionId ? (
             <button
               type="button"
               className="is-primary"
