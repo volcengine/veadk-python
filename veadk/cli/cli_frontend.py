@@ -1279,6 +1279,14 @@ def _run_frontend_server(
         web=False,  # we serve our own UI, not the bundled ADK dev UI
     )
 
+    # Studio's production bundle includes large CSS assets. Compress them at
+    # the application boundary so cloud API gateways do not have to stream the
+    # uncompressed response to every browser. Starlette automatically skips
+    # responses that must not be buffered, including server-sent events.
+    from starlette.middleware.gzip import GZipMiddleware
+
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
+
     adk_server = None
     for route in app.routes:
         if getattr(route, "path", "") != "/run_sse":
