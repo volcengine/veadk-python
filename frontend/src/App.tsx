@@ -4109,58 +4109,11 @@ export default function App() {
     }
   }
 
-  async function verifyIntelligentDevelopment() {
-    const activeSession = sandboxSession;
-    if (!activeSession?.intelligentDevelopment || sandboxBusy) return;
-    const assistantTurnId = crypto.randomUUID();
-    setSandboxTurns((current) => [
-      ...current,
-      {
-        role: "system",
-        blocks: [],
-        activity: {
-          id: crypto.randomUUID(),
-          title: "正在独立验证并生成交付物",
-        },
-        meta: { localId: crypto.randomUUID(), ts: Date.now() / 1000 },
-      },
-      { role: "assistant", blocks: [], meta: { localId: assistantTurnId } },
-    ]);
-    const controller = new AbortController();
-    sandboxMessageAbortRef.current?.abort();
-    sandboxMessageAbortRef.current = controller;
-    setSandboxBusy(true);
-    try {
-      const reply = await intelligentDevelopmentClient.verifyDelivery(
-        activeSession.id,
-        {
-          signal: controller.signal,
-          onBlocks: (blocks) => {
-            setSandboxTurns((current) => current.map((turn) =>
-              turn.meta?.localId === assistantTurnId ? { ...turn, blocks } : turn
-            ));
-          },
-        },
-      );
-      setSandboxTurns((current) => current.map((turn) =>
-        turn.meta?.localId === assistantTurnId
-          ? { ...turn, blocks: reply.blocks, meta: { ...turn.meta, ts: Date.now() / 1000 } }
-          : turn
-      ));
-    } catch (cause) {
-      if ((cause as Error)?.name !== "AbortError") {
-        setError(cause instanceof Error ? cause.message : String(cause));
-      }
-    } finally {
-      if (sandboxMessageAbortRef.current === controller) {
-        sandboxMessageAbortRef.current = null;
-        setSandboxBusy(false);
-      }
-    }
-  }
-
   async function submitSandboxInput(value: string) {
-    if (await sandboxCommands.executeSlash(value)) return;
+    if (
+      !sandboxSession?.intelligentDevelopment &&
+      await sandboxCommands.executeSlash(value)
+    ) return;
     if (!sandboxSession || sandboxBusy || sandboxCommands.commandBusy) return;
     const messageAttachments = attachments;
     const selectedSkills = sandboxCommands.selectedSkills;
@@ -5617,20 +5570,13 @@ export default function App() {
                           ? "OpenClaw"
                           : "Hermes"
                 }
+                expireAt={
+                  sandboxSession.intelligentDevelopment
+                    ? sandboxSession.expireAt
+                    : undefined
+                }
                 onExit={startNewChat}
               />
-            )}
-            {sandboxSession?.intelligentDevelopment && (
-              <div className="intelligent-verify-bar">
-                <span>开发完成后，由 Studio 独立执行真实 AgentKit 验证。</span>
-                <button
-                  type="button"
-                  disabled={sandboxBusy || sandboxCommands.commandBusy}
-                  onClick={() => void verifyIntelligentDevelopment()}
-                >
-                  验证并生成交付物
-                </button>
-              </div>
             )}
             {sandboxSession ? (
               <SandboxComposer

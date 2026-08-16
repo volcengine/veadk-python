@@ -20,20 +20,31 @@ import asyncio
 import contextlib
 from datetime import datetime, timezone
 import json
+import logging
 import re
 import shlex
 from collections.abc import AsyncIterator, Callable
 from typing import Any
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from starlette.types import Receive, Scope, Send
 
-from frontend.server.intelligent_development import (
-    DevSession,
-    DevelopmentEvent,
-    IntelligentDevelopmentVerifier,
+from frontend.server.intelligent_development_task import (
+    COMPLETION_FILE_PREFIX,
+    CredentialResolver,
+    DeliveryPublisher,
+    builder_prompt,
+    create_credential_lease,
+    intent_gate_prompt,
+    invalidate_current_delivery,
+    parse_intent_decision,
+    read_completion_contract,
+    remove_completion_file,
 )
 from frontend.server.sandbox_remote import SandboxRemoteTransport
+from veadk.cli.codex_app_server import CodexPermissionSettings
 from veadk.cli.frontend_sandbox import (
     SandboxCapacityError,
     SandboxCloudSession,
@@ -43,6 +54,7 @@ from veadk.cli.frontend_sandbox import (
     SandboxProvisioningError,
     SandboxSessionNotFoundError,
     SandboxSessionUnavailableError,
+    SandboxStreamEvent,
     SandboxValidationError,
     mount_sandbox_routes,
 )
@@ -53,7 +65,38 @@ INTELLIGENT_DEVELOPMENT_AGENT_KIND = "intelligent-development"
 INTELLIGENT_DEVELOPMENT_WORKLOAD = INTELLIGENT_DEVELOPMENT_AGENT_KIND
 INTELLIGENT_DEVELOPMENT_SCHEMA_VERSION = "1"
 _PROJECT_ROOT = "/home/gem/workspace"
+_DEVELOPMENT_SKILL_NAME = "veadk-agent-development"
 _SAFE_WORKSPACE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_INTENT_TURN_TIMEOUT_SECONDS = 120
+_BUILDER_TURN_TIMEOUT_SECONDS = 3_300
+_INTENT_PERMISSIONS = CodexPermissionSettings(
+    approval_policy="never",
+    approvals_reviewer="auto_review",
+    sandbox_mode="read-only",
+    network_access=False,
+)
+_BUILDER_PERMISSIONS = CodexPermissionSettings(
+    approval_policy="never",
+    approvals_reviewer="auto_review",
+    sandbox_mode="danger-full-access",
+    network_access=True,
+)
+_COMMAND_PROGRESS = (
+    (re.compile(r"(?:^|[\s;&|])ak\s+runtime\s+delete\b"), "正在清理临时验证资源。"),
+    (re.compile(r"(?:^|[\s;&|])ak\s+runtime\s+logs\b"), "正在检查临时运行日志。"),
+    (re.compile(r"(?:^|[\s;&|])ak\s+invoke\b"), "正在验证 Agent 的实际行为。"),
+    (re.compile(r"(?:^|[\s;&|])ak\s+status\b"), "正在等待临时验证环境就绪。"),
+    (re.compile(r"(?:^|[\s;&|])ak\s+deploy\b"), "正在部署临时验证环境。"),
+    (re.compile(r"(?:^|[\s;&|])ak\s+build\b"), "正在构建临时验证版本。"),
+    (re.compile(r"(?:^|[\s;&|])ak\s+config\b"), "正在准备临时验证配置。"),
+    (re.compile(r"(?:^|[\s;&|])ak\s+init\b"), "正在初始化 Agent 项目。"),
+    (
+        re.compile(r"(?:^|[\s;&|])(pytest|ruff|pyright|mypy|python[^\s]*\s+-m\s+(pytest|compileall))\b"),
+        "正在执行本地检查。",
+    ),
+    (re.compile(r"(?:^|[\s;&|])(curl|wget)\b[^\n]*?/ping\b"), "正在检查本地服务。"),
+)
+logger = logging.getLogger(__name__)
 
 
 class IntelligentDevelopmentGateway:
@@ -71,6 +114,27 @@ class IntelligentDevelopmentGateway:
     async def create_session(self, *args: Any, **kwargs: Any) -> SandboxCloudSession:
         return await self._gateway.create_session(*args, **kwargs)
 
+    async def list_sessions(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._gateway.list_sessions(*args, **kwargs)
+
+    async def list_snapshots(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._gateway.list_snapshots(*args, **kwargs)
+
+    async def get_session(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._gateway.get_session(*args, **kwargs)
+
+    async def delete_session(self, *args: Any, **kwargs: Any) -> None:
+        await self._gateway.delete_session(*args, **kwargs)
+
+    async def resume_snapshot(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._gateway.resume_snapshot(*args, **kwargs)
+
+    async def delete_snapshot(self, *args: Any, **kwargs: Any) -> None:
+        await self._gateway.delete_snapshot(*args, **kwargs)
+
+    async def open_codex(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._gateway.open_codex(*args, **kwargs)
+
 
 class _SandboxSurfaceAdapter:
     """Expose the existing Sandbox route adapter below a Studio-only prefix."""
@@ -87,16 +151,13 @@ class _SandboxSurfaceAdapter:
 
     async def __call__(
         self,
-        scope: dict[str, Any],
-        receive: Callable[[], Any],
-        send: Callable[[dict[str, Any]], Any],
+        scope: Scope,
+        receive: Receive,
+        send: Send,
     ) -> None:
         rewritten = dict(scope)
         path = scope.get("path", "")
-        allowed_suffixes = (
-            "/approvals/",
-            "/disconnect",
-        )
+        allowed_suffixes = ("/disconnect",)
         if not any(marker in path for marker in allowed_suffixes):
             raise HTTPException(status_code=404, detail="Not Found")
         parts = path.split("/")
@@ -209,6 +270,18 @@ def _workspace(session: SandboxCloudSession) -> str:
     return f"{_PROJECT_ROOT}/{identity}"
 
 
+def _remaining_lifetime_minutes(expire_at: str) -> int:
+    try:
+        expires_at = datetime.fromisoformat(expire_at.replace("Z", "+00:00"))
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+    except ValueError as error:
+        raise SandboxSessionUnavailableError(
+            "开发环境过期时间无效。"
+        ) from error
+    return max(0, int((expires_at - datetime.now(timezone.utc)).total_seconds() // 60))
+
+
 async def _prepare_workspace(session: SandboxCloudSession) -> str:
     workspace = _workspace(session)
     source = (
@@ -227,10 +300,62 @@ async def _prepare_workspace(session: SandboxCloudSession) -> str:
     return workspace
 
 
-VerifierFactory = Callable[
-    [Callable[[DevelopmentEvent], Any]], IntelligentDevelopmentVerifier
-]
-CleanupStaleRuntimes = Callable[[], Any]
+async def _development_skill_id(
+    service: SandboxConversationService,
+    session_id: str,
+    owner_id: str,
+) -> str:
+    skills = await service.list_skills(session_id, owner_id, force_reload=True)
+    matches = [skill for skill in skills if skill.name == _DEVELOPMENT_SKILL_NAME]
+    if len(matches) != 1:
+        raise SandboxConfigurationError("智能开发能力尚未正确安装。")
+    return matches[0].id
+
+
+def _conversation_event_sse(event: SandboxStreamEvent) -> str | None:
+    if event.kind in {"text", "commentary"}:
+        payload = {"text": event.text}
+        return f"event: delta\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+    if event.kind == "usage" and event.usage is not None:
+        payload = {
+            "turnId": event.turn_id,
+            "usage": event.usage.public_dict(),
+            **(
+                {"threadTotal": event.thread_total.public_dict()}
+                if event.thread_total is not None
+                else {}
+            ),
+            **(
+                {"modelContextWindow": event.model_context_window}
+                if event.model_context_window is not None
+                else {}
+            ),
+        }
+        return f"event: usage\ndata: {json.dumps(payload)}\n\n"
+    return None
+
+
+def _progress_sse(message: str) -> str:
+    payload = {"text": f"{message}\n\n"}
+    return f"event: delta\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _command_progress(event: SandboxStreamEvent) -> str | None:
+    if event.kind != "tool" or event.status != "running":
+        return None
+    arguments = event.arguments
+    if not isinstance(arguments, dict):
+        return None
+    command = arguments.get("command")
+    if isinstance(command, list):
+        command = " ".join(item for item in command if isinstance(item, str))
+    if not isinstance(command, str):
+        return None
+    lowered = command.lower()
+    for pattern, message in _COMMAND_PROGRESS:
+        if pattern.search(lowered):
+            return message
+    return None
 
 
 def mount_intelligent_development_routes(
@@ -238,15 +363,16 @@ def mount_intelligent_development_routes(
     service: SandboxConversationService,
     owner_resolver: Callable[[Request], str],
     creator_resolver: Callable[[Request], str],
-    verifier_factory: VerifierFactory | None = None,
+    credential_resolver: CredentialResolver | None = None,
     configured: bool = True,
-    cleanup_stale_runtimes: CleanupStaleRuntimes | None = None,
+    validation_region: str = "cn-beijing",
+    validation_project: str = "default",
 ) -> None:
-    """Mount fixed SANDBOX_DEV routes without changing the generic Sandbox API."""
+    """Mount the Codex-gated SANDBOX_DEV surface."""
 
     delegated = FastAPI()
-    verification_locks: dict[tuple[str, str], asyncio.Lock] = {}
-    verification_locks_guard = asyncio.Lock()
+    task_locks: dict[tuple[str, str], asyncio.Lock] = {}
+    task_locks_guard = asyncio.Lock()
     mount_sandbox_routes(
         delegated,
         service,
@@ -322,141 +448,18 @@ def mount_intelligent_development_routes(
                 await service.update_workspace(session_id, owner, workspace)
             elif conversation.codex.cwd != workspace:
                 raise SandboxSessionUnavailableError("开发会话已在非预期工作空间启动。")
+            if conversation.codex.permissions != _BUILDER_PERMISSIONS:
+                await service.update_permissions(
+                    session_id,
+                    owner,
+                    _BUILDER_PERMISSIONS,
+                )
         except SandboxError as error:
             raise _http_error(error) from error
         return {
             **_public_session(conversation.cloud),
             **service.settings(session_id, owner),
         }
-
-    @app.post(
-        f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions/{{session_id}}/verify-deliver"
-    )
-    async def _verify_deliver(
-        session_id: str,
-        request: Request,
-    ) -> StreamingResponse:
-        owner = owner_resolver(request)
-        if verifier_factory is None:
-            raise HTTPException(
-                status_code=503,
-                detail="智能开发验证服务尚未配置。",
-            )
-        try:
-            cloud = await resolve_intelligent_development_session(
-                service, session_id, owner
-            )
-            project_root = _workspace(cloud)
-            conversation = await service.connect(session_id, owner, is_admin=False)
-            _require_development_session(conversation.cloud)
-            if conversation.codex.active:
-                raise SandboxSessionUnavailableError(
-                    "当前开发回复尚未完成，请稍后再验证。"
-                )
-            if conversation.codex.cwd != project_root:
-                raise SandboxSessionUnavailableError("开发工作空间不符合验证要求。")
-        except SandboxError as error:
-            raise _http_error(error) from error
-
-        lock_key = (owner, session_id)
-        async with verification_locks_guard:
-            verification_lock = verification_locks.setdefault(lock_key, asyncio.Lock())
-            if verification_lock.locked():
-                raise _http_error(
-                    SandboxSessionUnavailableError(
-                        "当前 Session 正在验证，请勿重复提交。"
-                    )
-                )
-            await verification_lock.acquire()
-        queue: asyncio.Queue[DevelopmentEvent | None] = asyncio.Queue()
-
-        async def event_sink(event: DevelopmentEvent) -> None:
-            await queue.put(event)
-
-        try:
-            verifier = verifier_factory(event_sink)
-            session = DevSession(
-                owner_id=owner,
-                session_id=conversation.cloud.instance_id,
-                endpoint=conversation.cloud.endpoint,
-                project_root=project_root,
-            )
-        except Exception:
-            async with verification_locks_guard:
-                verification_lock.release()
-                verification_locks.pop(lock_key, None)
-            raise
-
-        async def run() -> None:
-            try:
-                await verifier.run(owner_id=owner, session=session)
-            finally:
-                async with verification_locks_guard:
-                    verification_lock.release()
-                    verification_locks.pop(lock_key, None)
-                await queue.put(None)
-
-        async def stream() -> AsyncIterator[str]:
-            task = asyncio.create_task(run())
-            try:
-                while True:
-                    event = await queue.get()
-                    if event is None:
-                        break
-                    yield event.as_sse()
-                await task
-            except asyncio.CancelledError:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-                raise
-            except Exception:
-                if not task.done():
-                    task.cancel()
-                payload = {
-                    "code": "INTELLIGENT_DEVELOPMENT_FAILED",
-                    "message": "验证未能完成，请返回开发会话后重试。",
-                    "retryable": True,
-                }
-                yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-        return StreamingResponse(
-            stream(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-
-    @app.get(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions/{{session_id}}/status")
-    async def _status(session_id: str, request: Request) -> dict[str, object]:
-        owner = owner_resolver(request)
-        try:
-            await resolve_intelligent_development_session(service, session_id, owner)
-            return service.status(session_id, owner)
-        except SandboxError as error:
-            raise _http_error(error) from error
-
-    @app.get(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions/{{session_id}}/models")
-    async def _models(session_id: str, request: Request) -> dict[str, object]:
-        owner = owner_resolver(request)
-        try:
-            await resolve_intelligent_development_session(service, session_id, owner)
-            models = await service.list_models(session_id, owner)
-        except SandboxError as error:
-            raise _http_error(error) from error
-        return {"models": [model.public_dict() for model in models]}
-
-    @app.put(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions/{{session_id}}/model")
-    async def _model(session_id: str, request: Request) -> dict[str, object]:
-        owner = owner_resolver(request)
-        try:
-            await resolve_intelligent_development_session(service, session_id, owner)
-            body = await _request_object(request, 64 * 1024)
-            model = body.get("model")
-            if set(body) != {"model"} or not isinstance(model, str):
-                raise SandboxValidationError("模型名称必须是文本。")
-            return {"model": await service.set_model(session_id, owner, model)}
-        except SandboxError as error:
-            raise _http_error(error) from error
 
     @app.get(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/releases/summary")
     async def _release_summary(
@@ -512,12 +515,6 @@ def mount_intelligent_development_routes(
             "gateSummary": list(trusted.gate_summary),
         }
 
-    @app.get(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions/{{session_id}}/skills")
-    async def _skills_unavailable(session_id: str, request: Request) -> None:
-        del session_id
-        owner_resolver(request)
-        raise HTTPException(status_code=404, detail="Not Found")
-
     @app.post(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions/{{session_id}}/interrupt")
     async def _interrupt(session_id: str, request: Request) -> dict[str, bool]:
         owner = owner_resolver(request)
@@ -542,66 +539,230 @@ def mount_intelligent_development_routes(
             if len(prompt) > 100_000:
                 raise SandboxValidationError("message is too large")
             service.require_owned(session_id, owner)
+            cloud = await resolve_intelligent_development_session(
+                service, session_id, owner
+            )
+            project_root = _workspace(cloud)
         except SandboxError as error:
             raise _http_error(error) from error
 
+        lock_key = (owner, session_id)
+        async with task_locks_guard:
+            task_lock = task_locks.setdefault(lock_key, asyncio.Lock())
+            if task_lock.locked():
+                raise _http_error(
+                    SandboxSessionUnavailableError(
+                        "当前智能开发任务仍在进行，请稍后继续。"
+                    )
+                )
+            await task_lock.acquire()
+
         async def stream() -> AsyncIterator[str]:
+            lease = None
+            completion_path = ""
+            emitted_progress: set[str] = set()
+
+            async def cleanup_task_files() -> None:
+                nonlocal completion_path, lease
+                completion_error: Exception | None = None
+                credential_error: Exception | None = None
+                if completion_path:
+                    try:
+                        await remove_completion_file(
+                            SandboxRemoteTransport(cloud.endpoint), completion_path
+                        )
+                        completion_path = ""
+                    except Exception as error:
+                        completion_error = error
+                if lease is not None:
+                    try:
+                        await lease.cleanup()
+                        lease = None
+                    except Exception as error:
+                        credential_error = error
+                if credential_error is not None:
+                    try:
+                        await service.delete(session_id, owner)
+                    except Exception:
+                        logger.error(
+                            "Credential cleanup and environment termination failed for intelligent development session %s",
+                            session_id,
+                        )
+                        raise SandboxError(
+                            "临时凭据清理未能确认，开发环境自动终止也失败。"
+                            "请勿继续使用当前会话，并联系管理员。"
+                        ) from credential_error
+                    completion_path = ""
+                    lease = None
+                    raise SandboxSessionNotFoundError(
+                        "临时凭据清理未能确认；为保护凭据，开发环境已自动终止。"
+                        "请新建会话后重试。"
+                    ) from credential_error
+                if completion_error is not None:
+                    raise SandboxSessionUnavailableError(
+                        "临时交付证据文件未能清理，本轮已停止交付。请重试。"
+                    ) from completion_error
+
             try:
+                yield _progress_sse("正在理解需求并整理验收标准。")
+                gate_text = ""
                 async for event in service.stream_message(
                     session_id,
                     owner,
-                    prompt.strip(),
+                    intent_gate_prompt(prompt.strip(), expire_at=cloud.expire_at),
+                    turn_permissions=_INTENT_PERMISSIONS,
+                    turn_timeout_seconds=_INTENT_TURN_TIMEOUT_SECONDS,
                 ):
                     if event.kind == "text":
-                        payload = {"text": event.text}
-                        yield f"event: delta\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                    elif event.approval is not None:
-                        yield (
-                            "event: approval\n"
-                            f"data: {json.dumps(event.approval, ensure_ascii=False)}\n\n"
+                        gate_text += event.text
+                try:
+                    decision = parse_intent_decision(gate_text)
+                except ValueError as error:
+                    raise SandboxSessionUnavailableError(
+                        "意图识别未返回有效结果，请重试。"
+                    ) from error
+                if decision.decision != "accept":
+                    payload = {"text": decision.message}
+                    yield (
+                        "event: delta\n"
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    )
+                    yield "event: done\ndata: {}\n\n"
+                    return
+
+                transport = SandboxRemoteTransport(cloud.endpoint)
+                development_skill_id = await _development_skill_id(
+                    service, session_id, owner
+                )
+                yield _progress_sse("需求已确认，正在准备开发环境。")
+                if decision.changes_delivery:
+                    await invalidate_current_delivery(transport)
+                completion_path = (
+                    f"{project_root}/{COMPLETION_FILE_PREFIX}{uuid4().hex}.json"
+                )
+                if credential_resolver is None:
+                    raise SandboxConfigurationError("智能开发云端凭据尚未配置。")
+                lease = await create_credential_lease(
+                    cloud.endpoint, credential_resolver
+                )
+                yield _progress_sse("开发环境已就绪，正在实现、测试并完成临时云端验证。")
+                delivery = None
+                async for event in service.stream_message(
+                    session_id,
+                    owner,
+                    builder_prompt(
+                        prompt.strip(),
+                        decision,
+                        launcher_path=lease.launcher_path,
+                        completion_path=completion_path,
+                        expire_at=cloud.expire_at,
+                        remaining_lifetime_minutes=_remaining_lifetime_minutes(
+                            cloud.expire_at
+                        ),
+                        validation_region=validation_region,
+                        validation_project=validation_project,
+                    ),
+                    skill_ids=(development_skill_id,),
+                    turn_timeout_seconds=_BUILDER_TURN_TIMEOUT_SECONDS,
+                ):
+                    progress = _command_progress(event)
+                    if progress is not None and progress not in emitted_progress:
+                        emitted_progress.add(progress)
+                        yield _progress_sse(progress)
+                    public_event = _conversation_event_sse(event)
+                    if public_event is not None:
+                        yield public_event
+
+                try:
+                    completion = await read_completion_contract(
+                        transport, completion_path
+                    )
+                except Exception:
+                    completion = None
+                if completion is None:
+                    payload = {
+                        "text": (
+                            "\n\nStudio 未收到完整的交付证据，因此本轮不会标记为“已验证”。"
+                            "你可以在当前 Thread 继续修复和重验。"
                         )
-                    elif event.approval_resolved_id:
-                        payload = {"approvalId": event.approval_resolved_id}
-                        yield (
-                            "event: approval_resolved\n"
-                            f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                        )
-                    elif event.kind == "usage" and event.usage is not None:
-                        payload = {
-                            "turnId": event.turn_id,
-                            "usage": event.usage.public_dict(),
-                            **(
-                                {"threadTotal": event.thread_total.public_dict()}
-                                if event.thread_total is not None
-                                else {}
-                            ),
-                            **(
-                                {"modelContextWindow": event.model_context_window}
-                                if event.model_context_window is not None
-                                else {}
-                            ),
-                        }
-                        yield f"event: usage\ndata: {json.dumps(payload)}\n\n"
-                    else:
-                        payload = {
-                            "id": event.item_id,
-                            "kind": event.kind,
-                            "status": event.status,
-                            "text": event.text or None,
-                            "name": event.name or None,
-                            "args": event.arguments,
-                            "response": event.response,
-                        }
-                        yield f"event: activity\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    }
+                    yield (
+                        "event: delta\n"
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    )
+                if completion is not None and completion.verified:
+                    delivery = await DeliveryPublisher(transport).publish(
+                        session_id=cloud.instance_id,
+                        project_root=project_root,
+                        task_root=lease.root,
+                        completion=completion,
+                        exact_secrets=lease.exact_secrets,
+                    )
+
+                await cleanup_task_files()
+
+                if delivery is not None:
+                    event = {
+                        "payload": {"delivery": delivery.as_dict()},
+                    }
+                    yield (
+                        "event: development.succeeded\n"
+                        f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    )
                 yield "event: done\ndata: {}\n\n"
             except SandboxError as error:
+                failure = error
+                try:
+                    await cleanup_task_files()
+                except SandboxError as cleanup_error:
+                    failure = cleanup_error
+                except Exception:
+                    failure = SandboxError(
+                        "智能开发任务未能安全清理，请勿继续使用当前会话。"
+                    )
                 payload = {
-                    "code": error.code,
-                    "message": str(error),
-                    "retryable": error.retryable,
+                    "code": failure.code,
+                    "message": str(failure),
+                    "retryable": failure.retryable,
                 }
                 yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 yield 'event: done\ndata: {"reason":"failed"}\n\n'
+            except Exception:
+                try:
+                    await cleanup_task_files()
+                except SandboxError as cleanup_error:
+                    payload = {
+                        "code": cleanup_error.code,
+                        "message": str(cleanup_error),
+                        "retryable": cleanup_error.retryable,
+                    }
+                except Exception:
+                    payload = {
+                        "code": "INTELLIGENT_DEVELOPMENT_CLEANUP_FAILED",
+                        "message": "智能开发任务未能安全清理，请勿继续使用当前会话。",
+                        "retryable": False,
+                    }
+                else:
+                    payload = {
+                        "code": "INTELLIGENT_DEVELOPMENT_FAILED",
+                        "message": "智能开发任务未能安全完成，请在当前会话重试。",
+                        "retryable": True,
+                    }
+                yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                yield 'event: done\ndata: {"reason":"failed"}\n\n'
+            finally:
+                if completion_path or lease is not None:
+                    try:
+                        await cleanup_task_files()
+                    except Exception:
+                        logger.error(
+                            "Final intelligent development cleanup failed for session %s",
+                            session_id,
+                        )
+                async with task_locks_guard:
+                    if task_lock.locked():
+                        task_lock.release()
+                    task_locks.pop(lock_key, None)
 
         return StreamingResponse(
             stream(),
@@ -620,14 +781,6 @@ def mount_intelligent_development_routes(
         while True:
             await asyncio.sleep(60)
             await service.cleanup_expired()
-            if cleanup_stale_runtimes is not None:
-                try:
-                    result = cleanup_stale_runtimes()
-                    if result is not None:
-                        await result
-                except Exception:
-                    # The next bounded cycle retries; conversation cleanup must continue.
-                    pass
 
     async def _start() -> None:
         nonlocal cleanup_task

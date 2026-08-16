@@ -162,7 +162,7 @@ test("normal sandbox client keeps the existing endpoint and skill payload", asyn
   });
 });
 
-test("verify-deliver accepts only the typed server delivery event", async (t) => {
+test("the automatic message stream accepts only a typed delivery event", async (t) => {
   const previousFetch = globalThis.fetch;
   const writes = [];
   const previousStorage = globalThis.localStorage;
@@ -187,11 +187,14 @@ test("verify-deliver accepts only the typed server delivery event", async (t) =>
     ]);
   };
 
-  const reply = await intelligentDevelopmentClient.verifyDelivery("dev/1");
+  const reply = await intelligentDevelopmentClient.sendMessage({
+    sessionId: "dev/1",
+    text: "build it",
+  });
 
   assert.equal(
     requestedUrl,
-    "/web/intelligent-development/sessions/dev%2F1/verify-deliver",
+    "/web/intelligent-development/sessions/dev%2F1/messages",
   );
   assert.equal(reply.blocks[0].kind, "text");
   assert.equal(reply.blocks.filter((block) => block.kind === "delivery").length, 1);
@@ -267,6 +270,12 @@ test("client exports remain separately configured", () => {
   assert.match(sandboxSource, /export const sandboxClient = createSandboxClient\(SANDBOX_API\)/);
   assert.match(
     sandboxSource,
-    /export const intelligentDevelopmentClient = createSandboxClient\(\s*"\/web\/intelligent-development\/sessions",\s*\{ textOnly: true \}/,
+    /export const intelligentDevelopmentClient = createSandboxClient\(\s*"\/web\/intelligent-development\/sessions",\s*\{ textOnly: true, messageTimeoutMs: 3_600_000 \}/,
+  );
+  assert.doesNotMatch(sandboxSource, /verifyDelivery\(/);
+  assert.doesNotMatch(appSource, /验证并生成交付物|verifyIntelligentDevelopment/);
+  assert.match(
+    appSource,
+    /!sandboxSession\?\.intelligentDevelopment\s*&&\s*await sandboxCommands\.executeSlash\(value\)/,
   );
 });

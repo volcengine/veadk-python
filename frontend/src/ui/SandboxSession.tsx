@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { SandboxTokenUsage } from "../adk/sandbox";
 import type { TurnActivity } from "../blocks";
 import { InsightIcon } from "./icons/InsightIcon";
@@ -30,16 +31,49 @@ export function SandboxEntryButton({
 
 export function SandboxSessionWarning({
   agentName,
+  expireAt,
   onExit,
 }: {
   agentName: string;
+  expireAt?: string;
   onExit: () => void;
 }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!expireAt) return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [expireAt]);
+  const expiry = expireAt ? Date.parse(expireAt) : Number.NaN;
+  const remainingMinutes = Number.isFinite(expiry)
+    ? Math.max(0, Math.ceil((expiry - now) / 60_000))
+    : null;
+  const remaining = remainingMinutes === null
+    ? ""
+    : remainingMinutes === 0
+      ? "已到期"
+      : remainingMinutes >= 60
+        ? `剩余 ${Math.floor(remainingMinutes / 60)} 小时 ${remainingMinutes % 60} 分钟`
+        : `剩余 ${remainingMinutes} 分钟`;
+  const expiryLabel = Number.isFinite(expiry)
+    ? new Date(expiry).toLocaleString("zh-CN", {
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
   return (
-    <div className="sandbox-session-warning" role="status">
+    <div
+      className={`sandbox-session-warning${expireAt ? " is-expiring" : ""}`}
+      role="status"
+    >
       <span className="sandbox-session-warning-dot" aria-hidden="true" />
       <span className="sandbox-session-warning-copy">
         当前您在使用 {agentName} 智能体
+        {expiryLabel
+          ? ` · 开发环境将在 ${expiryLabel} 结束（${remaining}），当前 Thread 与文件届时不再保留`
+          : ""}
       </span>
       <button type="button" onClick={onExit}>
         退出当前智能体

@@ -513,6 +513,42 @@ async def test_permissions_persist_and_apply_to_every_turn() -> None:
 
 
 @pytest.mark.asyncio
+async def test_expired_transport_reconnects_and_resumes_the_same_thread() -> None:
+    websockets = [_FakeWebSocket(), _FakeWebSocket()]
+
+    async def _factory(_url: str) -> _FakeWebSocket:
+        return websockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=_factory,
+    )
+    await session.connect()
+    original_thread = session.thread_id
+    first = [event async for event in session.stream_turn("hello")]
+    session._connection_started_at = 0
+    second = [event async for event in session.stream_turn("again")]
+
+    assert [event.text for event in first if event.kind == "text"] == ["完成"]
+    assert [event.text for event in second if event.kind == "text"] == ["完成"]
+    assert session.thread_id == original_thread
+    assert websockets == []
+    second_methods = [
+        message.get("method") for message in session._websocket.messages
+    ]
+    assert "thread/resume" in second_methods
+    assert "thread/start" not in second_methods
+    assert second_methods.count("turn/start") == 1
+    resumed = next(
+        message
+        for message in session._websocket.messages
+        if message.get("method") == "thread/resume"
+    )
+    assert resumed["params"]["threadId"] == original_thread
+    await session.close()
+
+
+@pytest.mark.asyncio
 async def test_reasoning_deltas_stream_as_accumulated_thinking() -> None:
     websocket = _FakeWebSocket()
     session = CodexAppServerSession(
@@ -527,6 +563,28 @@ async def test_reasoning_deltas_stream_as_accumulated_thinking() -> None:
     assert [event.text for event in thinking] == ["分", "分析", "分析"]
     assert [event.status for event in thinking] == ["running", "running", "done"]
     await session.close()
+
+
+def test_completed_commentary_without_delta_remains_a_distinct_public_event() -> None:
+    session = CodexAppServerSession("https://sandbox.example?Authorization=secret")
+    session._turn_events = asyncio.Queue()
+
+    session._handle_notification(
+        "item/completed",
+        {
+            "item": {
+                "id": "commentary-1",
+                "type": "agentMessage",
+                "phase": "commentary",
+                "text": "正在实现并验证 Agent。",
+                "status": "completed",
+            }
+        },
+    )
+
+    event = session._turn_events.get_nowait()
+    assert event.kind == "commentary"
+    assert event.text == "正在实现并验证 Agent。"
 
 
 @pytest.mark.asyncio

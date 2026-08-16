@@ -92,6 +92,12 @@
   text-align: center;
 }
 
+.sandbox-session-warning.is-expiring .sandbox-session-warning-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .sandbox-session-warning button {
   grid-column: 3;
   justify-self: end;

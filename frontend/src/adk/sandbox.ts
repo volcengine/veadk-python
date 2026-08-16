@@ -332,10 +332,6 @@ export interface AgentKitSandboxClient {
     message: SandboxMessage,
     options?: SandboxRequestOptions,
   ): Promise<SandboxReply>;
-  verifyDelivery(
-    sessionId: string,
-    options?: SandboxRequestOptions,
-  ): Promise<SandboxReply>;
   interruptSession(
     sessionId: string,
     options?: SandboxRequestOptions,
@@ -959,44 +955,6 @@ async function parseSandboxStream(
       );
     }
     if (event === "activity") applyActivity(payload);
-    if (event === "verification.stage.started") {
-      const detail = recordOf(payload.payload);
-      if (typeof detail?.name === "string") {
-        blocks.push({
-          kind: "thinking",
-          text: `正在验证：${detail.name}`,
-          done: false,
-        });
-        emitBlocks();
-      }
-    }
-    if (event === "verification.step.finished") {
-      const detail = recordOf(payload.payload);
-      if (typeof detail?.name === "string") {
-        const existing = [...blocks].reverse().findIndex(
-          (block) => block.kind === "thinking" && block.text === `正在验证：${detail.name}`,
-        );
-        if (existing >= 0) {
-          const index = blocks.length - existing - 1;
-          blocks[index] = {
-            kind: "thinking",
-            text: `${detail.passed === true ? "已通过" : "未通过"}：${detail.name}`,
-            done: true,
-          };
-        }
-        emitBlocks();
-      }
-    }
-    if (event === "development.failed") {
-      const detail = recordOf(payload.payload);
-      blocks.push({
-        kind: "text",
-        text: typeof detail?.message === "string"
-          ? `验证未通过：${detail.message}。请继续在当前会话中修复后重试。`
-          : "验证未通过，请继续在当前会话中修复后重试。",
-      });
-      emitBlocks();
-    }
     if (event === "development.succeeded") {
       const eventPayload = recordOf(payload.payload);
       const eventData = recordOf(eventPayload?.delivery);
@@ -1105,7 +1063,10 @@ async function sandboxJson(
   return response.json();
 }
 
-function createSandboxClient(api: string, config: { textOnly?: boolean } = {}): AgentKitSandboxClient {
+function createSandboxClient(
+  api: string,
+  config: { textOnly?: boolean; messageTimeoutMs?: number } = {},
+): AgentKitSandboxClient {
   return {
   async listSessions(options = {}) {
     const response = await studioFetch(
@@ -1345,27 +1306,10 @@ function createSandboxClient(api: string, config: { textOnly?: boolean } = {}): 
         }),
         signal: options.signal,
       },
-      MESSAGE_TIMEOUT_MS,
+      config.messageTimeoutMs ?? MESSAGE_TIMEOUT_MS,
     );
     if (!response.ok) {
       throw await responseError(response, "沙箱对话失败，请稍后重试。");
-    }
-    return parseSandboxStream(response, options);
-  },
-
-  async verifyDelivery(sessionId, options = {}) {
-    if (!sessionId) throw new Error("缺少要验证的智能开发 Session。");
-    const response = await studioFetch(
-      `${api}/${encodeURIComponent(sessionId)}/verify-deliver`,
-      {
-        method: "POST",
-        headers: sandboxHeaders({ Accept: "text/event-stream" }),
-        signal: options.signal,
-      },
-      MESSAGE_TIMEOUT_MS,
-    );
-    if (!response.ok) {
-      throw await responseError(response, "验证与交付失败，请稍后重试。");
     }
     return parseSandboxStream(response, options);
   },
@@ -1857,7 +1801,7 @@ function createSandboxClient(api: string, config: { textOnly?: boolean } = {}): 
 export const sandboxClient = createSandboxClient(SANDBOX_API);
 export const intelligentDevelopmentClient = createSandboxClient(
   "/web/intelligent-development/sessions",
-  { textOnly: true },
+  { textOnly: true, messageTimeoutMs: 3_600_000 },
 );
 
 async function launchSandboxTool(

@@ -2186,32 +2186,6 @@ body {
 }
 .delivery-card > button:disabled { cursor: not-allowed; opacity: .5; }
 .delivery-card > button:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
-.intelligent-verify-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 9px 12px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 10px;
-  background: hsl(var(--panel));
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-}
-.intelligent-verify-bar button {
-  flex: 0 0 auto;
-  min-height: 30px;
-  padding: 0 10px;
-  border: 1px solid hsl(var(--primary));
-  border-radius: 7px;
-  background: hsl(var(--primary));
-  color: hsl(var(--primary-foreground));
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.intelligent-verify-bar button:disabled { cursor: not-allowed; opacity: .5; }
 .trusted-source-pane {
   display: grid;
   gap: 14px;
@@ -2252,8 +2226,6 @@ body {
 @media (max-width: 640px) {
   .delivery-card-grid { grid-template-columns: minmax(0, 1fr); }
   .delivery-card > button { width: 100%; }
-  .intelligent-verify-bar { align-items: stretch; flex-direction: column; }
-  .intelligent-verify-bar button { width: 100%; }
 }
 .artifact-preview {
   position: fixed;
