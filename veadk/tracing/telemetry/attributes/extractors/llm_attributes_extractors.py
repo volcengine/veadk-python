@@ -774,6 +774,36 @@ def llm_output_value(params: LLMAttributesParams) -> ExtractorResponse:
     )
 
 
+def _request_function_declarations(llm_request) -> dict[str, object]:
+    """Return function declarations already built for the outgoing request."""
+    declarations = {}
+    config = getattr(llm_request, "config", None)
+
+    for tool_group in getattr(config, "tools", None) or []:
+        for declaration in getattr(tool_group, "function_declarations", None) or []:
+            name = getattr(declaration, "name", None)
+            if name:
+                declarations[name] = declaration
+
+    return declarations
+
+
+def _function_parameters_json(declaration) -> str:
+    """Serialize function parameters across supported google-adk versions."""
+    if declaration is None:
+        return "{}"
+
+    parameters = getattr(declaration, "parameters", None)
+    if parameters is not None:
+        model_dump_json = getattr(parameters, "model_dump_json", None)
+        if callable(model_dump_json):
+            return model_dump_json(exclude_none=True)
+        return safe_json_serialize(parameters)
+
+    parameters_json_schema = getattr(declaration, "parameters_json_schema", None)
+    return safe_json_serialize(parameters_json_schema or {})
+
+
 def llm_gen_ai_request_functions(params: LLMAttributesParams) -> ExtractorResponse:
     """Extract available functions/tools from the LLM request.
 
@@ -788,21 +818,19 @@ def llm_gen_ai_request_functions(params: LLMAttributesParams) -> ExtractorRespon
         ExtractorResponse: Response containing list of function metadata
     """
     functions = []
+    declarations = _request_function_declarations(params.llm_request)
 
-    for idx, (tool_name, tool_instance) in enumerate(
-        params.llm_request.tools_dict.items()
-    ):
+    for idx, tool_instance in enumerate(params.llm_request.tools_dict.values()):
+        declaration = declarations.get(tool_instance.name)
+        if declaration is None:
+            declaration = tool_instance._get_declaration()  # type: ignore
+
         functions.append(
             {
                 f"gen_ai.request.functions.{idx}.name": tool_instance.name,
                 f"gen_ai.request.functions.{idx}.description": tool_instance.description,
-                f"gen_ai.request.functions.{idx}.parameters": str(
-                    tool_instance._get_declaration().parameters.model_dump_json(  # type: ignore
-                        exclude_none=True
-                    )
-                    if tool_instance._get_declaration()
-                    and tool_instance._get_declaration().parameters  # type: ignore
-                    else {}
+                f"gen_ai.request.functions.{idx}.parameters": (
+                    _function_parameters_json(declaration)
                 ),
             }
         )
