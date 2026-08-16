@@ -23,6 +23,10 @@ const resourceCardStylesSource = readFileSync(
   new URL("../src/ui/LibraryResourceCard.css", import.meta.url),
   "utf8",
 );
+const actionMenuSource = readFileSync(
+  new URL("../src/ui/StudioActionMenu.tsx", import.meta.url),
+  "utf8",
+);
 
 let knowledgeClientPromise;
 function loadKnowledgeClient() {
@@ -601,8 +605,9 @@ test("uses one shared resource card for knowledge actions and overflow managemen
   assert.match(resourceCardSource, /primaryAction: LibraryResourceCardAction/);
   assert.match(resourceCardSource, /menuActions: readonly LibraryResourceCardMenuAction\[\]/);
   assert.match(resourceCardSource, /<LibraryResourceCardActions/);
-  assert.match(resourceCardSource, /role="menu"/);
-  assert.match(resourceCardSource, /role="menuitem"/);
+  assert.match(resourceCardSource, /<StudioActionMenu/);
+  assert.match(actionMenuSource, /role="menu"/);
+  assert.match(actionMenuSource, /role="menuitem"/);
   assert.doesNotMatch(resourceCardSource, /<article[^>]*onClick=/);
 });
 

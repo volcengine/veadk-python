@@ -62,6 +62,10 @@ const resourceCardStylesSource = readFileSync(
   new URL("../src/ui/LibraryResourceCard.css", import.meta.url),
   "utf8",
 );
+const actionMenuSource = readFileSync(
+  new URL("../src/ui/StudioActionMenu.tsx", import.meta.url),
+  "utf8",
+);
 test("skill center uses the Studio page shell and opens spaces as a detail page", () => {
   assert.doesNotMatch(skillCenterSource, /Find Skill|findskill|SKILL_URL|skill-frame/);
   assert.match(skillCenterSource, /defaultCloudRegion\(cloudProvider\)/);
@@ -240,7 +244,8 @@ test("managed Skill APIs cover space creation, archives, deletion, and full file
   assert.match(managementDialogsSource, /export function EditSkillSpaceDialog/);
   assert.match(skillCenterSource, /label: "编辑空间"/);
   assert.match(skillCenterSource, /label: "删除空间"/);
-  assert.match(resourceCardSource, /role="menuitem"/);
+  assert.match(resourceCardSource, /<StudioActionMenu/);
+  assert.match(actionMenuSource, /role="menuitem"/);
   assert.match(managementDialogsSource, /不会自动上传/);
   assert.match(managementDialogsSource, /!validation \|\| validating \|\| submitting/);
 });
@@ -260,8 +265,8 @@ test("Skill space cards keep menus usable and load more while scrolling", () => 
   assert.match(skillCenterSource, /onScroll=\{handleSpaceResultsScroll\}/);
   assert.match(skillCenterSource, /results\.scrollHeight - results\.scrollTop - results\.clientHeight <= 240/);
   assert.match(skillCenterSource, /menuLabel=\{`更多空间操作：\$\{space\.name\}`\}/);
-  assert.match(resourceCardSource, /window\.addEventListener\("pointerdown", closeMenu\)/);
-  assert.match(resourceCardSource, /event\.key === "Escape"/);
+  assert.match(actionMenuSource, /window\.addEventListener\("pointerdown", closeOnPointerDown\)/);
+  assert.match(actionMenuSource, /event\.key !== "Escape"/);
   assert.match(resourceCardStylesSource, /\.library-resource-card\s*\{[^}]*overflow:\s*visible;/);
   assert.match(resourceCardStylesSource, /\.library-resource-card__actions\s*\{[^}]*z-index:\s*2;/);
 });

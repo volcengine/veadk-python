@@ -73,59 +73,7 @@
   outline-offset: 1px;
 }
 
-.library-resource-card__menu {
-  position: relative;
-  z-index: 30;
-}
-
 .library-resource-card__more svg {
   width: 16px;
   height: 16px;
-}
-
-.library-resource-card__popover {
-  position: absolute;
-  z-index: 20;
-  right: 0;
-  bottom: calc(100% + 6px);
-  width: 148px;
-  box-sizing: border-box;
-  padding: 4px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 8px;
-  background: hsl(var(--panel));
-  box-shadow: 0 12px 28px hsl(var(--foreground) / 0.14);
-}
-
-.library-resource-card__popover .library-resource-card__menu-action {
-  width: 100%;
-  min-height: 32px;
-  display: flex;
-  align-items: center;
-  padding: 0 9px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: hsl(var(--foreground));
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 18px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.library-resource-card__popover .library-resource-card__menu-action:hover:not(:disabled),
-.library-resource-card__popover .library-resource-card__menu-action:focus-visible {
-  outline: 0;
-  background: hsl(var(--secondary));
-}
-
-.library-resource-card__popover .library-resource-card__menu-action.is-danger {
-  color: hsl(var(--destructive));
-}
-
-.library-resource-card__popover .library-resource-card__menu-action:disabled {
-  cursor: not-allowed;
-  opacity: 0.48;
 }

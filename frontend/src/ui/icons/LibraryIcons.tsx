@@ -77,6 +77,25 @@ export function DownloadArtifactIcon(props: IconProps) {
   );
 }
 
+export function SourceArtifactIcon(props: IconProps) {
+  return (
+    <svg {...sharedProps} {...props}>
+      <path d="M8.75 8.75 6.9 10.6a3.4 3.4 0 0 0 4.8 4.8l1.85-1.85" />
+      <path d="m15.25 15.25 1.85-1.85a3.4 3.4 0 0 0-4.8-4.8l-1.85 1.85" />
+      <path d="m9.4 14.6 5.2-5.2" />
+    </svg>
+  );
+}
+
+export function EditArtifactIcon(props: IconProps) {
+  return (
+    <svg {...sharedProps} {...props}>
+      <path d="M5 19h3.2L18.6 8.6a1.7 1.7 0 0 0 0-2.4l-.8-.8a1.7 1.7 0 0 0-2.4 0L5 15.8V19Z" />
+      <path d="m13.9 6.9 3.2 3.2M5 15.8 8.2 19" />
+    </svg>
+  );
+}
+
 export function CloseLibraryIcon(props: IconProps) {
   return (
     <svg {...sharedProps} {...props}>
