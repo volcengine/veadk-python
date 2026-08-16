@@ -401,6 +401,42 @@ def test_create_cleans_up_new_provider_when_agentkit_step_fails(
         assert agentkit.records == {}
 
 
+def test_create_returns_operation_and_cleanup_errors_when_rollback_fails() -> None:
+    class FailingAgentKitGateway(FakeAgentKitGateway):
+        def add(self, body, **kwargs) -> str:
+            del body, kwargs
+            raise RuntimeError("AgentKit add failed")
+
+    class FailingProvisioner(FakeKnowledgeProvisioner):
+        def delete(self, **kwargs: str) -> None:
+            super().delete(**kwargs)
+            raise RuntimeError("Viking cleanup failed")
+
+    agentkit = FailingAgentKitGateway([])
+    provisioner = FailingProvisioner()
+    service, _, _ = auto_create_service(
+        agentkit=agentkit,
+        provisioner=provisioner,
+    )
+
+    with pytest.raises(KnowledgeAccessError) as captured:
+        service.create_first_available(
+            CreateKnowledgeBaseBody(name="support", description="Team docs"),
+            identity=KnowledgeIdentity(
+                "user-1",
+                "Alice",
+                can_bind_provider=True,
+            ),
+            regions=("cn-beijing", "cn-shanghai"),
+        )
+
+    assert captured.value.status_code == 502
+    assert captured.value.error_code == "KNOWLEDGE_ROLLBACK_FAILED"
+    assert captured.value.operation_error == "AgentKit add failed"
+    assert captured.value.cleanup_errors == ["Viking cleanup failed"]
+    assert [item["region"] for item in provisioner.created] == ["cn-beijing"]
+
+
 def test_auto_create_tries_second_region_when_first_provision_fails() -> None:
     provisioner = FakeKnowledgeProvisioner()
     provisioner.fail_regions.add("cn-beijing")
@@ -517,6 +553,151 @@ def test_delete_managed_knowledge_base_removes_provider_before_agentkit() -> Non
 
     assert events == ["provider", "agentkit"]
     assert created.id not in agentkit.records
+
+
+def test_delete_managed_knowledge_base_cleans_paginated_documents_first() -> None:
+    events: list[str] = []
+
+    class Documents(FakeDocumentGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.list_calls: list[tuple[int, int]] = []
+            self.documents = [
+                {
+                    "id": "doc-1",
+                    "tosPath": "tos://bucket/doc-1.txt",
+                    "metadata": {"_veadk_file_size_bytes": 1},
+                },
+                {
+                    "id": "doc-2",
+                    "tosPath": "tos://bucket/doc-2.txt",
+                    "metadata": {"_veadk_file_size_bytes": 2},
+                },
+            ]
+
+        def list(self, *, offset: int, limit: int, document_type: str | None):
+            del document_type
+            self.list_calls.append((offset, limit))
+            return [self.documents[offset]], offset == 0
+
+        def delete(self, document_id: str) -> None:
+            events.append(f"document:{document_id}")
+
+    class Uploads:
+        max_file_bytes = 1024
+
+        def delete_managed(self, **kwargs) -> bool:
+            events.append(f"storage:{kwargs['tos_path']}")
+            return True
+
+    class OrderedAgentKitGateway(FakeAgentKitGateway):
+        def delete(self, knowledge_id: str, *, region: str) -> None:
+            events.append("agentkit")
+            super().delete(knowledge_id, region=region)
+
+    class OrderedProvisioner(FakeKnowledgeProvisioner):
+        def delete(self, **kwargs: str) -> None:
+            events.append("provider")
+            super().delete(**kwargs)
+
+    documents = Documents()
+    agentkit = OrderedAgentKitGateway([])
+    provisioner = OrderedProvisioner()
+    service = KnowledgeService(
+        agentkit,
+        lambda record, connection: documents,
+        signing_key=SIGNING_KEY,
+        upload_store=Uploads(),
+        provisioner=provisioner,
+    )
+    identity = KnowledgeIdentity(
+        owner_id="user-1",
+        owner_label="Alice",
+        can_bind_provider=True,
+    )
+    created = service.create(
+        CreateKnowledgeBaseBody(name="support", description="Team docs"),
+        identity=identity,
+        region="cn-beijing",
+    )
+    events.clear()
+
+    service.delete(created.id, identity=identity, region="cn-beijing")
+
+    assert documents.list_calls == [(0, 100), (1, 100)]
+    assert events == [
+        "storage:tos://bucket/doc-1.txt",
+        "document:doc-1",
+        "storage:tos://bucket/doc-2.txt",
+        "document:doc-2",
+        "provider",
+        "agentkit",
+    ]
+
+
+def test_delete_managed_knowledge_base_keeps_provider_when_storage_is_invalid() -> None:
+    events: list[str] = []
+
+    class Documents(FakeDocumentGateway):
+        def list(self, *, offset: int, limit: int, document_type: str | None):
+            del offset, limit, document_type
+            return [
+                {
+                    "id": "doc-1",
+                    "tosPath": "tos://bucket/doc-1.txt",
+                    "metadata": {"_veadk_file_size_bytes": 1},
+                }
+            ], False
+
+        def delete(self, document_id: str) -> None:
+            events.append(f"document:{document_id}")
+
+    class Uploads:
+        max_file_bytes = 1024
+
+        def delete_managed(self, **kwargs) -> bool:
+            events.append(f"storage:{kwargs['tos_path']}")
+            return False
+
+    class OrderedAgentKitGateway(FakeAgentKitGateway):
+        def delete(self, knowledge_id: str, *, region: str) -> None:
+            events.append("agentkit")
+            super().delete(knowledge_id, region=region)
+
+    class OrderedProvisioner(FakeKnowledgeProvisioner):
+        def delete(self, **kwargs: str) -> None:
+            events.append("provider")
+            super().delete(**kwargs)
+
+    documents = Documents()
+    agentkit = OrderedAgentKitGateway([])
+    provisioner = OrderedProvisioner()
+    service = KnowledgeService(
+        agentkit,
+        lambda record, connection: documents,
+        signing_key=SIGNING_KEY,
+        upload_store=Uploads(),
+        provisioner=provisioner,
+    )
+    identity = KnowledgeIdentity(
+        owner_id="user-1",
+        owner_label="Alice",
+        can_bind_provider=True,
+    )
+    created = service.create(
+        CreateKnowledgeBaseBody(name="support", description="Team docs"),
+        identity=identity,
+        region="cn-beijing",
+    )
+    events.clear()
+
+    with pytest.raises(KnowledgeAccessError) as captured:
+        service.delete(created.id, identity=identity, region="cn-beijing")
+
+    assert captured.value.status_code == 409
+    assert captured.value.error_code == "KNOWLEDGE_DOCUMENT_STORAGE_INVALID"
+    assert events == ["storage:tos://bucket/doc-1.txt"]
+    assert created.id in agentkit.records
 
 
 def test_delete_rejects_managed_record_when_signing_key_changed() -> None:

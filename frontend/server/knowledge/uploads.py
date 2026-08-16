@@ -77,6 +77,31 @@ _SUPPORTED_FILE_MIME_TYPES: dict[str, frozenset[str]] = {
 }
 
 
+class _KnowledgeStorageCleanupError(KnowledgeAccessError):
+    def __init__(self, errors: list[Exception]) -> None:
+        super().__init__(
+            "知识库文件清理失败：" + "；".join(str(error) for error in errors),
+            status_code=502,
+            error_code="KNOWLEDGE_STORAGE_CLEANUP_FAILED",
+        )
+        self.cleanup_failures = [str(error) for error in errors]
+
+
+def _delete_objects(client: Any, *, bucket: str, keys: tuple[str, ...]) -> None:
+    errors: list[Exception] = []
+    for key in keys:
+        try:
+            client.delete_object(bucket=bucket, key=key)
+        except Exception as error:
+            errors.append(error)
+    if not errors:
+        return
+    if len(errors) == 1:
+        raise errors[0]
+    combined = _KnowledgeStorageCleanupError(errors)
+    raise combined from errors[0]
+
+
 @dataclass(frozen=True, slots=True)
 class ValidatedKnowledgeUpload:
     file_name: str
@@ -331,11 +356,14 @@ class TosKnowledgeUploadStore:
     def delete(self, upload: StoredKnowledgeUpload) -> None:
         target = self._target(upload.region)
         client = self._client(target)
-        client.delete_object(
+        _delete_objects(
+            client,
             bucket=upload.bucket,
-            key=_metadata_key(target, upload.bucket, upload.key),
+            keys=(
+                _metadata_key(target, upload.bucket, upload.key),
+                upload.key,
+            ),
         )
-        client.delete_object(bucket=upload.bucket, key=upload.key)
 
     def put_metadata(
         self,
@@ -381,6 +409,7 @@ class TosKnowledgeUploadStore:
             owner_id=owner_id,
             knowledge_id=knowledge_id,
             region=region,
+            strict=True,
         )
         if resolved is None:
             return False
@@ -442,16 +471,17 @@ class TosKnowledgeUploadStore:
             owner_id=owner_id,
             knowledge_id=knowledge_id,
             region=region,
+            strict=True,
         )
         if resolved is None:
             return False
         target, bucket, key = resolved
         client = self._client(target)
-        client.delete_object(
+        _delete_objects(
+            client,
             bucket=bucket,
-            key=_metadata_key(target, bucket, key),
+            keys=(_metadata_key(target, bucket, key), key),
         )
-        client.delete_object(bucket=bucket, key=key)
         return True
 
     def _managed_key(
@@ -461,6 +491,7 @@ class TosKnowledgeUploadStore:
         owner_id: str,
         knowledge_id: str,
         region: str,
+        strict: bool = False,
     ) -> tuple[_UploadTarget, str, str] | None:
         resolved = _parse_tos_path(tos_path)
         if resolved is None:
@@ -470,16 +501,22 @@ class TosKnowledgeUploadStore:
         if bucket != target.bucket:
             return None
         users_prefix = f"{target.prefix.strip('/')}/users/"
+        if not key.startswith(users_prefix):
+            return None
         knowledge_segment = quote(knowledge_id, safe="")[:512]
         if owner_id:
             expected_prefix = (
                 f"{users_prefix}{quote(owner_id, safe='')[:512]}/{knowledge_segment}/"
             )
             if not key.startswith(expected_prefix) or key == expected_prefix:
-                return None
+                if not strict:
+                    return None
+                raise KnowledgeAccessError(
+                    "知识库文件路径与当前用户或知识库不匹配。",
+                    status_code=409,
+                    error_code="KNOWLEDGE_DOCUMENT_STORAGE_INVALID",
+                )
         else:
-            if not key.startswith(users_prefix):
-                return None
             owner_segment, separator, scoped_key = key[len(users_prefix) :].partition(
                 "/"
             )
@@ -496,7 +533,13 @@ class TosKnowledgeUploadStore:
                 or not scoped_key.startswith(expected_knowledge_prefix)
                 or scoped_key == expected_knowledge_prefix
             ):
-                return None
+                if not strict:
+                    return None
+                raise KnowledgeAccessError(
+                    "知识库文件路径与当前知识库不匹配。",
+                    status_code=409,
+                    error_code="KNOWLEDGE_DOCUMENT_STORAGE_INVALID",
+                )
         return target, bucket, key
 
     def _target(self, region: str) -> _UploadTarget:

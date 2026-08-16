@@ -668,6 +668,47 @@ def test_tos_store_only_deletes_objects_in_the_owned_knowledge_scope(
     ]
 
 
+def test_tos_cleanup_attempts_source_when_sidecar_deletion_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingClient(_FakeTosClient):
+        def delete_object(self, **kwargs: object) -> None:
+            super().delete_object(**kwargs)
+            if "/metadata/" in str(kwargs["key"]):
+                raise RuntimeError("metadata unavailable")
+
+    fake_client = FailingClient()
+    import tos
+
+    monkeypatch.setattr(tos, "TosClientV2", lambda **kwargs: fake_client)
+    store = TosKnowledgeUploadStore(
+        provider="volcengine",
+        resolve_credentials=lambda: ("ak", "sk", None),
+        source={
+            "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
+            "VEADK_STUDIO_TOS_REGION": "cn-beijing",
+        },
+    )
+    source_key = (
+        "veadk-studio/v1/knowledge/users/"
+        "alice%40example.com/kb%2Fsupport/0123456789abcdef/source.pdf"
+    )
+
+    with pytest.raises(RuntimeError, match="metadata unavailable"):
+        store.delete_managed(
+            tos_path=f"tos://studio-bucket/{source_key}",
+            owner_id="alice@example.com",
+            knowledge_id="kb/support",
+            region="cn-beijing",
+        )
+
+    assert len(fake_client.deleted) == 2
+    assert fake_client.deleted[1] == {
+        "bucket": "studio-bucket",
+        "key": source_key,
+    }
+
+
 def test_tos_store_legacy_cleanup_accepts_one_encoded_owner_segment_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -697,9 +738,20 @@ def test_tos_store_legacy_cleanup_accepts_one_encoded_owner_segment_only(
         )
         is True
     )
-    for forged_path in (
+    for external_path in (
         f"other-bucket/{valid_key}",
         "studio-bucket/external/users/legacy%40owner/kb-legacy/file.pdf",
+    ):
+        assert (
+            store.delete_managed(
+                tos_path=external_path,
+                owner_id="",
+                knowledge_id="kb-legacy",
+                region="cn-beijing",
+            )
+            is False
+        )
+    for forged_path in (
         (
             "studio-bucket/veadk-studio/v1/knowledge/users/legacy%40owner/"
             "kb-other/file.pdf"
@@ -710,15 +762,15 @@ def test_tos_store_legacy_cleanup_accepts_one_encoded_owner_segment_only(
         ),
         ("studio-bucket/veadk-studio/v1/knowledge/users/legacy%ZZ/kb-legacy/file.pdf"),
     ):
-        assert (
+        with pytest.raises(KnowledgeAccessError) as captured:
             store.delete_managed(
                 tos_path=forged_path,
                 owner_id="",
                 knowledge_id="kb-legacy",
                 region="cn-beijing",
             )
-            is False
-        )
+        assert captured.value.status_code == 409
+        assert captured.value.error_code == "KNOWLEDGE_DOCUMENT_STORAGE_INVALID"
 
     assert fake_client.deleted == [
         {
@@ -821,6 +873,7 @@ class _UploadStore:
         self.deleted: list[StoredKnowledgeUpload] = []
         self.managed_deletes: list[dict[str, object]] = []
         self.cleanup_failure: Exception | None = None
+        self.delete_failure: Exception | None = None
         self.metadata: dict[str, dict[str, object]] = {}
 
     def put(self, **kwargs) -> StoredKnowledgeUpload:
@@ -836,6 +889,8 @@ class _UploadStore:
     def delete(self, upload: StoredKnowledgeUpload) -> None:
         self.deleted.append(upload)
         self.metadata.pop(upload.tos_path, None)
+        if self.delete_failure is not None:
+            raise self.delete_failure
 
     def put_metadata(
         self,
@@ -986,6 +1041,35 @@ def test_agentkit_failure_removes_new_tos_object(tmp_path: Path) -> None:
             region="cn-beijing",
         )
     ]
+
+
+def test_upload_rollback_failure_returns_operation_and_cleanup_errors(
+    tmp_path: Path,
+) -> None:
+    service, documents, uploads = _knowledge_service()
+    documents.failure = RuntimeError("provider failed")
+    uploads.delete_failure = RuntimeError("TOS unavailable")
+    source = tmp_path / "guide.pdf"
+    source.write_bytes(b"%PDF-test")
+
+    with pytest.raises(KnowledgeAccessError) as captured:
+        service.upload_document(
+            "kb-1",
+            identity=KnowledgeIdentity("user-1", "Alice"),
+            region="cn-beijing",
+            source=source,
+            file_name="guide.pdf",
+            mime_type="application/pdf",
+            name="guide.pdf",
+            document_type="pdf",
+            metadata={},
+        )
+
+    assert captured.value.status_code == 502
+    assert captured.value.error_code == "KNOWLEDGE_ROLLBACK_FAILED"
+    assert captured.value.operation_error == "provider failed"
+    assert captured.value.cleanup_errors == ["TOS unavailable"]
+    assert captured.value.resource == "tos://bucket/object.pdf"
 
 
 def test_update_document_keeps_internal_metadata_and_updates_sidecar() -> None:

@@ -45,6 +45,7 @@ _COMPACT_METADATA_PATTERN = re.compile(
     r"(?P<signature>[A-Za-z0-9_-]+)$"
 )
 _PROVIDER_BINDING_LOCK = RLock()
+_DOCUMENT_CLEANUP_PAGE_SIZE = 100
 logger = logging.getLogger(__name__)
 
 
@@ -72,6 +73,27 @@ class KnowledgeProvisionError(RuntimeError):
                 f"{failure['region']}: {failure['message']}" for failure in failures
             )
         )
+
+
+class KnowledgeRollbackError(KnowledgeAccessError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        operation: str,
+        operation_error: Exception,
+        cleanup_errors: list[Exception],
+        resource: str = "",
+    ) -> None:
+        super().__init__(
+            message,
+            status_code=502,
+            error_code="KNOWLEDGE_ROLLBACK_FAILED",
+        )
+        self.operation = operation
+        self.operation_error = str(operation_error)
+        self.cleanup_errors = [str(error) for error in cleanup_errors]
+        self.resource = resource
 
 
 @dataclass(frozen=True, slots=True)
@@ -582,15 +604,13 @@ class KnowledgeService:
                     description=description,
                     region=region,
                 )
-            except Exception:
+            except Exception as operation_error:
+                cleanup_errors: list[Exception] = []
                 if knowledge_id:
                     try:
                         self._agentkit.delete(knowledge_id, region=region)
-                    except Exception as cleanup_error:  # noqa: BLE001
-                        logger.warning(
-                            "Failed to clean up unsigned knowledge record error_type=%s",
-                            type(cleanup_error).__name__,
-                        )
+                    except Exception as cleanup_error:
+                        cleanup_errors.append(cleanup_error)
                 try:
                     self._provisioner.delete(
                         name=provisioned.name,
@@ -598,11 +618,16 @@ class KnowledgeService:
                         project_name=project_name,
                         region=region,
                     )
-                except Exception as cleanup_error:  # noqa: BLE001
-                    logger.warning(
-                        "Failed to clean up provisioned knowledge base error_type=%s",
-                        type(cleanup_error).__name__,
-                    )
+                except Exception as cleanup_error:
+                    cleanup_errors.append(cleanup_error)
+                if cleanup_errors:
+                    raise KnowledgeRollbackError(
+                        "知识库创建失败，并且部分已创建资源未能清理。",
+                        operation="create_knowledge_base",
+                        operation_error=operation_error,
+                        cleanup_errors=cleanup_errors,
+                        resource=provisioned.provider_knowledge_id,
+                    ) from cleanup_errors[0]
                 raise
         return self.get(knowledge_id, identity=identity, region=region)
 
@@ -625,6 +650,8 @@ class KnowledgeService:
             try:
                 return self.create(body, identity=identity, region=region)
             except KnowledgeAccessError as error:
+                if isinstance(error, KnowledgeRollbackError):
+                    raise
                 # Permission and duplicate-binding failures are independent of
                 # region and must not be obscured by a retry elsewhere.
                 if error.status_code in {403, 409}:
@@ -638,7 +665,7 @@ class KnowledgeService:
                         "requestId": str(getattr(error, "request_id", "")),
                     }
                 )
-            except Exception as error:  # noqa: BLE001
+            except Exception as error:
                 last_error = error
                 failures.append(
                     {
@@ -723,6 +750,11 @@ class KnowledgeService:
                     "知识库删除服务尚未配置。",
                     status_code=503,
                 )
+            self._delete_all_documents(
+                record,
+                identity=identity,
+                region=region,
+            )
             logger.info(
                 "Deleting Studio-managed knowledge provider knowledge_id=%s "
                 "provider_id=%s region=%s",
@@ -888,14 +920,17 @@ class KnowledgeService:
                 )
             )
             return self._merge_document_metadata(result, provider_metadata)
-        except Exception:
+        except Exception as operation_error:
             try:
                 self._upload_store.delete(upload)
-            except Exception as cleanup_error:  # noqa: BLE001
-                logger.warning(
-                    "Failed to clean up knowledge upload error_type=%s",
-                    type(cleanup_error).__name__,
-                )
+            except Exception as cleanup_error:
+                raise KnowledgeRollbackError(
+                    "数据写入失败，并且上传文件未能完全清理。",
+                    operation="create_document",
+                    operation_error=operation_error,
+                    cleanup_errors=[cleanup_error],
+                    resource=upload.tos_path,
+                ) from cleanup_error
             raise
 
     def update_document(
@@ -951,15 +986,92 @@ class KnowledgeService:
     ) -> None:
         record, gateway = self._document_context(knowledge_id, identity, region)
         document = gateway.get(document_id)
-        tos_path = str(document.get("tosPath") or "").strip()
-        if self._upload_store is not None and tos_path:
-            owner_id = self._to_item(record, identity).owner_id
-            self._upload_store.delete_managed(
-                tos_path=tos_path,
-                owner_id=owner_id,
-                knowledge_id=knowledge_id,
+        self._delete_document_from_context(
+            record,
+            gateway,
+            document,
+            identity=identity,
+            region=region,
+        )
+
+    def _delete_all_documents(
+        self,
+        record: KnowledgeRecord,
+        *,
+        identity: KnowledgeIdentity,
+        region: str,
+    ) -> None:
+        connection = self._agentkit.connection(record.id, region=region)
+        gateway = self._document_gateway_factory(record, connection)
+        documents: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            page, has_more = gateway.list(
+                offset=offset,
+                limit=_DOCUMENT_CLEANUP_PAGE_SIZE,
+                document_type=None,
+            )
+            documents.extend(page)
+            if not has_more:
+                break
+            if not page:
+                raise KnowledgeAccessError(
+                    "Provider 返回了无效的知识分页，知识库尚未删除，请重试。",
+                    status_code=502,
+                    error_code="KNOWLEDGE_DOCUMENT_PAGE_INVALID",
+                )
+            offset += len(page)
+        for document in documents:
+            document_id = str(document.get("id") or "").strip()
+            if not document_id:
+                raise KnowledgeAccessError(
+                    "Provider 返回了缺少 ID 的数据，知识库尚未删除，请重试。",
+                    status_code=502,
+                    error_code="KNOWLEDGE_DOCUMENT_ID_INVALID",
+                )
+            self._delete_document_from_context(
+                record,
+                gateway,
+                document,
+                identity=identity,
                 region=region,
             )
+
+    def _delete_document_from_context(
+        self,
+        record: KnowledgeRecord,
+        gateway: DocumentGateway,
+        document: dict[str, Any],
+        *,
+        identity: KnowledgeIdentity,
+        region: str,
+    ) -> None:
+        document_id = str(document.get("id") or "").strip()
+        tos_path = str(document.get("tosPath") or "").strip()
+        metadata = document.get("metadata")
+        is_studio_managed = isinstance(metadata, dict) and any(
+            str(key).startswith("_veadk_") for key in metadata
+        )
+        if self._upload_store is None and tos_path and is_studio_managed:
+            raise KnowledgeAccessError(
+                "知识库文件存储尚未配置，数据尚未删除，请联系管理员。",
+                status_code=503,
+                error_code="KNOWLEDGE_STORAGE_UNAVAILABLE",
+            )
+        if self._upload_store is not None and tos_path:
+            owner_id = self._to_item(record, identity).owner_id
+            deleted = self._upload_store.delete_managed(
+                tos_path=tos_path,
+                owner_id=owner_id,
+                knowledge_id=record.id,
+                region=region,
+            )
+            if not deleted and is_studio_managed:
+                raise KnowledgeAccessError(
+                    "无法验证此数据的 Studio 存储归属，数据尚未删除，请重试或联系管理员。",
+                    status_code=409,
+                    error_code="KNOWLEDGE_DOCUMENT_STORAGE_INVALID",
+                )
         gateway.delete(document_id)
 
     def _documents(
