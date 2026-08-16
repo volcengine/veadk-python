@@ -2040,8 +2040,6 @@ def test_studio_deploy_rejects_unsupported_region() -> None:
                 "manylinux2014_x86_64.whl\n"
                 "./openviking_sdk-0.1.4-py3-none-any.whl\n"
                 "./pydantic-2.12.5-py3-none-any.whl\n"
-                "./charset_normalizer-3.4.9-cp312-cp312-manylinux2014_x86_64."
-                "manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl\n"
             ),
         ),
     ],
@@ -2105,7 +2103,6 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
             "369cc9fc8cc10cb24143873a0d95438bb8ee257bb80c71989e3ee290e8d72c67",
             "1e9f23332b1b687dd7f272e660953992de60ad3e9d07d62f7460fd4aedb99616",
             "e561593fccf61e8a20fc46dfc2dfe075b8be7d0188df33f221ad1f0139180f9d",
-            "5e226f6218febc71f6c1fc2fafb91c226f75bdc1d8fb12d66823716e891608fd",
         ]
     )
     monkeypatch.setattr(

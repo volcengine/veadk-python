@@ -94,19 +94,6 @@ BYTEPLUS_STUDIO_DEPENDENCY_WHEELS = (
         ),
         sha256="e561593fccf61e8a20fc46dfc2dfe075b8be7d0188df33f221ad1f0139180f9d",
     ),
-    StudioDependencyWheel(
-        filename=(
-            "charset_normalizer-3.4.9-cp312-cp312-manylinux2014_x86_64."
-            "manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
-        ),
-        url=(
-            "https://files.pythonhosted.org/packages/01/c4/"
-            "4fa4c8b3097a11f3c5f09a35b72ed6855fb1d332469504962ab7bafcc702/"
-            "charset_normalizer-3.4.9-cp312-cp312-manylinux2014_x86_64."
-            "manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
-        ),
-        sha256="5e226f6218febc71f6c1fc2fafb91c226f75bdc1d8fb12d66823716e891608fd",
-    ),
 )
 
 
