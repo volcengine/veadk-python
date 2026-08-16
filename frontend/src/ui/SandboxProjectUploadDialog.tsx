@@ -171,7 +171,14 @@ function progressRank(status: CodexProjectHandoffStatus): number {
     case "completed":
       return 4;
     case "failed":
-      return status.failedStage === "creating-session" ? 1 : 3;
+      if (status.failedStage === "creating-session") return 1;
+      if (
+        status.failedStage === "uploading-project" ||
+        status.failedStage === "restoring-project"
+      ) {
+        return 2;
+      }
+      return 3;
   }
 }
 
@@ -301,7 +308,12 @@ export function SandboxProjectUploadDialog({
         );
         if (stopped) return;
         setHandoffStatus(value);
-        if (value.state === "completed" || value.state === "failed") return;
+        if (value.state === "completed") return;
+        timer = window.setTimeout(
+          () => void poll(),
+          value.state === "failed" ? 3000 : 1500,
+        );
+        return;
       } catch (cause) {
         if ((cause as Error)?.name === "AbortError" || stopped) return;
         setError({

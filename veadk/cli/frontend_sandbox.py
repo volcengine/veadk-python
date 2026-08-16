@@ -1746,6 +1746,42 @@ class SandboxConversationService:
         value = _safe_public_value(snapshot.public_dict(session.codex.permissions))
         if not isinstance(value, dict):
             raise SandboxInvocationError("Codex Thread 响应格式无效。")
+        public_messages = value.get("messages")
+        if isinstance(public_messages, list):
+            for public_message, message in zip(
+                public_messages,
+                snapshot.messages,
+                strict=False,
+            ):
+                if not message.images or not isinstance(public_message, dict):
+                    continue
+                public_message["images"] = [
+                    {
+                        "mimeType": image.mime_type,
+                        "data": image.data,
+                        **(
+                            {
+                                "name": _redact_public_text(
+                                    image.name,
+                                    maximum=255,
+                                )
+                            }
+                            if image.name
+                            else {}
+                        ),
+                        **(
+                            {
+                                "alt": _redact_public_text(
+                                    image.alt,
+                                    maximum=500,
+                                )
+                            }
+                            if image.alt
+                            else {}
+                        ),
+                    }
+                    for image in message.images
+                ]
         return value
 
     async def new_thread(self, session_id: str, owner_id: str) -> dict[str, object]:
@@ -2814,19 +2850,34 @@ def mount_sandbox_routes(
             if previous_handoff_id == handoff_id:
                 if (
                     pairing.get("projectName") != project_name
-                    or pairing.get("agentName") != display_name
                     or pairing.get("remoteRepoDir") != remote_repo_dir
                 ):
                     raise SandboxValidationError(
                         "端云接力请求 ID 不能用于不同的请求参数。"
                     )
                 previous_response = pairing.get("sessionResponse")
-                if isinstance(previous_response, dict) and pairing_state in {
+                reusable_states = {
                     "session-created",
                     "continuing",
                     "running",
                     "completed",
-                }:
+                }
+                retryable_failed_stages = {
+                    "uploading-project",
+                    "restoring-project",
+                }
+                can_resume_failed_session = (
+                    pairing_state == "failed"
+                    and pairing.get("failedStage") in retryable_failed_stages
+                )
+                if isinstance(previous_response, dict) and (
+                    pairing_state in reusable_states or can_resume_failed_session
+                ):
+                    if can_resume_failed_session:
+                        pairing["state"] = "session-created"
+                        pairing.pop("error", None)
+                        pairing.pop("failedStage", None)
+                        pairing["requestedAt"] = int(time.time())
                     response = JSONResponse(dict(previous_response))
                     response.headers["Cache-Control"] = "no-store"
                     return response
@@ -2909,6 +2960,55 @@ def mount_sandbox_routes(
         }
         pairing["sessionResponse"] = session_response
         response = JSONResponse(session_response)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/web/sandbox/codex-project-handoff/sessions/{session_id}/status")
+    async def _update_codex_project_handoff_status(
+        session_id: str,
+        request: Request,
+    ) -> JSONResponse:
+        try:
+            data = await _request_object(request)
+            pairing_key = _normalize_codex_project_handoff_pairing(
+                data.get("pairingCode")
+            )
+            handoff_id = _codex_project_handoff_id(data.get("handoffId"))
+            failed_stage = data.get("failedStage")
+            if failed_stage not in {"uploading-project", "restoring-project"}:
+                raise SandboxValidationError("云端接力失败阶段无效。")
+            error_message = data.get("error")
+            if not isinstance(error_message, str) or not error_message.strip():
+                raise SandboxValidationError("云端接力失败原因不能为空。")
+            if len(error_message) > 20_000:
+                raise SandboxValidationError("云端接力失败原因过长。")
+
+            _cleanup_codex_project_handoff_pairings(int(time.time()))
+            pairing = _CODEX_PROJECT_HANDOFF_PAIRINGS.get(pairing_key)
+            if pairing is None:
+                raise SandboxPermissionError("Codex 云端接力配对码已使用或已过期。")
+            if (
+                pairing.get("handoffId") != handoff_id
+                or pairing.get("sessionId") != session_id
+            ):
+                raise SandboxPermissionError("配对码与云端接力 Session 不匹配。")
+            if pairing.get("state") not in {"session-created", "failed"}:
+                raise SandboxPermissionError("当前云端接力状态不能上报该失败。")
+            safe_message = _redact_public_text(
+                error_message.strip(),
+                maximum=2_000,
+            )
+            pairing.update(
+                {
+                    "state": "failed",
+                    "failedStage": failed_stage,
+                    "error": safe_message or "端侧项目迁移失败。",
+                    "failedAt": int(time.time()),
+                }
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        response = JSONResponse({"state": "failed"})
         response.headers["Cache-Control"] = "no-store"
         return response
 

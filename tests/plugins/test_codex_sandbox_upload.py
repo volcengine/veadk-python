@@ -691,8 +691,184 @@ def test_remote_restore_emits_heartbeat_while_restore_runs(
     ) == {"restored": True, "fileCount": 2}
     command = requests[0]["command"]
     assert isinstance(command, str)
+    assert command.startswith("sh -lc ")
     assert 'while kill -0 "$restore_pid"' in command
     assert "[handoff] restore in progress" in command
+
+
+def test_stable_handoff_id_is_retry_stable_and_scoped_to_request(
+    upload_project, tmp_path: Path
+) -> None:
+    repo = tmp_path / "source"
+    repo.mkdir()
+
+    first = upload_project.stable_handoff_id("ABCD-EFGH", repo, "demo", "/home/gem")
+    retried = upload_project.stable_handoff_id("ABCDEFGH", repo, "demo", "/home/gem/")
+    different_project = upload_project.stable_handoff_id(
+        "ABCD-EFGH", repo, "other", "/home/gem"
+    )
+
+    assert first == retried
+    assert len(first) == 32
+    assert int(first, 16) >= 0
+    assert different_project != first
+
+
+def test_project_bundle_upload_chunks_reassembles_and_verifies_checksum(
+    upload_project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "bundle.tar.gz"
+    bundle.write_bytes(b"abcdefghij")
+    uploads: list[tuple[str, bytes]] = []
+    shell_requests: list[dict[str, object]] = []
+    monkeypatch.setattr(upload_project, "UPLOAD_CHUNK_BYTES", 4)
+    monkeypatch.setattr(
+        upload_project,
+        "upload_file",
+        lambda _endpoint, source, destination: uploads.append(
+            (destination, source.read_bytes())
+        ),
+    )
+
+    def fake_post_json(_url, payload, action):
+        assert action == "Sandbox bundle assembly"
+        shell_requests.append(payload)
+        return {"data": {"status": "completed", "exit_code": 0}}
+
+    monkeypatch.setattr(upload_project, "post_json", fake_post_json)
+
+    upload_project.upload_project_bundle(
+        "https://sandbox.example?Authorization=secret",
+        bundle,
+        "/home/gem/bundle.tar.gz",
+    )
+
+    assert uploads == [
+        ("/home/gem/bundle.tar.gz.part-0000", b"abcd"),
+        ("/home/gem/bundle.tar.gz.part-0001", b"efgh"),
+        ("/home/gem/bundle.tar.gz.part-0002", b"ij"),
+    ]
+    command = shell_requests[0]["command"]
+    assert isinstance(command, str)
+    assert command.startswith("sh -lc ")
+    assert "cat -- /home/gem/bundle.tar.gz.part-0000" in command
+    assert "sha256sum" in command
+    assert upload_project.file_sha256(bundle) in command
+    assert "rm -f -- /home/gem/bundle.tar.gz.part-0002" in command
+
+
+def test_project_bundle_upload_uses_single_request_at_chunk_boundary(
+    upload_project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "bundle.tar.gz"
+    bundle.write_bytes(b"abcd")
+    uploads: list[tuple[Path, str]] = []
+    monkeypatch.setattr(upload_project, "UPLOAD_CHUNK_BYTES", 4)
+    monkeypatch.setattr(
+        upload_project,
+        "upload_file",
+        lambda _endpoint, source, destination: uploads.append((source, destination)),
+    )
+
+    upload_project.upload_project_bundle(
+        "https://sandbox.example",
+        bundle,
+        "/home/gem/bundle.tar.gz",
+    )
+
+    assert uploads == [(bundle, "/home/gem/bundle.tar.gz")]
+
+
+def test_project_bundle_upload_cleans_parts_after_failure(
+    upload_project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "bundle.tar.gz"
+    bundle.write_bytes(b"abcdefghij")
+    cleanup_calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(upload_project, "UPLOAD_CHUNK_BYTES", 4)
+
+    def fail_second_upload(_endpoint, _source, destination):
+        if destination.endswith("part-0001"):
+            raise upload_project.HandoffError("upload failed")
+
+    monkeypatch.setattr(upload_project, "upload_file", fail_second_upload)
+    monkeypatch.setattr(
+        upload_project,
+        "cleanup_remote_artifacts",
+        lambda _endpoint, paths: cleanup_calls.append(tuple(paths)),
+    )
+
+    with pytest.raises(upload_project.HandoffError, match="upload failed"):
+        upload_project.upload_project_bundle(
+            "https://sandbox.example",
+            bundle,
+            "/home/gem/bundle.tar.gz",
+        )
+
+    assert cleanup_calls == [
+        (
+            "/home/gem/bundle.tar.gz",
+            "/home/gem/bundle.tar.gz.part-0000",
+            "/home/gem/bundle.tar.gz.part-0001",
+            "/home/gem/bundle.tar.gz.part-0002",
+        )
+    ]
+
+
+def test_remote_artifact_cleanup_wraps_all_commands_in_one_shell_invocation(
+    upload_project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        upload_project,
+        "post_json",
+        lambda _url, payload, _action: requests.append(payload) or {},
+    )
+
+    upload_project.cleanup_remote_artifacts(
+        "https://sandbox.example",
+        ("/home/gem/bundle.tar.gz", "/home/gem/.restore"),
+    )
+
+    command = requests[0]["command"]
+    assert isinstance(command, str)
+    assert command.startswith("sh -lc ")
+    assert "rm -rf -- /home/gem/bundle.tar.gz" in command
+    assert "rm -rf -- /home/gem/.restore" in command
+
+
+def test_handoff_failure_status_reporting_is_best_effort(
+    upload_project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[tuple[str, dict[str, object], str]] = []
+
+    def fake_post_json(url, payload, action):
+        requests.append((url, payload, action))
+        raise upload_project.HandoffError("status endpoint unavailable")
+
+    monkeypatch.setattr(upload_project, "post_json", fake_post_json)
+
+    upload_project.report_handoff_failure(
+        "https://studio.example/",
+        "remote-1",
+        "ABCD-EFGH",
+        "a" * 32,
+        "uploading-project",
+        upload_project.HandoffError("Sandbox upload failed"),
+    )
+
+    assert requests == [
+        (
+            "https://studio.example/web/sandbox/codex-project-handoff/sessions/remote-1/status",
+            {
+                "pairingCode": "ABCD-EFGH",
+                "handoffId": "a" * 32,
+                "failedStage": "uploading-project",
+                "error": "Sandbox upload failed",
+            },
+            "Studio handoff status update",
+        )
+    ]
 
 
 def test_sanitize_remote_removes_embedded_credentials(upload_project) -> None:

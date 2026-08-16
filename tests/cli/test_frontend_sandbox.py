@@ -1182,7 +1182,8 @@ def test_codex_project_handoff_pairing_creates_temporary_session_and_continues(
     assert created_status.json()["sessionId"] == "remote-1"
     assert reused.status_code == 200
     assert reused.json() == created.json()
-    assert reused_with_different_payload.status_code == 422
+    assert reused_with_different_payload.status_code == 200
+    assert reused_with_different_payload.json() == created.json()
     assert conflicting.status_code == 403
     assert continued.status_code == 200
     assert '"stage": "connecting-session"' in continued.text
@@ -1206,6 +1207,120 @@ def test_codex_project_handoff_pairing_creates_temporary_session_and_continues(
     )
     assert gateway.connections[0].prompts == ["继续"]
     assert "Authorization=secret" not in listed.text
+
+
+def test_codex_project_handoff_upload_failure_is_visible_and_session_is_reused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
+    gateway = _FakeGateway()
+
+    with TestClient(_app(gateway)) as client:
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
+            headers={"X-Test-User": "alice"},
+        )
+        code = pairing.json()["pairingCode"]
+        payload = {
+            "pairingCode": code,
+            "projectName": "Large Repo",
+            "agentName": "修复大包上传",
+            "handoffId": "handoff-request-retry-0001",
+        }
+        created = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json=payload,
+        )
+        session_id = created.json()["sessionId"]
+        failed = client.post(
+            f"/web/sandbox/codex-project-handoff/sessions/{session_id}/status",
+            json={
+                "pairingCode": code,
+                "handoffId": payload["handoffId"],
+                "failedStage": "uploading-project",
+                "error": "Sandbox upload could not connect to the service",
+            },
+        )
+        failed_status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
+        )
+        retried = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={**payload, "agentName": "继续大包上传"},
+        )
+        retried_status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert failed.status_code == 200
+    assert failed.headers["cache-control"] == "no-store"
+    assert failed_status.json()["state"] == "failed"
+    assert failed_status.json()["failedStage"] == "uploading-project"
+    assert failed_status.json()["error"] == (
+        "Sandbox upload could not connect to the service"
+    )
+    assert retried.status_code == 200
+    assert retried.json() == created.json()
+    assert retried_status.json()["state"] == "session-created"
+    assert retried_status.json()["agentName"] == "修复大包上传"
+    assert "failedStage" not in retried_status.json()
+    assert gateway.created == 1
+
+
+def test_codex_project_handoff_failure_status_rejects_mismatched_request() -> None:
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
+    gateway = _FakeGateway()
+
+    with TestClient(_app(gateway)) as client:
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
+            headers={"X-Test-User": "alice"},
+        )
+        code = pairing.json()["pairingCode"]
+        handoff_id = "handoff-request-status-0001"
+        created = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "Repo",
+                "agentName": "迁移项目",
+                "handoffId": handoff_id,
+            },
+        )
+        session_id = created.json()["sessionId"]
+        wrong_handoff = client.post(
+            f"/web/sandbox/codex-project-handoff/sessions/{session_id}/status",
+            json={
+                "pairingCode": code,
+                "handoffId": "handoff-request-status-wrong",
+                "failedStage": "restoring-project",
+                "error": "restore failed",
+            },
+        )
+        wrong_session = client.post(
+            "/web/sandbox/codex-project-handoff/sessions/remote-wrong/status",
+            json={
+                "pairingCode": code,
+                "handoffId": handoff_id,
+                "failedStage": "restoring-project",
+                "error": "restore failed",
+            },
+        )
+        wrong_stage = client.post(
+            f"/web/sandbox/codex-project-handoff/sessions/{session_id}/status",
+            json={
+                "pairingCode": code,
+                "handoffId": handoff_id,
+                "failedStage": "continuing-task",
+                "error": "continue failed",
+            },
+        )
+
+    assert wrong_handoff.status_code == 403
+    assert wrong_session.status_code == 403
+    assert wrong_stage.status_code == 422
 
 
 def test_codex_project_handoff_session_accepts_custom_home(
@@ -1286,6 +1401,42 @@ def test_codex_project_handoff_history_accepts_bounded_images() -> None:
             ),
         ),
     )
+
+
+def test_public_thread_snapshot_preserves_validated_imported_image_data() -> None:
+    image = CodexImportedImage(
+        mime_type="image/png",
+        data="iVBORw0KGgppbWFnZQ==",
+        name="handoff.png",
+        alt="端云接力界面",
+    )
+    snapshot = CodexThreadSnapshot(
+        thread=CodexThreadSummary(id="thread-1"),
+        messages=(
+            CodexThreadMessage(
+                id="message-1",
+                role="user",
+                content="请看图片",
+                timestamp=1,
+                images=(image,),
+            ),
+        ),
+    )
+    service = SandboxConversationService(_FakeGateway(), tool_id="tool-studio")
+    session = SimpleNamespace(
+        codex=SimpleNamespace(permissions=CodexPermissionSettings())
+    )
+
+    value = service._public_snapshot(session, snapshot)
+
+    assert value["messages"][0]["images"] == [
+        {
+            "mimeType": "image/png",
+            "data": "iVBORw0KGgppbWFnZQ==",
+            "name": "handoff.png",
+            "alt": "端云接力界面",
+        }
+    ]
 
 
 def test_codex_project_handoff_rejects_invalid_and_expired_pairing_code(

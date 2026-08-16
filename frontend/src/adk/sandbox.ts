@@ -126,7 +126,11 @@ export interface CodexProjectHandoffStatus {
   agentName?: string;
   sessionId?: string;
   error?: string;
-  failedStage?: "creating-session" | "continuing-task";
+  failedStage?:
+    | "creating-session"
+    | "uploading-project"
+    | "restoring-project"
+    | "continuing-task";
 }
 
 export interface SandboxUploadedFile {
@@ -1341,6 +1345,8 @@ export const sandboxClient: AgentKitSandboxClient = {
         : {}),
       ...(typeof value.error === "string" ? { error: value.error } : {}),
       ...(value.failedStage === "creating-session" ||
+      value.failedStage === "uploading-project" ||
+      value.failedStage === "restoring-project" ||
       value.failedStage === "continuing-task"
         ? { failedStage: value.failedStage }
         : {}),

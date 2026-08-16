@@ -79,6 +79,7 @@ SECRET_ASSIGNMENT = re.compile(
 )
 MAX_SCAN_BYTES = 1024 * 1024
 MAX_BUNDLE_BYTES = 512 * 1024 * 1024
+UPLOAD_CHUNK_BYTES = 64 * 1024 * 1024
 UPLOAD_CONNECT_ATTEMPTS = 24
 UPLOAD_RETRY_DELAY_SECONDS = 5.0
 SESSION_CREATE_ATTEMPTS = 6
@@ -906,6 +907,27 @@ def pairing_code(value: str) -> str:
     return f"{compact[:4]}-{compact[4:]}"
 
 
+def stable_handoff_id(
+    code: str,
+    repo: Path,
+    project_name: str,
+    remote_home: str,
+) -> str:
+    """Return a retry-stable, non-reversible request identifier."""
+    identity = json.dumps(
+        {
+            "pairingCode": pairing_code(code),
+            "repo": str(repo.expanduser().resolve()),
+            "projectName": project_name,
+            "remoteHome": remote_home.rstrip("/") or "/",
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(identity).hexdigest()[:32]
+
+
 def service_url(endpoint: str, route: str) -> str:
     parsed = urlsplit(endpoint)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -1184,6 +1206,151 @@ def upload_file(endpoint: str, source: Path, destination: str) -> dict[str, Any]
     ) from last_error
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def shell_script_command(lines: Iterable[str]) -> str:
+    """Wrap a multi-line script for Sandbox terminals that accept one command."""
+    import shlex
+
+    script = "\n".join(lines)
+    return f"sh -lc {shlex.quote(script)}"
+
+
+def remote_reassemble_bundle(
+    endpoint: str,
+    destination: str,
+    part_paths: tuple[str, ...],
+    expected_sha256: str,
+) -> None:
+    import shlex
+
+    if not part_paths:
+        raise HandoffError("Sandbox upload produced no bundle parts")
+    quoted_parts = " ".join(shlex.quote(path) for path in part_paths)
+    command = shell_script_command(
+        [
+            "set -eu",
+            f"bundle={shlex.quote(destination)}",
+            f"expected_sha256={shlex.quote(expected_sha256)}",
+            'temporary="${bundle}.assembling"',
+            'cleanup() { rm -f -- "$temporary"; }',
+            "trap cleanup EXIT",
+            'rm -f -- "$temporary"',
+            f'cat -- {quoted_parts} > "$temporary"',
+            'actual_sha256="$(sha256sum "$temporary" | awk \'{print $1}\')"',
+            'if [ "$actual_sha256" != "$expected_sha256" ]; then',
+            '  echo "bundle checksum mismatch" >&2',
+            "  exit 1",
+            "fi",
+            'mv -f -- "$temporary" "$bundle"',
+            *(f"rm -f -- {shlex.quote(path)}" for path in part_paths),
+        ]
+    )
+    value = post_json(
+        service_url(endpoint, "/v1/shell/exec"),
+        {"id": "", "exec_dir": "/", "command": command},
+        "Sandbox bundle assembly",
+    )
+    status = nested(
+        value,
+        (
+            ("data", "status"),
+            ("data", "Status"),
+            ("status",),
+            ("Status",),
+            ("Result", "data", "status"),
+            ("Result", "status"),
+        ),
+    )
+    exit_code = nested(
+        value,
+        (
+            ("data", "exit_code"),
+            ("data", "ExitCode"),
+            ("exit_code",),
+            ("ExitCode",),
+            ("Result", "data", "exit_code"),
+            ("Result", "exit_code"),
+        ),
+    )
+    if (
+        value.get("success") is False
+        or status in {"failed", "error"}
+        or exit_code not in (None, 0, "0")
+    ):
+        raise HandoffError("Sandbox bundle assembly failed")
+
+
+def upload_project_bundle(endpoint: str, source: Path, destination: str) -> None:
+    """Upload a project bundle, using bounded requests for large archives."""
+    size = source.stat().st_size
+    if size <= UPLOAD_CHUNK_BYTES:
+        upload_file(endpoint, source, destination)
+        return
+
+    part_count = (size + UPLOAD_CHUNK_BYTES - 1) // UPLOAD_CHUNK_BYTES
+    remote_parts = tuple(
+        f"{destination}.part-{index:04d}" for index in range(part_count)
+    )
+    assembled = False
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="studio-project-handoff-parts-",
+            dir=source.parent,
+        ) as temporary:
+            parts_dir = Path(temporary)
+            with source.open("rb") as handle:
+                for index, remote_part in enumerate(remote_parts):
+                    part = parts_dir / f"bundle.part-{index:04d}"
+                    part.write_bytes(handle.read(UPLOAD_CHUNK_BYTES))
+                    report_progress(f"正在上传项目（{index + 1}/{part_count}）")
+                    upload_file(endpoint, part, remote_part)
+        remote_reassemble_bundle(
+            endpoint,
+            destination,
+            remote_parts,
+            file_sha256(source),
+        )
+        assembled = True
+    finally:
+        if not assembled:
+            try:
+                cleanup_remote_artifacts(endpoint, (destination, *remote_parts))
+            except HandoffError:
+                pass
+
+
+def report_handoff_failure(
+    studio_base_url: str,
+    session_id: str,
+    code: str,
+    handoff_id: str,
+    failed_stage: str,
+    error: HandoffError,
+) -> None:
+    """Best-effort synchronization of an upload-side failure to Studio."""
+    try:
+        post_json(
+            studio_base_url.rstrip("/")
+            + f"/web/sandbox/codex-project-handoff/sessions/{session_id}/status",
+            {
+                "pairingCode": code,
+                "handoffId": handoff_id,
+                "failedStage": failed_stage,
+                "error": str(error),
+            },
+            "Studio handoff status update",
+        )
+    except HandoffError:
+        pass
+
+
 def nested(value: dict[str, Any], paths: Iterable[tuple[str, ...]]) -> Any:
     for path in paths:
         current: Any = value
@@ -1205,7 +1372,7 @@ def remote_restore(
 ) -> dict[str, Any]:
     import shlex
 
-    command = "\n".join(
+    command = shell_script_command(
         [
             "set -eu",
             f"bundle={shlex.quote(bundle_path)}",
@@ -1320,7 +1487,7 @@ def cleanup_remote_artifacts(endpoint: str, paths: Iterable[str]) -> None:
     safe_paths = [path for path in paths if path.startswith("/") and path != "/"]
     if not safe_paths:
         return
-    command = "\n".join(
+    command = shell_script_command(
         [
             "set -eu",
             *(f"rm -rf -- {shlex.quote(path)}" for path in safe_paths),
@@ -1448,7 +1615,12 @@ def main(argv: list[str] | None = None) -> int:
             shutil.copy2(bundle, output)
             print(f"[handoff] retained local bundle: {output}")
         print(f"[handoff] bundle bytes: {bundle.stat().st_size}")
-        handoff_id = uuid.uuid4().hex
+        handoff_id = stable_handoff_id(
+            one_time_code,
+            state.repo,
+            project_name,
+            args.remote_home,
+        )
         report_progress("正在创建云端 Session")
         session = post_json(
             studio_base_url + "/web/sandbox/codex-project-handoff/sessions",
@@ -1494,17 +1666,39 @@ def main(argv: list[str] | None = None) -> int:
         restore_completed = False
         try:
             report_progress("正在上传项目")
-            upload_file(endpoint, bundle, remote_bundle)
-            if credentials_file is not None and remote_credentials is not None:
-                upload_file(endpoint, credentials_file, remote_credentials)
+            try:
+                upload_project_bundle(endpoint, bundle, remote_bundle)
+                if credentials_file is not None and remote_credentials is not None:
+                    upload_file(endpoint, credentials_file, remote_credentials)
+            except HandoffError as error:
+                report_handoff_failure(
+                    studio_base_url,
+                    session_id,
+                    one_time_code,
+                    handoff_id,
+                    "uploading-project",
+                    error,
+                )
+                raise
             report_progress("正在恢复项目")
-            restored = remote_restore(
-                endpoint,
-                remote_bundle,
-                stage,
-                remote_repo,
-                remote_credentials,
-            )
+            try:
+                restored = remote_restore(
+                    endpoint,
+                    remote_bundle,
+                    stage,
+                    remote_repo,
+                    remote_credentials,
+                )
+            except HandoffError as error:
+                report_handoff_failure(
+                    studio_base_url,
+                    session_id,
+                    one_time_code,
+                    handoff_id,
+                    "restoring-project",
+                    error,
+                )
+                raise
             restore_completed = True
             report_progress("项目恢复完成")
         finally:

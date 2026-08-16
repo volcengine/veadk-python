@@ -135,6 +135,20 @@ test("handoff progress can open the completed Codex session", () => {
   assert.match(appSource, /onOpenSession=\{openCodexHandoffSession\}/);
 });
 
+test("handoff upload and restore failures stop on the restore step", () => {
+  assert.match(sandboxClientSource, /\| "uploading-project"/);
+  assert.match(sandboxClientSource, /\| "restoring-project"/);
+  assert.match(
+    dialogSource,
+    /status\.failedStage === "uploading-project"[\s\S]*?status\.failedStage === "restoring-project"[\s\S]*?return 2/,
+  );
+  assert.match(dialogSource, /value\.state === "failed" \? 3000 : 1500/);
+  assert.doesNotMatch(
+    dialogSource,
+    /value\.state === "completed" \|\| value\.state === "failed"/,
+  );
+});
+
 test("GitHub credential handling stays in the upload skill instead of the dialog", () => {
   assert.doesNotMatch(dialogSource, /gh auth login/);
   assert.doesNotMatch(dialogSource, /GitHub CLI 凭据/);
