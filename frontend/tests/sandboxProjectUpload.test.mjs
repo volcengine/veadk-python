@@ -179,7 +179,7 @@ test("the handoff step generates a short cloud continuation prompt", () => {
 test("the dialog uses the requested copy and normal body typography", () => {
   assert.match(
     dialogSource,
-    /按顺序复制两段提示词，Codex 会安装插件并将当前任务接力到云端/,
+    /按顺序复制两段提示词，Codex 会通过插件将您的本地任务接力到云端/,
   );
   assert.match(dialogSource, /复制安装提示词/);
   assert.match(dialogSource, /复制接力提示词/);

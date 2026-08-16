@@ -474,7 +474,7 @@ export function SandboxProjectUploadDialog({
               </Badge>
             </div>
             <p id="sandbox-project-upload-description">
-              按顺序复制两段提示词，Codex 会安装插件并将当前任务接力到云端
+              按顺序复制两段提示词，Codex 会通过插件将您的本地任务接力到云端
             </p>
           </div>
           <button
