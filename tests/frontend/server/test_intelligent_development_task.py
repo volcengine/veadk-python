@@ -1,3 +1,17 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from __future__ import annotations
 
 import hashlib
@@ -208,8 +222,7 @@ async def test_delivery_publisher_sends_server_parsed_manifest_contract() -> Non
     artifact_digest = "a" * 64
     report_digest = "b" * 64
     release = (
-        "/home/gem/.intelligent-development/releases/"
-        f"{artifact_digest}-{report_digest}"
+        f"/home/gem/.intelligent-development/releases/{artifact_digest}-{report_digest}"
     )
 
     class Remote:
@@ -234,9 +247,7 @@ async def test_delivery_publisher_sends_server_parsed_manifest_contract() -> Non
             del media_type, max_bytes
             self.uploads[path] = (content, mode)
 
-        async def exec_json(
-            self, command: str, *, timeout: int
-        ) -> dict[str, object]:
+        async def exec_json(self, command: str, *, timeout: int) -> dict[str, object]:
             self.commands.append((command, timeout))
             return {
                 "sessionId": "session",
@@ -247,9 +258,7 @@ async def test_delivery_publisher_sends_server_parsed_manifest_contract() -> Non
                 "fileCount": 2,
                 "artifactPath": f"{release}/artifact.zip",
                 "descriptorPath": f"{release}/descriptor.json",
-                "validationReportPath": (
-                    f"{release}/validation/{report_digest}.json"
-                ),
+                "validationReportPath": (f"{release}/validation/{report_digest}.json"),
                 "validationReportSha256": report_digest,
                 "releasePath": release,
             }
