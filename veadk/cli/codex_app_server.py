@@ -30,6 +30,7 @@ import math
 import posixpath
 import re
 import secrets
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import asdict, dataclass
@@ -65,6 +66,8 @@ _APP_SERVER_MAX_MESSAGE_BYTES = _IMPORTED_HISTORY_MAX_BASE64_BYTES + 2 * 1024 * 
 _IMPORTED_HISTORY_IMAGE_MIME_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/gif", "image/webp"}
 )
+_GATEWAY_WEBSOCKET_MAX_LIFETIME_SECONDS = 30 * 60
+_GATEWAY_WEBSOCKET_REFRESH_MARGIN_SECONDS = 30
 
 
 class CodexAppServerError(RuntimeError):
@@ -382,7 +385,7 @@ class CodexAppServerSession:
         self._websocket: Any | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._server_request_tasks: set[asyncio.Task[None]] = set()
-        self._connect_lock = asyncio.Lock()
+        self._connection_lock = asyncio.Lock()
         self._send_lock = asyncio.Lock()
         self._next_request_id = 1
         self._pending_requests: dict[int, asyncio.Future[dict[str, object]]] = {}
@@ -391,6 +394,8 @@ class CodexAppServerSession:
         self._active_turn_id = ""
         self._pending_approvals: dict[str, asyncio.Future[ApprovalDecision]] = {}
         self._closed = False
+        self._connected_at = 0.0
+        self._connection_failure: CodexAppServerError | None = None
         self._workspace_locked = False
         self._agent_message_delta_ids: set[str] = set()
         self._received_unidentified_agent_delta = False
@@ -420,6 +425,17 @@ class CodexAppServerSession:
         return self._workspace_locked
 
     @property
+    def healthy(self) -> bool:
+        """Whether the current app-server WebSocket can accept requests."""
+        return (
+            not self._closed
+            and self._websocket is not None
+            and self._reader_task is not None
+            and not self._reader_task.done()
+            and self._connection_failure is None
+        )
+
+    @property
     def thread_token_total(self) -> CodexTokenUsage | None:
         """The latest exact cumulative usage reported for the active thread."""
         return self._thread_token_total
@@ -430,83 +446,171 @@ class CodexAppServerSession:
         return self._model_context_window
 
     async def connect(self) -> None:
-        """Connect to app-server, resuming the active thread after transport loss."""
-        async with self._connect_lock:
-            if self._websocket is not None:
+        """Connect to app-server, creating or resuming the active thread."""
+        if self.healthy:
+            return
+        if self._closed:
+            raise CodexAppServerError("Codex app-server connection is closed.")
+        async with self._connection_lock:
+            if self.healthy:
                 return
-            if self._closed:
-                raise CodexAppServerError("Codex app-server connection is closed.")
+            if self._websocket is not None:
+                await self._close_transport()
             active_thread_id = self.thread_id
+            previous_workspace_locked = self._workspace_locked
+            previous_thread_total = self._thread_token_total
+            previous_context_window = self._model_context_window
             try:
-                url = _app_server_url(self._endpoint)
-                if self._websocket_factory is not None:
-                    self._websocket = await self._websocket_factory(url)
-                else:
-                    import websockets
-
-                    self._websocket = await websockets.connect(
-                        url,
-                        open_timeout=30,
-                        close_timeout=5,
-                        ping_timeout=60,
-                        max_size=_APP_SERVER_MAX_MESSAGE_BYTES,
-                    )
-            except Exception as error:
-                raise CodexAppServerError(
-                    "无法连接 AgentKit Session 中的 Codex 服务。"
-                ) from error
-            self._reader_task = asyncio.create_task(self._read_messages())
-            try:
-                await self.request(
-                    "initialize",
-                    {
-                        "clientInfo": {
-                            "name": "agentkit_codex_app_server_client",
-                            "title": "AgentKit Studio",
-                            "version": "1",
-                        },
-                        "capabilities": {"experimentalApi": True},
-                    },
-                )
-                await self.notify("initialized")
+                await self._open_transport()
+                await self._initialize_transport()
                 if active_thread_id:
-                    try:
-                        snapshot = await self.request(
-                            "thread/resume",
-                            {
-                                "threadId": active_thread_id,
-                                **self._thread_options(),
-                            },
-                        )
-                    except CodexAppServerError as error:
-                        if "no rollout found for thread id" not in str(error):
-                            raise
-                        snapshot = await self.request(
-                            "thread/start",
-                            self._thread_options(),
-                        )
-                        self._activate_thread_snapshot("thread/start", snapshot)
-                    else:
-                        self._activate_thread_snapshot("thread/resume", snapshot)
+                    method, result = await self._resume_or_start_thread(
+                        active_thread_id,
+                        previous_workspace_locked=previous_workspace_locked,
+                    )
+                    self._activate_thread_snapshot(method, result)
+                    if method == "thread/resume":
+                        self._workspace_locked = previous_workspace_locked
+                        self._thread_token_total = previous_thread_total
+                        self._model_context_window = previous_context_window
                 else:
-                    snapshot = await self.request("thread/start", {})
+                    snapshot = await self._request("thread/start", {})
                     self._apply_thread_snapshot(snapshot)
             except Exception:
-                if active_thread_id:
-                    failed_socket = self._websocket
-                    failed_reader = self._reader_task
-                    self._websocket = None
-                    self._reader_task = None
-                    if failed_socket is not None:
-                        with contextlib.suppress(Exception):
-                            await failed_socket.close()
-                    if failed_reader is not None:
-                        failed_reader.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await failed_reader
-                else:
-                    await self.close()
+                await self._close_transport()
                 raise
+
+    async def ensure_connected(
+        self,
+        *,
+        minimum_lifetime_seconds: float = _REQUEST_TIMEOUT_SECONDS,
+    ) -> None:
+        """Refresh a closed or aging transport without replacing its thread."""
+        if self._closed:
+            raise CodexAppServerError("Codex app-server 连接已关闭。")
+        if not self.thread_id:
+            raise CodexAppServerError("Codex app-server 尚未连接。")
+        if not self._transport_needs_refresh(minimum_lifetime_seconds):
+            return
+        if self.active:
+            if not self.healthy:
+                raise self._connection_failure or CodexAppServerError(
+                    "Codex app-server 连接已断开。"
+                )
+            return
+        async with self._connection_lock:
+            if not self._transport_needs_refresh(minimum_lifetime_seconds):
+                return
+            if self.active:
+                if not self.healthy:
+                    raise self._connection_failure or CodexAppServerError(
+                        "Codex app-server 连接已断开。"
+                    )
+                return
+            if any(not future.done() for future in self._pending_requests.values()):
+                if self.healthy:
+                    return
+                raise self._connection_failure or CodexAppServerError(
+                    "Codex app-server 连接已断开。"
+                )
+            await self._reconnect_transport()
+
+    async def _open_transport(self) -> None:
+        """Open one WebSocket transport and start its reader."""
+        try:
+            url = _app_server_url(self._endpoint)
+            if self._websocket_factory is not None:
+                self._websocket = await self._websocket_factory(url)
+            else:
+                import websockets
+
+                self._websocket = await websockets.connect(
+                    url,
+                    open_timeout=30,
+                    close_timeout=5,
+                    ping_timeout=60,
+                    max_size=_APP_SERVER_MAX_MESSAGE_BYTES,
+                )
+        except Exception as error:
+            raise CodexAppServerError(
+                "无法连接 AgentKit Session 中的 Codex 服务。"
+            ) from error
+        self._connected_at = time.monotonic()
+        self._connection_failure = None
+        self._reader_task = asyncio.create_task(self._read_messages())
+
+    async def _initialize_transport(self) -> None:
+        """Initialize the app-server protocol on the current transport."""
+        await self._request(
+            "initialize",
+            {
+                "clientInfo": {
+                    "name": "agentkit_codex_app_server_client",
+                    "title": "AgentKit Studio",
+                    "version": "1",
+                },
+                "capabilities": {"experimentalApi": True},
+            },
+        )
+        await self._send({"method": "initialized"})
+
+    def _transport_needs_refresh(self, minimum_lifetime_seconds: float) -> bool:
+        if not self.healthy:
+            return True
+        minimum_lifetime_seconds = max(0.0, minimum_lifetime_seconds)
+        maximum_age = (
+            _GATEWAY_WEBSOCKET_MAX_LIFETIME_SECONDS
+            - _GATEWAY_WEBSOCKET_REFRESH_MARGIN_SECONDS
+            - minimum_lifetime_seconds
+        )
+        return time.monotonic() - self._connected_at >= max(0.0, maximum_age)
+
+    async def _resume_or_start_thread(
+        self,
+        thread_id: str,
+        *,
+        previous_workspace_locked: bool,
+    ) -> tuple[str, dict[str, object]]:
+        try:
+            result = await self._request(
+                "thread/resume",
+                {
+                    "threadId": thread_id,
+                    **self._thread_options(),
+                },
+            )
+            return "thread/resume", result
+        except CodexAppServerError as error:
+            if (
+                previous_workspace_locked
+                or "no rollout found" not in str(error).lower()
+            ):
+                raise
+            result = await self._request("thread/start", self._thread_options())
+            return "thread/start", result
+
+    async def _reconnect_transport(self) -> None:
+        """Replace the transport and resume the active Codex thread."""
+        previous_thread_id = self.thread_id
+        previous_workspace_locked = self._workspace_locked
+        previous_thread_total = self._thread_token_total
+        previous_context_window = self._model_context_window
+        await self._close_transport()
+        try:
+            await self._open_transport()
+            await self._initialize_transport()
+            method, result = await self._resume_or_start_thread(
+                previous_thread_id,
+                previous_workspace_locked=previous_workspace_locked,
+            )
+            self._activate_thread_snapshot(method, result)
+            if method == "thread/resume":
+                self._workspace_locked = previous_workspace_locked
+                self._thread_token_total = previous_thread_total
+                self._model_context_window = previous_context_window
+        except Exception:
+            await self._close_transport()
+            raise
 
     async def request(
         self,
@@ -516,8 +620,20 @@ class CodexAppServerSession:
         timeout: float = _REQUEST_TIMEOUT_SECONDS,
     ) -> dict[str, object]:
         """Send one JSON-RPC request and validate its object result."""
-        if self._websocket is None:
+        if not self.thread_id:
             await self.connect()
+        else:
+            await self.ensure_connected(minimum_lifetime_seconds=timeout)
+        return await self._request(method, params, timeout=timeout)
+
+    async def _request(
+        self,
+        method: str,
+        params: dict[str, object] | None = None,
+        *,
+        timeout: float = _REQUEST_TIMEOUT_SECONDS,
+    ) -> dict[str, object]:
+        """Send one request on an already-checked WebSocket transport."""
         if self._websocket is None or self._closed:
             raise CodexAppServerError("Codex app-server 尚未连接。")
         request_id = self._next_request_id
@@ -542,6 +658,10 @@ class CodexAppServerSession:
         self, method: str, params: dict[str, object] | None = None
     ) -> None:
         """Send a JSON-RPC notification."""
+        if not self.thread_id:
+            await self.connect()
+        else:
+            await self.ensure_connected()
         await self._send(
             {
                 "method": method,
@@ -553,9 +673,14 @@ class CodexAppServerSession:
         self, prompt: str, skill_ids: tuple[str, ...] = ()
     ) -> AsyncIterator[CodexAppServerEvent]:
         """Start one Codex turn and stream its public events."""
-        await self.connect()
         if self.active:
             raise CodexAppServerError("当前 Codex 任务仍在运行。")
+        if not self.thread_id:
+            await self.connect()
+        else:
+            await self.ensure_connected(
+                minimum_lifetime_seconds=_TURN_TIMEOUT_SECONDS,
+            )
         if not self.thread_id:
             raise CodexAppServerError("Codex Thread 尚未初始化。")
         prompt = prompt.strip()
@@ -1279,15 +1404,23 @@ class CodexAppServerSession:
             await asyncio.gather(
                 *tuple(self._server_request_tasks), return_exceptions=True
             )
-        if self._websocket is not None:
-            with contextlib.suppress(Exception):
-                await self._websocket.close()
-        if self._reader_task is not None:
-            self._reader_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._reader_task
-        self._websocket = None
+        await self._close_transport()
         self._endpoint = ""
+
+    async def _close_transport(self) -> None:
+        """Close only the current WebSocket so the Session can reconnect."""
+        reader_task = self._reader_task
+        self._reader_task = None
+        if reader_task is not None and reader_task is not asyncio.current_task():
+            reader_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reader_task
+        websocket = self._websocket
+        self._websocket = None
+        if websocket is not None:
+            with contextlib.suppress(Exception):
+                await websocket.close()
+        self._connected_at = 0.0
 
     async def _send(self, message: dict[str, object]) -> None:
         if self._websocket is None or self._closed:
@@ -1296,9 +1429,10 @@ class CodexAppServerSession:
             try:
                 await self._websocket.send(json.dumps(message, ensure_ascii=False))
             except Exception as error:
-                raise CodexAppServerError(
-                    "向 Codex app-server 发送请求失败。"
-                ) from error
+                failure = CodexAppServerError("向 Codex app-server 发送请求失败。")
+                failure.__cause__ = error
+                self._connection_failure = failure
+                raise failure
 
     async def _read_messages(self) -> None:
         failure: CodexAppServerError | None = None
@@ -1343,6 +1477,7 @@ class CodexAppServerSession:
             if not self._closed:
                 failure = CodexAppServerError("Codex app-server 连接已断开。")
         if failure is not None:
+            self._connection_failure = failure
             for future in self._pending_requests.values():
                 if not future.done():
                     future.set_exception(failure)
