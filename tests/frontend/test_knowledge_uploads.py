@@ -42,6 +42,7 @@ from frontend.server.knowledge.uploads import (
     validate_knowledge_upload_content,
 )
 from frontend.server.knowledge.web_import import (
+    WebImportContentError,
     WebImportFetchError,
     WebImportResult,
 )
@@ -870,6 +871,7 @@ class _UploadStore:
     def __init__(self) -> None:
         self.puts: list[dict[str, object]] = []
         self.contents: list[bytes] = []
+        self.managed_contents: dict[str, bytes] = {}
         self.deleted: list[StoredKnowledgeUpload] = []
         self.managed_deletes: list[dict[str, object]] = []
         self.cleanup_failure: Exception | None = None
@@ -878,19 +880,26 @@ class _UploadStore:
 
     def put(self, **kwargs) -> StoredKnowledgeUpload:
         self.puts.append(kwargs)
-        self.contents.append(Path(kwargs["source"]).read_bytes())
-        return StoredKnowledgeUpload(
+        content = Path(kwargs["source"]).read_bytes()
+        self.contents.append(content)
+        upload = StoredKnowledgeUpload(
             tos_path="tos://bucket/object.pdf",
             bucket="bucket",
             key="object.pdf",
             region="cn-beijing",
         )
+        self.managed_contents[upload.tos_path] = content
+        return upload
 
     def delete(self, upload: StoredKnowledgeUpload) -> None:
         self.deleted.append(upload)
         self.metadata.pop(upload.tos_path, None)
+        self.managed_contents.pop(upload.tos_path, None)
         if self.delete_failure is not None:
             raise self.delete_failure
+
+    def read_managed(self, **kwargs) -> bytes | None:
+        return self.managed_contents.get(str(kwargs["tos_path"]))
 
     def put_metadata(
         self,
@@ -974,6 +983,40 @@ def test_upload_route_authorizes_then_adds_tos_document() -> None:
         "team": "support",
         "_veadk_file_size_bytes": 9,
     }
+
+
+def test_preview_document_reads_stored_markdown_without_provider_chunks() -> None:
+    service, documents, uploads = _knowledge_service()
+    markdown = b"# Service guide\n\nImported body."
+    uploads.managed_contents["tos://bucket/object.pdf"] = markdown
+    uploads.metadata["tos://bucket/object.pdf"] = {
+        "_veadk_content_format": "markdown",
+        "_veadk_source_title": "",
+        "_veadk_source_url": "https://example.com/guide",
+    }
+
+    def _unexpected_preview(
+        *args: object, **kwargs: object
+    ) -> tuple[list[object], bool]:
+        del args, kwargs
+        raise AssertionError("provider preview must not run for stored Markdown")
+
+    documents.preview = _unexpected_preview  # type: ignore[method-assign]
+
+    result = service.preview_document(
+        "kb-1",
+        "doc-web",
+        identity=KnowledgeIdentity("user-1", "Alice"),
+        region="cn-beijing",
+        offset=0,
+        limit=20,
+    )
+
+    assert result["sourceMarkdown"] == markdown.decode()
+    assert result["document"]["name"] == "example.com"
+    assert result["document"]["url"] == "https://example.com/guide"
+    assert result["chunks"] == []
+    assert result["hasMore"] is False
 
 
 def test_upload_route_blocks_cross_owner_before_persistent_upload() -> None:
@@ -1302,8 +1345,70 @@ def test_web_import_authorizes_then_uploads_markdown_through_tos() -> None:
     assert created.metadata["_veadk_content_format"] == "markdown"
     assert created.metadata["_veadk_fetched_at"]
     assert response.json()["url"] == "https://example.com/guide?id=42"
+    assert response.json()["sourceMarkdown"] == "# Service guide\n\nImported body."
     assert "secret-value" not in response.text
     assert "signed-secret" not in response.text
+
+
+def test_web_preview_extracts_markdown_without_creating_document() -> None:
+    service, documents, uploads = _knowledge_service()
+    importer = _WebImporter(
+        WebImportResult(
+            markdown="# Service guide\n\nImported body.",
+            title="Service guide",
+            final_url="https://example.com/guide?token=secret-value#section",
+        )
+    )
+
+    response = _web_import_client(service, importer).post(
+        "/web/knowledge-bases/kb-1/documents/web-preview",
+        json={"sourceType": "url", "url": "https://example.com/guide"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "name": "Service guide",
+        "url": "https://example.com/guide",
+        "sourceMarkdown": "# Service guide\n\nImported body.",
+    }
+    assert importer.urls == ["https://example.com/guide"]
+    assert uploads.puts == []
+    assert documents.created == []
+    assert "secret-value" not in response.text
+
+
+def test_web_confirmation_saves_exact_preview_without_refetching() -> None:
+    service, documents, uploads = _knowledge_service()
+    uploads.max_file_bytes = 1024
+    importer = _WebImporter(
+        WebImportResult(
+            markdown="# Previewed guide\n\nApproved body.",
+            title="Previewed guide",
+            final_url="https://example.com/guide",
+        )
+    )
+    client = _web_import_client(service, importer)
+
+    preview = client.post(
+        "/web/knowledge-bases/kb-1/documents/web-preview",
+        json={"sourceType": "url", "url": "https://example.com/guide"},
+    ).json()
+    response = client.post(
+        "/web/knowledge-bases/kb-1/documents",
+        json={
+            "sourceType": "url",
+            "url": preview["url"],
+            "sourceTitle": preview["name"],
+            "sourceMarkdown": preview["sourceMarkdown"],
+            "metadata": {"team": "support"},
+        },
+    )
+
+    assert response.status_code == 201
+    assert importer.urls == ["https://example.com/guide"]
+    assert uploads.contents == [b"# Previewed guide\n\nApproved body."]
+    assert documents.created[0].name == "Previewed guide"
+    assert documents.created[0].metadata["team"] == "support"
 
 
 def test_viking_document_restores_sanitized_web_source_url_from_metadata() -> None:
@@ -1395,3 +1500,27 @@ def test_web_import_failure_is_structured_and_does_not_leak_credentials() -> Non
     assert "diagnostics" in detail
     assert "secret-value" not in response.text
     assert "top-secret" not in response.text
+
+
+def test_web_import_explains_javascript_only_pages() -> None:
+    service, documents, uploads = _knowledge_service()
+    importer = _WebImporter(
+        failure=WebImportContentError(
+            "No visible HTML content could be extracted. The page may require JavaScript to render."
+        )
+    )
+
+    response = _web_import_client(service, importer).post(
+        "/web/knowledge-bases/kb-1/documents/web-preview",
+        json={
+            "sourceType": "url",
+            "url": "https://example.com/javascript-app",
+        },
+    )
+
+    assert response.status_code == 422
+    assert uploads.puts == []
+    assert documents.created == []
+    detail = response.json()["detail"]
+    assert detail["errorCode"] == "KNOWLEDGE_WEB_CONTENT_INVALID"
+    assert "JavaScript 动态渲染" in detail["message"]

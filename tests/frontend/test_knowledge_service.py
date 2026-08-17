@@ -877,6 +877,7 @@ def test_preview_route_returns_authorized_paginated_chunks() -> None:
         "offset": 10,
         "limit": 20,
         "hasMore": True,
+        "sourceMarkdown": "",
     }
     assert agentkit.connection_calls == [("kb-a", "cn-beijing")]
     assert documents.previewed == [("doc-1", 10, 20)]

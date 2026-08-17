@@ -10,17 +10,6 @@
   color: hsl(var(--foreground));
 }
 
-.knowledge-library button,
-.knowledge-library input,
-.knowledge-library textarea,
-.knowledge-library select,
-.knowledge-dialog button,
-.knowledge-dialog input,
-.knowledge-dialog textarea,
-.knowledge-dialog select {
-  font: inherit;
-}
-
 .knowledge-library__sidebar {
   display: flex;
   flex-direction: column;
@@ -584,7 +573,7 @@
 .knowledge-document-table__name {
   overflow: hidden;
   font-size: 13.5px;
-  font-weight: 600;
+  font-weight: 400;
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -671,6 +660,13 @@
   flex-direction: column;
 }
 
+.knowledge-dialog--web-confirm form {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .knowledge-preview {
   flex: 1;
   min-width: 0;
@@ -697,6 +693,16 @@
   font-size: 12px;
   font-weight: 550;
   text-decoration: none;
+}
+
+.knowledge-preview__meta strong {
+  min-width: 0;
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .knowledge-preview__meta a:hover {
@@ -973,6 +979,7 @@
 }
 
 .knowledge-dialog__body > label,
+.knowledge-source-panel > label,
 .knowledge-dialog__fields label {
   display: flex;
   min-width: 0;
@@ -1109,6 +1116,15 @@
   border-color: hsl(var(--foreground));
   background: hsl(var(--foreground));
   color: hsl(var(--background));
+}
+
+.knowledge-dialog__actions button.is-back {
+  margin-inline-end: auto;
+}
+
+.knowledge-web-preview__error {
+  flex: 0 0 auto;
+  padding: 10px 18px 0;
 }
 
 .knowledge-dialog__actions button:hover:not(:disabled) {
@@ -1450,6 +1466,31 @@
   }
 }
 
+.knowledge-preview__markdown-shell {
+  width: min(780px, calc(100% - 36px));
+  box-sizing: border-box;
+  margin: 18px auto 28px;
+  padding: 18px 20px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: hsl(var(--panel));
+}
+
+.knowledge-preview__markdown {
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-preview__markdown > :first-child {
+  margin-top: 0;
+}
+
+.knowledge-preview__markdown > :last-child {
+  margin-bottom: 0;
+}
+
 @media (max-width: 560px) {
   .knowledge-library {
     padding-inline: 16px;
@@ -1473,12 +1514,14 @@
     height: calc(100dvh - 32px);
   }
 
-  .knowledge-preview__chunks {
+  .knowledge-preview__chunks,
+  .knowledge-preview__markdown-shell {
     width: calc(100% - 24px);
     margin-top: 12px;
   }
 
-  .knowledge-preview__chunk {
+  .knowledge-preview__chunk,
+  .knowledge-preview__markdown-shell {
     padding: 14px;
   }
 }

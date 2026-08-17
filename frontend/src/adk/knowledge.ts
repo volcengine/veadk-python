@@ -52,6 +52,7 @@ export interface KnowledgeDocumentItem {
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+  sourceMarkdown: string;
 }
 
 export interface KnowledgeDocumentPage {
@@ -74,6 +75,7 @@ export interface KnowledgeDocumentPreviewChunk {
 export interface KnowledgeDocumentPreviewPage {
   document: KnowledgeDocumentItem;
   chunks: KnowledgeDocumentPreviewChunk[];
+  sourceMarkdown: string;
   offset: number;
   limit: number;
   hasMore: boolean;
@@ -89,8 +91,20 @@ export interface CreateKnowledgeDocumentInput {
   name?: string;
   documentType?: string;
   url?: string;
+  sourceTitle?: string;
+  sourceMarkdown?: string;
   tosPath?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface KnowledgeWebPreview {
+  name: string;
+  url: string;
+  sourceMarkdown: string;
+}
+
+export interface PreviewKnowledgeWebInput {
+  url: string;
 }
 
 export interface UploadKnowledgeDocumentInput {
@@ -397,6 +411,7 @@ function normalizeKnowledgeDocument(value: unknown): KnowledgeDocumentItem {
     metadata: asRecord(item.metadata),
     createdAt: asString(item.createdAt),
     updatedAt: asString(item.updatedAt),
+    sourceMarkdown: asString(item.sourceMarkdown),
   };
 }
 
@@ -647,6 +662,7 @@ export async function previewKnowledgeDocument(
     chunks: Array.isArray(page.chunks)
       ? page.chunks.map(normalizeKnowledgePreviewChunk)
       : [],
+    sourceMarkdown: asString(page.sourceMarkdown),
     offset: asNumber(page.offset, 0),
     limit: asNumber(page.limit, options.limit ?? 20),
     hasMore: page.hasMore === true,
@@ -663,6 +679,27 @@ export function createKnowledgeDocument(
     { method: "POST", body: JSON.stringify(input) },
     TRANSFER_REQUEST_TIMEOUT_MS,
   ).then(normalizeKnowledgeDocument);
+}
+
+export async function previewWebKnowledgeDocument(
+  knowledgeId: string,
+  region: string,
+  input: PreviewKnowledgeWebInput,
+): Promise<KnowledgeWebPreview> {
+  const response = await knowledgeFetch<unknown>(
+    `/web/knowledge-bases/${encodeURIComponent(knowledgeId)}/documents/web-preview${regionQuery(region)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({ sourceType: "url", url: input.url }),
+    },
+    TRANSFER_REQUEST_TIMEOUT_MS,
+  );
+  const preview = asRecord(response);
+  return {
+    name: asString(preview.name),
+    url: asString(preview.url),
+    sourceMarkdown: asString(preview.sourceMarkdown),
+  };
 }
 
 export function uploadKnowledgeDocument(

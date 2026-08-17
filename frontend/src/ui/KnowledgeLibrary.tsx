@@ -28,6 +28,7 @@ import {
   KNOWLEDGE_PROVIDER_ASSOCIATION_INVALID,
   KnowledgeRequestError,
   previewKnowledgeDocument,
+  previewWebKnowledgeDocument,
   uploadKnowledgeDocument,
   updateKnowledgeBase,
   updateKnowledgeDocument,
@@ -37,9 +38,11 @@ import {
   type KnowledgeBaseItem,
   type KnowledgeDocumentItem,
   type KnowledgeDocumentPreviewChunk,
+  type KnowledgeWebPreview,
 } from "../adk/knowledge";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import { LibraryResourceCard } from "./LibraryResourceCard";
+import { Markdown } from "./Markdown";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./MyAgents.css";
 import "./KnowledgeLibrary.css";
@@ -346,10 +349,18 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const [metadata, setMetadata] = useState("{}");
-  const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<"" | "preview" | "save" | "upload">("");
   const [error, setError] = useState("");
+  const [webPreview, setWebPreview] = useState<{ preview: KnowledgeWebPreview; metadata: Record<string, unknown> } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const webUrlRef = useRef<HTMLInputElement>(null);
+  const webConfirmRef = useRef<HTMLButtonElement>(null);
   const dragDepth = useRef(0);
+  const busy = Boolean(busyAction);
+
+  useEffect(() => {
+    if (webPreview && !busy) webConfirmRef.current?.focus();
+  }, [busy, webPreview]);
 
   const chooseSourceKind = (kind: KnowledgeSourceKind) => {
     if (busy || kind === sourceKind) return;
@@ -359,6 +370,7 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
     setName("");
     setDocumentType("");
     setError("");
+    setWebPreview(null);
     setDragging(false);
     dragDepth.current = 0;
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -390,18 +402,29 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
       setError(formatKnowledgeError(reason, "Metadata 格式错误"));
       return;
     }
-    setBusy(true);
+    setBusyAction(sourceKind === "web" ? (webPreview ? "save" : "preview") : "upload");
     setError("");
     try {
       if (sourceKind === "web") {
-        const input: CreateKnowledgeDocumentInput = {
-          sourceType: "url",
-          name: name.trim() || undefined,
-          documentType: documentType.trim() || undefined,
-          metadata: parsedMetadata,
-          url: source.trim(),
-        };
-        await createKnowledgeDocument(base.id, base.region, input);
+        if (!webPreview) {
+          const preview = await previewWebKnowledgeDocument(base.id, base.region, {
+            url: source.trim(),
+          });
+          if (!preview.sourceMarkdown.trim()) {
+            throw new Error("网页没有可预览的 Markdown 内容");
+          }
+          setWebPreview({ preview, metadata: parsedMetadata });
+        } else {
+          const input: CreateKnowledgeDocumentInput = {
+            sourceType: "url",
+            metadata: webPreview.metadata,
+            url: webPreview.preview.url,
+            sourceTitle: webPreview.preview.name,
+            sourceMarkdown: webPreview.preview.sourceMarkdown,
+          };
+          await createKnowledgeDocument(base.id, base.region, input);
+          onCreated();
+        }
       } else if (file) {
         await uploadKnowledgeDocument(base.id, base.region, {
           file,
@@ -409,8 +432,8 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
           documentType: documentType.trim() || undefined,
           metadata: parsedMetadata,
         });
+        onCreated();
       }
-      onCreated();
     } catch (reason) {
       if (
         reason instanceof KnowledgeRequestError
@@ -418,124 +441,173 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
       ) {
         onAssociationInvalid(reason);
       } else {
-        setError(formatKnowledgeError(reason, sourceKind === "web" ? "添加网页失败" : "上传文件失败"));
+        setError(formatKnowledgeError(
+          reason,
+          sourceKind === "web"
+            ? webPreview ? "添加网页失败" : "生成网页预览失败"
+            : "上传文件失败",
+        ));
       }
     } finally {
-      setBusy(false);
+      setBusyAction("");
     }
   };
+
+  const returnToWebForm = () => {
+    if (busy) return;
+    setWebPreview(null);
+    setError("");
+    requestAnimationFrame(() => webUrlRef.current?.focus());
+  };
+
   return (
-    <KnowledgeDialog title="添加数据" onClose={onClose} busy={busy}>
+    <KnowledgeDialog
+      title={webPreview ? "预览网页内容" : "添加数据"}
+      onClose={onClose}
+      busy={busy}
+      className={webPreview ? "knowledge-dialog--preview knowledge-dialog--web-confirm" : ""}
+    >
       <form onSubmit={(event) => void submit(event)}>
-        <div className="knowledge-dialog__body">
-          <div className="knowledge-source-tabs" role="tablist" aria-label="知识来源">
-            {([
-              ["image", "图片"],
-              ["document", "文档文件"],
-              ["web", "在线网页"],
-            ] as const).map(([kind, label]) => (
-              <button
-                key={kind}
-                type="button"
-                role="tab"
-                id={`knowledge-source-${kind}-tab`}
-                aria-controls={`knowledge-source-${kind}-panel`}
-                aria-selected={sourceKind === kind}
-                tabIndex={sourceKind === kind ? 0 : -1}
-                className={sourceKind === kind ? "is-active" : ""}
-                disabled={busy}
-                onClick={() => chooseSourceKind(kind)}
-                onKeyDown={(event) => {
-                  const kinds: KnowledgeSourceKind[] = ["image", "document", "web"];
-                  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                  event.preventDefault();
-                  const current = kinds.indexOf(kind);
-                  const next = event.key === "Home"
-                    ? kinds[0]
-                    : event.key === "End"
-                      ? kinds[kinds.length - 1]
-                      : kinds[(current + (event.key === "ArrowRight" ? 1 : -1) + kinds.length) % kinds.length];
-                  chooseSourceKind(next);
-                  requestAnimationFrame(() => document.getElementById(`knowledge-source-${next}-tab`)?.focus());
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <div
-            id={`knowledge-source-${sourceKind}-panel`}
-            className="knowledge-source-panel"
-            role="tabpanel"
-            aria-labelledby={`knowledge-source-${sourceKind}-tab`}
-          >
-            {sourceKind === "web" ? (
-              <label><span>网页 URL</span><input autoFocus type="url" value={source} disabled={busy} onChange={(event) => setSource(event.target.value)} placeholder="https://example.com/article" /></label>
-            ) : (
-              <>
-                <input
-                  ref={fileInputRef}
-                  className="knowledge-upload-input"
-                  type="file"
-                  aria-label="选择知识文件"
-                  accept={sourceKind === "image" ? IMAGE_ACCEPT : DOCUMENT_ACCEPT}
-                  disabled={busy}
-                  onChange={(event) => {
-                    chooseFile(event.currentTarget.files?.[0] ?? null);
-                    event.currentTarget.value = "";
-                  }}
-                />
-                <button
-                  type="button"
-                  className={`knowledge-upload-dropzone${dragging ? " is-dragging" : ""}${file ? " is-ready" : ""}`}
-                  disabled={busy}
-                  onClick={() => fileInputRef.current?.click()}
-                  onDragEnter={(event) => {
-                    event.preventDefault();
-                    if (busy) return;
-                    dragDepth.current += 1;
-                    setDragging(true);
-                  }}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    if (!busy) event.dataTransfer.dropEffect = "copy";
-                  }}
-                  onDragLeave={(event) => {
-                    event.preventDefault();
-                    dragDepth.current = Math.max(0, dragDepth.current - 1);
-                    if (dragDepth.current === 0) setDragging(false);
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    dragDepth.current = 0;
-                    setDragging(false);
-                    if (!busy) chooseFile(event.dataTransfer.files?.[0] ?? null);
-                  }}
-                >
-                  <strong>{file ? file.name : "选择文件或拖拽到这里"}</strong>
-                  <span>{file
-                    ? `${formatFileSize(file.size)} · 点击可重新选择`
-                    : sourceKind === "image"
-                      ? "支持 PNG、JPG 和 JPEG，单个文件不超过 200 MB"
-                      : "支持 PDF、PPTX、DOCX、XLSX 和 TXT，单个文件不超过 200 MB"}</span>
-                </button>
-                <div className="knowledge-upload-status" role="status" aria-live="polite">
-                  {busy ? <TextShimmer>正在上传文件并添加到知识库</TextShimmer> : null}
+        {webPreview ? (
+          <>
+            <div className="knowledge-preview knowledge-web-preview">
+              <div className="knowledge-preview__meta">
+                <strong title={webPreview.preview.name}>{webPreview.preview.name}</strong>
+                <a href={webPreview.preview.url} target="_blank" rel="noopener noreferrer">打开原网页</a>
+              </div>
+              <div className="knowledge-preview__body" aria-live="polite">
+                <div className="knowledge-preview__markdown-shell">
+                  <Markdown text={webPreview.preview.sourceMarkdown} allowRawHtml={false} className="knowledge-preview__markdown" />
                 </div>
-              </>
-            )}
-          </div>
-          <div className="knowledge-dialog__fields">
-            <label><span>名称（可选）</span><input value={name} disabled={busy} maxLength={256} onChange={(event) => setName(event.target.value)} /></label>
-            <label><span>类型（可选）</span><input value={documentType} disabled={busy} maxLength={64} onChange={(event) => setDocumentType(event.target.value)} placeholder={sourceKind === "web" ? "html" : "pdf、docx、png"} /></label>
-          </div>
-          <label><span>Metadata（JSON）</span><textarea className="is-code" value={metadata} disabled={busy} onChange={(event) => setMetadata(event.target.value)} spellCheck={false} /></label>
-          <FormError message={error} />
-        </div>
-        <footer className="knowledge-dialog__actions">
-          <button type="button" onClick={onClose} disabled={busy}>取消</button>
-          <button type="submit" className="is-primary" disabled={busy || (sourceKind === "web" ? !source.trim() : !file)}>{busy ? (sourceKind === "web" ? "添加中" : "上传中") : (sourceKind === "web" ? "添加网页" : "上传文件")}</button>
-        </footer>
+              </div>
+              {error ? <div className="knowledge-web-preview__error"><FormError message={error} /></div> : null}
+            </div>
+            <footer className="knowledge-dialog__actions">
+              <button type="button" className="is-back" onClick={returnToWebForm} disabled={busy}>返回修改</button>
+              <button type="button" onClick={onClose} disabled={busy}>取消</button>
+              <button ref={webConfirmRef} type="submit" className="is-primary" disabled={busy}>{busyAction === "save" ? "添加中" : "确认添加"}</button>
+            </footer>
+          </>
+        ) : (
+          <>
+            <div className="knowledge-dialog__body">
+              <div className="knowledge-source-tabs" role="tablist" aria-label="知识来源">
+                {([
+                  ["image", "图片"],
+                  ["document", "文档文件"],
+                  ["web", "在线网页"],
+                ] as const).map(([kind, label]) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    role="tab"
+                    id={`knowledge-source-${kind}-tab`}
+                    aria-controls={`knowledge-source-${kind}-panel`}
+                    aria-selected={sourceKind === kind}
+                    tabIndex={sourceKind === kind ? 0 : -1}
+                    className={sourceKind === kind ? "is-active" : ""}
+                    disabled={busy}
+                    onClick={() => chooseSourceKind(kind)}
+                    onKeyDown={(event) => {
+                      const kinds: KnowledgeSourceKind[] = ["image", "document", "web"];
+                      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                      event.preventDefault();
+                      const current = kinds.indexOf(kind);
+                      const next = event.key === "Home"
+                        ? kinds[0]
+                        : event.key === "End"
+                          ? kinds[kinds.length - 1]
+                          : kinds[(current + (event.key === "ArrowRight" ? 1 : -1) + kinds.length) % kinds.length];
+                      chooseSourceKind(next);
+                      requestAnimationFrame(() => document.getElementById(`knowledge-source-${next}-tab`)?.focus());
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div
+                id={`knowledge-source-${sourceKind}-panel`}
+                className="knowledge-source-panel"
+                role="tabpanel"
+                aria-labelledby={`knowledge-source-${sourceKind}-tab`}
+              >
+                {sourceKind === "web" ? (
+                  <>
+                    <label><span>网页 URL</span><input ref={webUrlRef} autoFocus type="url" value={source} disabled={busy} onChange={(event) => { setSource(event.target.value); setError(""); }} placeholder="https://example.com/article" /></label>
+                    <div className="knowledge-upload-status" role="status" aria-live="polite">
+                      {busyAction === "preview" ? <TextShimmer>正在抓取网页并生成 Markdown 预览</TextShimmer> : null}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <input
+                      ref={fileInputRef}
+                      className="knowledge-upload-input"
+                      type="file"
+                      aria-label="选择知识文件"
+                      accept={sourceKind === "image" ? IMAGE_ACCEPT : DOCUMENT_ACCEPT}
+                      disabled={busy}
+                      onChange={(event) => {
+                        chooseFile(event.currentTarget.files?.[0] ?? null);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className={`knowledge-upload-dropzone${dragging ? " is-dragging" : ""}${file ? " is-ready" : ""}`}
+                      disabled={busy}
+                      onClick={() => fileInputRef.current?.click()}
+                      onDragEnter={(event) => {
+                        event.preventDefault();
+                        if (busy) return;
+                        dragDepth.current += 1;
+                        setDragging(true);
+                      }}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        if (!busy) event.dataTransfer.dropEffect = "copy";
+                      }}
+                      onDragLeave={(event) => {
+                        event.preventDefault();
+                        dragDepth.current = Math.max(0, dragDepth.current - 1);
+                        if (dragDepth.current === 0) setDragging(false);
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        dragDepth.current = 0;
+                        setDragging(false);
+                        if (!busy) chooseFile(event.dataTransfer.files?.[0] ?? null);
+                      }}
+                    >
+                      <strong>{file ? file.name : "选择文件或拖拽到这里"}</strong>
+                      <span>{file
+                        ? `${formatFileSize(file.size)} · 点击可重新选择`
+                        : sourceKind === "image"
+                          ? "支持 PNG、JPG 和 JPEG，单个文件不超过 200 MB"
+                          : "支持 PDF、PPTX、DOCX、XLSX 和 TXT，单个文件不超过 200 MB"}</span>
+                    </button>
+                    <div className="knowledge-upload-status" role="status" aria-live="polite">
+                      {busy ? <TextShimmer>正在上传文件并添加到知识库</TextShimmer> : null}
+                    </div>
+                  </>
+                )}
+              </div>
+              {sourceKind !== "web" ? (
+                <div className="knowledge-dialog__fields">
+                  <label><span>名称（可选）</span><input value={name} disabled={busy} maxLength={256} onChange={(event) => setName(event.target.value)} /></label>
+                  <label><span>类型（可选）</span><input value={documentType} disabled={busy} maxLength={64} onChange={(event) => setDocumentType(event.target.value)} placeholder="pdf、docx、png" /></label>
+                </div>
+              ) : null}
+              <label><span>Metadata（JSON）</span><textarea className="is-code" value={metadata} disabled={busy} onChange={(event) => setMetadata(event.target.value)} spellCheck={false} /></label>
+              <FormError message={error} />
+            </div>
+            <footer className="knowledge-dialog__actions">
+              <button type="button" onClick={onClose} disabled={busy}>取消</button>
+              <button type="submit" className="is-primary" disabled={busy || (sourceKind === "web" ? !source.trim() : !file)}>{busy ? (sourceKind === "web" ? "生成中" : "上传中") : (sourceKind === "web" ? "生成预览" : "上传文件")}</button>
+            </footer>
+          </>
+        )}
       </form>
     </KnowledgeDialog>
   );
@@ -772,6 +844,7 @@ function KnowledgeDocumentPreviewDialog({
 }) {
   const [chunks, setChunks] = useState<KnowledgeDocumentPreviewChunk[]>([]);
   const [document, setDocument] = useState(item);
+  const [resolvedSourceMarkdown, setResolvedSourceMarkdown] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -799,6 +872,7 @@ function KnowledgeDocumentPreviewDialog({
       });
       if (requestRef.current !== request) return;
       setDocument(page.document.id ? page.document : item);
+      setResolvedSourceMarkdown(page.sourceMarkdown || page.document.sourceMarkdown);
       setChunks((current) => offset > 0 ? [...current, ...page.chunks] : page.chunks);
       setHasMore(page.hasMore);
     } catch (reason) {
@@ -823,9 +897,10 @@ function KnowledgeDocumentPreviewDialog({
 
   const sourceUrl = safeKnowledgeSourceUrl(document.url || item.url);
   const emptyCopy = knowledgePreviewEmptyCopy(document);
+  const contentIsMarkdown = document.metadata._veadk_content_format === "markdown";
 
   return (
-    <KnowledgeDialog title={item.name || item.id} onClose={onClose} className="knowledge-dialog--preview">
+    <KnowledgeDialog title={document.name || item.name || item.id} onClose={onClose} className="knowledge-dialog--preview">
       <div className="knowledge-preview">
         {document.sizeBytes > 0 || sourceUrl ? (
           <div className="knowledge-preview__meta">
@@ -834,7 +909,11 @@ function KnowledgeDocumentPreviewDialog({
           </div>
         ) : null}
         <div className="knowledge-preview__body" aria-live="polite">
-          {loading ? (
+          {resolvedSourceMarkdown ? (
+            <div className="knowledge-preview__markdown-shell">
+              <Markdown text={resolvedSourceMarkdown} allowRawHtml={false} className="knowledge-preview__markdown" />
+            </div>
+          ) : loading ? (
             <div className="knowledge-preview__state" role="status">
               <TextShimmer as="span" duration={2.4}>正在加载数据预览</TextShimmer>
             </div>
@@ -859,7 +938,11 @@ function KnowledgeDocumentPreviewDialog({
                     <header>
                       <h3>{chunk.title || `片段 ${index + 1}`}</h3>
                     </header>
-                    {chunk.content ? <p className="knowledge-preview__content">{chunk.content}</p> : null}
+                    {chunk.content ? (
+                      contentIsMarkdown
+                        ? <Markdown text={chunk.content} allowRawHtml={false} className="knowledge-preview__markdown" />
+                        : <p className="knowledge-preview__content">{chunk.content}</p>
+                    ) : null}
                     {table ? (
                       <div className="knowledge-preview__table-wrap">
                         <table>
