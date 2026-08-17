@@ -511,7 +511,7 @@ export function SandboxComposer({
             disabled={disabled}
             placeholder={
               textOnly
-                ? "继续描述你想构建或优化的 VeADK Agent…"
+                ? "继续说明你想实现或调整的内容"
                 : "向 AgentKit 沙箱发送消息，输入 / 查看命令，输入 $ 调用 Skill…"
             }
             aria-expanded={menuVisible}
