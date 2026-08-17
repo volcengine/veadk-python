@@ -37,6 +37,9 @@ from veadk.cli.codex_app_server import (
     CodexAppServerEvent,
     CodexPermissionSettings,
     CodexSkill,
+    CodexThreadMessage,
+    CodexThreadSnapshot,
+    CodexThreadSummary,
     CodexTokenUsage,
 )
 from veadk.cli.frontend_sandbox import (
@@ -87,6 +90,7 @@ class _FakeCodex:
         )
         self.turns: list[list[CodexAppServerEvent] | BaseException] = []
         self.calls: list[dict[str, object]] = []
+        self.threads: list[CodexThreadSummary] = []
 
     async def stream_turn(
         self,
@@ -133,6 +137,45 @@ class _FakeCodex:
 
     async def interrupt(self) -> None:
         self.active = False
+
+    async def list_threads(
+        self,
+        *,
+        cursor: str = "",
+        search_term: str = "",
+        archived: bool = False,
+    ) -> tuple[tuple[CodexThreadSummary, ...], str]:
+        del cursor, search_term, archived
+        return tuple(self.threads), ""
+
+    def _snapshot(self, thread_id: str) -> CodexThreadSnapshot:
+        return CodexThreadSnapshot(
+            thread=next(thread for thread in self.threads if thread.id == thread_id),
+            messages=(
+                CodexThreadMessage(
+                    id="message-user",
+                    role="user",
+                    content="创建销售 Agent",
+                    timestamp=1_000,
+                ),
+                CodexThreadMessage(
+                    id="message-assistant",
+                    role="assistant",
+                    content="已完成",
+                    timestamp=2_000,
+                ),
+            ),
+            model=self.model,
+            cwd=self.cwd,
+            workspace_locked=True,
+        )
+
+    async def read_thread(self, thread_id: str) -> CodexThreadSnapshot:
+        return self._snapshot(thread_id)
+
+    async def resume_thread(self, thread_id: str) -> CodexThreadSnapshot:
+        self.thread_id = thread_id
+        return self._snapshot(thread_id)
 
     async def close(self) -> None:
         self.closed = True
@@ -260,6 +303,18 @@ def _connect(client: TestClient) -> None:
     assert response.status_code == 200
 
 
+def test_list_is_empty_when_intelligent_development_is_not_configured() -> None:
+    gateway = _FakeGateway()
+    with TestClient(_app(gateway, configured=False)) as client:
+        response = client.get(
+            "/web/intelligent-development/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"sessions": []}
+
+
 def test_create_is_transient_and_public_contract_includes_expiry() -> None:
     gateway = _FakeGateway()
     with TestClient(_app(gateway)) as client:
@@ -281,6 +336,111 @@ def test_connect_locks_fixed_workspace_and_enables_autonomous_builder() -> None:
         _connect(client)
     assert gateway.codex.cwd == "/home/gem/workspace/project-1"
     assert gateway.codex.permissions == routes._BUILDER_PERMISSIONS
+
+
+def test_connect_restores_the_latest_non_empty_conversation() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud(user_session_id="project-1")
+    gateway.codex.thread_id = "thread-new"
+    gateway.codex.threads = [
+        CodexThreadSummary(
+            id="thread-new",
+            preview="",
+            cwd="/home/gem/workspace/project-1",
+            updated_at=30,
+        ),
+        CodexThreadSummary(
+            id="thread-restored",
+            preview="创建销售 Agent",
+            cwd="/home/gem/workspace/project-1",
+            updated_at=20,
+        ),
+    ]
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/connect",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["threadId"] == "thread-restored"
+    assert response.json()["conversation"]["threadId"] == "thread-restored"
+    assert [
+        message["content"] for message in response.json()["conversation"]["messages"]
+    ] == ["创建销售 Agent", "已完成"]
+
+
+def test_connect_does_not_switch_threads_while_a_build_is_active() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud(user_session_id="project-1")
+    gateway.codex.active = True
+    gateway.codex.thread_id = "thread-active"
+    gateway.codex.cwd = "/home/gem/workspace/project-1"
+    gateway.codex.workspace_locked = True
+    gateway.codex.permissions = routes._BUILDER_PERMISSIONS
+    gateway.codex.threads = [
+        CodexThreadSummary(
+            id="thread-active",
+            preview="正在创建销售 Agent",
+            cwd="/home/gem/workspace/project-1",
+            updated_at=30,
+        )
+    ]
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/connect",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["threadId"] == "thread-active"
+    assert response.json()["busy"] is True
+    assert "conversation" not in response.json()
+
+
+def test_current_release_returns_no_content_or_the_materialized_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    trusted = SimpleNamespace(
+        session_id="dev-session",
+        artifact_sha256="a" * 64,
+        validation_report_sha256="b" * 64,
+        agent_name="sales-agent",
+        entry_point="agent.py",
+        file_count=4,
+        artifact_size=2048,
+        validated_at="2026-08-17T10:00:00Z",
+        gate_summary=("local-checks",),
+        deployable=True,
+        verified=True,
+        validation_summary="云端验证已通过",
+        files=(),
+    )
+    current = AsyncMock(side_effect=[None, trusted])
+    monkeypatch.setattr(
+        source_module,
+        "materialize_current_intelligent_development_preview",
+        current,
+        raising=False,
+    )
+    with TestClient(_app(gateway)) as client:
+        missing = client.get(
+            "/web/intelligent-development/releases/current",
+            headers={"X-Test-User": "alice"},
+            params={"sessionId": "dev-session"},
+        )
+        restored = client.get(
+            "/web/intelligent-development/releases/current",
+            headers={"X-Test-User": "alice"},
+            params={"sessionId": "dev-session"},
+        )
+
+    assert missing.status_code == 204
+    assert restored.status_code == 200
+    assert restored.json()["artifactSha256"] == "a" * 64
+    assert restored.json()["verified"] is True
 
 
 def test_release_summary_returns_materialized_text_files_before_verification(

@@ -35,13 +35,17 @@ server that `veadk frontend` launches — no separate backend.
   log inspection, and cleanup.
   Public Codex reasoning updates and Assistant replies use the normal
   conversation renderer; credentials, raw Sandbox paths, and internal commands
-  stay hidden. The same eight-hour Sandbox, Workspace, and Codex Thread can run
-  repeated optimize-and-verify cycles. Stopping preserves received output and
-  blocks the next submission until cleanup finishes. A successful cycle ends
-  with a source-delivery card: users can inspect generated text files and
-  download the complete ZIP (including binary assets) as soon as the source is
-  ready, while manual Runtime deployment remains available only after all
-  verification gates pass. No separate “start verification” action is required.
+  stay hidden. Each build appears in the shared conversation history for the
+  lifetime of its remote development environment (up to eight hours); reopening
+  it restores the latest conversation and current source-delivery card.
+  Navigating away from an active build requires confirmation and stops that
+  build before leaving, while the conversation remains available until expiry.
+  Stopping preserves received output and blocks the next submission until
+  cleanup finishes. Users can inspect generated text files and download the
+  complete ZIP (including binary assets) as soon as the source is ready.
+  Deployable source can be sent to Runtime manually; an incomplete verification
+  report requires an explicit confirmation. No separate “start verification”
+  action is required.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Agent context rail** keeps the selected Agent's description, model, tools,
   skills, and optional live multi-Agent topology together in the conversation's

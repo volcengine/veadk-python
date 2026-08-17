@@ -28,7 +28,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.types import Receive, Scope, Send
 
 from frontend.server.intelligent_development_task import (
@@ -219,6 +219,45 @@ def _public_session(session: SandboxCloudSession) -> dict[str, object]:
     }
 
 
+def _release_payload(session_id: str, trusted: Any) -> dict[str, object]:
+    return {
+        "sessionId": session_id,
+        "artifactSha256": trusted.artifact_sha256,
+        "validationReportSha256": trusted.validation_report_sha256,
+        "agentName": trusted.agent_name,
+        "entryPoint": trusted.entry_point,
+        "fileCount": trusted.file_count,
+        "artifactSize": trusted.artifact_size,
+        "validatedAt": trusted.validated_at,
+        "gateSummary": list(trusted.gate_summary),
+        "deployable": True,
+        "verified": trusted.verified,
+        "validationSummary": trusted.validation_summary,
+        "files": [
+            {"path": item.path, "content": item.content} for item in trusted.files
+        ],
+    }
+
+
+async def _restore_latest_conversation(
+    service: SandboxConversationService,
+    session_id: str,
+    owner_id: str,
+    *,
+    busy: bool,
+) -> dict[str, object] | None:
+    if busy:
+        return None
+    threads, _ = await service.list_threads(session_id, owner_id)
+    candidate = next(
+        (thread for thread in threads if thread.preview.strip() or thread.name.strip()),
+        None,
+    )
+    if candidate is None:
+        return None
+    return await service.resume_thread(session_id, owner_id, candidate.id)
+
+
 async def _request_object(request: Request, maximum: int) -> dict[str, object]:
     body = await request.body()
     if len(body) > maximum:
@@ -389,6 +428,8 @@ def mount_intelligent_development_routes(
     @app.get(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions")
     async def _list(request: Request) -> dict[str, object]:
         owner = owner_resolver(request)
+        if not configured:
+            return {"sessions": []}
         try:
             sessions = await service.list_sessions(owner, is_admin=False)
         except SandboxError as error:
@@ -452,12 +493,58 @@ def mount_intelligent_development_routes(
                     owner,
                     _BUILDER_PERMISSIONS,
                 )
+            restored = await _restore_latest_conversation(
+                service,
+                session_id,
+                owner,
+                busy=conversation.codex.active,
+            )
         except SandboxError as error:
             raise _http_error(error) from error
         return {
             **_public_session(conversation.cloud),
             **service.settings(session_id, owner),
+            **({"conversation": restored} if restored is not None else {}),
         }
+
+    @app.get(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/releases/current")
+    async def _current_release(
+        request: Request,
+        sessionId: str,
+    ) -> Response:
+        import shutil
+        import tempfile
+        from pathlib import Path
+        from frontend.server.deployment_source import DeploymentSourceError
+        from frontend.server.intelligent_development_source import (
+            materialize_current_intelligent_development_preview,
+        )
+
+        owner = owner_resolver(request)
+        destination = Path(tempfile.mkdtemp(prefix="intelligent-current-"))
+        try:
+            trusted = await materialize_current_intelligent_development_preview(
+                destination,
+                sessionId,
+                owner_id=owner,
+                service=service,
+            )
+        except DeploymentSourceError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except SandboxSessionNotFoundError as error:
+            raise _http_error(error) from error
+        except SandboxSessionUnavailableError as error:
+            raise _http_error(error) from error
+        except Exception as error:
+            raise HTTPException(
+                status_code=502,
+                detail="无法恢复当前源码快照。",
+            ) from error
+        finally:
+            shutil.rmtree(destination, ignore_errors=True)
+        if trusted is None:
+            return Response(status_code=204)
+        return JSONResponse(_release_payload(sessionId, trusted))
 
     @app.get(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/releases/summary")
     async def _release_summary(
@@ -501,23 +588,7 @@ def mount_intelligent_development_routes(
             ) from error
         finally:
             shutil.rmtree(destination, ignore_errors=True)
-        return {
-            "sessionId": sessionId,
-            "artifactSha256": trusted.artifact_sha256,
-            "validationReportSha256": trusted.validation_report_sha256,
-            "agentName": trusted.agent_name,
-            "entryPoint": trusted.entry_point,
-            "fileCount": trusted.file_count,
-            "artifactSize": trusted.artifact_size,
-            "validatedAt": trusted.validated_at,
-            "gateSummary": list(trusted.gate_summary),
-            "deployable": True,
-            "verified": trusted.verified,
-            "validationSummary": trusted.validation_summary,
-            "files": [
-                {"path": item.path, "content": item.content} for item in trusted.files
-            ],
-        }
+        return _release_payload(sessionId, trusted)
 
     @app.get(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/releases/download")
     async def _release_download(
