@@ -197,17 +197,20 @@ class _InMemorySpanProcessor(export.SimpleSpanProcessor):
         Args:
             span: The span that has finished execution
         """
-        if span.context:
-            if not span.context.trace_flags.sampled:
-                return
-            token = attach(set_value(_SUPPRESS_INSTRUMENTATION_KEY, True))
-            try:
-                self.span_exporter.export((span,))
-            # pylint: disable=broad-exception-caught
-            except Exception:
-                logger.exception("Exception while exporting Span.")
-            detach(token)
+        if not span.context:
+            return
 
+        try:
+            if span.context.trace_flags.sampled:
+                token = attach(set_value(_SUPPRESS_INSTRUMENTATION_KEY, True))
+                try:
+                    self.span_exporter.export((span,))
+                # pylint: disable=broad-exception-caught
+                except Exception:
+                    logger.exception("Exception while exporting Span.")
+                finally:
+                    detach(token)
+        finally:
             token = self._context_tokens.pop(span.context.span_id, None)
             if token is not None:
                 detach(token)
