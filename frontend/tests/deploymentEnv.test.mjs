@@ -703,6 +703,20 @@ test("summarizes the Agent above the deployment configuration", () => {
   assert.match(projectPreviewStyles, /\.pp-release-preview\s*\{[\s\S]*?box-sizing:\s*border-box/);
 });
 
+test("keeps root project files visible before expanded folders", () => {
+  for (const source of [codeBrowserSource, projectPreviewSource]) {
+    assert.match(
+      source,
+      /function sortedChildren\(node: TreeNode, filesFirst = false\)/,
+    );
+    assert.match(
+      source,
+      /return filesFirst \? \(aFolder \? 1 : -1\) : aFolder \? -1 : 1/,
+    );
+    assert.match(source, /sortedChildren\(node, depth === 0\)/);
+  }
+});
+
 test("keeps artifact actions beside the embedded publish canvas", () => {
   assert.match(
     projectPreviewSource,
@@ -723,6 +737,17 @@ test("keeps artifact actions beside the embedded publish canvas", () => {
   assert.match(
     projectPreviewStyles,
     /\.pp-artifact-actions\.is-rail \.pp-secondary,[\s\S]*?flex:\s*1 1 0;[\s\S]*?justify-content:\s*center/,
+  );
+});
+
+test("lets the narrow publish overview shrink to its content", () => {
+  assert.match(
+    projectPreviewStyles,
+    /@media \(max-width: 860px\)[\s\S]*?\.pp-release-overview\s*\{[\s\S]*?min-height:\s*0;/,
+  );
+  assert.doesNotMatch(
+    projectPreviewStyles,
+    /@media \(max-width: 860px\)[\s\S]*?\.pp-release-overview\s*\{[\s\S]*?min-height:\s*460px;/,
   );
 });
 

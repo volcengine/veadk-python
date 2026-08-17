@@ -80,6 +80,17 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
     o.tracingExporters = [...draft.tracingExporters];
   }
   if (
+    draft.cloudEnvironment?.cliTools.length ||
+    draft.cloudEnvironment?.dockerfile !== undefined
+  ) {
+    o.cloudEnvironment = {
+      cliTools: [...draft.cloudEnvironment.cliTools],
+      ...(draft.cloudEnvironment.dockerfile !== undefined
+        ? { dockerfile: draft.cloudEnvironment.dockerfile }
+        : {}),
+    };
+  }
+  if (
     draft.deployment?.feishuEnabled ||
     draft.deployment?.runtimeName?.trim() ||
     draft.deployment?.runtimeNameCustomized ||
