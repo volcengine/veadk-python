@@ -70,6 +70,7 @@ class _FakeCodex:
         self.workspace_locked = False
         self.active = False
         self.closed = False
+        self.ensure_calls = 0
         self.turns = turns
         self.prompts: list[str] = []
         self.fail = fail
@@ -79,6 +80,16 @@ class _FakeCodex:
 
     async def connect(self) -> None:
         return None
+
+    @property
+    def healthy(self) -> bool:
+        return not self.closed
+
+    async def ensure_connected(self, *, minimum_lifetime_seconds: float = 60) -> None:
+        del minimum_lifetime_seconds
+        self.ensure_calls += 1
+        if self.closed:
+            raise CodexAppServerError("connection closed")
 
     async def stream_turn(
         self, prompt: str, skill_ids: tuple[str, ...] = ()
@@ -2077,6 +2088,19 @@ def test_sandbox_stream_redacts_private_endpoint_queries() -> None:
     assert "Authorization" not in response.text
     assert "secret" not in response.text
     assert "[sandbox endpoint]" in response.text
+
+
+@pytest.mark.asyncio
+async def test_reconnecting_cached_conversation_checks_codex_transport() -> None:
+    gateway = _FakeGateway()
+    service = SandboxConversationService(gateway, tool_id="tool-studio")
+
+    first = await service.connect("remote-existing", "alice")
+    second = await service.connect("remote-existing", "alice")
+
+    assert second is first
+    assert first.codex.ensure_calls == 1
+    assert len(gateway.connections) == 1
 
 
 @pytest.mark.asyncio

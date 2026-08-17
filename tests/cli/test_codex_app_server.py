@@ -534,6 +534,81 @@ async def test_workspace_directory_browsing_and_user_approval() -> None:
 
 
 @pytest.mark.asyncio
+async def test_closed_transport_reconnects_and_resumes_active_thread() -> None:
+    first = _FakeWebSocket()
+    second = _FakeWebSocket()
+    available = [first, second]
+
+    async def _factory(_url: str) -> _FakeWebSocket:
+        return available.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=_factory,
+    )
+    await session.connect()
+    _ = [event async for event in session.stream_turn("hello")]
+    thread_id = session.thread_id
+
+    await first.queue.put(None)
+    for _ in range(10):
+        await asyncio.sleep(0)
+        if not session.healthy:
+            break
+
+    assert session.healthy is False
+    await session.ensure_connected()
+
+    assert session.healthy is True
+    assert session._websocket is second
+    assert session.thread_id == thread_id
+    assert any(
+        message.get("method") == "thread/resume"
+        and message.get("params", {}).get("threadId") == thread_id
+        for message in second.messages
+    )
+    events = [event async for event in session.stream_turn("again")]
+    assert any(event.text == "完成" for event in events)
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_aging_transport_rotates_before_starting_a_long_turn() -> None:
+    first = _FakeWebSocket()
+    second = _FakeWebSocket()
+    available = [first, second]
+
+    async def _factory(_url: str) -> _FakeWebSocket:
+        return available.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=_factory,
+    )
+    await session.connect()
+    _ = [event async for event in session.stream_turn("hello")]
+    thread_id = session.thread_id
+    session._connected_at -= 20 * 60
+
+    events = [event async for event in session.stream_turn("again")]
+
+    assert first.closed is True
+    assert session.thread_id == thread_id
+    assert any(
+        message.get("method") == "thread/resume"
+        and message.get("params", {}).get("threadId") == thread_id
+        for message in second.messages
+    )
+    assert any(
+        message.get("method") == "turn/start"
+        and message.get("params", {}).get("threadId") == thread_id
+        for message in second.messages
+    )
+    assert any(event.text == "完成" for event in events)
+    await session.close()
+
+
+@pytest.mark.asyncio
 async def test_clean_socket_close_rejects_pending_requests() -> None:
     websocket = _FakeWebSocket()
     session = CodexAppServerSession(

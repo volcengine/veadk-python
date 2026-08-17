@@ -735,6 +735,15 @@ class SandboxCodexConnection(Protocol):
         """Ensure the app-server transport is connected."""
         raise NotImplementedError
 
+    @property
+    def healthy(self) -> bool:
+        """Whether the app-server transport can accept a request."""
+        raise NotImplementedError
+
+    async def ensure_connected(self, *, minimum_lifetime_seconds: float = 60) -> None:
+        """Refresh a stale transport while preserving its active thread."""
+        raise NotImplementedError
+
     async def stream_turn(
         self, prompt: str, skill_ids: tuple[str, ...] = ()
     ) -> AsyncIterator[CodexAppServerEvent]:
@@ -1632,7 +1641,7 @@ class SandboxConversationService:
         existing = self._sessions.get(key)
         if existing is not None:
             try:
-                await existing.codex.connect()
+                await existing.codex.ensure_connected()
             except CodexAppServerError as error:
                 raise SandboxInvocationError(_safe_error_message(error)) from error
             return existing
@@ -1641,7 +1650,7 @@ class SandboxConversationService:
             existing = self._sessions.get(key)
             if existing is not None:
                 try:
-                    await existing.codex.connect()
+                    await existing.codex.ensure_connected()
                 except CodexAppServerError as error:
                     raise SandboxInvocationError(_safe_error_message(error)) from error
                 return existing

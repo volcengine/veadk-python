@@ -1,6 +1,5 @@
 import { withAuth } from "./auth";
-import { withLocalUser } from "./identity";
-import { requestSignal } from "./timeout";
+import { studioFetch } from "./client";
 import type { Block } from "../blocks";
 
 const SANDBOX_API = "/web/sandbox/sessions";
@@ -521,7 +520,7 @@ interface SandboxStreamPayload {
 }
 
 function sandboxHeaders(headers?: HeadersInit): Headers {
-  const next = withLocalUser(headers);
+  const next = new Headers(headers);
   if (!next.has("Accept")) next.set("Accept", "application/json");
   return next;
 }
@@ -995,16 +994,17 @@ async function sandboxJson(
   },
 ): Promise<unknown> {
   if (!sessionId) throw new Error("缺少要操作的 AgentKit Session。");
-  const response = await fetch(
-    withAuth(`${SANDBOX_API}/${encodeURIComponent(sessionId)}/${action}`),
+  const response = await studioFetch(
+    `${SANDBOX_API}/${encodeURIComponent(sessionId)}/${action}`,
     {
       method,
       headers: sandboxHeaders(
         body === undefined ? undefined : { "Content-Type": "application/json" },
       ),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: requestSignal(options.signal, SETTINGS_TIMEOUT_MS),
+      signal: options.signal,
     },
+    SETTINGS_TIMEOUT_MS,
   );
   if (!response.ok) throw await responseError(response, fallback);
   return response.json();
@@ -1012,11 +1012,15 @@ async function sandboxJson(
 
 export const sandboxClient: AgentKitSandboxClient = {
   async listSessions(options = {}) {
-    const response = await fetch(withAuth(SANDBOX_API), {
-      method: "GET",
-      headers: sandboxHeaders(),
-      signal: requestSignal(options.signal, LIST_TIMEOUT_MS),
-    });
+    const response = await studioFetch(
+      SANDBOX_API,
+      {
+        method: "GET",
+        headers: sandboxHeaders(),
+        signal: options.signal,
+      },
+      LIST_TIMEOUT_MS,
+    );
     if (!response.ok) {
       throw await responseError(response, "无法读取 Codex 智能体，请稍后重试。");
     }
@@ -1034,15 +1038,19 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async startSession(options = {}) {
-    const response = await fetch(withAuth(SANDBOX_API), {
-      method: "POST",
-      headers: sandboxHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({
-        displayName: options.displayName?.trim() ?? "",
-        persistent: options.persistent ?? true,
-      }),
-      signal: requestSignal(options.signal, START_TIMEOUT_MS),
-    });
+    const response = await studioFetch(
+      SANDBOX_API,
+      {
+        method: "POST",
+        headers: sandboxHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          displayName: options.displayName?.trim() ?? "",
+          persistent: options.persistent ?? true,
+        }),
+        signal: options.signal,
+      },
+      START_TIMEOUT_MS,
+    );
     if (!response.ok) {
       throw await responseError(response, "无法启动 AgentKit 沙箱，请稍后重试。");
     }
@@ -1050,11 +1058,15 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async listAgentSessions(kind, options = {}) {
-    const response = await fetch(withAuth(`/web/${kind}/sessions`), {
-      method: "GET",
-      headers: sandboxHeaders(),
-      signal: requestSignal(options.signal, LIST_TIMEOUT_MS),
-    });
+    const response = await studioFetch(
+      `/web/${kind}/sessions`,
+      {
+        method: "GET",
+        headers: sandboxHeaders(),
+        signal: options.signal,
+      },
+      LIST_TIMEOUT_MS,
+    );
     if (!response.ok) {
       throw await responseError(response, `无法读取 ${kind} 智能体，请稍后重试。`);
     }
@@ -1072,15 +1084,19 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async startAgentSession(kind, options = {}) {
-    const response = await fetch(withAuth(`/web/${kind}/sessions`), {
-      method: "POST",
-      headers: sandboxHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({
-        displayName: options.displayName?.trim() ?? "",
-        persistent: options.persistent ?? true,
-      }),
-      signal: requestSignal(options.signal, START_TIMEOUT_MS),
-    });
+    const response = await studioFetch(
+      `/web/${kind}/sessions`,
+      {
+        method: "POST",
+        headers: sandboxHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          displayName: options.displayName?.trim() ?? "",
+          persistent: options.persistent ?? true,
+        }),
+        signal: options.signal,
+      },
+      START_TIMEOUT_MS,
+    );
     if (!response.ok) {
       throw await responseError(response, `无法创建 ${kind} 智能体，请稍后重试。`);
     }
@@ -1089,13 +1105,14 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async openAgentSession(kind, sessionId, options = {}) {
     if (!sessionId) throw new Error("缺少要打开的 AgentKit Session。");
-    const response = await fetch(
-      withAuth(`/web/${kind}/sessions/${encodeURIComponent(sessionId)}/open`),
+    const response = await studioFetch(
+      `/web/${kind}/sessions/${encodeURIComponent(sessionId)}/open`,
       {
         method: "POST",
         headers: sandboxHeaders(),
-        signal: requestSignal(options.signal, SETTINGS_TIMEOUT_MS),
+        signal: options.signal,
       },
+      SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
       throw await responseError(response, `无法打开 ${kind} 智能体。`);
@@ -1115,13 +1132,14 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async launchAgentTerminal(kind, sessionId, options = {}) {
     if (!sessionId) throw new Error("缺少要打开 Terminal 的 AgentKit Session。");
-    const response = await fetch(
-      withAuth(`/web/${kind}/sessions/${encodeURIComponent(sessionId)}/terminal`),
+    const response = await studioFetch(
+      `/web/${kind}/sessions/${encodeURIComponent(sessionId)}/terminal`,
       {
         method: "POST",
         headers: sandboxHeaders(),
-        signal: requestSignal(options.signal, SETTINGS_TIMEOUT_MS),
+        signal: options.signal,
       },
+      SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
       throw await responseError(response, `无法打开 ${kind} Terminal。`);
@@ -1141,13 +1159,14 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async deleteAgentSession(kind, sessionId, options = {}) {
     if (!sessionId) return;
-    const response = await fetch(
-      withAuth(`/web/${kind}/sessions/${encodeURIComponent(sessionId)}`),
+    const response = await studioFetch(
+      `/web/${kind}/sessions/${encodeURIComponent(sessionId)}`,
       {
         method: "DELETE",
         headers: sandboxHeaders(),
-        signal: requestSignal(options.signal, CLOSE_TIMEOUT_MS),
+        signal: options.signal,
       },
+      CLOSE_TIMEOUT_MS,
     );
     if (!response.ok && response.status !== 404) {
       throw await responseError(response, `无法删除 ${kind} 智能体。`);
@@ -1157,13 +1176,14 @@ export const sandboxClient: AgentKitSandboxClient = {
   async resumeSnapshot(kind, snapshotId, options = {}) {
     if (!snapshotId) throw new Error("缺少要唤醒的 AgentKit Snapshot。");
     const base = kind === "codex" ? "/web/sandbox" : `/web/${kind}`;
-    const response = await fetch(
-      withAuth(`${base}/snapshots/${encodeURIComponent(snapshotId)}/resume`),
+    const response = await studioFetch(
+      `${base}/snapshots/${encodeURIComponent(snapshotId)}/resume`,
       {
         method: "POST",
         headers: sandboxHeaders(),
-        signal: requestSignal(options.signal, START_TIMEOUT_MS),
+        signal: options.signal,
       },
+      START_TIMEOUT_MS,
     );
     if (!response.ok) {
       throw await responseError(response, "无法从快照唤醒智能体，请稍后重试。");
@@ -1174,13 +1194,14 @@ export const sandboxClient: AgentKitSandboxClient = {
   async deleteSnapshot(kind, snapshotId, options = {}) {
     if (!snapshotId) return;
     const base = kind === "codex" ? "/web/sandbox" : `/web/${kind}`;
-    const response = await fetch(
-      withAuth(`${base}/snapshots/${encodeURIComponent(snapshotId)}`),
+    const response = await studioFetch(
+      `${base}/snapshots/${encodeURIComponent(snapshotId)}`,
       {
         method: "DELETE",
         headers: sandboxHeaders(),
-        signal: requestSignal(options.signal, CLOSE_TIMEOUT_MS),
+        signal: options.signal,
       },
+      CLOSE_TIMEOUT_MS,
     );
     if (!response.ok && response.status !== 404) {
       throw await responseError(response, "无法删除智能体快照。");
@@ -1189,13 +1210,14 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async connectSession(sessionId, options = {}) {
     if (!sessionId) throw new Error("缺少要连接的 AgentKit Session。");
-    const response = await fetch(
-      withAuth(`${SANDBOX_API}/${encodeURIComponent(sessionId)}/connect`),
+    const response = await studioFetch(
+      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/connect`,
       {
         method: "POST",
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
-        signal: requestSignal(options.signal, CONNECT_TIMEOUT_MS),
+        signal: options.signal,
       },
+      CONNECT_TIMEOUT_MS,
     );
     if (!response.ok) {
       throw await responseError(response, "无法连接 Codex 智能体，请稍后重试。");
@@ -1211,8 +1233,8 @@ export const sandboxClient: AgentKitSandboxClient = {
     if (!message.sessionId || !message.text.trim()) {
       throw new Error("内置智能体会话缺少有效的消息内容。");
     }
-    const response = await fetch(
-      withAuth(`${SANDBOX_API}/${encodeURIComponent(message.sessionId)}/messages`),
+    const response = await studioFetch(
+      `${SANDBOX_API}/${encodeURIComponent(message.sessionId)}/messages`,
       {
         method: "POST",
         headers: sandboxHeaders({
@@ -1223,8 +1245,9 @@ export const sandboxClient: AgentKitSandboxClient = {
           message: message.text,
           ...(message.skillIds?.length ? { skillIds: message.skillIds } : {}),
         }),
-        signal: requestSignal(options.signal, MESSAGE_TIMEOUT_MS),
+        signal: options.signal,
       },
+      MESSAGE_TIMEOUT_MS,
     );
     if (!response.ok) {
       throw await responseError(response, "沙箱对话失败，请稍后重试。");
@@ -1271,8 +1294,8 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async createCodexProjectHandoffPairing(options = {}) {
-    const response = await fetch(
-      withAuth(`${CODEX_PROJECT_HANDOFF_API}/pairings`),
+    const response = await studioFetch(
+      `${CODEX_PROJECT_HANDOFF_API}/pairings`,
       {
         method: "POST",
         headers: sandboxHeaders({
@@ -1282,11 +1305,9 @@ export const sandboxClient: AgentKitSandboxClient = {
         body: JSON.stringify({
           ttlSeconds: CODEX_PROJECT_HANDOFF_PAIRING_TTL_SECONDS,
         }),
-        signal: requestSignal(
-          options.signal,
-          CODEX_PROJECT_HANDOFF_TIMEOUT_MS,
-        ),
+        signal: options.signal,
       },
+      CODEX_PROJECT_HANDOFF_TIMEOUT_MS,
     );
     if (!response.ok) {
       throw await responseError(
@@ -1316,17 +1337,13 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async getCodexProjectHandoffStatus(pairingCode, options = {}) {
-    const response = await fetch(
-      withAuth(
-        `${CODEX_PROJECT_HANDOFF_API}/pairings/${encodeURIComponent(pairingCode)}`,
-      ),
+    const response = await studioFetch(
+      `${CODEX_PROJECT_HANDOFF_API}/pairings/${encodeURIComponent(pairingCode)}`,
       {
         headers: sandboxHeaders({ Accept: "application/json" }),
-        signal: requestSignal(
-          options.signal,
-          CODEX_PROJECT_HANDOFF_TIMEOUT_MS,
-        ),
+        signal: options.signal,
       },
+      CODEX_PROJECT_HANDOFF_TIMEOUT_MS,
     );
     if (!response.ok) {
       throw await responseError(response, "无法读取端云接力状态。");
@@ -1525,13 +1542,14 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async getSettings(sessionId, options = {}) {
-    const response = await fetch(
-      withAuth(`${SANDBOX_API}/${encodeURIComponent(sessionId)}/settings`),
+    const response = await studioFetch(
+      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/settings`,
       {
         method: "GET",
         headers: sandboxHeaders(),
-        signal: requestSignal(options.signal, SETTINGS_TIMEOUT_MS),
+        signal: options.signal,
       },
+      SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
       throw await responseError(response, "无法读取 Codex 权限与工作空间。");
@@ -1540,14 +1558,15 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async updatePermissions(sessionId, permissions, options = {}) {
-    const response = await fetch(
-      withAuth(`${SANDBOX_API}/${encodeURIComponent(sessionId)}/permissions`),
+    const response = await studioFetch(
+      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/permissions`,
       {
         method: "PUT",
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(permissions),
-        signal: requestSignal(options.signal, SETTINGS_TIMEOUT_MS),
+        signal: options.signal,
       },
+      SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
       throw await responseError(response, "无法更新 Codex 权限。");
@@ -1557,14 +1576,15 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async updateWorkspace(sessionId, cwd, options = {}) {
-    const response = await fetch(
-      withAuth(`${SANDBOX_API}/${encodeURIComponent(sessionId)}/workspace`),
+    const response = await studioFetch(
+      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/workspace`,
       {
         method: "PUT",
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ cwd }),
-        signal: requestSignal(options.signal, SETTINGS_TIMEOUT_MS),
+        signal: options.signal,
       },
+      SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
       throw await responseError(response, "无法更新 Codex 工作空间。");
@@ -1578,15 +1598,14 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async listDirectories(sessionId, path, options = {}) {
     const query = new URLSearchParams({ path });
-    const response = await fetch(
-      withAuth(
-        `${SANDBOX_API}/${encodeURIComponent(sessionId)}/directories?${query}`,
-      ),
+    const response = await studioFetch(
+      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/directories?${query}`,
       {
         method: "GET",
         headers: sandboxHeaders(),
-        signal: requestSignal(options.signal, SETTINGS_TIMEOUT_MS),
+        signal: options.signal,
       },
+      SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
       throw await responseError(response, "无法读取 Sandbox 目录。");
@@ -1617,16 +1636,15 @@ export const sandboxClient: AgentKitSandboxClient = {
     decision,
     options = {},
   ) {
-    const response = await fetch(
-      withAuth(
-        `${SANDBOX_API}/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
-      ),
+    const response = await studioFetch(
+      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
       {
         method: "POST",
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ decision }),
-        signal: requestSignal(options.signal, SETTINGS_TIMEOUT_MS),
+        signal: options.signal,
       },
+      SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
       throw await responseError(response, "无法提交 Codex 审批决定。");
@@ -1644,14 +1662,15 @@ export const sandboxClient: AgentKitSandboxClient = {
   async uploadFile(sessionId, file, options = {}) {
     const form = new FormData();
     form.set("file", file, file.name);
-    const response = await fetch(
-      withAuth(`${SANDBOX_API}/${encodeURIComponent(sessionId)}/files`),
+    const response = await studioFetch(
+      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/files`,
       {
         method: "POST",
         headers: sandboxHeaders(),
         body: form,
-        signal: requestSignal(options.signal, UPLOAD_TIMEOUT_MS),
+        signal: options.signal,
       },
+      UPLOAD_TIMEOUT_MS,
     );
     if (!response.ok) {
       throw await responseError(response, "无法上传文件到 Sandbox。");
@@ -1671,15 +1690,14 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async closeSession(sessionId, options = {}) {
     if (!sessionId) return;
-    const response = await fetch(
-      withAuth(
-        `${SANDBOX_API}/${encodeURIComponent(sessionId)}/disconnect`,
-      ),
+    const response = await studioFetch(
+      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/disconnect`,
       {
         method: "POST",
         headers: sandboxHeaders(),
-        signal: requestSignal(options.signal, CLOSE_TIMEOUT_MS),
+        signal: options.signal,
       },
+      CLOSE_TIMEOUT_MS,
     );
     if (!response.ok && response.status !== 404) {
       throw await responseError(response, "无法断开 Codex 智能体连接。");
@@ -1688,13 +1706,14 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async interruptSession(sessionId, options = {}) {
     if (!sessionId) return;
-    const response = await fetch(
-      withAuth(`${SANDBOX_API}/${encodeURIComponent(sessionId)}/interrupt`),
+    const response = await studioFetch(
+      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/interrupt`,
       {
         method: "POST",
         headers: sandboxHeaders(),
-        signal: requestSignal(options.signal, CLOSE_TIMEOUT_MS),
+        signal: options.signal,
       },
+      CLOSE_TIMEOUT_MS,
     );
     if (!response.ok && response.status !== 404) {
       throw await responseError(response, "无法停止 Codex 任务。");
@@ -1703,13 +1722,14 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async deleteSession(sessionId, options = {}) {
     if (!sessionId) return;
-    const response = await fetch(
-      withAuth(`${SANDBOX_API}/${encodeURIComponent(sessionId)}`),
+    const response = await studioFetch(
+      `${SANDBOX_API}/${encodeURIComponent(sessionId)}`,
       {
         method: "DELETE",
         headers: sandboxHeaders(),
-        signal: requestSignal(options.signal, CLOSE_TIMEOUT_MS),
+        signal: options.signal,
       },
+      CLOSE_TIMEOUT_MS,
     );
     if (!response.ok && response.status !== 404) {
       throw await responseError(response, "无法删除 Codex 智能体。");
@@ -1722,13 +1742,14 @@ async function launchSandboxTool(
   tool: "terminal" | "browser",
   options: SandboxRequestOptions,
 ): Promise<SandboxToolLaunch> {
-  const response = await fetch(
-    withAuth(`${SANDBOX_API}/${encodeURIComponent(sessionId)}/${tool}`),
+  const response = await studioFetch(
+    `${SANDBOX_API}/${encodeURIComponent(sessionId)}/${tool}`,
     {
       method: "POST",
       headers: sandboxHeaders(),
-      signal: requestSignal(options.signal, SETTINGS_TIMEOUT_MS),
+      signal: options.signal,
     },
+    SETTINGS_TIMEOUT_MS,
   );
   if (!response.ok) {
     throw await responseError(
