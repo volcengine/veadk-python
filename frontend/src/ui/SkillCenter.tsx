@@ -466,12 +466,14 @@ export function SkillCenterView({
   activationRevision = 0,
   initialWorkspace = null,
   onInitialWorkspaceConsumed,
+  onPageTitleChange,
 }: {
   cloudProvider?: CloudProvider;
   active?: boolean;
   activationRevision?: number;
   initialWorkspace?: SkillCenterWorkspaceLaunch | null;
   onInitialWorkspaceConsumed?: () => void;
+  onPageTitleChange?: (title: string) => void;
 }) {
   const spaceRegions = useMemo(
     () => cloudRegionOptions(cloudProvider).map((option) => option.value),
@@ -512,6 +514,16 @@ export function SkillCenterView({
   const spaceLoadMoreRef = useRef<HTMLDivElement>(null);
   const deferredSpaceQuery = useDeferredValue(spaceQuery);
   const deferredSkillQuery = useDeferredValue(skillQuery);
+  const workspaceTitle = workspace && (selectedSpace || workspace.selectPublishSpace)
+    ? workspace.operation === "create"
+      ? "创建技能"
+      : `优化 ${workspace.source?.name || "技能"}`
+    : "";
+  const pageTitle = workspaceTitle || selectedSpace?.name || "技能库";
+
+  useEffect(() => {
+    if (active) onPageTitleChange?.(pageTitle);
+  }, [active, onPageTitleChange, pageTitle]);
 
   useEffect(() => {
     if (initialWorkspace) onInitialWorkspaceConsumed?.();
