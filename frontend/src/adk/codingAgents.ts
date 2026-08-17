@@ -2,7 +2,9 @@ import { studioFetch } from "./client";
 import { BOOT_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS } from "./timeout";
 
 export type CodingAgentId = "trae" | "claude-code" | "codex";
-export type BundledCodingAgentSkillId = "agentkit-cli";
+export type BundledCodingAgentSkillId =
+  | "veadk-agent-development"
+  | "agentkit-cli";
 
 export interface CodingAgentCapability {
   id: CodingAgentId;
