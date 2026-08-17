@@ -5228,6 +5228,11 @@ export default function App() {
     startNewChat();
   };
 
+  const openIntelligentDeploymentChat = async (agentId: string) => {
+    await refreshCurrentAgentAndStartNewChat(agentId);
+    setIntelligentDeployment(null);
+  };
+
   const selectAgent = async (id: string) => {
     await refreshCurrentAgentAndStartNewChat(id);
   };
@@ -6254,7 +6259,7 @@ export default function App() {
                 cloudProvider={cloudProvider}
                 initialDeployRegion={newRuntimeRegion}
                 onBack={() => setIntelligentDeployment(null)}
-                onAgentAdded={onAgentAdded}
+                onAgentAdded={openIntelligentDeploymentChat}
                 onDeploymentTaskChange={updateDeploymentTask}
                 onDeploymentStarted={startDeployment}
                 onDeploymentComplete={finishDeployment}
