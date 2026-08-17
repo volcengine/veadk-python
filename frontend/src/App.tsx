@@ -126,7 +126,10 @@ import { Composer } from "./ui/Composer";
 import { InvocationChips } from "./ui/InvocationChips";
 import { MediaGroup } from "./ui/Media";
 import { StackCards } from "./ui/AddAgentMenu";
-import { IntelligentCreate } from "./create/IntelligentCreate";
+import {
+  IntelligentCreate,
+  type IntelligentPreparationStage,
+} from "./create/IntelligentCreate";
 import { IntelligentDeployment } from "./create/IntelligentDeployment";
 import { CustomCreate } from "./create/CustomCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
@@ -1147,7 +1150,8 @@ export default function App() {
     useState(true);
   const [intelligentCapabilitiesError, setIntelligentCapabilitiesError] =
     useState("");
-  const [intelligentCreating, setIntelligentCreating] = useState(false);
+  const [intelligentPreparationStage, setIntelligentPreparationStage] =
+    useState<IntelligentPreparationStage | null>(null);
   const [intelligentDeployment, setIntelligentDeploymentState] =
     useState<IntelligentDevelopmentReleaseRef | null>(null);
   const setIntelligentDeployment = useCallback(
@@ -4207,7 +4211,7 @@ export default function App() {
   function cancelIntelligentPreparation() {
     intelligentCreateAbortRef.current?.abort();
     intelligentCreateAbortRef.current = null;
-    setIntelligentCreating(false);
+    setIntelligentPreparationStage(null);
   }
 
   async function removeSession(id: string) {
@@ -6259,25 +6263,31 @@ export default function App() {
               <IntelligentCreate
                 capabilities={intelligentCapabilities}
                 loading={intelligentCapabilitiesLoading}
-                creating={intelligentCreating}
+                preparationStage={intelligentPreparationStage}
                 error={intelligentCapabilitiesError}
+                onCancel={cancelIntelligentPreparation}
                 onBack={() => {
                   cancelIntelligentPreparation();
                   setCreateView(null);
                   setAddMenu(true);
                 }}
                 onCreate={async (goal) => {
-                  if (intelligentCreating) return;
+                  if (intelligentPreparationStage) return;
                   intelligentCreateAbortRef.current?.abort();
                   const controller = new AbortController();
                   intelligentCreateAbortRef.current = controller;
-                  setIntelligentCreating(true);
+                  setIntelligentPreparationStage("preparing");
                   setIntelligentCapabilitiesError("");
                   try {
                     const created = await intelligentDevelopmentClient.startSession({
                       displayName: goal.slice(0, 40),
                       signal: controller.signal,
                     });
+                    if (
+                      controller.signal.aborted ||
+                      intelligentCreateAbortRef.current !== controller
+                    ) return;
+                    setIntelligentPreparationStage("starting");
                     const connected = await intelligentDevelopmentClient.connectSession(
                       created.id,
                       { signal: controller.signal },
@@ -6306,7 +6316,7 @@ export default function App() {
                     setAgentDetailTarget(null);
                     setMyAgents(false);
                     intelligentCreateAbortRef.current = null;
-                    setIntelligentCreating(false);
+                    setIntelligentPreparationStage(null);
                     await sendSandboxMessage(goal, [], [], connected);
                   } catch (cause) {
                     if ((cause as Error)?.name !== "AbortError") {
@@ -6317,7 +6327,7 @@ export default function App() {
                   } finally {
                     if (intelligentCreateAbortRef.current === controller) {
                       intelligentCreateAbortRef.current = null;
-                      setIntelligentCreating(false);
+                      setIntelligentPreparationStage(null);
                     }
                   }
                 }}

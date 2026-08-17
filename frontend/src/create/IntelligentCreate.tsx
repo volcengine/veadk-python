@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { isImeCompositionEvent } from "../ui/composerKeyboard";
+import { TextShimmer } from "../ui/text-shimmer/TextShimmer";
 import "./IntelligentCreate.css";
 
 function IntelligentCreateIcon() {
@@ -25,24 +26,34 @@ export interface IntelligentDevelopmentCapabilities {
   reason: string;
 }
 
+export type IntelligentPreparationStage = "preparing" | "starting";
+
+const PREPARATION_MESSAGES: Record<IntelligentPreparationStage, string> = {
+  preparing: "正在准备完成这项任务所需的工具…",
+  starting: "工具已准备好，正在开始处理你的目标…",
+};
+
 export interface IntelligentCreateProps {
   capabilities: IntelligentDevelopmentCapabilities | null;
   loading: boolean;
-  creating: boolean;
+  preparationStage: IntelligentPreparationStage | null;
   error: string;
   onBack: () => void;
+  onCancel: () => void;
   onCreate: (goal: string) => Promise<void>;
 }
 
 export function IntelligentCreate({
   capabilities,
   loading,
-  creating,
+  preparationStage,
   error,
   onBack,
+  onCancel,
   onCreate,
 }: IntelligentCreateProps) {
   const [goal, setGoal] = useState("");
+  const creating = preparationStage !== null;
   const unavailable = capabilities?.enabled !== true;
   const unavailableReason = loading
     ? "正在检查智能开发能力…"
@@ -81,7 +92,7 @@ export function IntelligentCreate({
       </header>
 
       <div className="ic-main">
-        <section className="ic-panel ic-goal-panel">
+        <section className="ic-panel ic-goal-panel" aria-busy={creating}>
           <div className="ic-goal-heading">
             <span className="ic-create-icon-wrap"><IntelligentCreateIcon /></span>
             <div>
@@ -101,6 +112,24 @@ export function IntelligentCreate({
             disabled={loading || creating || unavailable}
             autoFocus
           />
+          {preparationStage ? (
+            <div
+              className="ic-preparation"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              <div>
+                <strong>目标已收到，马上开始实现</strong>
+                <TextShimmer as="p" duration={2.4} spread={18}>
+                  {PREPARATION_MESSAGES[preparationStage]}
+                </TextShimmer>
+                <p className="ic-preparation-next">
+                  接下来会先梳理目标和实现方式，再编写、运行和验证 Agent。
+                </p>
+              </div>
+            </div>
+          ) : null}
           {unavailableReason ? (
             <p className={loading ? "ic-state" : "ic-error"} role={loading ? "status" : "alert"}>
               {unavailableReason}
@@ -108,16 +137,27 @@ export function IntelligentCreate({
           ) : null}
           {error ? <p className="ic-error" role="alert">{error}</p> : null}
           <div className="ic-actions">
-            <span>开发环境保留最多 8 小时，可在同一 Thread 持续优化</span>
-            <button
-              type="button"
-              className="ic-primary"
-              onClick={() => void submit()}
-              disabled={submitDisabled}
-              aria-busy={creating}
-            >
-              {creating ? "正在准备开发环境…" : "开始构建"}
-            </button>
+            <span>
+              {creating
+                ? "目标会保留在当前页面，取消后可以继续修改"
+                : "开发环境保留最多 8 小时，可在同一 Thread 持续优化"}
+            </span>
+            <div className="ic-action-buttons">
+              {creating ? (
+                <button type="button" className="ic-secondary" onClick={onCancel}>
+                  取消
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="ic-primary"
+                onClick={() => void submit()}
+                disabled={submitDisabled}
+                aria-busy={creating}
+              >
+                {creating ? "准备中…" : "开始构建"}
+              </button>
+            </div>
           </div>
         </section>
       </div>
