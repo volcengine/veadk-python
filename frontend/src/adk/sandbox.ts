@@ -223,6 +223,10 @@ export interface SandboxRequestOptions {
   onUsage?: (update: SandboxTokenUsageUpdate) => void;
 }
 
+export interface SandboxListOptions extends SandboxRequestOptions {
+  autoResumeSnapshots?: boolean;
+}
+
 export interface SandboxStartOptions extends SandboxRequestOptions {
   displayName?: string;
   persistent?: boolean;
@@ -284,11 +288,11 @@ export interface SandboxReply {
 }
 
 export interface AgentKitSandboxClient {
-  listSessions(options?: SandboxRequestOptions): Promise<SandboxAgentResource[]>;
+  listSessions(options?: SandboxListOptions): Promise<SandboxAgentResource[]>;
   startSession(options?: SandboxStartOptions): Promise<SandboxSession>;
   listAgentSessions(
     kind: SandboxAgentKind,
-    options?: SandboxRequestOptions,
+    options?: SandboxListOptions,
   ): Promise<SandboxAgentResource[]>;
   startAgentSession(
     kind: SandboxAgentKind,
@@ -609,6 +613,12 @@ function parseSnapshot(
     createdAt: data.createdAt ?? "",
     createdBy: data.createdBy ?? "",
   };
+}
+
+function sandboxListUrl(base: string, options?: SandboxListOptions): string {
+  if (!options?.autoResumeSnapshots) return base;
+  const params = new URLSearchParams({ autoResumeSnapshots: "true" });
+  return `${base}?${params.toString()}`;
 }
 
 const DEFAULT_PERMISSIONS: SandboxPermissions = {
@@ -1013,7 +1023,7 @@ async function sandboxJson(
 export const sandboxClient: AgentKitSandboxClient = {
   async listSessions(options = {}) {
     const response = await studioFetch(
-      SANDBOX_API,
+      sandboxListUrl(SANDBOX_API, options),
       {
         method: "GET",
         headers: sandboxHeaders(),
@@ -1059,7 +1069,7 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async listAgentSessions(kind, options = {}) {
     const response = await studioFetch(
-      `/web/${kind}/sessions`,
+      sandboxListUrl(`/web/${kind}/sessions`, options),
       {
         method: "GET",
         headers: sandboxHeaders(),

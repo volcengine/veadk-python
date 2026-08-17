@@ -317,3 +317,34 @@ test("sends persistence explicitly for default and temporary agents", async (t) 
     },
   ]);
 });
+
+test("requests snapshot auto-resume when listing sandbox agents", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, method: init.method });
+    return new Response(JSON.stringify({ sessions: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  await sandboxClient.listSessions({ autoResumeSnapshots: true });
+  await sandboxClient.listAgentSessions("openclaw", {
+    autoResumeSnapshots: true,
+  });
+
+  assert.deepEqual(requests, [
+    {
+      url: "/web/sandbox/sessions?autoResumeSnapshots=true",
+      method: "GET",
+    },
+    {
+      url: "/web/openclaw/sessions?autoResumeSnapshots=true",
+      method: "GET",
+    },
+  ]);
+});
