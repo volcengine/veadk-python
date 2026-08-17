@@ -2210,6 +2210,7 @@ body {
 .delivery-card-actions button:disabled { cursor: not-allowed; opacity: .5; }
 .delivery-card-actions button:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
 .delivery-card-error { margin: 0; color: hsl(var(--destructive)); font-size: 12px; }
+.delivery-card-status { margin: 0; color: hsl(142 52% 32%); font-size: 12px; }
 .trusted-source-pane {
   display: grid;
   gap: 14px;

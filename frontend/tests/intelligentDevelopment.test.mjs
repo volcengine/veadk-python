@@ -334,9 +334,16 @@ test("delivery card always exposes source and gates manual deployment on verific
   assert.match(releaseInterface, /validationSummary: string/);
   assert.doesNotMatch(releaseInterface, /releasePath|validationReportPath|url|localStorage/i);
   assert.match(blocksUiSource, /查看源码/);
+  assert.match(blocksUiSource, /下载源码/);
   assert.match(blocksUiSource, /手动部署到 Runtime/);
+  assert.match(blocksUiSource, /busyAction === "download"/);
+  assert.match(blocksUiSource, /源码 ZIP 已开始下载/);
+  assert.match(
+    blocksUiSource,
+    /async function download\(\)[\s\S]*?catch[\s\S]*?finally \{[\s\S]*?setBusyAction\(null\)/,
+  );
   assert.match(blocksUiSource, /disabled=\{\s*!value\.verified/);
-  assert.match(blocksUiSource, /验证通过后即可手动部署/);
+  assert.match(blocksUiSource, /源码已安全保存，可查看或下载/);
   assert.match(
     blocksUiSource,
     /value\.verified \? <DeliveryVerifiedIcon \/> : <DeliverySourceIcon \/>/,
@@ -346,9 +353,108 @@ test("delivery card always exposes source and gates manual deployment on verific
   assert.match(codeBrowserSource, /readOnly=\{readOnly\}/);
   assert.match(appSource, /onDeployDelivery=\{setIntelligentDeployment\}/);
   assert.match(appSource, /onResolveDelivery=\{resolveIntelligentDelivery\}/);
+  assert.match(appSource, /onDownloadDelivery=\{downloadIntelligentDelivery\}/);
+  assert.match(
+    appSource,
+    /downloadIntelligentDelivery[\s\S]*?beginAgentSourceDownload[\s\S]*?operation\.succeed[\s\S]*?operation\.fail/,
+  );
   assert.match(appSource, /<IntelligentDeployment[\s\S]*?delivery=\{intelligentDeployment\}/);
   assert.match(deploymentSource, /<ProjectPreview/);
   assert.doesNotMatch(deploymentSource, /localStorage|releasePath|validationReportPath/);
+});
+
+test("intelligent release client downloads the exact server archive", async () => {
+  const { downloadIntelligentDevelopmentRelease } = await importTsxBundle(
+    "../src/adk/intelligentDevelopment.ts",
+  );
+  const originalFetch = globalThis.fetch;
+  const archive = Uint8Array.from([0x50, 0x4b, 0x03, 0x04]);
+  globalThis.fetch = async (url, options) => {
+    const request = new URL(String(url), "http://localhost");
+    assert.equal(request.pathname, "/web/intelligent-development/releases/download");
+    assert.equal(request.searchParams.get("sessionId"), "dev-1");
+    assert.equal(request.searchParams.get("artifactSha256"), "a".repeat(64));
+    assert.equal(request.searchParams.get("validationReportSha256"), "b".repeat(64));
+    assert.equal(new Headers(options?.headers).get("Accept"), "application/zip");
+    return new Response(archive, {
+      headers: {
+        "Content-Type": "application/zip",
+        "Content-Disposition": 'attachment; filename="weather-source-aaaaaaaaaaaa.zip"',
+      },
+    });
+  };
+  try {
+    const result = await downloadIntelligentDevelopmentRelease({
+      sessionId: "dev-1",
+      artifactSha256: "a".repeat(64),
+      validationReportSha256: "b".repeat(64),
+      agentName: "weather",
+      entryPoint: "app.py",
+      fileCount: 2,
+      artifactSize: archive.byteLength,
+      validatedAt: "",
+      gateSummary: [],
+      verified: false,
+      validationSummary: "验证结果尚未确认",
+    });
+    assert.equal(result.filename, "weather-source-aaaaaaaaaaaa.zip");
+    assert.deepEqual(
+      new Uint8Array(await result.blob.arrayBuffer()),
+      archive,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("intelligent release download rejects invalid responses and remains retryable", async () => {
+  const { downloadIntelligentDevelopmentRelease } = await importTsxBundle(
+    "../src/adk/intelligentDevelopment.ts",
+  );
+  const originalFetch = globalThis.fetch;
+  const candidate = { ...delivery, artifactSize: 3 };
+  let call = 0;
+  globalThis.fetch = async () => {
+    call += 1;
+    if (call === 1) {
+      return new Response(Uint8Array.from([1, 2, 3]), {
+        headers: { "Content-Type": "application/octet-stream" },
+      });
+    }
+    if (call === 2) {
+      return new Response(Uint8Array.from([1, 2, 3, 4]), {
+        headers: { "Content-Type": "application/zip" },
+      });
+    }
+    if (call === 3) {
+      return Response.json({ detail: "交付物已不是当前发布版本。" }, { status: 409 });
+    }
+    return new Response(Uint8Array.from([1, 2, 3]), {
+      headers: { "Content-Type": "application/zip" },
+    });
+  };
+  try {
+    await assert.rejects(
+      downloadIntelligentDevelopmentRelease(candidate),
+      /不是 ZIP 文件/,
+    );
+    await assert.rejects(
+      downloadIntelligentDevelopmentRelease(candidate),
+      /大小与发布记录不一致/,
+    );
+    await assert.rejects(
+      downloadIntelligentDevelopmentRelease(candidate),
+      /交付物已不是当前发布版本/,
+    );
+    const result = await downloadIntelligentDevelopmentRelease(candidate);
+    assert.equal(
+      result.filename,
+      `sales-agent-source-${"a".repeat(12)}.zip`,
+    );
+    assert.equal(result.blob.size, 3);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("trusted deployment previews verified files but never deploys browser file bytes", () => {

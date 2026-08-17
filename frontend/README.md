@@ -38,8 +38,10 @@ server that `veadk frontend` launches — no separate backend.
   stay hidden. The same eight-hour Sandbox, Workspace, and Codex Thread can run
   repeated optimize-and-verify cycles. Stopping preserves received output and
   blocks the next submission until cleanup finishes. A successful cycle ends
-  with a verified-delivery card and the existing manual Runtime deployment
-  flow; no separate “start verification” action is required.
+  with a source-delivery card: users can inspect generated text files and
+  download the complete ZIP (including binary assets) as soon as the source is
+  ready, while manual Runtime deployment remains available only after all
+  verification gates pass. No separate “start verification” action is required.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Agent context rail** keeps the selected Agent's description, model, tools,
   skills, and optional live multi-Agent topology together in the conversation's

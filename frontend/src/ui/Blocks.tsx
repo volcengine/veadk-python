@@ -198,20 +198,27 @@ export function ThinkingBlock({
 function DeliveryCard({
   value,
   onResolve,
+  onDownload,
   onDeploy,
 }: {
   value: Extract<Block, { kind: "delivery" }>["value"];
   onResolve?: (
     value: Extract<Block, { kind: "delivery" }>["value"],
   ) => Promise<Extract<Block, { kind: "delivery" }>["value"]>;
+  onDownload?: (
+    value: Extract<Block, { kind: "delivery" }>["value"],
+  ) => Promise<void>;
   onDeploy?: (value: Extract<Block, { kind: "delivery" }>["value"]) => void;
 }) {
   const [resolved, setResolved] = useState<
     Extract<Block, { kind: "delivery" }>["value"] | null
   >(value.files ? value : null);
   const [codeOpen, setCodeOpen] = useState(false);
-  const [busyAction, setBusyAction] = useState<"source" | "deploy" | null>(null);
+  const [busyAction, setBusyAction] = useState<
+    "source" | "download" | "deploy" | null
+  >(null);
   const [error, setError] = useState("");
+  const [status, setStatus] = useState("");
   const validatedAt = new Date(value.validatedAt);
   const time = !value.validatedAt
     ? "刚刚"
@@ -230,6 +237,7 @@ function DeliveryCard({
   async function openSource() {
     setBusyAction("source");
     setError("");
+    setStatus("");
     try {
       await resolveDelivery();
       setCodeOpen(true);
@@ -240,9 +248,25 @@ function DeliveryCard({
     }
   }
 
+  async function download() {
+    if (!onDownload) return;
+    setBusyAction("download");
+    setError("");
+    setStatus("");
+    try {
+      await onDownload(value);
+      setStatus("源码 ZIP 已开始下载。");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function deploy() {
     setBusyAction("deploy");
     setError("");
+    setStatus("");
     try {
       onDeploy?.(await resolveDelivery());
     } catch (cause) {
@@ -293,7 +317,7 @@ function DeliveryCard({
         </p>
         {!value.verified ? (
           <p className="delivery-card-guidance">
-            源码已安全保存。请在当前对话中继续修复并重新完成云端验证，验证通过后即可手动部署。
+            源码已安全保存，可查看或下载。请在当前对话中继续修复并重新完成云端验证，验证通过后即可手动部署。
           </p>
         ) : null}
         <div className="delivery-card-actions">
@@ -310,6 +334,18 @@ function DeliveryCard({
           </button>
           <button
             type="button"
+            className="delivery-card-secondary"
+            onClick={() => void download()}
+            disabled={!onDownload || busyAction !== null}
+            aria-busy={busyAction === "download"}
+          >
+            {busyAction === "download" ? (
+              <Loader2 className="spin" aria-hidden="true" />
+            ) : null}
+            {busyAction === "download" ? "正在下载…" : "下载源码"}
+          </button>
+          <button
+            type="button"
             onClick={() => void deploy()}
             disabled={
               !value.verified || !onDeploy || !onResolve || busyAction !== null
@@ -323,6 +359,11 @@ function DeliveryCard({
           </button>
         </div>
         {error ? <p className="delivery-card-error" role="alert">{error}</p> : null}
+        {status ? (
+          <p className="delivery-card-status" role="status" aria-live="polite">
+            {status}
+          </p>
+        ) : null}
       </section>
       <CodeBrowserDialog
         project={{ name: value.agentName, files: resolved?.files ?? [] }}
@@ -663,6 +704,9 @@ export interface BlocksProps {
   onResolveDelivery?: (
     delivery: Extract<Block, { kind: "delivery" }>["value"],
   ) => Promise<Extract<Block, { kind: "delivery" }>["value"]>;
+  onDownloadDelivery?: (
+    delivery: Extract<Block, { kind: "delivery" }>["value"],
+  ) => Promise<void>;
   onDeployDelivery?: (delivery: Extract<Block, { kind: "delivery" }>["value"]) => void;
 }
 
@@ -677,6 +721,7 @@ export function Blocks({
   onArtifactDownload,
   onArtifactPreview,
   onResolveDelivery,
+  onDownloadDelivery,
   onDeployDelivery,
 }: BlocksProps) {
   const lastTextBlockIndex = blocks.reduce(
@@ -726,6 +771,7 @@ export function Blocks({
                 key={i}
                 value={b.value}
                 onResolve={onResolveDelivery}
+                onDownload={onDownloadDelivery}
                 onDeploy={onDeployDelivery}
               />
             );
