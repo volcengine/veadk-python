@@ -397,6 +397,55 @@ class _DetailedErrorWebSocket(_FakeWebSocket):
         await super().send(raw)
 
 
+class _NotMaterializedThreadWebSocket(_FakeWebSocket):
+    """Simulates a freshly-started thread that has no turns yet."""
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        params = message.get("params") or {}
+        if (
+            message.get("method") == "thread/read"
+            and params.get("includeTurns") is True
+        ):
+            self.messages.append(message)
+            thread_id = params.get("threadId", "unknown")
+            await self.queue.put(
+                json.dumps(
+                    {
+                        "id": message["id"],
+                        "error": {
+                            "code": -32600,
+                            "message": (
+                                f"thread {thread_id} is not materialized yet; "
+                                "includeTurns is unavailable before first user message"
+                            ),
+                        },
+                    }
+                )
+            )
+            return
+        if message.get("method") == "thread/read":
+            # Metadata-only read (no includeTurns) returns thread without turns.
+            self.messages.append(message)
+            await self.queue.put(
+                json.dumps(
+                    {
+                        "id": message["id"],
+                        "result": {
+                            "thread": {
+                                "id": message["params"]["threadId"],
+                                "cwd": "/workspace",
+                            },
+                            "cwd": "/workspace",
+                            "model": "gpt-test",
+                        },
+                    }
+                )
+            )
+            return
+        await super().send(raw)
+
+
 class _SendFailureWebSocket(_FakeWebSocket):
     async def send(self, raw: str) -> None:
         message = json.loads(raw)
@@ -757,6 +806,44 @@ async def test_json_rpc_error_preserves_complete_payload() -> None:
     assert '"code":-32001' in detail
     assert '"message":"quota exceeded"' in detail
     assert '"data":{"reason":"quota_exceeded","retryAfter":30}' in detail
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_read_thread_falls_back_when_thread_not_materialized() -> None:
+    """A fresh thread with no user message should not cause a 500 error.
+
+    The Codex app-server rejects includeTurns with -32600 before the first
+    user message. read_thread should retry without includeTurns and return
+    an empty conversation snapshot.
+    """
+    websocket = _NotMaterializedThreadWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    snapshot = await session.read_thread("thread-fresh")
+
+    assert snapshot.thread.id == "thread-fresh"
+    assert snapshot.messages == ()
+    assert snapshot.workspace_locked is False
+    assert snapshot.cwd == "/workspace"
+    assert snapshot.model == "gpt-test"
+
+    # Verify the first request used includeTurns and the fallback did not.
+    read_requests = [
+        message
+        for message in websocket.messages
+        if message.get("method") == "thread/read"
+    ]
+    assert len(read_requests) == 2
+    assert read_requests[0]["params"] == {
+        "threadId": "thread-fresh",
+        "includeTurns": True,
+    }
+    assert read_requests[1]["params"] == {"threadId": "thread-fresh"}
     await session.close()
 
 
