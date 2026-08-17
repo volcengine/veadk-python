@@ -403,17 +403,40 @@ test("intelligent preparation acknowledges the goal and exposes cancellable prog
     }),
   );
 
+  const idle = render(null);
+  assert.match(
+    appSource,
+    /描述目标，按你的意图构建、调试并验证 Agent。/,
+  );
+  assert.match(
+    idle,
+    /描述目标后，沙箱中的 Codex 会判断你的意图，完成构建、调试和临时云端验证。/,
+  );
+  assert.match(
+    idle,
+    /只需说明 Agent 要解决的问题；如有影响结果的关键信息，会在开始前向你确认。/,
+  );
+  assert.match(idle, /开发环境最多保留 8 小时，可在当前任务中持续优化。/);
+  assert.match(
+    idle,
+    /placeholder="例如：创建一个能读取销售数据、生成周报并校验输出格式的 Agent"/,
+  );
+  assert.doesNotMatch(
+    createSource,
+    /描述目标后，AI|VeADK Agent|开发会话|同一 Thread/,
+  );
+
   const preparing = render("preparing");
   assert.match(preparing, /role="status"/);
   assert.match(preparing, /aria-live="polite"/);
   assert.match(preparing, /目标已收到，马上开始实现/);
-  assert.match(preparing, /正在准备完成这项任务所需的工具/);
+  assert.match(preparing, /正在创建任务环境/);
   assert.match(preparing, /接下来会先梳理目标和实现方式，再编写、运行和验证 Agent/);
   assert.match(preparing, />取消</);
   assert.match(preparing, /<textarea[^>]*disabled/);
 
   const starting = render("starting");
-  assert.match(starting, /工具已准备好，正在开始处理你的目标/);
+  assert.match(starting, /环境已就绪，正在启动 Codex/);
 });
 
 test("intelligent preparation ends before the first build turn and resets on navigation", () => {

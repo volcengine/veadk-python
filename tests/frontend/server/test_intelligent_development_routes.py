@@ -493,8 +493,17 @@ def _verified_contract_text() -> str:
     )
 
 
+@pytest.mark.parametrize(
+    ("changes_delivery", "task_progress"),
+    [
+        (True, "正在实现本次变更、运行测试并验证结果。"),
+        (False, "正在检查当前项目并整理结果。"),
+    ],
+)
 def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
     monkeypatch: pytest.MonkeyPatch,
+    changes_delivery: bool,
+    task_progress: str,
 ) -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
@@ -506,7 +515,7 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
                 status="running",
                 text="正在判断目标是否属于 VeADK Agent 开发。",
             ),
-            _gate(),
+            _gate(changes=changes_delivery),
         ],
         [
             CodexAppServerEvent(
@@ -558,22 +567,23 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
             json={"message": "做一个天气 Agent"},
         )
     assert response.status_code == 200
-    assert "正在理解需求并整理验收标准" in response.text
+    assert "Codex 正在分析本次请求并确认预期结果" in response.text
     assert "正在判断目标是否属于 VeADK Agent 开发" in response.text
-    assert "需求已确认，正在准备开发环境" in response.text
+    assert task_progress in response.text
+    assert "目标已确认，正在配置构建环境" not in response.text
     assert "正在实现并验证天气 Agent" in response.text
     assert "正在构建临时验证版本" in response.text
     assert "已完成本地实现" in response.text
     assert "event: usage" in response.text
     assert response.text.count("event: activity") == 2
     assert response.text.count('"kind": "thinking"') == 2
-    assert response.text.index("正在理解需求并整理验收标准") < response.text.index(
-        "正在判断目标是否属于 VeADK Agent 开发"
-    )
+    assert response.text.index(
+        "Codex 正在分析本次请求并确认预期结果"
+    ) < response.text.index("正在判断目标是否属于 VeADK Agent 开发")
     assert response.text.index(
         "正在判断目标是否属于 VeADK Agent 开发"
-    ) < response.text.index("需求已确认，正在准备开发环境")
-    assert response.text.index("需求已确认，正在准备开发环境") < response.text.index(
+    ) < response.text.index(task_progress)
+    assert response.text.index(task_progress) < response.text.index(
         "正在实现并验证天气 Agent"
     )
     assert response.text.index("正在实现并验证天气 Agent") < response.text.index(
@@ -593,7 +603,10 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
         gateway.codex.calls[1]["timeout_seconds"]
         == routes._BUILDER_TURN_TIMEOUT_SECONDS
     )
-    invalidate.assert_awaited_once()
+    if changes_delivery:
+        invalidate.assert_awaited_once()
+    else:
+        invalidate.assert_not_awaited()
     remove.assert_awaited_once()
     publisher.publish.assert_awaited_once()
     assert lease.cleaned is True
