@@ -15,7 +15,7 @@ import type { NetworkConfig } from "./types";
 export interface IntelligentDeploymentProps {
   delivery: IntelligentDevelopmentReleaseRef;
   onBack: () => void;
-  onAgentAdded?: (agentId: string, agentName: string) => void;
+  onAgentAdded?: (agentId: string, agentName: string) => void | Promise<void>;
   onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;
   onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
   onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;

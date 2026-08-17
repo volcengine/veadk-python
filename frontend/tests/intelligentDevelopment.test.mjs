@@ -387,6 +387,21 @@ test("delivery card separates deployability from verification", () => {
   assert.doesNotMatch(deploymentSource, /localStorage|releasePath|validationReportPath/);
 });
 
+test("successful intelligent deployment opens a fresh agent chat", () => {
+  assert.match(
+    projectPreviewSource,
+    /await onAgentAdded\(agentId, deployResult\.agentName\)/,
+  );
+  assert.match(
+    appSource,
+    /const openIntelligentDeploymentChat = async \(agentId: string\) => \{[\s\S]*?await refreshCurrentAgentAndStartNewChat\(agentId\);[\s\S]*?setIntelligentDeployment\(null\);[\s\S]*?\};/,
+  );
+  assert.match(
+    appSource,
+    /<IntelligentDeployment[\s\S]*?onAgentAdded=\{openIntelligentDeploymentChat\}/,
+  );
+});
+
 test("delivery card clears browser download handoff feedback", () => {
   assert.match(blocksUiSource, /const DOWNLOAD_STATUS_DURATION_MS = 3_000/);
   assert.match(

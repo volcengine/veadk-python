@@ -611,7 +611,7 @@ export interface ProjectPreviewProps {
     options?: DeployOptions,
   ) => Promise<DeployResult>;
   /** Called after successfully adding the agent to the connection list. */
-  onAgentAdded?: (agentId: string, agentName: string) => void;
+  onAgentAdded?: (agentId: string, agentName: string) => void | Promise<void>;
   /** Called as soon as the Runtime has been deployed or updated successfully. */
   onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
   /** Label for the floating deployment action. */
@@ -1709,7 +1709,7 @@ export function ProjectPreview({
 
         if (onAgentAdded) {
           const agentId = remoteAppId(conn.id, conn.apps[0]);
-          onAgentAdded(agentId, deployResult.agentName);
+          await onAgentAdded(agentId, deployResult.agentName);
         } else {
           alert(`🎉 Agent "${deployResult.agentName}" 已添加到左上角下拉列表！`);
         }
