@@ -3272,7 +3272,7 @@ const WORKSPACE_MODES: Array<{
 const WORKSPACE_TITLES: Record<WorkspaceMode, string> = {
   build: "个性化您的智能体架构",
   validate: "调试您的智能体",
-  environment: "配置您的云上环境",
+  environment: "配置云上环境",
   publish: "准备好部署您的智能体",
 };
 
