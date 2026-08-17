@@ -14,14 +14,16 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 from google.adk.models.llm_request import LlmRequest
 from google.adk.tools.function_tool import FunctionTool
 
 from veadk.tracing.telemetry.attributes.extractors.llm_attributes_extractors import (
     llm_gen_ai_request_functions,
+    llm_gen_ai_usage_output_tokens,
 )
+from veadk.tracing.telemetry.attributes.extractors.types import ExtractorResponse
 
 
 def test_request_functions_reuses_adk_request_declaration(monkeypatch):
@@ -99,3 +101,35 @@ def test_request_functions_builds_missing_declaration_once():
     )
     assert parameters == {"type": "object"}
     get_declaration.assert_called_once_with()
+
+
+def test_missing_output_token_count_is_not_written_to_span():
+    params = SimpleNamespace(
+        llm_response=SimpleNamespace(
+            usage_metadata=SimpleNamespace(candidates_token_count=None)
+        )
+    )
+    response = llm_gen_ai_usage_output_tokens(params)
+    span = Mock()
+
+    ExtractorResponse.update_span(span, "gen_ai.usage.output_tokens", response)
+
+    span.set_attribute.assert_not_called()
+
+
+def test_falsy_attribute_values_are_written_to_span():
+    span = Mock()
+
+    ExtractorResponse.update_span(span, "zero", ExtractorResponse(content=0))
+    ExtractorResponse.update_span(span, "false", ExtractorResponse(content=False))
+
+    assert span.set_attribute.call_args_list == [call("zero", 0), call("false", False)]
+
+
+def test_none_values_in_attribute_mappings_are_not_written_to_span():
+    span = Mock()
+    response = ExtractorResponse(content=[{"present": 0, "missing": None}])
+
+    ExtractorResponse.update_span(span, "unused", response)
+
+    span.set_attribute.assert_called_once_with("present", 0)

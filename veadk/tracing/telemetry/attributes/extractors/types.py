@@ -86,13 +86,15 @@ class ExtractorResponse:
         """
         if response.type == "attribute":
             res = response.content
+            if res is None:
+                return
             if isinstance(res, list):
                 for _res in res:
                     if isinstance(_res, dict):
                         for k, v in _res.items():
-                            span.set_attribute(k, v)
+                            if v is not None:
+                                span.set_attribute(k, v)
             else:
-                # set anyway
                 span.set_attribute(attr_name, res)  # type: ignore
         elif response.type == "event":
             if isinstance(response.content, dict):
