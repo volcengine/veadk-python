@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import re
 import socket
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from urllib.parse import SplitResult, urljoin, urlsplit, urlunsplit
 
 import httpx
@@ -39,6 +41,70 @@ REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 AddressResolver = Callable[[str, int], Awaitable[Sequence[str]]]
 TransportFactory = Callable[[], httpx.AsyncBaseTransport]
 MarkdownExtractor = Callable[[bytes, str], tuple[str, str]]
+
+_HTML_CHARSET_PATTERN = re.compile(
+    rb"charset\s*=\s*['\"]?\s*([a-zA-Z0-9._:-]+)",
+    re.IGNORECASE,
+)
+
+_FALLBACK_IGNORED_TAGS = frozenset(
+    {
+        "aside",
+        "canvas",
+        "dialog",
+        "footer",
+        "form",
+        "nav",
+        "noscript",
+        "script",
+        "style",
+        "svg",
+        "template",
+    }
+)
+_FALLBACK_BLOCK_TAGS = frozenset(
+    {
+        "address",
+        "article",
+        "blockquote",
+        "dd",
+        "div",
+        "dl",
+        "dt",
+        "figcaption",
+        "figure",
+        "header",
+        "main",
+        "p",
+        "section",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "tr",
+    }
+)
+_FALLBACK_HEADING_TAGS = {f"h{level}": level for level in range(1, 7)}
+_FALLBACK_VOID_TAGS = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+)
 
 
 class WebImportError(RuntimeError):
@@ -97,9 +163,25 @@ def _default_transport_factory() -> httpx.AsyncBaseTransport:
     return httpx.AsyncHTTPTransport(retries=0, trust_env=False)
 
 
+def _decode_html(html: bytes) -> str:
+    """Decode HTML before extraction so large UTF-8 pages are not misdetected."""
+    match = _HTML_CHARSET_PATTERN.search(html[:16384])
+    encodings = [match.group(1).decode("ascii")] if match is not None else []
+    encodings.extend(("utf-8-sig", "utf-8"))
+    for encoding in encodings:
+        if encoding.casefold() in {"gb2312", "gbk", "x-gbk"}:
+            encoding = "gb18030"
+        try:
+            return html.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return html.decode("utf-8", errors="replace")
+
+
 def _extract_markdown(html: bytes, final_url: str) -> tuple[str, str]:
+    decoded_html = _decode_html(html)
     markdown = extract(
-        html,
+        decoded_html,
         url=final_url,
         output_format="markdown",
         with_metadata=False,
@@ -111,10 +193,125 @@ def _extract_markdown(html: bytes, final_url: str) -> tuple[str, str]:
     if not markdown:
         return "", ""
     metadata = extract_metadata(
-        html.decode("utf-8", errors="replace"),
+        decoded_html,
         default_url=final_url,
     )
     return markdown, (metadata.title if metadata is not None else "") or ""
+
+
+class _FallbackMarkdownParser(HTMLParser):
+    """Convert visible body text to conservative Markdown after extraction fails."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._title_parts: list[str] = []
+        self._body_depth = 0
+        self._head_depth = 0
+        self._title_depth = 0
+        self._ignored_depth = 0
+
+    @property
+    def title(self) -> str:
+        return " ".join(" ".join(self._title_parts).split())
+
+    @property
+    def markdown(self) -> str:
+        value = "".join(self._parts)
+        value = re.sub(r"[ \t]+\n", "\n", value)
+        value = re.sub(r"\n[ \t]+", "\n", value)
+        value = re.sub(r"\n{3,}", "\n\n", value)
+        return value.strip()
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        del attrs
+        tag = tag.casefold()
+        if self._ignored_depth:
+            if tag not in _FALLBACK_VOID_TAGS:
+                self._ignored_depth += 1
+            return
+        if tag in _FALLBACK_IGNORED_TAGS:
+            self._ignored_depth = 1
+            return
+        if tag == "head":
+            self._head_depth += 1
+            return
+        if self._head_depth:
+            if tag not in _FALLBACK_VOID_TAGS:
+                self._head_depth += 1
+            if tag == "title":
+                self._title_depth = self._head_depth
+            return
+        if tag == "body":
+            self._body_depth += 1
+            return
+        if not self._body_depth:
+            return
+        if tag in _FALLBACK_HEADING_TAGS:
+            self._paragraph_break()
+            self._parts.append(f"{'#' * _FALLBACK_HEADING_TAGS[tag]} ")
+        elif tag == "li":
+            self._line_break()
+            self._parts.append("- ")
+        elif tag == "br":
+            self._line_break()
+        elif tag in _FALLBACK_BLOCK_TAGS:
+            self._paragraph_break()
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.casefold()
+        if self._ignored_depth:
+            self._ignored_depth -= 1
+            return
+        if self._head_depth:
+            if self._title_depth == self._head_depth:
+                self._title_depth = 0
+            self._head_depth -= 1
+            return
+        if tag == "body":
+            self._body_depth = max(0, self._body_depth - 1)
+            return
+        if not self._body_depth:
+            return
+        if tag in _FALLBACK_HEADING_TAGS or tag == "li":
+            self._line_break()
+        elif tag in _FALLBACK_BLOCK_TAGS:
+            self._paragraph_break()
+
+    def handle_data(self, data: str) -> None:
+        text = " ".join(data.split())
+        if not text:
+            return
+        if self._title_depth:
+            self._title_parts.append(text)
+            return
+        if not self._body_depth or self._ignored_depth or self._head_depth:
+            return
+        if self._parts and not self._parts[-1].endswith((" ", "\n")):
+            self._parts.append(" ")
+        self._parts.append(text)
+
+    def _line_break(self) -> None:
+        if self._parts and not self._parts[-1].endswith("\n"):
+            self._parts.append("\n")
+
+    def _paragraph_break(self) -> None:
+        if not self._parts:
+            return
+        if self._parts[-1].endswith("\n\n"):
+            return
+        self._parts.append("\n" if self._parts[-1].endswith("\n") else "\n\n")
+
+
+def _extract_visible_body_markdown(html: bytes) -> tuple[str, str]:
+    parser = _FallbackMarkdownParser()
+    parser.feed(_decode_html(html))
+    parser.close()
+    return parser.markdown, parser.title
 
 
 def _validate_url(raw_url: str) -> _ValidatedUrl:
@@ -260,7 +457,16 @@ class WebImporter:
             )
             markdown = markdown.strip()
             if not markdown:
-                raise WebImportContentError("No main content could be extracted.")
+                fallback_markdown, fallback_title = await asyncio.to_thread(
+                    _extract_visible_body_markdown,
+                    response_data.content,
+                )
+                markdown = fallback_markdown.strip()
+                title = title.strip() or fallback_title
+            if not markdown:
+                raise WebImportContentError(
+                    "No visible HTML content could be extracted. The page may require JavaScript to render."
+                )
             if len(markdown.encode("utf-8")) > MAX_MARKDOWN_BYTES:
                 raise WebImportTooLargeError("Extracted Markdown exceeds 2 MB.")
             return WebImportResult(

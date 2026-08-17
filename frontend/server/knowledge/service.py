@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from threading import RLock
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from .models import (
     CreateDocumentBody,
@@ -280,6 +281,15 @@ class KnowledgeUploadStore(Protocol):
     ) -> StoredKnowledgeUpload: ...
 
     def delete(self, upload: StoredKnowledgeUpload) -> None: ...
+
+    def read_managed(
+        self,
+        *,
+        tos_path: str,
+        owner_id: str,
+        knowledge_id: str,
+        region: str,
+    ) -> bytes | None: ...
 
     def put_metadata(
         self,
@@ -840,17 +850,42 @@ class KnowledgeService:
             knowledge_id=knowledge_id,
             region=region,
         )
-        chunks, has_more = gateway.preview(
-            document_id,
-            offset=offset,
-            limit=limit,
-        )
+        metadata = document.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        source_markdown = ""
+        content_format = str(metadata.get("_veadk_content_format") or "")
+        tos_path = str(document.get("tosPath") or "").strip()
+        if content_format == "markdown" and tos_path and self._upload_store is not None:
+            source = self._upload_store.read_managed(
+                tos_path=tos_path,
+                owner_id=self._to_item(record, identity).owner_id,
+                knowledge_id=knowledge_id,
+                region=region,
+            )
+            if source is not None:
+                try:
+                    source_markdown = source.decode("utf-8")
+                except UnicodeDecodeError as error:
+                    raise KnowledgeAccessError(
+                        "网页 Markdown 原文已损坏。",
+                        status_code=502,
+                    ) from error
+        if source_markdown:
+            chunks, has_more = [], False
+        else:
+            chunks, has_more = gateway.preview(
+                document_id,
+                offset=offset,
+                limit=limit,
+            )
         return {
             "document": document,
             "chunks": chunks,
             "offset": offset,
             "limit": limit,
             "hasMore": has_more,
+            "sourceMarkdown": source_markdown,
         }
 
     def create_document(
@@ -1095,8 +1130,17 @@ class KnowledgeService:
             **metadata,
         }
         source_url = str(merged_metadata.get("_veadk_source_url") or "").strip()
+        content_format = str(merged_metadata.get("_veadk_content_format") or "").strip()
+        source_title = str(merged_metadata.get("_veadk_source_title") or "").strip()
+        if content_format == "markdown" and not source_title and source_url:
+            source_title = urlsplit(source_url).hostname or "网页"
         return {
             **document,
+            "name": (
+                source_title
+                if content_format == "markdown" and source_title
+                else str(document.get("name") or "")
+            ),
             "metadata": merged_metadata,
             "url": source_url or str(document.get("url") or ""),
             "sizeBytes": int(

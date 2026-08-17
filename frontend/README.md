@@ -67,7 +67,11 @@ server that `veadk frontend` launches — no separate backend.
   artifacts from one sidebar entry. Knowledge documents support verified
   JPG/PNG, PDF/PPTX/DOCX/XLSX/TXT uploads and public webpage imports. Studio
   fetches webpages server-side with SSRF protections, extracts the main content
-  as Markdown, and stores it through the existing private TOS-to-Viking flow.
+  as Markdown, and shows a safe rendered preview before any data is created.
+  Only an explicit confirmation stores the previewed Markdown through the
+  existing private TOS-to-Viking flow; cancelling or a preview failure leaves
+  the knowledge base unchanged. Imported webpages are named automatically from
+  the page title, with the hostname as a fallback.
   AgentKit knowledge names use its native identifier rules: 1-48 characters,
   starting with a letter and containing only letters, numbers, or underscores.
   Descriptions are limited to 80 characters so the signed owner marker remains

@@ -52,6 +52,7 @@ from .models import (
 from .service import KnowledgeAccessError, KnowledgeIdentity, KnowledgeService
 from .uploads import validate_knowledge_upload
 from .web_import import (
+    MAX_MARKDOWN_BYTES,
     WebImportContentError,
     WebImporter,
     WebImportFetchError,
@@ -356,6 +357,31 @@ def _safe_source_url(value: str) -> str:
     )
 
 
+def _validated_preview_source_url(value: str) -> str:
+    try:
+        parsed = urlsplit(value.strip())
+        port = parsed.port
+    except (UnicodeError, ValueError) as error:
+        raise KnowledgeAccessError(
+            "网页预览地址无效，请重新生成预览。",
+            status_code=422,
+            error_code="KNOWLEDGE_WEB_PREVIEW_INVALID",
+        ) from error
+    if (
+        parsed.scheme.casefold() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in {None, 80, 443}
+    ):
+        raise KnowledgeAccessError(
+            "网页预览地址无效，请重新生成预览。",
+            status_code=422,
+            error_code="KNOWLEDGE_WEB_PREVIEW_INVALID",
+        )
+    return _safe_source_url(value)
+
+
 def _web_import_access_error(error: Exception) -> KnowledgeAccessError:
     if isinstance(error, WebImportSecurityError):
         return KnowledgeAccessError(
@@ -370,8 +396,14 @@ def _web_import_access_error(error: Exception) -> KnowledgeAccessError:
             error_code="KNOWLEDGE_WEB_CONTENT_TOO_LARGE",
         )
     if isinstance(error, WebImportContentError):
+        message = (
+            "网页未返回可导入的 HTML 正文，可能依赖 JavaScript 动态渲染。"
+            "请使用可公开访问的文章页或静态 HTML 地址。"
+            if "JavaScript" in str(error)
+            else "网页没有可导入的正文内容，请确认地址指向公开的 HTML 页面。"
+        )
         return KnowledgeAccessError(
-            "网页没有可导入的正文内容，请确认地址指向公开的 HTML 页面。",
+            message,
             status_code=422,
             error_code="KNOWLEDGE_WEB_CONTENT_INVALID",
         )
@@ -421,6 +453,30 @@ def mount_knowledge_routes(
                 status_code=status_code,
                 detail=detail,
             ) from error
+
+    async def import_web_preview(body: CreateDocumentBody) -> dict[str, str]:
+        try:
+            imported = await importer.import_url(body.url or "")
+        except Exception as error:  # noqa: BLE001
+            try:
+                raise _web_import_access_error(error) from error
+            except KnowledgeAccessError as access_error:
+                status_code, detail = _error_detail(access_error)
+                raise HTTPException(
+                    status_code=status_code,
+                    detail=detail,
+                ) from access_error
+        safe_url = _safe_source_url(imported.final_url)
+        resolved_name = (
+            (body.name or "").strip()
+            or imported.title.strip()
+            or (urlsplit(safe_url).hostname or "网页")
+        )[:256]
+        return {
+            "name": resolved_name,
+            "url": safe_url,
+            "sourceMarkdown": imported.markdown,
+        }
 
     @app.get(
         "/web/knowledge-bases",
@@ -562,6 +618,31 @@ def mount_knowledge_routes(
         }
 
     @app.post(
+        "/web/knowledge-bases/{knowledge_id}/documents/web-preview",
+    )
+    async def preview_web_document(
+        knowledge_id: str,
+        body: CreateDocumentBody,
+        request: Request,
+        region: str = "",
+    ) -> dict[str, str]:
+        identity = identity_resolver(request)
+        resolved_region = region_resolver(region)
+        if body.source_type != "url":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="sourceType must be url for a web preview",
+            )
+        await invoke(
+            lambda: service.authorize_document_operation(
+                knowledge_id,
+                identity=identity,
+                region=resolved_region,
+            )
+        )
+        return await import_web_preview(body)
+
+    @app.post(
         "/web/knowledge-bases/{knowledge_id}/documents",
         status_code=status.HTTP_201_CREATED,
     )
@@ -581,28 +662,38 @@ def mount_knowledge_routes(
                     region=resolved_region,
                 )
             )
-            try:
-                imported = await importer.import_url(body.url or "")
-            except Exception as error:  # noqa: BLE001
-                try:
-                    raise _web_import_access_error(error) from error
-                except KnowledgeAccessError as access_error:
-                    status_code, detail = _error_detail(access_error)
+            if body.source_markdown is None:
+                preview = await import_web_preview(body)
+            else:
+                markdown_size = len(body.source_markdown.encode("utf-8"))
+                if not body.source_markdown.strip():
                     raise HTTPException(
-                        status_code=status_code,
-                        detail=detail,
-                    ) from access_error
-
-            safe_url = _safe_source_url(imported.final_url)
-            resolved_name = (
-                (body.name or "").strip()
-                or imported.title.strip()
-                or (urlsplit(safe_url).hostname or "网页")
-            )[:256]
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="sourceMarkdown must contain previewed content",
+                    )
+                if markdown_size > MAX_MARKDOWN_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail="sourceMarkdown exceeds 2 MB",
+                    )
+                safe_url = await invoke(
+                    lambda: _validated_preview_source_url(body.url or "")
+                )
+                preview = {
+                    "name": (
+                        (body.source_title or "").strip()
+                        or (urlsplit(safe_url).hostname or "网页")
+                    )[:256],
+                    "url": safe_url,
+                    "sourceMarkdown": body.source_markdown,
+                }
+            safe_url = preview["url"]
+            resolved_name = preview["name"]
+            source_markdown = preview["sourceMarkdown"]
             metadata = {
                 **body.metadata,
                 "_veadk_source_url": safe_url,
-                "_veadk_source_title": imported.title.strip()[:512],
+                "_veadk_source_title": resolved_name[:512],
                 "_veadk_content_format": "markdown",
                 "_veadk_fetched_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -615,7 +706,7 @@ def mount_knowledge_routes(
                     suffix=".md",
                 ) as temp:
                     temp_path = Path(temp.name)
-                    temp.write(imported.markdown)
+                    temp.write(source_markdown)
                 result = await invoke(
                     lambda: service.upload_document(
                         knowledge_id,
@@ -629,7 +720,11 @@ def mount_knowledge_routes(
                         metadata=metadata,
                     )
                 )
-                return {**result, "url": safe_url}
+                return {
+                    **result,
+                    "url": safe_url,
+                    "sourceMarkdown": source_markdown,
+                }
             finally:
                 if temp_path is not None:
                     temp_path.unlink(missing_ok=True)

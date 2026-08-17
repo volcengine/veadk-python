@@ -27,6 +27,10 @@ const actionMenuSource = readFileSync(
   new URL("../src/ui/StudioActionMenu.tsx", import.meta.url),
   "utf8",
 );
+const actionMenuStylesSource = readFileSync(
+  new URL("../src/ui/StudioActionMenu.css", import.meta.url),
+  "utf8",
+);
 
 let knowledgeClientPromise;
 function loadKnowledgeClient() {
@@ -407,8 +411,58 @@ test("offers verified image document and web knowledge sources", () => {
   assert.match(pageSource, /formatFileSize\(file\.size\)/);
   assert.match(pageSource, /await uploadKnowledgeDocument/);
   assert.match(pageSource, /"上传中"/);
+  assert.match(pageSource, /sourceKind !== "web" \? \(\s*<div className="knowledge-dialog__fields">[\s\S]*?<span>名称（可选）<\/span>[\s\S]*?<span>类型（可选）<\/span>/);
+  assert.doesNotMatch(pageSource, /knowledge-dialog__fields\$\{sourceKind === "web"/);
+  const webInputStart = pageSource.indexOf("const input: CreateKnowledgeDocumentInput = {");
+  const webInputEnd = pageSource.indexOf("};", webInputStart);
+  assert.notEqual(webInputStart, -1);
+  assert.notEqual(webInputEnd, -1);
+  assert.doesNotMatch(pageSource.slice(webInputStart, webInputEnd), /\bname:/);
   assert.match(stylesSource, /\.knowledge-upload-dropzone/);
   assert.match(stylesSource, /\.knowledge-source-tabs/);
+  assert.match(stylesSource, /\.knowledge-dialog__body > label,\s*\.knowledge-source-panel > label,\s*\.knowledge-dialog__fields label\s*\{[^}]*font-size:\s*12px;[^}]*font-weight:\s*550;/);
+  assert.doesNotMatch(stylesSource, /knowledge-source-url-input|knowledge-dialog__fields\.is-single/);
+  assert.match(pageSource, /await previewWebKnowledgeDocument/);
+  assert.match(pageSource, /"生成预览"/);
+  assert.match(pageSource, /"确认添加"/);
+  assert.match(pageSource, />返回修改</);
+  assert.match(pageSource, /sourceMarkdown: webPreview\.preview\.sourceMarkdown/);
+  assert.doesNotMatch(pageSource, /if \(item\?\.sourceMarkdown\) setPreviewDocument/);
+});
+
+test("renders document names with regular weight", () => {
+  assert.match(stylesSource, /\.knowledge-document-table__name\s*\{[^}]*font-weight:\s*400;/);
+});
+
+test("fetches a safe web markdown preview without creating a document", async () => {
+  const client = await loadKnowledgeClient();
+  const originalFetch = globalThis.fetch;
+  let requestedUrl = "";
+  let requestedMethod = "";
+  globalThis.fetch = async () => Response.json({
+    name: "Service guide",
+    url: "https://example.com/guide",
+    sourceMarkdown: "# Service guide\n\nImported body.",
+  });
+  try {
+    globalThis.fetch = async (input, init = {}) => {
+      requestedUrl = String(input);
+      requestedMethod = init.method ?? "GET";
+      return Response.json({
+        name: "Service guide",
+        url: "https://example.com/guide",
+        sourceMarkdown: "# Service guide\n\nImported body.",
+      });
+    };
+    const preview = await client.previewWebKnowledgeDocument("kb-1", "cn-beijing", {
+      url: "https://example.com/guide",
+    });
+    assert.match(requestedUrl, /documents\/web-preview\?region=cn-beijing$/);
+    assert.equal(requestedMethod, "POST");
+    assert.equal(preview.sourceMarkdown, "# Service guide\n\nImported body.");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("uploads files through the multipart AgentKit knowledge route", () => {
@@ -530,6 +584,7 @@ test("provides a responsive card overview and a focused detail view", () => {
 
 test("previews knowledge data with safe media and paginated parsed chunks", () => {
   assert.match(pageSource, /import \{ Delete, Edit, Eye \} from "@openai\/apps-sdk-ui\/components\/Icon"/);
+  assert.match(pageSource, /import \{ Markdown \} from "\.\/Markdown"/);
   assert.match(pageSource, /function KnowledgeDocumentPreviewDialog/);
   assert.match(pageSource, /aria-label=\{`预览 \$\{item\.name \|\| item\.id\}`\}/);
   assert.match(pageSource, /<Eye aria-hidden="true" \/>/);
@@ -542,6 +597,10 @@ test("previews knowledge data with safe media and paginated parsed chunks", () =
   assert.match(pageSource, /<video[\s\S]*controls[\s\S]*playsInline/);
   assert.match(pageSource, /<img className="knowledge-preview__image"/);
   assert.match(pageSource, /target="_blank" rel="noopener noreferrer">打开原网页/);
+  assert.match(pageSource, /<Markdown text=\{resolvedSourceMarkdown\} allowRawHtml=\{false\}/);
+  assert.match(pageSource, /<Markdown text=\{chunk\.content\} allowRawHtml=\{false\}/);
+  assert.match(pageSource, /setPreviewDocument\(item\)/);
+  assert.match(pageSource, /title=\{document\.name \|\| item\.name \|\| item\.id\}/);
   assert.doesNotMatch(pageSource, /<iframe[^>]+\{sourceUrl\}/);
   assert.match(pageSource, /loadPreview\(chunks\.length\)/);
   assert.match(pageSource, /a\[href\], audio\[controls\], video\[controls\]/);
@@ -549,6 +608,7 @@ test("previews knowledge data with safe media and paginated parsed chunks", () =
   assert.match(stylesSource, /\.knowledge-preview__table-wrap/);
   assert.match(stylesSource, /\.knowledge-preview__audio/);
   assert.match(stylesSource, /\.knowledge-preview__video/);
+  assert.match(stylesSource, /\.knowledge-preview__markdown/);
 });
 
 test("renders provider doc-image and image attachments as image previews", () => {
@@ -608,6 +668,14 @@ test("uses one shared resource card for knowledge actions and overflow managemen
   assert.match(resourceCardSource, /<StudioActionMenu/);
   assert.match(actionMenuSource, /role="menu"/);
   assert.match(actionMenuSource, /role="menuitem"/);
+  assert.match(
+    actionMenuStylesSource,
+    /\.studio-action-menu__item\s*\{[^}]*font-size:\s*12px;[^}]*font-weight:\s*400;[^}]*line-height:\s*18px;/,
+  );
+  assert.doesNotMatch(
+    stylesSource,
+    /\.knowledge-library button,[\s\S]*?\.knowledge-dialog select\s*\{\s*font:\s*inherit;/,
+  );
   assert.doesNotMatch(resourceCardSource, /<article[^>]*onClick=/);
 });
 
