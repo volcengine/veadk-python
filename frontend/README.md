@@ -29,8 +29,10 @@ server that `veadk frontend` launches — no separate backend.
   presentation task types; Studio mounts only missing task tools for the
   current session and preserves tools already supplied by the Agent.
 - **Intelligent Agent development**: describe the intended VeADK Agent once and
-  Studio automatically runs intent gating, implementation, local checks, a
-  temporary cloud deployment, acceptance calls, log inspection, and cleanup.
+  receive immediate, cancellable preparation feedback before the development
+  conversation opens. Studio then automatically runs intent gating,
+  implementation, local checks, a temporary cloud deployment, acceptance calls,
+  log inspection, and cleanup.
   Public Codex reasoning updates and Assistant replies use the normal
   conversation renderer; credentials, raw Sandbox paths, and internal commands
   stay hidden. The same eight-hour Sandbox, Workspace, and Codex Thread can run

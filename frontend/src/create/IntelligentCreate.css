@@ -89,6 +89,35 @@
 .ic-goal-input:focus { border-color: hsl(var(--ring)); box-shadow: 0 0 0 2px hsl(var(--ring) / .12); }
 .ic-goal-input:disabled { opacity: .55; cursor: not-allowed; }
 
+.ic-preparation {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--canvas) / .55);
+}
+.ic-preparation > div { min-width: 0; }
+.ic-preparation strong {
+  display: block;
+  color: hsl(var(--foreground));
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.ic-preparation .text-shimmer {
+  width: fit-content;
+  max-width: 100%;
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ic-preparation-next {
+  margin-top: 4px !important;
+  color: hsl(var(--muted-foreground));
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
 .ic-state,
 .ic-error { margin: 10px 0 0 !important; font-size: 12.5px; line-height: 1.5; }
 .ic-state { color: hsl(var(--muted-foreground)); }
@@ -96,21 +125,32 @@
 
 .ic-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; }
 .ic-actions > span { color: hsl(var(--muted-foreground)); font-size: 12px; }
+.ic-action-buttons { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.ic-secondary,
 .ic-primary {
   height: 36px;
   padding: 0 16px;
-  border: 1px solid hsl(var(--primary));
   border-radius: 7px;
-  background: hsl(var(--primary));
-  color: hsl(var(--primary-foreground));
   font: inherit;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 }
+.ic-secondary {
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+}
+.ic-primary {
+  border: 1px solid hsl(var(--primary));
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+.ic-secondary:hover { background: hsl(var(--muted)); }
 .ic-primary:hover:not(:disabled) { opacity: .88; }
 .ic-primary:disabled { opacity: .45; cursor: not-allowed; }
 .ic-back:focus-visible,
+.ic-secondary:focus-visible,
 .ic-primary:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 1px; }
 
 @media (max-width: 640px) {
@@ -118,7 +158,8 @@
   .ic-main { padding: 20px 16px; }
   .ic-panel { padding: 18px; }
   .ic-actions { align-items: stretch; flex-direction: column; }
-  .ic-primary { width: 100%; }
+  .ic-action-buttons { width: 100%; }
+  .ic-action-buttons button { flex: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {

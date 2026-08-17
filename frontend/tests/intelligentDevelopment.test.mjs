@@ -1,10 +1,32 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { build } from "esbuild";
+
+const require = createRequire(import.meta.url);
+
+async function importTsxBundle(relativePath) {
+  const bundled = await build({
+    entryPoints: [fileURLToPath(new URL(relativePath, import.meta.url))],
+    bundle: true,
+    external: ["react"],
+    format: "cjs",
+    loader: { ".css": "empty" },
+    platform: "node",
+    write: false,
+  });
+  const module = { exports: {} };
+  Function("require", "module", "exports", bundled.outputFiles[0].text)(
+    require,
+    module,
+    module.exports,
+  );
+  return module.exports;
+}
 
 function memoryStorage() {
   const values = new Map();
@@ -363,10 +385,41 @@ test("intelligent goal input shares IME handling and semantic responsive styles"
   assert.match(createStyles, /\.ic-actions > span \{[^}]*font-size: 12px/);
 });
 
+test("intelligent preparation acknowledges the goal and exposes cancellable progress", async () => {
+  const React = require("react");
+  const { renderToStaticMarkup } = require("react-dom/server");
+  const { IntelligentCreate } = await importTsxBundle(
+    "../src/create/IntelligentCreate.tsx",
+  );
+  const render = (preparationStage) => renderToStaticMarkup(
+    React.createElement(IntelligentCreate, {
+      capabilities: { enabled: true, reason: "" },
+      loading: false,
+      preparationStage,
+      error: "",
+      onBack() {},
+      onCancel() {},
+      async onCreate() {},
+    }),
+  );
+
+  const preparing = render("preparing");
+  assert.match(preparing, /role="status"/);
+  assert.match(preparing, /aria-live="polite"/);
+  assert.match(preparing, /目标已收到，马上开始实现/);
+  assert.match(preparing, /正在准备完成这项任务所需的工具/);
+  assert.match(preparing, /接下来会先梳理目标和实现方式，再编写、运行和验证 Agent/);
+  assert.match(preparing, />取消</);
+  assert.match(preparing, /<textarea[^>]*disabled/);
+
+  const starting = render("starting");
+  assert.match(starting, /工具已准备好，正在开始处理你的目标/);
+});
+
 test("intelligent preparation ends before the first build turn and resets on navigation", () => {
   assert.match(
     appSource,
-    /function cancelIntelligentPreparation\(\)[\s\S]*?intelligentCreateAbortRef\.current\?\.abort\(\)[\s\S]*?setIntelligentCreating\(false\)/,
+    /function cancelIntelligentPreparation\(\)[\s\S]*?intelligentCreateAbortRef\.current\?\.abort\(\)[\s\S]*?setIntelligentPreparationStage\(null\)/,
   );
   assert.match(
     appSource,
@@ -378,11 +431,15 @@ test("intelligent preparation ends before the first build turn and resets on nav
   );
   assert.match(
     appSource,
-    /setSandboxSession\(connected\)[\s\S]*?setIntelligentCreating\(false\)[\s\S]*?await sendSandboxMessage\(goal, \[\], \[\], connected\)/,
+    /setIntelligentPreparationStage\("preparing"\)[\s\S]*?startSession\([\s\S]*?setIntelligentPreparationStage\("starting"\)[\s\S]*?connectSession\(/,
+  );
+  assert.match(
+    appSource,
+    /setSandboxSession\(connected\)[\s\S]*?setIntelligentPreparationStage\(null\)[\s\S]*?await sendSandboxMessage\(goal, \[\], \[\], connected\)/,
   );
   assert.doesNotMatch(appSource, /function sendIntelligentInitialMessage\(/);
   assert.match(createSource, /const submitDisabled = loading \|\| creating \|\| unavailable \|\| !goal\.trim\(\)/);
-  assert.match(createSource, /\{creating \? "正在准备开发环境…" : "开始构建"\}/);
+  assert.match(appSource, /onCancel=\{cancelIntelligentPreparation\}/);
 });
 
 test("intelligent conversation keeps the Studio visual language and stable controls", () => {
