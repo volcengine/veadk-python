@@ -106,6 +106,20 @@ function AddIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function HandoffIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <path
+        d="M2.75 5.25h8.75m0 0-2-2m2 2-2 2M13.25 10.75H4.5m0 0 2 2m-2-2 2-2"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function AgentTypeIcon({ type }: { type: AgentType }) {
   if (type === "general") return <AgentFaceIcon />;
   return <SandboxAgentIcon kind={type} />;
@@ -392,6 +406,7 @@ export interface MyAgentsProps {
   canCreate: boolean;
   runtimeScope: RuntimeScope;
   onCreateAgent: (region: string) => void;
+  onOpenCodexProjectUpload?: () => void;
   onUseAgent: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails: (agent: MyAgentCardData) => void;
   onCreateSandboxAgent: (kind: "codex" | SandboxAgentKind) => void;
@@ -413,6 +428,7 @@ export function MyAgents({
   canCreate,
   runtimeScope,
   onCreateAgent,
+  onOpenCodexProjectUpload,
   onUseAgent,
   onViewAgentDetails,
   onCreateSandboxAgent,
@@ -655,6 +671,8 @@ export function MyAgents({
       ? () => onCreateAgent(defaultCloudRegion(cloudProvider))
       : () => onCreateSandboxAgent(activeType)
     : undefined;
+  const showCodexProjectUpload =
+    activeType === "codex" && canCreate && Boolean(onOpenCodexProjectUpload);
   const createDisabledReason = !canCreate
     ? "当前账号没有创建智能体权限"
     : undefined;
@@ -698,16 +716,28 @@ export function MyAgents({
             </button>
           ))}
         </nav>
-        <button
-          type="button"
-          className="my-agent-create-primary"
-          disabled={!createAgent}
-          title={createDisabledReason}
-          onClick={() => createAgent?.()}
-        >
-          <AddIcon />
-          <span>创建智能体</span>
-        </button>
+        <div className="my-agent-type-actions">
+          {showCodexProjectUpload ? (
+            <button
+              type="button"
+              className="my-agent-create-secondary"
+              onClick={onOpenCodexProjectUpload}
+            >
+              <HandoffIcon />
+              <span>接力</span>
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="my-agent-create-primary"
+            disabled={!createAgent}
+            title={createDisabledReason}
+            onClick={() => createAgent?.()}
+          >
+            <AddIcon />
+            <span>创建智能体</span>
+          </button>
+        </div>
       </div>
 
       <section
@@ -758,6 +788,17 @@ export function MyAgents({
                 </EmptyMessage.Title>
                 {canCreate ? (
                   <EmptyMessage.ActionRow>
+                    {activeType === "codex" && onOpenCodexProjectUpload ? (
+                      <Button
+                        className="my-agent-handoff-button"
+                        color="discovery"
+                        size="lg"
+                        onClick={onOpenCodexProjectUpload}
+                      >
+                        <HandoffIcon />
+                        接力
+                      </Button>
+                    ) : null}
                     <Button
                       color="primary"
                       size="lg"

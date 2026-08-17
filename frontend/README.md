@@ -52,6 +52,11 @@ server that `veadk frontend` launches — no separate backend.
   standard Codex App Server threads. Leaving the conversation only
   disconnects it, so the Agent remains available until the user deletes it.
   OpenClaw and Hermes expose their main interface and Terminal through Studio.
+- **Codex conversation handoff** creates a temporary cloud Sandbox, restores
+  the current Git worktree, injects only completed user-visible user and
+  assistant messages into the cloud Thread, then starts one new turn with
+  `继续` or the user's explicit cloud task. System/developer prompts, reasoning,
+  tool logs, local runtime databases, and SSH keys are never transferred.
 - **System information**: open a full page from the account menu to inspect the
   Studio version, configured Sandbox Tool IDs (with snapshot Tools badged), and
   available Identity user pools. Resource identifiers remain read-only and

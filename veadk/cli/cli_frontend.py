@@ -6048,9 +6048,15 @@ def _run_frontend_server(
                     "/favicon.ico",
                     "/web/auth-config",
                     "/web/site-logo",
+                    "/web/sandbox/codex-project-handoff/sessions",
+                    "/web/sandbox/codex-project-upload/sessions",
                     "/web/ui-config",
                 },
-                exempt_prefixes={"/assets", "/skillhub"},
+                exempt_prefixes={
+                    "/assets",
+                    "/skillhub",
+                    "/web/sandbox/codex-project-handoff/sessions/",
+                },
             )
             logger.info(
                 f"OAuth2 SSO enabled (provider={provider_id}, redirect_uri={redirect_uri})"
@@ -9144,6 +9150,7 @@ def frontend_update(
 ) -> None:
     """Build local Studio sources and update an existing VeFaaS Application."""
     import shutil
+    from functools import partial
 
     from veadk.cli.studio_package import (
         build_frontend_assets,
@@ -9151,8 +9158,10 @@ def frontend_update(
         write_studio_package,
     )
     from veadk.cli.studio_update import (
+        _is_retryable_cloud_read_error,
         find_studio_deployments,
         load_deployed_site_logo,
+        retry_transient_cloud_operation,
     )
     from veadk.cli.studio_knowledge_signing import (
         STUDIO_KNOWLEDGE_SIGNING_KEY_ENV,
@@ -9185,15 +9194,22 @@ def frontend_update(
         provider=provider_id,
     )
 
-    targets = find_studio_deployments(
-        access_key=ak,
-        secret_key=sk,
-        session_token=session_token,
-        application_name=vefaas_app_name,
-        region=region,
-        project=project,
-        provider=provider_id,
-    )
+    try:
+        targets = find_studio_deployments(
+            access_key=ak,
+            secret_key=sk,
+            session_token=session_token,
+            application_name=vefaas_app_name,
+            region=region,
+            project=project,
+            provider=provider_id,
+        )
+    except Exception as error:
+        detail = _safe_exception_detail(error, secrets=(ak, sk, session_token))
+        raise click.ClickException(
+            "Could not query the existing Studio deployment after retrying "
+            f"transient cloud errors: {detail}"
+        ) from error
     if not targets:
         default_scope = (
             DEFAULT_BYTEPLUS_REGION
@@ -9265,6 +9281,8 @@ def frontend_update(
         service_client = getattr(service, "client", None)
         current_env: dict[str, str] = {}
         remote_function: object | None = None
+        user_pool_id = ""
+        user_pool_client_id = ""
         if service_client is not None:
             import volcenginesdkvefaas
 
@@ -9292,6 +9310,9 @@ def frontend_update(
                 or current_env.get("OAUTH2_USER_POOL_ID")
                 or ""
             ).strip()
+            user_pool_client_id = str(
+                current_env.get("OAUTH2_USER_POOL_CLIENT_ID") or ""
+            ).strip()
             if user_pool_id:
                 environment_overrides.update(
                     {
@@ -9310,6 +9331,35 @@ def frontend_update(
         environment_overrides[STUDIO_KNOWLEDGE_SIGNING_KEY_ENV] = (
             resolve_studio_knowledge_signing_key(current_env)
         )
+
+        public_url = target.url.rstrip("/")
+        if public_url and user_pool_id and user_pool_client_id:
+            redirect_uri = f"{public_url}/oauth2/callback"
+            environment_overrides["OAUTH2_REDIRECT_URI"] = redirect_uri
+            from veadk.integrations.ve_identity.identity_client import IdentityClient
+
+            identity_client = IdentityClient(
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token,
+                region=str(current_env.get("VEIDENTITY_REGION") or target.region),
+                provider=provider_id,
+            )
+            try:
+                identity_client.register_callback_for_user_pool_client(
+                    user_pool_uid=user_pool_id,
+                    client_uid=user_pool_client_id,
+                    callback_url=redirect_uri,
+                    web_origin=public_url,
+                    dismiss_login_page_enabled=False,
+                    skip_consent_enabled=True,
+                )
+                click.echo(f"Registered SSO callback: {redirect_uri}")
+            except Exception as error:
+                click.echo(
+                    f"Warning: Could not register the SSO callback ({error}). Add "
+                    f"{redirect_uri} to the user-pool client's allowed callback URLs manually."
+                )
 
         studio_account_id = str(
             current_env.get("VEADK_STUDIO_ACCOUNT_ID") or ""
@@ -9663,27 +9713,33 @@ def frontend_update(
                                 else None
                             )
                             future = ex.submit(
-                                ensure_skill_creator_model_credential,
-                                tool_id=tool_id,
-                                region=target.region,
-                                access_key=ak,
-                                secret_key=sk,
-                                session_token=session_token,
-                                provider=provider_id,
-                                model_name=code_model_name,
+                                retry_transient_cloud_operation,
+                                partial(
+                                    ensure_skill_creator_model_credential,
+                                    tool_id=tool_id,
+                                    region=target.region,
+                                    access_key=ak,
+                                    secret_key=sk,
+                                    session_token=session_token,
+                                    provider=provider_id,
+                                    model_name=code_model_name,
+                                ),
                             )
                         else:
                             future = ex.submit(
-                                ensure_studio_agent_model_credential,
-                                tool_id=tool_id,
-                                kind=base_kind,
-                                model_name=sandbox_agent_model_name,
-                                model_base_url=sandbox_model_base_url,
-                                region=target.region,
-                                access_key=ak,
-                                secret_key=sk,
-                                session_token=session_token,
-                                provider=provider_id,
+                                retry_transient_cloud_operation,
+                                partial(
+                                    ensure_studio_agent_model_credential,
+                                    tool_id=tool_id,
+                                    kind=base_kind,
+                                    model_name=sandbox_agent_model_name,
+                                    model_base_url=sandbox_model_base_url,
+                                    region=target.region,
+                                    access_key=ak,
+                                    secret_key=sk,
+                                    session_token=session_token,
+                                    provider=provider_id,
+                                ),
                             )
                         credential_futures[kind] = future
                     for kind, future in credential_futures.items():
@@ -9764,12 +9820,27 @@ def frontend_update(
                 ),
             }
         )
-        url = service.update_application_code_bundle(
-            application_id=target.application_id,
-            function_id=target.function_id,
-            path=str(package_dir),
-            environment_overrides=environment_overrides or None,
-        )
+        try:
+            url = service.update_application_code_bundle(
+                application_id=target.application_id,
+                function_id=target.function_id,
+                path=str(package_dir),
+                environment_overrides=environment_overrides or None,
+            )
+        except Exception as error:
+            if _is_retryable_cloud_read_error(error):
+                raise click.ClickException(
+                    "Studio update was interrupted by a temporary cloud network "
+                    "error after retrying. The cloud release may still be running; "
+                    "wait briefly and run the same update command again."
+                ) from error
+            detail = _safe_exception_detail(
+                error,
+                secrets=(ak, sk, session_token),
+            )
+            raise click.ClickException(
+                f"Could not finish the Studio update.\n{detail}"
+            ) from error
         click.echo("")
         click.echo(f"✅ Studio updated: {url}")
         click.echo(f"   application id: {target.application_id}")

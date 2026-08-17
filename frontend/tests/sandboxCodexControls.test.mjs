@@ -81,6 +81,15 @@ test("active Codex Sandbox threads replace normal history in the Sidebar", () =>
   assert.match(confirmDialogSource, /role="alertdialog"/);
 });
 
+test("a running handoff session is opened with live busy-state recovery", () => {
+  assert.match(appSource, /setSandboxBusy\(connected\.busy\)/);
+  assert.match(appSource, /sandboxSnapshotTurnsForStatus\(snapshot, connected\.busy\)/);
+  assert.match(appSource, /sandboxClient\.getStatus\(activeSession\.id/);
+  assert.match(appSource, /sandboxClient\.readThread\(activeSession\.id, status\.threadId/);
+  assert.match(appSource, /setSandboxBusy\(status\.busy\)/);
+  assert.match(appSource, /window\.setTimeout\(syncBackgroundTurn, 1500\)/);
+});
+
 test("Codex token usage and approvals are presented per assistant turn", () => {
   assert.match(blocksSource, /sandboxUsage\?: SandboxTokenUsage/);
   assert.match(appSource, /onUsage: \(update\) =>/);

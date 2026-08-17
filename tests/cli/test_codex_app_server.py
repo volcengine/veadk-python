@@ -17,15 +17,19 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
 
+import veadk.cli.codex_app_server as codex_app_server
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerSession,
+    CodexImportedImage,
+    CodexImportedMessage,
     CodexPermissionSettings,
     approval_decision_from_payload,
     permission_settings_from_payload,
@@ -36,6 +40,7 @@ from veadk.cli.codex_app_server import (
 class _FakeWebSocket:
     def __init__(self) -> None:
         self.messages: list[dict[str, object]] = []
+        self.files: dict[str, str] = {}
         self.queue: asyncio.Queue[str | None] = asyncio.Queue()
         self.closed = False
 
@@ -121,6 +126,20 @@ class _FakeWebSocket:
                     }
                 ]
             }
+        elif method == "fs/writeFile":
+            params = message.get("params")
+            assert isinstance(params, dict)
+            path = params.get("path")
+            data = params.get("dataBase64")
+            assert isinstance(path, str) and isinstance(data, str)
+            self.files[path] = data
+            result = {}
+        elif method == "fs/readFile":
+            params = message.get("params")
+            assert isinstance(params, dict)
+            path = params.get("path")
+            assert isinstance(path, str)
+            result = {"dataBase64": self.files.get(path, "")}
         elif method == "thread/list":
             result = {
                 "data": [
@@ -303,6 +322,35 @@ class _FakeWebSocket:
         await self.queue.put(None)
 
 
+class _SlowActiveWebSocket(_FakeWebSocket):
+    """Emit regular progress for longer than one inactivity timeout."""
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        if message.get("method") != "turn/start":
+            await super().send(raw)
+            return
+        self.messages.append(message)
+        request_id = message["id"]
+        await self.queue.put(
+            json.dumps({"id": request_id, "result": {"turn": {"id": "slow-turn"}}})
+        )
+
+        async def _emit_progress() -> None:
+            for index in range(3):
+                await asyncio.sleep(0.03)
+                await self._notification(
+                    "item/agentMessage/delta",
+                    {"itemId": "slow-message", "delta": str(index)},
+                )
+            await self._notification(
+                "turn/completed",
+                {"turn": {"id": "slow-turn", "status": "completed"}},
+            )
+
+        asyncio.create_task(_emit_progress())
+
+
 class _MissingRolloutWebSocket(_FakeWebSocket):
     async def send(self, raw: str) -> None:
         message = json.loads(raw)
@@ -433,6 +481,27 @@ async def test_reasoning_deltas_stream_as_accumulated_thinking() -> None:
 
 
 @pytest.mark.asyncio
+async def test_turn_timeout_resets_when_progress_events_arrive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(codex_app_server, "_TURN_TIMEOUT_SECONDS", 0.05)
+    websocket = _SlowActiveWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    events = [event async for event in session.stream_turn("long-running")]
+
+    assert "".join(event.text for event in events if event.kind == "text") == "012"
+    assert not any(
+        message.get("method") == "turn/interrupt" for message in websocket.messages
+    )
+    await session.close()
+
+
+@pytest.mark.asyncio
 async def test_workspace_directory_browsing_and_user_approval() -> None:
     websocket = _FakeWebSocket()
     session = CodexAppServerSession(
@@ -479,6 +548,104 @@ async def test_clean_socket_close_rejects_pending_requests() -> None:
 
     with pytest.raises(CodexAppServerError, match="连接已断开"):
         await pending
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_clean_socket_close_reconnects_and_resumes_existing_thread() -> None:
+    first = _FakeWebSocket()
+    second = _FakeWebSocket()
+    sockets = [first, second]
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return sockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=factory,
+    )
+    await session.connect()
+    await first.queue.put(None)
+    assert session._reader_task is not None
+    await session._reader_task
+
+    await session.connect()
+
+    resumed = [
+        message
+        for message in second.messages
+        if message.get("method") == "thread/resume"
+    ]
+    assert resumed[0]["params"]["threadId"] == "thread-1"
+    assert not any(
+        message.get("method") == "thread/start" for message in second.messages
+    )
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_request_reconnects_before_reading_thread_after_socket_close() -> None:
+    first = _FakeWebSocket()
+    second = _FakeWebSocket()
+    sockets = [first, second]
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return sockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=factory,
+    )
+    await session.connect()
+    await first.queue.put(None)
+    assert session._reader_task is not None
+    await session._reader_task
+
+    snapshot = await session.read_thread("thread-1")
+
+    assert snapshot.thread.id == "thread-1"
+    assert [message.content for message in snapshot.messages] == [
+        "inspect this",
+        "Looks good.",
+    ]
+    assert [message.get("method") for message in second.messages[:4]] == [
+        "initialize",
+        "initialized",
+        "thread/resume",
+        "thread/read",
+    ]
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_starts_fresh_thread_when_active_rollout_is_missing() -> None:
+    first = _FakeWebSocket()
+    second = _MissingRolloutWebSocket()
+    sockets = [first, second]
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return sockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=factory,
+    )
+    await session.connect()
+    session.thread_id = "thread-empty"
+    await first.queue.put(None)
+    assert session._reader_task is not None
+    await session._reader_task
+
+    snapshot = await session.read_thread("thread-old")
+
+    assert snapshot.thread.id == "thread-old"
+    assert [message.get("method") for message in second.messages[:5]] == [
+        "initialize",
+        "initialized",
+        "thread/resume",
+        "thread/start",
+        "thread/read",
+    ]
     await session.close()
 
 
@@ -671,6 +838,149 @@ async def test_thread_commands_restore_sanitized_history() -> None:
         message.get("method") == "thread/compact/start"
         for message in websocket.messages
     )
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_inject_history_uses_model_visible_items_without_starting_turn() -> None:
+    websocket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+    await session.update_workspace("/workspace/project")
+
+    await session.inject_history(
+        (
+            CodexImportedMessage(
+                role="user",
+                content="修复登录超时",
+                images=(
+                    CodexImportedImage(
+                        mime_type="image/png",
+                        data="iVBORw0KGgppbWFnZQ==",
+                        name="handoff.png",
+                        alt="端云接力界面",
+                    ),
+                ),
+            ),
+            CodexImportedMessage(role="assistant", content="已定位重试逻辑。"),
+        )
+    )
+    snapshot = await session.read_thread("thread-1")
+
+    inject_request = next(
+        message
+        for message in websocket.messages
+        if message.get("method") == "thread/inject_items"
+    )
+    assert inject_request["params"] == {
+        "threadId": "thread-1",
+        "items": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "修复登录超时"},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,iVBORw0KGgppbWFnZQ==",
+                    },
+                ],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "已定位重试逻辑。"}],
+            },
+        ],
+    }
+    assert not any(
+        message.get("method") == "turn/start" for message in websocket.messages
+    )
+    assert [(message.role, message.content) for message in snapshot.messages[:2]] == [
+        ("user", "修复登录超时"),
+        ("assistant", "已定位重试逻辑。"),
+    ]
+    assert snapshot.messages[0].images[0].name == "handoff.png"
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_imported_history_survives_app_server_transport_reconnect() -> None:
+    first = _FakeWebSocket()
+    second = _FakeWebSocket()
+    sockets = [first, second]
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return sockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=factory,
+    )
+    await session.connect()
+    imported = (
+        CodexImportedMessage(role="user", content="端侧历史"),
+        CodexImportedMessage(role="assistant", content="历史回复"),
+    )
+    await session.inject_history(imported)
+    await first.queue.put(None)
+    assert session._reader_task is not None
+    await session._reader_task
+
+    snapshot = await session.read_thread("thread-1")
+
+    assert [(message.role, message.content) for message in snapshot.messages] == [
+        ("user", "端侧历史"),
+        ("assistant", "历史回复"),
+        ("user", "inspect this"),
+        ("assistant", "Looks good."),
+    ]
+    assert not any(
+        message.get("method") == "fs/readFile" for message in second.messages
+    )
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_persisted_imported_history_is_chunked_and_restored() -> None:
+    websocket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+    image_data = base64.b64encode(
+        b"\x89PNG\r\n\x1a\n" + b"\0" * (2 * 1024 * 1024)
+    ).decode("ascii")
+    imported = (
+        CodexImportedMessage(
+            role="user",
+            content="包含大图的端侧历史",
+            images=(CodexImportedImage(mime_type="image/png", data=image_data),),
+        ),
+        CodexImportedMessage(role="assistant", content="历史回复"),
+    )
+
+    await session.inject_history(imported)
+    session._imported_history_by_thread.clear()
+    snapshot = await session.read_thread("thread-1")
+
+    assert snapshot.messages[0].content == "包含大图的端侧历史"
+    assert snapshot.messages[0].images[0].data == image_data
+    history_paths = tuple(
+        path for path in websocket.files if ".agentkit-studio-history-" in path
+    )
+    assert any(path.endswith(".part-01") for path in history_paths)
+    assert any(path.endswith(".part-02") for path in history_paths)
+    manifest_path = next(path for path in history_paths if path.endswith(".json"))
+    manifest = json.loads(
+        base64.b64decode(websocket.files[manifest_path], validate=True)
+    )
+    assert manifest["storage"] == "chunked"
+    assert manifest["partCount"] == 6
     await session.close()
 
 

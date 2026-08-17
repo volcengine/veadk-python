@@ -101,6 +101,35 @@ test("keeps a primary create action visible above the scrolling results", () => 
   assert.match(pageSource, /onCreateAgent\(defaultCloudRegion\(cloudProvider\)\)/);
   assert.match(pageSource, /onCreateSandboxAgent: \(kind: "codex" \| SandboxAgentKind\) => void/);
   assert.match(pageSource, /className="my-agent-create-primary"[\s\S]*?disabled=\{!createAgent\}[\s\S]*?<span>创建智能体<\/span>/);
+  assert.match(
+    pageSource,
+    /className="my-agent-create-secondary"[\s\S]*?<HandoffIcon \/>[\s\S]*?<span>接力<\/span>/,
+  );
+  assert.match(
+    pageSource,
+    /<Button[\s\S]*?className="my-agent-handoff-button"[\s\S]*?color="discovery"[\s\S]*?<HandoffIcon \/>[\s\S]*?接力/,
+  );
+  assert.match(
+    pageStyles,
+    /\.my-agent-create-secondary\s*\{[\s\S]*?height: 32px;[\s\S]*?gap: 6px;[\s\S]*?font-size: 12\.5px;/,
+  );
+  assert.match(
+    pageStyles,
+    /\.my-agent-create-secondary\s*\{[\s\S]*?background-image: linear-gradient\([\s\S]*?var\(--blue-500\)[\s\S]*?var\(--purple-500\)[\s\S]*?var\(--purple-400\)[\s\S]*?color: var\(--white\)/,
+  );
+  assert.match(
+    pageStyles,
+    /\.my-agent-create-secondary:hover:not\(:disabled\)\s*\{[\s\S]*?background-position: 68% 50%/,
+  );
+  assert.match(
+    pageStyles,
+    /\.my-agent-handoff-button::before\s*\{[\s\S]*?background-image: linear-gradient\([\s\S]*?var\(--blue-500\)[\s\S]*?var\(--purple-500\)[\s\S]*?var\(--purple-400\)/,
+  );
+  assert.match(
+    pageStyles,
+    /\.my-agent-create-secondary svg,[\s\S]*?\.my-agent-create-primary svg\s*\{[\s\S]*?width: 14px;[\s\S]*?height: 14px;/,
+  );
+  assert.doesNotMatch(pageSource, /本地迁移/);
   assert.ok(pageSource.indexOf('className="my-agent-create-primary"') < pageSource.indexOf('className="my-agent-results"'));
   assert.match(pageSource, /当前账号没有创建智能体权限/);
   assert.match(pageStyles, /\.my-agent-create-primary\s*\{[\s\S]*?background: hsl\(var\(--foreground\)\);[\s\S]*?color: hsl\(var\(--background\)\)/);
