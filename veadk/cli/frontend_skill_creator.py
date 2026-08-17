@@ -770,7 +770,7 @@ def ensure_skill_creator_model_credential(
         model_base_url=model_base_url,
         model_provider_was_provided=True,
         model_base_url_was_provided=True,
-        include_codex_config=True,
+        include_codex_config=False,
         disable_websearch_apikey=True,
     )
     if not session_envs:
@@ -1118,7 +1118,7 @@ class SkillCreatorService:
             model_base_url=model_base_url,
             model_provider_was_provided=True,
             model_base_url_was_provided=True,
-            include_codex_config=True,
+            include_codex_config=False,
             disable_websearch_apikey=True,
         )
         safe_session_envs = [
