@@ -27,7 +27,7 @@ import re
 import secrets
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Protocol
 
@@ -883,10 +883,6 @@ class SandboxCodexConnection(Protocol):
 
     def resolve_approval(self, approval_id: str, decision: ApprovalDecision) -> None:
         """Resolve one pending user approval."""
-        raise NotImplementedError
-
-    async def interrupt(self) -> None:
-        """Interrupt the active turn."""
         raise NotImplementedError
 
     async def close(self) -> None:
@@ -1780,10 +1776,7 @@ class SandboxConversationService:
                     session.pending_prompt = prompt
                     session.pending_prompt_timestamp = int(time.time() * 1_000)
                     try:
-                        if (
-                            turn_permissions is None
-                            and turn_timeout_seconds is None
-                        ):
+                        if turn_permissions is None and turn_timeout_seconds is None:
                             events = (
                                 session.codex.stream_turn(prompt, skill_ids)
                                 if skill_ids

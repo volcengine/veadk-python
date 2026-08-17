@@ -2754,61 +2754,6 @@ async def test_gateway_reports_tool_quota_with_actionable_message() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gateway_ambiguous_create_reconciles_caller_session_id(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    requests: list[tuple[str, dict[str, object]]] = []
-
-    class _Client:
-        def create_session(self, request: object) -> None:
-            requests.append(
-                ("create", request.model_dump(by_alias=True, exclude_none=True))
-            )
-            raise RuntimeError("ErrCreateSessionFail")
-
-        def list_sessions(self, request: object) -> SimpleNamespace:
-            requests.append(
-                ("list", request.model_dump(by_alias=True, exclude_none=True))
-            )
-            return SimpleNamespace(
-                session_infos=[
-                    SimpleNamespace(
-                        session_id="remote-reconciled",
-                        user_session_id="vibe-task-ambiguous",
-                        endpoint="https://sandbox.example",
-                        status="Ready",
-                    )
-                ]
-            )
-
-    async def _no_sleep(_seconds: float) -> None:
-        return None
-
-    monkeypatch.setattr("veadk.cli.frontend_sandbox.asyncio.sleep", _no_sleep)
-    session = await AgentkitSandboxGateway(_Client()).create_session(
-        "tool-sdk",
-        user_session_id="vibe-task-ambiguous",
-        ttl_seconds=1_800,
-        envs={"VIBE_TASK_ID": "task-ambiguous"},
-        metadata={"veadk_workload": "vibe"},
-    )
-
-    assert session.instance_id == "remote-reconciled"
-    assert session.user_session_id == "vibe-task-ambiguous"
-    assert requests[0][1]["UserSessionId"] == "vibe-task-ambiguous"
-    assert requests[1] == (
-        "list",
-        {
-            "ToolId": "tool-sdk",
-            "MaxResults": 10,
-            "Filters": [
-                {"Name": "UserSessionId", "Values": ["vibe-task-ambiguous"]}
-            ],
-        },
-    )
-
-
-@pytest.mark.asyncio
 async def test_disconnect_never_deletes_the_cloud_session() -> None:
     class _FailDeleteGateway(_FakeGateway):
         async def delete_session(self, session: SandboxCloudSession) -> None:

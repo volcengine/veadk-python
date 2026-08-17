@@ -24,6 +24,7 @@ runtimes (the UI is still served).
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import re

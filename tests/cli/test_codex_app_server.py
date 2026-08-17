@@ -526,7 +526,7 @@ async def test_expired_transport_reconnects_and_resumes_the_same_thread() -> Non
     await session.connect()
     original_thread = session.thread_id
     first = [event async for event in session.stream_turn("hello")]
-    session._connection_started_at = 0
+    session._connected_at = 0
     second = [event async for event in session.stream_turn("again")]
 
     assert [event.text for event in first if event.kind == "text"] == ["完成"]
