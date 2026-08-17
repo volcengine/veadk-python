@@ -788,17 +788,6 @@ export function MyAgents({
                 </EmptyMessage.Title>
                 {canCreate ? (
                   <EmptyMessage.ActionRow>
-                    {activeType === "codex" && onOpenCodexProjectUpload ? (
-                      <Button
-                        className="my-agent-handoff-button"
-                        color="discovery"
-                        size="lg"
-                        onClick={onOpenCodexProjectUpload}
-                      >
-                        <HandoffIcon />
-                        接力
-                      </Button>
-                    ) : null}
                     <Button
                       color="primary"
                       size="lg"

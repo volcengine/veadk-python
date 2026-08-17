@@ -316,9 +316,9 @@ test("handoff progress labels stay on one line without connector pressure", () =
   );
 });
 
-test("the Codex project handoff entry is named 接力", () => {
+test("the Codex project handoff entry remains in the toolbar only", () => {
   assert.doesNotMatch(myAgentsSource, /本地Codex项目上传/);
-  assert.equal(myAgentsSource.match(/接力/g)?.length, 2);
+  assert.equal(myAgentsSource.match(/接力/g)?.length, 1);
   assert.match(
     myAgentsStyles,
     /\.my-agent-create-secondary\s*\{[\s\S]*?height:\s*32px[\s\S]*?display:\s*inline-flex/,
