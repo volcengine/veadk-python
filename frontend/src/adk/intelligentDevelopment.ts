@@ -1,7 +1,6 @@
 import type { IntelligentDevelopmentReleaseRef } from "../blocks";
-import { withAuth } from "./auth";
-import { withLocalUser } from "./identity";
-import { requestSignal, TRANSFER_REQUEST_TIMEOUT_MS } from "./timeout";
+import { studioFetch } from "./client";
+import { TRANSFER_REQUEST_TIMEOUT_MS } from "./timeout";
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
   const raw = await response.text().catch(() => "");
@@ -45,12 +44,12 @@ export async function fetchIntelligentDevelopmentRelease(
     artifactSha256,
     validationReportSha256,
   });
-  const response = await fetch(
-    withAuth(`/web/intelligent-development/releases/summary?${params}`),
-    { headers: withLocalUser({ Accept: "application/json" }), signal },
+  const response = await studioFetch(
+    `/web/intelligent-development/releases/summary?${params}`,
+    { headers: { Accept: "application/json" }, signal },
   );
   if (!response.ok) {
-    throw new Error(`无法读取源码快照（HTTP ${response.status}）`);
+    throw await responseError(response, "无法读取源码快照");
   }
   const value = await response.json() as Partial<IntelligentDevelopmentReleaseRef>;
   if (
@@ -86,12 +85,13 @@ export async function downloadIntelligentDevelopmentRelease(
     artifactSha256: delivery.artifactSha256,
     validationReportSha256: delivery.validationReportSha256,
   });
-  const response = await fetch(
-    withAuth(`/web/intelligent-development/releases/download?${params}`),
+  const response = await studioFetch(
+    `/web/intelligent-development/releases/download?${params}`,
     {
-      headers: withLocalUser({ Accept: "application/zip" }),
-      signal: requestSignal(signal, TRANSFER_REQUEST_TIMEOUT_MS),
+      headers: { Accept: "application/zip" },
+      signal,
     },
+    TRANSFER_REQUEST_TIMEOUT_MS,
   );
   if (!response.ok) {
     throw await responseError(response, "下载源码失败");
