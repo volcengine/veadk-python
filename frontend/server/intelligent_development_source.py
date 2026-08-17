@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 import zipfile
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -28,13 +29,13 @@ from frontend.server.deployment_source import (
     DeploymentSourceError,
     extract_migration_source,
 )
+from frontend.server.intelligent_development import release_path
+from frontend.server.sandbox_remote import SandboxRemoteTransport
 from veadk.cli.frontend_sandbox import (
+    SandboxConversationService,
     SandboxSessionNotFoundError,
     SandboxSessionUnavailableError,
 )
-from frontend.server.intelligent_development import release_path
-from frontend.server.sandbox_remote import SandboxRemoteTransport
-from veadk.cli.frontend_sandbox import SandboxConversationService
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_ARTIFACT_BYTES = 20 * 1024 * 1024
@@ -42,6 +43,7 @@ _MAX_EXPANDED_BYTES = 20 * 1024 * 1024
 _MAX_FILE_COUNT = 2_000
 _MAX_REPORT_BYTES = 2 * 1024 * 1024
 _MAX_DESCRIPTOR_BYTES = 256 * 1024
+_CURRENT_POINTER_BYTES = 4 * 1024
 _REQUIRED_GATES = {
     "local-checks",
     "service-probe",
@@ -350,6 +352,69 @@ async def materialize_intelligent_development_preview(
     return release.source
 
 
+async def materialize_current_intelligent_development_preview(
+    destination: Path,
+    session_id: str,
+    *,
+    owner_id: str,
+    service: SandboxConversationService,
+) -> TrustedDeploymentSource | None:
+    """Return the current owner-scoped release, or None before first delivery."""
+    from frontend.server.intelligent_development import CURRENT_POINTER
+    from frontend.server.intelligent_development_routes import (
+        resolve_intelligent_development_session,
+    )
+
+    cloud = await resolve_intelligent_development_session(service, session_id, owner_id)
+    source = (
+        "import json,os,stat\n"
+        f"path={CURRENT_POINTER!r}; limit={_CURRENT_POINTER_BYTES}\n"
+        "try:\n"
+        " fd=os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0))\n"
+        "except FileNotFoundError:\n"
+        " print(json.dumps({'exists':False},separators=(',',':')))\n"
+        "else:\n"
+        " try:\n"
+        "  metadata=os.fstat(fd)\n"
+        "  if not stat.S_ISREG(metadata.st_mode): raise ValueError('not regular')\n"
+        "  with os.fdopen(fd,'rb',closefd=False) as stream: content=stream.read(limit+1)\n"
+        " finally:\n"
+        "  os.close(fd)\n"
+        " if len(content)>limit: raise ValueError('pointer too large')\n"
+        " pointer=json.loads(content)\n"
+        " print(json.dumps({'exists':True,'pointer':pointer},separators=(',',':')))\n"
+    )
+    envelope = await SandboxRemoteTransport(cloud.endpoint).exec_json(
+        f"python3 -c {shlex.quote(source)}", timeout=12
+    )
+    if envelope == {"exists": False}:
+        return None
+    pointer = envelope.get("pointer")
+    if set(envelope) != {"exists", "pointer"} or envelope.get("exists") is not True:
+        raise DeploymentSourceError("当前交付物索引格式无效。")
+    if not isinstance(pointer, dict) or set(pointer) != {
+        "artifactSha256",
+        "validationReportSha256",
+        "releasePath",
+    }:
+        raise DeploymentSourceError("当前交付物索引格式无效。")
+    artifact_digest = _request_digest(pointer, "artifactSha256")
+    report_digest = _request_digest(pointer, "validationReportSha256")
+    if pointer.get("releasePath") != release_path(artifact_digest, report_digest):
+        raise IntelligentDevelopmentSourceStale("交付物索引与当前发布版本不一致。")
+    return await materialize_intelligent_development_preview(
+        destination,
+        {
+            "kind": "intelligentDevelopment",
+            "sessionId": session_id,
+            "artifactSha256": artifact_digest,
+            "validationReportSha256": report_digest,
+        },
+        owner_id=owner_id,
+        service=service,
+    )
+
+
 async def load_intelligent_development_artifact(
     destination: Path,
     source: Mapping[str, object],
@@ -383,6 +448,7 @@ __all__ = [
     "TrustedDeploymentSource",
     "TrustedSourceFile",
     "load_intelligent_development_artifact",
+    "materialize_current_intelligent_development_preview",
     "materialize_intelligent_development_preview",
     "materialize_intelligent_development_source",
 ]

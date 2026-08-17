@@ -251,6 +251,7 @@ export interface SandboxSession {
   busy: boolean;
   model?: string;
   permissions: SandboxPermissions;
+  restoredConversation?: SandboxThreadSnapshot;
 }
 
 export interface SandboxSnapshot {
@@ -480,6 +481,7 @@ interface SessionResponse {
   busy?: boolean;
   model?: string;
   permissions?: unknown;
+  conversation?: unknown;
 }
 
 interface ListSessionsResponse {
@@ -598,6 +600,9 @@ function parseSession(
     busy: data.busy === true,
     ...(typeof data.model === "string" ? { model: data.model } : {}),
     permissions: parsePermissions(data.permissions),
+    ...(data.conversation === undefined
+      ? {}
+      : { restoredConversation: parseThreadSnapshot(data.conversation) }),
   };
 }
 

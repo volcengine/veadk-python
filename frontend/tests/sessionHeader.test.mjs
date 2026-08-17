@@ -45,7 +45,10 @@ test("opens new chat even when no Agent is active", () => {
   assert.match(handler, /setMyAgents\(false\)/);
   assert.match(handler, /startNewChat\(\)/);
   assert.doesNotMatch(handler, /hasAgentSelection|showToast|setMyAgents\(true\)/);
-  assert.match(appSource, /onNewChat=\{openNewChat\}/);
+  assert.match(
+    appSource,
+    /onNewChat=\{\(\) => requestIntelligentNavigation\(openNewChat\)\}/,
+  );
 });
 
 test("only using an Agent selects it for the main conversation", () => {

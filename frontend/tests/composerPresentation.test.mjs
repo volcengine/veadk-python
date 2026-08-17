@@ -170,9 +170,9 @@ test("welcome screen offers a broader set of prompts", () => {
 });
 
 test("shows full session titles on hover instead of internal ids", () => {
-  assert.match(sidebarSource, /const title = sessionTitle\(s\.events\)/);
-  assert.match(sidebarSource, /title=\{title\}/);
-  assert.doesNotMatch(sidebarSource, /title=\{s\.id\}/);
+  assert.match(sidebarSource, /title: sessionTitle\(session\.events\)/);
+  assert.match(sidebarSource, /title=\{item\.title\}/);
+  assert.doesNotMatch(sidebarSource, /title=\{item\.id\}/);
 });
 
 test("renders a normal-font session id with an inline copy action", () => {

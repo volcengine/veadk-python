@@ -32,6 +32,7 @@ from frontend.server.intelligent_development import release_path
 from frontend.server.intelligent_development_source import (
     IntelligentDevelopmentSourceNotFound,
     load_intelligent_development_artifact,
+    materialize_current_intelligent_development_preview,
     materialize_intelligent_development_preview,
     materialize_intelligent_development_source,
 )
@@ -219,6 +220,15 @@ class FakeTransport:
             raise ValueError("download exceeds limit")
         return value
 
+    async def exec_json(self, command: str, *, timeout: int = 12) -> dict[str, object]:
+        del command, timeout
+        pointer = self.downloads.get(
+            "/home/gem/.intelligent-development/published.json"
+        )
+        if pointer is None:
+            return {"exists": False}
+        return {"exists": True, "pointer": json.loads(pointer)}
+
 
 class FakeService:
     def __init__(self, cloud: SandboxCloudSession) -> None:
@@ -372,6 +382,55 @@ async def test_download_keeps_exact_artifact_including_binary_files(
     assert result.artifact_sha256 == request["artifactSha256"]
     assert result.file_count == 3
     assert result.artifact_size == len(artifact)
+
+
+@pytest.mark.asyncio
+async def test_current_preview_distinguishes_no_delivery_and_validates_current_release(
+    tmp_path: Path,
+) -> None:
+    FakeTransport.downloads = {}
+    service = cast(SandboxConversationService, FakeService(_cloud()))
+    missing = await materialize_current_intelligent_development_preview(
+        tmp_path / "missing",
+        SESSION_ID,
+        owner_id=OWNER_ID,
+        service=service,
+    )
+    assert missing is None
+
+    request, downloads = _release_files()
+    FakeTransport.downloads = downloads
+    restored = await materialize_current_intelligent_development_preview(
+        tmp_path / "restored",
+        SESSION_ID,
+        owner_id=OWNER_ID,
+        service=service,
+    )
+    assert restored is not None
+    assert restored.artifact_sha256 == request["artifactSha256"]
+    assert restored.validation_report_sha256 == request[REPORT_DIGEST_FIELD]
+
+
+@pytest.mark.asyncio
+async def test_current_preview_rejects_a_pointer_outside_the_immutable_release(
+    tmp_path: Path,
+) -> None:
+    request, downloads = _release_files()
+    pointer = json.loads(downloads["/home/gem/.intelligent-development/published.json"])
+    pointer["releasePath"] = "/tmp/untrusted-release"
+    FakeTransport.downloads = {
+        **downloads,
+        "/home/gem/.intelligent-development/published.json": _json_bytes(pointer),
+    }
+    service = cast(SandboxConversationService, FakeService(_cloud()))
+
+    with pytest.raises(DeploymentSourceError, match="索引与当前发布版本不一致"):
+        await materialize_current_intelligent_development_preview(
+            tmp_path / "rejected",
+            str(request["sessionId"]),
+            owner_id=OWNER_ID,
+            service=service,
+        )
 
 
 @pytest.mark.asyncio

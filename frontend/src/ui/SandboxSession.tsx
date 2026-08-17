@@ -73,7 +73,7 @@ export function SandboxSessionWarning({
       <span className="sandbox-session-warning-dot" aria-hidden="true" />
       <span className="sandbox-session-warning-copy">
         {expiryLabel
-          ? `当前构建将在 ${expiryLabel} 结束（${remaining}），对话和文件届时清除`
+          ? `远端开发环境最长保留 8 小时，将于 ${expiryLabel} 到期（${remaining}）；到期后清除对话和文件。`
           : `当前您在使用 ${agentName} 智能体`}
       </span>
       <button type="button" onClick={onExit}>

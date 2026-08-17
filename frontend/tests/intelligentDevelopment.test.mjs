@@ -124,6 +124,10 @@ const codeBrowserSource = readFileSync(
   new URL("../src/ui/CodeBrowserDialog.tsx", import.meta.url),
   "utf8",
 );
+const sidebarSource = readFileSync(
+  new URL("../src/ui/Sidebar.tsx", import.meta.url),
+  "utf8",
+);
 
 function sseResponse(frames) {
   return new Response(frames.join("\n\n") + "\n\n", {
@@ -197,6 +201,92 @@ test("text-only intelligent client uses its fixed endpoint and omits skills", as
       body: { message: "continue" },
     },
   ]);
+});
+
+test("intelligent reconnect parses the restored conversation snapshot", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  globalThis.fetch = async () => Response.json({
+    sessionId: "dev-1",
+    status: "Ready",
+    toolName: "intelligent-development",
+    threadId: "thread-restored",
+    conversation: {
+      thread: {
+        id: "thread-restored",
+        preview: "创建销售 Agent",
+        cwd: "/home/gem/workspace/project-1",
+        modelProvider: "openai",
+        createdAt: 1,
+        updatedAt: 2,
+        status: "idle",
+      },
+      threadId: "thread-restored",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          content: "创建销售 Agent",
+          timestamp: 1_000,
+        },
+        {
+          id: "message-2",
+          role: "assistant",
+          content: "已完成",
+          timestamp: 2_000,
+        },
+      ],
+      cwd: "/home/gem/workspace/project-1",
+      workspaceLocked: true,
+      permissions: {
+        approvalPolicy: "never",
+        approvalsReviewer: "auto_review",
+        sandboxMode: "danger-full-access",
+        networkAccess: true,
+      },
+    },
+  });
+
+  const connected = await intelligentDevelopmentClient.connectSession("dev-1");
+
+  assert.equal(connected.restoredConversation.threadId, "thread-restored");
+  assert.deepEqual(
+    connected.restoredConversation.messages.map((message) => message.content),
+    ["创建销售 Agent", "已完成"],
+  );
+});
+
+test("current intelligent release can be absent or restored", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const { fetchCurrentIntelligentDevelopmentRelease } = await importTsxBundle(
+    "../src/adk/intelligentDevelopment.ts",
+  );
+  globalThis.fetch = async () => new Response(null, { status: 204 });
+  assert.equal(
+    await fetchCurrentIntelligentDevelopmentRelease("dev-1"),
+    null,
+  );
+
+  const restoredDelivery = { ...delivery, sessionId: "dev-1", files: [] };
+  globalThis.fetch = async () => Response.json(restoredDelivery);
+  assert.deepEqual(
+    await fetchCurrentIntelligentDevelopmentRelease("dev-1"),
+    restoredDelivery,
+  );
+
+  globalThis.fetch = async () => Response.json({
+    ...restoredDelivery,
+    files: undefined,
+  });
+  await assert.rejects(
+    fetchCurrentIntelligentDevelopmentRelease("dev-1"),
+    /源码快照的响应格式无效/,
+  );
 });
 
 test("normal sandbox client keeps the existing endpoint and skill payload", async (t) => {
@@ -479,7 +569,7 @@ test("intelligent release requests recover an expired Studio login", () => {
   );
   assert.equal(
     intelligentReleaseClientSource.match(/await studioFetch\(/g)?.length,
-    2,
+    3,
   );
   assert.doesNotMatch(
     intelligentReleaseClientSource,
@@ -675,12 +765,55 @@ test("intelligent conversation keeps the Studio visual language and stable contr
   assert.match(sandboxSessionSource, /exitLabel = "退出当前智能体"/);
   assert.match(
     sandboxSessionSource,
-    /`当前构建将在 \$\{expiryLabel\} 结束（\$\{remaining\}），对话和文件届时清除`/,
+    /`远端开发环境最长保留 8 小时，将于 \$\{expiryLabel\} 到期（\$\{remaining\}）；到期后清除对话和文件。`/,
   );
   assert.doesNotMatch(sandboxSessionSource, /Thread 与文件/);
   assert.match(
     appSource,
     /exitLabel=\{[\s\S]*?sandboxSession\.intelligentDevelopment[\s\S]*?\? "退出开发环境"[\s\S]*?: undefined[\s\S]*?\}/,
+  );
+});
+
+test("intelligent builds join history and restore conversation plus delivery", () => {
+  assert.match(appSource, /const \[intelligentSessions, setIntelligentSessions\]/);
+  assert.match(
+    appSource,
+    /intelligentDevelopmentClient\.listSessions\([\s\S]*?setIntelligentSessions/,
+  );
+  assert.match(
+    appSource,
+    /setIntelligentSessions\(\(current\) =>[\s\S]*?created/,
+  );
+  assert.match(sidebarSource, /intelligentHistory\?: SidebarIntelligentHistory/);
+  assert.match(
+    sidebarSource,
+    /kind: "intelligent"[\s\S]*?createdAt[\s\S]*?sort/,
+  );
+  assert.match(
+    appSource,
+    /async function openIntelligentDevelopmentSession[\s\S]*?connectSession\([\s\S]*?restoredConversation[\s\S]*?sandboxSnapshotTurns/,
+  );
+  assert.match(
+    appSource,
+    /intelligentOpenAbortRef\.current\?\.abort\(\)[\s\S]*?connectSession\([\s\S]*?signal: controller\.signal/,
+  );
+  assert.match(
+    appSource,
+    /fetchCurrentIntelligentDevelopmentRelease\([\s\S]*?appendIntelligentDelivery/,
+  );
+  assert.match(
+    appSource,
+    /function requestIntelligentNavigation[\s\S]*?sandboxSession\?\.intelligentDevelopment && sandboxBusy[\s\S]*?setIntelligentLeaveOpen\(true\)/,
+  );
+  assert.match(appSource, /离开将停止本轮构建；当前会话仍会保留，可稍后从历史会话重新进入。/);
+  assert.match(appSource, /title="删除构建会话"[\s\S]*?删除后无法恢复/);
+  assert.match(
+    appSource,
+    /deleteSession\(session\.id\)[\s\S]*?exitSandboxSession\(false\)/,
+  );
+  assert.match(
+    sidebarSource,
+    /!intelligentHistory\?\.error[\s\S]*?combinedHistory\.length === 0/,
   );
 });
 
