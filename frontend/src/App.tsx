@@ -95,6 +95,7 @@ import { AgentWorkspace } from "./ui/AgentWorkspace";
 import {
   MyAgents,
   invalidateRuntimeAgentCache,
+  type AgentType,
   type MyAgentCardData,
 } from "./ui/MyAgents";
 import { Applications, type ApplicationId } from "./ui/Applications";
@@ -947,6 +948,7 @@ export default function App() {
   const [sandboxLaunchFromAgents, setSandboxLaunchFromAgents] = useState(false);
   const [sandboxProjectUploadOpen, setSandboxProjectUploadOpen] = useState(false);
   const [sandboxAgentRefreshKey, setSandboxAgentRefreshKey] = useState(0);
+  const [myAgentsActiveType, setMyAgentsActiveType] = useState<AgentType>("general");
   const [sandboxAgentDetailTarget, setSandboxAgentDetailTarget] =
     useState<SandboxAgentResource | null>(null);
   const [sandboxAgentWorkspace, setSandboxAgentWorkspace] =
@@ -3280,6 +3282,7 @@ export default function App() {
   }
 
   function openSandboxAgentDetails(session: SandboxAgentResource) {
+    setMyAgentsActiveType(session.toolName);
     setSandboxAgentDetailTarget(session);
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
@@ -3298,6 +3301,7 @@ export default function App() {
         await sandboxClient.deleteAgentSession(session.toolName, session.id);
       }
     }
+    setMyAgentsActiveType(session.toolName);
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
     setSandboxAgentRefreshKey((current) => current + 1);
@@ -5661,6 +5665,8 @@ export default function App() {
                   openSandboxAgent(session, "my_agents")
                 }
                 onViewSandboxAgentDetails={openSandboxAgentDetails}
+                activeType={myAgentsActiveType}
+                onActiveTypeChange={setMyAgentsActiveType}
                 sandboxRefreshKey={sandboxAgentRefreshKey}
                 connectedRuntimeId={connectedRuntimeId}
                 hiddenRuntimeIds={hiddenRuntimeIds}
