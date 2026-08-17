@@ -49,6 +49,21 @@ _PYTHON_LICENSE_HEADER = """# Copyright (c) 2025 Beijing Volcano Engine Technolo
 # limitations under the License.
 """
 
+_AGENTKIT_BASE_IMAGES = {
+    "volcengine": "agentkit-prod-public-cn-beijing.cr.volces.com/base/py-simple:python3.12-bookworm-slim-latest",
+    "byteplus": "agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/base/py-simple:python3.12-bookworm-slim-latest",
+}
+_LARK_CLI_VERSION = "1.0.87"
+_LARK_CLI_SHA256 = {
+    "amd64": "6027b1ddc12440400581bbdf9554850d8e119c7dd400439b1220e7a87b9673c5",
+    "arm64": "fade9a22d363172a9c18a8287c99c80d6d106a2900f3fce4015e4e156c5fc776",
+}
+_GITHUB_CLI_VERSION = "2.97.0"
+_GITHUB_CLI_SHA256 = {
+    "amd64": "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112",
+    "arm64": "73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5",
+}
+
 
 class GeneratedFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -173,6 +188,29 @@ class DeploymentConfig(BaseModel):
     envValues: dict[str, str] = Field(default_factory=dict)
 
 
+class CloudEnvironmentConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cliTools: list[Literal["lark-cli", "github-cli", "pandoc"]] = Field(
+        default_factory=list
+    )
+    dockerfile: str | None = Field(default=None, max_length=65_536)
+
+    @field_validator("cliTools")
+    @classmethod
+    def _dedupe_cli_tools(
+        cls, value: list[Literal["lark-cli", "github-cli", "pandoc"]]
+    ) -> list[Literal["lark-cli", "github-cli", "pandoc"]]:
+        return list(dict.fromkeys(value))
+
+    @field_validator("dockerfile")
+    @classmethod
+    def _validate_dockerfile(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("Dockerfile 不能为空")
+        return value
+
+
 class AgentDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -207,6 +245,9 @@ class AgentDraft(BaseModel):
     selectedSkills: list[SelectedSkill] = Field(default_factory=list)
     workflow: WorkflowConfig | None = None
     deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
+    cloudEnvironment: CloudEnvironmentConfig = Field(
+        default_factory=CloudEnvironmentConfig
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -336,6 +377,13 @@ def _safe_draft_payload(draft: AgentDraft) -> dict[str, Any]:
             node.pop("cloudProvider", None)
         if node.get("modelSource") is None:
             node.pop("modelSource", None)
+        cloud_environment = node.get("cloudEnvironment")
+        if (
+            isinstance(cloud_environment, dict)
+            and not cloud_environment.get("cliTools")
+            and cloud_environment.get("dockerfile") is None
+        ):
+            node.pop("cloudEnvironment", None)
         agent_segment = _env_segment(str(node.get("name") or ""), "AGENT")
         tools = node.get("mcpTools")
         if isinstance(tools, list):
@@ -1472,6 +1520,140 @@ def _materialize_a2a_registry_env(env: list[EnvVar], draft: AgentDraft) -> list[
     ]
 
 
+def _render_cli_install(
+    *,
+    asset_name: str,
+    version: str,
+    checksums: dict[str, str],
+    download_urls: list[str],
+    archive_member: str,
+    install_source: str,
+    cleanup_source: str,
+    binary_name: str,
+) -> str:
+    quoted_download_urls = " ".join(f'"{url}"' for url in download_urls)
+    return "\n".join(
+        [
+            "RUN set -eux; \\",
+            '    arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \\',
+            '    case "$arch" in \\',
+            f'      amd64) checksum="{checksums["amd64"]}" ;; \\',
+            f'      arm64) checksum="{checksums["arm64"]}" ;; \\',
+            '      *) echo "Unsupported architecture: $arch" >&2; exit 1 ;; \\',
+            "    esac; \\",
+            f'    asset="{asset_name}"; \\',
+            "    downloaded=0; \\",
+            f"    for base_url in {quoted_download_urls}; do \\",
+            (
+                "      if curl -fLSs --connect-timeout 10 --max-time 180 "
+                '--retry 1 --retry-delay 1 -o "/tmp/${asset}" \\'
+            ),
+            f'        "${{base_url}}/v{version}/${{asset}}"; then downloaded=1; break; fi; \\',
+            "    done; \\",
+            '    test "$downloaded" = 1; \\',
+            '    echo "${checksum}  /tmp/${asset}" | sha256sum -c -; \\',
+            f'    tar -xzf "/tmp/${{asset}}" -C /tmp "{archive_member}"; \\',
+            f'    install -m 0755 "{install_source}" "/usr/local/bin/{binary_name}"; \\',
+            f'    rm -rf "/tmp/${{asset}}" "{cleanup_source}"',
+        ]
+    )
+
+
+def _github_release_urls(cloud_provider: str, repository: str) -> list[str]:
+    official = f"https://github.com/{repository}/releases/download"
+    mirror = f"https://ghfast.top/{official}"
+    return [mirror, official] if cloud_provider == "volcengine" else [official, mirror]
+
+
+def render_cloud_environment_dockerfile(draft: AgentDraft) -> str | None:
+    """Render the custom image or an AgentKit-compatible image for selected CLIs."""
+    if draft.cloudEnvironment.dockerfile is not None:
+        return draft.cloudEnvironment.dockerfile
+
+    selected = set(draft.cloudEnvironment.cliTools)
+    if not selected:
+        return None
+
+    system_packages = ["ca-certificates", "curl"]
+    if "github-cli" in selected:
+        system_packages.append("git")
+    if "pandoc" in selected:
+        system_packages.append("pandoc")
+    blocks = [
+        f"FROM {_AGENTKIT_BASE_IMAGES[draft.cloudProvider]}",
+        "",
+        "# Configure AgentKit runtime defaults.",
+        "ENV UV_SYSTEM_PYTHON=1 UV_COMPILE_BYTECODE=1 PYTHONUNBUFFERED=1 DOCKER_CONTAINER=1",
+        "ARG TARGETARCH",
+        "",
+        "# Install system dependencies required by the selected tools.",
+        (
+            "RUN apt-get update && apt-get install -y --no-install-recommends "
+            f"{' '.join(system_packages)} && rm -rf /var/lib/apt/lists/*"
+        ),
+    ]
+    if "lark-cli" in selected:
+        blocks.extend(
+            [
+                "",
+                "# Install Lark CLI from the official release archive.",
+                _render_cli_install(
+                    asset_name=(f"lark-cli-{_LARK_CLI_VERSION}-linux-${{arch}}.tar.gz"),
+                    version=_LARK_CLI_VERSION,
+                    checksums=_LARK_CLI_SHA256,
+                    download_urls=_github_release_urls(
+                        draft.cloudProvider,
+                        "larksuite/cli",
+                    ),
+                    archive_member="lark-cli",
+                    install_source="/tmp/lark-cli",
+                    cleanup_source="/tmp/lark-cli",
+                    binary_name="lark-cli",
+                ),
+            ]
+        )
+    if "github-cli" in selected:
+        blocks.extend(
+            [
+                "",
+                "# Install GitHub CLI (gh) from the official release archive.",
+                _render_cli_install(
+                    asset_name=f"gh_{_GITHUB_CLI_VERSION}_linux_${{arch}}.tar.gz",
+                    version=_GITHUB_CLI_VERSION,
+                    checksums=_GITHUB_CLI_SHA256,
+                    download_urls=_github_release_urls(
+                        draft.cloudProvider,
+                        "cli/cli",
+                    ),
+                    archive_member=(f"gh_{_GITHUB_CLI_VERSION}_linux_${{arch}}/bin/gh"),
+                    install_source=(
+                        f"/tmp/gh_{_GITHUB_CLI_VERSION}_linux_${{arch}}/bin/gh"
+                    ),
+                    cleanup_source=(f"/tmp/gh_{_GITHUB_CLI_VERSION}_linux_${{arch}}"),
+                    binary_name="gh",
+                ),
+            ]
+        )
+    blocks.extend(
+        [
+            "",
+            "# Install Python dependencies before copying the source for better layer caching.",
+            "COPY requirements.txt requirements.txt",
+            "RUN uv pip install -r requirements.txt",
+            "",
+            "# Copy the Agent application and configure its runtime entrypoint.",
+            "EXPOSE 8000",
+            "",
+            "WORKDIR /app",
+            "COPY . .",
+            "",
+            'CMD ["python", "-m", "app"]',
+            "",
+        ]
+    )
+    return "\n".join(blocks)
+
+
 def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
     if draft.agentType == "a2a":
         raise ValueError("Remote Agent cannot be the root Agent.")
@@ -1540,4 +1722,7 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         ),
         GeneratedFile(path="README.md", content=render_readme(pkg, draft)),
     ]
+    dockerfile = render_cloud_environment_dockerfile(draft)
+    if dockerfile is not None:
+        files.append(GeneratedFile(path="Dockerfile", content=dockerfile))
     return GeneratedProject(name=pkg, files=files)

@@ -81,6 +81,16 @@ export interface DeploymentConfig {
   envValues?: Record<string, string>;
 }
 
+export type CloudCliToolId = "lark-cli" | "github-cli" | "pandoc";
+export const MAX_CLOUD_DOCKERFILE_LENGTH = 65_536;
+
+export interface CloudEnvironmentConfig {
+  /** Official command-line tools baked into the deployment image. */
+  cliTools: CloudCliToolId[];
+  /** User-edited Dockerfile. Omitted while Studio should generate it. */
+  dockerfile?: string;
+}
+
 /** A draft VeADK agent configuration produced by a creation flow. */
 export interface AgentDraft {
   name: string;
@@ -147,6 +157,8 @@ export interface AgentDraft {
   };
   /** Deployment-time options that do not change generated agent code. */
   deployment?: DeploymentConfig;
+  /** Optional command-line tools installed into the cloud runtime image. */
+  cloudEnvironment?: CloudEnvironmentConfig;
 }
 
 // Pre-filled defaults so description / system prompt / model are never empty
@@ -199,6 +211,7 @@ export function emptyDraft(cloudProvider: CloudProvider = "volcengine"): AgentDr
     knowledgebaseIndex: "",
     tracingExporters: [],
     selectedSkills: [],
+    cloudEnvironment: { cliTools: [] },
     deployment: {
       feishuEnabled: false,
       modelApiKeyId: "",

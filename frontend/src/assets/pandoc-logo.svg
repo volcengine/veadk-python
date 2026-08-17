@@ -1,0 +1,52 @@
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 100 100">
+  <title>Pandoc Icon</title>
+  <desc property="dc:creator">Albert Krewinkel</desc>
+  <metadata id="license"
+            xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+            xmlns:dc="http://purl.org/dc/elements/1.1/"
+            xmlns:cc="http://creativecommons.org/ns#">
+    <rdf:RDF>
+      <cc:Work rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <cc:license rdf:resource="http://creativecommons.org/licenses/by-sa/4.0/" />
+      </cc:Work>
+      <cc:License rdf:about="http://creativecommons.org/licenses/by-sa/4.0/">
+        <cc:permits rdf:resource="http://creativecommons.org/ns#Reproduction" />
+        <cc:permits rdf:resource="http://creativecommons.org/ns#Distribution" />
+        <cc:requires rdf:resource="http://creativecommons.org/ns#Notice" />
+        <cc:requires rdf:resource="http://creativecommons.org/ns#Attribution" />
+        <cc:permits rdf:resource="http://creativecommons.org/ns#DerivativeWorks" />
+        <cc:requires rdf:resource="http://creativecommons.org/ns#ShareAlike" />
+      </cc:License>
+    </rdf:RDF>
+  </metadata>
+  <rect fill="#fed" stroke="#fed" width="100" height="100"/>
+  <g fill="none"
+     stroke="#4093da"
+     stroke-linecap="round"
+     stroke-linejoin="round"
+     stroke-width="8"
+     transform="skewX(-6) translate(8 1)">
+    <path
+        d="M 30,10
+           l 0,80
+           M 45,10
+           l 0,80
+           M 20,10
+           l 40,0
+           l 18,18
+           l 0,25
+           l -33,0" />
+    <path
+        fill="#4093da"
+        stroke-width="6"
+        d="M 61,10
+           l 17,17
+           l -17,0
+           l 0,-17" />
+  </g>
+</svg>
