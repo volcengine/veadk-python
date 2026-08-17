@@ -166,6 +166,10 @@ test("sandbox agents expose detail deletion and reusable workspaces", () => {
   assert.match(detailsSource, /确认删除/);
   assert.match(appSource, /sandboxClient\.deleteSession\(session\.id\)/);
   assert.match(appSource, /sandboxClient\.deleteAgentSession\(session\.toolName, session\.id\)/);
+  assert.match(
+    appSource,
+    /deleteSandboxAgent[\s\S]*?setMyAgentsActiveType\(session\.toolName\)[\s\S]*?setSandboxAgentRefreshKey/,
+  );
   assert.match(workspaceSource, /主界面/);
   assert.match(workspaceSource, /终端/);
   assert.match(workspaceSource, /sandboxClient\.launchAgentTerminal/);
