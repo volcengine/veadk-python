@@ -46,7 +46,7 @@ const htmlSource = readFileSync(
 test("applies configured branding to the UI, document title, and favicon", () => {
   assert.match(clientSource, /title: "AgentKit Studio"/);
   assert.match(appSource, /import defaultSiteLogo from "\.\/assets\/logo\.svg"/);
-  assert.match(appSource, /document\.title = siteBranding\.title/);
+  assert.match(appSource, /document\.title = studioDocumentTitle/);
   assert.match(appSource, /cloudProvider === "byteplus" \? byteplusLogo : defaultSiteLogo/);
   assert.match(sidebarSource, /\{branding\.title\}/);
   assert.match(sidebarSource, /import defaultSiteLogo from "\.\.\/assets\/logo\.svg"/);

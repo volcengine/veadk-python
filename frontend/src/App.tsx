@@ -81,6 +81,7 @@ import {
   applyEvent,
   emptyAcc,
   eventsToTurns,
+  sessionTitle,
   type Block,
   type Turn,
   type TurnActivityDetail,
@@ -97,11 +98,16 @@ import {
   type MyAgentCardData,
 } from "./ui/MyAgents";
 import { Applications, type ApplicationId } from "./ui/Applications";
+import { getAutomation } from "./automations/registry";
 import { SystemInfo } from "./ui/SystemInfo";
 import { GitHubIntegration } from "./ui/GitHubIntegration";
 import { FeishuBotIntegration } from "./automations/feishu/FeishuBotIntegration";
 import { CodingAgentsIntegration } from "./automations/coding-agents/CodingAgentsIntegration";
 import { SearchView } from "./ui/Search";
+import {
+  formatStudioDocumentTitle,
+  type StudioDocumentTitleTarget,
+} from "./ui/documentTitle";
 import {
   buildAgentEntries,
   connectRuntime,
@@ -1697,6 +1703,7 @@ export default function App() {
   const [hasCreds, setHasCreds] = useState(true);
   const [skillCenter, setSkillCenter] = useState(false);
   const [libraryTab, setLibraryTab] = useState<LibraryTab>("skills");
+  const [libraryPageTitle, setLibraryPageTitle] = useState("技能库");
   const [skillCenterLaunch, setSkillCenterLaunch] =
     useState<SkillCenterWorkspaceLaunch | null>(null);
   const [addAgent, setAddAgent] = useState(false);
@@ -2589,6 +2596,79 @@ export default function App() {
     if (!access.capabilities.manageAgents) setManageAgents(false);
   }, [access]);
 
+  let documentTitleTarget: StudioDocumentTitleTarget = { kind: "home" };
+  if (authStatus === "authenticated") {
+    if (platformFeedbackOrigin !== null) {
+      documentTitleTarget = { kind: "page", title: "问题反馈" };
+    } else if (systemInfo) {
+      documentTitleTarget = { kind: "page", title: "系统信息" };
+    } else if (applicationsView) {
+      documentTitleTarget = {
+        kind: "page",
+        title: applicationsView === "catalog"
+          ? "自动化"
+          : getAutomation(applicationsView).name,
+      };
+    } else if (sandboxAgentWorkspace) {
+      documentTitleTarget = {
+        kind: "page",
+        title: sandboxAgentWorkspace.session.displayName || "智能体",
+      };
+    } else if (sandboxAgentDetailTarget) {
+      documentTitleTarget = {
+        kind: "page",
+        title: sandboxAgentDetailTarget.displayName || "智能体",
+      };
+    } else if (myAgents || manageAgents) {
+      documentTitleTarget = {
+        kind: "page",
+        title: agentDetailTarget?.name || "智能体",
+      };
+    } else if (addMenu) {
+      documentTitleTarget = { kind: "page", title: "创建智能体" };
+    } else if (searchView) {
+      documentTitleTarget = { kind: "page", title: "搜索" };
+    } else if (addAgent) {
+      documentTitleTarget = { kind: "page", title: "添加智能体" };
+    } else if (skillCenter) {
+      documentTitleTarget = {
+        kind: "page",
+        title: libraryPageTitle || "库",
+      };
+    } else if (createView) {
+      documentTitleTarget = {
+        kind: "page",
+        title: createView === "custom"
+          ? runtimeUpdateTarget?.name
+            ? `更新 ${runtimeUpdateTarget.name}`
+            : "创建智能体"
+          : createView === "package"
+            ? "从代码包添加"
+            : "迁移智能体",
+      };
+    } else if (sandboxSession) {
+      const activeThread = sandboxCommands.threads.find(
+        (thread) => thread.id === sandboxSession.threadId,
+      );
+      documentTitleTarget = {
+        kind: "conversation",
+        title: activeThread?.name
+          || activeThread?.preview
+          || sandboxSession.displayName,
+      };
+    } else if (sessionId) {
+      const activeSession = sessions.find((session) => session.id === sessionId);
+      const activeSessionTitle = sessionTitle(activeSession?.events);
+      documentTitleTarget = activeSessionTitle === "新会话"
+        ? { kind: "home" }
+        : { kind: "conversation", title: activeSessionTitle };
+    }
+  }
+  const studioDocumentTitle = formatStudioDocumentTitle(
+    siteBranding.title,
+    documentTitleTarget,
+  );
+
   useEffect(() => {
     if (
       authStatus !== "authenticated" ||
@@ -2603,7 +2683,7 @@ export default function App() {
   }, [agentDetailTarget, agentsSource, authStatus, manageAgents, refreshAgentLibrary, uiConfigLoaded]);
 
   useEffect(() => {
-    document.title = siteBranding.title;
+    document.title = studioDocumentTitle;
     let favicon = document.querySelector<HTMLLinkElement>('link[rel~="icon"]');
     if (!favicon) {
       favicon = document.createElement("link");
@@ -2613,7 +2693,7 @@ export default function App() {
     favicon.removeAttribute("type");
     favicon.href = siteBranding.logoUrl
       || (cloudProvider === "byteplus" ? byteplusLogo : defaultSiteLogo);
-  }, [cloudProvider, siteBranding]);
+  }, [cloudProvider, siteBranding.logoUrl, studioDocumentTitle]);
 
   // Check whether the server has cloud AK/SK (needed by the workbench).
   useEffect(() => {
@@ -5152,6 +5232,7 @@ export default function App() {
           setApplicationsView(null);
           setSkillCenterLaunch(null);
           setLibraryTab("skills");
+          setLibraryPageTitle("技能库");
           setSkillCenter(true);
           setError("");
         }}
@@ -5351,6 +5432,11 @@ export default function App() {
                   setError("");
                   setSkillCenterLaunch(launch);
                   setLibraryTab("skills");
+                  setLibraryPageTitle(
+                    launch.operation === "create"
+                      ? "创建技能"
+                      : `优化 ${launch.source?.name || "技能"}`,
+                  );
                   setSkillCenter(true);
                   return;
                 }
@@ -5789,6 +5875,7 @@ export default function App() {
                 cloudProvider={cloudProvider}
                 activeTab={libraryTab}
                 onTabChange={setLibraryTab}
+                onPageTitleChange={setLibraryPageTitle}
                 skillInitialWorkspace={skillCenterLaunch}
                 onSkillInitialWorkspaceConsumed={() => setSkillCenterLaunch(null)}
                 artifactSources={appName

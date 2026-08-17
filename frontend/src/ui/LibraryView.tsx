@@ -32,6 +32,7 @@ export interface LibraryViewProps {
   cloudProvider: CloudProvider;
   activeTab: LibraryTab;
   onTabChange: (tab: LibraryTab) => void;
+  onPageTitleChange?: (title: string) => void;
   skillInitialWorkspace?: SkillCenterWorkspaceLaunch | null;
   onSkillInitialWorkspaceConsumed?: () => void;
   artifactSources?: readonly ArtifactSessionSource[];
@@ -44,6 +45,7 @@ export function LibraryView({
   cloudProvider,
   activeTab,
   onTabChange,
+  onPageTitleChange,
   skillInitialWorkspace = null,
   onSkillInitialWorkspaceConsumed,
   artifactSources = [],
@@ -51,6 +53,7 @@ export function LibraryView({
   onArtifactActivate,
   onArtifactSourceOpen,
 }: LibraryViewProps) {
+  const [skillPageTitle, setSkillPageTitle] = useState("技能库");
   const [mountedTabs, setMountedTabs] = useState<ReadonlySet<LibraryTab>>(
     () => new Set<LibraryTab>(["skills", activeTab]),
   );
@@ -83,6 +86,13 @@ export function LibraryView({
       return next;
     });
   }, [activeTab]);
+
+  useEffect(() => {
+    const activeTitle = activeTab === "skills"
+      ? skillPageTitle
+      : LIBRARY_TABS.find((tab) => tab.id === activeTab)?.label || "库";
+    onPageTitleChange?.(activeTitle);
+  }, [activeTab, onPageTitleChange, skillPageTitle]);
 
   useEffect(() => {
     if (activeTab === "artifacts") {
@@ -178,6 +188,7 @@ export function LibraryView({
               cloudProvider={cloudProvider}
               active={activeTab === "skills"}
               activationRevision={activationRevisions.skills}
+              onPageTitleChange={setSkillPageTitle}
               initialWorkspace={skillInitialWorkspace}
               onInitialWorkspaceConsumed={onSkillInitialWorkspaceConsumed}
             />
