@@ -342,6 +342,7 @@ async def test_delivery_publisher_sends_server_parsed_manifest_contract() -> Non
     assert delivery.entry_point == "weather.py"
     assert delivery.artifact_sha256 == artifact_digest
     assert delivery.validation_report_sha256 == report_digest
+    assert delivery.deployable is True
     assert delivery.verified is True
 
     source_only = await DeliveryPublisher(remote).publish(  # type: ignore[arg-type]
@@ -362,6 +363,7 @@ async def test_delivery_publisher_sends_server_parsed_manifest_contract() -> Non
     )
     assert unverified_request["report"]["acceptanceCriteria"] == ["返回天气"]
     assert unverified_request["report"]["validationSummary"] == "未收到完整验证结果"
+    assert source_only.deployable is True
     assert source_only.verified is False
     assert source_only.gate_summary == ()
 

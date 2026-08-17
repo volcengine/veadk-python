@@ -153,16 +153,23 @@ async def _materialize_intelligent_development_source(
         resolve_intelligent_development_session,
     )
 
+    required_fields = {
+        "kind",
+        "sessionId",
+        "artifactSha256",
+        "validationReportSha256",
+    }
     if (
         set(source)
-        != {
-            "kind",
-            "sessionId",
-            "artifactSha256",
-            "validationReportSha256",
+        not in {
+            frozenset(required_fields),
+            frozenset({*required_fields, "acknowledgeUnverified"}),
         }
         or source.get("kind") != "intelligentDevelopment"
     ):
+        raise DeploymentSourceError("智能开发部署来源格式无效。")
+    acknowledge_unverified = source.get("acknowledgeUnverified", False)
+    if not isinstance(acknowledge_unverified, bool):
         raise DeploymentSourceError("智能开发部署来源格式无效。")
     session_id = source.get("sessionId")
     if not isinstance(session_id, str) or not session_id:
@@ -239,7 +246,7 @@ async def _materialize_intelligent_development_source(
     verified = report_value.get("status") == "passed" and _REQUIRED_GATES.issubset(
         passed
     )
-    if require_verified and not verified:
+    if require_verified and not verified and not acknowledge_unverified:
         raise DeploymentSourceError("交付物验证报告未通过全部门禁。")
     validation_summary = report_value.get("validationSummary")
     if not isinstance(validation_summary, str) or not validation_summary.strip():
@@ -314,7 +321,7 @@ async def materialize_intelligent_development_source(
     owner_id: str,
     service: SandboxConversationService,
 ) -> TrustedDeploymentSource:
-    """Materialize a snapshot only when every deployment gate is verified."""
+    """Materialize a verified snapshot or an explicitly acknowledged one."""
     release = await _materialize_intelligent_development_source(
         destination,
         source,

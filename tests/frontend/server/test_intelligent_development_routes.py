@@ -327,6 +327,7 @@ def test_release_summary_returns_materialized_text_files_before_verification(
         {"path": "app.py", "content": "root_agent = object()\n"},
     ]
     assert response.json()["verified"] is False
+    assert response.json()["deployable"] is True
     assert response.json()["validationSummary"] == "未收到完整验证结果"
     materialize_call = materialize.await_args
     assert materialize_call is not None
@@ -546,6 +547,7 @@ def _delivery_dict(*, verified: bool = False) -> dict[str, object]:
         "fileCount": 3,
         "validatedAt": "2026-08-15T00:00:00Z",
         "gateSummary": ["ak-build", "runtime-cleanup"] if verified else [],
+        "deployable": True,
         "verified": verified,
         "validationSummary": "验证完成" if verified else "未收到完整验证结果",
     }
@@ -928,13 +930,53 @@ def test_missing_completion_still_emits_source_but_never_verified_success(
 
     assert response.status_code == 200
     assert "已生成源码，但验证结果未确认" in response.text
+    assert "验证报告未生成或暂时无法读取" in response.text
     assert "event: development.source_ready" in response.text
+    assert '"deployable": true' in response.text
     assert '"verified": false' in response.text
     assert "event: development.succeeded" not in response.text
     assert read_completion.await_count == 1
     assert len(gateway.codex.calls) == 2
     assert publisher.publish.await_args.kwargs["completion"] is None
     assert lease.cleaned is True
+
+
+def test_invalid_completion_contract_reports_format_problem_without_blocking_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [_gate()],
+        [CodexAppServerEvent(kind="text", text="验证完成")],
+    ]
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    monkeypatch.setattr(
+        routes, "create_credential_lease", AsyncMock(return_value=lease)
+    )
+    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(
+        routes,
+        "read_completion_contract",
+        AsyncMock(side_effect=ValueError("Completion contract fields are invalid")),
+    )
+    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(
+        routes, "DeliveryPublisher", lambda _transport: _publisher_mock()
+    )
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "做一个天气 Agent"},
+        )
+
+    assert response.status_code == 200
+    assert "验证报告格式不完整" in response.text
+    assert "event: development.source_ready" in response.text
+    assert "event: development.succeeded" not in response.text
 
 
 def test_builder_response_cannot_replace_a_missing_completion_file(

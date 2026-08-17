@@ -511,6 +511,7 @@ def mount_intelligent_development_routes(
             "artifactSize": trusted.artifact_size,
             "validatedAt": trusted.validated_at,
             "gateSummary": list(trusted.gate_summary),
+            "deployable": True,
             "verified": trusted.verified,
             "validationSummary": trusted.validation_summary,
             "files": [
@@ -746,12 +747,22 @@ def mount_intelligent_development_routes(
                     if public_event is not None:
                         yield public_event
 
+                completion_problem = ""
                 try:
                     completion = await read_completion_contract(
                         transport, completion_path
                     )
+                except ValueError as error:
+                    completion = None
+                    completion_problem = "验证报告格式不完整"
+                    logger.warning(
+                        "Intelligent development completion contract was invalid for %s: %s",
+                        session_id,
+                        type(error).__name__,
+                    )
                 except Exception as error:
                     completion = None
+                    completion_problem = "验证报告未生成或暂时无法读取"
                     logger.warning(
                         "Intelligent development completion contract was unavailable for %s: %s",
                         session_id,
@@ -764,8 +775,8 @@ def mount_intelligent_development_routes(
                 if completion is None:
                     payload = {
                         "text": (
-                            "\n\n未收到完整的交付证据，本轮不会标记为“已验证”。"
-                            "生成的源码仍可查看；你可以在当前对话中继续修复和重验。"
+                            f"\n\n{completion_problem}，完整验证状态尚未确认。"
+                            "源码已准备好，可查看、下载或手动部署；部署前请检查配置。"
                         )
                     }
                     yield (

@@ -79,6 +79,7 @@ class DeliveryReference:
     file_count: int
     validated_at: str
     gate_summary: tuple[str, ...]
+    deployable: bool
     verified: bool
     validation_summary: str
 
@@ -93,6 +94,7 @@ class DeliveryReference:
             "fileCount": self.file_count,
             "validatedAt": self.validated_at,
             "gateSummary": list(self.gate_summary),
+            "deployable": self.deployable,
             "verified": self.verified,
             "validationSummary": self.validation_summary,
         }

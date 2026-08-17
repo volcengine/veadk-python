@@ -329,7 +329,7 @@ function DeliveryCard({
         </p>
         {!value.verified ? (
           <p className="delivery-card-guidance">
-            源码已安全保存，可查看或下载。请在当前对话中继续修复并重新完成云端验证，验证通过后即可手动部署。
+            源码已准备好，可查看、下载或手动部署。完整验证尚未确认，部署前请检查配置。
           </p>
         ) : null}
         <div className="delivery-card-actions">
@@ -360,9 +360,9 @@ function DeliveryCard({
             type="button"
             onClick={() => void deploy()}
             disabled={
-              !value.verified || !onDeploy || !onResolve || busyAction !== null
+              !value.deployable || !onDeploy || !onResolve || busyAction !== null
             }
-            title={value.verified ? undefined : "完成云端验证后可部署"}
+            title={value.deployable ? undefined : "源码尚未准备好"}
           >
             {busyAction === "deploy" ? (
               <Loader2 className="spin" aria-hidden="true" />

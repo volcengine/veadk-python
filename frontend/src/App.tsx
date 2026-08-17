@@ -2606,9 +2606,9 @@ export default function App() {
     )
       .then((delivery) => {
         if (controller.signal.aborted) return;
-        if (!delivery.verified) {
+        if (!delivery.deployable) {
           setIntelligentCapabilitiesError(
-            "该源码尚未通过完整云端验证，请返回对话继续修复和重验。",
+            "该源码尚未准备好，请返回对话继续处理。",
           );
           return;
         }

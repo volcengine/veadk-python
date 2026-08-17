@@ -678,6 +678,7 @@ class DeliveryPublisher:
             file_count,
             validated_at,
             gate_summary,
+            True,
             verified,
             validation_summary,
         )
