@@ -32,7 +32,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 CodingAgentId = Literal["trae", "claude-code", "codex"]
-BundledSkillId = Literal["veadk-agent-development", "agentkit-cli"]
+BundledSkillId = Literal["agentkit-cli"]
 
 _MAX_FILES_PER_SKILL = 500
 _MAX_FILE_BYTES = 5 * 1024 * 1024
@@ -74,10 +74,6 @@ _AGENT_SPECS: dict[CodingAgentId, _AgentSpec] = {
 }
 
 _BUNDLED_SKILLS: dict[BundledSkillId, _BundledSkillSpec] = {
-    "veadk-agent-development": _BundledSkillSpec(
-        name="VeADK 开发技能",
-        description="构建、调试并交付基于 VeADK 的智能体应用。",
-    ),
     "agentkit-cli": _BundledSkillSpec(
         name="AgentKit 平台操作技能",
         description="使用 AgentKit CLI 管理部署、运行时与平台资源。",
