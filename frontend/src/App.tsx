@@ -5461,12 +5461,12 @@ export default function App() {
     setAddAgent(false);
     setAddMenu(false);
     setSearchView(false);
+    setIntelligentDeployment(null);
     startNewChat();
   };
 
   const openIntelligentDeploymentChat = async (agentId: string) => {
     await refreshCurrentAgentAndStartNewChat(agentId);
-    setIntelligentDeployment(null);
   };
 
   const selectAgent = async (id: string) => {

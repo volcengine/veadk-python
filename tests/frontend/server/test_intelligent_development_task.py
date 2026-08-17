@@ -96,8 +96,31 @@ def test_verified_completion_requires_all_cloud_and_cleanup_gates() -> None:
     }
     assert parse_completion_contract(json.dumps(value).encode()).verified is True
     value["gates"]["runtime-cleanup"] = False
-    with pytest.raises(ValueError, match="incomplete"):
-        parse_completion_contract(json.dumps(value).encode())
+    assert parse_completion_contract(json.dumps(value).encode()).verified is False
+
+
+def test_completion_parser_accepts_forward_compatible_partial_metadata() -> None:
+    completion = parse_completion_contract(
+        json.dumps(
+            {
+                "status": "partial",
+                "summary": "源码与本地检查已完成",
+                "gates": {
+                    "local-checks": True,
+                    "future-gate": True,
+                },
+                "futureField": {"ignored": True},
+            },
+            ensure_ascii=False,
+        ).encode()
+    )
+
+    assert completion.verified is False
+    assert completion.runtime_name == ""
+    assert completion.attempt_count == 0
+    assert completion.gates["local-checks"] is True
+    assert completion.gates["service-probe"] is False
+    assert completion.acceptance_criteria == ()
 
 
 def test_builder_context_uses_launcher_without_secret_values() -> None:
@@ -362,7 +385,7 @@ async def test_delivery_publisher_sends_server_parsed_manifest_contract() -> Non
         item for item in requests if item["report"]["status"] == "unverified"
     )
     assert unverified_request["report"]["acceptanceCriteria"] == ["返回天气"]
-    assert unverified_request["report"]["validationSummary"] == "未收到完整验证结果"
+    assert unverified_request["report"]["validationSummary"] == "源码已准备好，可部署"
     assert source_only.deployable is True
     assert source_only.verified is False
     assert source_only.gate_summary == ()

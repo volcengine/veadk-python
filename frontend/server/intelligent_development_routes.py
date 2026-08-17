@@ -818,14 +818,12 @@ def mount_intelligent_development_routes(
                     if public_event is not None:
                         yield public_event
 
-                completion_problem = ""
                 try:
                     completion = await read_completion_contract(
                         transport, completion_path
                     )
                 except ValueError as error:
                     completion = None
-                    completion_problem = "验证报告格式不完整"
                     logger.warning(
                         "Intelligent development completion contract was invalid for %s: %s",
                         session_id,
@@ -833,7 +831,6 @@ def mount_intelligent_development_routes(
                     )
                 except Exception as error:
                     completion = None
-                    completion_problem = "验证报告未生成或暂时无法读取"
                     logger.warning(
                         "Intelligent development completion contract was unavailable for %s: %s",
                         session_id,
@@ -843,22 +840,15 @@ def mount_intelligent_development_routes(
                     yield _progress_sse(
                         "Agent 已完成实现、检查和临时云端验证，已生成可部署交付物。"
                     )
-                if completion is None:
+                if completion is not None and completion.status in {
+                    "partial",
+                    "blocked",
+                    "failed",
+                }:
                     payload = {
                         "text": (
-                            f"\n\n{completion_problem}，完整验证状态尚未确认。"
-                            "源码已准备好，可查看、下载或手动部署；部署前请检查配置。"
-                        )
-                    }
-                    yield (
-                        "event: delta\n"
-                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                    )
-                elif not completion.verified:
-                    payload = {
-                        "text": (
-                            "\n\n本轮未达到完整验证条件："
-                            f"{completion.summary}。你可以在当前对话中继续修复和重验。"
+                            "\n\n本轮仍有待处理事项："
+                            f"{completion.summary}。你可以在当前对话中继续完善。"
                         )
                     }
                     yield (
