@@ -236,6 +236,7 @@ def test_studio_identity_resources_are_created_in_deployment_region(
         "session_token": "token",
         "region": region,
         "provider": provider,
+        "enable_vefaas_iam_fallback": False,
     }
     assert captured["get_pool"] == {"name": "veadk-studio-my-studio"}
     assert captured["create_pool"] == "veadk-studio-my-studio"
@@ -488,6 +489,9 @@ def test_studio_deploy_auto_identity_is_injected_and_printed(
     assert f"Identity console: {identity_console}" in result.output
     assert "Password sign-in is disabled by default for security." in result.output
     assert "Configure an SSO identity provider before inviting users." in result.output
+    callback_client = captured["callback_client"]
+    assert isinstance(callback_client, dict)
+    assert callback_client["enable_vefaas_iam_fallback"] is False
 
 
 def test_studio_credentials_fall_back_to_volc_default_profile(
@@ -958,6 +962,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
         "session_token": "sts-token",
         "region": expected_identity_region,
         "provider": "volcengine",
+        "enable_vefaas_iam_fallback": False,
     }
     assert captured["provider"] == "volcengine"
     assert veadk_environments["CLOUD_PROVIDER"] == "volcengine"
@@ -1222,6 +1227,7 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
     assert isinstance(identity, dict)
     assert identity["provider"] == "byteplus"
     assert identity["region"] == "ap-southeast-1"
+    assert identity["enable_vefaas_iam_fallback"] is False
     assert captured["deploy"]["enable_mcp_session"] is False
     assert "--provider byteplus --auth-mode frontend" in str(captured["run_script"])
     assert str(captured["requirements"]).startswith(
@@ -1831,11 +1837,20 @@ def test_studio_identity_region_searches_deployment_region_first(
 ) -> None:
     checked_regions: list[str] = []
     checked_tokens: list[str] = []
+    checked_vefaas_fallbacks: list[bool] = []
 
     class _FakeIdentityClient:
-        def __init__(self, **kwargs: str) -> None:
-            self.region = kwargs["region"]
-            checked_tokens.append(kwargs["session_token"])
+        def __init__(
+            self,
+            *,
+            region: str,
+            session_token: str,
+            enable_vefaas_iam_fallback: bool,
+            **_: object,
+        ) -> None:
+            self.region = region
+            checked_tokens.append(session_token)
+            checked_vefaas_fallbacks.append(enable_vefaas_iam_fallback)
 
         def user_pool_client_exists(self, **_: str) -> bool:
             checked_regions.append(self.region)
@@ -1858,6 +1873,53 @@ def test_studio_identity_region_searches_deployment_region_first(
     assert resolved == "cn-beijing"
     assert checked_regions == ["cn-shanghai", "cn-beijing"]
     assert checked_tokens == ["sts-token", "sts-token"]
+    assert checked_vefaas_fallbacks == [False, False]
+
+
+def test_identity_client_can_disable_vefaas_iam_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    get_vefaas_credentials = Mock()
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.get_credential_from_vefaas_iam",
+        get_vefaas_credentials,
+    )
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        enable_vefaas_iam_fallback=False,
+    )
+    identity_client._api_client.get_user_pool_client = Mock(return_value=object())
+
+    assert identity_client.user_pool_client_exists("pool-id", "client-id")
+    get_vefaas_credentials.assert_not_called()
+
+
+def test_identity_client_keeps_vefaas_iam_fallback_enabled_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    get_vefaas_credentials = Mock(
+        return_value=SimpleNamespace(
+            access_key_id="iam-access-key",
+            secret_access_key="iam-secret-key",
+            session_token="iam-session-token",
+        )
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.get_credential_from_vefaas_iam",
+        get_vefaas_credentials,
+    )
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    identity_client._api_client.get_user_pool_client = Mock(return_value=object())
+
+    assert identity_client.user_pool_client_exists("pool-id", "client-id")
+    get_vefaas_credentials.assert_called_once_with()
+    assert identity_client._api_client.api_client.configuration.session_token == (
+        "iam-session-token"
+    )
 
 
 def test_identity_client_preserves_external_sts_token() -> None:

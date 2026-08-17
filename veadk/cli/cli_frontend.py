@@ -7942,6 +7942,7 @@ def _resolve_studio_identity_region(
             session_token=session_token,
             region=candidate_region,
             provider=provider,
+            enable_vefaas_iam_fallback=False,
         )
         if identity_client.user_pool_client_exists(
             user_pool_uid=user_pool_id,
@@ -7985,6 +7986,7 @@ def _resolve_or_create_studio_identity_resources(
         session_token=session_token,
         region=region,
         provider=provider,
+        enable_vefaas_iam_fallback=False,
     )
 
     if resolved_pool_id:
@@ -8952,6 +8954,7 @@ def frontend_deploy(
             session_token=session_token,
             region=identity_region,
             provider=provider_id,
+            enable_vefaas_iam_fallback=False,
         )
 
         # 4) Register the SSO callback on the user-pool client HERE, with the

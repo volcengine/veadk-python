@@ -106,7 +106,9 @@ def refresh_credentials(func):
 
         # Step 3: Try VeFaaS IAM if no credentials or no session_token
         # VeFaaS IAM provides complete credentials (ak, sk, session_token)
-        if not (ak and sk) or (ak and sk and not session_token):
+        if self._enable_vefaas_iam_fallback and (
+            not (ak and sk) or (ak and sk and not session_token)
+        ):
             if credentials := _try_get_vefaas_credentials():
                 ak, sk, session_token = credentials
 
@@ -162,6 +164,7 @@ class IdentityClient:
         session_token: Optional[str] = None,
         region: str = "cn-beijing",
         provider: CloudProvider | None = None,
+        enable_vefaas_iam_fallback: bool = True,
     ):
         """Initialize the identity client.
 
@@ -170,12 +173,15 @@ class IdentityClient:
             secret_key: VolcEngine secret key. Defaults to VOLCENGINE_SECRET_KEY env var.
             session_token: VolcEngine session token. Defaults to VOLCENGINE_SESSION_TOKEN env var.
             region: The VolcEngine region. Defaults to "cn-beijing".
+            enable_vefaas_iam_fallback: Whether API calls may refresh credentials
+                from the VeFaaS IAM file. Defaults to True.
 
         Raises:
             KeyError: If required environment variables are not set.
         """
         self.region = region
         self.provider = provider or cloud_provider_from_env()
+        self._enable_vefaas_iam_fallback = enable_vefaas_iam_fallback
 
         # Store initial credentials for fallback
         if self.provider == "byteplus":
