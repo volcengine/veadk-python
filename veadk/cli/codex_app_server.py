@@ -81,6 +81,26 @@ def _app_server_error_detail(error: object) -> str:
     return str(error)
 
 
+def _is_thread_not_materialized_error(error: CodexAppServerError) -> bool:
+    """Return True when the app-server reports a thread has no turns yet.
+
+    A freshly-started thread returns JSON-RPC -32600 with the message
+    "thread ... is not materialized yet; includeTurns is unavailable before
+    first user message".
+    """
+    message = str(error)
+    try:
+        payload = json.loads(message)
+    except (json.JSONDecodeError, TypeError):
+        return "not materialized yet" in message
+    if isinstance(payload, dict):
+        if payload.get("code") == -32600 and "not materialized yet" in str(
+            payload.get("message", "")
+        ):
+            return True
+    return "not materialized yet" in message
+
+
 @dataclass(frozen=True)
 class CodexPermissionSettings:
     """Permission settings applied to every Codex thread in one cloud Session."""
@@ -966,10 +986,22 @@ class CodexAppServerSession:
     async def read_thread(self, thread_id: str) -> CodexThreadSnapshot:
         """Read one thread's complete stored history without activating it."""
         thread_id = _required_identifier(thread_id, "Thread ID")
-        result = await self.request(
-            "thread/read",
-            {"threadId": thread_id, "includeTurns": True},
-        )
+        try:
+            result = await self.request(
+                "thread/read",
+                {"threadId": thread_id, "includeTurns": True},
+            )
+        except CodexAppServerError as error:
+            # A freshly-started thread has no user message yet, so the Codex
+            # app-server rejects includeTurns with -32600 ("not materialized
+            # yet"). Fall back to a metadata-only read and return an empty
+            # conversation instead of surfacing a 500 to the browser.
+            if not _is_thread_not_materialized_error(error):
+                raise
+            result = await self.request(
+                "thread/read",
+                {"threadId": thread_id},
+            )
         snapshot = self._thread_snapshot("thread/read", result)
         imported = self._imported_history_by_thread.get(thread_id)
         if imported is None:
