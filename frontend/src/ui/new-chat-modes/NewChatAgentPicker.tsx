@@ -187,8 +187,14 @@ export function NewChatAgentPicker({
     setSandboxSessions([]);
     try {
       const sessions = type === "codex"
-        ? await sandboxClient.listSessions({ signal: controller.signal })
-        : await sandboxClient.listAgentSessions(type, { signal: controller.signal });
+        ? await sandboxClient.listSessions({
+            signal: controller.signal,
+            autoResumeSnapshots: true,
+          })
+        : await sandboxClient.listAgentSessions(type, {
+            signal: controller.signal,
+            autoResumeSnapshots: true,
+          });
       if (requestIdRef.current !== requestId) return;
       setSandboxSessions(sessions);
       setLoadedSandboxType(type);

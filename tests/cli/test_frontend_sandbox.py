@@ -722,7 +722,7 @@ def test_managed_agent_snapshot_is_listed_resumed_and_deleted() -> None:
             headers={"X-Test-User": "alice"},
         )
         admin_list = client.get(
-            "/web/openclaw/sessions",
+            "/web/openclaw/sessions?autoResumeSnapshots=false",
             headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
         )
         denied = client.post(
@@ -750,6 +750,52 @@ def test_managed_agent_snapshot_is_listed_resumed_and_deleted() -> None:
     assert resumed.json()["sessionId"] == "resumed-snapshot-alice"
     assert deleted.status_code == 200
     assert [item.snapshot_id for item in gateway.deleted_snapshots] == ["snapshot-bob"]
+
+
+def test_managed_agent_admin_listing_auto_resumes_current_kind_snapshots() -> None:
+    gateway = _FakeGateway()
+    gateway.snapshots["snapshot-openclaw"] = SandboxCloudSnapshot(
+        tool_id="tool-openclaw-snapshot",
+        snapshot_id="snapshot-openclaw",
+        session_id="expired-openclaw",
+        user_session_id="user-openclaw",
+        region="cn-beijing",
+        status="Ready",
+        reason="Expired",
+        created_at="2026-08-06T09:00:00Z",
+        display_name="OpenClaw Agent",
+        created_by="alice",
+    )
+    gateway.snapshots["snapshot-hermes"] = SandboxCloudSnapshot(
+        tool_id="tool-hermes-snapshot",
+        snapshot_id="snapshot-hermes",
+        session_id="expired-hermes",
+        user_session_id="user-hermes",
+        region="cn-beijing",
+        status="Ready",
+        reason="Expired",
+        created_at="2026-08-06T09:01:00Z",
+        display_name="Hermes Agent",
+        created_by="alice",
+    )
+
+    with TestClient(_agent_app(gateway)) as client:
+        ordinary = client.get(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+        admin = client.get(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
+        )
+
+    assert ordinary.status_code == 200
+    assert "snapshots" not in ordinary.json()
+    assert "resumed-snapshot-openclaw" in {
+        item["sessionId"] for item in admin.json()["sessions"]
+    }
+    assert "snapshots" not in admin.json()
+    assert "resumed-snapshot-hermes" not in gateway.sessions
 
 
 def test_managed_agent_routes_enforce_username_scope() -> None:
@@ -1816,7 +1862,7 @@ def test_sandbox_snapshot_is_wakeable_for_admin_only() -> None:
             headers={"X-Test-User": "alice"},
         )
         admin_list = client.get(
-            "/web/sandbox/sessions",
+            "/web/sandbox/sessions?autoResumeSnapshots=false",
             headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
         )
         resumed = client.post(
@@ -1841,6 +1887,52 @@ def test_sandbox_snapshot_is_wakeable_for_admin_only() -> None:
     assert admin_resumed.json()["sessionId"] == "resumed-snapshot-alice"
     assert admin_resumed.json()["persistent"] is True
     assert deleted.json() == {"deleted": True}
+
+
+def test_sandbox_admin_listing_auto_resumes_snapshots() -> None:
+    gateway = _FakeGateway()
+    gateway.snapshots["snapshot-alice"] = SandboxCloudSnapshot(
+        tool_id="tool-studio-snapshot",
+        snapshot_id="snapshot-alice",
+        session_id="expired-alice",
+        user_session_id="user-alice",
+        region="cn-beijing",
+        status="Ready",
+        reason="Expired",
+        created_at="2026-08-06T09:00:00Z",
+        display_name="Alice Codex",
+        created_by="alice",
+    )
+    gateway.snapshots["snapshot-failed"] = SandboxCloudSnapshot(
+        tool_id="tool-studio-snapshot",
+        snapshot_id="snapshot-failed",
+        session_id="failed-session",
+        user_session_id="user-failed",
+        region="cn-beijing",
+        status="Failed",
+        reason="Create failed",
+        created_at="2026-08-06T10:00:00Z",
+        display_name="Failed Codex",
+        created_by="alice",
+    )
+
+    with TestClient(_app(gateway)) as client:
+        ordinary = client.get(
+            "/web/sandbox/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+        admin = client.get(
+            "/web/sandbox/sessions",
+            headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
+        )
+
+    assert ordinary.status_code == 200
+    assert "snapshots" not in ordinary.json()
+    assert "resumed-snapshot-alice" in {
+        item["sessionId"] for item in admin.json()["sessions"]
+    }
+    assert "snapshots" not in admin.json()
+    assert "resumed-snapshot-failed" not in gateway.sessions
 
 
 def test_sandbox_list_scope_follows_user_role() -> None:

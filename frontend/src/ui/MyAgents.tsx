@@ -540,8 +540,14 @@ export function MyAgents({
     setSandboxAgents([]);
     try {
       const sessions = type === "codex"
-        ? await sandboxClient.listSessions({ signal: controller.signal })
-        : await sandboxClient.listAgentSessions(type, { signal: controller.signal });
+        ? await sandboxClient.listSessions({
+            signal: controller.signal,
+            autoResumeSnapshots: true,
+          })
+        : await sandboxClient.listAgentSessions(type, {
+            signal: controller.signal,
+            autoResumeSnapshots: true,
+          });
       if (sandboxRequestRef.current !== requestId) return;
       setSandboxAgents(sessions.map(sandboxToAgent));
     } catch (cause) {
