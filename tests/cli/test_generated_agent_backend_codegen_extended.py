@@ -50,6 +50,7 @@ from veadk.cli.generated_agent_codegen import (
 from veadk.cli.generated_agent_security import (
     DebugPolicyError,
     MAX_DEPTH,
+    MAX_INSTRUCTION_LEN,
     MAX_ITERATIONS,
     validate_debug_policy,
     validate_project_policy,
@@ -341,6 +342,20 @@ def test_security_rejects_unsupported_component_configuration(
 ) -> None:
     with pytest.raises(DebugPolicyError):
         validate_debug_policy(draft)
+
+
+def test_security_allows_instruction_up_to_limit_and_rejects_overflow() -> None:
+    validate_project_policy(
+        AgentDraft(name="demo", instruction="x" * MAX_INSTRUCTION_LEN),
+    )
+
+    with pytest.raises(
+        DebugPolicyError,
+        match=rf"instruction is too long \(>{MAX_INSTRUCTION_LEN}\)",
+    ):
+        validate_project_policy(
+            AgentDraft(name="demo", instruction="x" * (MAX_INSTRUCTION_LEN + 1)),
+        )
 
 
 def test_security_rejects_agent_tree_beyond_depth_limit() -> None:
