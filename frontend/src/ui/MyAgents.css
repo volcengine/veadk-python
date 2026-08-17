@@ -193,48 +193,6 @@
   opacity: 0.58;
 }
 
-.my-agent-handoff-button {
-  color: var(--white);
-}
-
-.my-agent-handoff-button::before {
-  background-color: var(--purple-500);
-  background-image: linear-gradient(
-    105deg,
-    var(--blue-500) 0%,
-    var(--purple-500) 36%,
-    color-mix(in srgb, var(--purple-400) 94%, var(--purple-500)) 60%,
-    var(--blue-500) 100%
-  );
-  background-position: 32% 50%;
-  background-size: 160% 100%;
-  transition-property:
-    opacity,
-    background-color,
-    background-position,
-    transform,
-    box-shadow,
-    border-color;
-}
-
-.my-agent-handoff-button:hover:not(:disabled)::before {
-  background-position: 68% 50%;
-}
-
-.my-agent-handoff-button:active:not(:disabled)::before {
-  background-color: var(--purple-500);
-  background-image: linear-gradient(
-    105deg,
-    var(--blue-500) 0%,
-    var(--purple-500) 46%,
-    var(--blue-500) 100%
-  );
-}
-
-.my-agent-handoff-button:disabled::before {
-  background-image: none;
-}
-
 .my-agent-results {
   flex: 1;
   min-height: 0;

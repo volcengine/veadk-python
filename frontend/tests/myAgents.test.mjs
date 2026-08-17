@@ -105,10 +105,7 @@ test("keeps a primary create action visible above the scrolling results", () => 
     pageSource,
     /className="my-agent-create-secondary"[\s\S]*?<HandoffIcon \/>[\s\S]*?<span>接力<\/span>/,
   );
-  assert.match(
-    pageSource,
-    /<Button[\s\S]*?className="my-agent-handoff-button"[\s\S]*?color="discovery"[\s\S]*?<HandoffIcon \/>[\s\S]*?接力/,
-  );
+  assert.doesNotMatch(pageSource, /className="my-agent-handoff-button"/);
   assert.match(
     pageStyles,
     /\.my-agent-create-secondary\s*\{[\s\S]*?height: 32px;[\s\S]*?gap: 6px;[\s\S]*?font-size: 12\.5px;/,
@@ -120,10 +117,6 @@ test("keeps a primary create action visible above the scrolling results", () => 
   assert.match(
     pageStyles,
     /\.my-agent-create-secondary:hover:not\(:disabled\)\s*\{[\s\S]*?background-position: 68% 50%/,
-  );
-  assert.match(
-    pageStyles,
-    /\.my-agent-handoff-button::before\s*\{[\s\S]*?background-image: linear-gradient\([\s\S]*?var\(--blue-500\)[\s\S]*?var\(--purple-500\)[\s\S]*?var\(--purple-400\)/,
   );
   assert.match(
     pageStyles,
