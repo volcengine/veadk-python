@@ -150,6 +150,12 @@ class SandboxConfigurationError(SandboxError):
     code = "SANDBOX_NOT_CONFIGURED"
 
 
+class SandboxToolQuotaError(SandboxConfigurationError):
+    """The configured cloud account cannot create another Sandbox Session."""
+
+    code = "SANDBOX_TOOL_QUOTA_EXCEEDED"
+
+
 class SandboxPermissionError(SandboxError):
     """The caller is not allowed to use a Sandbox capability."""
 
@@ -230,8 +236,34 @@ def _safe_error_message(error: object) -> str:
             next_error = current.__context__
         current = next_error
     raw_message = "\n".join(parts) if parts else str(error).strip()
-    message = _redact_public_text(raw_message, maximum=20_000)
+    message = _redact_public_text(raw_message, maximum=2_000)
     return message or type(error).__name__
+
+
+def _is_agentkit_tool_quota_error(error: BaseException) -> bool:
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).lower()
+        if "quotaexceeded.tool" in message or (
+            "tool" in message and "quota exceeded" in message
+        ):
+            return True
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+    return False
+
+
+def _raise_tool_configuration_error(error: BaseException) -> None:
+    if _is_agentkit_tool_quota_error(error):
+        raise SandboxToolQuotaError(
+            "Sandbox Tool 配额不足，请管理员释放不用的 Tool 或申请扩容。"
+        ) from error
+    raise SandboxConfigurationError(
+        "Sandbox Tool 不存在或已失效，请管理员重新配置。"
+    ) from error
 
 
 def _sandbox_endpoint_export_enabled() -> bool:
@@ -1032,6 +1064,8 @@ class AgentkitSandboxGateway:
             except Exception as error:
                 if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
                     continue
+                if is_agentkit_resource_not_found(error):
+                    _raise_tool_configuration_error(error)
                 raise SandboxProvisioningError(
                     f"读取 AgentKit Session 失败：{_safe_error_message(error)}"
                 ) from error
@@ -1084,6 +1118,8 @@ class AgentkitSandboxGateway:
             except Exception as error:
                 if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
                     continue
+                if is_agentkit_resource_not_found(error):
+                    _raise_tool_configuration_error(error)
                 raise SandboxProvisioningError(
                     f"读取 AgentKit Session 快照失败：{_safe_error_message(error)}"
                 ) from error
@@ -1154,6 +1190,10 @@ class AgentkitSandboxGateway:
             except Exception as error:
                 if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
                     continue
+                if is_agentkit_resource_not_found(error):
+                    _raise_tool_configuration_error(error)
+                if _is_agentkit_tool_quota_error(error):
+                    _raise_tool_configuration_error(error)
                 if _CREATE_SESSION_START_FAIL_CODE not in str(error):
                     raise SandboxProvisioningError(
                         f"创建 AgentKit 沙箱会话失败：{_safe_error_message(error)}"
@@ -3013,6 +3053,16 @@ def mount_sandbox_routes(
                     response = JSONResponse(dict(previous_response))
                     response.headers["Cache-Control"] = "no-store"
                     return response
+                if (
+                    pairing_state == "failed"
+                    and pairing.get("failedStage") == "creating-session"
+                ):
+                    detail = str(
+                        pairing.get("error") or "云端 Session 创建失败。"
+                    ).strip()
+                    raise SandboxSessionUnavailableError(
+                        f"{detail} 请刷新配对码后重试。"
+                    )
                 if pairing_state == "creating":
                     raise SandboxSessionUnavailableError(
                         "云端 Agent 正在创建，请稍后重试。"
@@ -3027,6 +3077,7 @@ def mount_sandbox_routes(
                     "projectName": project_name,
                     "agentName": display_name,
                     "handoffId": handoff_id,
+                    "remoteRepoDir": remote_repo_dir,
                     "requestedAt": int(time.time()),
                 }
             )

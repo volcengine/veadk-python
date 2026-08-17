@@ -619,13 +619,22 @@ class CodexAppServerSession:
                         raise TimeoutError
                     if event_task in done:
                         yield event_task.result()
+                        # Treat the turn timeout as an inactivity bound, not an
+                        # absolute wall-clock limit. Long coding tasks can run
+                        # well beyond ten minutes while continuing to emit
+                        # reasoning, tool, and progress events.
+                        deadline = (
+                            asyncio.get_running_loop().time() + _TURN_TIMEOUT_SECONDS
+                        )
                     else:
                         event_task.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
                             await event_task
             except TimeoutError as error:
                 await self.interrupt()
-                raise CodexAppServerError("Codex 智能体响应超时，请重试。") from error
+                raise CodexAppServerError(
+                    "Codex 智能体长时间没有新进度，已停止本次任务，请重试。"
+                ) from error
 
             turn_result = completion.result()
             status = str(turn_result.get("status") or "completed")

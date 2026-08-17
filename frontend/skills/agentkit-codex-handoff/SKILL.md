@@ -16,7 +16,7 @@ Include only:
 - Git tracked files and non-ignored untracked files, including working-tree edits and deletions
 - repository-level `AGENTS.md` files selected by the same Git rules
 - Git branch, HEAD commit, sanitized remote URL, and status metadata
-- a generated `HANDOFF.md`; append the generated section when the project already has one
+- a generated `HANDOFF.md`; append the generated section when the project already has one, and keep the generated metadata out of Git commits
 - every user and assistant message visible in the active Codex task before the current handoff turn, including progress commentary and interrupted turns
 - local PNG, JPEG, GIF, or WebP images attached to those prior user messages
 
@@ -28,6 +28,8 @@ Never include:
 - ignored files such as `.env` unless they are deliberately tracked
 
 Do not place conversation history in the repository, `HANDOFF.md`, retained project bundle, logs, or command output. Send it only through the authenticated one-time continuation request. Do not claim that the remote environment is an exact copy of local Codex; it is a visible-history and project handoff into a separately configured Studio runtime.
+
+The restore helper hides a newly generated `HANDOFF.md` through the repository-local Git exclude file. When the repository already tracks `HANDOFF.md`, it applies `skip-worktree` in the temporary cloud checkout so the appended transfer metadata is not staged by broad `git add` commands. Never commit generated transfer metadata. If the cloud task deliberately needs to edit a tracked `HANDOFF.md`, first remove the temporary flag with `git update-index --no-skip-worktree HANDOFF.md`, then delete the generated section before committing.
 
 ## Workflow
 
@@ -88,7 +90,7 @@ Do not place conversation history in the repository, `HANDOFF.md`, retained proj
    returns after Studio confirms that the cloud Codex completed the continuation and generated a visible reply;
    the cloud task then keeps running independently.
 
-11. Delete the temporary history and handoff files after the command returns. Confirm that the script created a temporary Studio Sandbox, restored the project, injected the visible conversation history and images, and sent the final continuation message. Report the Sandbox display name, session ID, remote project directory, restored file count, imported message count, imported image count, Git status, GitHub authentication result, and continuation status. Do not claim success when the continuation stream reports an error or closes before completion.
+11. Delete the temporary history and handoff files after the command returns. Confirm that the script created a temporary Studio Sandbox, restored the project, kept generated handoff metadata out of Git status, injected the visible conversation history and images, and sent the final continuation message. Report the Sandbox display name, session ID, remote project directory, restored file count, imported message count, imported image count, Git status, GitHub authentication result, and continuation status. Do not claim success when the continuation stream reports an error or closes before completion.
 
 ## Script options
 

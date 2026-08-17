@@ -19,7 +19,9 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import ANY
 
+import httpx
 import pytest
+import requests
 from click.testing import CliRunner
 
 from veadk.cli.cli_frontend import studio
@@ -29,6 +31,7 @@ from veadk.cli.studio_update import (
     StudioDeploymentTarget,
     find_studio_deployments,
     load_deployed_site_logo,
+    retry_transient_cloud_operation,
 )
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
@@ -174,6 +177,87 @@ def test_find_studio_deployments_searches_regions_and_filters_project(
     ]
 
 
+def test_find_studio_deployments_retries_transient_cloud_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts: list[int] = []
+    delays: list[float] = []
+
+    class _FakeVeFaaS:
+        def __init__(self, **_: str) -> None:
+            self.client = SimpleNamespace(
+                get_function=lambda _request: SimpleNamespace(project_name="default")
+            )
+
+        def _list_application(self, app_name: str) -> list[dict[str, object]]:
+            assert app_name == "studio-app"
+            attempts.append(len(attempts) + 1)
+            if len(attempts) < 3:
+                cause = requests.ReadTimeout("read timed out")
+                raise ValueError("List application failed") from cause
+            return [
+                {
+                    "Name": "studio-app",
+                    "Id": "app-id",
+                    "CloudResource": json.dumps(
+                        {
+                            "framework": {
+                                "function": {"Id": "function-app-id"},
+                                "url": {"system_url": "https://studio.example.com"},
+                            }
+                        }
+                    ),
+                }
+            ]
+
+    monkeypatch.setattr("veadk.cli.studio_update.VeFaaS", _FakeVeFaaS)
+
+    targets = find_studio_deployments(
+        access_key="ak",
+        secret_key="sk",
+        application_name="studio-app",
+        region="ap-southeast-1",
+        project="default",
+        provider="byteplus",
+        retry_delay_seconds=0.25,
+        sleep=delays.append,
+    )
+
+    assert attempts == [1, 2, 3]
+    assert delays == [0.25, 0.5]
+    assert targets == [_target(region="ap-southeast-1")]
+
+
+def test_find_studio_deployments_does_not_retry_non_transient_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    class _FakeVeFaaS:
+        def __init__(self, **_: str) -> None:
+            pass
+
+        def _list_application(self, app_name: str) -> list[dict[str, object]]:
+            nonlocal attempts
+            attempts += 1
+            raise ValueError(f"invalid application filter: {app_name}")
+
+    monkeypatch.setattr("veadk.cli.studio_update.VeFaaS", _FakeVeFaaS)
+
+    with pytest.raises(ValueError, match="invalid application filter"):
+        find_studio_deployments(
+            access_key="ak",
+            secret_key="sk",
+            application_name="studio-app",
+            region="ap-southeast-1",
+            project="default",
+            provider="byteplus",
+            sleep=lambda _: pytest.fail("non-transient failures must not sleep"),
+        )
+
+    assert attempts == 1
+
+
 def test_list_applications_uses_deployment_region(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -234,6 +318,28 @@ def test_load_deployed_site_logo_uses_current_branding_url(
 
     assert load_deployed_site_logo(_target()) == expected
     assert resolved_urls == ["https://studio.example.com/web/site-logo"]
+
+
+def test_load_deployed_site_logo_retries_timeout_and_suggests_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def _get(*_: object, **__: object) -> object:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ReadTimeout("read timed out")
+
+    monkeypatch.setattr("veadk.cli.studio_update.httpx.get", _get)
+
+    with pytest.raises(ValueError, match=r"Retry later or pass --site-logo"):
+        load_deployed_site_logo(
+            _target(), retry_delay_seconds=0.25, sleep=delays.append
+        )
+
+    assert attempts == 3
+    assert delays == [0.25, 0.5]
 
 
 def test_studio_update_preserves_branding_and_updates_existing_ids(
@@ -519,6 +625,41 @@ def test_studio_update_missing_target_does_not_build(
 
     assert result.exit_code == 1
     assert "was not found" in result.output
+
+
+def test_studio_update_surfaces_compact_discovery_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _find(**_: object) -> list[StudioDeploymentTarget]:
+        cause = requests.ReadTimeout("read timed out")
+        raise ValueError("List application failed") from cause
+
+    monkeypatch.setattr("veadk.cli.studio_update.find_studio_deployments", _find)
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_frontend_assets",
+        lambda *_: pytest.fail("frontend should not be built"),
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "update",
+            "--provider",
+            "byteplus",
+            "--vefaas-app-name",
+            "studio-app",
+            "--byteplus-access-key",
+            "bp-ak",
+            "--byteplus-secret-key",
+            "bp-sk",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Could not query the existing Studio deployment after retrying" in (
+        result.output
+    )
+    assert "Traceback" not in result.output
 
 
 def test_studio_update_explicit_branding_overrides_cloud_values(
@@ -1086,6 +1227,97 @@ def test_application_operations_use_deployment_region(
         ("DeleteApplication", "cn-shanghai"),
         ("GetApplicationRevisionLog", "cn-shanghai"),
     ]
+
+
+def test_application_status_retries_transient_network_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    delays: list[float] = []
+    service = object.__new__(VeFaaS)
+    service.session_token = ""
+    cast(Any, service).ak = "ak"
+    cast(Any, service).sk = "sk"
+    cast(Any, service).region = "ap-southeast-1"
+    cast(Any, service).provider = "byteplus"
+
+    def _ve_request(**_: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise requests.ReadTimeout("TLS handshake operation timed out")
+        return {"Result": {"Status": "deploy_success"}}
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.ve_request", _ve_request)
+
+    status, _ = service._get_application_status(
+        "application-id", retry_delay_seconds=0.25, sleep=delays.append
+    )
+
+    assert status == "deploy_success"
+    assert calls == 3
+    assert delays == [0.25, 0.5]
+
+
+def test_application_status_does_not_retry_non_transient_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    service = object.__new__(VeFaaS)
+    service.session_token = ""
+    cast(Any, service).ak = "ak"
+    cast(Any, service).sk = "sk"
+    cast(Any, service).region = "cn-beijing"
+    cast(Any, service).provider = "volcengine"
+
+    def _ve_request(**_: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        raise ValueError("permission denied")
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.ve_request", _ve_request)
+
+    with pytest.raises(ValueError, match="permission denied"):
+        service._get_application_status("application-id", sleep=lambda _: None)
+
+    assert calls == 1
+
+
+def test_retry_transient_cloud_operation_retries_idempotent_call() -> None:
+    calls = 0
+    delays: list[float] = []
+
+    def _operation() -> str:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise requests.ReadTimeout("read timed out")
+        return "ready"
+
+    assert (
+        retry_transient_cloud_operation(
+            _operation,
+            retry_delay_seconds=0.25,
+            sleep=delays.append,
+        )
+        == "ready"
+    )
+    assert calls == 3
+    assert delays == [0.25, 0.5]
+
+
+def test_retry_transient_cloud_operation_does_not_retry_permanent_error() -> None:
+    calls = 0
+
+    def _operation() -> None:
+        nonlocal calls
+        calls += 1
+        raise ValueError("permission denied")
+
+    with pytest.raises(ValueError, match="permission denied"):
+        retry_transient_cloud_operation(_operation, sleep=lambda _: None)
+
+    assert calls == 1
 
 
 def test_application_logs_use_latest_revision_and_bounded_limit(

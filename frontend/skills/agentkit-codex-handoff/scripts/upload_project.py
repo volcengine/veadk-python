@@ -369,9 +369,11 @@ def generated_handoff(state: ProjectState, supplied: Path | None) -> bytes:
         .replace("+00:00", "Z")
     )
     status = state.status or "clean"
-    text = f"""# Studio Project Handoff
+    text = f"""# Project Continuation Context
 
 Generated: {timestamp}
+
+> Generated transfer metadata. Do not commit this file or this generated section.
 
 ## Source state
 
@@ -384,9 +386,9 @@ Generated: {timestamp}
 {status}
 ```
 
-## Transfer boundary
+## Transfer note
 
-This snapshot contains tracked and non-ignored project files plus working-tree changes. Repository `AGENTS.md` files are ordinary project files and remain in place. Codex system or developer prompts, reasoning, tool logs, databases, global configuration, Skills, and SSH keys were not transferred. Sanitized user-visible conversation history and GitHub authentication, when enabled, travel through separate ephemeral payloads and are not embedded in this snapshot.
+This snapshot contains tracked and non-ignored project files plus working-tree changes. Repository `AGENTS.md` files are ordinary project files and remain in place. System or developer prompts, reasoning, tool logs, databases, global configuration, local extensions, and SSH keys were not transferred. Sanitized user-visible conversation history and GitHub authentication, when enabled, travel through separate ephemeral payloads and are not embedded in this snapshot.
 """
     return existing + text.encode("utf-8")
 
@@ -461,6 +463,32 @@ def safe_extract(archive_path, destination):
                     raise RuntimeError(f"unsafe archive link: {member.name}")
         archive.extractall(destination, members=members)
     return len(members)
+
+def hide_generated_handoff(repo):
+    git_dir = repo / ".git"
+    handoff = repo / "HANDOFF.md"
+    if not git_dir.is_dir() or not handoff.is_file():
+        return "none"
+    tracked = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "--error-unmatch", "--", "HANDOFF.md"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if tracked.returncode == 0:
+        subprocess.run(
+            ["git", "-C", str(repo), "update-index", "--skip-worktree", "--", "HANDOFF.md"],
+            check=True,
+        )
+        return "skip-worktree"
+    exclude = git_dir / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    existing = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
+    if "/HANDOFF.md" not in {line.strip() for line in existing.splitlines()}:
+        with exclude.open("a", encoding="utf-8") as handle:
+            if existing and not existing.endswith("\n"):
+                handle.write("\n")
+            handle.write("/HANDOFF.md\n")
+    return "excluded"
 
 def install_github_credentials(source, repo):
     if source is None:
@@ -572,6 +600,7 @@ if remote and (repo / ".git").exists():
     subprocess.run(
         ["git", "-C", str(repo), "remote", "set-url", "origin", remote], check=False
     )
+handoff_git_policy = hide_generated_handoff(repo)
 github_auth = install_github_credentials(args.github_credentials, repo)
 status = ""
 if (repo / ".git").exists():
@@ -590,6 +619,7 @@ print(
             "fileCount": file_count,
             "gitStatus": status,
             "githubAuth": github_auth,
+            "handoffGitPolicy": handoff_git_policy,
         },
         ensure_ascii=False,
     )

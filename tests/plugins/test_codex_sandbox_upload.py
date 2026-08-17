@@ -129,11 +129,21 @@ def test_build_and_restore_preserves_worktree_and_github_auth(
     result = json.loads(restored.stdout.strip().splitlines()[-1])
 
     assert result["githubAuth"] is True
+    assert result["handoffGitPolicy"] == "excluded"
     assert (destination / "app.py").read_text(encoding="utf-8") == 'print("after")\n'
     assert not (destination / "deleted.txt").exists()
     assert (destination / "new.txt").read_text(encoding="utf-8") == "new file\n"
     assert (destination / "AGENTS.md").is_file()
     assert (destination / "HANDOFF.md").is_file()
+    assert "Codex" not in (destination / "HANDOFF.md").read_text(encoding="utf-8")
+    assert "Do not commit" in (destination / "HANDOFF.md").read_text(encoding="utf-8")
+    assert "/HANDOFF.md" in (destination / ".git/info/exclude").read_text(
+        encoding="utf-8"
+    )
+    assert "HANDOFF.md" not in subprocess.check_output(
+        ["git", "-C", str(destination), "status", "--short"],
+        text=True,
+    )
     assert (destination / "important.log").read_text(
         encoding="utf-8"
     ) == "tracked log\n"
@@ -152,6 +162,56 @@ def test_build_and_restore_preserves_worktree_and_github_auth(
     assert stat.S_IMODE(token_path.stat().st_mode) == 0o600
     assert token in (home / ".config/gh/hosts.yml").read_text(encoding="utf-8")
     assert not credentials.exists()
+
+
+def test_restore_hides_generated_section_for_tracked_handoff(
+    upload_project, tmp_path: Path
+) -> None:
+    source = tmp_path / "source"
+    work = tmp_path / "work"
+    stage = tmp_path / "stage"
+    destination = tmp_path / "home" / "demo"
+    for directory in (source, work, stage, destination.parent):
+        directory.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(source)], check=True)
+    _git(source, "config", "user.name", "Test User")
+    _git(source, "config", "user.email", "test@example.com")
+    (source / "app.py").write_text('print("hello")\n', encoding="utf-8")
+    (source / "HANDOFF.md").write_text("# Team handoff\n", encoding="utf-8")
+    _git(source, "add", ".")
+    _git(source, "commit", "-qm", "base")
+
+    state = upload_project.inspect_project(source)
+    bundle = upload_project.build_bundle(state, "demo", None, work, False)
+    with tarfile.open(bundle, "r:gz") as archive:
+        archive.extractall(stage)
+    restored = subprocess.run(
+        [
+            sys.executable,
+            str(stage / "restore_project.py"),
+            "--stage",
+            str(stage),
+            "--repo",
+            str(destination),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = json.loads(restored.stdout.strip().splitlines()[-1])
+
+    assert result["handoffGitPolicy"] == "skip-worktree"
+    handoff = (destination / "HANDOFF.md").read_text(encoding="utf-8")
+    assert handoff.startswith("# Team handoff\n")
+    assert "Do not commit" in handoff
+    assert "HANDOFF.md" not in subprocess.check_output(
+        ["git", "-C", str(destination), "status", "--short"],
+        text=True,
+    )
+    assert subprocess.check_output(
+        ["git", "-C", str(destination), "ls-files", "-v", "HANDOFF.md"],
+        text=True,
+    ).startswith("S ")
 
 
 def test_preview_flags_tracked_sensitive_files(upload_project, tmp_path: Path) -> None:

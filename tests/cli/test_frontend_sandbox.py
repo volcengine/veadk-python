@@ -1451,6 +1451,58 @@ def test_codex_project_handoff_upload_failure_is_visible_and_session_is_reused(
     assert gateway.created == 1
 
 
+def test_codex_project_handoff_creation_retry_preserves_original_error() -> None:
+    class _CreateFailureGateway(_FakeGateway):
+        async def create_session(
+            self,
+            tool_id: str,
+            display_name: str = "",
+            username: str = "",
+            creator_name: str = "",
+            agent_kind: str = "",
+        ) -> SandboxCloudSession:
+            del tool_id, display_name, username, creator_name, agent_kind
+            self.created += 1
+            raise SandboxProvisioningError("AgentKit Tool 已失效。")
+
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
+    gateway = _CreateFailureGateway()
+
+    with TestClient(_app(gateway)) as client:
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
+            headers={"X-Test-User": "alice"},
+        )
+        code = pairing.json()["pairingCode"]
+        payload = {
+            "pairingCode": code,
+            "projectName": "Repo",
+            "agentName": "恢复仓库任务",
+            "handoffId": "handoff-request-create-failure",
+        }
+        failed = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json=payload,
+        )
+        retried = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json=payload,
+        )
+        status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert failed.status_code == 502
+    assert retried.status_code == 409
+    assert "AgentKit Tool 已失效" in retried.text
+    assert "刷新配对码后重试" in retried.text
+    assert "不能用于不同的请求参数" not in retried.text
+    assert status.json()["state"] == "failed"
+    assert status.json()["failedStage"] == "creating-session"
+    assert gateway.created == 1
+
+
 def test_codex_project_handoff_failure_status_rejects_mismatched_request() -> None:
     frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
     gateway = _FakeGateway()
@@ -2546,6 +2598,43 @@ async def test_gateway_does_not_retry_non_not_found_creation_errors() -> None:
         await gateway.create_session("tool-1")
 
     assert regions == ["cn-beijing"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_reports_expired_tool_without_sdk_error_chain() -> None:
+    class _Client:
+        def list_sessions(self, request: object) -> None:
+            del request
+            cause = RuntimeError("request bytes and RequestId=secret-noise")
+            raise RuntimeError("InvalidResource.NotFound: Tool") from cause
+
+    gateway = AgentkitSandboxGateway(_Client())
+
+    with pytest.raises(
+        SandboxConfigurationError,
+        match="Sandbox Tool 不存在或已失效，请管理员重新配置",
+    ) as raised:
+        await gateway.list_sessions("tool-expired")
+
+    assert "RequestId" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_gateway_reports_tool_quota_with_actionable_message() -> None:
+    class _Client:
+        def create_session(self, request: object) -> None:
+            del request
+            raise RuntimeError("QuotaExceeded.Tool: quota exceeded")
+
+    gateway = AgentkitSandboxGateway(_Client())
+
+    with pytest.raises(
+        SandboxConfigurationError,
+        match="Sandbox Tool 配额不足，请管理员释放不用的 Tool 或申请扩容",
+    ) as raised:
+        await gateway.create_session("tool-full")
+
+    assert raised.value.code == "SANDBOX_TOOL_QUOTA_EXCEEDED"
 
 
 @pytest.mark.asyncio

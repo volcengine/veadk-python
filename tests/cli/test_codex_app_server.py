@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+import veadk.cli.codex_app_server as codex_app_server
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerSession,
@@ -321,6 +322,35 @@ class _FakeWebSocket:
         await self.queue.put(None)
 
 
+class _SlowActiveWebSocket(_FakeWebSocket):
+    """Emit regular progress for longer than one inactivity timeout."""
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        if message.get("method") != "turn/start":
+            await super().send(raw)
+            return
+        self.messages.append(message)
+        request_id = message["id"]
+        await self.queue.put(
+            json.dumps({"id": request_id, "result": {"turn": {"id": "slow-turn"}}})
+        )
+
+        async def _emit_progress() -> None:
+            for index in range(3):
+                await asyncio.sleep(0.03)
+                await self._notification(
+                    "item/agentMessage/delta",
+                    {"itemId": "slow-message", "delta": str(index)},
+                )
+            await self._notification(
+                "turn/completed",
+                {"turn": {"id": "slow-turn", "status": "completed"}},
+            )
+
+        asyncio.create_task(_emit_progress())
+
+
 class _MissingRolloutWebSocket(_FakeWebSocket):
     async def send(self, raw: str) -> None:
         message = json.loads(raw)
@@ -447,6 +477,27 @@ async def test_reasoning_deltas_stream_as_accumulated_thinking() -> None:
 
     assert [event.text for event in thinking] == ["分", "分析", "分析"]
     assert [event.status for event in thinking] == ["running", "running", "done"]
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_turn_timeout_resets_when_progress_events_arrive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(codex_app_server, "_TURN_TIMEOUT_SECONDS", 0.05)
+    websocket = _SlowActiveWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    events = [event async for event in session.stream_turn("long-running")]
+
+    assert "".join(event.text for event in events if event.kind == "text") == "012"
+    assert not any(
+        message.get("method") == "turn/interrupt" for message in websocket.messages
+    )
     await session.close()
 
 

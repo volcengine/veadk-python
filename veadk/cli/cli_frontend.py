@@ -9150,6 +9150,7 @@ def frontend_update(
 ) -> None:
     """Build local Studio sources and update an existing VeFaaS Application."""
     import shutil
+    from functools import partial
 
     from veadk.cli.studio_package import (
         build_frontend_assets,
@@ -9157,8 +9158,10 @@ def frontend_update(
         write_studio_package,
     )
     from veadk.cli.studio_update import (
+        _is_retryable_cloud_read_error,
         find_studio_deployments,
         load_deployed_site_logo,
+        retry_transient_cloud_operation,
     )
     from veadk.cli.studio_knowledge_signing import (
         STUDIO_KNOWLEDGE_SIGNING_KEY_ENV,
@@ -9191,15 +9194,22 @@ def frontend_update(
         provider=provider_id,
     )
 
-    targets = find_studio_deployments(
-        access_key=ak,
-        secret_key=sk,
-        session_token=session_token,
-        application_name=vefaas_app_name,
-        region=region,
-        project=project,
-        provider=provider_id,
-    )
+    try:
+        targets = find_studio_deployments(
+            access_key=ak,
+            secret_key=sk,
+            session_token=session_token,
+            application_name=vefaas_app_name,
+            region=region,
+            project=project,
+            provider=provider_id,
+        )
+    except Exception as error:
+        detail = _safe_exception_detail(error, secrets=(ak, sk, session_token))
+        raise click.ClickException(
+            "Could not query the existing Studio deployment after retrying "
+            f"transient cloud errors: {detail}"
+        ) from error
     if not targets:
         default_scope = (
             DEFAULT_BYTEPLUS_REGION
@@ -9703,27 +9713,33 @@ def frontend_update(
                                 else None
                             )
                             future = ex.submit(
-                                ensure_skill_creator_model_credential,
-                                tool_id=tool_id,
-                                region=target.region,
-                                access_key=ak,
-                                secret_key=sk,
-                                session_token=session_token,
-                                provider=provider_id,
-                                model_name=code_model_name,
+                                retry_transient_cloud_operation,
+                                partial(
+                                    ensure_skill_creator_model_credential,
+                                    tool_id=tool_id,
+                                    region=target.region,
+                                    access_key=ak,
+                                    secret_key=sk,
+                                    session_token=session_token,
+                                    provider=provider_id,
+                                    model_name=code_model_name,
+                                ),
                             )
                         else:
                             future = ex.submit(
-                                ensure_studio_agent_model_credential,
-                                tool_id=tool_id,
-                                kind=base_kind,
-                                model_name=sandbox_agent_model_name,
-                                model_base_url=sandbox_model_base_url,
-                                region=target.region,
-                                access_key=ak,
-                                secret_key=sk,
-                                session_token=session_token,
-                                provider=provider_id,
+                                retry_transient_cloud_operation,
+                                partial(
+                                    ensure_studio_agent_model_credential,
+                                    tool_id=tool_id,
+                                    kind=base_kind,
+                                    model_name=sandbox_agent_model_name,
+                                    model_base_url=sandbox_model_base_url,
+                                    region=target.region,
+                                    access_key=ak,
+                                    secret_key=sk,
+                                    session_token=session_token,
+                                    provider=provider_id,
+                                ),
                             )
                         credential_futures[kind] = future
                     for kind, future in credential_futures.items():
@@ -9804,12 +9820,27 @@ def frontend_update(
                 ),
             }
         )
-        url = service.update_application_code_bundle(
-            application_id=target.application_id,
-            function_id=target.function_id,
-            path=str(package_dir),
-            environment_overrides=environment_overrides or None,
-        )
+        try:
+            url = service.update_application_code_bundle(
+                application_id=target.application_id,
+                function_id=target.function_id,
+                path=str(package_dir),
+                environment_overrides=environment_overrides or None,
+            )
+        except Exception as error:
+            if _is_retryable_cloud_read_error(error):
+                raise click.ClickException(
+                    "Studio update was interrupted by a temporary cloud network "
+                    "error after retrying. The cloud release may still be running; "
+                    "wait briefly and run the same update command again."
+                ) from error
+            detail = _safe_exception_detail(
+                error,
+                secrets=(ak, sk, session_token),
+            )
+            raise click.ClickException(
+                f"Could not finish the Studio update.\n{detail}"
+            ) from error
         click.echo("")
         click.echo(f"✅ Studio updated: {url}")
         click.echo(f"   application id: {target.application_id}")
