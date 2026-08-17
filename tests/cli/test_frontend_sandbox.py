@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import replace
@@ -27,11 +28,14 @@ import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
+from veadk.cli import frontend_sandbox
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerEvent,
     CodexDirectoryEntry,
     CodexDirectoryListing,
+    CodexImportedImage,
+    CodexImportedMessage,
     CodexModel,
     CodexPermissionSettings,
     CodexSkill,
@@ -44,8 +48,8 @@ from veadk.cli.frontend_sandbox import (
     STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH,
     AgentkitSandboxGateway,
     SandboxAgentSessionService,
-    SandboxCloudSnapshot,
     SandboxCloudSession,
+    SandboxCloudSnapshot,
     SandboxConfigurationError,
     SandboxConversationService,
     SandboxProvisioningError,
@@ -67,9 +71,14 @@ class _FakeCodex:
         self.active = False
         self.closed = False
         self.turns = turns
+        self.prompts: list[str] = []
         self.fail = fail
         self.approvals: list[tuple[str, str]] = []
         self.selected_skill_ids: tuple[str, ...] = ()
+        self.imported_history: tuple[CodexImportedMessage, ...] = ()
+
+    async def connect(self) -> None:
+        return None
 
     async def stream_turn(
         self, prompt: str, skill_ids: tuple[str, ...] = ()
@@ -77,6 +86,7 @@ class _FakeCodex:
         self.active = True
         self.workspace_locked = True
         self.turns.append(self.thread_id)
+        self.prompts.append(prompt)
         self.selected_skill_ids = skill_ids
         try:
             if self.fail:
@@ -122,6 +132,9 @@ class _FakeCodex:
                 )
         finally:
             self.active = False
+
+    async def interrupt(self) -> None:
+        self.active = False
 
     async def list_models(self) -> tuple[CodexModel, ...]:
         return (
@@ -211,6 +224,17 @@ class _FakeCodex:
 
     async def resume_thread(self, thread_id: str) -> CodexThreadSnapshot:
         return self._snapshot(thread_id)
+
+    async def read_thread(self, thread_id: str) -> CodexThreadSnapshot:
+        active_thread_id = self.thread_id
+        workspace_locked = self.workspace_locked
+        snapshot = self._snapshot(thread_id)
+        self.thread_id = active_thread_id
+        self.workspace_locked = workspace_locked
+        return snapshot
+
+    async def inject_history(self, messages: tuple[CodexImportedMessage, ...]) -> None:
+        self.imported_history = messages
 
     async def fork_thread(self) -> CodexThreadSnapshot:
         return self._snapshot("thread-fork")
@@ -854,12 +878,13 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sandbox_client_disconnect_interrupts_only_the_active_turn() -> None:
+async def test_sandbox_client_disconnect_keeps_the_cloud_turn_running() -> None:
     class _CancellableCodex(_FakeCodex):
         def __init__(self, turns: list[str]) -> None:
             super().__init__(turns)
             self.partial_sent = asyncio.Event()
-            self.cancelled = asyncio.Event()
+            self.release = asyncio.Event()
+            self.settled = asyncio.Event()
 
         async def stream_turn(
             self, prompt: str, skill_ids: tuple[str, ...] = ()
@@ -872,10 +897,11 @@ async def test_sandbox_client_disconnect_interrupts_only_the_active_turn() -> No
             try:
                 yield CodexAppServerEvent(kind="text", text="partial")
                 self.partial_sent.set()
-                await asyncio.Event().wait()
+                await self.release.wait()
+                yield CodexAppServerEvent(kind="text", text="completed")
             finally:
                 self.active = False
-                self.cancelled.set()
+                self.settled.set()
 
     class _CancellableGateway(_FakeGateway):
         async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
@@ -927,15 +953,68 @@ async def test_sandbox_client_disconnect_interrupts_only_the_active_turn() -> No
         send,
     )
 
-    await asyncio.wait_for(connection.cancelled.wait(), timeout=1)
     assert any(b"partial" in message.get("body", b"") for message in response_messages)
-    assert connection.active is False
+    assert connection.active is True
+    assert connection.settled.is_set() is False
     assert connection.closed is False
+    connection.release.set()
+    await asyncio.wait_for(connection.settled.wait(), timeout=1)
+    assert connection.active is False
     follow_up = [
         event
         async for event in service.stream_message("remote-existing", "alice", "again")
     ]
     assert [event.text for event in follow_up] == ["reply:again"]
+
+
+@pytest.mark.asyncio
+async def test_read_thread_exposes_pending_prompt_while_turn_is_running() -> None:
+    class _PendingCodex(_FakeCodex):
+        def __init__(self, turns: list[str]) -> None:
+            super().__init__(turns)
+            self.release = asyncio.Event()
+
+        async def stream_turn(
+            self, prompt: str, skill_ids: tuple[str, ...] = ()
+        ) -> AsyncIterator[CodexAppServerEvent]:
+            del prompt, skill_ids
+            self.active = True
+            self.workspace_locked = True
+            try:
+                yield CodexAppServerEvent(kind="thinking", status="running")
+                await self.release.wait()
+            finally:
+                self.active = False
+
+    class _PendingGateway(_FakeGateway):
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            del session
+            connection = _PendingCodex(self.thread_ids)
+            self.connections.append(connection)
+            return connection
+
+    service = SandboxConversationService(_PendingGateway(), tool_id="tool-studio")
+    await service.connect("remote-existing", "alice")
+    events = service.stream_message("remote-existing", "alice", "继续")
+
+    first = await anext(events)
+    assert first.kind == "thinking"
+    with pytest.raises(frontend_sandbox.SandboxSessionUnavailableError):
+        await anext(service.stream_message("remote-existing", "alice", "重复发送"))
+    snapshot = await service.read_thread("remote-existing", "alice", "thread-1")
+    assert snapshot["messages"][-1]["role"] == "user"
+    assert snapshot["messages"][-1]["content"] == "继续"
+
+    await events.aclose()
+    connection = service._owned("remote-existing", "alice").codex
+    assert isinstance(connection, _PendingCodex)
+    assert connection.active is True
+    connection.release.set()
+    background_turn = service._owned("remote-existing", "alice").background_turn
+    assert background_turn is not None
+    await background_turn
+    settled = await service.read_thread("remote-existing", "alice", "thread-1")
+    assert settled["messages"][-1]["role"] == "assistant"
 
 
 def test_sandbox_routes_select_and_resolve_both_tool_variants() -> None:
@@ -981,6 +1060,52 @@ def test_sandbox_routes_select_and_resolve_both_tool_variants() -> None:
     assert deleted_temporary.json() == {"deleted": True}
 
 
+def test_sandbox_endpoint_export_requires_connected_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("STUDIO_EXPOSE_SANDBOX_ENDPOINT", raising=False)
+    gateway = _FakeGateway()
+    headers = {"X-Test-User": "alice"}
+    with TestClient(_app(gateway)) as client:
+        listed = client.get("/web/sandbox/sessions", headers=headers)
+        connected = client.post(
+            "/web/sandbox/sessions/remote-existing/connect",
+            headers=headers,
+        )
+        exported = client.get(
+            "/web/sandbox/sessions/remote-existing/endpoint",
+            headers=headers,
+        )
+
+    assert connected.status_code == 200
+    assert "Authorization=secret" not in listed.text
+    assert "Authorization=secret" not in connected.text
+    assert exported.status_code == 200
+    assert exported.json() == {
+        "endpoint": "https://sandbox.example/existing?Authorization=secret",
+        "sessionId": "remote-existing",
+        "expireAt": "2026-07-30T16:00:00Z",
+    }
+
+
+def test_sandbox_endpoint_export_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STUDIO_EXPOSE_SANDBOX_ENDPOINT", "0")
+    gateway = _FakeGateway()
+    headers = {"X-Test-User": "alice"}
+    with TestClient(_app(gateway)) as client:
+        capabilities = client.get("/web/sandbox/capabilities", headers=headers)
+        client.post("/web/sandbox/sessions/remote-existing/connect", headers=headers)
+        exported = client.get(
+            "/web/sandbox/sessions/remote-existing/endpoint",
+            headers=headers,
+        )
+
+    assert capabilities.json()["endpointExportEnabled"] is False
+    assert exported.status_code == 403
+
+
 def test_sandbox_persistent_create_requires_snapshot_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1001,6 +1126,638 @@ def test_sandbox_persistent_create_requires_snapshot_tool(
     assert "快照" in missing.text
     assert temporary.status_code == 200
     assert temporary.json()["persistent"] is False
+
+
+def test_codex_project_handoff_pairing_creates_temporary_session_and_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
+    gateway = _FakeGateway()
+
+    with TestClient(_app(gateway)) as client:
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
+            headers={
+                "X-Test-User": "alice",
+                "X-Test-Creator": "alice@example.com",
+                "X-Forwarded-Proto": "https",
+                "X-Forwarded-Host": "studio.example.com",
+            },
+            json={"ttlSeconds": 120},
+        )
+        code = pairing.json()["pairingCode"]
+        issued_status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
+        )
+        foreign_status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "bob"},
+        )
+        created = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "My Repo",
+                "agentName": "完善端云接力",
+                "handoffId": "handoff-request-0001",
+            },
+        )
+        created_status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
+        )
+        reused = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "My Repo",
+                "agentName": "完善端云接力",
+                "handoffId": "handoff-request-0001",
+            },
+        )
+        reused_with_different_payload = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "My Repo",
+                "agentName": "另一个任务",
+                "handoffId": "handoff-request-0001",
+            },
+        )
+        conflicting = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "My Repo",
+                "agentName": "另一个任务",
+                "handoffId": "handoff-request-0002",
+            },
+        )
+        continued = client.post(
+            f"/web/sandbox/codex-project-handoff/sessions/{created.json()['sessionId']}/messages",
+            json={
+                "pairingCode": code,
+                "history": [
+                    {"role": "user", "content": "修复登录超时"},
+                    {"role": "assistant", "content": "我已经定位到重试逻辑。"},
+                ],
+                "message": "继续",
+            },
+        )
+        continued_twice = client.post(
+            f"/web/sandbox/codex-project-handoff/sessions/{created.json()['sessionId']}/messages",
+            json={
+                "pairingCode": code,
+                "message": "continue again",
+            },
+        )
+        completed_status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
+        )
+        listed = client.get(
+            "/web/sandbox/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert pairing.status_code == 200
+    assert pairing.headers["cache-control"] == "no-store"
+    assert pairing.json()["studioUrl"] == "https://studio.example.com"
+    assert pairing.json()["expireAt"].endswith("Z")
+    assert re.fullmatch(r"[2-9A-HJ-KM-NP-Z]{4}-[2-9A-HJ-KM-NP-Z]{4}", code)
+    assert issued_status.status_code == 200
+    assert issued_status.headers["cache-control"] == "no-store"
+    assert issued_status.json()["state"] == "issued"
+    assert foreign_status.status_code == 404
+    assert created.status_code == 200
+    assert created.headers["cache-control"] == "no-store"
+    assert created.json()["sessionId"] == "remote-1"
+    assert created.json()["displayName"] == "完善端云接力"
+    assert created.json()["remoteRepoDir"] == "/home/gem/My-Repo"
+    assert created.json()["endpoint"].endswith("Authorization=secret")
+    assert created_status.status_code == 200
+    assert created_status.json()["state"] == "session-created"
+    assert created_status.json()["projectName"] == "My Repo"
+    assert created_status.json()["agentName"] == "完善端云接力"
+    assert created_status.json()["sessionId"] == "remote-1"
+    assert reused.status_code == 200
+    assert reused.json() == created.json()
+    assert reused_with_different_payload.status_code == 200
+    assert reused_with_different_payload.json() == created.json()
+    assert conflicting.status_code == 403
+    assert continued.status_code == 200
+    assert '"stage": "connecting-session"' in continued.text
+    assert '"stage": "importing-history"' in continued.text
+    assert '"stage": "task-started"' in continued.text
+    assert 'data: {"reason": "completed"}' in continued.text
+    assert "reply:继续" not in continued.text
+    assert continued_twice.status_code == 403
+    assert completed_status.status_code == 200
+    assert completed_status.json()["state"] == "completed"
+    assert completed_status.json()["sessionId"] == "remote-1"
+    assert gateway.sessions["remote-1"].tool_id == "tool-studio"
+    assert gateway.sessions["remote-1"].created_by == "alice"
+    assert gateway.sessions["remote-1"].creator_name == "alice@example.com"
+    assert gateway.created == 1
+    assert gateway.display_names == ["完善端云接力"]
+    assert gateway.connections[0].cwd == "/home/gem/My-Repo"
+    assert gateway.connections[0].imported_history == (
+        CodexImportedMessage(role="user", content="修复登录超时"),
+        CodexImportedMessage(role="assistant", content="我已经定位到重试逻辑。"),
+    )
+    assert gateway.connections[0].prompts == ["继续"]
+    assert gateway.connections[0].permissions == CodexPermissionSettings(
+        approval_policy="never",
+        approvals_reviewer="auto_review",
+        sandbox_mode="danger-full-access",
+        network_access=True,
+    )
+    assert "Authorization=secret" not in listed.text
+
+
+def test_codex_project_handoff_continuation_failure_reaches_edge_and_pairing() -> None:
+    class _FailStreamGateway(_FakeGateway):
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            del session
+            connection = _FakeCodex(self.thread_ids, fail=True)
+            self.connections.append(connection)
+            return connection
+
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
+    with TestClient(_app(_FailStreamGateway())) as client:
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
+            headers={"X-Test-User": "alice"},
+        )
+        code = pairing.json()["pairingCode"]
+        created = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "Repo",
+                "agentName": "继续失败任务",
+                "handoffId": "handoff-request-failed-turn",
+            },
+        )
+        continued = client.post(
+            f"/web/sandbox/codex-project-handoff/sessions/{created.json()['sessionId']}/messages",
+            json={"pairingCode": code, "message": "继续"},
+        )
+        status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert continued.status_code == 200
+    assert "event: error" in continued.text
+    assert 'data: {"reason": "failed"}' in continued.text
+    assert "failed" in continued.text
+    assert status.json()["state"] == "failed"
+    assert status.json()["failedStage"] == "continuing-task"
+    assert status.json()["error"].startswith("failed")
+
+
+def test_codex_project_handoff_first_event_timeout_interrupts_and_fails_pairing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _StalledCodex(_FakeCodex):
+        def __init__(self, turns: list[str]) -> None:
+            super().__init__(turns)
+            self.cancelled = False
+
+        async def stream_turn(
+            self, prompt: str, skill_ids: tuple[str, ...] = ()
+        ) -> AsyncIterator[CodexAppServerEvent]:
+            del prompt, skill_ids
+            self.active = True
+            self.workspace_locked = True
+            try:
+                await asyncio.Event().wait()
+                if False:
+                    yield CodexAppServerEvent()
+            except asyncio.CancelledError as error:
+                self.cancelled = True
+                raise CodexAppServerError("cancelled while waiting") from error
+            finally:
+                self.active = False
+
+    class _StalledGateway(_FakeGateway):
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            del session
+            connection = _StalledCodex(self.thread_ids)
+            self.connections.append(connection)
+            return connection
+
+    monkeypatch.setattr(
+        frontend_sandbox,
+        "_CODEX_PROJECT_HANDOFF_FIRST_EVENT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
+    gateway = _StalledGateway()
+    with TestClient(_app(gateway)) as client:
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
+            headers={"X-Test-User": "alice"},
+        )
+        code = pairing.json()["pairingCode"]
+        created = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "Repo",
+                "agentName": "连接超时任务",
+                "handoffId": "handoff-request-stalled-turn",
+            },
+        )
+        continued = client.post(
+            f"/web/sandbox/codex-project-handoff/sessions/{created.json()['sessionId']}/messages",
+            json={"pairingCode": code, "message": "继续"},
+        )
+        status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert continued.status_code == 200
+    assert "event: error" in continued.text
+    assert 'data: {"reason": "failed"}' in continued.text
+    assert "云端模型连接异常" in continued.text
+    assert status.json()["state"] == "failed"
+    assert status.json()["failedStage"] == "continuing-task"
+    assert "云端模型连接异常" in status.json()["error"]
+    assert gateway.connections[0].cancelled is True
+    assert gateway.connections[0].active is False
+
+
+def test_codex_project_handoff_upload_failure_is_visible_and_session_is_reused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
+    gateway = _FakeGateway()
+
+    with TestClient(_app(gateway)) as client:
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
+            headers={"X-Test-User": "alice"},
+        )
+        code = pairing.json()["pairingCode"]
+        payload = {
+            "pairingCode": code,
+            "projectName": "Large Repo",
+            "agentName": "修复大包上传",
+            "handoffId": "handoff-request-retry-0001",
+        }
+        created = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json=payload,
+        )
+        session_id = created.json()["sessionId"]
+        failed = client.post(
+            f"/web/sandbox/codex-project-handoff/sessions/{session_id}/status",
+            json={
+                "pairingCode": code,
+                "handoffId": payload["handoffId"],
+                "failedStage": "uploading-project",
+                "error": "Sandbox upload could not connect to the service",
+            },
+        )
+        failed_status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
+        )
+        retried = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={**payload, "agentName": "继续大包上传"},
+        )
+        retried_status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert failed.status_code == 200
+    assert failed.headers["cache-control"] == "no-store"
+    assert failed_status.json()["state"] == "failed"
+    assert failed_status.json()["failedStage"] == "uploading-project"
+    assert failed_status.json()["error"] == (
+        "Sandbox upload could not connect to the service"
+    )
+    assert retried.status_code == 200
+    assert retried.json() == created.json()
+    assert retried_status.json()["state"] == "session-created"
+    assert retried_status.json()["agentName"] == "修复大包上传"
+    assert "failedStage" not in retried_status.json()
+    assert gateway.created == 1
+
+
+def test_codex_project_handoff_creation_retry_preserves_original_error() -> None:
+    class _CreateFailureGateway(_FakeGateway):
+        async def create_session(
+            self,
+            tool_id: str,
+            display_name: str = "",
+            username: str = "",
+            creator_name: str = "",
+            agent_kind: str = "",
+        ) -> SandboxCloudSession:
+            del tool_id, display_name, username, creator_name, agent_kind
+            self.created += 1
+            raise SandboxProvisioningError("AgentKit Tool 已失效。")
+
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
+    gateway = _CreateFailureGateway()
+
+    with TestClient(_app(gateway)) as client:
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
+            headers={"X-Test-User": "alice"},
+        )
+        code = pairing.json()["pairingCode"]
+        payload = {
+            "pairingCode": code,
+            "projectName": "Repo",
+            "agentName": "恢复仓库任务",
+            "handoffId": "handoff-request-create-failure",
+        }
+        failed = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json=payload,
+        )
+        retried = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json=payload,
+        )
+        status = client.get(
+            f"/web/sandbox/codex-project-handoff/pairings/{code}",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert failed.status_code == 502
+    assert retried.status_code == 409
+    assert "AgentKit Tool 已失效" in retried.text
+    assert "刷新配对码后重试" in retried.text
+    assert "不能用于不同的请求参数" not in retried.text
+    assert status.json()["state"] == "failed"
+    assert status.json()["failedStage"] == "creating-session"
+    assert gateway.created == 1
+
+
+def test_codex_project_handoff_failure_status_rejects_mismatched_request() -> None:
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
+    gateway = _FakeGateway()
+
+    with TestClient(_app(gateway)) as client:
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
+            headers={"X-Test-User": "alice"},
+        )
+        code = pairing.json()["pairingCode"]
+        handoff_id = "handoff-request-status-0001"
+        created = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "Repo",
+                "agentName": "迁移项目",
+                "handoffId": handoff_id,
+            },
+        )
+        session_id = created.json()["sessionId"]
+        wrong_handoff = client.post(
+            f"/web/sandbox/codex-project-handoff/sessions/{session_id}/status",
+            json={
+                "pairingCode": code,
+                "handoffId": "handoff-request-status-wrong",
+                "failedStage": "restoring-project",
+                "error": "restore failed",
+            },
+        )
+        wrong_session = client.post(
+            "/web/sandbox/codex-project-handoff/sessions/remote-wrong/status",
+            json={
+                "pairingCode": code,
+                "handoffId": handoff_id,
+                "failedStage": "restoring-project",
+                "error": "restore failed",
+            },
+        )
+        wrong_stage = client.post(
+            f"/web/sandbox/codex-project-handoff/sessions/{session_id}/status",
+            json={
+                "pairingCode": code,
+                "handoffId": handoff_id,
+                "failedStage": "continuing-task",
+                "error": "continue failed",
+            },
+        )
+
+    assert wrong_handoff.status_code == 403
+    assert wrong_session.status_code == 403
+    assert wrong_stage.status_code == 422
+
+
+def test_codex_project_handoff_session_accepts_custom_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
+    gateway = _FakeGateway()
+
+    with TestClient(_app(gateway)) as client:
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
+            headers={"X-Test-User": "alice"},
+        )
+        created = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": pairing.json()["pairingCode"],
+                "projectName": "codex-demo/project",
+                "agentName": "迁移演示项目",
+                "handoffId": "handoff-request-0003",
+                "remoteHome": "/workspace/.",
+            },
+        )
+
+    assert created.status_code == 200
+    assert created.json()["displayName"] == "迁移演示项目"
+    assert created.json()["remoteRepoDir"] == "/workspace/codex-demo-project"
+    assert gateway.sessions[created.json()["sessionId"]].tool_id == "tool-studio"
+    assert gateway.display_names == ["迁移演示项目"]
+
+
+def test_codex_project_handoff_history_accepts_only_visible_messages() -> None:
+    assert frontend_sandbox._codex_project_handoff_history(
+        [
+            {"role": "user", "content": " 继续修复问题 "},
+            {"role": "assistant", "content": "已完成定位。"},
+        ]
+    ) == (
+        CodexImportedMessage(role="user", content="继续修复问题"),
+        CodexImportedMessage(role="assistant", content="已完成定位。"),
+    )
+    with pytest.raises(
+        frontend_sandbox.SandboxValidationError,
+        match="只支持用户和助手消息",
+    ):
+        frontend_sandbox._codex_project_handoff_history(
+            [{"role": "developer", "content": "hidden instructions"}]
+        )
+
+
+def test_codex_project_handoff_history_accepts_bounded_images() -> None:
+    assert frontend_sandbox._codex_project_handoff_history(
+        [
+            {
+                "role": "user",
+                "content": "请看图片",
+                "images": [
+                    {
+                        "mimeType": "image/png",
+                        "data": "iVBORw0KGgppbWFnZQ==",
+                        "name": "handoff.png",
+                        "alt": "端云接力界面",
+                    }
+                ],
+            }
+        ]
+    ) == (
+        CodexImportedMessage(
+            role="user",
+            content="请看图片",
+            images=(
+                CodexImportedImage(
+                    mime_type="image/png",
+                    data="iVBORw0KGgppbWFnZQ==",
+                    name="handoff.png",
+                    alt="端云接力界面",
+                ),
+            ),
+        ),
+    )
+
+
+def test_public_thread_snapshot_preserves_validated_imported_image_data() -> None:
+    image = CodexImportedImage(
+        mime_type="image/png",
+        data="iVBORw0KGgppbWFnZQ==",
+        name="handoff.png",
+        alt="端云接力界面",
+    )
+    snapshot = CodexThreadSnapshot(
+        thread=CodexThreadSummary(id="thread-1"),
+        messages=(
+            CodexThreadMessage(
+                id="message-1",
+                role="user",
+                content="请看图片",
+                timestamp=1,
+                images=(image,),
+            ),
+        ),
+    )
+    service = SandboxConversationService(_FakeGateway(), tool_id="tool-studio")
+    session = SimpleNamespace(
+        codex=SimpleNamespace(permissions=CodexPermissionSettings())
+    )
+
+    value = service._public_snapshot(session, snapshot)
+
+    assert value["messages"][0]["images"] == [
+        {
+            "mimeType": "image/png",
+            "data": "iVBORw0KGgppbWFnZQ==",
+            "name": "handoff.png",
+            "alt": "端云接力界面",
+        }
+    ]
+
+
+def test_public_thread_snapshot_keeps_complete_handoff_history_and_pending_turn() -> (
+    None
+):
+    snapshot = CodexThreadSnapshot(
+        thread=CodexThreadSummary(id="thread-1"),
+        messages=tuple(
+            CodexThreadMessage(
+                id=f"message-{index}",
+                role="user" if index % 2 == 0 else "assistant",
+                content="继续" if index == 100 else f"message {index}",
+                timestamp=index,
+            )
+            for index in range(101)
+        ),
+    )
+    service = SandboxConversationService(_FakeGateway(), tool_id="tool-studio")
+    session = SimpleNamespace(
+        codex=SimpleNamespace(permissions=CodexPermissionSettings())
+    )
+
+    value = service._public_snapshot(session, snapshot)
+
+    assert len(value["messages"]) == 101
+    assert value["messages"][0]["content"] == "message 0"
+    assert value["messages"][-1]["content"] == "继续"
+
+
+def test_codex_project_handoff_rejects_invalid_and_expired_pairing_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frontend_sandbox._CODEX_PROJECT_HANDOFF_PAIRINGS.clear()
+    gateway = _FakeGateway()
+
+    with TestClient(_app(gateway)) as client:
+        pairing = client.post(
+            "/web/sandbox/codex-project-handoff/pairings",
+            headers={"X-Test-User": "alice"},
+            json={"ttlSeconds": 60},
+        )
+        code = pairing.json()["pairingCode"]
+        tampered = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": f"{code}x",
+                "projectName": "repo",
+                "agentName": "迁移项目",
+                "handoffId": "handoff-request-0004",
+            },
+        )
+        invalid_request = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "repo",
+                "agentName": "迁移项目",
+                "handoffId": "handoff-request-0004",
+                "persistent": True,
+            },
+        )
+        invalid_name = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "repo",
+                "agentName": "这是一个超过十二个字符的云端任务名称",
+                "handoffId": "handoff-request-0004",
+            },
+        )
+        expired_at = int(frontend_sandbox.time.time()) + 61
+        monkeypatch.setattr(frontend_sandbox.time, "time", lambda: expired_at)
+        expired = client.post(
+            "/web/sandbox/codex-project-handoff/sessions",
+            json={
+                "pairingCode": code,
+                "projectName": "repo",
+                "agentName": "迁移项目",
+                "handoffId": "handoff-request-0004",
+            },
+        )
+
+    assert tampered.status_code == 403
+    assert invalid_request.status_code == 422
+    assert invalid_name.status_code == 422
+    assert expired.status_code == 403
+    assert gateway.created == 0
 
 
 def test_sandbox_snapshot_is_wakeable_for_admin_only() -> None:
@@ -1185,6 +1942,7 @@ def test_sandbox_codex_commands_skills_threads_and_token_usage() -> None:
             json={"model": "gpt-next"},
         )
         threads = client.get(f"{root}/threads", headers=headers)
+        history = client.get(f"{root}/threads/thread-old", headers=headers)
         resumed = client.post(
             f"{root}/threads/resume",
             headers=headers,
@@ -1219,6 +1977,8 @@ def test_sandbox_codex_commands_skills_threads_and_token_usage() -> None:
     assert '"modelContextWindow": 200000' in token_reply.text
     assert model.json() == {"model": "gpt-next"}
     assert threads.json()["threads"][0]["id"] == "thread-old"
+    assert history.json()["threadId"] == "thread-old"
+    assert history.json()["messages"][0]["content"] == "restored"
     assert resumed.json()["messages"][0]["skillNames"] == ["review"]
     assert forked.json()["threadId"] == "thread-fork"
     assert compacted.json() == {"started": True}
@@ -1376,6 +2136,7 @@ def test_sandbox_capabilities_report_configured_tool(
         "reason": "",
         "persistentEnabled": False,
         "persistentReason": "管理员未配置快照版 Tool",
+        "endpointExportEnabled": True,
     }
 
 
@@ -1416,6 +2177,7 @@ def test_sandbox_capabilities_report_admin_not_configured(
         "reason": "管理员未配置",
         "persistentEnabled": False,
         "persistentReason": "管理员未配置快照版 Tool",
+        "endpointExportEnabled": True,
     }
 
 
@@ -1836,6 +2598,43 @@ async def test_gateway_does_not_retry_non_not_found_creation_errors() -> None:
         await gateway.create_session("tool-1")
 
     assert regions == ["cn-beijing"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_reports_expired_tool_without_sdk_error_chain() -> None:
+    class _Client:
+        def list_sessions(self, request: object) -> None:
+            del request
+            cause = RuntimeError("request bytes and RequestId=secret-noise")
+            raise RuntimeError("InvalidResource.NotFound: Tool") from cause
+
+    gateway = AgentkitSandboxGateway(_Client())
+
+    with pytest.raises(
+        SandboxConfigurationError,
+        match="Sandbox Tool 不存在或已失效，请管理员重新配置",
+    ) as raised:
+        await gateway.list_sessions("tool-expired")
+
+    assert "RequestId" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_gateway_reports_tool_quota_with_actionable_message() -> None:
+    class _Client:
+        def create_session(self, request: object) -> None:
+            del request
+            raise RuntimeError("QuotaExceeded.Tool: quota exceeded")
+
+    gateway = AgentkitSandboxGateway(_Client())
+
+    with pytest.raises(
+        SandboxConfigurationError,
+        match="Sandbox Tool 配额不足，请管理员释放不用的 Tool 或申请扩容",
+    ) as raised:
+        await gateway.create_session("tool-full")
+
+    assert raised.value.code == "SANDBOX_TOOL_QUOTA_EXCEEDED"
 
 
 @pytest.mark.asyncio

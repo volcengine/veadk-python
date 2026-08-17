@@ -1,0 +1,20 @@
+{
+  "name": "veadk-python",
+  "interface": {
+    "displayName": "VeADK Python"
+  },
+  "plugins": [
+    {
+      "name": "agentkit-studio",
+      "source": {
+        "source": "local",
+        "path": "./plugins/agentkit-studio"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

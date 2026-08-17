@@ -17,11 +17,14 @@
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urljoin
 
 import httpx
+import requests
 import volcenginesdkvefaas
 
 from veadk.cli.frontend_branding import SiteLogo, resolve_site_logo
@@ -33,6 +36,19 @@ from veadk.utils.cloud_provider import (
 )
 
 SUPPORTED_STUDIO_REGIONS = ("cn-beijing", "cn-shanghai")
+_TRANSIENT_CLOUD_ERROR_MARKERS = (
+    "connection aborted",
+    "connection error",
+    "connection reset",
+    "connection timed out",
+    "gateway timeout",
+    "read timed out",
+    "request timeout",
+    "service unavailable",
+    "temporarily unavailable",
+    "the handshake operation timed out",
+    "too many requests",
+)
 
 
 @dataclass(frozen=True)
@@ -56,8 +72,15 @@ def find_studio_deployments(
     region: str | None,
     project: str | None,
     provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+    attempts: int = 3,
+    retry_delay_seconds: float = 1.0,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> list[StudioDeploymentTarget]:
     """Find exact-name Studio Applications in the requested cloud scopes."""
+    if attempts < 1:
+        raise ValueError("attempts must be at least 1")
+    if retry_delay_seconds < 0:
+        raise ValueError("retry_delay_seconds must not be negative")
     regions = (
         (region,)
         if region is not None
@@ -77,31 +100,57 @@ def find_studio_deployments(
             project_name=project or "default",
             provider=provider,
         )
-        applications = service._list_application(app_name=application_name)
-        for application in applications:
-            if application.get("Name") != application_name:
+        for attempt in range(1, attempts + 1):
+            try:
+                applications = service._list_application(app_name=application_name)
+                region_targets = []
+                for application in applications:
+                    if application.get("Name") != application_name:
+                        continue
+                    target = _deployment_target(service, candidate_region, application)
+                    if project is None or target.project == project:
+                        region_targets.append(target)
+            except Exception as error:
+                if attempt >= attempts or not _is_retryable_cloud_read_error(error):
+                    raise
+                sleep(retry_delay_seconds * attempt)
                 continue
-            target = _deployment_target(service, candidate_region, application)
-            if project is None or target.project == project:
-                targets.append(target)
+            targets.extend(region_targets)
+            break
     return targets
 
 
-def load_deployed_site_logo(target: StudioDeploymentTarget) -> SiteLogo | None:
+def load_deployed_site_logo(
+    target: StudioDeploymentTarget,
+    *,
+    attempts: int = 3,
+    retry_delay_seconds: float = 1.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> SiteLogo | None:
     """Read the current logo so a code update does not reset branding."""
+    if attempts < 1:
+        raise ValueError("attempts must be at least 1")
+    if retry_delay_seconds < 0:
+        raise ValueError("retry_delay_seconds must not be negative")
     if not target.url:
         raise ValueError(
             "The existing Studio URL is unavailable; cannot safely preserve its logo."
         )
     config_url = urljoin(f"{target.url.rstrip('/')}/", "web/ui-config")
-    try:
-        response = httpx.get(config_url, follow_redirects=True, timeout=10.0)
-        response.raise_for_status()
-        payload = response.json()
-    except (httpx.HTTPError, ValueError) as error:
-        raise ValueError(
-            f"Could not read existing Studio branding from {config_url}: {error}"
-        ) from error
+    for attempt in range(1, attempts + 1):
+        try:
+            response = httpx.get(config_url, follow_redirects=True, timeout=10.0)
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as error:
+            if attempt < attempts and _is_retryable_cloud_read_error(error):
+                sleep(retry_delay_seconds * attempt)
+                continue
+            raise ValueError(
+                f"Could not read existing Studio branding from {config_url}: "
+                f"{error}. Retry later or pass --site-logo explicitly."
+            ) from error
+        break
     branding = payload.get("branding") if isinstance(payload, dict) else None
     if not isinstance(branding, dict) or "logoUrl" not in branding:
         raise ValueError(
@@ -111,6 +160,53 @@ def load_deployed_site_logo(target: StudioDeploymentTarget) -> SiteLogo | None:
     if not logo_url:
         return None
     return resolve_site_logo(urljoin(f"{target.url.rstrip('/')}/", str(logo_url)))
+
+
+def _is_retryable_cloud_read_error(error: BaseException) -> bool:
+    """Return whether a read-only cloud lookup failed transiently."""
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(
+            current,
+            (
+                TimeoutError,
+                ConnectionError,
+                httpx.TimeoutException,
+                httpx.NetworkError,
+                requests.Timeout,
+                requests.ConnectionError,
+            ),
+        ):
+            return True
+        message = str(current).lower()
+        if any(marker in message for marker in _TRANSIENT_CLOUD_ERROR_MARKERS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def retry_transient_cloud_operation(
+    operation: Callable[[], Any],
+    *,
+    attempts: int = 3,
+    retry_delay_seconds: float = 1.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Any:
+    """Run an idempotent cloud operation with bounded transient retries."""
+    if attempts < 1:
+        raise ValueError("attempts must be at least 1")
+    if retry_delay_seconds < 0:
+        raise ValueError("retry_delay_seconds must not be negative")
+    for attempt in range(1, attempts + 1):
+        try:
+            return operation()
+        except Exception as error:
+            if attempt >= attempts or not _is_retryable_cloud_read_error(error):
+                raise
+            sleep(retry_delay_seconds * attempt)
+    raise AssertionError("unreachable")
 
 
 def _deployment_target(

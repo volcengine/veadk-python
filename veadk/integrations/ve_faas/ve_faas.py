@@ -52,6 +52,37 @@ from veadk.version import VERSION
 logger = get_logger(__name__)
 
 _APPLICATION_REVISION_LOG_MAX_BYTES = 50_000
+_TRANSIENT_VEFAAS_ERROR_MARKERS = (
+    "connection aborted",
+    "connection error",
+    "connection reset",
+    "connection timed out",
+    "gateway timeout",
+    "read timed out",
+    "request timeout",
+    "service unavailable",
+    "temporarily unavailable",
+    "the handshake operation timed out",
+    "too many requests",
+)
+
+
+def _is_transient_vefaas_error(error: BaseException) -> bool:
+    """Return whether a VeFaaS request can safely be retried."""
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(
+            current,
+            (TimeoutError, ConnectionError, requests.Timeout, requests.ConnectionError),
+        ):
+            return True
+        message = str(current).lower()
+        if any(marker in message for marker in _TRANSIENT_VEFAAS_ERROR_MARKERS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _redact_release_text(text: str) -> str:
@@ -348,19 +379,39 @@ class VeFaaS:
             log_text = f"{log_text}\n\nApplication status response:\n{status_text}"
             raise Exception(f"Release application failed. Logs:\n{log_text}")
 
-    def _get_application_status(self, app_id: str):
-        response = ve_request(
-            request_body={"Id": app_id},
-            action="GetApplication",
-            ak=self.ak,
-            sk=self.sk,
-            service="vefaas",
-            version="2021-03-03",
-            region=self.region,
-            host=self._openapi_host(),
-            session_token=self.session_token,
-        )
-        return response["Result"]["Status"], response
+    def _get_application_status(
+        self,
+        app_id: str,
+        *,
+        attempts: int = 3,
+        retry_delay_seconds: float = 1.0,
+        sleep=time.sleep,
+    ):
+        """Read Application status with bounded transient-network retries."""
+        if attempts < 1:
+            raise ValueError("attempts must be at least 1")
+        if retry_delay_seconds < 0:
+            raise ValueError("retry_delay_seconds must not be negative")
+        for attempt in range(1, attempts + 1):
+            try:
+                response = ve_request(
+                    request_body={"Id": app_id},
+                    action="GetApplication",
+                    ak=self.ak,
+                    sk=self.sk,
+                    service="vefaas",
+                    version="2021-03-03",
+                    region=self.region,
+                    host=self._openapi_host(),
+                    session_token=self.session_token,
+                )
+            except Exception as error:
+                if attempt >= attempts or not _is_transient_vefaas_error(error):
+                    raise
+                sleep(retry_delay_seconds * attempt)
+                continue
+            return response["Result"]["Status"], response
+        raise AssertionError("unreachable")
 
     def _list_application(self, app_id: str = None, app_name: str = None):
         # firt match app_id. if app_id is None,then match app_name and remove app_id

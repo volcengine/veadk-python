@@ -68,7 +68,7 @@ test("aborts only an active Sandbox agent response", () => {
   );
   assert.match(
     appSource,
-    /function stopSandboxGeneration\(\)[\s\S]*?sandboxMessageAbortRef\.current\?\.abort\(\)/,
+    /function stopSandboxGeneration\(\)[\s\S]*?sandboxMessageAbortRef\.current\?\.abort\(\)[\s\S]*?sandboxClient[\s\S]*?\.interruptSession\(activeSessionId\)/,
   );
   assert.match(
     appSource,

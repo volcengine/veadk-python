@@ -51,6 +51,7 @@ test("sandbox access is isolated behind a reusable typed client", () => {
   assert.match(sandboxClientSource, /deleteAgentSession\([\s\S]*kind: SandboxAgentKind/);
   assert.match(sandboxClientSource, /sendMessage\([\s\S]*options\?: SandboxRequestOptions/);
   assert.match(sandboxClientSource, /closeSession\([\s\S]*options\?: SandboxRequestOptions/);
+  assert.match(sandboxClientSource, /interruptSession\([\s\S]*options\?: SandboxRequestOptions/);
   assert.match(sandboxClientSource, /signal\?: AbortSignal/);
   assert.match(sandboxClientSource, /\/web\/sandbox\/sessions/);
   assert.match(sandboxClientSource, /withAuth/);

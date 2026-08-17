@@ -21,6 +21,8 @@ import {
 import {
   SandboxBrowserIcon,
   SandboxAddIcon,
+  SandboxCheckIcon,
+  SandboxCopyIcon,
   SandboxFileIcon,
   SandboxImageIcon,
   SandboxPermissionsIcon,
@@ -43,6 +45,9 @@ export interface SandboxComposerActions {
   onOpenBrowser: () => void;
   onOpenPermissions: () => void;
   onOpenWorkspace: () => void;
+  onCopyEndpoint?: () => void;
+  endpointCopyEnabled?: boolean;
+  endpointCopyState?: "idle" | "copying" | "copied";
   workspaceLocked: boolean;
   settingsBusy: boolean;
   uploadBusy: boolean;
@@ -449,6 +454,32 @@ export function SandboxComposer({
           >
             <SandboxWorkspaceIcon />
           </button>
+          {actions.endpointCopyEnabled && actions.onCopyEndpoint ? (
+            <button
+              type="button"
+              className="comp-icon sandbox-composer-control"
+              title={
+                actions.endpointCopyState === "copied"
+                  ? "Endpoint 已复制"
+                  : "复制 Sandbox Endpoint"
+              }
+              aria-label={
+                actions.endpointCopyState === "copied"
+                  ? "Endpoint 已复制"
+                  : "复制 Sandbox Endpoint"
+              }
+              disabled={actions.endpointCopyState === "copying"}
+              onClick={actions.onCopyEndpoint}
+            >
+              {actions.endpointCopyState === "copying" ? (
+                <SandboxSpinnerIcon className="spin" />
+              ) : actions.endpointCopyState === "copied" ? (
+                <SandboxCheckIcon />
+              ) : (
+                <SandboxCopyIcon />
+              )}
+            </button>
+          ) : null}
         </div>
 
         <div className="composer-input-stack sandbox-composer-input">

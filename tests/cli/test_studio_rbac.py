@@ -219,6 +219,43 @@ def test_auth_config_uses_cloud_specific_identity_label(
     ]
 
 
+def test_project_handoff_pairing_authorizes_only_terminal_session_routes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from veadk.auth.middleware.oauth2_auth import OAuth2Config
+
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        OAuth2Config,
+        "from_veidentity",
+        lambda **_: SimpleNamespace(
+            cookie_secure=True,
+            logout_redirect_url="/",
+            end_session_url="https://identity.example.com/logout",
+        ),
+    )
+
+    def _capture_oauth2(*_: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "veadk.auth.middleware.oauth2_auth.setup_oauth2",
+        _capture_oauth2,
+    )
+
+    _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        oauth2_user_pool_uid="pool-current",
+        oauth2_user_pool_client_uid="studio-client",
+    )
+
+    assert "/web/sandbox/codex-project-handoff/sessions" in captured["exempt_paths"]
+    assert "/web/sandbox/codex-project-handoff/sessions/" in captured["exempt_prefixes"]
+    assert "/web/sandbox/codex-project-handoff/pairings" not in captured["exempt_paths"]
+
+
 def test_identity_user_pools_marks_the_current_studio_pool(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

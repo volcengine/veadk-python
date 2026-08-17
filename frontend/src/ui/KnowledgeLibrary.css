@@ -1379,9 +1379,9 @@
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid hsl(var(--border));
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: hsl(var(--panel));
+  background: transparent;
   color: hsl(var(--muted-foreground));
   cursor: pointer;
 }

@@ -1,0 +1,33 @@
+{
+  "name": "agentkit-studio",
+  "version": "0.1.1+codex.20260816111057",
+  "description": "Continue local Codex conversations and coding tasks in an AgentKit Studio cloud sandbox.",
+  "author": {
+    "name": "VeADK",
+    "url": "https://github.com/volcengine/veadk-python"
+  },
+  "homepage": "https://github.com/volcengine/veadk-python",
+  "repository": "https://github.com/volcengine/veadk-python",
+  "license": "Apache-2.0",
+  "keywords": [
+    "agentkit",
+    "studio",
+    "sandbox",
+    "project-handoff"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "AgentKit Studio",
+    "shortDescription": "Continue local Codex conversations in Studio.",
+    "longDescription": "Create a temporary Studio cloud sandbox, restore a Git-aware project snapshot, inject completed user-visible conversation history, securely transfer GitHub CLI authentication, and continue with one new user message without copying hidden Codex runtime state or SSH keys.",
+    "developerName": "VeADK",
+    "category": "Productivity",
+    "capabilities": [
+      "Task continuation",
+      "Project handoff"
+    ],
+    "defaultPrompt": [
+      "Continue this project and task in my AgentKit Studio sandbox."
+    ]
+  }
+}

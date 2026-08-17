@@ -4,6 +4,7 @@ import { requestSignal } from "./timeout";
 import type { Block } from "../blocks";
 
 const SANDBOX_API = "/web/sandbox/sessions";
+const CODEX_PROJECT_HANDOFF_API = "/web/sandbox/codex-project-handoff";
 const LIST_TIMEOUT_MS = 30_000;
 const START_TIMEOUT_MS = 330_000;
 const CONNECT_TIMEOUT_MS = 60_000;
@@ -11,6 +12,8 @@ const MESSAGE_TIMEOUT_MS = 600_000;
 const CLOSE_TIMEOUT_MS = 15_000;
 const SETTINGS_TIMEOUT_MS = 60_000;
 const UPLOAD_TIMEOUT_MS = 330_000;
+const CODEX_PROJECT_HANDOFF_TIMEOUT_MS = 30_000;
+export const CODEX_PROJECT_HANDOFF_PAIRING_TTL_SECONDS = 60 * 60;
 
 export const SANDBOX_DISPLAY_NAME_MAX_LENGTH = 40;
 export type SandboxAgentKind = "deepseek-harness" | "openclaw" | "hermes";
@@ -95,6 +98,41 @@ export interface SandboxToolLaunch {
   shellSessionId?: string;
 }
 
+export interface SandboxEndpointExport {
+  endpoint: string;
+  sessionId: string;
+  expireAt?: string;
+}
+
+export interface CodexProjectHandoffPairing {
+  pairingCode: string;
+  expireAt: string;
+  studioUrl: string;
+}
+
+export type CodexProjectHandoffState =
+  | "issued"
+  | "creating"
+  | "session-created"
+  | "continuing"
+  | "running"
+  | "completed"
+  | "failed";
+
+export interface CodexProjectHandoffStatus {
+  state: CodexProjectHandoffState;
+  expireAt: string;
+  projectName?: string;
+  agentName?: string;
+  sessionId?: string;
+  error?: string;
+  failedStage?:
+    | "creating-session"
+    | "uploading-project"
+    | "restoring-project"
+    | "continuing-task";
+}
+
 export interface SandboxUploadedFile {
   id: string;
   path: string;
@@ -142,12 +180,20 @@ export interface SandboxThreadSummary {
   status: string;
 }
 
+export interface SandboxThreadImage {
+  mimeType: string;
+  data: string;
+  name?: string;
+  alt?: string;
+}
+
 export interface SandboxThreadMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   timestamp: number;
   skillNames?: string[];
+  images?: SandboxThreadImage[];
 }
 
 export interface SandboxThreadSnapshot {
@@ -286,6 +332,17 @@ export interface AgentKitSandboxClient {
     sessionId: string,
     options?: SandboxRequestOptions,
   ): Promise<SandboxStatus>;
+  getEndpoint(
+    sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxEndpointExport>;
+  createCodexProjectHandoffPairing(
+    options?: SandboxRequestOptions,
+  ): Promise<CodexProjectHandoffPairing>;
+  getCodexProjectHandoffStatus(
+    pairingCode: string,
+    options?: SandboxRequestOptions,
+  ): Promise<CodexProjectHandoffStatus>;
   listModels(
     sessionId: string,
     options?: SandboxRequestOptions,
@@ -305,6 +362,11 @@ export interface AgentKitSandboxClient {
     query?: { cursor?: string; search?: string; archived?: boolean },
     options?: SandboxRequestOptions,
   ): Promise<SandboxThreadPage>;
+  readThread(
+    sessionId: string,
+    threadId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxThreadSnapshot>;
   newThread(
     sessionId: string,
     options?: SandboxRequestOptions,
@@ -371,6 +433,10 @@ export interface AgentKitSandboxClient {
     options?: SandboxRequestOptions,
   ): Promise<SandboxUploadedFile>;
   closeSession(
+    sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<void>;
+  interruptSession(
     sessionId: string,
     options?: SandboxRequestOptions,
   ): Promise<void>;
@@ -481,6 +547,18 @@ async function responseError(response: Response, fallback: string): Promise<Erro
       : JSON.stringify(detail);
   const summary = `${fallback}（HTTP ${response.status}）`;
   return new Error(detailText ? `${summary}：${detailText}` : summary);
+}
+
+async function responseJson(
+  response: Response,
+  fallback: string,
+): Promise<unknown> {
+  const text = await response.text().catch(() => "");
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new Error(`${fallback} Studio 服务响应异常，请刷新后重试。`);
+  }
 }
 
 function parseSession(
@@ -671,12 +749,35 @@ function parseThreadSnapshot(value: unknown): SandboxThreadSnapshot {
           (name): name is string => typeof name === "string" && Boolean(name),
         )
       : [];
+    const images = Array.isArray(message.images)
+      ? message.images.flatMap((value): SandboxThreadImage[] => {
+          const image = recordOf(value);
+          if (
+            !image ||
+            typeof image.mimeType !== "string" ||
+            !image.mimeType.startsWith("image/") ||
+            typeof image.data !== "string" ||
+            !image.data
+          ) return [];
+          return [{
+            mimeType: image.mimeType,
+            data: image.data,
+            ...(typeof image.name === "string" && image.name
+              ? { name: image.name }
+              : {}),
+            ...(typeof image.alt === "string" && image.alt
+              ? { alt: image.alt }
+              : {}),
+          }];
+        })
+      : [];
     return [{
       id: message.id,
       role: message.role,
       content: message.content,
       timestamp: message.timestamp,
       ...(skillNames.length ? { skillNames } : {}),
+      ...(images.length ? { images } : {}),
     }];
   });
   return {
@@ -1151,6 +1252,127 @@ export const sandboxClient: AgentKitSandboxClient = {
     };
   },
 
+  async getEndpoint(sessionId, options = {}) {
+    const value = recordOf(await sandboxJson(sessionId, "endpoint", {
+      options,
+      fallback: "无法读取 Sandbox Endpoint。",
+    }));
+    if (typeof value?.endpoint !== "string" || !value.endpoint.trim()) {
+      throw new Error("Sandbox 返回了无效 Endpoint。");
+    }
+    return {
+      endpoint: value.endpoint,
+      sessionId:
+        typeof value.sessionId === "string" ? value.sessionId : sessionId,
+      ...(typeof value.expireAt === "string"
+        ? { expireAt: value.expireAt }
+        : {}),
+    };
+  },
+
+  async createCodexProjectHandoffPairing(options = {}) {
+    const response = await fetch(
+      withAuth(`${CODEX_PROJECT_HANDOFF_API}/pairings`),
+      {
+        method: "POST",
+        headers: sandboxHeaders({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          ttlSeconds: CODEX_PROJECT_HANDOFF_PAIRING_TTL_SECONDS,
+        }),
+        signal: requestSignal(
+          options.signal,
+          CODEX_PROJECT_HANDOFF_TIMEOUT_MS,
+        ),
+      },
+    );
+    if (!response.ok) {
+      throw await responseError(
+        response,
+        "无法生成 Codex 云端接力配对码。",
+      );
+    }
+    const value = recordOf(
+      await responseJson(response, "无法生成 Codex 云端接力配对码。"),
+    );
+    if (
+      typeof value?.pairingCode !== "string" ||
+      !value.pairingCode.trim() ||
+      typeof value.expireAt !== "string" ||
+      !value.expireAt.trim()
+    ) {
+      throw new Error("Studio 返回了无效的 Codex 云端接力配对码。");
+    }
+    const studioUrl = typeof value.studioUrl === "string" && value.studioUrl.trim()
+      ? value.studioUrl.trim()
+      : window.location.origin;
+    return {
+      pairingCode: value.pairingCode,
+      expireAt: value.expireAt,
+      studioUrl,
+    };
+  },
+
+  async getCodexProjectHandoffStatus(pairingCode, options = {}) {
+    const response = await fetch(
+      withAuth(
+        `${CODEX_PROJECT_HANDOFF_API}/pairings/${encodeURIComponent(pairingCode)}`,
+      ),
+      {
+        headers: sandboxHeaders({ Accept: "application/json" }),
+        signal: requestSignal(
+          options.signal,
+          CODEX_PROJECT_HANDOFF_TIMEOUT_MS,
+        ),
+      },
+    );
+    if (!response.ok) {
+      throw await responseError(response, "无法读取端云接力状态。");
+    }
+    const value = recordOf(
+      await responseJson(response, "无法读取端云接力状态。"),
+    );
+    const states: ReadonlySet<string> = new Set([
+      "issued",
+      "creating",
+      "session-created",
+      "continuing",
+      "running",
+      "completed",
+      "failed",
+    ]);
+    if (
+      typeof value?.state !== "string" ||
+      !states.has(value.state) ||
+      typeof value.expireAt !== "string" ||
+      !value.expireAt.trim()
+    ) {
+      throw new Error("Studio 返回了无效的端云接力状态。");
+    }
+    return {
+      state: value.state as CodexProjectHandoffState,
+      expireAt: value.expireAt,
+      ...(typeof value.projectName === "string"
+        ? { projectName: value.projectName }
+        : {}),
+      ...(typeof value.agentName === "string"
+        ? { agentName: value.agentName }
+        : {}),
+      ...(typeof value.sessionId === "string"
+        ? { sessionId: value.sessionId }
+        : {}),
+      ...(typeof value.error === "string" ? { error: value.error } : {}),
+      ...(value.failedStage === "creating-session" ||
+      value.failedStage === "uploading-project" ||
+      value.failedStage === "restoring-project" ||
+      value.failedStage === "continuing-task"
+        ? { failedStage: value.failedStage }
+        : {}),
+    };
+  },
+
   async listModels(sessionId, options = {}) {
     const value = recordOf(await sandboxJson(sessionId, "models", {
       options,
@@ -1223,6 +1445,20 @@ export const sandboxClient: AgentKitSandboxClient = {
       options,
       fallback: "无法创建新的 Codex Thread。",
     }));
+  },
+
+  async readThread(sessionId, threadId, options = {}) {
+    if (!threadId) throw new Error("缺少要读取的 Codex Thread。");
+    return parseThreadSnapshot(
+      await sandboxJson(
+        sessionId,
+        `threads/${encodeURIComponent(threadId)}`,
+        {
+          options,
+          fallback: "无法读取 Codex 历史消息。",
+        },
+      ),
+    );
   },
 
   async resumeThread(sessionId, threadId, options = {}) {
@@ -1447,6 +1683,21 @@ export const sandboxClient: AgentKitSandboxClient = {
     );
     if (!response.ok && response.status !== 404) {
       throw await responseError(response, "无法断开 Codex 智能体连接。");
+    }
+  },
+
+  async interruptSession(sessionId, options = {}) {
+    if (!sessionId) return;
+    const response = await fetch(
+      withAuth(`${SANDBOX_API}/${encodeURIComponent(sessionId)}/interrupt`),
+      {
+        method: "POST",
+        headers: sandboxHeaders(),
+        signal: requestSignal(options.signal, CLOSE_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok && response.status !== 404) {
+      throw await responseError(response, "无法停止 Codex 任务。");
     }
   },
 

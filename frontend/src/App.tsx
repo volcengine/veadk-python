@@ -155,6 +155,7 @@ import {
   type SandboxPermissions,
   type SandboxSession as SandboxSessionInfo,
   type SandboxSkill,
+  type SandboxThreadSnapshot,
   type SandboxThreadSummary,
   type SandboxToolLaunch,
 } from "./adk/sandbox";
@@ -202,6 +203,7 @@ import {
 import { SandboxAgentDetails } from "./ui/SandboxAgentDetails";
 import { SandboxAgentWorkspace } from "./ui/SandboxAgentWorkspace";
 import { SandboxComposer } from "./ui/SandboxComposer";
+import { SandboxProjectUploadDialog } from "./ui/SandboxProjectUploadDialog";
 import { sandboxSnapshotTurns } from "./ui/sandboxCommands";
 import { useSandboxCodexCommands } from "./ui/useSandboxCodexCommands";
 import { StudioConfirmDialog } from "./ui/StudioConfirmDialog";
@@ -253,6 +255,7 @@ interface NewChatCapabilitiesState {
   builtinTools?: string[];
   temporaryEnabled?: boolean;
   deepseekHarnessEnabled?: boolean;
+  sandboxEndpointExportEnabled?: boolean;
   skillCustomizationEnabled?: boolean;
 }
 
@@ -280,6 +283,9 @@ async function probeNewChatCapabilities(
     deepseekHarnessEnabled:
       deepseekHarnessResult.status === "fulfilled" &&
       deepseekHarnessResult.value.enabled,
+    sandboxEndpointExportEnabled:
+      sandboxResult.status === "fulfilled" &&
+      sandboxResult.value.endpointExportEnabled === true,
     skillCustomizationEnabled:
       skillResult.status === "fulfilled" && skillResult.value.enabled,
   };
@@ -299,6 +305,46 @@ const EMPTY_STRING_ARR: string[] = [];
 
 function emptyInvocation(): FrontendInvocation {
   return { skills: [] };
+}
+
+async function loadSandboxThreadHistory(
+  session: SandboxSessionInfo,
+): Promise<SandboxThreadSnapshot | null> {
+  let readError: unknown;
+  if (session.threadId) {
+    try {
+      const snapshot = await sandboxClient.readThread(session.id, session.threadId);
+      if (snapshot.messages.length > 0) return snapshot;
+    } catch (cause) {
+      readError = cause;
+    }
+  }
+
+  const page = await sandboxClient.listThreads(session.id);
+  const latest = page.threads.find((thread) => thread.id !== session.threadId) ??
+    page.threads[0];
+  if (!latest) {
+    if (readError) throw readError;
+    return null;
+  }
+  return sandboxClient.resumeThread(session.id, latest.id);
+}
+
+function sandboxSnapshotTurnsForStatus(
+  snapshot: SandboxThreadSnapshot,
+  busy: boolean,
+): Turn[] {
+  const snapshotTurns = sandboxSnapshotTurns(snapshot);
+  const lastTurn = snapshotTurns[snapshotTurns.length - 1];
+  if (!busy || lastTurn?.role !== "user") return snapshotTurns;
+  return [
+    ...snapshotTurns,
+    {
+      role: "assistant",
+      blocks: [],
+      meta: { localId: `sandbox-background-${snapshot.threadId}` },
+    },
+  ];
 }
 
 function activeWorkspaceDraftKey(userId: string): string {
@@ -884,6 +930,8 @@ export default function App() {
   const [sandboxApprovalBusy, setSandboxApprovalBusy] = useState(false);
   const [sandboxApprovalError, setSandboxApprovalError] = useState("");
   const [sandboxUploadBusy, setSandboxUploadBusy] = useState(false);
+  const [sandboxEndpointCopyState, setSandboxEndpointCopyState] =
+    useState<"idle" | "copying" | "copied">("idle");
   const [sandboxLaunchOpen, setSandboxLaunchOpen] = useState(false);
   const [sandboxLaunchState, setSandboxLaunchState] =
     useState<SandboxLaunchState>("confirm");
@@ -891,6 +939,7 @@ export default function App() {
   const [sandboxLaunchKind, setSandboxLaunchKind] =
     useState<"codex" | SandboxAgentKind>("codex");
   const [sandboxLaunchFromAgents, setSandboxLaunchFromAgents] = useState(false);
+  const [sandboxProjectUploadOpen, setSandboxProjectUploadOpen] = useState(false);
   const [sandboxAgentRefreshKey, setSandboxAgentRefreshKey] = useState(0);
   const [sandboxAgentDetailTarget, setSandboxAgentDetailTarget] =
     useState<SandboxAgentResource | null>(null);
@@ -903,9 +952,13 @@ export default function App() {
   const sandboxSessionIdRef = useRef(sandboxSession?.id ?? "");
   const sandboxActiveAssistantTurnIdRef = useRef("");
   const sandboxUploadRunRef = useRef(0);
+  const sandboxEndpointCopyTimerRef = useRef<number | undefined>(undefined);
   const sandboxPreviewUrlsRef = useRef<Set<string>>(new Set());
   sandboxSessionIdRef.current = sandboxSession?.id ?? "";
   useEffect(() => () => {
+    if (sandboxEndpointCopyTimerRef.current !== undefined) {
+      window.clearTimeout(sandboxEndpointCopyTimerRef.current);
+    }
     for (const previewUrl of sandboxPreviewUrlsRef.current) {
       URL.revokeObjectURL(previewUrl);
     }
@@ -929,6 +982,18 @@ export default function App() {
     }
     sandboxPreviewUrlsRef.current.clear();
   }
+
+  const resetSandboxEndpointCopyState = useCallback(() => {
+    if (sandboxEndpointCopyTimerRef.current !== undefined) {
+      window.clearTimeout(sandboxEndpointCopyTimerRef.current);
+      sandboxEndpointCopyTimerRef.current = undefined;
+    }
+    setSandboxEndpointCopyState("idle");
+  }, []);
+
+  useEffect(() => {
+    resetSandboxEndpointCopyState();
+  }, [resetSandboxEndpointCopyState, sandboxSession?.id]);
 
   // Turns are stored PER SESSION, so a background stream can keep updating its
   // own session's transcript while you view another one — no cross-session
@@ -1430,6 +1495,72 @@ export default function App() {
     },
     onError: setError,
   });
+  useEffect(() => {
+    const activeSession = sandboxSession;
+    if (!activeSession || !sandboxBusy || sandboxMessageAbortRef.current) return;
+    let stopped = false;
+    let timer: number | undefined;
+    const controller = new AbortController();
+
+    const syncBackgroundTurn = async () => {
+      try {
+        const status = await sandboxClient.getStatus(activeSession.id, {
+          signal: controller.signal,
+        });
+        if (stopped || sandboxSessionIdRef.current !== activeSession.id) return;
+        const snapshot = status.threadId
+          ? await sandboxClient.readThread(activeSession.id, status.threadId, {
+              signal: controller.signal,
+            })
+          : null;
+        if (stopped || sandboxSessionIdRef.current !== activeSession.id) return;
+        if (snapshot) {
+          setSandboxTurns(sandboxSnapshotTurnsForStatus(snapshot, status.busy));
+        }
+        setSandboxSession((current) =>
+          current?.id === activeSession.id
+            ? {
+                ...current,
+                ...status,
+                ...(snapshot
+                  ? {
+                      threadId: snapshot.threadId,
+                      cwd: snapshot.cwd ?? status.cwd,
+                      model: snapshot.model ?? status.model,
+                      workspaceLocked: snapshot.workspaceLocked,
+                      permissions: snapshot.permissions,
+                    }
+                  : {}),
+              }
+            : current
+        );
+        setSandboxBusy(status.busy);
+        if (!status.busy) {
+          const lastMessage = snapshot?.messages[snapshot.messages.length - 1];
+          if (lastMessage?.role === "user") {
+            setError("云端 Codex 已结束，但没有生成回复，请重新发送任务。");
+          }
+          return;
+        }
+      } catch (cause) {
+        if ((cause as Error)?.name === "AbortError" || stopped) return;
+        setSandboxBusy(false);
+        setSandboxSession((current) =>
+          current?.id === activeSession.id ? { ...current, busy: false } : current
+        );
+        setError(cause instanceof Error ? cause.message : String(cause));
+        return;
+      }
+      timer = window.setTimeout(syncBackgroundTurn, 1500);
+    };
+
+    timer = window.setTimeout(syncBackgroundTurn, 1500);
+    return () => {
+      stopped = true;
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [sandboxBusy, sandboxSession?.id]);
   const activeAgent = activeAgentBySession[sessionId] ?? "";
   const seenAgents = seenAgentsBySession[sessionId] ?? EMPTY_STRING_SET;
   const execPath = execPathBySession[sessionId] ?? EMPTY_STRING_ARR;
@@ -3004,6 +3135,7 @@ export default function App() {
       }
       if (session.toolName === "codex") {
         const connected = await sandboxClient.connectSession(session.id);
+        const snapshot = await loadSandboxThreadHistory(connected);
         operation.succeed({
           sandboxStatus: telemetrySandboxStatus(connected.status),
         });
@@ -3013,8 +3145,21 @@ export default function App() {
         setInput("");
         setInvocation(emptyInvocation());
         releaseAllSandboxPreviews();
-        setSandboxTurns([]);
-        setSandboxSession(connected);
+        if (snapshot) {
+          setSandboxTurns(sandboxSnapshotTurnsForStatus(snapshot, connected.busy));
+          setSandboxSession({
+            ...connected,
+            threadId: snapshot.threadId,
+            cwd: snapshot.cwd ?? connected.cwd,
+            workspaceLocked: snapshot.workspaceLocked,
+            permissions: snapshot.permissions,
+            ...(snapshot.model ? { model: snapshot.model } : {}),
+          });
+        } else {
+          setSandboxTurns([]);
+          setSandboxSession(connected);
+        }
+        setSandboxBusy(connected.busy);
         setSandboxAgentDetailTarget(null);
         setSandboxAgentWorkspace(null);
         setMyAgents(false);
@@ -3037,6 +3182,21 @@ export default function App() {
       setError(cause instanceof Error ? cause.message : String(cause));
       throw cause;
     }
+  }
+
+  async function openCodexHandoffSession(sessionId: string) {
+    const resources = await sandboxClient.listSessions();
+    const session = resources.find(
+      (resource) =>
+        resource.resourceType === "session" &&
+        resource.toolName === "codex" &&
+        resource.id === sessionId,
+    );
+    if (!session) {
+      throw new Error("云端 Codex Session 暂未出现在列表中，请稍后重试。");
+    }
+    await openSandboxAgent(session, "my_agents");
+    setSandboxProjectUploadOpen(false);
   }
 
   function openSandboxAgentDetails(session: SandboxAgentResource) {
@@ -3094,6 +3254,7 @@ export default function App() {
     setSandboxApproval(null);
     setSandboxApprovalBusy(false);
     setSandboxApprovalError("");
+    resetSandboxEndpointCopyState();
     setSandboxThreadDeleteTarget(null);
     setSandboxUploadBusy(false);
     sandboxUploadRunRef.current += 1;
@@ -3124,6 +3285,33 @@ export default function App() {
       );
     } finally {
       setSandboxToolLoading(false);
+    }
+  }
+
+  async function copySandboxEndpoint() {
+    const activeSession = sandboxSession;
+    if (!activeSession || sandboxEndpointCopyState === "copying") return;
+    setSandboxEndpointCopyState("copying");
+    setError("");
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("当前浏览器不支持写入剪贴板。");
+      }
+      const exported = await sandboxClient.getEndpoint(activeSession.id);
+      await navigator.clipboard.writeText(exported.endpoint);
+      if (sandboxSessionIdRef.current !== activeSession.id) return;
+      setSandboxEndpointCopyState("copied");
+      if (sandboxEndpointCopyTimerRef.current !== undefined) {
+        window.clearTimeout(sandboxEndpointCopyTimerRef.current);
+      }
+      sandboxEndpointCopyTimerRef.current = window.setTimeout(() => {
+        setSandboxEndpointCopyState("idle");
+        sandboxEndpointCopyTimerRef.current = undefined;
+      }, 1600);
+    } catch (cause) {
+      if (sandboxSessionIdRef.current !== activeSession.id) return;
+      setSandboxEndpointCopyState("idle");
+      setError(cause instanceof Error ? cause.message : String(cause));
     }
   }
 
@@ -3354,7 +3542,13 @@ export default function App() {
   }
 
   function stopSandboxGeneration() {
+    const activeSessionId = sandboxSession?.id;
     sandboxMessageAbortRef.current?.abort();
+    if (activeSessionId) {
+      void sandboxClient
+        .interruptSession(activeSessionId)
+        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    }
   }
 
   async function sendSandboxMessage(
@@ -5081,6 +5275,10 @@ export default function App() {
                     setSandboxSettingsError("");
                     setSandboxWorkspaceOpen(true);
                   },
+                  onCopyEndpoint: copySandboxEndpoint,
+                  endpointCopyEnabled:
+                    newChatCapabilities.sandboxEndpointExportEnabled === true,
+                  endpointCopyState: sandboxEndpointCopyState,
                   workspaceLocked: sandboxSession.workspaceLocked,
                   settingsBusy: sandboxSettingsBusy,
                   uploadBusy: sandboxUploadBusy || sandboxBusy,
@@ -5367,6 +5565,7 @@ export default function App() {
                 canCreate={canCreateAgents}
                 runtimeScope={access.capabilities.runtimeScope}
                 onCreateAgent={openAgentCreateFromMyAgents}
+                onOpenCodexProjectUpload={() => setSandboxProjectUploadOpen(true)}
                 onUseAgent={(agent) =>
                   connectMyAgent(agent, { source: "my_agents" })
                 }
@@ -6074,6 +6273,13 @@ export default function App() {
         onConfirm={(displayName, persistent) =>
           void launchSandboxSession(displayName, persistent)
         }
+      />
+
+      <SandboxProjectUploadDialog
+        open={sandboxProjectUploadOpen}
+        onClose={() => setSandboxProjectUploadOpen(false)}
+        onRefreshAgents={() => setSandboxAgentRefreshKey((current) => current + 1)}
+        onOpenSession={openCodexHandoffSession}
       />
 
       {sandboxThreadDeleteTarget ? (
