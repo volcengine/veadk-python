@@ -2348,7 +2348,7 @@
 
   .pp-release-overview {
     flex: 0 0 auto;
-    min-height: 460px;
+    min-height: 0;
     border-right: 0;
     border-bottom: 0;
   }

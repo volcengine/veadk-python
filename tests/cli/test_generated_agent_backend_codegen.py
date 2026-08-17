@@ -65,6 +65,7 @@ def test_minimal_codegen_agent_py_compiles(tmp_path) -> None:
     assert "agents/demo_agent/__init__.py" in paths
     assert ".env.example" in paths
     assert "requirements.txt" in paths
+    assert "Dockerfile" not in paths
 
     for file in project.files:
         if file.path.endswith(".py"):
@@ -72,6 +73,197 @@ def test_minimal_codegen_agent_py_compiles(tmp_path) -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(file.content, encoding="utf-8")
             py_compile.compile(str(target), doraise=True)
+
+
+@pytest.mark.parametrize(
+    ("cloud_provider", "base_image"),
+    [
+        pytest.param(
+            "volcengine",
+            "agentkit-prod-public-cn-beijing.cr.volces.com/base/py-simple:python3.12-bookworm-slim-latest",
+            id="volcengine",
+        ),
+        pytest.param(
+            "byteplus",
+            "agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/base/py-simple:python3.12-bookworm-slim-latest",
+            id="byteplus",
+        ),
+    ],
+)
+def test_codegen_cloud_environment_uses_provider_base_image(
+    cloud_provider: str,
+    base_image: str,
+) -> None:
+    project = generate_project_from_draft(
+        AgentDraft.model_validate(
+            {
+                "name": "Cloud Agent",
+                "instruction": "You are helpful.",
+                "cloudProvider": cloud_provider,
+                "cloudEnvironment": {"cliTools": ["lark-cli"]},
+            }
+        )
+    )
+    files = {file.path: file.content for file in project.files}
+
+    assert files["Dockerfile"].startswith(f"FROM {base_image}\n")
+    assert "lark-cli-1.0.87-linux-${arch}.tar.gz" in files["Dockerfile"]
+    assert (
+        "6027b1ddc12440400581bbdf9554850d8e119c7dd400439b1220e7a87b9673c5"
+        in files["Dockerfile"]
+    )
+    assert (
+        "fade9a22d363172a9c18a8287c99c80d6d106a2900f3fce4015e4e156c5fc776"
+        in files["Dockerfile"]
+    )
+    assert "--connect-timeout 10" in files["Dockerfile"]
+    assert (
+        "https://ghfast.top/https://github.com/larksuite/cli/releases/download"
+        in files["Dockerfile"]
+    )
+    assert 'CMD ["python", "-m", "app"]' in files["Dockerfile"]
+
+
+def test_codegen_cloud_environment_installs_github_cli_for_both_architectures() -> None:
+    project = generate_project_from_draft(
+        AgentDraft.model_validate(
+            {
+                "name": "Cloud Agent",
+                "instruction": "You are helpful.",
+                "cloudEnvironment": {"cliTools": ["github-cli"]},
+            }
+        )
+    )
+    dockerfile = {file.path: file.content for file in project.files}["Dockerfile"]
+
+    assert "gh_2.97.0_linux_${arch}.tar.gz" in dockerfile
+    assert (
+        "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112" in dockerfile
+    )
+    assert (
+        "73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5" in dockerfile
+    )
+    assert (
+        "https://ghfast.top/https://github.com/cli/cli/releases/download" in dockerfile
+    )
+    assert (
+        "apt-get install -y --no-install-recommends ca-certificates curl git"
+        in dockerfile
+    )
+    assert "# Install GitHub CLI (gh)" in dockerfile
+
+
+def test_codegen_cloud_environment_installs_pandoc_from_system_packages() -> None:
+    project = generate_project_from_draft(
+        AgentDraft.model_validate(
+            {
+                "name": "Cloud Agent",
+                "instruction": "You are helpful.",
+                "cloudEnvironment": {"cliTools": ["pandoc"]},
+            }
+        )
+    )
+    dockerfile = {file.path: file.content for file in project.files}["Dockerfile"]
+
+    assert (
+        "apt-get install -y --no-install-recommends ca-certificates curl pandoc"
+        in dockerfile
+    )
+
+
+def test_codegen_cloud_environment_can_install_both_clis_without_credentials() -> None:
+    secret = "must-not-leak"
+    project = generate_project_from_draft(
+        AgentDraft.model_validate(
+            {
+                "name": "Cloud Agent",
+                "instruction": "You are helpful.",
+                "cloudEnvironment": {
+                    "cliTools": ["lark-cli", "github-cli"],
+                },
+                "deployment": {"envValues": {"GITHUB_TOKEN": secret}},
+            }
+        )
+    )
+    dockerfile = {file.path: file.content for file in project.files}["Dockerfile"]
+
+    assert "lark-cli" in dockerfile
+    assert "gh_2.97.0" in dockerfile
+    assert "ca-certificates curl git" in dockerfile
+    assert "# Configure AgentKit runtime defaults." in dockerfile
+    assert "# Install system dependencies" in dockerfile
+    assert "# Install Lark CLI" in dockerfile
+    assert "# Install GitHub CLI (gh)" in dockerfile
+    assert "# Install Python dependencies" in dockerfile
+    assert "# Copy the Agent application" in dockerfile
+    assert secret not in dockerfile
+    assert "GITHUB_TOKEN" not in dockerfile
+
+
+def test_codegen_cloud_environment_uses_custom_dockerfile_verbatim() -> None:
+    custom_dockerfile = "FROM example.invalid/custom\nRUN echo ready\n"
+    project = generate_project_from_draft(
+        AgentDraft.model_validate(
+            {
+                "name": "Cloud Agent",
+                "instruction": "You are helpful.",
+                "cloudEnvironment": {
+                    "cliTools": ["lark-cli"],
+                    "dockerfile": custom_dockerfile,
+                },
+            }
+        )
+    )
+
+    dockerfile = {file.path: file.content for file in project.files}["Dockerfile"]
+    assert dockerfile == custom_dockerfile
+    assert "lark-cli-1.0.87" not in dockerfile
+
+
+def test_codegen_cloud_environment_allows_custom_dockerfile_without_cli_tools() -> None:
+    project = generate_project_from_draft(
+        AgentDraft.model_validate(
+            {
+                "name": "Cloud Agent",
+                "cloudEnvironment": {
+                    "dockerfile": "FROM example.invalid/base\n",
+                },
+            }
+        )
+    )
+
+    dockerfile = {file.path: file.content for file in project.files}["Dockerfile"]
+    assert dockerfile == "FROM example.invalid/base\n"
+
+
+def test_codegen_cloud_environment_rejects_blank_custom_dockerfile() -> None:
+    with pytest.raises(ValidationError):
+        AgentDraft.model_validate(
+            {
+                "name": "Cloud Agent",
+                "cloudEnvironment": {"dockerfile": "  \n"},
+            }
+        )
+
+
+def test_codegen_cloud_environment_rejects_oversized_custom_dockerfile() -> None:
+    with pytest.raises(ValidationError):
+        AgentDraft.model_validate(
+            {
+                "name": "Cloud Agent",
+                "cloudEnvironment": {"dockerfile": "x" * 65_537},
+            }
+        )
+
+
+def test_codegen_cloud_environment_rejects_unknown_cli() -> None:
+    with pytest.raises(ValidationError):
+        AgentDraft.model_validate(
+            {
+                "name": "Cloud Agent",
+                "cloudEnvironment": {"cliTools": ["curl"]},
+            }
+        )
 
 
 @pytest.mark.parametrize(

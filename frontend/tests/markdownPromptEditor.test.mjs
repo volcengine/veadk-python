@@ -127,11 +127,12 @@ test("configuration form omits the redundant right-side step rail", () => {
   assert.doesNotMatch(createStyles, /\.cw-rail\s*\{/);
 });
 
-test("workspace uses one architecture title and a bottom three-stage lifecycle", () => {
+test("workspace uses one architecture title and a bottom four-stage lifecycle", () => {
   const headerRule = createStyles.match(/\.cw-workspace-header\s*\{[^}]*\}/)?.[0] ?? "";
-  assert.match(createSource, /mode === "validate"[\s\S]*?"调试您的智能体"/);
-  assert.match(createSource, /mode === "publish"[\s\S]*?"准备好部署您的智能体"/);
-  assert.match(createSource, /"个性化您的智能体架构";[\s\S]*?<h1>\{title\}<\/h1>/);
+  assert.match(createSource, /validate:\s*"调试您的智能体"/);
+  assert.match(createSource, /publish:\s*"准备好部署您的智能体"/);
+  assert.match(createSource, /build:\s*"个性化您的智能体架构"/);
+  assert.match(createSource, /<h1>\{WORKSPACE_TITLES\[mode\]\}<\/h1>/);
   assert.doesNotMatch(createSource, /agentName=\{workspaceAgentName\(draft\)\}/);
   assert.match(headerRule, /display:\s*flex/);
   assert.match(headerRule, /justify-content:\s*center/);
@@ -140,6 +141,7 @@ test("workspace uses one architecture title and a bottom three-stage lifecycle",
   assert.doesNotMatch(createSource, />放弃编辑</);
   assert.match(createSource, /\{ id: "build", label: "架构" \}/);
   assert.match(createSource, /\{ id: "validate", label: "调试" \}/);
+  assert.match(createSource, /\{ id: "environment", label: "环境" \}/);
   assert.match(createSource, /\{ id: "publish", label: "发布" \}/);
   assert.match(createSource, /function WorkspaceLifecycleFooter/);
   assert.match(createSource, /className="cw-workspace-footer"/);
@@ -152,7 +154,7 @@ test("workspace uses one architecture title and a bottom three-stage lifecycle",
     /\.cw-workspace-footer\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?padding:/,
   );
   assert.match(createStyles, /\.cw-workspace-nav-button\.is-placeholder\s*\{[\s\S]*?visibility:\s*hidden/);
-  assert.match(createStyles, /\.cw-workspace-progress\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(createStyles, /\.cw-workspace-progress\s*\{[\s\S]*?grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/);
 });
 
 test("build workspace uses a narrow 60-percent canvas and grouped configuration cards", () => {

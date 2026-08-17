@@ -40,6 +40,8 @@ import {
 import {
   type CreateModeProps,
   type AgentDraft,
+  type CloudEnvironmentConfig,
+  MAX_CLOUD_DOCKERFILE_LENGTH,
   type McpTool,
   type SelectedSkill,
   emptyDraft,
@@ -97,6 +99,10 @@ import type { SkillSource } from "./skills/types";
 import { SkillHubPicker } from "./SkillHubPicker";
 import { LocalPicker } from "./LocalPicker";
 import { SkillSpacePicker } from "./SkillSpacePicker";
+import {
+  CloudEnvironmentAdvancedTrigger,
+  CloudEnvironmentConfigurator,
+} from "../ui/CloudEnvironmentConfigurator";
 import { listA2aSpaces, type A2aSpaceRef } from "./a2aSpaces";
 import {
   listVikingKnowledgebases,
@@ -2610,7 +2616,7 @@ export function TreeNode({
 
 type DebugPhase = "idle" | "starting" | "ready" | "sending" | "error";
 
-type WorkspaceMode = "build" | "validate" | "publish";
+type WorkspaceMode = "build" | "validate" | "environment" | "publish";
 interface DebugMessage {
   role: "user" | "assistant";
   content: string;
@@ -3259,8 +3265,16 @@ const WORKSPACE_MODES: Array<{
 }> = [
   { id: "build", label: "架构" },
   { id: "validate", label: "调试" },
+  { id: "environment", label: "环境" },
   { id: "publish", label: "发布" },
 ];
+
+const WORKSPACE_TITLES: Record<WorkspaceMode, string> = {
+  build: "个性化您的智能体架构",
+  validate: "调试您的智能体",
+  environment: "配置云上环境",
+  publish: "准备好部署您的智能体",
+};
 
 const DEBUG_OPTIMIZATIONS = [
   {
@@ -3286,15 +3300,9 @@ const DEBUG_OPTIMIZATIONS = [
 ] as const;
 
 function WorkspaceHeader({ mode }: { mode: WorkspaceMode }) {
-  const title =
-    mode === "validate"
-      ? "调试您的智能体"
-      : mode === "publish"
-        ? "准备好部署您的智能体"
-        : "个性化您的智能体架构";
   return (
     <header className="cw-workspace-header">
-      <h1>{title}</h1>
+      <h1>{WORKSPACE_TITLES[mode]}</h1>
     </header>
   );
 }
@@ -3304,17 +3312,20 @@ function WorkspaceLifecycleFooter({
   busy,
   onChange,
   assistant,
+  accessory,
 }: {
   mode: WorkspaceMode;
   busy: boolean;
   onChange: (mode: WorkspaceMode) => void;
   assistant?: React.ReactNode;
+  accessory?: React.ReactNode;
 }) {
   const activeIndex = WORKSPACE_MODES.findIndex((item) => item.id === mode);
   const previousMode = WORKSPACE_MODES[activeIndex - 1];
   const nextMode = WORKSPACE_MODES[activeIndex + 1];
   return (
     <footer className="cw-workspace-footer">
+      {accessory ? <div className="cw-workspace-footer-accessory">{accessory}</div> : null}
       <div
         className={`cw-workspace-nav-actions${assistant ? " has-assistant" : ""}`}
       >
@@ -3477,6 +3488,8 @@ export function CustomCreate({
   const [validationPulse, setValidationPulse] = useState(0);
   const [project, setProject] = useState<AgentProject | null>(null);
   const [building, setBuilding] = useState(false);
+  const [cloudEnvironmentEditorOpen, setCloudEnvironmentEditorOpen] =
+    useState(false);
   const [deployRegion, setDeployRegion] = useState<string>(
     deploymentTarget?.region ?? initialDeployRegion,
   );
@@ -3946,11 +3959,37 @@ export function CustomCreate({
     });
   };
 
+  const openEnvironment = async (variantId?: string) => {
+    if (!(await confirmLeaveDebug())) return;
+    if (!requireCompleteDraft()) {
+      setWorkspaceMode("build");
+      return;
+    }
+    if (variantId) setSelectedVariantId(variantId);
+    setWorkspaceMode("environment");
+  };
+
   const openPublishPreview = async (variantId?: string) => {
     if (!(await confirmLeaveDebug())) return;
     setBuildErr("");
     if (!requireCompleteDraft()) {
       setWorkspaceMode("build");
+      return;
+    }
+    if (
+      providerDraft.cloudEnvironment?.dockerfile !== undefined &&
+      !providerDraft.cloudEnvironment.dockerfile.trim()
+    ) {
+      setBuildErr("Dockerfile 不能为空。请输入有效内容，或恢复自动生成。");
+      setWorkspaceMode("environment");
+      return;
+    }
+    if (
+      (providerDraft.cloudEnvironment?.dockerfile?.length ?? 0) >
+      MAX_CLOUD_DOCKERFILE_LENGTH
+    ) {
+      setBuildErr("Dockerfile 不能超过 64 KiB。请精简内容后重试。");
+      setWorkspaceMode("environment");
       return;
     }
     const invalidEnv = firstInvalidRuntimeEnv(
@@ -4329,8 +4368,21 @@ export function CustomCreate({
       openValidation();
       return;
     }
+    if (nextMode === "environment") {
+      void openEnvironment();
+      return;
+    }
     if (!(await confirmLeaveDebug())) return;
     setWorkspaceMode(nextMode);
+  };
+
+  const updateCloudEnvironment = (cloudEnvironment: CloudEnvironmentConfig) => {
+    setDraft((current) => ({
+      ...current,
+      cloudEnvironment,
+    }));
+    setBuildErr("");
+    setProject(null);
   };
 
   const Section = sectionImpl.current;
@@ -5213,7 +5265,7 @@ export function CustomCreate({
                 onInput={setDebugInput}
                 onSend={sendDebugMessage}
                 onStartVariant={startDebugVariant}
-                onDeployVariant={(id) => void openPublishPreview(id)}
+                onDeployVariant={(id) => void openEnvironment(id)}
                 onAddVariant={addDebugVariant}
                 onRemoveVariant={removeDebugVariant}
                 onToggleConfig={(id) => {
@@ -5226,6 +5278,19 @@ export function CustomCreate({
                 onOpenTrace={openDebugTrace}
               />
             </div>
+          </div>
+        )}
+
+        {workspaceMode === "environment" && (
+          <div className="cw-environment-workspace">
+            <CloudEnvironmentConfigurator
+              cloudProvider={cloudProvider}
+              value={draft.cloudEnvironment ?? { cliTools: [] }}
+              onChange={updateCloudEnvironment}
+              editorOpen={cloudEnvironmentEditorOpen}
+              onEditorOpenChange={setCloudEnvironmentEditorOpen}
+              disabled={building}
+            />
           </div>
         )}
 
@@ -5347,6 +5412,15 @@ export function CustomCreate({
         busy={building}
         onChange={handleWorkspaceChange}
         assistant={workspaceMode === "build" ? aiComposer : undefined}
+        accessory={
+          workspaceMode === "environment" ? (
+            <CloudEnvironmentAdvancedTrigger
+              customized={draft.cloudEnvironment?.dockerfile !== undefined}
+              disabled={building}
+              onClick={() => setCloudEnvironmentEditorOpen(true)}
+            />
+          ) : undefined
+        }
       />
       {debugTraceTarget && (
         <TraceDrawer

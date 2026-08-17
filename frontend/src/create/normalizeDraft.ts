@@ -2,6 +2,7 @@ import {
   emptyDraft,
   type A2aRegistryConfig,
   type AgentDraft,
+  type CloudCliToolId,
   type CustomTool,
   type SelectedSkill,
 } from "./types";
@@ -32,6 +33,11 @@ const TOOL_IDS = new Set([
   "vesearch",
 ]);
 const AGENT_TYPES = new Set(["llm", "sequential", "parallel", "loop", "a2a"]);
+const CLOUD_CLI_TOOL_IDS = new Set<CloudCliToolId>([
+  "lark-cli",
+  "github-cli",
+  "pandoc",
+]);
 
 function asString(v: unknown, fallback = ""): string {
   return typeof v === "string" ? v : fallback;
@@ -43,6 +49,16 @@ function asBool(v: unknown): boolean {
 
 function asStringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
+
+function asCloudCliTools(v: unknown): CloudCliToolId[] {
+  return Array.from(
+    new Set(
+      asStringArray(v).filter((tool): tool is CloudCliToolId =>
+        CLOUD_CLI_TOOL_IDS.has(tool as CloudCliToolId),
+      ),
+    ),
+  );
 }
 
 function asStringRecord(v: unknown): Record<string, string> {
@@ -224,6 +240,11 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     o.deployment && typeof o.deployment === "object" ? o.deployment : {}
   ) as Record<string, unknown>;
   const deploymentEnvValues = asStringRecord(deployment.envValues);
+  const cloudEnvironment = (
+    o.cloudEnvironment && typeof o.cloudEnvironment === "object"
+      ? o.cloudEnvironment
+      : {}
+  ) as Record<string, unknown>;
   const a2aRegistry = asA2aRegistry(o.a2aRegistry);
   const parsedType = asAgentType(o.agentType);
   const agentType =
@@ -290,6 +311,12 @@ export function normalizeDraft(raw: unknown): AgentDraft {
       modelApiKeyName: asString(deployment.modelApiKeyName),
       ...(Object.keys(deploymentEnvValues).length > 0
         ? { envValues: deploymentEnvValues }
+        : {}),
+    },
+    cloudEnvironment: {
+      cliTools: asCloudCliTools(cloudEnvironment.cliTools),
+      ...(typeof cloudEnvironment.dockerfile === "string"
+        ? { dockerfile: cloudEnvironment.dockerfile }
         : {}),
     },
     subAgents: parseSubAgents(o.subAgents, cloudProvider),

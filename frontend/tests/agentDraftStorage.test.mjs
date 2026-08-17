@@ -130,6 +130,24 @@ test("writes a versioned user-scoped payload with runtime environment values", (
   });
 });
 
+test("preserves cloud environment selections in local drafts", () => {
+  const storage = memoryStorage();
+  const cloudEnvironment = {
+    cliTools: ["lark-cli", "github-cli"],
+    dockerfile: "FROM example.invalid/custom\nRUN echo ready\n",
+  };
+  writeWorkspaceDrafts(storage, "cloud-builder", [
+    {
+      id: "cloud-draft",
+      updatedAt: 456,
+      draft: draft({ cloudEnvironment }),
+    },
+  ]);
+
+  const loaded = loadWorkspaceDrafts(storage, "cloud-builder");
+  assert.deepEqual(loaded[0].draft.cloudEnvironment, cloudEnvironment);
+});
+
 test("never persists server-managed Ark API key values while retaining selection metadata", () => {
   const leakedValue = "raw-ark-secret-must-not-enter-local-storage";
   const storage = memoryStorage();

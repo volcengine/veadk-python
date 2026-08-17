@@ -21,6 +21,9 @@
 .cw-root.is-validate {
   --cw-workspace-width: min(88%, 1440px);
 }
+.cw-root.is-environment {
+  --cw-workspace-width: min(76%, 1100px);
+}
 .cw-root.is-publish {
   --cw-workspace-width: min(80%, 1180px);
 }
@@ -68,6 +71,9 @@
   margin: 0 auto 24px;
   padding: 12px 0 4px;
   background: transparent;
+}
+.cw-workspace-footer-accessory {
+  width: 100%;
 }
 .cw-workspace-nav-actions {
   width: 100%;
@@ -151,9 +157,9 @@
   pointer-events: none;
 }
 .cw-workspace-progress {
-  width: min(132px, 40vw);
+  width: min(176px, 48vw);
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 5px;
   margin: 0 auto;
 }
@@ -3937,6 +3943,18 @@
 .cw-preview-body > * {
   flex: 1;
   min-height: 0;
+}
+
+/* ---------- cloud environment ---------- */
+.cw-environment-workspace {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 20px 0 24px;
 }
 
 /* ---------- skill hub picker ---------- */

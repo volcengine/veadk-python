@@ -686,11 +686,13 @@ function buildTree(files: ProjectFile[]): TreeNode {
   return root;
 }
 
-function sortedChildren(node: TreeNode): TreeNode[] {
+function sortedChildren(node: TreeNode, filesFirst = false): TreeNode[] {
   return [...node.children.values()].sort((a, b) => {
     const aFolder = a.children.size > 0 && a.path === undefined;
     const bFolder = b.children.size > 0 && b.path === undefined;
-    if (aFolder !== bFolder) return aFolder ? -1 : 1;
+    if (aFolder !== bFolder) {
+      return filesFirst ? (aFolder ? 1 : -1) : aFolder ? -1 : 1;
+    }
     return a.name.localeCompare(b.name);
   });
 }
@@ -1773,7 +1775,7 @@ export function ProjectPreview({
   );
 
   function renderNode(node: TreeNode, depth: number, prefix: string) {
-    return sortedChildren(node).map((child) => {
+    return sortedChildren(node, depth === 0).map((child) => {
       const key = prefix ? `${prefix}/${child.name}` : child.name;
       const isFile = child.path !== undefined;
       const pad = { paddingLeft: 8 + depth * 14 };
