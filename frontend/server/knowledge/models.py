@@ -55,6 +55,8 @@ class CreateDocumentBody(ApiModel):
     name: str | None = Field(default=None, max_length=256)
     document_type: str | None = Field(default=None, max_length=64)
     url: str | None = Field(default=None, max_length=4_096)
+    source_title: str | None = Field(default=None, max_length=512)
+    source_markdown: str | None = None
     tos_path: str | None = Field(default=None, max_length=4_096)
     metadata: dict[str, Any] = Field(default_factory=dict)
 

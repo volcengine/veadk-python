@@ -365,6 +365,37 @@ class TosKnowledgeUploadStore:
             ),
         )
 
+    def read_managed(
+        self,
+        *,
+        tos_path: str,
+        owner_id: str,
+        knowledge_id: str,
+        region: str,
+    ) -> bytes | None:
+        resolved = self._managed_key(
+            tos_path=tos_path,
+            owner_id=owner_id,
+            knowledge_id=knowledge_id,
+            region=region,
+        )
+        if resolved is None:
+            return None
+        target, bucket, key = resolved
+        try:
+            response = self._client(target).get_object(bucket=bucket, key=key)
+        except Exception as error:
+            if int(getattr(error, "status_code", 0) or 0) == 404:
+                return None
+            raise KnowledgeAccessError(
+                "读取知识原文失败，请稍后重试。",
+                status_code=502,
+            ) from error
+        content = response.read() if hasattr(response, "read") else b"".join(response)
+        if len(content) > self.max_file_bytes:
+            raise KnowledgeAccessError("知识原文超过读取限制。", status_code=502)
+        return content
+
     def put_metadata(
         self,
         upload: StoredKnowledgeUpload,

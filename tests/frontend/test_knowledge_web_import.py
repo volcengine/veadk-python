@@ -370,6 +370,72 @@ async def test_rejects_markdown_over_two_megabytes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_falls_back_to_visible_body_markdown_without_navigation_noise() -> None:
+    html = b"""
+    <html>
+      <head><meta charset="utf-8"><title>Workspace guide</title><script>hidden()</script></head>
+      <body>
+        <nav><img src="logo.png">Navigation noise</nav>
+        <main>
+          <h1>Configure your workspace</h1>
+          <p>Choose a project and save the configuration.</p>
+          <ul><li>Open settings</li><li>Select a project</li></ul>
+        </main>
+        <form><button>Unrelated action</button></form>
+        <footer>Footer noise</footer>
+      </body>
+    </html>
+    """
+    importer = WebImporter(
+        resolver=_public_resolver,
+        transport_factory=_transport_factory(
+            lambda request: httpx.Response(
+                200,
+                content=html,
+                headers={"content-type": "text/html"},
+            )
+        ),
+        extractor=lambda html, url: ("", ""),
+    )
+
+    result = await importer.import_url("https://example.com/workspace")
+
+    assert result.title == "Workspace guide"
+    assert "# Configure your workspace" in result.markdown
+    assert "Choose a project and save the configuration." in result.markdown
+    assert "- Open settings" in result.markdown
+    assert "- Select a project" in result.markdown
+    assert "Navigation noise" not in result.markdown
+    assert "Unrelated action" not in result.markdown
+    assert "Footer noise" not in result.markdown
+
+
+@pytest.mark.asyncio
+async def test_fallback_decodes_declared_utf8_without_mojibake() -> None:
+    html = """
+    <html>
+      <head><meta http-equiv="Content-type" content="text/html; charset=utf-8"></head>
+      <body><main><p>我国成功发射卫星，网页正文应保持中文。</p></main></body>
+    </html>
+    """.encode()
+    importer = WebImporter(
+        resolver=_public_resolver,
+        transport_factory=_transport_factory(
+            lambda request: httpx.Response(
+                200,
+                content=html,
+                headers={"content-type": "text/html"},
+            )
+        ),
+        extractor=lambda html, url: ("", ""),
+    )
+
+    result = await importer.import_url("https://example.com/chinese")
+
+    assert result.markdown == "我国成功发射卫星，网页正文应保持中文。"
+
+
+@pytest.mark.asyncio
 async def test_rejects_empty_html_and_empty_extraction() -> None:
     empty_html_importer = WebImporter(
         resolver=_public_resolver,
@@ -395,7 +461,7 @@ async def test_rejects_empty_html_and_empty_extraction() -> None:
         ),
         extractor=lambda html, url: ("  ", "Title"),
     )
-    with pytest.raises(WebImportContentError, match="No main content"):
+    with pytest.raises(WebImportContentError, match="No visible HTML content"):
         await empty_markdown_importer.import_url("https://example.com/")
 
 
