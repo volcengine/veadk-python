@@ -64,10 +64,36 @@ test("shows the requested title, search, and agent type pills", () => {
   assert.match(pageSource, /onClick=\{\(\) => selectAgentType\(type\.id\)\}/);
 });
 
+test("preserves the selected sandbox type across details and refreshes it after deletion", () => {
+  assert.match(pageSource, /activeType: AgentType/);
+  assert.match(pageSource, /onActiveTypeChange: \(type: AgentType\) => void/);
+  assert.doesNotMatch(pageSource, /useState<AgentType>\("general"\)/);
+  assert.match(
+    appSource,
+    /const \[myAgentsActiveType, setMyAgentsActiveType\] = useState<AgentType>\("general"\)/,
+  );
+  assert.match(
+    appSource,
+    /function openSandboxAgentDetails\(session: SandboxAgentResource\)[\s\S]*?setMyAgentsActiveType\(session\.toolName\)/,
+  );
+  assert.match(
+    appSource,
+    /async function deleteSandboxAgent\(session: SandboxAgentResource\)[\s\S]*?setMyAgentsActiveType\(session\.toolName\)[\s\S]*?setSandboxAgentRefreshKey\(\(current\) => current \+ 1\)[\s\S]*?setMyAgents\(true\)/,
+  );
+  assert.match(
+    appSource,
+    /<MyAgents[\s\S]*?activeType=\{myAgentsActiveType\}[\s\S]*?onActiveTypeChange=\{setMyAgentsActiveType\}[\s\S]*?sandboxRefreshKey=\{sandboxAgentRefreshKey\}/,
+  );
+  assert.match(
+    pageSource,
+    /fetchSandboxAgents\(activeType\)[\s\S]*?\[activeType, fetchSandboxAgents, sandboxRefreshKey\]/,
+  );
+});
+
 test("clears stale sandbox cards as soon as the Agent type changes", () => {
   assert.match(
     pageSource,
-    /function selectAgentType\(type: AgentType\)[\s\S]*?sandboxAbortRef\.current\?\.abort\(\)[\s\S]*?sandboxRequestRef\.current \+= 1[\s\S]*?setSandboxAgents\(\[\]\)[\s\S]*?setLoadingSandboxAgents\(true\)[\s\S]*?setActiveType\(type\)/,
+    /function selectAgentType\(type: AgentType\)[\s\S]*?sandboxAbortRef\.current\?\.abort\(\)[\s\S]*?sandboxRequestRef\.current \+= 1[\s\S]*?setSandboxAgents\(\[\]\)[\s\S]*?setLoadingSandboxAgents\(true\)[\s\S]*?onActiveTypeChange\(type\)/,
   );
   assert.match(
     pageSource,

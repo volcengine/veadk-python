@@ -412,6 +412,8 @@ export interface MyAgentsProps {
   onCreateSandboxAgent: (kind: "codex" | SandboxAgentKind) => void;
   onUseSandboxAgent: (session: SandboxAgentResource) => Promise<void>;
   onViewSandboxAgentDetails: (session: SandboxAgentResource) => void;
+  activeType: AgentType;
+  onActiveTypeChange: (type: AgentType) => void;
   sandboxRefreshKey?: number;
   connectedRuntimeId?: string;
   hiddenRuntimeIds?: ReadonlySet<string>;
@@ -434,6 +436,8 @@ export function MyAgents({
   onCreateSandboxAgent,
   onUseSandboxAgent,
   onViewSandboxAgentDetails,
+  activeType,
+  onActiveTypeChange,
   sandboxRefreshKey = 0,
   connectedRuntimeId = "",
   hiddenRuntimeIds = EMPTY_RUNTIME_IDS,
@@ -449,7 +453,6 @@ export function MyAgents({
   const runtimeRequestRef = useRef(0);
   const sandboxRequestRef = useRef(0);
   const sandboxAbortRef = useRef<AbortController | null>(null);
-  const [activeType, setActiveType] = useState<AgentType>("general");
   const [query, setQuery] = useState("");
   const [runtimeAgents, setRuntimeAgents] = useState<MyAgentCardData[]>([]);
   const [runtimeNextToken, setRuntimeNextToken] = useState("");
@@ -582,7 +585,7 @@ export function MyAgents({
       setSandboxError("");
       setLoadingSandboxAgents(true);
     }
-    setActiveType(type);
+    onActiveTypeChange(type);
   }
 
   useEffect(() => {
