@@ -389,6 +389,8 @@ def test_model_credential_is_bound_directly_to_tool(
     assert envs["MODEL_AGENT_NAME"] == envs["CODEX_MODEL"]
     assert envs["MODEL_AGENT_BASE_URL"] == expected_base_url
     assert envs["AGENTKIT_SANDBOX_MODEL_PROVIDER"] == expected_model_provider
+    assert "CODEX_CONFIG_TOML" not in envs
+    assert "CODEX_MODEL_CATALOG_JSON" not in envs
 
 
 def test_code_env_credential_accepts_a_provider_specific_default_model() -> None:
@@ -485,6 +487,7 @@ def test_candidate_session_never_overrides_tool_model_credential(monkeypatch) ->
     assert {"CODEX_API_KEY", "OPENCODE_API_KEY", "ANTHROPIC_AUTH_TOKEN"}.isdisjoint(
         envs
     )
+    assert {"CODEX_CONFIG_TOML", "CODEX_MODEL_CATALOG_JSON"}.isdisjoint(envs)
 
 
 def test_tool_rejects_untrusted_model_base_url() -> None:
