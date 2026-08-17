@@ -88,6 +88,10 @@ const deploymentClientSource = readFileSync(
   new URL("../src/adk/client.ts", import.meta.url),
   "utf8",
 );
+const intelligentReleaseClientSource = readFileSync(
+  new URL("../src/adk/intelligentDevelopment.ts", import.meta.url),
+  "utf8",
+);
 const projectPreviewSource = readFileSync(
   new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
   "utf8",
@@ -466,6 +470,21 @@ test("intelligent release client downloads the exact server archive", async () =
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("intelligent release requests recover an expired Studio login", () => {
+  assert.match(
+    intelligentReleaseClientSource,
+    /import \{ studioFetch \} from "\.\/client"/,
+  );
+  assert.equal(
+    intelligentReleaseClientSource.match(/await studioFetch\(/g)?.length,
+    2,
+  );
+  assert.doesNotMatch(
+    intelligentReleaseClientSource,
+    /fetch\(\s*withAuth\(\/web\/intelligent-development\/releases/,
+  );
 });
 
 test("intelligent release download rejects invalid responses and remains retryable", async () => {
