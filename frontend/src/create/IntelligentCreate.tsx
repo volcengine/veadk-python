@@ -29,8 +29,8 @@ export interface IntelligentDevelopmentCapabilities {
 export type IntelligentPreparationStage = "preparing" | "starting";
 
 const PREPARATION_MESSAGES: Record<IntelligentPreparationStage, string> = {
-  preparing: "正在准备完成这项任务所需的工具…",
-  starting: "工具已准备好，正在开始处理你的目标…",
+  preparing: "正在创建任务环境…",
+  starting: "环境已就绪，正在启动 Codex…",
 };
 
 export interface IntelligentCreateProps {
@@ -87,7 +87,7 @@ export function IntelligentCreate({
         </button>
         <div>
           <h1 id="intelligent-create-title">智能模式</h1>
-          <p>描述目标后，AI 会自动判断意图、构建、调试并完成临时云端验证。</p>
+          <p>描述目标后，沙箱中的 Codex 会判断你的意图，完成构建、调试和临时云端验证。</p>
         </div>
       </header>
 
@@ -97,7 +97,7 @@ export function IntelligentCreate({
             <span className="ic-create-icon-wrap"><IntelligentCreateIcon /></span>
             <div>
               <h2>从目标开始</h2>
-              <p>只需说明 Agent 要解决的问题；会改变结果的关键信息，AI 才会追问。</p>
+              <p>只需说明 Agent 要解决的问题；如有影响结果的关键信息，会在开始前向你确认。</p>
             </div>
           </div>
           <label className="ic-goal-label" htmlFor="intelligent-goal">目标描述</label>
@@ -107,7 +107,7 @@ export function IntelligentCreate({
             value={goal}
             onChange={(event) => setGoal(event.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="例如：创建一个能读取销售数据、生成周报并验证输出格式的 VeADK Agent"
+            placeholder="例如：创建一个能读取销售数据、生成周报并校验输出格式的 Agent"
             rows={6}
             disabled={loading || creating || unavailable}
             autoFocus
@@ -140,7 +140,7 @@ export function IntelligentCreate({
             <span>
               {creating
                 ? "目标会保留在当前页面，取消后可以继续修改"
-                : "开发环境保留最多 8 小时，可在同一 Thread 持续优化"}
+                : "开发环境最多保留 8 小时，可在当前任务中持续优化。"}
             </span>
             <div className="ic-action-buttons">
               {creating ? (

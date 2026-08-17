@@ -6127,7 +6127,7 @@ export default function App() {
                     title: "智能模式",
                     desc: intelligentCapabilitiesError
                       || intelligentCapabilities?.reason
-                      || "描述目标，在开发会话中生成、调试并验证 VeADK Agent。",
+                      || "描述目标，按你的意图构建、调试并验证 Agent。",
                     status: intelligentCapabilitiesLoading
                       ? "能力检查中"
                       : intelligentCapabilities?.enabled

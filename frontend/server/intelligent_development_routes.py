@@ -613,7 +613,7 @@ def mount_intelligent_development_routes(
                     ) from completion_error
 
             try:
-                yield _progress_sse("正在理解需求并整理验收标准。")
+                yield _progress_sse("Codex 正在分析本次请求并确认预期结果。")
                 gate_text = ""
                 async for event in service.stream_message(
                     session_id,
@@ -644,7 +644,6 @@ def mount_intelligent_development_routes(
                     return
 
                 transport = SandboxRemoteTransport(cloud.endpoint)
-                yield _progress_sse("需求已确认，正在准备开发环境。")
                 if decision.changes_delivery:
                     await invalidate_current_delivery(transport)
                 completion_path = (
@@ -656,7 +655,9 @@ def mount_intelligent_development_routes(
                     cloud.endpoint, credential_resolver
                 )
                 yield _progress_sse(
-                    "开发环境已就绪，正在实现、测试并完成临时云端验证。"
+                    "正在实现本次变更、运行测试并验证结果。"
+                    if decision.changes_delivery
+                    else "正在检查当前项目并整理结果。"
                 )
                 delivery = None
                 async for event in service.stream_message(
