@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from veadk.cli import frontend_coding_agents as coding_agents
 
 SKILLS = {
+    "veadk-agent-development": "VeADK 开发技能",
     "agentkit-cli": "AgentKit 平台操作技能",
 }
 
@@ -173,21 +174,21 @@ def test_configure_installs_selected_bundled_skills_globally(
         "/web/coding-agents/install",
         json={
             "agents": ["trae", "claude-code", "codex"],
-            "skills": ["agentkit-cli"],
+            "skills": ["veadk-agent-development"],
         },
     )
 
     assert response.status_code == 200
     assert len(response.json()["installations"]) == 3
     for relative in (
-        ".trae/skills/agentkit-cli",
-        ".claude/skills/agentkit-cli",
-        ".agents/skills/agentkit-cli",
+        ".trae/skills/veadk-agent-development",
+        ".claude/skills/veadk-agent-development",
+        ".agents/skills/veadk-agent-development",
     ):
         installed = home / relative
         assert (installed / "SKILL.md").is_file()
         assert (installed / "references/guide.md").read_text() == "# Guide\n"
-    assert not (home / ".claude/skills/veadk-agent-development").exists()
+    assert not (home / ".claude/skills/agentkit-cli").exists()
 
 
 def test_configure_atomically_updates_existing_bundled_skill(
@@ -222,17 +223,12 @@ def test_configure_rejects_unknown_or_duplicate_ids(
         "/web/coding-agents/install",
         json={"agents": ["trae"], "skills": ["untrusted-skill"]},
     )
-    removed = client.post(
-        "/web/coding-agents/install",
-        json={"agents": ["codex"], "skills": ["veadk-agent-development"]},
-    )
     duplicate = client.post(
         "/web/coding-agents/install",
         json={"agents": ["trae", "trae"], "skills": ["agentkit-cli"]},
     )
 
     assert unknown.status_code == 422
-    assert removed.status_code == 422
     assert duplicate.status_code == 400
 
 
@@ -256,7 +252,7 @@ def test_configure_rejects_symlinked_global_skills_root(
     assert not (outside / "skills").exists()
 
 
-def test_packaged_frontend_contains_only_the_canonical_cli_skill() -> None:
+def test_packaged_frontend_contains_canonical_skills_and_synced_veadk_copy() -> None:
     repository = Path(__file__).parents[2]
     roots = (
         repository / "frontend/public/coding-agent-skills",
@@ -270,6 +266,29 @@ def test_packaged_frontend_contains_only_the_canonical_cli_skill() -> None:
         for skill_id in SKILLS:
             skill_md = (root / skill_id / "SKILL.md").read_text(encoding="utf-8")
             assert f"name: {skill_id}" in skill_md
+
+    source = roots[0] / "veadk-agent-development"
+    packaged = roots[1] / "veadk-agent-development"
+    source_files = {
+        path.relative_to(source).as_posix(): path.read_bytes()
+        for path in source.rglob("*")
+        if path.is_file()
+    }
+    packaged_files = {
+        path.relative_to(packaged).as_posix(): path.read_bytes()
+        for path in packaged.rglob("*")
+        if path.is_file()
+    }
+    assert packaged_files == source_files
+
+    combined = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(source.rglob("*.md"))
+    )
+    assert "`agent_server` (`WebServer App`)" in combined
+    assert "default for a new empty VeADK project" in combined
+    assert "Never run bare `ak init`" in combined
+    assert "Studio" not in combined
+    assert "sandbox" not in combined.lower()
 
 
 def test_launch_route_is_not_exposed(
