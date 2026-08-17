@@ -27,7 +27,7 @@ import re
 import secrets
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Protocol
 
@@ -107,6 +107,7 @@ _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 _SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
 _ACTIVE_SESSION_STATUSES = {"creating", "pending", "running", "ready", "starting"}
 _RESTORABLE_SNAPSHOT_STATUSES = {"completed", "ready", "success", "succeeded"}
+_AUTO_RESUME_SNAPSHOT_CONCURRENCY = 3
 _RESUME_SESSION_ATTEMPTS = 36
 _RESUME_SESSION_INTERVAL_SECONDS = 5
 _SENSITIVE_PATTERN = re.compile(
@@ -653,6 +654,42 @@ def _restorable_snapshots(
             continue
         restorable.append(snapshot)
     return restorable
+
+
+def _request_auto_resume_snapshots(request: Request, *, default: bool = False) -> bool:
+    raw_value = request.query_params.get("autoResumeSnapshots")
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+async def _auto_resume_snapshot_batch(
+    snapshots: list[SandboxCloudSnapshot],
+    resume: Callable[[SandboxCloudSnapshot], Awaitable[SandboxCloudSession]],
+) -> None:
+    if not snapshots:
+        return
+    semaphore = asyncio.Semaphore(_AUTO_RESUME_SNAPSHOT_CONCURRENCY)
+
+    async def _resume(snapshot: SandboxCloudSnapshot) -> None:
+        async with semaphore:
+            try:
+                await resume(snapshot)
+            except Exception as error:
+                logger.warning(
+                    "Failed to auto-resume Sandbox snapshot snapshot_id=%s "
+                    "session_id=%s error_type=%s",
+                    snapshot.snapshot_id,
+                    snapshot.session_id,
+                    type(error).__name__,
+                )
+
+    await asyncio.gather(*(_resume(snapshot) for snapshot in snapshots))
 
 
 def _session_for_tools(
@@ -1534,13 +1571,37 @@ class SandboxConversationService:
         return await self._gateway.list_snapshots(tools.persistent)
 
     async def list_resources(
-        self, owner_id: str, *, is_admin: bool = False
+        self,
+        owner_id: str,
+        *,
+        is_admin: bool = False,
+        auto_resume_snapshots: bool = False,
     ) -> tuple[list[SandboxCloudSession], list[SandboxCloudSnapshot]]:
         sessions, snapshots = await asyncio.gather(
             self.list_sessions(owner_id, is_admin=is_admin),
             self.list_snapshots(owner_id, is_admin=is_admin),
         )
-        return sessions, _restorable_snapshots(sessions, snapshots)
+        restorable = _restorable_snapshots(sessions, snapshots)
+        if auto_resume_snapshots and is_admin and restorable:
+            await _auto_resume_snapshot_batch(
+                restorable,
+                self._resume_snapshot,
+            )
+            return await self.list_sessions(owner_id, is_admin=is_admin), []
+        return sessions, restorable
+
+    async def _resume_snapshot(
+        self, snapshot: SandboxCloudSnapshot
+    ) -> SandboxCloudSession:
+        session = await self._gateway.resume_snapshot(snapshot)
+        return _session_for_tools(
+            replace(
+                session,
+                display_name=session.display_name or snapshot.display_name,
+                created_by=session.created_by or snapshot.created_by,
+            ),
+            self._tools(),
+        )
 
     async def resume_snapshot(
         self,
@@ -1556,15 +1617,7 @@ class SandboxConversationService:
         )
         if snapshot is None:
             raise SandboxSessionNotFoundError("智能体快照不存在或不属于当前用户。")
-        session = await self._gateway.resume_snapshot(snapshot)
-        return _session_for_tools(
-            replace(
-                session,
-                display_name=session.display_name or snapshot.display_name,
-                created_by=session.created_by or snapshot.created_by,
-            ),
-            self._tools(),
-        )
+        return await self._resume_snapshot(snapshot)
 
     async def delete_snapshot(
         self,
@@ -2423,13 +2476,37 @@ class SandboxAgentSessionService:
         return await self._gateway.list_snapshots(tools.persistent)
 
     async def list_resources(
-        self, owner_id: str, *, is_admin: bool = False
+        self,
+        owner_id: str,
+        *,
+        is_admin: bool = False,
+        auto_resume_snapshots: bool = False,
     ) -> tuple[list[SandboxCloudSession], list[SandboxCloudSnapshot]]:
         sessions, snapshots = await asyncio.gather(
             self.list_sessions(owner_id, is_admin=is_admin),
             self.list_snapshots(owner_id, is_admin=is_admin),
         )
-        return sessions, _restorable_snapshots(sessions, snapshots)
+        restorable = _restorable_snapshots(sessions, snapshots)
+        if auto_resume_snapshots and is_admin and restorable:
+            await _auto_resume_snapshot_batch(
+                restorable,
+                self._resume_snapshot,
+            )
+            return await self.list_sessions(owner_id, is_admin=is_admin), []
+        return sessions, restorable
+
+    async def _resume_snapshot(
+        self, snapshot: SandboxCloudSnapshot
+    ) -> SandboxCloudSession:
+        session = await self._gateway.resume_snapshot(snapshot)
+        return _session_for_tools(
+            replace(
+                session,
+                display_name=session.display_name or snapshot.display_name,
+                created_by=session.created_by or snapshot.created_by,
+            ),
+            self._tools(),
+        )
 
     async def resume_snapshot(
         self,
@@ -2445,15 +2522,7 @@ class SandboxAgentSessionService:
         )
         if snapshot is None:
             raise SandboxSessionNotFoundError("智能体快照不存在或不属于当前用户。")
-        session = await self._gateway.resume_snapshot(snapshot)
-        return _session_for_tools(
-            replace(
-                session,
-                display_name=session.display_name or snapshot.display_name,
-                created_by=session.created_by or snapshot.created_by,
-            ),
-            self._tools(),
-        )
+        return await self._resume_snapshot(snapshot)
 
     async def delete_snapshot(
         self,
@@ -2713,6 +2782,10 @@ def mount_sandbox_agent_routes(
             sessions, snapshots = await _service(kind).list_resources(
                 owner_resolver(request),
                 is_admin=_is_admin(request),
+                auto_resume_snapshots=_request_auto_resume_snapshots(
+                    request,
+                    default=True,
+                ),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -3238,6 +3311,10 @@ def mount_sandbox_routes(
             sessions, snapshots = await service.list_resources(
                 owner_resolver(request),
                 is_admin=_is_admin(request),
+                auto_resume_snapshots=_request_auto_resume_snapshots(
+                    request,
+                    default=True,
+                ),
             )
         except SandboxError as error:
             raise _http_error(error) from error

@@ -89,8 +89,14 @@ test("renders only account-backed Runtime and Sandbox agents", () => {
     pageSource,
     /codex-code-review|codex-test-coverage|openclaw-research|hermes-data-analysis/,
   );
-  assert.match(pageSource, /sandboxClient\.listSessions\(\{ signal: controller\.signal \}\)/);
-  assert.match(pageSource, /sandboxClient\.listAgentSessions\(type, \{ signal: controller\.signal \}\)/);
+  assert.match(
+    pageSource,
+    /sandboxClient\.listSessions\(\{[\s\S]*?signal: controller\.signal,[\s\S]*?autoResumeSnapshots: true,[\s\S]*?\}\)/,
+  );
+  assert.match(
+    pageSource,
+    /sandboxClient\.listAgentSessions\(type, \{[\s\S]*?signal: controller\.signal,[\s\S]*?autoResumeSnapshots: true,[\s\S]*?\}\)/,
+  );
   assert.match(pageSource, /sessions\.map\(sandboxToAgent\)/);
 });
 
