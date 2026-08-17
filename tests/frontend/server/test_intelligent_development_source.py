@@ -22,6 +22,8 @@ import struct
 import zipfile
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
+
 import pytest
 
 from frontend.server import intelligent_development_source as source_module
@@ -29,10 +31,14 @@ from frontend.server.deployment_source import DeploymentSourceError
 from frontend.server.intelligent_development import release_path
 from frontend.server.intelligent_development_source import (
     IntelligentDevelopmentSourceNotFound,
+    load_intelligent_development_artifact,
     materialize_intelligent_development_preview,
     materialize_intelligent_development_source,
 )
-from veadk.cli.frontend_sandbox import SandboxCloudSession
+from veadk.cli.frontend_sandbox import (
+    SandboxCloudSession,
+    SandboxConversationService,
+)
 
 
 SESSION_ID = "session-1"
@@ -138,7 +144,7 @@ def _release_files(
                 file_count = sum(not info.is_dir() for info in archive.infolist())
         except zipfile.BadZipFile:
             file_count = 1
-    descriptor = {
+    descriptor: dict[str, object] = {
         "sessionId": SESSION_ID,
         "artifactSha256": artifact_digest,
         REPORT_DIGEST_FIELD: report_digest,
@@ -176,13 +182,13 @@ def _release_files(
         }
     )
     descriptor.update(descriptor_updates or {})
-    pointer = {
+    pointer: dict[str, object] = {
         "artifactSha256": artifact_digest,
         REPORT_DIGEST_FIELD: report_digest,
         "releasePath": release,
     }
     pointer.update(pointer_updates or {})
-    request = {
+    request: dict[str, object] = {
         "kind": "intelligentDevelopment",
         "sessionId": SESSION_ID,
         "artifactSha256": artifact_digest,
@@ -258,7 +264,7 @@ async def _materialize(
         tmp_path,
         request,
         owner_id=owner_id,
-        service=FakeService(cloud or _cloud()),
+        service=cast(SandboxConversationService, FakeService(cloud or _cloud())),
     )
 
 
@@ -272,7 +278,7 @@ async def _preview(
         tmp_path,
         request,
         owner_id=OWNER_ID,
-        service=FakeService(_cloud()),
+        service=cast(SandboxConversationService, FakeService(_cloud())),
     )
 
 
@@ -335,6 +341,37 @@ async def test_source_preview_omits_binary_files_without_rejecting_delivery(
 
     assert [item.path for item in result.files] == ["agentkit.yaml", "app.py"]
     assert result.file_count == 3
+
+
+@pytest.mark.asyncio
+async def test_download_keeps_exact_artifact_including_binary_files(
+    tmp_path: Path,
+) -> None:
+    artifact = _zip(
+        [
+            (
+                "agentkit.yaml",
+                b"common:\n  agent_name: trusted-agent\n  entry_point: app.py\n",
+            ),
+            ("app.py", b"root_agent = object()\n"),
+            ("logo.png", b"\x89PNG\x00\x01\xff"),
+        ]
+    )
+    request, downloads = _release_files(artifact=artifact)
+    FakeTransport.downloads = downloads
+
+    result = await load_intelligent_development_artifact(
+        tmp_path,
+        request,
+        owner_id=OWNER_ID,
+        service=cast(SandboxConversationService, FakeService(_cloud())),
+    )
+
+    assert result.content == artifact
+    assert result.agent_name == "trusted-agent"
+    assert result.artifact_sha256 == request["artifactSha256"]
+    assert result.file_count == 3
+    assert result.artifact_size == len(artifact)
 
 
 @pytest.mark.asyncio
@@ -425,7 +462,10 @@ async def test_rejects_malformed_source_before_session_resolution(
     FakeTransport.downloads = downloads
     with pytest.raises(DeploymentSourceError):
         await materialize_intelligent_development_source(
-            tmp_path, request, owner_id=OWNER_ID, service=service
+            tmp_path,
+            request,
+            owner_id=OWNER_ID,
+            service=cast(SandboxConversationService, service),
         )
     assert service.requested == []
     assert FakeTransport.instances == []

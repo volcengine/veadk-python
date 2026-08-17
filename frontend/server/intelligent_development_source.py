@@ -88,6 +88,21 @@ class TrustedDeploymentSource:
     files: tuple[TrustedSourceFile, ...]
 
 
+@dataclass(frozen=True)
+class TrustedDevelopmentArtifact:
+    content: bytes
+    artifact_sha256: str
+    agent_name: str
+    file_count: int
+    artifact_size: int
+
+
+@dataclass(frozen=True)
+class _MaterializedDevelopmentRelease:
+    source: TrustedDeploymentSource
+    artifact: bytes
+
+
 def _text_source_files(destination: Path) -> tuple[TrustedSourceFile, ...]:
     files: list[TrustedSourceFile] = []
     for path in sorted(destination.rglob("*")):
@@ -132,7 +147,7 @@ async def _materialize_intelligent_development_source(
     owner_id: str,
     service: SandboxConversationService,
     require_verified: bool,
-) -> TrustedDeploymentSource:
+) -> _MaterializedDevelopmentRelease:
     """Authorize, verify both digests, and safely materialize one immutable snapshot."""
     from frontend.server.intelligent_development_routes import (
         resolve_intelligent_development_session,
@@ -274,18 +289,21 @@ async def _materialize_intelligent_development_source(
         raise DeploymentSourceError("交付物 ZIP 格式无效。") from error
     resolved_entry = extract_migration_source(destination, artifact, manifest)
     source_files = _text_source_files(destination)
-    return TrustedDeploymentSource(
-        resolved_entry,
-        agent_name,
-        artifact_digest,
-        report_digest,
-        file_count,
-        artifact_size,
-        str(report_value.get("validatedAt") or ""),
-        tuple(sorted(str(name) for name in passed)),
-        verified,
-        validation_summary.strip(),
-        source_files,
+    return _MaterializedDevelopmentRelease(
+        TrustedDeploymentSource(
+            resolved_entry,
+            agent_name,
+            artifact_digest,
+            report_digest,
+            file_count,
+            artifact_size,
+            str(report_value.get("validatedAt") or ""),
+            tuple(sorted(str(name) for name in passed)),
+            verified,
+            validation_summary.strip(),
+            source_files,
+        ),
+        artifact,
     )
 
 
@@ -297,13 +315,14 @@ async def materialize_intelligent_development_source(
     service: SandboxConversationService,
 ) -> TrustedDeploymentSource:
     """Materialize a snapshot only when every deployment gate is verified."""
-    return await _materialize_intelligent_development_source(
+    release = await _materialize_intelligent_development_source(
         destination,
         source,
         owner_id=owner_id,
         service=service,
         require_verified=True,
     )
+    return release.source
 
 
 async def materialize_intelligent_development_preview(
@@ -314,12 +333,38 @@ async def materialize_intelligent_development_preview(
     service: SandboxConversationService,
 ) -> TrustedDeploymentSource:
     """Materialize a digest-bound snapshot without authorizing deployment."""
-    return await _materialize_intelligent_development_source(
+    release = await _materialize_intelligent_development_source(
         destination,
         source,
         owner_id=owner_id,
         service=service,
         require_verified=False,
+    )
+    return release.source
+
+
+async def load_intelligent_development_artifact(
+    destination: Path,
+    source: Mapping[str, object],
+    *,
+    owner_id: str,
+    service: SandboxConversationService,
+) -> TrustedDevelopmentArtifact:
+    """Load an exact archive only after the preview trust checks succeed."""
+    release = await _materialize_intelligent_development_source(
+        destination,
+        source,
+        owner_id=owner_id,
+        service=service,
+        require_verified=False,
+    )
+    trusted = release.source
+    return TrustedDevelopmentArtifact(
+        release.artifact,
+        trusted.artifact_sha256,
+        trusted.agent_name,
+        trusted.file_count,
+        trusted.artifact_size,
     )
 
 
@@ -327,8 +372,10 @@ __all__ = [
     "IntelligentDevelopmentSourceIntegrityError",
     "IntelligentDevelopmentSourceNotFound",
     "IntelligentDevelopmentSourceStale",
+    "TrustedDevelopmentArtifact",
     "TrustedDeploymentSource",
     "TrustedSourceFile",
+    "load_intelligent_development_artifact",
     "materialize_intelligent_development_preview",
     "materialize_intelligent_development_source",
 ]

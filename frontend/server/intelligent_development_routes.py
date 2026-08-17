@@ -28,7 +28,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from starlette.types import Receive, Scope, Send
 
 from frontend.server.intelligent_development_task import (
@@ -517,6 +517,67 @@ def mount_intelligent_development_routes(
                 {"path": item.path, "content": item.content} for item in trusted.files
             ],
         }
+
+    @app.get(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/releases/download")
+    async def _release_download(
+        request: Request,
+        sessionId: str,
+        artifactSha256: str,
+        validationReportSha256: str,
+    ) -> Response:
+        import shutil
+        import tempfile
+        from pathlib import Path
+        from frontend.server.deployment_source import DeploymentSourceError
+        from frontend.server.intelligent_development_source import (
+            IntelligentDevelopmentSourceIntegrityError,
+            IntelligentDevelopmentSourceNotFound,
+            IntelligentDevelopmentSourceStale,
+            load_intelligent_development_artifact,
+        )
+
+        owner = owner_resolver(request)
+        destination = Path(tempfile.mkdtemp(prefix="intelligent-download-"))
+        try:
+            trusted = await load_intelligent_development_artifact(
+                destination,
+                {
+                    "kind": "intelligentDevelopment",
+                    "sessionId": sessionId,
+                    "artifactSha256": artifactSha256,
+                    "validationReportSha256": validationReportSha256,
+                },
+                owner_id=owner,
+                service=service,
+            )
+        except IntelligentDevelopmentSourceNotFound as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except IntelligentDevelopmentSourceStale as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except IntelligentDevelopmentSourceIntegrityError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+        except DeploymentSourceError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except Exception as error:
+            raise HTTPException(
+                status_code=502,
+                detail="无法校验源码压缩包。",
+            ) from error
+        finally:
+            shutil.rmtree(destination, ignore_errors=True)
+
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", trusted.agent_name)
+        safe_name = safe_name.strip(".-_")[:64] or "agent"
+        filename = f"{safe_name}-source-{trusted.artifact_sha256[:12]}.zip"
+        return Response(
+            content=trusted.content,
+            media_type="application/zip",
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @app.post(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions/{{session_id}}/interrupt")
     async def _interrupt(session_id: str, request: Request) -> dict[str, bool]:

@@ -29,6 +29,7 @@ from httpx import Response
 
 from frontend.server import intelligent_development_routes as routes
 from frontend.server import intelligent_development_source as source_module
+from frontend.server.deployment_source import DeploymentSourceError
 from frontend.server.intelligent_development import StudioCredentials
 from frontend.server.intelligent_development_task import CompletionContract
 from veadk.cli.codex_app_server import (
@@ -327,14 +328,104 @@ def test_release_summary_returns_materialized_text_files_before_verification(
     ]
     assert response.json()["verified"] is False
     assert response.json()["validationSummary"] == "未收到完整验证结果"
-    source = materialize.await_args.args[1]
+    materialize_call = materialize.await_args
+    assert materialize_call is not None
+    source = materialize_call.args[1]
     assert source == {
         "kind": "intelligentDevelopment",
         "sessionId": "dev-session",
         "artifactSha256": "a" * 64,
         "validationReportSha256": "b" * 64,
     }
-    assert materialize.await_args.kwargs["owner_id"] == "alice"
+    assert materialize_call.kwargs["owner_id"] == "alice"
+
+
+def test_release_download_returns_exact_current_archive_before_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    archive = b"PK\x03\x04complete-source"
+    trusted = SimpleNamespace(
+        content=archive,
+        artifact_sha256="a" * 64,
+        agent_name="../../weather\r\nbad",
+        file_count=3,
+        artifact_size=len(archive),
+    )
+    load_artifact = AsyncMock(return_value=trusted)
+    monkeypatch.setattr(
+        source_module,
+        "load_intelligent_development_artifact",
+        load_artifact,
+        raising=False,
+    )
+
+    with TestClient(_app(gateway)) as client:
+        response = client.get(
+            "/web/intelligent-development/releases/download",
+            headers={"X-Test-User": "alice"},
+            params={
+                "sessionId": "dev-session",
+                "artifactSha256": "a" * 64,
+                "validationReportSha256": "b" * 64,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.content == archive
+    assert response.headers["content-type"] == "application/zip"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["content-disposition"] == (
+        'attachment; filename="weather-bad-source-aaaaaaaaaaaa.zip"'
+    )
+    load_call = load_artifact.await_args
+    assert load_call is not None
+    source = load_call.args[1]
+    assert source == {
+        "kind": "intelligentDevelopment",
+        "sessionId": "dev-session",
+        "artifactSha256": "a" * 64,
+        "validationReportSha256": "b" * 64,
+    }
+    assert load_call.kwargs["owner_id"] == "alice"
+
+
+@pytest.mark.parametrize(
+    ("error", "status_code"),
+    [
+        (source_module.IntelligentDevelopmentSourceNotFound("不存在"), 404),
+        (source_module.IntelligentDevelopmentSourceStale("已过期"), 409),
+        (source_module.IntelligentDevelopmentSourceIntegrityError("校验失败"), 502),
+        (DeploymentSourceError("契约无效"), 409),
+        (RuntimeError("transport failed"), 502),
+    ],
+)
+def test_release_download_maps_trust_and_transport_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    status_code: int,
+) -> None:
+    gateway = _FakeGateway()
+    monkeypatch.setattr(
+        source_module,
+        "load_intelligent_development_artifact",
+        AsyncMock(side_effect=error),
+        raising=False,
+    )
+
+    with TestClient(_app(gateway)) as client:
+        response = client.get(
+            "/web/intelligent-development/releases/download",
+            headers={"X-Test-User": "alice"},
+            params={
+                "sessionId": "dev-session",
+                "artifactSha256": "a" * 64,
+                "validationReportSha256": "b" * 64,
+            },
+        )
+
+    assert response.status_code == status_code
 
 
 def test_intent_reject_is_user_facing_and_never_uploads_credentials(

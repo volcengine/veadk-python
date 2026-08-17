@@ -173,7 +173,10 @@ import {
   type SandboxThreadSummary,
   type SandboxToolLaunch,
 } from "./adk/sandbox";
-import { fetchIntelligentDevelopmentRelease } from "./adk/intelligentDevelopment";
+import {
+  downloadIntelligentDevelopmentRelease,
+  fetchIntelligentDevelopmentRelease,
+} from "./adk/intelligentDevelopment";
 import {
   getSandboxAgentCapability,
   getSandboxCapability,
@@ -446,6 +449,7 @@ import {
 import {
   beginAgentConnect,
   beginAgentMessage,
+  beginAgentSourceDownload,
   beginSandboxCreate,
   classifyTelemetryError,
   identifyTelemetryUser,
@@ -1146,6 +1150,43 @@ export default function App() {
         delivery.artifactSha256,
         delivery.validationReportSha256,
       ),
+    [],
+  );
+  const downloadIntelligentDelivery = useCallback(
+    async (delivery: IntelligentDevelopmentReleaseRef) => {
+      const operation = beginAgentSourceDownload({
+        agentId: delivery.agentName,
+        deployAction: "create",
+        deploySource: "intelligent_development",
+        createMode: "intelligent",
+        aiAssisted: 1,
+      });
+      try {
+        const { blob, filename } = await downloadIntelligentDevelopmentRelease(delivery);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        link.hidden = true;
+        try {
+          document.body.appendChild(link);
+          link.click();
+        } finally {
+          link.remove();
+          window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+        }
+        operation.succeed({
+          fileCount: delivery.fileCount,
+          zipSizeBytes: blob.size,
+        });
+      } catch (cause) {
+        operation.fail({
+          fileCount: delivery.fileCount,
+          ...classifyTelemetryError(cause),
+        });
+        throw cause;
+      }
+    },
     [],
   );
   const [videoTask, setVideoTask] = useState<VideoGenerationTask | null>(null);
@@ -6538,6 +6579,7 @@ export default function App() {
                         previewArtifact(appName, userId, sessionId, filename, version)
                       }
                       onResolveDelivery={resolveIntelligentDelivery}
+                      onDownloadDelivery={downloadIntelligentDelivery}
                       onDeployDelivery={setIntelligentDeployment}
                     />
                     {/* Finalized turn that produced no visible answer (e.g. only
