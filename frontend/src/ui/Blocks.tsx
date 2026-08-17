@@ -324,12 +324,12 @@ function DeliveryCard({
         <p className="delivery-card-gates">
           {value.verified
             ? `${value.gateSummary.length} 项检查通过`
-            : `验证尚未确认：${value.validationSummary}`} ·{" "}
+            : "源码已准备好，可部署"} ·{" "}
           <code>{value.artifactSha256.slice(0, 12)}</code>
         </p>
         {!value.verified ? (
           <p className="delivery-card-guidance">
-            源码已准备好，可查看、下载或手动部署。完整验证尚未确认，部署前请检查配置。
+            源码已准备好，可查看、下载或部署；部署前请确认 Runtime 配置。
           </p>
         ) : null}
         <div className="delivery-card-actions">

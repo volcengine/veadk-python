@@ -446,7 +446,8 @@ test("delivery card separates deployability from verification", () => {
     /async function download\(\)[\s\S]*?catch[\s\S]*?finally \{[\s\S]*?setBusyAction\(null\)/,
   );
   assert.match(blocksUiSource, /disabled=\{\s*!value\.deployable/);
-  assert.match(blocksUiSource, /源码已准备好，可查看、下载或手动部署/);
+  assert.match(blocksUiSource, /源码已准备好，可查看、下载或部署/);
+  assert.doesNotMatch(blocksUiSource, /验证尚未确认：/);
   assert.match(
     blocksUiSource,
     /value\.verified \? <DeliveryVerifiedIcon \/> : <DeliverySourceIcon \/>/,
@@ -468,14 +469,9 @@ test("delivery card separates deployability from verification", () => {
     deploymentClientSource,
     /acknowledgeUnverified\?: true/,
   );
-  assert.match(
-    deploymentSource,
-    /deploymentConfirmation=\{delivery\.verified \? undefined : \{/,
-  );
-  assert.match(projectPreviewSource, /\{\.\.\.deploymentConfirmation\}/);
-  assert.match(deploymentSource, /部署未完整验证的源码/);
-  assert.match(deploymentSource, /继续部署/);
-  assert.match(sharedStyles, /\.trusted-source-pane__badge\.is-warning/);
+  assert.match(deploymentSource, /可部署源码/);
+  assert.doesNotMatch(deploymentSource, /部署未完整验证的源码|完整验证尚未确认/);
+  assert.doesNotMatch(sharedStyles, /\.trusted-source-pane__badge\.is-warning/);
   assert.match(appSource, /if \(!delivery\.deployable\)/);
   assert.doesNotMatch(appSource, /if \(!delivery\.verified\)/);
   assert.doesNotMatch(deploymentSource, /localStorage|releasePath|validationReportPath/);
@@ -488,7 +484,11 @@ test("successful intelligent deployment opens a fresh agent chat", () => {
   );
   assert.match(
     appSource,
-    /const openIntelligentDeploymentChat = async \(agentId: string\) => \{[\s\S]*?await refreshCurrentAgentAndStartNewChat\(agentId\);[\s\S]*?setIntelligentDeployment\(null\);[\s\S]*?\};/,
+    /const refreshCurrentAgentAndStartNewChat = async \(id: string\) => \{[\s\S]*?setIntelligentDeployment\(null\);[\s\S]*?startNewChat\(\);[\s\S]*?\};/,
+  );
+  assert.match(
+    appSource,
+    /const talkToWorkspaceAgent = async \(agent: AgentEntry\) => \{[\s\S]*?await refreshCurrentAgentAndStartNewChat\(/,
   );
   assert.match(
     appSource,

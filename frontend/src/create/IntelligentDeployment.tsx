@@ -112,11 +112,6 @@ export function IntelligentDeployment({
       deployRegion={deployRegion}
       onDeployRegionChange={setDeployRegion}
       deploymentActionLabel="部署"
-      deploymentConfirmation={delivery.verified ? undefined : {
-        title: "部署未完整验证的源码？",
-        description: "源码已准备好，但完整验证结果尚未确认。部署可能失败或行为不符合预期。",
-        confirmLabel: "继续部署",
-      }}
       deployDisabled={Boolean(runtimeNameError) || runtimeNameAvailable === false || runtimeNameChecking}
       deployDisabledReason={
         runtimeNameError
@@ -136,10 +131,10 @@ export function IntelligentDeployment({
       deploymentPrimaryPane={
         <section
           className="trusted-source-pane"
-          aria-label={delivery.verified ? "已验证源码" : "待确认验证状态的源码"}
+          aria-label={delivery.verified ? "已验证源码" : "可部署源码"}
         >
-          <div className={`trusted-source-pane__badge${delivery.verified ? "" : " is-warning"}`}>
-            {delivery.verified ? "已通过 Codex 云端验证" : "完整验证尚未确认"}
+          <div className="trusted-source-pane__badge">
+            {delivery.verified ? "已通过 Codex 云端验证" : "可部署源码"}
           </div>
           <h2>{delivery.agentName}</h2>
           <label className="trusted-source-pane__runtime-name">
@@ -162,7 +157,7 @@ export function IntelligentDeployment({
           <p>
             {delivery.verified
               ? "源码由服务端从已验证交付物物化，浏览器文件不能替换。"
-              : "源码已准备好，但完整验证结果尚未确认。部署前请检查配置。"}
+              : "源码已由服务端安全物化，部署前请确认 Runtime 配置。"}
           </p>
         </section>
       }

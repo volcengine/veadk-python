@@ -1036,7 +1036,7 @@ def test_verified_contract_emits_typed_delivery_only_after_cleanup(
         routes, "create_credential_lease", AsyncMock(return_value=lease)
     )
     monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
-    verified = SimpleNamespace(verified=True)
+    verified = SimpleNamespace(verified=True, status="verified")
     monkeypatch.setattr(
         routes, "read_completion_contract", AsyncMock(return_value=verified)
     )
@@ -1090,7 +1090,8 @@ def test_missing_completion_still_emits_source_but_never_verified_success(
 
     assert response.status_code == 200
     assert "已生成源码，但验证结果未确认" in response.text
-    assert "验证报告未生成或暂时无法读取" in response.text
+    assert "验证报告未生成或暂时无法读取" not in response.text
+    assert "验证报告格式不完整" not in response.text
     assert "event: development.source_ready" in response.text
     assert '"deployable": true' in response.text
     assert '"verified": false' in response.text
@@ -1101,7 +1102,7 @@ def test_missing_completion_still_emits_source_but_never_verified_success(
     assert lease.cleaned is True
 
 
-def test_invalid_completion_contract_reports_format_problem_without_blocking_source(
+def test_invalid_completion_contract_stays_internal_without_blocking_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = _FakeGateway()
@@ -1134,7 +1135,8 @@ def test_invalid_completion_contract_reports_format_problem_without_blocking_sou
         )
 
     assert response.status_code == 200
-    assert "验证报告格式不完整" in response.text
+    assert "验证报告格式不完整" not in response.text
+    assert "完整验证状态尚未确认" not in response.text
     assert "event: development.source_ready" in response.text
     assert "event: development.succeeded" not in response.text
 
