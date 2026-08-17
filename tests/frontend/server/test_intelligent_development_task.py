@@ -135,6 +135,9 @@ def test_builder_context_uses_launcher_without_secret_values() -> None:
     assert "do not derive project_name" in prompt
     assert "Do not stop at scaffolding, local checks, or a successful build" in prompt
     assert "coherent, runnable, deployable" in prompt
+    assert "use `ak init --template agent_server` by default" in prompt
+    assert "accepted user intent explicitly requires a different" in prompt
+    assert "Do not default to the `basic` template" in prompt
     assert "concise user-facing summary" in prompt
     assert "entire final assistant response" not in prompt
     assert "If time is running short" not in prompt

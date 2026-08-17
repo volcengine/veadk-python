@@ -189,6 +189,9 @@ Work autonomously in the current project directory. The primary objective is to 
 coherent, runnable, deployable VeADK project. Its real behavior must satisfy the accepted criteria
 and pass the bounded AgentKit cloud-validation loop. Implement the complete project, including a
 valid agentkit.yaml, entry point, dependencies, configuration, and focused tests.
+When initializing a new VeADK project, use `ak init --template agent_server` by default. Choose
+another template only when the accepted user intent explicitly requires a different application
+shape. Do not default to the `basic` template.
 Do not stop at scaffolding, local checks, or a successful build: carry the project through
 temporary cloud deployment, readiness checks, representative invocation, log inspection, and
 cleanup. The task submission already authorizes temporary validation resources, so do not ask
