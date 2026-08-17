@@ -19,6 +19,7 @@ import { CodeBrowserDialog } from "./CodeBrowserDialog";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
 const STREAM_FRAME_INTERVAL_MS = 28;
+const DOWNLOAD_STATUS_DURATION_MS = 3_000;
 
 function advanceCodePoints(text: string, start: number, count: number): number {
   let index = start;
@@ -218,13 +219,24 @@ function DeliveryCard({
     "source" | "download" | "deploy" | null
   >(null);
   const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
+  const [downloadStatus, setDownloadStatus] = useState<{
+    message: string;
+  } | null>(null);
   const validatedAt = new Date(value.validatedAt);
   const time = !value.validatedAt
     ? "刚刚"
     : Number.isNaN(validatedAt.getTime())
       ? value.validatedAt
       : validatedAt.toLocaleString("zh-CN", { hour12: false });
+
+  useEffect(() => {
+    if (!downloadStatus) return;
+    const timer = window.setTimeout(
+      () => setDownloadStatus(null),
+      DOWNLOAD_STATUS_DURATION_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [downloadStatus]);
 
   async function resolveDelivery() {
     if (resolved) return resolved;
@@ -237,7 +249,7 @@ function DeliveryCard({
   async function openSource() {
     setBusyAction("source");
     setError("");
-    setStatus("");
+    setDownloadStatus(null);
     try {
       await resolveDelivery();
       setCodeOpen(true);
@@ -252,10 +264,10 @@ function DeliveryCard({
     if (!onDownload) return;
     setBusyAction("download");
     setError("");
-    setStatus("");
+    setDownloadStatus(null);
     try {
       await onDownload(value);
-      setStatus("源码 ZIP 已开始下载。");
+      setDownloadStatus({ message: "已开始下载" });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -266,7 +278,7 @@ function DeliveryCard({
   async function deploy() {
     setBusyAction("deploy");
     setError("");
-    setStatus("");
+    setDownloadStatus(null);
     try {
       onDeploy?.(await resolveDelivery());
     } catch (cause) {
@@ -342,7 +354,7 @@ function DeliveryCard({
             {busyAction === "download" ? (
               <Loader2 className="spin" aria-hidden="true" />
             ) : null}
-            {busyAction === "download" ? "正在下载…" : "下载源码"}
+            {busyAction === "download" ? "正在准备…" : "下载源码"}
           </button>
           <button
             type="button"
@@ -359,9 +371,9 @@ function DeliveryCard({
           </button>
         </div>
         {error ? <p className="delivery-card-error" role="alert">{error}</p> : null}
-        {status ? (
+        {downloadStatus ? (
           <p className="delivery-card-status" role="status" aria-live="polite">
-            {status}
+            {downloadStatus.message}
           </p>
         ) : null}
       </section>

@@ -196,7 +196,7 @@ test("uses product-specific composer copy for Agent and sandbox sessions", () =>
   assert.doesNotMatch(composerSource, /给智能体发消息/);
   assert.match(
     sandboxComposerSource,
-    /textOnly\s*\?\s*"继续描述你想构建或优化的 VeADK Agent…"\s*:\s*"向 AgentKit 沙箱发送消息，输入 \/ 查看命令，输入 \$ 调用 Skill…"/,
+    /textOnly\s*\?\s*"继续说明你想实现或调整的内容"\s*:\s*"向 AgentKit 沙箱发送消息，输入 \/ 查看命令，输入 \$ 调用 Skill…"/,
   );
 });
 

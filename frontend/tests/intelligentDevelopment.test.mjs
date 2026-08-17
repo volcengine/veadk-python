@@ -337,7 +337,6 @@ test("delivery card always exposes source and gates manual deployment on verific
   assert.match(blocksUiSource, /下载源码/);
   assert.match(blocksUiSource, /手动部署到 Runtime/);
   assert.match(blocksUiSource, /busyAction === "download"/);
-  assert.match(blocksUiSource, /源码 ZIP 已开始下载/);
   assert.match(
     blocksUiSource,
     /async function download\(\)[\s\S]*?catch[\s\S]*?finally \{[\s\S]*?setBusyAction\(null\)/,
@@ -361,6 +360,27 @@ test("delivery card always exposes source and gates manual deployment on verific
   assert.match(appSource, /<IntelligentDeployment[\s\S]*?delivery=\{intelligentDeployment\}/);
   assert.match(deploymentSource, /<ProjectPreview/);
   assert.doesNotMatch(deploymentSource, /localStorage|releasePath|validationReportPath/);
+});
+
+test("delivery card clears browser download handoff feedback", () => {
+  assert.match(blocksUiSource, /const DOWNLOAD_STATUS_DURATION_MS = 3_000/);
+  assert.match(
+    blocksUiSource,
+    /busyAction === "download" \? "正在准备…" : "下载源码"/,
+  );
+  assert.match(
+    blocksUiSource,
+    /setDownloadStatus\(\{ message: "已开始下载" \}\)/,
+  );
+  assert.match(
+    blocksUiSource,
+    /if \(!downloadStatus\) return;[\s\S]*?window\.setTimeout\([\s\S]*?setDownloadStatus\(null\)[\s\S]*?DOWNLOAD_STATUS_DURATION_MS/,
+  );
+  assert.match(
+    blocksUiSource,
+    /return \(\) => window\.clearTimeout\(timer\);[\s\S]*?\}, \[downloadStatus\]\)/,
+  );
+  assert.doesNotMatch(blocksUiSource, /源码 ZIP 已开始下载。/);
 });
 
 test("intelligent release client downloads the exact server archive", async () => {
@@ -593,6 +613,11 @@ test("intelligent conversation keeps the Studio visual language and stable contr
     /\.sandbox-session-warning button \{[^}]*white-space: nowrap/,
   );
   assert.match(sandboxSessionSource, /exitLabel = "退出当前智能体"/);
+  assert.match(
+    sandboxSessionSource,
+    /`当前构建将在 \$\{expiryLabel\} 结束（\$\{remaining\}），对话和文件届时清除`/,
+  );
+  assert.doesNotMatch(sandboxSessionSource, /Thread 与文件/);
   assert.match(
     appSource,
     /exitLabel=\{[\s\S]*?sandboxSession\.intelligentDevelopment[\s\S]*?\? "退出开发环境"[\s\S]*?: undefined[\s\S]*?\}/,
