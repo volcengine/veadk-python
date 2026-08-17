@@ -59,6 +59,7 @@ export interface IntelligentDevelopmentReleaseRef {
   artifactSize: number;
   validatedAt: string;
   gateSummary: string[];
+  deployable: boolean;
   verified: boolean;
   validationSummary: string;
   files?: ProjectFile[];

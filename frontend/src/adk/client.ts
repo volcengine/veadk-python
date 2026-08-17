@@ -1958,6 +1958,7 @@ export interface IntelligentDevelopmentDeploymentSource {
   sessionId: string;
   artifactSha256: string;
   validationReportSha256: string;
+  acknowledgeUnverified?: true;
 }
 
 export type DeploymentSource =

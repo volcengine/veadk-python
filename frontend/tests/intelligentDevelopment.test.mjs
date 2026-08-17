@@ -84,6 +84,14 @@ const deploymentSource = readFileSync(
   new URL("../src/create/IntelligentDeployment.tsx", import.meta.url),
   "utf8",
 );
+const deploymentClientSource = readFileSync(
+  new URL("../src/adk/client.ts", import.meta.url),
+  "utf8",
+);
+const projectPreviewSource = readFileSync(
+  new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
+  "utf8",
+);
 const createSource = readFileSync(
   new URL("../src/create/IntelligentCreate.tsx", import.meta.url),
   "utf8",
@@ -144,6 +152,7 @@ const delivery = {
   artifactSize: 2048,
   validatedAt: "2026-08-14T10:00:00Z",
   gateSummary: ["ruff", "pytest"],
+  deployable: true,
   verified: true,
   validationSummary: "云端验证已通过",
 };
@@ -325,11 +334,12 @@ test("intelligent streams preserve thinking and assistant message order", async 
   assert.equal(updates.some((blocks) => blocks[0]?.done === false), true);
 });
 
-test("delivery card always exposes source and gates manual deployment on verification", () => {
+test("delivery card separates deployability from verification", () => {
   const releaseInterface = blocksSource.match(
     /export interface IntelligentDevelopmentReleaseRef \{([\s\S]*?)\n\}/,
   )?.[1] ?? "";
   assert.match(releaseInterface, /files\?: ProjectFile\[\]/);
+  assert.match(releaseInterface, /deployable: boolean/);
   assert.match(releaseInterface, /verified: boolean/);
   assert.match(releaseInterface, /validationSummary: string/);
   assert.doesNotMatch(releaseInterface, /releasePath|validationReportPath|url|localStorage/i);
@@ -341,8 +351,8 @@ test("delivery card always exposes source and gates manual deployment on verific
     blocksUiSource,
     /async function download\(\)[\s\S]*?catch[\s\S]*?finally \{[\s\S]*?setBusyAction\(null\)/,
   );
-  assert.match(blocksUiSource, /disabled=\{\s*!value\.verified/);
-  assert.match(blocksUiSource, /源码已安全保存，可查看或下载/);
+  assert.match(blocksUiSource, /disabled=\{\s*!value\.deployable/);
+  assert.match(blocksUiSource, /源码已准备好，可查看、下载或手动部署/);
   assert.match(
     blocksUiSource,
     /value\.verified \? <DeliveryVerifiedIcon \/> : <DeliverySourceIcon \/>/,
@@ -359,6 +369,21 @@ test("delivery card always exposes source and gates manual deployment on verific
   );
   assert.match(appSource, /<IntelligentDeployment[\s\S]*?delivery=\{intelligentDeployment\}/);
   assert.match(deploymentSource, /<ProjectPreview/);
+  assert.match(deploymentSource, /acknowledgeUnverified: true/);
+  assert.match(
+    deploymentClientSource,
+    /acknowledgeUnverified\?: true/,
+  );
+  assert.match(
+    deploymentSource,
+    /deploymentConfirmation=\{delivery\.verified \? undefined : \{/,
+  );
+  assert.match(projectPreviewSource, /\{\.\.\.deploymentConfirmation\}/);
+  assert.match(deploymentSource, /部署未完整验证的源码/);
+  assert.match(deploymentSource, /继续部署/);
+  assert.match(sharedStyles, /\.trusted-source-pane__badge\.is-warning/);
+  assert.match(appSource, /if \(!delivery\.deployable\)/);
+  assert.doesNotMatch(appSource, /if \(!delivery\.verified\)/);
   assert.doesNotMatch(deploymentSource, /localStorage|releasePath|validationReportPath/);
 });
 
@@ -414,6 +439,7 @@ test("intelligent release client downloads the exact server archive", async () =
       artifactSize: archive.byteLength,
       validatedAt: "",
       gateSummary: [],
+      deployable: true,
       verified: false,
       validationSummary: "验证结果尚未确认",
     });

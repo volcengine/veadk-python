@@ -62,6 +62,7 @@ export async function fetchIntelligentDevelopmentRelease(
     || typeof value.fileCount !== "number"
     || typeof value.artifactSize !== "number"
     || typeof value.validatedAt !== "string"
+    || typeof value.deployable !== "boolean"
     || typeof value.verified !== "boolean"
     || typeof value.validationSummary !== "string"
     || !Array.isArray(value.gateSummary)

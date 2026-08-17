@@ -969,6 +969,7 @@ async function parseSandboxStream(
         typeof eventData.fileCount === "number" &&
         typeof eventData.artifactSize === "number" &&
         typeof eventData.validatedAt === "string" &&
+        eventData.deployable === true &&
         eventData.verified === expectedVerified &&
         typeof eventData.validationSummary === "string" &&
         Array.isArray(eventData.gateSummary) &&
@@ -986,6 +987,7 @@ async function parseSandboxStream(
             artifactSize: eventData.artifactSize,
             validatedAt: eventData.validatedAt,
             gateSummary: eventData.gateSummary as string[],
+            deployable: eventData.deployable,
             verified: eventData.verified,
             validationSummary: eventData.validationSummary,
           },

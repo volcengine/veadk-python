@@ -375,7 +375,7 @@ async def test_download_keeps_exact_artifact_including_binary_files(
 
 
 @pytest.mark.asyncio
-async def test_unverified_snapshot_is_previewable_but_not_deployable(
+async def test_unverified_snapshot_requires_explicit_deployment_acknowledgement(
     tmp_path: Path,
 ) -> None:
     report = _report(status="unverified", failed_gate="runtime-cleanup")
@@ -394,6 +394,39 @@ async def test_unverified_snapshot_is_previewable_but_not_deployable(
     ]
     with pytest.raises(DeploymentSourceError, match="未通过全部门禁"):
         await _materialize(tmp_path / "deploy", request, downloads)
+    with pytest.raises(DeploymentSourceError, match="未通过全部门禁"):
+        await _materialize(
+            tmp_path / "unacknowledged-deploy",
+            {**request, "acknowledgeUnverified": False},
+            downloads,
+        )
+
+    acknowledged = {**request, "acknowledgeUnverified": True}
+    deployable = await _materialize(
+        tmp_path / "acknowledged-deploy", acknowledged, downloads
+    )
+
+    assert deployable.verified is False
+    assert deployable.artifact_sha256 == request["artifactSha256"]
+
+
+@pytest.mark.asyncio
+async def test_unverified_acknowledgement_cannot_bypass_artifact_integrity(
+    tmp_path: Path,
+) -> None:
+    report = _report(status="unverified", failed_gate="runtime-cleanup")
+    request, downloads = _release_files(report=report)
+    release = release_path(
+        str(request["artifactSha256"]), str(request[REPORT_DIGEST_FIELD])
+    )
+    downloads[f"{release}/artifact.zip"] += b"tampered"
+
+    with pytest.raises(DeploymentSourceError, match="完整性校验失败"):
+        await _materialize(
+            tmp_path,
+            {**request, "acknowledgeUnverified": True},
+            downloads,
+        )
 
 
 @pytest.mark.asyncio
@@ -440,6 +473,7 @@ async def test_rejects_unowned_or_ineligible_sessions_before_remote_access(
         {"sessionId": ""},
         {"artifactSha256": "A" * 64},
         {REPORT_DIGEST_FIELD: "not-a-digest"},
+        {"acknowledgeUnverified": "true"},
     ],
     ids=(
         "missing-field",
@@ -448,6 +482,7 @@ async def test_rejects_unowned_or_ineligible_sessions_before_remote_access(
         "empty-session",
         "uppercase-digest",
         "bad-report-digest",
+        "invalid-acknowledgement",
     ),
 )
 async def test_rejects_malformed_source_before_session_resolution(
