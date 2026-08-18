@@ -40,6 +40,7 @@ from frontend.server.intelligent_development_task import (
     intent_gate_prompt,
     invalidate_current_delivery,
     parse_intent_decision,
+    read_only_prompt,
     read_completion_contract,
     remove_completion_file,
 )
@@ -776,9 +777,27 @@ def mount_intelligent_development_routes(
                     yield "event: done\ndata: {}\n\n"
                     return
 
+                if not decision.changes_delivery:
+                    yield _progress_sse("正在检查当前项目并整理结果。")
+                    async for event in service.stream_message(
+                        session_id,
+                        owner,
+                        read_only_prompt(
+                            prompt.strip(),
+                            decision,
+                            expire_at=cloud.expire_at,
+                        ),
+                        turn_permissions=_INTENT_PERMISSIONS,
+                        turn_timeout_seconds=_BUILDER_TURN_TIMEOUT_SECONDS,
+                    ):
+                        public_event = _conversation_event_sse(event)
+                        if public_event is not None:
+                            yield public_event
+                    yield "event: done\ndata: {}\n\n"
+                    return
+
                 transport = SandboxRemoteTransport(cloud.endpoint)
-                if decision.changes_delivery:
-                    await invalidate_current_delivery(transport)
+                await invalidate_current_delivery(transport)
                 completion_path = (
                     f"{project_root}/{COMPLETION_FILE_PREFIX}{uuid4().hex}.json"
                 )
@@ -787,11 +806,7 @@ def mount_intelligent_development_routes(
                 lease = await create_credential_lease(
                     cloud.endpoint, credential_resolver
                 )
-                yield _progress_sse(
-                    "正在实现本次变更、运行测试并验证结果。"
-                    if decision.changes_delivery
-                    else "正在检查当前项目并整理结果。"
-                )
+                yield _progress_sse("正在实现本次变更、运行测试并验证结果。")
                 delivery = None
                 async for event in service.stream_message(
                     session_id,
