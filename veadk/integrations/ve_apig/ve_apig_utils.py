@@ -18,13 +18,14 @@ import datetime
 import hashlib
 import hmac
 import json
+import os
 from urllib.parse import quote
 
 import requests
 
 Service = "apig"
 Version = "2021-03-03"
-Region = "cn-beijing"
+Region = os.getenv("REGION") or "cn-beijing"
 Host = "iam.volcengineapi.com"
 ContentType = "application/json"
 
@@ -162,7 +163,7 @@ def request(method, date, query, header, region, ak, sk, token, action, body):
     return r.json()
 
 
-def validate_and_set_region(region: str = "cn-beijing") -> str:
+def validate_and_set_region(region: str = "") -> str:
     """
     Validates the provided region and returns the default if none is provided.
 
@@ -182,7 +183,7 @@ def validate_and_set_region(region: str = "cn-beijing") -> str:
                 f"Invalid region. Must be one of: {', '.join(valid_regions)}"
             )
     else:
-        region = "cn-beijing"
+        region = os.getenv("REGION") or "cn-beijing"
     return region
 
 
@@ -209,9 +210,7 @@ def handle_request(ak, sk, region, action, body) -> str:
     return response_body
 
 
-def create_serverless_gateway(
-    ak, sk, name: str = "", region: str = "cn-beijing"
-) -> str:
+def create_serverless_gateway(ak, sk, name: str = "", region: str = "") -> str:
     """
     Creates a new VeApig serverless gateway.
 
@@ -244,7 +243,7 @@ def create_serverless_gateway(
 
 
 def create_gateway_service(
-    ak, sk, gateway_id: str, name: str = "", region: str = "cn-beijing"
+    ak, sk, gateway_id: str, name: str = "", region: str = ""
 ) -> str:
     """
     Creates a new VeApig serverless gateway service.
@@ -274,7 +273,7 @@ def create_gateway_service(
         return f"Failed to create VeApig serverless gateway service with name {service_name}: {str(e)}"
 
 
-def list_gateways(ak, sk, region: str = "cn-beijing") -> str:
+def list_gateways(ak, sk, region: str = "") -> str:
     # Validate region parameter
     region = validate_and_set_region(region)
 
@@ -289,9 +288,7 @@ def list_gateways(ak, sk, region: str = "cn-beijing") -> str:
     return response_body
 
 
-def list_gateway_services(
-    ak, sk, gateway_id: str = "", region: str = "cn-beijing"
-) -> str:
+def list_gateway_services(ak, sk, gateway_id: str = "", region: str = "") -> str:
     # Validate region parameter
     region = validate_and_set_region(region)
 
@@ -310,7 +307,7 @@ def list_gateway_services(
     return response_body
 
 
-def get_gateway_route(ak, sk, route_id: str, region: str = "cn-beijing") -> str:
+def get_gateway_route(ak, sk, route_id: str, region: str = "") -> str:
     """
     Gets detailed informantion about a specific VeApig route.
 

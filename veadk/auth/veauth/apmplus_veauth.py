@@ -21,8 +21,9 @@ from veadk.utils.volcengine_sign import ve_request
 logger = get_logger(__name__)
 
 
-def get_apmplus_token(region: str = "cn-beijing") -> str:
+def get_apmplus_token(region: str = "") -> str:
     logger.info("Fetching APMPlus token...")
+    region = region or os.getenv("REGION") or "cn-beijing"
 
     access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
     secret_key = os.getenv("VOLCENGINE_SECRET_KEY")

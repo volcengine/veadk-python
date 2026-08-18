@@ -162,7 +162,7 @@ class IdentityClient:
         access_key: Optional[str] = None,
         secret_key: Optional[str] = None,
         session_token: Optional[str] = None,
-        region: str = "cn-beijing",
+        region: str = "",
         provider: CloudProvider | None = None,
         enable_vefaas_iam_fallback: bool = True,
     ):
@@ -179,8 +179,12 @@ class IdentityClient:
         Raises:
             KeyError: If required environment variables are not set.
         """
-        self.region = region
         self.provider = provider or cloud_provider_from_env()
+        if not region and self.provider != "byteplus":
+            region = os.getenv("REGION") or "cn-beijing"
+        elif not region:
+            region = "cn-beijing"
+        self.region = region
         self._enable_vefaas_iam_fallback = enable_vefaas_iam_fallback
 
         # Store initial credentials for fallback

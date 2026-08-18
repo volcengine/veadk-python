@@ -706,12 +706,12 @@ def mount_session_capability_routes(
     @router.get("/skills/spaces/{space_id}/skills")
     async def list_skills_in_space(
         space_id: str,
-        region: str = "cn-beijing",
+        region: str = "",
     ) -> dict[str, Any]:
         try:
             return await _list_skills_in_space(
                 space_id=space_id,
-                region=region,
+                region=region or os.getenv("REGION") or "cn-beijing",
             )
         except FileNotFoundError as exc:
             raise HTTPException(

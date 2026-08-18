@@ -82,11 +82,12 @@ def build_vikingdb_knowledgebase_request(
     volcengine_secret_key: str,
     session_token: str = "",
     method: Literal["GET", "POST", "PUT", "DELETE"] = "POST",
-    region: str = "cn-beijing",
+    region: str = "",
     params=None,
     data=None,
     doseq=0,
 ) -> Request:
+    region = region or os.getenv("REGION") or "cn-beijing"
     if params:
         for key in params:
             if (
@@ -238,7 +239,11 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
                 self.tos_config.region = self.region
                 self.tos_config.endpoint = f"tos-{self.region}.bytepluses.com"
         elif not self.region:
-            self.region = os.getenv("DATABASE_VIKING_REGION", "cn-beijing")
+            self.region = (
+                os.getenv("DATABASE_VIKING_REGION")
+                or os.getenv("REGION")
+                or "cn-beijing"
+            )
             self.base_url = f"https://api-knowledgebase.mlp.{self.region}.volces.com"
             self.host = f"api-knowledgebase.mlp.{self.region}.volces.com"
 

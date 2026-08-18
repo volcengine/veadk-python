@@ -159,7 +159,7 @@ async def get_workload_token(
     identity_client: Optional[IdentityClient] = None,
     workload_name: Optional[str] = None,
     user_token: Optional[str] = None,
-    region: str = "cn-beijing",
+    region: Optional[str] = None,
 ) -> str:
     """Convenience function to get a workload access token.
 

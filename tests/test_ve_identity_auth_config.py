@@ -46,6 +46,28 @@ class TestApiKeyAuth:
         assert config.region == "us-east-1"
         assert config.auth_type == "api_key"
 
+    def test_api_key_auth_uses_region_env_fallback(self, monkeypatch):
+        """Test REGION is used only when no auth region is configured."""
+        monkeypatch.delenv("VEIDENTITY_REGION", raising=False)
+        monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
+        monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+        monkeypatch.setenv("REGION", "cn-shanghai")
+
+        config = api_key_auth("test-provider")
+
+        assert config.region == "cn-shanghai"
+
+    def test_byteplus_api_key_auth_ignores_region_env_fallback(self, monkeypatch):
+        """Test BytePlus auth defaults are not changed by REGION."""
+        monkeypatch.delenv("VEIDENTITY_REGION", raising=False)
+        monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+        monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "byteplus")
+        monkeypatch.setenv("REGION", "cn-shanghai")
+
+        config = api_key_auth("test-provider")
+
+        assert config.region == "cn-beijing"
+
     def test_api_key_auth_empty_provider_name(self):
         """Test that empty provider_name raises ValueError."""
         with pytest.raises(ValueError, match="provider_name cannot be empty"):

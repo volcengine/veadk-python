@@ -155,7 +155,11 @@ def download_skills_tool(
 
         # Get service configuration
         service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
-        region = os.getenv("AGENTKIT_TOOL_REGION", default_region)
+        region = (
+            os.getenv("AGENTKIT_TOOL_REGION")
+            or (os.getenv("REGION") if cloud_provider != "byteplus" else None)
+            or default_region
+        )
         host = os.getenv("AGENTKIT_SKILL_HOST", service + "." + region + f".{sld}.com")
 
         # Ensure download path exists

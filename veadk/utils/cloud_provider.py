@@ -61,7 +61,7 @@ def default_region(provider: CloudProvider) -> str:
     """Return the provider's default control-plane region."""
     if provider == "byteplus":
         return os.getenv("BYTEPLUS_REGION") or DEFAULT_BYTEPLUS_REGION
-    return DEFAULT_VOLCENGINE_REGION
+    return os.getenv("REGION") or DEFAULT_VOLCENGINE_REGION
 
 
 def default_vefaas_application_template_id(

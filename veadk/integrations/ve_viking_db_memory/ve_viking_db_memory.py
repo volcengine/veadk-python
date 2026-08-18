@@ -70,7 +70,7 @@ class VikingDBMemoryClient(Service):
             host = host or DEFAULT_BYTEPLUS_VIKING_MEMORY_HOST
         else:
             if not region:
-                region = DEFAULT_VOLCENGINE_REGION
+                region = os.getenv("REGION") or DEFAULT_VOLCENGINE_REGION
             if not host:
                 host = f"api-knowledgebase.mlp.{region}.volces.com"
         env_host = getenv(

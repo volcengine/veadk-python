@@ -96,7 +96,11 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         if self.cloud_provider.lower() == "byteplus":
             self.region = DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
         elif not self.region:
-            self.region = os.getenv("DATABASE_VIKING_REGION", "cn-beijing")
+            self.region = (
+                os.getenv("DATABASE_VIKING_REGION")
+                or os.getenv("REGION")
+                or "cn-beijing"
+            )
 
         # We get memory type from:
         # 1. user input
