@@ -449,7 +449,7 @@ test("runtime update deployments stay on the existing agent row", () => {
   );
   assert.match(
     workspaceSource,
-    /selectedAgentUpdateDraft[\s\S]*?onEditDraft\?\.\(\{[\s\S]*?deploymentTarget:\s*selectedUpdateTarget/,
+    /selectedAgentUpdateDraft[\s\S]*?applyRuntimeAgentIntrospection\([\s\S]*?selectedUpdateCapability\?\.agent/,
   );
   assert.match(
     workspaceSource,
@@ -555,11 +555,11 @@ test("runtime updates use the Agent selected in management instead of the active
     /runtimeId,[\s\S]*?region,[\s\S]*?appName: selectedAgentAppName,[\s\S]*?signal/,
   );
   assert.match(workspaceSource, /onUpdateAgent: \(draft: AgentDraft, capability: RuntimeUpdateCapability\) => void/);
-  assert.match(workspaceSource, /selectedUpdateCapability\.agent\?\.draft \?\? draft,[\s\S]*?selectedUpdateCapability/);
+  assert.match(workspaceSource, /onUpdateAgent\(draft, selectedUpdateCapability\)/);
   assert.match(clientSource, /appName:\s*opts\?\.appName/);
   assert.match(customCreateSource, /appName:\s*deploymentTarget\?\.appName/);
 
-  const handlerStart = appSource.indexOf("onUpdateAgent={(nextDraft, capability) =>");
+  const handlerStart = appSource.indexOf("onUpdateAgent={async (nextDraft, capability) =>");
   const handlerEnd = appSource.indexOf("onEditDraft=", handlerStart);
   assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
   const handler = appSource.slice(handlerStart, handlerEnd);
