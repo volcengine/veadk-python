@@ -65,16 +65,17 @@ def test_hermes_surface_rewrite_removes_private_gateway_query() -> None:
     assert "hermes-secret" not in rewritten
 
 
-def test_deepseek_harness_rewrite_routes_root_assets_and_api_through_surface() -> None:
+def test_deepseek_harness_rewrite_routes_root_assets_through_surface() -> None:
     prefix = "/web/deepseek-harness/sessions/session-1/surface/token-1"
     body = (
-        b'<script src="/deepseek-harness-auth-query.js?Authorization=secret">'
+        b'<html><head><script src="/deepseek-harness-auth-query.js?Authorization=secret">'
         b"</script>"
         b'<script>const slash = "/"; const api = "/api/status";'
         b'const ws = new WebSocket("/api/events");'
         b'window.__DSH_BASE_PATH__ = "/deepseek-harness";</script>'
         b'<script src="/assets/app.js"></script>'
         b'<link href="/plugins/plugin-a/index.css" rel="stylesheet">'
+        b"</head></html>"
     )
 
     rewritten = _rewrite_body(
@@ -86,13 +87,33 @@ def test_deepseek_harness_rewrite_routes_root_assets_and_api_through_surface() -
 
     assert 'const slash = "/"' in rewritten
     assert f'src="{prefix}/deepseek-harness-auth-query.js"' in rewritten
-    assert f'const api = "{prefix}/api/status"' in rewritten
-    assert f'new WebSocket("{prefix}/api/events")' in rewritten
+    assert 'const api = "/api/status"' in rewritten
+    assert 'new WebSocket("/api/events")' in rewritten
     assert f'window.__DSH_BASE_PATH__ = "{prefix}/deepseek-harness"' in rewritten
     assert f'src="{prefix}/assets/app.js"' in rewritten
     assert f'href="{prefix}/plugins/plugin-a/index.css"' in rewritten
+    assert f'const surfacePrefix = "{prefix}"' in rewritten
+    assert "url.pathname = surfacePrefix + url.pathname" in rewritten
     assert "Authorization" not in rewritten
     assert "secret" not in rewritten
+
+
+def test_deepseek_harness_rewrite_preserves_api_transport_semantics() -> None:
+    prefix = "/web/deepseek-harness/sessions/session-1/surface/token-1"
+    body = (
+        b'const API_PATH = "/api";'
+        b'connection.rpc.call("/api", endpoint, { args });'
+        b"const response = await this.postJson(`/api/${method}`, message);"
+    )
+
+    rewritten = _rewrite_body(
+        body,
+        "text/javascript; charset=utf-8",
+        prefix,
+        "deepseek-harness",
+    ).decode()
+
+    assert rewritten == body.decode()
 
 
 def test_agent_surface_proxy_keeps_endpoint_auth_server_side(
@@ -212,10 +233,7 @@ def test_deepseek_harness_proxy_keeps_endpoint_auth_server_side(
         "?faasInstanceName=instance-1&Authorization=server-secret"
     )
     assert requested_urls == [expected_url]
-    expected_fetch = (
-        'fetch("/web/deepseek-harness/sessions/session-1/surface/token-1/api/status")'
-    )
-    assert expected_fetch in response.text
+    assert 'fetch("/api/status")' in response.text
     assert "server-secret" not in response.text
 
 

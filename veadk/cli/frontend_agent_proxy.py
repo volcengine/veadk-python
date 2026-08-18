@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import html
+import json
 import re
 from collections.abc import Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -45,12 +46,11 @@ _OPENCLAW_RESET_TAG = (
     b"if(key.startsWith('openclaw.control.settings.v1'))localStorage.removeItem(key)"
     b"}}catch{}</script>"
 )
-_DEEPSEEK_HARNESS_PATHS = (
+_DEEPSEEK_HARNESS_STATIC_PATHS = (
     "/deepseek-harness-auth-query.js",
     "/deepseek-harness",
     "/plugins",
     "/assets",
-    "/api",
 )
 _BLOCKED_RESPONSE_HEADERS = {
     "connection",
@@ -94,7 +94,7 @@ def _rewrite_body(
     if kind in {"hermes", "deepseek-harness"}:
         body = _strip_hermes_gateway_query(body)
     if kind == "deepseek-harness":
-        return _rewrite_deepseek_harness_body(body, prefix)
+        return _rewrite_deepseek_harness_body(body, content_type, prefix)
     source = f"/{kind}".encode()
     replacement = f"{prefix}/{kind}".encode()
     for quote in (b'"', b"'", b"`"):
@@ -114,10 +114,61 @@ def _rewrite_root_path(body: bytes, source_path: str, replacement_path: str) -> 
     return body
 
 
-def _rewrite_deepseek_harness_body(body: bytes, prefix: str) -> bytes:
-    """Route DSH root assets and APIs through the opaque Studio surface proxy."""
-    for path in _DEEPSEEK_HARNESS_PATHS:
+def _javascript_string(value: str) -> bytes:
+    """Return an HTML-safe JavaScript string literal."""
+    literal = json.dumps(value, ensure_ascii=True)
+    return (
+        literal.replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .encode()
+    )
+
+
+def _deepseek_harness_surface_bootstrap(prefix: str) -> bytes:
+    """Build the browser shim that rebases DSH API traffic at request time."""
+    return b"".join(
+        (
+            b"<script>(()=>{",
+            b"const surfacePrefix = ",
+            _javascript_string(prefix),
+            b";const pageUrl=new URL(window.location.href);",
+            b"const sameEndpoint=url=>url.hostname===pageUrl.hostname&&",
+            b"url.port===pageUrl.port&&(url.protocol===pageUrl.protocol||",
+            b"pageUrl.protocol==='https:'&&url.protocol==='wss:'||",
+            b"pageUrl.protocol==='http:'&&url.protocol==='ws:');",
+            b"const rebase=input=>{try{",
+            b"const source=input instanceof Request?input.url:input;",
+            b"const url=new URL(source,window.location.href);",
+            b"if(sameEndpoint(url)&&(url.pathname==='/api'||",
+            b"url.pathname.startsWith('/api/')||url.pathname.startsWith('/api.')))",
+            b"{url.pathname = surfacePrefix + url.pathname;}",
+            b"if(input instanceof Request)return new Request(url.toString(),input);",
+            b"return url;}catch{return input;}};",
+            b"const originalFetch=window.fetch.bind(window);",
+            b"window.fetch=(input,init)=>originalFetch(rebase(input),init);",
+            b"const OriginalWebSocket=window.WebSocket;",
+            b"window.WebSocket=function(url,protocols){const next=rebase(url);",
+            b"return protocols===undefined?new OriginalWebSocket(next):",
+            b"new OriginalWebSocket(next,protocols);};",
+            b"Object.setPrototypeOf(window.WebSocket,OriginalWebSocket);",
+            b"window.WebSocket.prototype=OriginalWebSocket.prototype;",
+            b"})();</script>",
+        )
+    )
+
+
+def _rewrite_deepseek_harness_body(
+    body: bytes,
+    content_type: str,
+    prefix: str,
+) -> bytes:
+    """Route DSH root assets and runtime API traffic through its Studio surface."""
+    for path in _DEEPSEEK_HARNESS_STATIC_PATHS:
         body = _rewrite_root_path(body, path, f"{prefix}{path}")
+    if "text/html" in content_type:
+        bootstrap = _deepseek_harness_surface_bootstrap(prefix)
+        body = body.replace(b"<head>", b"<head>" + bootstrap, 1)
     return body
 
 
