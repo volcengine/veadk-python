@@ -7,6 +7,7 @@ import {
   type StudioRole,
 } from "../adk/client";
 import type { CloudProvider } from "../adk/cloudProvider";
+import { PageBackButton } from "./PageBackButton";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import {
   identityUserPoolConsoleUrl,
@@ -21,6 +22,7 @@ export interface SystemInfoProps {
   role: StudioRole;
   provider: CloudProvider;
   region: string;
+  onBack: () => void;
 }
 
 interface ConsoleLinkProps {
@@ -62,6 +64,7 @@ export function SystemInfo({
   role,
   provider,
   region,
+  onBack,
 }: SystemInfoProps) {
   const isAdmin = role === "admin";
   const [tosAddress, setTosAddress] = useState("");
@@ -131,8 +134,11 @@ export function SystemInfo({
   return (
     <div className="system-info-page">
       <header className="system-info-page-header">
-        <h1>系统信息</h1>
-        <p>查看当前 Studio 版本及关联的基础资源</p>
+        <PageBackButton label="返回上一页" onClick={onBack} />
+        <div>
+          <h1>系统信息</h1>
+          <p>查看当前 Studio 版本及关联的基础资源</p>
+        </div>
       </header>
 
       <div className="system-info-scroll">

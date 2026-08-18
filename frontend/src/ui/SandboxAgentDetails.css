@@ -11,41 +11,13 @@
 }
 
 .sandbox-agent-details-header {
-  display: grid;
-  gap: 20px;
-}
-
-.sandbox-agent-back {
-  display: inline-flex;
-  width: fit-content;
-  height: 32px;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  font: inherit;
-  font-size: 12px;
-  font-weight: 550;
-  cursor: pointer;
+  gap: 8px;
 }
 
-.sandbox-agent-back:hover {
-  background: hsl(var(--muted));
-  color: hsl(var(--foreground));
-}
-
-.sandbox-agent-back:focus-visible {
-  outline: 2px solid hsl(var(--foreground) / 0.3);
-  outline-offset: 2px;
-}
-
-.sandbox-agent-back svg {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
+.sandbox-agent-details-header > div {
+  min-width: 0;
 }
 
 .sandbox-agent-details-header h1 {
