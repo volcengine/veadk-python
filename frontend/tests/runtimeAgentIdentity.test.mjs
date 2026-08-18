@@ -18,9 +18,10 @@ async function loadTypeScriptModule(relativePath) {
   return import(`data:text/javascript;base64,${source}`);
 }
 
-const { applyRuntimeAgentIntrospection } = await loadTypeScriptModule(
-  "../src/create/runtimeModelName.ts",
-);
+const {
+  applyRuntimeAgentIntrospection,
+  runtimeAgentDraftFromCloud,
+} = await loadTypeScriptModule("../src/create/runtimeModelName.ts");
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 const workspaceSource = readFileSync(
   new URL("../src/ui/AgentWorkspace.tsx", import.meta.url),
@@ -51,27 +52,156 @@ test("deployed Agent identity overrides a cached Runtime resource name", () => {
   assert.equal(restored.name, "customer_agent");
 });
 
-test("Runtime update entry always passes the live-hydrated draft through the update handler", () => {
+test("deployed Runtime configuration is rebuilt only from cloud data", () => {
+  const restored = runtimeAgentDraftFromCloud(
+    {
+      appName: "cloud_app",
+      name: "cloud_agent",
+      model: "openai/cloud-model",
+      draft: {
+        ...cachedRuntimeDraft("cloud_draft_name"),
+        description: "cloud description",
+        instruction: "cloud instruction",
+        builtinTools: ["web_search"],
+        mcpTools: [
+          {
+            name: "cloud-mcp",
+            transport: "http",
+            url: "https://mcp.example.com",
+          },
+        ],
+        memory: { shortTerm: true, longTerm: true },
+        shortTermBackend: "redis",
+        longTermBackend: "viking",
+        knowledgebase: true,
+        knowledgebaseBackend: "viking",
+        knowledgebaseIndex: "cloud-index",
+        tracing: true,
+        tracingExporters: ["tls"],
+      },
+    },
+    "volcengine",
+  );
+
+  assert.equal(restored.name, "cloud_agent");
+  assert.equal(restored.description, "cloud description");
+  assert.equal(restored.instruction, "cloud instruction");
+  assert.equal(restored.modelName, "cloud-model");
+  assert.equal(restored.modelProvider, "openai");
+  assert.deepEqual(restored.builtinTools, ["web_search"]);
+  assert.equal(restored.mcpTools[0].name, "cloud-mcp");
+  assert.deepEqual(restored.memory, { shortTerm: true, longTerm: true });
+  assert.equal(restored.shortTermBackend, "redis");
+  assert.equal(restored.longTermBackend, "viking");
+  assert.equal(restored.knowledgebase, true);
+  assert.equal(restored.knowledgebaseIndex, "cloud-index");
+  assert.equal(restored.tracing, true);
+  assert.deepEqual(restored.tracingExporters, ["tls"]);
+});
+
+test("Agent name uses only cloud graph, metadata, then app name", () => {
+  const fromGraph = runtimeAgentDraftFromCloud(
+    {
+      appName: "cloud_app",
+      name: "cloud_metadata_name",
+      graph: { name: "cloud_graph_name", children: [] },
+      draft: cachedRuntimeDraft("cloud_snapshot_name"),
+    },
+    "volcengine",
+  );
+  const fromMetadata = runtimeAgentDraftFromCloud(
+    { appName: "cloud_app", name: "cloud_metadata_name" },
+    "volcengine",
+  );
+  const fromAppName = runtimeAgentDraftFromCloud(
+    { appName: "cloud_app" },
+    "volcengine",
+  );
+
+  assert.equal(fromGraph.name, "cloud_graph_name");
+  assert.equal(fromMetadata.name, "cloud_metadata_name");
+  assert.equal(fromAppName.name, "cloud_app");
+});
+
+test("nullable fields from older cloud snapshots are normalized at the boundary", () => {
+  const restored = runtimeAgentDraftFromCloud(
+    {
+      appName: "legacy_app",
+      draft: {
+        ...cachedRuntimeDraft("legacy_agent"),
+        description: "legacy description",
+        instruction: "legacy instruction",
+        memory: { shortTerm: null, longTerm: null },
+        a2aUrl: null,
+        modelSource: null,
+        cloudEnvironment: { cliTools: ["lark-cli"], dockerfile: null },
+        deployment: {
+          feishuEnabled: false,
+          runtimeName: null,
+          modelApiKeyId: null,
+          modelApiKeyName: null,
+        },
+      },
+    },
+    "volcengine",
+  );
+
+  assert.deepEqual(restored.memory, { shortTerm: false, longTerm: false });
+  assert.equal(restored.a2aUrl, "");
+  assert.equal(restored.modelSource, undefined);
+  assert.deepEqual(restored.cloudEnvironment.cliTools, ["lark-cli"]);
+  assert.equal(restored.cloudEnvironment.dockerfile, undefined);
+  assert.equal(restored.deployment.runtimeName, undefined);
+  assert.equal(restored.deployment.modelApiKeyId, "");
+  assert.equal(restored.deployment.modelApiKeyName, "");
+});
+
+test("legacy Runtime graph uses cloud values and defaults for unavailable fields", () => {
+  const restored = runtimeAgentDraftFromCloud(
+    {
+      appName: "legacy_app",
+      graph: {
+        name: "legacy_agent",
+        description: "legacy description",
+        instruction: "legacy instruction",
+        type: "llm",
+        model: "openrouter/meta/llama",
+        tools: [],
+        skills: [],
+        children: [],
+      },
+    },
+    "volcengine",
+  );
+
+  assert.equal(restored.name, "legacy_agent");
+  assert.equal(restored.modelName, "meta/llama");
+  assert.equal(restored.modelProvider, "openrouter");
+  assert.deepEqual(restored.memory, { shortTerm: false, longTerm: false });
+  assert.equal(restored.knowledgebase, false);
+  assert.equal(restored.tracing, false);
+});
+
+test("Runtime update entry passes only cloud capability to the update handler", () => {
   const clickStart = workspaceSource.indexOf("onClick={() =>\n                      selectedDraft");
   const clickEnd = workspaceSource.indexOf("                    }\n                  >", clickStart);
   assert.ok(clickStart >= 0 && clickEnd > clickStart);
   const clickHandler = workspaceSource.slice(clickStart, clickEnd);
 
-  assert.match(clickHandler, /onUpdateAgent\(draft, selectedUpdateCapability\)/);
+  assert.match(clickHandler, /onUpdateAgent\(selectedUpdateCapability\)/);
+  assert.doesNotMatch(clickHandler, /onUpdateAgent\(draft,/);
   assert.doesNotMatch(clickHandler, /selectedAgentUpdateDraft[\s\S]*?onEditDraft/);
 });
 
-test("Runtime update hydration applies deployed introspection before opening the builder", () => {
+test("Runtime update hydration starts from cloud configuration without local draft values", () => {
   const handlerStart = appSource.indexOf(
-    "onUpdateAgent={async (nextDraft, capability) =>",
+    "onUpdateAgent={async (capability) =>",
   );
   const handlerEnd = appSource.indexOf("onEditDraft=", handlerStart);
   assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
   const handler = appSource.slice(handlerStart, handlerEnd);
 
-  assert.match(
-    handler,
-    /applyRuntimeAgentIntrospection\([\s\S]*?nextDraft,[\s\S]*?capability\.agent\?\.graph/,
-  );
+  assert.match(handler, /runtimeAgentDraftFromCloud\([\s\S]*?capability\.agent/);
+  assert.doesNotMatch(handler, /\bnextDraft\b|draftEnvValues/);
   assert.match(handler, /setImportedDraft\(classifiedDraft\)/);
 });

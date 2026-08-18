@@ -141,10 +141,10 @@ import {
   isRuntimeModelSelectionEnv,
 } from "./create/modelSource";
 import {
-  applyRuntimeAgentIntrospection,
   classifyRuntimeModelSources,
   modelConfigurationFromRuntime,
   modelNameFromRuntime,
+  runtimeAgentDraftFromCloud,
 } from "./create/runtimeModelName";
 import {
   loadWorkspaceDrafts,
@@ -6288,7 +6288,7 @@ export default function App() {
                   setFocusedWorkspaceAgentId("");
                   setError("");
                 }}
-                onUpdateAgent={async (nextDraft, capability) => {
+                onUpdateAgent={async (capability) => {
                   if (!canManageAgents && !canCreateAgents) {
                     setError("当前账号没有管理 Agent 的权限。");
                     return;
@@ -6309,15 +6309,11 @@ export default function App() {
                     setError("Runtime 缺少智能体名称，无法更新。");
                     return;
                   }
+                  const runtimeAgent = capability.agent;
                   const runtimeEnvValues = Object.fromEntries(
                     capability.runtime.envs
                       .filter(({ key }) => !isRuntimeModelSelectionEnv(key))
                       .map(({ key, value }) => [key, value]),
-                  );
-                  const draftEnvValues = Object.fromEntries(
-                    Object.entries(nextDraft.deployment?.envValues ?? {}).filter(
-                      ([key]) => !isRuntimeModelSelectionEnv(key),
-                    ),
                   );
                   const runtimeEnv = new Map(
                     capability.runtime.envs.map(({ key, value }) => [
@@ -6325,13 +6321,12 @@ export default function App() {
                       value.trim(),
                     ]),
                   );
-                  const runtimeDraft = applyRuntimeAgentIntrospection(
-                    nextDraft,
-                    capability.agent?.graph,
-                    capability.agent ?? undefined,
+                  const runtimeDraft = runtimeAgentDraftFromCloud(
+                    runtimeAgent,
+                    cloudProvider,
                   );
                   const runtimeModel = modelConfigurationFromRuntime(
-                    capability.agent?.model,
+                    runtimeAgent.model,
                   );
                   const hydratedDraft = hydrateRuntimeModelSelection(
                     {
@@ -6346,10 +6341,7 @@ export default function App() {
                       deployment: {
                         ...(runtimeDraft.deployment ?? { feishuEnabled: false }),
                         network: capability.runtime.network,
-                        envValues: {
-                          ...runtimeEnvValues,
-                          ...draftEnvValues,
-                        },
+                        envValues: runtimeEnvValues,
                       },
                     },
                     capability.runtime.envs,
@@ -6375,13 +6367,15 @@ export default function App() {
                   setCustomCreateMode("custom");
                   const nextDraftId = `runtime-${capability.runtime.runtimeId}`;
                   setEditingDraftId(nextDraftId);
-                  editingDraftBaselineRef.current =
-                    savedAgentDrafts.find((item) => item.id === nextDraftId) ?? null;
+                  editingDraftBaselineRef.current = null;
                   setFocusedDeploymentTaskId("");
                   setFocusedWorkspaceAgentId("");
                   setRuntimeUpdateTarget({
                     runtimeId: capability.runtime.runtimeId,
-                    name: capability.runtime.name || capability.agent.name || nextDraft.name,
+                    name:
+                      capability.runtime.name ||
+                      runtimeAgent.name ||
+                      runtimeDraft.name,
                     region: capability.runtime.region,
                     appName: capability.agent.appName,
                     currentVersion: capability.runtime.currentVersion,
