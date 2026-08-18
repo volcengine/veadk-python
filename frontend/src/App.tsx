@@ -36,6 +36,7 @@ import {
   getStudioAccess,
   getRuntimes,
   listApps,
+  listModelOptions,
   listSessionBuiltinTools,
   listSessions,
   removeSessionCapability,
@@ -139,6 +140,12 @@ import {
   hydrateRuntimeModelSelection,
   isRuntimeModelSelectionEnv,
 } from "./create/modelSource";
+import {
+  applyRuntimeAgentIntrospection,
+  classifyRuntimeModelSources,
+  modelConfigurationFromRuntime,
+  modelNameFromRuntime,
+} from "./create/runtimeModelName";
 import {
   loadWorkspaceDrafts,
   workspaceDraftsKey,
@@ -6019,7 +6026,9 @@ export default function App() {
               agents={sandboxSession ? [] : availableAgents}
               invocation={sandboxSession ? emptyInvocation() : invocation}
               capabilitiesLoading={!sandboxSession && capabilitiesLoading}
-              modelName={agentInfo?.model?.trim() || activeTokenUsage.modelName}
+              modelName={
+                modelNameFromRuntime(agentInfo?.model) || activeTokenUsage.modelName
+              }
               tokenUsage={activeTokenUsage}
               systemTokenEstimate={systemTokenEstimate}
               allowAttachments={!sandboxSession}
@@ -6279,7 +6288,7 @@ export default function App() {
                   setFocusedWorkspaceAgentId("");
                   setError("");
                 }}
-                onUpdateAgent={(nextDraft, capability) => {
+                onUpdateAgent={async (nextDraft, capability) => {
                   if (!canManageAgents && !canCreateAgents) {
                     setError("当前账号没有管理 Agent 的权限。");
                     return;
@@ -6310,11 +6319,32 @@ export default function App() {
                       ([key]) => !isRuntimeModelSelectionEnv(key),
                     ),
                   );
+                  const runtimeEnv = new Map(
+                    capability.runtime.envs.map(({ key, value }) => [
+                      key,
+                      value.trim(),
+                    ]),
+                  );
+                  const runtimeDraft = applyRuntimeAgentIntrospection(
+                    nextDraft,
+                    capability.agent?.graph,
+                    capability.agent ?? undefined,
+                  );
+                  const runtimeModel = modelConfigurationFromRuntime(
+                    capability.agent?.model,
+                  );
                   const hydratedDraft = hydrateRuntimeModelSelection(
                     {
-                      ...nextDraft,
+                      ...runtimeDraft,
+                      modelProvider:
+                        runtimeModel.modelProvider ||
+                        runtimeEnv.get("MODEL_AGENT_PROVIDER") ||
+                        runtimeDraft.modelProvider,
+                      modelApiBase:
+                        runtimeEnv.get("MODEL_AGENT_API_BASE") ||
+                        runtimeDraft.modelApiBase,
                       deployment: {
-                        ...(nextDraft.deployment ?? { feishuEnabled: false }),
+                        ...(runtimeDraft.deployment ?? { feishuEnabled: false }),
                         network: capability.runtime.network,
                         envValues: {
                           ...runtimeEnvValues,
@@ -6324,8 +6354,24 @@ export default function App() {
                     },
                     capability.runtime.envs,
                   );
+                  const apiKeyId =
+                    hydratedDraft.deployment?.modelApiKeyId?.trim();
+                  let arkModelIds = new Set<string>();
+                  try {
+                    const response = await listModelOptions({ apiKeyId });
+                    arkModelIds = new Set(
+                      response.models.map((model) => model.id.trim()),
+                    );
+                  } catch {
+                    // If the ModelArk catalog is unavailable, no Runtime model
+                    // can be verified as ModelArk; custom is the safe fallback.
+                  }
+                  const classifiedDraft = classifyRuntimeModelSources(
+                    hydratedDraft,
+                    arkModelIds,
+                  );
                   setManageAgents(false);
-                  setImportedDraft(hydratedDraft);
+                  setImportedDraft(classifiedDraft);
                   setCustomCreateMode("custom");
                   const nextDraftId = `runtime-${capability.runtime.runtimeId}`;
                   setEditingDraftId(nextDraftId);

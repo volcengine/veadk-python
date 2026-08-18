@@ -70,6 +70,8 @@ test("ModelArk picker exposes search, status, loading, empty and retry states", 
     /searchPlaceholder="搜索名称、Model ID 或服务商"/,
   );
   assert.match(customCreateSource, /createPortal\(/);
+  assert.match(customCreateSource, /top: menuPosition\.top \?\? "auto"/);
+  assert.match(customCreateSource, /bottom: menuPosition\.bottom \?\? "auto"/);
   assert.match(customCreateSource, /model\.lifecycleStatus === "Retiring"/);
   assert.match(customCreateSource, /即将下线/);
   assert.match(customCreateSource, /正在加载模型列表/);
@@ -104,6 +106,12 @@ test("ModelArk picker refreshes by API Key without exposing internal Key IDs", (
     customCreateSource,
     /`\$\{selectedApiKey\.name\} \(\$\{selectedApiKey\.id\}\)`/,
   );
+});
+
+test("selecting a ModelArk model updates only the model name", () => {
+  const picker = customCreateSource.match(/<ModelOptionSelect[\s\S]*?\/>/)?.[0] ?? "";
+  assert.match(picker, /onChange=\{\(modelName\) =>\s*patch\(\{ modelName \}\)\s*\}/);
+  assert.doesNotMatch(picker, /modelProvider/);
 });
 
 test("selected ModelArk API Key is resolved only by the Studio server", () => {

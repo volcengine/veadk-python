@@ -8,6 +8,10 @@ import type {
   SessionCapabilities,
 } from "../adk/client";
 import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
+import {
+  modelConfigurationFromRuntime,
+  modelNameFromRuntime,
+} from "../create/runtimeModelName";
 import { emptyDraft, type AgentDraft } from "../create/types";
 import {
   sessionToolLabel,
@@ -45,13 +49,15 @@ function normalizeLegacyNames(node: AgentNode, isRoot = true): AgentNode {
 
 function graphNodeToCanvasDraft(node: AgentNode): AgentDraft {
   const fallback = emptyDraft();
+  const runtimeModel = modelConfigurationFromRuntime(node.model);
   return {
     ...fallback,
     name: node.name,
     description: node.description,
     instruction: node.instruction || fallback.instruction,
     agentType: node.type,
-    modelName: node.model,
+    modelName: runtimeModel.modelName,
+    modelProvider: runtimeModel.modelProvider,
     tools: node.tools ?? [],
     skills: (node.skills ?? []).map((skill) => skill.name),
     subAgents: node.children.map(graphNodeToCanvasDraft),
@@ -158,6 +164,7 @@ export function AgentInfoPanel({
     );
   }
   if (!info) return null;
+  const modelName = modelNameFromRuntime(info.model);
 
   const graph = normalizeLegacyNames(
     info.graph ?? {
@@ -165,7 +172,7 @@ export function AgentInfoPanel({
       name: info.name,
       description: info.description,
       type: info.type ?? "llm",
-      model: info.model,
+      model: modelName,
       tools: info.tools,
       skills: info.skills,
       path: [info.name],
@@ -214,7 +221,7 @@ export function AgentInfoPanel({
           <h2 title={info.name}>
             {info.name || "未命名 Agent"}
           </h2>
-          {info.model && <span title={info.model}>{info.model}</span>}
+          {modelName && <span title={modelName}>{modelName}</span>}
         </div>
         {info.description && (
           <p className="topo-description" title={info.description}>

@@ -384,7 +384,7 @@ test("renders an accessible context meter immediately left of send", () => {
   assert.match(appSource, /addTokenUsage\(previous, event\)/);
   assert.match(
     appSource,
-    /modelName=\{agentInfo\?\.model\?\.trim\(\) \|\| activeTokenUsage\.modelName\}/,
+    /modelNameFromRuntime\(agentInfo\?\.model\) \|\| activeTokenUsage\.modelName/,
   );
   assert.match(appSource, /estimateSystemContextTokens/);
   assert.match(composerSource, /systemTokenEstimate=\{systemTokenEstimate\}/);

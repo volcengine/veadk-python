@@ -30,6 +30,7 @@ import {
   type RuntimeDetail,
 } from "../adk/client";
 import { connectRuntime } from "../adk/connections";
+import { modelNameFromRuntime } from "../create/runtimeModelName";
 import {
   beginAgentConnect,
   classifyTelemetryError,
@@ -658,6 +659,7 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
   }, [runtimeId, runtimeRegion]);
 
   const components = info?.components ?? [];
+  const modelName = modelNameFromRuntime(info?.model);
 
   return (
     <div className="agentsel-detail-body">
@@ -676,7 +678,7 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
             <AgentFaceIcon className="agentsel-identity-icon" />
             <div className="agentsel-identity-copy">
               <strong title={info.name}>{info.name || "未命名 Agent"}</strong>
-              {info.model && <span title={info.model}>{info.model}</span>}
+              {modelName && <span title={modelName}>{modelName}</span>}
             </div>
           </div>
 

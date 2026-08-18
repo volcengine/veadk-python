@@ -879,8 +879,8 @@ function CatalogSelect({
             ref={menuRef}
             className={`cw-a2a-space-menu cw-catalog-menu cw-catalog-menu-portal${menuPosition.opensUp ? " is-up" : ""}`}
             style={{
-              top: menuPosition.top,
-              bottom: menuPosition.bottom,
+              top: menuPosition.top ?? "auto",
+              bottom: menuPosition.bottom ?? "auto",
               left: menuPosition.left,
               width: menuPosition.width,
               maxHeight: menuPosition.maxHeight,
