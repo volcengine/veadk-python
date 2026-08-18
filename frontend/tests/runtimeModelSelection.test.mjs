@@ -39,8 +39,8 @@ const projectPreviewSource = readFileSync(
   new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
   "utf8",
 );
-const agentWorkspaceSource = readFileSync(
-  new URL("../src/ui/AgentWorkspace.tsx", import.meta.url),
+const runtimeModelNameSource = readFileSync(
+  new URL("../src/create/runtimeModelName.ts", import.meta.url),
   "utf8",
 );
 
@@ -316,7 +316,7 @@ test("hydrates Runtime updates through safe selection metadata", () => {
 });
 
 test("legacy capability fallbacks do not inherit the new-draft Ark default", () => {
-  const fallbackOverrides = agentWorkspaceSource.match(/modelSource: undefined/g) ?? [];
+  const fallbackOverrides = runtimeModelNameSource.match(/modelSource: undefined/g) ?? [];
   assert.equal(fallbackOverrides.length, 2);
 });
 

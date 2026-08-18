@@ -2923,7 +2923,11 @@ export interface RuntimeUpdateCapability {
     appName: string;
     name?: string;
     description?: string;
+    instruction?: string;
+    type?: AgentNodeType;
     model?: string;
+    tools?: string[];
+    skills?: AgentSkill[];
     graph?: AgentNode;
     draft?: AgentDraft;
   } | null;
