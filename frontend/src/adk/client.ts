@@ -2088,6 +2088,8 @@ export async function listDeploymentResources(
 export type SandboxToolKind =
   | "codex"
   | "codex_snapshot"
+  | "deepseek_harness"
+  | "deepseek_harness_snapshot"
   | "openclaw"
   | "openclaw_snapshot"
   | "hermes"

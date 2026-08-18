@@ -180,6 +180,8 @@ test("system information page lists sandbox tools and the current identity user 
   assert.match(systemInfoSource, /role="alert"/);
   assert.match(systemInfoSource, /未配置/);
   assert.match(clientSource, /snapshot: boolean/);
+  assert.match(clientSource, /"deepseek_harness"/);
+  assert.match(clientSource, /"deepseek_harness_snapshot"/);
   assert.match(clientSource, /typeof \(item as SandboxToolInfo\)\.snapshot !== "boolean"/);
   assert.match(
     systemInfoSource,

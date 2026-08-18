@@ -453,6 +453,18 @@ def test_system_info_lists_configured_sandbox_tool_ids(
                 "snapshot": True,
             },
             {
+                "kind": "deepseek_harness",
+                "label": "DeepSeek Harness Sandbox",
+                "toolId": "tool-codex",
+                "snapshot": False,
+            },
+            {
+                "kind": "deepseek_harness_snapshot",
+                "label": "DeepSeek Harness Sandbox",
+                "toolId": "tool-codex-snapshot",
+                "snapshot": True,
+            },
+            {
                 "kind": "openclaw",
                 "label": "OpenClaw Sandbox",
                 "toolId": "tool-openclaw",
