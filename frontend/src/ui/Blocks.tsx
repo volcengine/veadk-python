@@ -13,9 +13,13 @@ import { BuiltinToolHeader } from "./builtin-tools/BuiltinToolHeader";
 import { ToolDisclosureIcon } from "./builtin-tools/icons";
 import { getBuiltinToolDefinition } from "./builtin-tools/registry";
 import { AgentKitLogoIcon } from "./icons/AgentKitLogoIcon";
+import { DeliverySourceIcon } from "./icons/DeliverySourceIcon";
+import { DeliveryVerifiedIcon } from "./icons/DeliveryVerifiedIcon";
+import { CodeBrowserDialog } from "./CodeBrowserDialog";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
 const STREAM_FRAME_INTERVAL_MS = 28;
+const DOWNLOAD_STATUS_DURATION_MS = 3_000;
 
 function advanceCodePoints(text: string, start: number, count: number): number {
   let index = start;
@@ -189,6 +193,198 @@ export function ThinkingBlock({
         </div>
       </div>
     </div>
+  );
+}
+
+function DeliveryCard({
+  value,
+  onResolve,
+  onDownload,
+  onDeploy,
+}: {
+  value: Extract<Block, { kind: "delivery" }>["value"];
+  onResolve?: (
+    value: Extract<Block, { kind: "delivery" }>["value"],
+  ) => Promise<Extract<Block, { kind: "delivery" }>["value"]>;
+  onDownload?: (
+    value: Extract<Block, { kind: "delivery" }>["value"],
+  ) => Promise<void>;
+  onDeploy?: (value: Extract<Block, { kind: "delivery" }>["value"]) => void;
+}) {
+  const [resolved, setResolved] = useState<
+    Extract<Block, { kind: "delivery" }>["value"] | null
+  >(value.files ? value : null);
+  const [codeOpen, setCodeOpen] = useState(false);
+  const [busyAction, setBusyAction] = useState<
+    "source" | "download" | "deploy" | null
+  >(null);
+  const [error, setError] = useState("");
+  const [downloadStatus, setDownloadStatus] = useState<{
+    message: string;
+  } | null>(null);
+  const validatedAt = new Date(value.validatedAt);
+  const time = !value.validatedAt
+    ? "刚刚"
+    : Number.isNaN(validatedAt.getTime())
+      ? value.validatedAt
+      : validatedAt.toLocaleString("zh-CN", { hour12: false });
+
+  useEffect(() => {
+    if (!downloadStatus) return;
+    const timer = window.setTimeout(
+      () => setDownloadStatus(null),
+      DOWNLOAD_STATUS_DURATION_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [downloadStatus]);
+
+  async function resolveDelivery() {
+    if (resolved) return resolved;
+    if (!onResolve) throw new Error("暂时无法读取生成的源码，请稍后重试。");
+    const delivery = await onResolve(value);
+    setResolved(delivery);
+    return delivery;
+  }
+
+  async function openSource() {
+    setBusyAction("source");
+    setError("");
+    setDownloadStatus(null);
+    try {
+      await resolveDelivery();
+      setCodeOpen(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function download() {
+    if (!onDownload) return;
+    setBusyAction("download");
+    setError("");
+    setDownloadStatus(null);
+    try {
+      await onDownload(value);
+      setDownloadStatus({ message: "已开始下载" });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function deploy() {
+    setBusyAction("deploy");
+    setError("");
+    setDownloadStatus(null);
+    try {
+      onDeploy?.(await resolveDelivery());
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  return (
+    <>
+      <section
+        className={`delivery-card${value.verified ? " is-verified" : " is-unverified"}`}
+        aria-label={value.verified ? "已验证交付物" : "生成的 Agent 源码"}
+      >
+        <header className="delivery-card-header">
+          <span className="delivery-card-icon">
+            {value.verified ? <DeliveryVerifiedIcon /> : <DeliverySourceIcon />}
+          </span>
+          <div>
+            <strong>{value.verified ? "已验证交付物" : "生成的 Agent 源码"}</strong>
+            <span>{value.agentName}</span>
+          </div>
+        </header>
+        <dl className="delivery-card-grid">
+          <div>
+            <dt>入口</dt>
+            <dd><code>{value.entryPoint}</code></dd>
+          </div>
+          <div>
+            <dt>文件数</dt>
+            <dd>{value.fileCount}</dd>
+          </div>
+          <div>
+            <dt>大小</dt>
+            <dd>{(value.artifactSize / 1024).toFixed(1)} KiB</dd>
+          </div>
+          <div>
+            <dt>{value.verified ? "验证时间" : "生成时间"}</dt>
+            <dd>{time}</dd>
+          </div>
+        </dl>
+        <p className="delivery-card-gates">
+          {value.verified
+            ? `${value.gateSummary.length} 项检查通过`
+            : "源码已准备好，可部署"} ·{" "}
+          <code>{value.artifactSha256.slice(0, 12)}</code>
+        </p>
+        {!value.verified ? (
+          <p className="delivery-card-guidance">
+            源码已准备好，可查看、下载或部署；部署前请确认 Runtime 配置。
+          </p>
+        ) : null}
+        <div className="delivery-card-actions">
+          <button
+            type="button"
+            className="delivery-card-secondary"
+            onClick={() => void openSource()}
+            disabled={!onResolve || busyAction !== null}
+          >
+            {busyAction === "source" ? (
+              <Loader2 className="spin" aria-hidden="true" />
+            ) : null}
+            查看源码
+          </button>
+          <button
+            type="button"
+            className="delivery-card-secondary"
+            onClick={() => void download()}
+            disabled={!onDownload || busyAction !== null}
+            aria-busy={busyAction === "download"}
+          >
+            {busyAction === "download" ? (
+              <Loader2 className="spin" aria-hidden="true" />
+            ) : null}
+            {busyAction === "download" ? "正在准备…" : "下载源码"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void deploy()}
+            disabled={
+              !value.deployable || !onDeploy || !onResolve || busyAction !== null
+            }
+            title={value.deployable ? undefined : "源码尚未准备好"}
+          >
+            {busyAction === "deploy" ? (
+              <Loader2 className="spin" aria-hidden="true" />
+            ) : null}
+            手动部署到 Runtime
+          </button>
+        </div>
+        {error ? <p className="delivery-card-error" role="alert">{error}</p> : null}
+        {downloadStatus ? (
+          <p className="delivery-card-status" role="status" aria-live="polite">
+            {downloadStatus.message}
+          </p>
+        ) : null}
+      </section>
+      <CodeBrowserDialog
+        project={{ name: value.agentName, files: resolved?.files ?? [] }}
+        open={codeOpen}
+        onClose={() => setCodeOpen(false)}
+        onChange={() => {}}
+        readOnly
+      />
+    </>
   );
 }
 
@@ -517,6 +713,13 @@ export interface BlocksProps {
   onAuth?: (block: AuthBlock) => Promise<void>;
   onArtifactDownload?: (filename: string, version: number) => Promise<void>;
   onArtifactPreview?: (filename: string, version: number) => Promise<string>;
+  onResolveDelivery?: (
+    delivery: Extract<Block, { kind: "delivery" }>["value"],
+  ) => Promise<Extract<Block, { kind: "delivery" }>["value"]>;
+  onDownloadDelivery?: (
+    delivery: Extract<Block, { kind: "delivery" }>["value"],
+  ) => Promise<void>;
+  onDeployDelivery?: (delivery: Extract<Block, { kind: "delivery" }>["value"]) => void;
 }
 
 export function Blocks({
@@ -529,6 +732,9 @@ export function Blocks({
   onAuth,
   onArtifactDownload,
   onArtifactPreview,
+  onResolveDelivery,
+  onDownloadDelivery,
+  onDeployDelivery,
 }: BlocksProps) {
   const lastTextBlockIndex = blocks.reduce(
     (lastIndex, block, index) => block.kind === "text" ? index : lastIndex,
@@ -571,6 +777,16 @@ export function Blocks({
             return <MediaGroup key={i} appName={appName} items={b.files} />;
           case "artifact":
             return <ArtifactCard key={i} block={b} onDownload={onArtifactDownload} onPreview={onArtifactPreview} />;
+          case "delivery":
+            return (
+              <DeliveryCard
+                key={i}
+                value={b.value}
+                onResolve={onResolveDelivery}
+                onDownload={onDownloadDelivery}
+                onDeploy={onDeployDelivery}
+              />
+            );
           case "invocation":
             return <InvocationChips key={i} value={b.value} />;
           case "tool":

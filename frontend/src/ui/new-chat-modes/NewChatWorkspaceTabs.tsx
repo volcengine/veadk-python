@@ -56,7 +56,7 @@ export function NewChatWorkspaceTabs({
       nextIndex = (index - 1 + visibleModes.length) % visibleModes.length;
     }
     if (event.key === "Home") nextIndex = 0;
-    if (event.key === "End") nextIndex = WORKSPACE_MODES.length - 1;
+    if (event.key === "End") nextIndex = visibleModes.length - 1;
     if (nextIndex === null) return;
     event.preventDefault();
     selectAt(nextIndex);

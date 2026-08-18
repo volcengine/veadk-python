@@ -92,6 +92,26 @@
   text-align: center;
 }
 
+.sandbox-session-warning.is-expiring .sandbox-session-warning-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.sandbox-session-warning.is-expiring {
+  grid-template-columns: minmax(0, 1fr) auto;
+  max-width: 768px;
+}
+
+.sandbox-session-warning.is-expiring .sandbox-session-warning-copy {
+  grid-column: 1;
+  text-align: center;
+}
+
+.sandbox-session-warning.is-expiring button {
+  grid-column: 2;
+}
+
 .sandbox-session-warning button {
   grid-column: 3;
   justify-self: end;
@@ -102,6 +122,7 @@
   color: hsl(var(--muted-foreground));
   font: inherit;
   font-weight: 580;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -339,6 +360,14 @@
   filter: blur(24px);
   opacity: 1;
   animation: sandbox-smoke-enter 420ms ease-out both;
+}
+
+.main.is-sandbox-session.is-intelligent-development {
+  background: hsl(var(--panel));
+}
+
+.main.is-sandbox-session.is-intelligent-development::before {
+  display: none;
 }
 
 .main.is-sandbox-session > * {

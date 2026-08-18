@@ -6,6 +6,7 @@ import {
 } from "react";
 import {
   sandboxClient,
+  type AgentKitSandboxClient,
   type SandboxModel,
   type SandboxSession,
   type SandboxSkill,
@@ -22,6 +23,9 @@ import {
 } from "./sandboxCommands";
 
 interface UseSandboxCodexCommandsOptions {
+  client?: AgentKitSandboxClient;
+  allowSkillSelection?: boolean;
+  allowThreadManagement?: boolean;
   session: SandboxSession | null;
   conversationBusy: boolean;
   onInputChange: (value: string) => void;
@@ -32,6 +36,9 @@ interface UseSandboxCodexCommandsOptions {
 }
 
 export function useSandboxCodexCommands({
+  client = sandboxClient,
+  allowSkillSelection = true,
+  allowThreadManagement = true,
   session,
   conversationBusy,
   onInputChange,
@@ -81,7 +88,7 @@ export function useSandboxCodexCommands({
     if (!activeSessionId) return [];
     setModelsLoading(true);
     try {
-      const available = await sandboxClient.listModels(activeSessionId);
+      const available = await client.listModels(activeSessionId);
       if (sessionIdRef.current === activeSessionId) {
         setModels(available);
         setModelsLoaded(true);
@@ -96,14 +103,15 @@ export function useSandboxCodexCommands({
     } finally {
       if (sessionIdRef.current === activeSessionId) setModelsLoading(false);
     }
-  }, [onError]);
+  }, [client, onError]);
 
   const loadSkills = useCallback(async (): Promise<SandboxSkill[]> => {
+    if (!allowSkillSelection) return [];
     const activeSessionId = sessionIdRef.current;
     if (!activeSessionId) return [];
     setSkillsLoading(true);
     try {
-      const available = await sandboxClient.listSkills(activeSessionId);
+      const available = await client.listSkills(activeSessionId);
       if (sessionIdRef.current === activeSessionId) {
         setSkills(available);
         setSkillsLoaded(true);
@@ -118,7 +126,7 @@ export function useSandboxCodexCommands({
     } finally {
       if (sessionIdRef.current === activeSessionId) setSkillsLoading(false);
     }
-  }, [onError]);
+  }, [allowSkillSelection, client, onError]);
 
   const loadThreadsPage = useCallback(async (
     cursor = "",
@@ -130,7 +138,7 @@ export function useSandboxCodexCommands({
     setThreadsLoading(true);
     setThreadsError("");
     try {
-      const page = await sandboxClient.listThreads(
+      const page = await client.listThreads(
         activeSessionId,
         cursor ? { cursor } : {},
       );
@@ -161,7 +169,7 @@ export function useSandboxCodexCommands({
         setThreadsLoading(false);
       }
     }
-  }, []);
+  }, [client]);
 
   const refreshThreads = useCallback(
     () => loadThreadsPage("", false),
@@ -179,9 +187,9 @@ export function useSandboxCodexCommands({
   }, [refreshThreads]);
 
   useEffect(() => {
-    if (!session?.id) return;
+    if (!allowThreadManagement || !session?.id) return;
     void refreshThreads();
-  }, [refreshThreads, session?.id]);
+  }, [allowThreadManagement, refreshThreads, session?.id]);
 
   function applySnapshot(snapshot: SandboxThreadSnapshot) {
     onSnapshot(snapshot);
@@ -196,7 +204,7 @@ export function useSandboxCodexCommands({
   }
 
   async function requestNewThread(activeSessionId: string) {
-    const snapshot = await sandboxClient.newThread(activeSessionId);
+    const snapshot = await client.newThread(activeSessionId);
     if (sessionIdRef.current !== activeSessionId) return;
     applySnapshot(snapshot);
     onActivity("已新建 Codex 对话", [
@@ -233,7 +241,7 @@ export function useSandboxCodexCommands({
     setCommandBusy(true);
     onError("");
     try {
-      const snapshot = await sandboxClient.resumeThread(
+      const snapshot = await client.resumeThread(
         activeSessionId,
         threadId,
       );
@@ -261,7 +269,7 @@ export function useSandboxCodexCommands({
     setThreadsError("");
     onError("");
     try {
-      const result = await sandboxClient.deleteThread(activeSessionId, threadId);
+      const result = await client.deleteThread(activeSessionId, threadId);
       if (sessionIdRef.current !== activeSessionId) return false;
       if (result.snapshot) applySnapshot(result.snapshot);
       setThreads((current) => current.filter((thread) => thread.id !== threadId));
@@ -310,6 +318,10 @@ export function useSandboxCodexCommands({
       return true;
     }
     if (command.name === "skill" || command.name === "skills") {
+      if (!allowSkillSelection) {
+        onError("智能开发模式会自动使用开发能力，无需手动选择 Skill。");
+        return true;
+      }
       onInputChange("$");
       if (!skillsLoaded) {
         const available = await loadSkills();
@@ -327,7 +339,7 @@ export function useSandboxCodexCommands({
     setCommandBusy(true);
     try {
       if (command.name === "model") {
-        const model = await sandboxClient.setModel(
+        const model = await client.setModel(
           activeSession.id,
           invocation.argument,
         );
@@ -346,7 +358,7 @@ export function useSandboxCodexCommands({
       } else if (command.name === "new" || command.name === "clear") {
         await requestNewThread(activeSession.id);
       } else if (command.name === "resume") {
-        const snapshot = await sandboxClient.resumeThread(
+        const snapshot = await client.resumeThread(
           activeSession.id,
           invocation.argument,
         );
@@ -356,21 +368,21 @@ export function useSandboxCodexCommands({
           { label: "Thread", value: snapshot.threadId, code: true },
         ]);
       } else if (command.name === "fork") {
-        const snapshot = await sandboxClient.forkThread(activeSession.id);
+        const snapshot = await client.forkThread(activeSession.id);
         if (sessionIdRef.current !== activeSession.id) return true;
         applySnapshot(snapshot);
         onActivity("已分叉 Codex 对话", [
           { label: "Thread", value: snapshot.threadId, code: true },
         ]);
       } else if (command.name === "compact") {
-        await sandboxClient.compactThread(activeSession.id);
+        await client.compactThread(activeSession.id);
         if (sessionIdRef.current !== activeSession.id) return true;
         onActivity("已开始压缩当前 Codex 对话", [
           { label: "Thread", value: activeSession.threadId, code: true },
         ]);
       } else if (command.name === "archive") {
         const archivedThreadId = activeSession.threadId;
-        const result = await sandboxClient.archiveThread(
+        const result = await client.archiveThread(
           activeSession.id,
           archivedThreadId,
         );
@@ -383,7 +395,7 @@ export function useSandboxCodexCommands({
           { label: "Thread", value: archivedThreadId, code: true },
         ]);
       } else if (command.name === "status") {
-        const status = await sandboxClient.getStatus(activeSession.id);
+        const status = await client.getStatus(activeSession.id);
         if (sessionIdRef.current !== activeSession.id) return true;
         onSessionPatch(status);
         onActivity("Codex 当前状态", sandboxStatusDetails(status));

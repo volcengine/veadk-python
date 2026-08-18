@@ -59,6 +59,7 @@ export interface CodeBrowserDialogProps {
   open: boolean;
   onClose: () => void;
   onChange: (project: AgentProject) => void;
+  readOnly?: boolean;
 }
 
 /** Browse and edit generated project files without leaving the deploy view. */
@@ -67,6 +68,7 @@ export function CodeBrowserDialog({
   open,
   onClose,
   onChange,
+  readOnly = false,
 }: CodeBrowserDialogProps) {
   const [selected, setSelected] = useState<string | null>(
     project.files[0]?.path ?? null,
@@ -221,6 +223,7 @@ export function CodeBrowserDialog({
                     value={selectedFile.content}
                     path={selectedFile.path}
                     onChange={handleEdit}
+                    readOnly={readOnly}
                   />
                 </Suspense>
               ) : (

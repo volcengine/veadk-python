@@ -1953,6 +1953,19 @@ export async function checkRuntimeNameAvailability(
   return { available: value.available };
 }
 
+export interface IntelligentDevelopmentDeploymentSource {
+  kind: "intelligentDevelopment";
+  sessionId: string;
+  artifactSha256: string;
+  validationReportSha256: string;
+  acknowledgeUnverified?: true;
+}
+
+export type DeploymentSource =
+  | { kind: "inlineFiles" }
+  | { kind: "migration"; migrationId: string }
+  | IntelligentDevelopmentDeploymentSource;
+
 export type DeployAuthentication =
   | { type: "api_key" }
   | { type: "user_pool"; userPoolUid: string };
@@ -2239,6 +2252,7 @@ export async function deployAgentkitProject(
     };
     envs?: { key: string; value: string }[];
     resources?: DeployResources;
+    source?: DeploymentSource;
   },
 ): Promise<DeployAgentkitResult> {
   const taskId = opts?.taskId;
@@ -2283,6 +2297,11 @@ export async function deployAgentkitProject(
           im: opts?.im,
           envs: opts?.envs,
           resources: opts?.resources,
+          source: opts?.source ?? (
+            opts?.migrationTaskId
+              ? { kind: "migration", migrationId: opts.migrationTaskId }
+              : { kind: "inlineFiles" }
+          ),
         }),
       },
       {},

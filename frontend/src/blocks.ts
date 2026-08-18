@@ -19,6 +19,7 @@ import type {
 } from "./adk/client";
 import type { A2uiMessage } from "./a2ui/types";
 import type { SandboxTokenUsage } from "./adk/sandbox";
+import type { ProjectFile } from "./create/project";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
 const VALIDATED_JSON_KEY = "validated_a2ui_json";
@@ -48,6 +49,22 @@ export interface AttachmentView {
   previewUrl?: string;
 }
 
+export interface IntelligentDevelopmentReleaseRef {
+  sessionId: string;
+  artifactSha256: string;
+  validationReportSha256: string;
+  agentName: string;
+  entryPoint: string;
+  fileCount: number;
+  artifactSize: number;
+  validatedAt: string;
+  gateSummary: string[];
+  deployable: boolean;
+  verified: boolean;
+  validationSummary: string;
+  files?: ProjectFile[];
+}
+
 export type Block =
   | { kind: "thinking"; text: string; done: boolean }
   | { kind: "text"; text: string }
@@ -58,6 +75,10 @@ export type Block =
   | {
       kind: "artifact";
       files: { filename: string; version: number }[];
+    }
+  | {
+      kind: "delivery";
+      value: IntelligentDevelopmentReleaseRef;
     }
   | { kind: "invocation"; value: FrontendInvocation }
   | {

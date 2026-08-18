@@ -6,6 +6,13 @@
 // Cookies (e.g. VeADK's `veadk_session`) are sent automatically.
 
 const STORAGE_KEY = "veadk_auth_qs";
+const LOCAL_QUERY_KEYS = new Set([
+  "view",
+  "source",
+  "sessionId",
+  "artifactSha256",
+  "validationReportSha256",
+]);
 
 let cached: string | null = null;
 
@@ -13,19 +20,34 @@ let cached: string | null = null;
 function authQuery(): string {
   if (cached !== null) return cached;
 
-  const params = new URLSearchParams(window.location.search);
-  const incoming = params.toString();
-  if (incoming) {
-    sessionStorage.setItem(STORAGE_KEY, incoming);
-    cached = incoming;
+  const incoming = new URLSearchParams(window.location.search);
+  const forwarded = new URLSearchParams();
+  const local = new URLSearchParams();
+  const intelligentDeploymentDeepLink =
+    incoming.get("view") === "runtime-deploy"
+    && incoming.get("source") === "intelligent-development";
+  incoming.forEach((value, key) => {
+    (
+      intelligentDeploymentDeepLink && LOCAL_QUERY_KEYS.has(key)
+        ? local
+        : forwarded
+    ).append(key, value);
+  });
+  const forwardedQuery = forwarded.toString();
+  if (forwardedQuery) {
+    sessionStorage.setItem(STORAGE_KEY, forwardedQuery);
+    cached = forwardedQuery;
   } else {
     cached = sessionStorage.getItem(STORAGE_KEY) ?? "";
   }
-  if (window.location.search) {
+  if (forwardedQuery) {
+    const localQuery = local.toString();
     window.history.replaceState(
       null,
       "",
-      window.location.pathname + window.location.hash,
+      window.location.pathname
+        + (localQuery ? `?${localQuery}` : "")
+        + window.location.hash,
     );
   }
   return cached;

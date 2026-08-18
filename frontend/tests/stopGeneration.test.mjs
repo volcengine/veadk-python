@@ -68,7 +68,11 @@ test("aborts only an active Sandbox agent response", () => {
   );
   assert.match(
     appSource,
-    /function stopSandboxGeneration\(\)[\s\S]*?sandboxMessageAbortRef\.current\?\.abort\(\)[\s\S]*?sandboxClient[\s\S]*?\.interruptSession\(activeSessionId\)/,
+    /function stopSandboxGeneration\(\)[\s\S]*?const controller = sandboxMessageAbortRef\.current[\s\S]*?controller\.abort\(\)/,
+  );
+  assert.match(
+    appSource,
+    /sandboxClient\.interruptSession\(activeSession\.id\)/,
   );
   assert.match(
     appSource,
@@ -104,6 +108,48 @@ test("aborts only an active Sandbox agent response", () => {
   assert.doesNotMatch(
     abortBranch,
     /setSandboxTurns\(|filter\(|setInput\(|operation\.succeed|setError\(/,
+  );
+});
+
+test("intelligent stop waits for backend cleanup, preserves output, and remains resumable", () => {
+  const stopSource = between(
+    appSource,
+    "  function stopSandboxGeneration()",
+    "  async function sendSandboxMessage(",
+  );
+  const sendSource = between(
+    appSource,
+    "  async function sendSandboxMessage(",
+    "  async function submitSandboxInput(",
+  );
+  assert.match(appSource, /const sandboxStopWaitRef = useRef/);
+  assert.match(
+    stopSource,
+    /interruptSession\(activeSession\.id\)[\s\S]*?\.then\(\(\) => \{[\s\S]*?controller\.abort\(\)[\s\S]*?return true[\s\S]*?\.catch\([\s\S]*?return false[\s\S]*?sandboxStopWaitRef\.current = \{ controller, promise \}/,
+  );
+  assert.match(
+    stopSource,
+    /if \(sandboxStopWaitRef\.current\?\.controller === controller\) return/,
+  );
+  assert.doesNotMatch(
+    stopSource,
+    /sandboxStopWaitRef\.current = \{ controller, promise \};\s*controller\.abort\(\)/,
+  );
+  assert.match(
+    sendSource,
+    /activeSessionOverride\?: SandboxSessionInfo[\s\S]*?const activeSession = activeSessionOverride \?\? sandboxSession/,
+  );
+  assert.match(
+    sendSource,
+    /const stopWait = sandboxStopWaitRef\.current[\s\S]*?const cleanupConfirmed = await stopWait\.promise[\s\S]*?if \(cleanupConfirmed\)[\s\S]*?appendSandboxActivity\([\s\S]*?"已停止，可继续输入"/,
+  );
+  assert.doesNotMatch(
+    sendSource,
+    /current\.filter\([\s\S]*?turn\.meta\?\.localId !== assistantTurnId[\s\S]*?AbortError/,
+  );
+  assert.match(
+    appSource,
+    /await sendSandboxMessage\(goal, \[\], \[\], connected\)/,
   );
 });
 

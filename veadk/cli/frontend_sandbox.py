@@ -237,7 +237,7 @@ def _safe_error_message(error: object) -> str:
             next_error = current.__context__
         current = next_error
     raw_message = "\n".join(parts) if parts else str(error).strip()
-    message = _redact_public_text(raw_message, maximum=2_000)
+    message = _redact_public_text(raw_message, maximum=20_000)
     return message or type(error).__name__
 
 
@@ -782,7 +782,12 @@ class SandboxCodexConnection(Protocol):
         raise NotImplementedError
 
     async def stream_turn(
-        self, prompt: str, skill_ids: tuple[str, ...] = ()
+        self,
+        prompt: str,
+        skill_ids: tuple[str, ...] = (),
+        *,
+        permissions: CodexPermissionSettings | None = None,
+        timeout_seconds: float | None = None,
     ) -> AsyncIterator[CodexAppServerEvent]:
         """Run and stream one turn."""
         if False:
@@ -1754,6 +1759,9 @@ class SandboxConversationService:
         owner_id: str,
         prompt: str,
         skill_ids: tuple[str, ...] = (),
+        *,
+        turn_permissions: CodexPermissionSettings | None = None,
+        turn_timeout_seconds: float | None = None,
     ) -> AsyncIterator[SandboxStreamEvent]:
         session = self._owned(session_id, owner_id)
         if session.background_turn is not None and not session.background_turn.done():
@@ -1768,11 +1776,19 @@ class SandboxConversationService:
                     session.pending_prompt = prompt
                     session.pending_prompt_timestamp = int(time.time() * 1_000)
                     try:
-                        events = (
-                            session.codex.stream_turn(prompt, skill_ids)
-                            if skill_ids
-                            else session.codex.stream_turn(prompt)
-                        )
+                        if turn_permissions is None and turn_timeout_seconds is None:
+                            events = (
+                                session.codex.stream_turn(prompt, skill_ids)
+                                if skill_ids
+                                else session.codex.stream_turn(prompt)
+                            )
+                        else:
+                            events = session.codex.stream_turn(
+                                prompt,
+                                skill_ids,
+                                permissions=turn_permissions,
+                                timeout_seconds=turn_timeout_seconds,
+                            )
                         async for event in events:
                             if event.kind and listening:
                                 queue.put_nowait(

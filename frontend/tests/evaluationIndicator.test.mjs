@@ -38,8 +38,14 @@ test("refreshes server-owned evaluation state when the selected agent changes", 
 
 test("renders an accessible evaluation status with streaming priority", () => {
   assert.match(sidebarSource, /evaluatingSids\?: Set<string>/);
-  assert.match(sidebarSource, /const streaming = streamingSids\?\.has\(s\.id\) === true/);
-  assert.match(sidebarSource, /const evaluating = !streaming && evaluatingSids\?\.has\(s\.id\) === true/);
+  assert.match(
+    sidebarSource,
+    /const streaming = intelligent[\s\S]*?: streamingSids\?\.has\(item\.id\) === true/,
+  );
+  assert.match(
+    sidebarSource,
+    /const evaluating = !intelligent && !streaming[\s\S]*?evaluatingSids\?\.has\(item\.id\) === true/,
+  );
   assert.match(sidebarSource, /className="history-evaluating-status"[\s\S]*?评测中/);
   assert.match(stylesSource, /\.history-evaluating\s*\{[\s\S]*?animation: history-evaluation-pulse/);
   assert.match(

@@ -690,7 +690,12 @@ class CodexAppServerSession:
         )
 
     async def stream_turn(
-        self, prompt: str, skill_ids: tuple[str, ...] = ()
+        self,
+        prompt: str,
+        skill_ids: tuple[str, ...] = (),
+        *,
+        permissions: CodexPermissionSettings | None = None,
+        timeout_seconds: float | None = None,
     ) -> AsyncIterator[CodexAppServerEvent]:
         """Start one Codex turn and stream its public events."""
         if self.active:
@@ -707,6 +712,12 @@ class CodexAppServerSession:
         if not prompt:
             raise CodexAppServerError("消息内容不能为空。")
         skills = await self._resolve_skills(prompt, skill_ids)
+        turn_permissions = permissions or self.permissions
+        turn_timeout = (
+            _TURN_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+        )
+        if turn_timeout <= 0 or not math.isfinite(turn_timeout):
+            raise CodexAppServerError("Codex Turn 超时时间无效。")
 
         queue: asyncio.Queue[CodexAppServerEvent] = asyncio.Queue()
         completion: asyncio.Future[dict[str, object]] = (
@@ -734,7 +745,7 @@ class CodexAppServerSession:
                             for skill in skills
                         ),
                     ],
-                    **_runtime_permission_params(self.permissions, self.cwd),
+                    **_runtime_permission_params(turn_permissions, self.cwd),
                 },
             )
             turn = result.get("turn")
@@ -744,7 +755,7 @@ class CodexAppServerSession:
             self._workspace_locked = True
 
             try:
-                deadline = asyncio.get_running_loop().time() + _TURN_TIMEOUT_SECONDS
+                deadline = asyncio.get_running_loop().time() + turn_timeout
                 while True:
                     if completion.done() and queue.empty():
                         break
@@ -2116,7 +2127,7 @@ def _event_from_item(
         text = _string(item.get("text"), 100_000)
         if phase == "commentary":
             return CodexAppServerEvent(
-                kind="thinking",
+                kind="commentary",
                 item_id=item_id,
                 status=status,
                 text=text,

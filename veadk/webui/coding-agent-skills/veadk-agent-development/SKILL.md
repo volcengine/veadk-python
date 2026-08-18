@@ -1,220 +1,174 @@
 ---
 name: veadk-agent-development
-description: Build, run, and ship AI agents with veadk-python (VeADK) — the Volcengine Agent Development Kit built on Google ADK. Covers the Agent/Runner API, tools, short/long-term memory, knowledge bases, serving on :8000, local iteration, and deploying to Volcengine AgentKit via the agentkit CLI. Use when writing or modifying a veADK agent, adding tools/memory/RAG, or preparing an agent for deployment. Does NOT handle non-VeADK agent frameworks (LangChain, CrewAI, etc.), general Python web development, AgentKit CLI operations (use agentkit-cli skill for that), or source-to-VeADK migration (use source-to-veadk skill for that).
+description: Build, modify, debug, and cloud-validate VeADK Agents from an accepted product intent. Use for VeADK architecture, tools, workflows, memory, knowledge, executable AgentKit projects, local tests, and AgentKit build/deploy/invoke/log repair loops. Do not use for unrelated user requests, other Agent frameworks, standalone cloud administration, or production Runtime operations.
 ---
 
 # VeADK Agent Development
 
-Practical, example-driven guidance for building agents with **veadk-python** (VeADK). VeADK
-wraps Google ADK and Volcengine models/services so you can go from an idea to a
-working agent quickly. Optimize for a tight loop: **scaffold → edit instruction/tools
-→ run locally → publish with CLI → invoke**.
+根据用户输入意图生成或修改 VeADK Agent，负责实现项目、运行、调试与本地验证、
+AgentKit build/deploy 验证，并交付可部署到 AgentKit 的项目。
 
-This skill includes a lightweight `agentkit` CLI publish path for smoke-testing a VeADK
-agent. For cloud deployment, runtime binding, or delivery architecture, use the
-`agentkit-cli` skill.
+Turn the accepted user intent into the smallest suitable VeADK Agent and keep working until it
+is cloud-validated or truthfully blocked.
 
-For a high-code Agent + App starting point, prefer the local template
-`templates/python/veadk-agent-app` in this repository. It contains a richer VeADK
-Agent layout, app wrappers, deployment entrypoints, and smoke tests.
+## Operating model
 
-For exact API signatures and source, use **`references/veadk-python-index.md`** — a
-retrieval map of the veadk-python repo (locate the file, then read it; don't guess).
-For component selection, VeADK entrypoints, resource requirements, and default exposure
-behavior, read **`references/components.md`**.
+Apply **Context over Control**: use the user's goal, acceptance criteria, repository facts,
+installed versions, environment capabilities, and fresh execution evidence as context. Choose
+and adapt the implementation instead of following a fixed template or command script.
 
-## When to Use This Skill
+Use only development and validation resources already authorized for the task. Do not ask for
+a second “start validation” confirmation. Never treat development authorization as permission
+to create, update, release, or delete a production Runtime.
 
-- Creating a new VeADK agent or editing an existing one
-- Adding tools (built-in or your own functions), memory, or a knowledge base (RAG)
-- Choosing how to wire VeADK components such as model, prompt management, session,
-  memory, knowledge, tools, security, observability, skills, or frontend/extensions
-- Serving an agent over HTTP (:8000) for local and deployment compatibility
-- Running a simple `agentkit` CLI publish/invoke smoke check before cloud handoff
-- Debugging "agent won't start / won't answer" issues
+Treat one accepted change as one continuing development effort:
 
-## Setup
+- follow-up instructions refine the same working tree and acceptance context;
+- after a user interruption, resume from the current working tree instead of restarting; first
+  reconcile any incomplete local command, cloud write, validation Runtime, and completion
+  evidence before making another change;
+- any source or configuration change invalidates earlier validation evidence;
+- complete cloud validation again before presenting a new verified delivery.
 
-```bash
-pip install veadk-python            # core; add [extensions] only if you need
-                                    # llama-index / redis / opensearch backends
+Read [`references/agentkit-delivery.md`](references/agentkit-delivery.md) before the first cloud
+operation. Load the other references only when their decision is material.
+
+Treat the installed AgentKit CLI as both the developer capability surface and the source of
+truth for the installed version. Discover its current command tree and help before choosing a
+workflow. Use lifecycle commands such as `init`, `config`, `build`, `deploy`, `status`, `invoke`,
+and `runtime` for the normal delivery loop. Use CLI capabilities for knowledge, memory, MCP,
+datasets, evaluation, or Skill management only when the accepted intent and
+acceptance criteria actually require them; their existence is not a reason to expand the
+Agent architecture.
+
+## Hard boundaries
+
+- Read repository instructions and verify every VeADK API, import, tool name, backend, config
+  key, and AgentKit flag against the installed or locked version before using it.
+- Never read, print, summarize, copy, commit, or package AK/SK, tokens, `.env`, private
+  endpoints, or task credentials. Use only the credential mechanism supplied by
+  the task context and keep secrets out of commands, logs, Thread text, and Artifacts.
+- Do not claim an unexecuted model call, test, service probe, build, deploy, Runtime status,
+  invoke, log inspection, or cleanup succeeded.
+- Use a fresh validation Runtime for each cloud attempt. Never repurpose a production Runtime.
+- Allow at most two complete cloud attempts for one accepted change: the initial attempt and
+  one evidence-driven repair attempt. Never loop indefinitely.
+- After a source/configuration repair, rerun affected local checks and the full cloud sequence
+  from build through cleanup. Do not resume at only the failed step.
+
+## Goal-driven loop
+
+### 1. Understand
+
+Read the user message, relevant conversation context, repository instructions, working tree, dependency
+and deployment files, existing tests, and current evidence. Maintain a concise working contract:
+
+- intended Agent behavior and users;
+- accepted inputs and observable outputs;
+- external systems and side effects;
+- constraints, assumptions, and non-goals;
+- acceptance criteria that distinguish success from a plausible-looking answer.
+
+Ask only a question whose answer changes the product result, architecture, authority, or an
+otherwise unsafe assumption. Continue with explicit reversible assumptions for lesser gaps.
+If the preceding turn was interrupted, treat its last operation as indeterminate until fresh
+evidence proves its result. Preserve valid source changes, discard incomplete completion
+evidence, and reconcile any uniquely named validation Runtime before starting the next attempt.
+
+### 2. Choose the smallest architecture
+
+Start with one `Agent` and the fewest necessary components. Read
+[`references/architecture-and-components.md`](references/architecture-and-components.md) when
+topology, tools, state, memory, or retrieval is material. Add workflow Agents, sub-agents,
+knowledge, memory, MCP, or A2A only when the acceptance criteria require them.
+
+Define inputs, outputs, failure behavior, state ownership, authorization, timeout, and
+idempotency for every deterministic stage or side-effecting tool.
+
+### 3. Implement coherently
+
+Follow the existing repository layout. Read
+[`references/project-implementation.md`](references/project-implementation.md) for application
+and test contracts. For a new empty project, inspect `ak init --help` and
+`ak init --list-templates`, then select the application template explicitly from the accepted
+intent. Use `agent_server` (`WebServer App`) as the default for a new empty VeADK project when
+the intent does not require another protocol. Never run bare `ak init`; pass the explicit
+template key supported by the installed CLI. Use `basic` only when the user explicitly needs a
+minimal stateless single-entrypoint application, and select streaming or A2A templates only
+when those interfaces are material. Adapt and test the generated skeleton instead of recreating
+AgentKit lifecycle files from memory. Keep a valid existing project rather than reinitializing
+it. Produce only files required for runtime, testing, configuration, or delivery. Ensure the
+project root contains a valid `agentkit.yaml` whose entry point starts a persistent service over
+HTTP on `0.0.0.0:${PORT:-8000}` and exposes `/ping`.
+
+### 4. Observe locally
+
+Follow [`references/running-debugging-and-validation.md`](references/running-debugging-and-validation.md):
+
+1. run parse/compile and import checks;
+2. run focused deterministic and existing regression tests;
+3. test tools, state, and retrieval directly before Agent integration;
+4. run representative Agent requests when the required model access exists;
+5. launch the exact deployment entry point, prove the process stays alive, confirm its
+   listener, and require a successful `/ping` response.
+
+An importable `app`, a Runner smoke, or a process that exits with status 0 does not prove the
+service is deployable.
+
+### 5. Cloud-validate autonomously
+
+Use the installed AgentKit CLI yourself; do not hand control back to the user or ask them to
+click a validation button. Inspect current `--help`, inspect the Artifact inventory, then run:
+
+```text
+build → deploy fresh validation Runtime → wait for Ready
+→ representative invoke(s) → bounded logs → delete validation Runtime
 ```
 
-Model credentials (local dev): VeADK defaults to a Volcengine Ark (doubao) model and
-reads the key from the environment / a `.env`:
+Validate the deployed behavior against the current acceptance criteria, not only liveness.
+Classify a failure before acting:
 
-```bash
-# .env
-MODEL_AGENT_API_KEY=<your-ark-api-key>     # required locally to call the model
-VOLCENGINE_ACCESS_KEY=<ak>                 # only for tools/memory/knowledge that hit Volcengine
-VOLCENGINE_SECRET_KEY=<sk>
-```
+- **code/configuration** — preserve sanitized evidence, repair the smallest root cause, rerun
+  affected local checks, and perform the one full cloud revalidation;
+- **infrastructure/permission/quota** — do not rewrite correct source; report the external
+  blocker and retain useful local evidence;
+- **control-plane configuration** — distinguish fixed account/project/region context from the
+  unique validation Runtime name; for example, `NotFound.Project` is not an IAM denial;
+- **indeterminate remote write** — reconcile Runtime state by the unique validation identity
+  before retrying or deleting; never blindly repeat deploy;
+- **unsafe Artifact or secret exposure** — stop delivery, remove the exposure, rebuild, and
+  state that credential rotation may be required.
 
-On a deployed AgentKit runtime the model's Ark credential is resolved from the runtime's
-mounted IAM role / AK-SK — you do **not** set `MODEL_AGENT_API_KEY` there.
+### 6. Deliver truthfully
 
-## Core: a minimal agent
+Use one terminal result:
 
-`Agent` carries the model + instruction + tools; `Runner` drives it.
+- **`verified`** — current source passed local evidence, fresh Runtime `Ready`, representative
+  invoke and acceptance checks, bounded log inspection, and Runtime cleanup;
+- **`partial`** — a useful project exists but a required live or cloud check was not completed;
+- **`blocked`** — permission, dependency, quota, safety, or remaining-time boundary prevents
+  progress;
+- **`indeterminate`** — a cloud write may have succeeded but its remote state or cleanup cannot
+  yet be established;
+- **`failed`** — the current implementation still fails after the one allowed repair attempt.
 
-```python
-from veadk import Agent, Runner
+Report only decision-relevant facts: changed behavior, important architecture choices,
+non-secret configuration names, exact evidence actually executed, validation result and cleanup
+result, warnings/blockers, and the terminal result. Keep command lines, host-environment details,
+filesystem paths, launcher details, and internal tool names out of user-facing progress and
+results. When a failure cannot be understood without lower-level evidence, provide only the
+smallest sanitized explanation needed to act on it.
 
-agent = Agent(
-    name="assistant",                    # MUST be a valid identifier: [A-Za-z_][A-Za-z0-9_]* — no hyphens!
-    description="A helpful assistant.",   # used in A2A scenarios
-    instruction="You are concise and helpful. Use your tools when relevant.",
-    # model_name defaults to VeADK's default doubao model; override to pin one:
-    # model_name="doubao-seed-1-6-250615",
-)
+Never report `verified` before cleanup is confirmed, and never modify deliverable source after
+the successful final build and validation. Keep command output, credentials, prompts,
+responses, endpoints, and other sensitive payloads out of completion evidence.
 
-runner = Runner(agent=agent, app_name="assistant")
+## References
 
-# run() is async and takes a list of messages + session identity:
-import asyncio
-output = asyncio.run(runner.run(messages=["Hello!"], user_id="u1", session_id="s1"))
-print(output)
-```
-
-Key `Agent(...)` params: `name`, `description`, `instruction`, `model_name`,
-`tools`, `runtime` (`"adk"` default | `"codex"`), `knowledgebase`,
-`short_term_memory`, `long_term_memory`, `skills`.
-
-## Tools
-
-**Your own tool = a plain function with type hints + a docstring.** The docstring is what
-the model reads to decide when/how to call it — write it well.
-
-```python
-def get_city_weather(city: str) -> dict[str, str]:
-    """Get the current weather for a city.
-
-    Args:
-        city: The English city name, e.g. "Beijing".
-    Returns:
-        A dict with a human-readable "result".
-    """
-    return {"result": f"Sunny in {city}"}
-
-agent = Agent(name="assistant", instruction="...", tools=[get_city_weather])
-```
-
-**Built-in tools** — reference by name:
-
-```python
-from veadk.tools import get_builtin_tool, list_builtin_tools
-
-list_builtin_tools()
-# ['coding', 'get_city_weather', 'image_edit', 'image_generate', 'link_reader',
-#  'parallel_web_search', 'run_code', 'text_to_speech', 'vesearch',
-#  'video_generate', 'web_fetch', 'web_search', ...]
-
-agent = Agent(name="assistant", instruction="...",
-              tools=[get_builtin_tool("web_search"), get_builtin_tool("run_code")])
-```
-
-## Memory
-
-```python
-from veadk.memory.short_term_memory import ShortTermMemory
-from veadk.memory.long_term_memory import LongTermMemory
-
-stm = ShortTermMemory(backend="local")          # session store: local | sqlite | mysql | postgresql
-ltm = LongTermMemory(backend="viking", app_name="my-agent")   # cross-session: viking | opensearch | redis | mem0
-
-agent = Agent(name="assistant", instruction="...",
-              short_term_memory=stm, long_term_memory=ltm)
-runner = Runner(agent=agent, short_term_memory=stm, app_name="assistant")
-```
-
-Reuse the same session id across `run()` calls to continue a conversation.
-
-## Knowledge base (RAG)
-
-```python
-from veadk.knowledgebase import KnowledgeBase
-
-kb = KnowledgeBase(backend="viking", app_name="my-agent")   # viking | opensearch | redis
-agent = Agent(name="assistant", instruction="...", knowledgebase=kb)
-```
-
-Non-`viking` backends (llama-index / redis / opensearch) require `veadk-python[extensions]`.
-
-## Serving and Deployment
-
-A deployed agent must be an HTTP server listening on **`0.0.0.0:8000`** (the runtime's
-readiness probe). Two options from `agentkit.apps`:
-
-**A. `AgentkitSimpleApp`** — minimal `/ping` `/health` + one entrypoint. Good for a single
-request/response agent.
-
-```python
-from veadk import Agent, Runner
-from agentkit.apps import AgentkitSimpleApp
-
-app = AgentkitSimpleApp()
-agent = Agent(name="assistant", instruction="You are helpful.")
-runner = Runner(agent=agent, app_name="assistant")
-
-@app.ping
-def ping() -> str:
-    return "ok"
-
-@app.entrypoint
-async def invoke(messages):
-    return await runner.run(messages=messages, session_id="default")
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)
-```
-
-**B. `AgentkitAgentServerApp`** — the **full ADK API server** (`/list-apps`, `/run`,
-`/run_sse`, session/artifact management, + an `/invoke` compat route). Use this if the
-Volcengine console, ADK clients, or `agentkit invoke` (which prefers `/run_sse`) will call it.
-
-```python
-from veadk import Agent
-from veadk.memory.short_term_memory import ShortTermMemory
-from agentkit.apps import AgentkitAgentServerApp
-
-agent = Agent(name="assistant", instruction="You are helpful.")
-server = AgentkitAgentServerApp(agent=agent, short_term_memory=ShortTermMemory(backend="local"))
-app = server.app          # a FastAPI app
-# run: uvicorn module:app --host 0.0.0.0 --port 8000   (or server.run("0.0.0.0", 8000))
-```
-
-## Deploy with the `agentkit` CLI
-
-```bash
-agentkit init my-agent        # scaffold a project (python/java/typescript/golang templates)
-cd my-agent
-# ... edit main.py: instruction, tools ...
-agentkit deploy               # cloud-builds the image + creates/updates the runtime → Ready + endpoint
-agentkit invoke my-agent -m "hello"    # call it (auto-detects /run_sse vs /invoke)
-agentkit runtime logs my-agent         # cloud instance logs when something's off
-```
-
-## Gotchas (learned the hard way)
-
-- **Agent `name` must be a valid identifier** — `"my_agent"`/`"assistant"`, never `"my-agent"`
-  (pydantic rejects hyphens). The *project*/runtime name may have hyphens; the agent name may not.
-- **The container must listen on `0.0.0.0:8000`** — that's the only hard deploy requirement.
-- **Model creds**: locally set `MODEL_AGENT_API_KEY`; on the runtime it comes from the IAM
-  role (don't hardcode it). VeADK resolves the model key **eagerly at `Agent(...)` construction**,
-  so a missing key fails at import/startup — build the agent lazily if you want the container to
-  start before the model is configured.
-- **Dockerfile for cloud builds**: no `# syntax=` directive and use a Volcengine-hosted base
-  image (cloud builds can't reach Docker Hub). Install from **PyPI** (`veadk-python`); only pull
-  `[extensions]` when a redis/opensearch/llama-index backend is actually used.
-- **`runtime="codex"`** needs `openai-codex` installed; default `"adk"` needs nothing extra.
-- **Defer heavy imports** (`get_builtin_tool`, backend classes) into functions if you want
-  startup to be robust across veADK versions — a missing symbol then surfaces at call time,
-  not as a container that never boots.
-
-## Vibe-coding workflow
-
-1. `agentkit init my-agent` (or copy the minimal agent above).
-2. Edit the `instruction` (persona) and `tools` (start with 1–2 built-ins).
-3. Run locally: `python main.py` then `curl localhost:8000/ping`, or drive `runner.run(...)`.
-4. `agentkit deploy` → `agentkit invoke my-agent -m "..."`.
-5. Iterate: tweak instruction/tools, redeploy. Read `agentkit runtime logs` when it misbehaves.
+- component and topology decisions: [`references/architecture-and-components.md`](references/architecture-and-components.md)
+- project, serving, and test shape: [`references/project-implementation.md`](references/project-implementation.md)
+- local runtime and diagnosis: [`references/running-debugging-and-validation.md`](references/running-debugging-and-validation.md)
+- AgentKit cloud loop: [`references/agentkit-delivery.md`](references/agentkit-delivery.md)
+- VeADK source navigation map: [`references/veadk-python-index.md`](references/veadk-python-index.md)
+- secret, Artifact, and failure safety: [`references/security-and-troubleshooting.md`](references/security-and-troubleshooting.md)
+- behavior cases: [`tests/test-cases.md`](tests/test-cases.md)
