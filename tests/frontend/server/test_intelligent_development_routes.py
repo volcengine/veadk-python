@@ -746,18 +746,10 @@ def _verified_contract_text() -> str:
     )
 
 
-@pytest.mark.parametrize(
-    ("changes_delivery", "task_progress"),
-    [
-        (True, "正在实现本次变更、运行测试并验证结果。"),
-        (False, "正在检查当前项目并整理结果。"),
-    ],
-)
 def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
     monkeypatch: pytest.MonkeyPatch,
-    changes_delivery: bool,
-    task_progress: str,
 ) -> None:
+    task_progress = "正在实现本次变更、运行测试并验证结果。"
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.turns = [
@@ -768,7 +760,7 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
                 status="running",
                 text="正在判断目标是否属于 VeADK Agent 开发。",
             ),
-            _gate(changes=changes_delivery),
+            _gate(changes=True),
         ],
         [
             CodexAppServerEvent(
@@ -856,13 +848,54 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
         gateway.codex.calls[1]["timeout_seconds"]
         == routes._BUILDER_TURN_TIMEOUT_SECONDS
     )
-    if changes_delivery:
-        invalidate.assert_awaited_once()
-    else:
-        invalidate.assert_not_awaited()
+    invalidate.assert_awaited_once()
     remove.assert_awaited_once()
     publisher.publish.assert_awaited_once()
     assert lease.cleaned is True
+
+
+def test_read_only_request_has_no_credentials_mutations_or_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [_gate(changes=False)],
+        [CodexAppServerEvent(kind="text", text="当前数据来自已配置的天气接口。")],
+    ]
+    credentials = AsyncMock()
+    invalidate = AsyncMock()
+    read_completion = AsyncMock()
+    remove = AsyncMock()
+    publisher = _publisher_mock()
+    monkeypatch.setattr(routes, "create_credential_lease", credentials)
+    monkeypatch.setattr(routes, "invalidate_current_delivery", invalidate)
+    monkeypatch.setattr(routes, "read_completion_contract", read_completion)
+    monkeypatch.setattr(routes, "remove_completion_file", remove)
+    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "当前数据从哪里来？"},
+        )
+
+    assert response.status_code == 200
+    assert "正在检查当前项目并整理结果" in response.text
+    assert "当前数据来自已配置的天气接口" in response.text
+    assert "development.source_ready" not in response.text
+    assert "development.succeeded" not in response.text
+    assert len(gateway.codex.calls) == 2
+    read_only = gateway.codex.calls[1]
+    assert read_only["permissions"] == routes._INTENT_PERMISSIONS
+    assert "read-only question" in str(read_only["prompt"])
+    credentials.assert_not_awaited()
+    invalidate.assert_not_awaited()
+    read_completion.assert_not_awaited()
+    remove.assert_not_awaited()
+    publisher.publish.assert_not_awaited()
 
 
 def test_follow_up_runs_a_new_gate_and_build_cycle_in_the_same_thread(
