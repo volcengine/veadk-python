@@ -6,6 +6,10 @@ import {
   uploadSkillArchive,
   validateSkillArchive,
 } from "../../adk/skills";
+import {
+  SkillConfigSelect,
+  type SkillConfigOption,
+} from "./SkillConfigSelect";
 import { normalizeSkillError, SkillErrorDetails } from "./SkillErrorDetails";
 
 function DialogFrame({
@@ -36,9 +40,20 @@ function DialogFrame({
   );
 }
 
-export function CreateSkillSpaceDialog({ region, onClose, onCreated }: { region: string; onClose: () => void; onCreated: (space: SkillSpaceRef) => void }) {
+export function CreateSkillSpaceDialog({
+  region: initialRegion,
+  regionOptions,
+  onClose,
+  onCreated,
+}: {
+  region: string;
+  regionOptions: SkillConfigOption[];
+  onClose: () => void;
+  onCreated: (space: SkillSpaceRef) => void;
+}) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [region, setRegion] = useState(initialRegion);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const submit = async () => {
@@ -46,7 +61,12 @@ export function CreateSkillSpaceDialog({ region, onClose, onCreated }: { region:
     setSubmitting(true);
     setError(null);
     try {
-      onCreated(await createSkillSpace({ name: name.trim(), description: description.trim() || undefined, region }));
+      const created = await createSkillSpace({
+        name: name.trim(),
+        description: description.trim() || undefined,
+        region,
+      });
+      onCreated({ ...created, region: created.region || region });
     } catch (reason) {
       setError(normalizeSkillError(reason, "创建 Skill 空间失败"));
     } finally {
@@ -57,6 +77,13 @@ export function CreateSkillSpaceDialog({ region, onClose, onCreated }: { region:
     <DialogFrame title="新建 Skill 空间" onClose={onClose}>
       <div className="skill-dialog__body">
         <label><span>名称</span><input autoFocus value={name} maxLength={128} onChange={(event) => setName(event.target.value)} /></label>
+        <SkillConfigSelect
+          label="地域"
+          value={region}
+          options={regionOptions}
+          onChange={setRegion}
+          required
+        />
         <label><span>描述（可选）</span><textarea value={description} maxLength={1024} onChange={(event) => setDescription(event.target.value)} /></label>
         {error ? <div className="skill-inline-error"><SkillErrorDetails error={error} /></div> : null}
       </div>
