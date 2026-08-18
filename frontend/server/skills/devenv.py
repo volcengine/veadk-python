@@ -552,6 +552,7 @@ def validate_skill_archive(content: bytes) -> SkillArchive:
             file_paths: list[PurePosixPath] = []
             files: list[dict[str, object]] = []
             total = 0
+            file_count = 0
             archive_files: dict[str, zipfile.ZipInfo] = {}
             for info in infos:
                 raw_name = info.filename
@@ -585,9 +586,13 @@ def validate_skill_archive(content: bytes) -> SkillArchive:
                     )
                 if info.is_dir():
                     continue
-                file_paths.append(path)
-                archive_files[normalized] = info
+                file_count += 1
                 total += info.file_size
+                if file_count > _MAX_FILES:
+                    raise SkillWorkbenchError(
+                        "SKILL_ARCHIVE_FILE_COUNT",
+                        "Skill 文件数必须在 1 到 100 之间",
+                    )
                 if total > _MAX_EXPANDED_BYTES:
                     raise SkillWorkbenchError(
                         "SKILL_ARCHIVE_EXPANDED_TOO_LARGE",
@@ -600,9 +605,13 @@ def validate_skill_archive(content: bytes) -> SkillArchive:
                         "Skill ZIP 压缩率异常",
                         status_code=413,
                     )
-            if not file_paths or len(file_paths) > _MAX_FILES:
+                if path.parts[0] == "__MACOSX":
+                    continue
+                file_paths.append(path)
+                archive_files[normalized] = info
+            if not file_paths:
                 raise SkillWorkbenchError(
-                    "SKILL_ARCHIVE_FILE_COUNT", "Skill 文件数必须在 1 到 100 之间"
+                    "SKILL_ARCHIVE_EMPTY", "Skill ZIP 不能为空", status_code=422
                 )
 
             wrapper = ""

@@ -80,6 +80,8 @@ def validate_skill_archive(content: bytes) -> SkillArchive:
             if not infos:
                 raise SkillArchiveError("SKILL_ARCHIVE_EMPTY", "Skill ZIP 不能为空。")
             files: dict[str, zipfile.ZipInfo] = {}
+            seen: set[str] = set()
+            file_count = 0
             total = 0
             for info in infos:
                 raw = info.filename
@@ -97,11 +99,12 @@ def validate_skill_archive(content: bytes) -> SkillArchive:
                         f"Skill ZIP 包含不安全路径：{raw}",
                     )
                 folded = normalized.casefold()
-                if folded in {item.casefold() for item in files}:
+                if folded in seen:
                     raise SkillArchiveError(
                         "SKILL_ARCHIVE_DUPLICATE_PATH",
                         f"Skill ZIP 包含重复路径：{raw}",
                     )
+                seen.add(folded)
                 mode = info.external_attr >> 16
                 file_type = stat.S_IFMT(mode)
                 if file_type == stat.S_IFLNK:
@@ -116,9 +119,9 @@ def validate_skill_archive(content: bytes) -> SkillArchive:
                     )
                 if info.is_dir():
                     continue
-                files[normalized] = info
+                file_count += 1
                 total += info.file_size
-                if len(files) > MAX_FILES:
+                if file_count > MAX_FILES:
                     raise SkillArchiveError(
                         "SKILL_ARCHIVE_FILE_COUNT",
                         "Skill 文件数不能超过 100 个。",
@@ -136,6 +139,9 @@ def validate_skill_archive(content: bytes) -> SkillArchive:
                         f"文件压缩率异常：{raw}",
                         status_code=413,
                     )
+                if path.parts[0] == "__MACOSX":
+                    continue
+                files[normalized] = info
             if not files:
                 raise SkillArchiveError("SKILL_ARCHIVE_EMPTY", "Skill ZIP 不能为空。")
             wrapper = ""
