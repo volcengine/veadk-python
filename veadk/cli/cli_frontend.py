@@ -6631,13 +6631,6 @@ def _run_frontend_server(
                     reason_code="runtime_list_apps_unsupported",
                 )
             if error.status_code >= 500:
-                if app_name:
-                    return _runtime_update_result(
-                        runtime,
-                        runtime_payload,
-                        app_name,
-                        can_update=True,
-                    )
                 return _runtime_update_result(
                     runtime,
                     runtime_payload,
@@ -6725,7 +6718,9 @@ def _run_frontend_server(
                     runtime,
                     runtime_payload,
                     app_name,
-                    can_update=True,
+                    can_update=False,
+                    reason="暂时无法读取该 Runtime 的 Agent 配置，请稍后重试。",
+                    reason_code="runtime_agent_info_unavailable",
                 )
             raise HTTPException(
                 status_code=error.status_code,

@@ -2702,7 +2702,8 @@ def test_runtime_update_capability_distinguishes_incompatible_and_network_errors
         "该 Runtime 包含多个 Agent，暂不支持原地更新。"
     )
     assert network_error.status_code == 200
-    assert network_error.json()["canUpdate"] is True
+    assert network_error.json()["canUpdate"] is False
+    assert network_error.json()["reasonCode"] == "runtime_list_apps_unavailable"
     assert network_error.json()["agent"] == {"appName": "selected-agent"}
     assert network_without_app.status_code == 200
     assert network_without_app.json()["canUpdate"] is False
@@ -2712,7 +2713,8 @@ def test_runtime_update_capability_distinguishes_incompatible_and_network_errors
     )
     assert "connect" not in network_without_app.json()["reason"].lower()
     assert server_error.status_code == 200
-    assert server_error.json()["canUpdate"] is True
+    assert server_error.json()["canUpdate"] is False
+    assert server_error.json()["reasonCode"] == "runtime_list_apps_unavailable"
     assert server_error.json()["agent"] == {"appName": "selected-agent"}
     assert server_error_without_app.status_code == 200
     assert server_error_without_app.json()["canUpdate"] is False
@@ -2721,7 +2723,11 @@ def test_runtime_update_capability_distinguishes_incompatible_and_network_errors
     )
     assert "internal_server_error" not in server_error_without_app.json()["reason"]
     assert agent_server_error.status_code == 200
-    assert agent_server_error.json()["canUpdate"] is True
+    assert agent_server_error.json()["canUpdate"] is False
+    assert agent_server_error.json()["reasonCode"] == "runtime_agent_info_unavailable"
+    assert agent_server_error.json()["reason"] == (
+        "暂时无法读取该 Runtime 的 Agent 配置，请稍后重试。"
+    )
     assert agent_server_error.json()["agent"] == {"appName": "selected-agent"}
     assert forbidden.status_code == 403
     assert forbidden.json()["detail"] == "runtime_update_capability_failed"

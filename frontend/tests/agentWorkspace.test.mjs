@@ -449,8 +449,9 @@ test("runtime update deployments stay on the existing agent row", () => {
   );
   assert.match(
     workspaceSource,
-    /selectedAgentUpdateDraft[\s\S]*?applyRuntimeAgentIntrospection\([\s\S]*?selectedUpdateCapability\?\.agent/,
+    /selectedUpdateCapability\?\.agent[\s\S]*?runtimeAgentDraftFromCloud\([\s\S]*?selectedUpdateCapability\.agent/,
   );
+  assert.doesNotMatch(workspaceSource, /selectedAgentUpdateDraft\?\.draft/);
   assert.match(
     workspaceSource,
     /const matchingAgent = focusedTask\?\.runtimeId[\s\S]*?agentByRuntimeId\.get/,
@@ -554,12 +555,12 @@ test("runtime updates use the Agent selected in management instead of the active
     capabilityCall,
     /runtimeId,[\s\S]*?region,[\s\S]*?appName: selectedAgentAppName,[\s\S]*?signal/,
   );
-  assert.match(workspaceSource, /onUpdateAgent: \(draft: AgentDraft, capability: RuntimeUpdateCapability\) => void/);
-  assert.match(workspaceSource, /onUpdateAgent\(draft, selectedUpdateCapability\)/);
+  assert.match(workspaceSource, /onUpdateAgent: \(capability: RuntimeUpdateCapability\) => void/);
+  assert.match(workspaceSource, /onUpdateAgent\(selectedUpdateCapability\)/);
   assert.match(clientSource, /appName:\s*opts\?\.appName/);
   assert.match(customCreateSource, /appName:\s*deploymentTarget\?\.appName/);
 
-  const handlerStart = appSource.indexOf("onUpdateAgent={async (nextDraft, capability) =>");
+  const handlerStart = appSource.indexOf("onUpdateAgent={async (capability) =>");
   const handlerEnd = appSource.indexOf("onEditDraft=", handlerStart);
   assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
   const handler = appSource.slice(handlerStart, handlerEnd);
@@ -571,10 +572,8 @@ test("runtime updates use the Agent selected in management instead of the active
     handler,
     /capability\.runtime\.envs[\s\S]*?filter\(\(\{ key \}\) => !isRuntimeModelSelectionEnv\(key\)\)[\s\S]*?\.map/,
   );
-  assert.match(
-    handler,
-    /envValues:\s*\{[\s\S]*?\.\.\.runtimeEnvValues,[\s\S]*?\.\.\.draftEnvValues/,
-  );
+  assert.match(handler, /envValues:\s*runtimeEnvValues/);
+  assert.doesNotMatch(handler, /draftEnvValues|selectedAgentUpdateDraft\?\.draft/);
   assert.match(handler, /hydrateRuntimeModelSelection\(/);
   assert.match(handler, /network:\s*capability\.runtime\.network/);
 });

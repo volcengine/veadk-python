@@ -55,11 +55,10 @@ import {
 import type { AgentEntry } from "../adk/connections";
 import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
 import {
-  applyRuntimeAgentIntrospection,
-  modelConfigurationFromRuntime,
   modelNameFromRuntime,
+  runtimeAgentDraftFromCloud,
 } from "../create/runtimeModelName";
-import { emptyDraft, type AgentDraft } from "../create/types";
+import type { AgentDraft } from "../create/types";
 import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
@@ -519,46 +518,25 @@ function IntegrationPanel({
   );
 }
 
-function graphNodeToDraft(node: AgentNode): AgentDraft {
-  const runtimeTools = node.tools ?? [];
-  const runtimeModel = modelConfigurationFromRuntime(node.model);
-  const builtinTools = BUILTIN_TOOLS.filter((tool) =>
-    tool.toolNames.some((name) => runtimeTools.includes(name)),
+function infoToDraft(
+  info: AgentInfo | null,
+  fallbackName: string,
+  cloudProvider: "volcengine" | "byteplus",
+): AgentDraft {
+  return runtimeAgentDraftFromCloud(
+    {
+      appName: info?.appName?.trim() || fallbackName,
+      name: info?.name,
+      description: info?.description,
+      type: info?.type,
+      model: info?.model,
+      tools: info?.tools,
+      skills: info?.skills,
+      graph: info?.graph,
+      draft: info?.draft,
+    },
+    cloudProvider,
   );
-  const builtinToolNames = new Set(builtinTools.flatMap((tool) => tool.toolNames));
-  return {
-    ...emptyDraft(),
-    modelSource: undefined,
-    name: node.name,
-    description: node.description,
-    instruction: node.instruction || emptyDraft().instruction,
-    agentType: node.type,
-    modelName: runtimeModel.modelName,
-    modelProvider: runtimeModel.modelProvider,
-    tools: runtimeTools.filter((name) => !builtinToolNames.has(name)),
-    builtinTools: builtinTools.map((tool) => tool.id),
-    skills: (node.skills ?? []).map((skill) => skill.name),
-    subAgents: (node.children ?? []).map(graphNodeToDraft),
-  };
-}
-
-function infoToDraft(info: AgentInfo | null, fallbackName: string): AgentDraft {
-  if (info?.draft) {
-    return applyRuntimeAgentIntrospection(info.draft, info.graph, info);
-  }
-  if (info?.graph) return graphNodeToDraft(info.graph);
-  const runtimeModel = modelConfigurationFromRuntime(info?.model);
-  return {
-    ...emptyDraft(),
-    modelSource: undefined,
-    name: info?.name || fallbackName,
-    description: info?.description || "暂无描述",
-    agentType: info?.type ?? "llm",
-    modelName: runtimeModel.modelName,
-    modelProvider: runtimeModel.modelProvider,
-    tools: info?.tools ?? [],
-    skills: info?.skills?.map((skill) => skill.name) ?? [],
-  };
 }
 
 function countNodes(node?: AgentNode): number {
@@ -957,7 +935,7 @@ export interface AgentWorkspaceProps {
   onOpenFeedbackCase?: (item: AgentFeedbackCase) => void | Promise<void>;
   onFeedbackCasesDeleted?: (items: AgentFeedbackCase[]) => void;
   onCreateAgent: () => void;
-  onUpdateAgent: (draft: AgentDraft, capability: RuntimeUpdateCapability) => void;
+  onUpdateAgent: (capability: RuntimeUpdateCapability) => void;
   onEditDraft?: (draft: WorkspaceAgentDraft) => void;
 }
 
@@ -1303,28 +1281,28 @@ export function AgentWorkspace({
   const selectedDeleteCount =
     selectedDeletableAgents.length + selectedDeletableDrafts.length;
   const draft = useMemo(() => {
-    const editableDraft =
-      selectedPendingTask?.agentDraft ??
-      selectedDraft?.draft ??
-      selectedAgentUpdateDraft?.draft;
-    if (editableDraft) {
-      const liveAgent = selectedUpdateCapability?.agent;
-      return applyRuntimeAgentIntrospection(
-        editableDraft,
-        liveAgent?.graph ?? selectedAgentInfo?.graph,
-        liveAgent ?? selectedAgentInfo ?? undefined,
+    if (selectedPendingTask?.agentDraft) return selectedPendingTask.agentDraft;
+    if (selectedDraft?.draft) return selectedDraft.draft;
+    const cloudProvider = selectedAgent?.region?.startsWith("ap-")
+      ? "byteplus"
+      : "volcengine";
+    if (selectedUpdateCapability?.agent) {
+      return runtimeAgentDraftFromCloud(
+        selectedUpdateCapability.agent,
+        cloudProvider,
       );
     }
     return infoToDraft(
       selectedAgentInfo,
       selectedAgentAppName || selectedAgent?.label || "agent",
+      cloudProvider,
     );
   },
     [
       selectedAgentInfo,
       selectedAgentAppName,
       selectedAgent?.label,
-      selectedAgentUpdateDraft?.draft,
+      selectedAgent?.region,
       selectedDraft?.draft,
       selectedPendingTask?.agentDraft,
       selectedUpdateCapability?.agent,
@@ -3310,7 +3288,7 @@ export function AgentWorkspace({
                       selectedDraft
                         ? onEditDraft?.(selectedDraft)
                         : selectedUpdateCapability
-                          ? onUpdateAgent(draft, selectedUpdateCapability)
+                          ? onUpdateAgent(selectedUpdateCapability)
                           : undefined
                     }
                   >
