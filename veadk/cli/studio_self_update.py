@@ -511,6 +511,7 @@ class StudioSelfUpdater:
             "updateLogs": _tail_log_lines(self._diagnostic_lines),
             "updateLogsVisible": self._vefaas_logs_visible,
             "consoleUrl": self._console_url(),
+            "permissionConsoleUrl": self._permission_console_url(),
         }
 
     def _status_failure_payload(
@@ -623,6 +624,15 @@ class StudioSelfUpdater:
             f"region:vefaas+{self._settings.deployment_region}/function/detail/"
             f"{self._settings.function_id}"
         )
+
+    def _permission_console_url(self) -> str:
+        """Return the provider IAM console used to grant optional log access."""
+        console_host = (
+            "console.byteplus.com"
+            if self._settings.provider == "byteplus"
+            else "console.volcengine.com"
+        )
+        return f"https://{console_host}/iam"
 
     def _application_status(self) -> tuple[str, str, int, bool]:
         """Read the Application status and Function's configured release version."""

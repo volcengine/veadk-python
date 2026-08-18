@@ -46,15 +46,14 @@ def _client(
         ("byteplus", "ap-southeast-1"),
     ],
 )
-def test_reconcile_refreshes_the_default_function_role_policy(
+def test_reconcile_does_not_mutate_the_function_role_policy(
     monkeypatch: pytest.MonkeyPatch,
     provider: str,
     region: str,
 ) -> None:
-    calls: list[dict[str, str]] = []
     monkeypatch.setattr(
-        "frontend.server.studio_update_resources.ensure_default_frontend_role_policy",
-        lambda role, **kwargs: calls.append({"role": role, **kwargs}) or True,
+        "veadk.cli.frontend_deploy_iam.ensure_default_frontend_role_policy",
+        lambda *_args, **_kwargs: pytest.fail("self-update must not mutate IAM"),
     )
     monkeypatch.setattr(
         "frontend.server.studio_update_resources.resolve_studio_storage_for_deploy",
@@ -89,15 +88,6 @@ def test_reconcile_refreshes_the_default_function_role_policy(
         )
         == {}
     )
-    assert calls == [
-        {
-            "role": "trn:iam::123:role/VeADKFrontendServiceRole",
-            "access_key": "ak",
-            "secret_key": "sk",
-            "session_token": "token",
-            "provider": provider,
-        }
-    ]
 
 
 def test_reconcile_studio_update_resources_reuses_existing_resources(
