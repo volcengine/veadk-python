@@ -1252,12 +1252,19 @@ export default function App() {
         type: "generation_started",
         remoteTaskId: created.taskId,
         generationModel: created.generationModel,
+        startedAt: Date.now(),
       });
       if (!current) return;
 
       while (!controller.signal.aborted) {
         const remote = await getVideoTask(created.taskId, controller.signal);
         if (controller.signal.aborted) return;
+        if (remote.status === "queued" || remote.status === "running") {
+          commitVideoTask(localId, runId, {
+            type: "generation_status_changed",
+            providerStatus: remote.status,
+          });
+        }
         if (remote.status === "failed") {
           throw new Error(remote.error || "视频生成失败，请稍后重试。");
         }

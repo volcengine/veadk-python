@@ -7,6 +7,7 @@ export type VideoTaskStatus =
   | "error";
 
 export type VideoTaskErrorStage = "optimization" | "generation";
+export type VideoProviderStatus = "queued" | "running";
 
 export interface VideoTaskOutput {
   previewUrl: string;
@@ -26,6 +27,8 @@ export interface VideoGenerationTask {
   config: NewChatVideoConfig;
   enhancerModel: string;
   generationModel: string;
+  providerStatus: VideoProviderStatus | null;
+  generationStartedAt: number | null;
   assetIds: string[];
   output: VideoTaskOutput | null;
   errorStage: VideoTaskErrorStage | null;
@@ -40,7 +43,16 @@ export type VideoTaskEvent =
       enhancerModel: string;
     }
   | { type: "assets_uploaded"; assetIds: string[] }
-  | { type: "generation_started"; remoteTaskId: string; generationModel: string }
+  | {
+      type: "generation_started";
+      remoteTaskId: string;
+      generationModel: string;
+      startedAt: number;
+    }
+  | {
+      type: "generation_status_changed";
+      providerStatus: VideoProviderStatus;
+    }
   | { type: "generation_succeeded"; output: VideoTaskOutput }
   | { type: "failed"; stage: VideoTaskErrorStage; error: string }
   | { type: "retry"; stage: VideoTaskErrorStage };
@@ -87,6 +99,8 @@ export function createVideoGenerationTask({
     config: { ...config },
     enhancerModel,
     generationModel,
+    providerStatus: null,
+    generationStartedAt: null,
     assetIds: [],
     output: null,
     errorStage: null,
@@ -118,14 +132,21 @@ export function updateVideoGenerationTask(
       status: "generating",
       remoteTaskId: event.remoteTaskId,
       generationModel: event.generationModel,
+      providerStatus: "queued",
+      generationStartedAt: event.startedAt,
       errorStage: null,
       error: "",
     };
+  }
+  if (event.type === "generation_status_changed") {
+    if (task.providerStatus === event.providerStatus) return task;
+    return { ...task, providerStatus: event.providerStatus };
   }
   if (event.type === "generation_succeeded") {
     return {
       ...task,
       status: "success",
+      providerStatus: null,
       output: event.output,
       errorStage: null,
       error: "",
@@ -135,6 +156,7 @@ export function updateVideoGenerationTask(
     return {
       ...task,
       status: "error",
+      providerStatus: null,
       errorStage: event.stage,
       error: event.error,
     };
@@ -144,6 +166,8 @@ export function updateVideoGenerationTask(
     runId: task.runId + 1,
     status: event.stage === "optimization" ? "optimizing" : "generating",
     remoteTaskId: "",
+    providerStatus: null,
+    generationStartedAt: null,
     optimizedPrompt: event.stage === "optimization" ? "" : task.optimizedPrompt,
     resolvedMode: event.stage === "optimization" ? null : task.resolvedMode,
     output: null,
@@ -182,7 +206,11 @@ export function videoTaskSteps(task: VideoGenerationTask): VideoTaskStep[] {
         : generationFailed
           ? `${taskLabel}失败`
           : task.status === "generating"
-            ? `${taskLabel}进行中`
+            ? task.providerStatus === "queued"
+              ? `${taskLabel}排队中`
+              : task.providerStatus === "running"
+                ? `${taskLabel}生成中`
+                : `${taskLabel}进行中`
             : "等待视频生成",
       status: task.status === "success"
         ? "done"
@@ -193,6 +221,16 @@ export function videoTaskSteps(task: VideoGenerationTask): VideoTaskStep[] {
             : "pending",
     },
   ];
+}
+
+export function formatVideoTaskElapsed(elapsedMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1_000));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}小时${String(minutes).padStart(2, "0")}分`;
+  if (minutes > 0) return `${minutes}分${String(seconds).padStart(2, "0")}秒`;
+  return `${seconds}秒`;
 }
 
 export function currentVideoTaskStatus(task: VideoGenerationTask): string {
