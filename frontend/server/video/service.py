@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -39,6 +41,72 @@ from .models import (
 from .storage import LazyVideoAssetRepository, StoredVideoAsset
 
 logger = get_logger(__name__)
+
+_REDACTED = "[REDACTED]"
+_SENSITIVE_ERROR_KEYS = {
+    "access_key",
+    "access_token",
+    "apikey",
+    "api_key",
+    "authorization",
+    "cookie",
+    "credential",
+    "credentials",
+    "id_token",
+    "password",
+    "refresh_token",
+    "secret_key",
+    "session_token",
+    "set_cookie",
+    "signature",
+    "token",
+}
+_BEARER_SECRET = re.compile(r"(?i)\bBearer\s+[^\s,;\"']+")
+_JWT_SECRET = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(authorization|api[_-]?key|access[_-]?key|secret(?:[_-]?key)?|"
+    r"session[_-]?token|refresh[_-]?token|access[_-]?token|password|signature)"
+    r"\s*[:=]\s*[^\s,;]+"
+)
+_SIGNED_URL_QUERY = re.compile(r"(https?://[^\s?\"'<>]+)\?[^\s\"'<>]+")
+
+
+def _provider_error_text(result: dict[str, Any]) -> str:
+    """Preserve the provider error payload while removing credential material."""
+
+    error = result.get("error")
+    if error in (None, "", {}, []):
+        return "视频生成失败，请调整提示词或素材后重试。"
+    safe_error = _redact_provider_error(error)
+    if isinstance(safe_error, str):
+        return safe_error
+    return json.dumps(safe_error, ensure_ascii=False, indent=2)
+
+
+def _redact_provider_error(value: Any, *, key: str = "") -> Any:
+    normalized_key = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
+    if normalized_key in _SENSITIVE_ERROR_KEYS or normalized_key.endswith(
+        ("_api_key", "_password", "_secret", "_signature", "_token")
+    ):
+        return _REDACTED
+    if isinstance(value, dict):
+        return {
+            str(child_key): _redact_provider_error(child_value, key=str(child_key))
+            for child_key, child_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_provider_error(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_provider_error(item) for item in value]
+    if not isinstance(value, str):
+        return value
+    redacted = _BEARER_SECRET.sub("Bearer [REDACTED]", value)
+    redacted = _JWT_SECRET.sub(_REDACTED, redacted)
+    redacted = _SECRET_ASSIGNMENT.sub(
+        lambda match: f"{match.group(1)}={_REDACTED}",
+        redacted,
+    )
+    return _SIGNED_URL_QUERY.sub(r"\1?[REDACTED]", redacted)
 
 
 class VideoTaskNotFound(RuntimeError):
@@ -243,7 +311,7 @@ class VideoService:
         elif raw_status in {"failed", "error", "cancelled", "canceled"}:
             record.status = "failed"
             record.video_url = None
-            record.error = "视频生成失败，请调整提示词或素材后重试。"
+            record.error = _provider_error_text(result)
         elif raw_status == "expired":
             record.status = "failed"
             record.video_url = None

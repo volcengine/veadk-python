@@ -29,6 +29,7 @@ from frontend.server.video.prompts import (
     parameter_policy,
     parse_enhancement_output,
 )
+from frontend.server.video.seedance_prompt_skill import build_seedance_skill_context
 
 
 def _valid_output(task_type: str = "text_to_video") -> dict:
@@ -111,6 +112,53 @@ def test_build_messages_contains_system_strategy_and_json_input():
         )
     )
     assert json.loads(messages[1]["content"]) == input_data
+
+
+def test_build_messages_include_seedance_skill_context_for_long_video():
+    input_data = build_enhancement_input(
+        "Create a cinematic product launch story.",
+        selected_task_mode="text_to_video",
+        selected_duration=30,
+    )
+
+    messages = build_enhancement_messages(input_data)
+    system_prompt = messages[0]["content"]
+
+    assert "Seedance 2.5 prompt skill context" in system_prompt
+    assert "subject + action/event + scene/environment" in system_prompt
+    assert "consecutive stages" in system_prompt
+    assert "directly visible end state" in system_prompt
+
+
+def test_build_messages_include_reference_material_mapping_guidance():
+    input_data = build_enhancement_input(
+        "Create a new campaign video using the product reference.",
+        selected_task_mode="reference_to_video",
+        has_image=True,
+        image_count=1,
+    )
+
+    messages = build_enhancement_messages(input_data)
+    system_prompt = messages[0]["content"]
+
+    assert "@Image 1 defines" in system_prompt
+    assert "what not to use" in system_prompt
+    assert "not as a source to edit directly" in system_prompt
+
+
+def test_seedance_skill_context_selects_video_editing_guidance():
+    input_data = build_enhancement_input(
+        "Replace the logo on the jacket and keep everything else unchanged.",
+        selected_task_mode="video_editing",
+        has_video=True,
+        video_count=1,
+    )
+
+    context = build_seedance_skill_context("video_editing", input_data)
+
+    assert "@Video 1 is the sole editing master" in context
+    assert "edit scope" in context
+    assert "content to preserve" in context
 
 
 @pytest.mark.parametrize(

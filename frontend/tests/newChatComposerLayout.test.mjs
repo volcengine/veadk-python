@@ -641,13 +641,16 @@ test("runs and restores the accessible video generation task dialog", () => {
   assert.match(videoTaskDialogSource, /new-chat-video-task-preview__loading/);
   assert.match(
     videoTaskDialogSource,
-    /<TextShimmer as="strong"[\s\S]*?\{taskLabel\}进行中[\s\S]*?<\/TextShimmer>/,
+    /<TextShimmer[\s\S]*?as="strong"[\s\S]*?\{activeStatus\}[\s\S]*?<\/TextShimmer>/,
   );
   assert.match(
     videoTaskDialogSource,
-    /这可能持续数分钟，生成完成后将在这里显示视频预览/,
+    /这可能持续数分钟，完成后将在这里显示视频预览/,
   );
-  assert.match(videoTaskDialogSource, /请勿关闭弹窗，关闭后任务将丢失/);
+  assert.match(videoTaskDialogSource, /可以关闭弹窗，任务会继续在后台运行/);
+  assert.match(videoTaskDialogSource, /role="progressbar"/);
+  assert.match(videoTaskDialogSource, /aria-valuetext=/);
+  assert.match(videoTaskDialogSource, /已等待 \{elapsed\}/);
   assert.doesNotMatch(
     videoTaskDialogSource,
     /new-chat-video-task-step__marker/,
@@ -656,7 +659,7 @@ test("runs and restores the accessible video generation task dialog", () => {
     videoTaskDialogSource,
     /function CheckIcon|function ErrorIcon|function VideoTaskIcon/,
   );
-  assert.doesNotMatch(videoTaskDialogSource, /currentVideoTaskStatus/);
+  assert.match(videoTaskDialogSource, /currentVideoTaskStatus/);
   assert.match(
     videoTaskDialogSource,
     /<video[\s\S]*?controls[\s\S]*?playsInline/,
@@ -676,6 +679,15 @@ test("runs and restores the accessible video generation task dialog", () => {
     /\.new-chat-video-task-dialog__icon\s*\{/,
   );
   assert.match(videoTaskDialogSource, /请先在模型控制台开通服务，再重试生成/);
+  assert.match(videoTaskDialogSource, /className="new-chat-video-task-error" role="alert"/);
+  assert.match(
+    videoTaskDialogStylesSource,
+    /\.new-chat-video-task-error\s*\{[\s\S]*?max-height:\s*220px;[\s\S]*?overflow-y:\s*auto;/,
+  );
+  assert.match(
+    videoTaskDialogStylesSource,
+    /\.new-chat-video-task-error p\s*\{[\s\S]*?overflow-wrap:\s*anywhere;[\s\S]*?white-space:\s*pre-wrap;/,
+  );
   assert.match(videoTaskDialogStylesSource, /prefers-reduced-motion:\s*reduce/);
   assert.match(
     videoTaskDialogStylesSource,
@@ -687,7 +699,7 @@ test("runs and restores the accessible video generation task dialog", () => {
   );
   assert.match(
     videoTaskDialogStylesSource,
-    /new-chat-video-task-dialog__actions p\.is-warning[\s\S]*?--destructive/,
+    /new-chat-video-task-progress > span[\s\S]*?animation:\s*new-chat-video-task-progress/,
   );
 });
 
