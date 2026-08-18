@@ -23,6 +23,12 @@ const {
   isRuntimeModelSelectionEnv,
   resolvedModelSource,
 } = await loadTypeScriptModule("../src/create/modelSource.ts");
+const {
+  applyRuntimeAgentIntrospection,
+  classifyRuntimeModelSources,
+  modelConfigurationFromRuntime,
+  modelNameFromRuntime,
+} = await loadTypeScriptModule("../src/create/runtimeModelName.ts");
 
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 const customCreateSource = readFileSync(
@@ -52,6 +58,112 @@ function draft(overrides = {}) {
     ...overrides,
   };
 }
+
+test("splits provider-qualified runtime model names at the first slash", () => {
+  assert.equal(modelNameFromRuntime("openai/saved-model"), "saved-model");
+  assert.equal(modelNameFromRuntime("saved-model"), "saved-model");
+  assert.equal(modelNameFromRuntime(undefined), "");
+  assert.deepEqual(modelConfigurationFromRuntime("anthropic/claude-sonnet"), {
+    modelName: "claude-sonnet",
+    modelProvider: "anthropic",
+  });
+  assert.deepEqual(modelConfigurationFromRuntime("openrouter/meta/llama"), {
+    modelName: "meta/llama",
+    modelProvider: "openrouter",
+  });
+});
+
+test("hydrates a legacy runtime model name without changing its provider", () => {
+  const restored = hydrateRuntimeModelSelection(
+    draft({
+      modelName: "openai/saved-model",
+      modelSource: "custom",
+      modelProvider: "openai",
+      modelApiBase: "https://models.example.com/v1",
+    }),
+    [],
+  );
+
+  assert.equal(restored.modelName, "saved-model");
+  assert.equal(restored.modelProvider, "openai");
+  assert.equal(restored.modelSource, "custom");
+});
+
+test("uses the provider prefix from the live Runtime model", () => {
+  const restored = hydrateRuntimeModelSelection(
+    draft({
+      modelName: "openrouter/meta/llama",
+      modelSource: "custom",
+      modelProvider: "openai",
+      modelApiBase: "https://models.example.com/v1",
+    }),
+    [],
+  );
+
+  assert.equal(restored.modelName, "meta/llama");
+  assert.equal(restored.modelProvider, "openrouter");
+  assert.equal(restored.modelSource, "custom");
+});
+
+test("uses deployed Agent introspection instead of cached draft identity", () => {
+  const restored = applyRuntimeAgentIntrospection(
+    draft({
+      name: "runtime-name-with-suffix-a1b2c3",
+      modelName: "",
+      modelProvider: "stale-provider",
+      subAgents: [draft({ name: "child", modelName: "" })],
+    }),
+    {
+      name: "agent-name",
+      model: "openai/root-model",
+      children: [{ model: "openrouter/meta/child-model" }],
+    },
+  );
+
+  assert.equal(restored.name, "agent-name");
+  assert.equal(restored.modelName, "root-model");
+  assert.equal(restored.modelProvider, "openai");
+  assert.equal(restored.subAgents[0].modelName, "meta/child-model");
+  assert.equal(restored.subAgents[0].modelProvider, "openrouter");
+});
+
+test("classifies Runtime models only by ModelArk catalog membership", () => {
+  const matched = classifyRuntimeModelSources(
+    draft({
+      modelName: "doubao-seed-2-1-pro-260628",
+      modelSource: "custom",
+    }),
+    new Set(["doubao-seed-2-1-pro-260628"]),
+  );
+  const unmatched = classifyRuntimeModelSources(
+    draft({
+      modelName: "private-model",
+      modelSource: "ark",
+      modelProvider: "custom-provider",
+    }),
+    new Set(["doubao-seed-2-1-pro-260628"]),
+  );
+
+  assert.equal(matched.modelSource, "ark");
+  assert.equal(unmatched.modelSource, "custom");
+  assert.equal(unmatched.modelProvider, "custom-provider");
+});
+
+test("keeps a legacy runtime custom while restoring its model configuration", () => {
+  const restored = hydrateRuntimeModelSelection(
+    draft({
+      modelName: "anthropic/saved-model",
+      modelSource: undefined,
+      modelProvider: "",
+      modelApiBase: "",
+    }),
+    [],
+  );
+
+  assert.equal(restored.modelSource, "custom");
+  assert.equal(restored.modelName, "saved-model");
+  assert.equal(restored.modelProvider, "anthropic");
+});
 
 test("restores a saved ModelArk API Key and keeps the saved model selection", () => {
   const restored = hydrateRuntimeModelSelection(

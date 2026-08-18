@@ -1,4 +1,5 @@
 import { defaultModelApiBase, type CloudProvider } from "../adk/cloudProvider";
+import { modelConfigurationFromRuntime } from "./runtimeModelName";
 import type { AgentDraft } from "./types";
 import { isProviderModelApiBase } from "./customModelCredentials";
 
@@ -65,12 +66,15 @@ export function hydrateRuntimeModelSelection(
 
   const hydrateNode = (node: AgentDraft): AgentDraft => {
     const provider = node.cloudProvider ?? draft.cloudProvider ?? "volcengine";
-    const legacyModelSource =
-      node.modelProvider?.trim() || node.modelApiBase?.trim()
-        ? resolvedModelSource(node, provider)
-        : "custom";
+    const configuredProvider = node.modelProvider?.trim() ?? "";
+    const runtimeModel = modelConfigurationFromRuntime(node.modelName);
+    const legacyModelSource = node.modelApiBase?.trim()
+      ? resolvedModelSource(node, provider)
+      : "custom";
     return {
       ...node,
+      modelName: runtimeModel.modelName,
+      modelProvider: runtimeModel.modelProvider || configuredProvider,
       modelSource:
         node.modelSource === "ark" || node.modelSource === "custom"
           ? node.modelSource

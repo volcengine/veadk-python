@@ -22,6 +22,7 @@ import {
   formatCloudRegion,
   type CloudProvider,
 } from "../adk/cloudProvider";
+import { modelNameFromRuntime } from "../create/runtimeModelName";
 import "./ManageAgents.css";
 
 export interface ManageAgentsViewProps {
@@ -413,12 +414,13 @@ const TYPE_LABEL: Record<string, string> = {
 
 /** Recursive agent tree: name + type/model/tools, with nested sub-agents. */
 function AgentTree({ node, depth = 0 }: { node: AgentNode; depth?: number }) {
+  const modelName = modelNameFromRuntime(node.model);
   return (
     <div className="manage-tree" style={{ marginLeft: depth ? 16 : 0 }}>
       <div className="manage-tree-node">
         <span className="manage-tree-name">{node.name || "(未命名)"}</span>
         <span className="manage-tree-type">{TYPE_LABEL[node.type] || node.type}</span>
-        {node.model && <span className="manage-tree-model">{node.model}</span>}
+        {modelName && <span className="manage-tree-model">{modelName}</span>}
       </div>
       {node.tools.length > 0 && (
         <div className="manage-tree-tools">

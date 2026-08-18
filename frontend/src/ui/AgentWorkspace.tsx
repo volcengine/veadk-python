@@ -54,6 +54,11 @@ import {
 } from "../adk/client";
 import type { AgentEntry } from "../adk/connections";
 import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
+import {
+  applyRuntimeAgentIntrospection,
+  modelConfigurationFromRuntime,
+  modelNameFromRuntime,
+} from "../create/runtimeModelName";
 import { emptyDraft, type AgentDraft } from "../create/types";
 import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
@@ -516,6 +521,7 @@ function IntegrationPanel({
 
 function graphNodeToDraft(node: AgentNode): AgentDraft {
   const runtimeTools = node.tools ?? [];
+  const runtimeModel = modelConfigurationFromRuntime(node.model);
   const builtinTools = BUILTIN_TOOLS.filter((tool) =>
     tool.toolNames.some((name) => runtimeTools.includes(name)),
   );
@@ -527,7 +533,8 @@ function graphNodeToDraft(node: AgentNode): AgentDraft {
     description: node.description,
     instruction: node.instruction || emptyDraft().instruction,
     agentType: node.type,
-    modelName: node.model,
+    modelName: runtimeModel.modelName,
+    modelProvider: runtimeModel.modelProvider,
     tools: runtimeTools.filter((name) => !builtinToolNames.has(name)),
     builtinTools: builtinTools.map((tool) => tool.id),
     skills: (node.skills ?? []).map((skill) => skill.name),
@@ -536,15 +543,19 @@ function graphNodeToDraft(node: AgentNode): AgentDraft {
 }
 
 function infoToDraft(info: AgentInfo | null, fallbackName: string): AgentDraft {
-  if (info?.draft) return info.draft;
+  if (info?.draft) {
+    return applyRuntimeAgentIntrospection(info.draft, info.graph, info);
+  }
   if (info?.graph) return graphNodeToDraft(info.graph);
+  const runtimeModel = modelConfigurationFromRuntime(info?.model);
   return {
     ...emptyDraft(),
     modelSource: undefined,
     name: info?.name || fallbackName,
     description: info?.description || "暂无描述",
     agentType: info?.type ?? "llm",
-    modelName: info?.model,
+    modelName: runtimeModel.modelName,
+    modelProvider: runtimeModel.modelProvider,
     tools: info?.tools ?? [],
     skills: info?.skills?.map((skill) => skill.name) ?? [],
   };
@@ -1291,15 +1302,24 @@ export function AgentWorkspace({
   const deletableItemCount = deletableListedAgents.length + filteredDrafts.length;
   const selectedDeleteCount =
     selectedDeletableAgents.length + selectedDeletableDrafts.length;
-  const draft = useMemo(
-    () =>
+  const draft = useMemo(() => {
+    const editableDraft =
       selectedPendingTask?.agentDraft ??
       selectedDraft?.draft ??
-      selectedAgentUpdateDraft?.draft ??
-      infoToDraft(
-        selectedAgentInfo,
-        selectedAgentAppName || selectedAgent?.label || "agent",
-      ),
+      selectedAgentUpdateDraft?.draft;
+    if (editableDraft) {
+      const liveAgent = selectedUpdateCapability?.agent;
+      return applyRuntimeAgentIntrospection(
+        editableDraft,
+        liveAgent?.graph ?? selectedAgentInfo?.graph,
+        liveAgent ?? selectedAgentInfo ?? undefined,
+      );
+    }
+    return infoToDraft(
+      selectedAgentInfo,
+      selectedAgentAppName || selectedAgent?.label || "agent",
+    );
+  },
     [
       selectedAgentInfo,
       selectedAgentAppName,
@@ -1307,6 +1327,7 @@ export function AgentWorkspace({
       selectedAgentUpdateDraft?.draft,
       selectedDraft?.draft,
       selectedPendingTask?.agentDraft,
+      selectedUpdateCapability?.agent,
     ],
   );
   const updateBlockedReason = selectedDraft
@@ -1329,15 +1350,6 @@ export function AgentWorkspace({
                     ? ""
                     : "Runtime 更新能力响应缺少智能体信息。";
   const updateReasonId = "aw-update-disabled-reason";
-  const selectedUpdateTarget = selectedUpdateCapability?.agent
-    ? {
-        runtimeId: selectedUpdateCapability.runtime.runtimeId,
-        name: selectedUpdateCapability.runtime.name,
-        region: selectedUpdateCapability.runtime.region,
-        appName: selectedUpdateCapability.agent.appName,
-        currentVersion: selectedUpdateCapability.runtime.currentVersion,
-      }
-    : selectedAgentUpdateDraft?.deploymentTarget;
   const toolNames = useMemo(() => {
     if (selectedAgentInfo) return selectedAgentInfo.tools;
     const builtinNames = (draft.builtinTools ?? []).map(
@@ -2764,7 +2776,14 @@ export function AgentWorkspace({
                       <strong>详细信息</strong>
                     </div>
                     <dl className="aw-facts">
-                      <div><dt>模型</dt><dd>{selectedAgentInfo?.model || draft.modelName || "暂未提供"}</dd></div>
+                      <div>
+                        <dt>模型</dt>
+                        <dd>
+                          {modelNameFromRuntime(selectedAgentInfo?.model) ||
+                            draft.modelName ||
+                            "暂未提供"}
+                        </dd>
+                      </div>
                       <div><dt>智能体数量</dt><dd>{selectedAgentInfo?.graph ? countNodes(selectedAgentInfo.graph) : countDraftNodes(draft)}</dd></div>
                       <div>
                         <dt>工具</dt>
@@ -3290,17 +3309,9 @@ export function AgentWorkspace({
                     onClick={() =>
                       selectedDraft
                         ? onEditDraft?.(selectedDraft)
-                        : selectedAgentUpdateDraft
-                          ? onEditDraft?.({
-                              ...selectedAgentUpdateDraft,
-                              deploymentTarget: selectedUpdateTarget,
-                            })
-                          : selectedUpdateCapability
-                            ? onUpdateAgent(
-                                selectedUpdateCapability.agent?.draft ?? draft,
-                                selectedUpdateCapability,
-                              )
-                            : undefined
+                        : selectedUpdateCapability
+                          ? onUpdateAgent(draft, selectedUpdateCapability)
+                          : undefined
                     }
                   >
                     {updateCapabilityLoading ? (
