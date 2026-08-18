@@ -215,6 +215,7 @@ test("Skill generation setup follows Studio form and select conventions", () => 
   assert.match(configSelectSource, /role="option"/);
   assert.match(configSelectSource, /event\.key === "Escape"/);
   assert.match(configSelectSource, /event\.key === "ArrowDown"/);
+  assert.match(configSelectSource, /event\.key === "Enter" \|\| event\.key === " "/);
   assert.match(configSelectSource, /addEventListener\("wheel", handleWheel, \{ passive: false \}\)/);
   assert.match(configSelectSource, /event\.preventDefault\(\)/);
   assert.match(configSelectSource, /event\.stopPropagation\(\)/);
@@ -248,6 +249,23 @@ test("managed Skill APIs cover space creation, archives, deletion, and full file
   assert.match(actionMenuSource, /role="menuitem"/);
   assert.match(managementDialogsSource, /不会自动上传/);
   assert.match(managementDialogsSource, /!validation \|\| validating \|\| submitting/);
+});
+
+test("Skill space creation requires an explicit region and keeps it after creation", () => {
+  assert.match(managementDialogsSource, /import \{[\s\S]*?SkillConfigSelect,[\s\S]*?\} from "\.\/SkillConfigSelect"/);
+  assert.match(managementDialogsSource, /regionOptions: SkillConfigOption\[\]/);
+  assert.match(managementDialogsSource, /const \[region, setRegion\] = useState\(initialRegion\)/);
+  assert.match(managementDialogsSource, /<SkillConfigSelect[\s\S]*?label="地域"[\s\S]*?required/);
+  assert.match(managementDialogsSource, /createSkillSpace\(\{[\s\S]*?region,[\s\S]*?\}\)/);
+  assert.match(managementDialogsSource, /onCreated\(\{ \.\.\.created, region: created\.region \|\| region \}\)/);
+  assert.match(skillCenterSource, /regionOptions=\{cloudRegionOptions\(cloudProvider\)\}/);
+});
+
+test("Skill space cards show their cloud region", () => {
+  assert.match(
+    skillCenterSource,
+    /metadata=\{\[[\s\S]*?label: "地域", value: formatCloudRegion\(space\.region \|\| defaultCloudRegion\(cloudProvider\), cloudProvider\)/,
+  );
 });
 
 test("skill pages match the Studio page spacing, search, and card grid", () => {
