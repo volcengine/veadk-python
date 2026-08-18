@@ -11,6 +11,8 @@ import { BOOT_REQUEST_TIMEOUT_MS, requestSignal } from "./timeout";
 
 const LOCAL_USER_KEY = "veadk_local_user";
 const TAB_LOCAL_USER_KEY = "veadk_local_user_tab";
+const REFRESH_RETRY_HEADER = "X-VeADK-OAuth-Refresh-Retry";
+const REFRESH_RETRY_DELAYS_MS = [50, 250] as const;
 
 export type AuthStatus = "authenticated" | "unauthenticated";
 
@@ -157,22 +159,42 @@ export function logout(): void {
   window.location.assign("/oauth2/logout");
 }
 
+async function fetchIdentityResponse(): Promise<Response> {
+  for (let attempt = 0; ; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch("/oauth2/userinfo", {
+        headers: { Accept: "application/json" },
+        signal: requestSignal(undefined, BOOT_REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      console.warn("[identity] /oauth2/userinfo is unreachable:", error);
+      throw new Error("无法连接身份服务，请检查网络后重试。");
+    }
+
+    const retryDelay = REFRESH_RETRY_DELAYS_MS[attempt];
+    if (
+      response.status !== 401 ||
+      response.headers.get(REFRESH_RETRY_HEADER) !== "1" ||
+      retryDelay === undefined
+    ) {
+      return response;
+    }
+
+    // Another Studio instance may have already rotated the browser's refresh
+    // token. Give its Set-Cookie response a moment to land, then retry with the
+    // updated HttpOnly cookie. The frontend never reads either token.
+    await new Promise((resolve) => window.setTimeout(resolve, retryDelay));
+  }
+}
+
 /** Resolve identity. With SSO: via /oauth2/userinfo. Without SSO (endpoint 404):
  *  use a locally chosen username, or prompt for one on the login page.
  *
  *  Network and server failures reject instead of silently changing identity
  *  mode. The caller can then show a retryable error. */
 export async function resolveIdentity(): Promise<Identity> {
-  let res: Response;
-  try {
-    res = await fetch("/oauth2/userinfo", {
-      headers: { Accept: "application/json" },
-      signal: requestSignal(undefined, BOOT_REQUEST_TIMEOUT_MS),
-    });
-  } catch (error) {
-    console.warn("[identity] /oauth2/userinfo is unreachable:", error);
-    throw new Error("无法连接身份服务，请检查网络后重试。");
-  }
+  const res = await fetchIdentityResponse();
 
   // SSO enabled, signed in.
   if (res.ok) {
