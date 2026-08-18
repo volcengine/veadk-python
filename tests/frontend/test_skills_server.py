@@ -17,11 +17,10 @@ from __future__ import annotations
 import base64
 import io
 import json
-import sys
 import stat
+import sys
 import zipfile
-from types import ModuleType
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -30,6 +29,9 @@ from frontend.server.skills.devenv import (
     CreateSkillTaskBody,
     SkillWorkbenchError,
     SkillWorkbenchService,
+)
+from frontend.server.skills.devenv import (
+    validate_skill_archive as validate_workbench_skill_archive,
 )
 from frontend.server.skills.models import (
     CreateSkillSpaceBody,
@@ -80,6 +82,66 @@ def test_skill_archive_accepts_root_or_one_wrapper(files: dict[str, bytes]) -> N
     assert result.name == "example-skill"
     assert result.description == "A focused test Skill"
     assert result.files[0]["path"] == "SKILL.md"
+
+
+@pytest.mark.parametrize(
+    "validator", [validate_skill_archive, validate_workbench_skill_archive]
+)
+def test_skill_archive_ignores_top_level_macos_metadata(validator) -> None:
+    result = validator(
+        archive(
+            {
+                "example-skill/SKILL.md": SKILL_MD.encode(),
+                "__MACOSX/._example-skill": b"\x00\x05AppleDouble",
+                "__MACOSX/example-skill/._SKILL.md": b"\x00\x05AppleDouble",
+            }
+        )
+    )
+
+    assert result.name == "example-skill"
+    assert result.files == [{"path": "SKILL.md", "size": len(SKILL_MD.encode())}]
+
+
+@pytest.mark.parametrize(
+    "validator", [validate_skill_archive, validate_workbench_skill_archive]
+)
+def test_skill_archive_rejects_macos_metadata_only(validator) -> None:
+    with pytest.raises((SkillArchiveError, SkillWorkbenchError)) as raised:
+        validator(archive({"__MACOSX/._example-skill": b"\x00\x05AppleDouble"}))
+
+    assert raised.value.code == "SKILL_ARCHIVE_EMPTY"
+
+
+@pytest.mark.parametrize(
+    "validator", [validate_skill_archive, validate_workbench_skill_archive]
+)
+def test_skill_archive_still_rejects_an_unrelated_second_root(validator) -> None:
+    with pytest.raises((SkillArchiveError, SkillWorkbenchError)) as raised:
+        validator(
+            archive(
+                {
+                    "example-skill/SKILL.md": SKILL_MD.encode(),
+                    "other/notes.txt": b"not metadata",
+                }
+            )
+        )
+
+    assert raised.value.code == "SKILL_MD_NOT_AT_ROOT"
+
+
+@pytest.mark.parametrize(
+    "validator", [validate_skill_archive, validate_workbench_skill_archive]
+)
+def test_ignored_macos_metadata_still_gets_security_validation(validator) -> None:
+    content = archive(
+        {"example-skill/SKILL.md": SKILL_MD.encode()},
+        symlink="__MACOSX/unsafe-link",
+    )
+
+    with pytest.raises((SkillArchiveError, SkillWorkbenchError)) as raised:
+        validator(content)
+
+    assert raised.value.code == "SKILL_ARCHIVE_SYMLINK"
 
 
 @pytest.mark.parametrize(
