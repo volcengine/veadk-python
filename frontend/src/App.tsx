@@ -320,6 +320,25 @@ async function probeNewChatCapabilities(
 type CreateView = "custom" | "package" | "migration" | null;
 type AppView = CreateView | "intelligent";
 type CustomCreateMode = "custom" | "yaml_import";
+type StudioPageId =
+  | "new-chat"
+  | "conversation"
+  | "sandbox"
+  | "create"
+  | "library"
+  | "search"
+  | "applications"
+  | "agents"
+  | "agent-detail"
+  | "sandbox-agent-detail"
+  | "sandbox-agent-workspace"
+  | "feedback";
+type StudioStackPage = "system-info" | "agent-detail" | "sandbox-agent-detail";
+
+interface StudioPageStackEntry {
+  page: StudioStackPage;
+  returnTo: StudioPageId;
+}
 
 // Persist the last view so a page refresh restores where the user was.
 const LS = { app: "veadk.appName", view: "veadk.view", session: "veadk.sessionId" } as const;
@@ -1919,7 +1938,25 @@ export default function App() {
   const [feedbackCasePreview, setFeedbackCasePreview] =
     useState<AgentFeedbackCase | null>(null);
   const [myAgents, setMyAgents] = useState(false);
-  const [systemInfo, setSystemInfo] = useState(false);
+  const [pageStack, setPageStack] = useState<StudioPageStackEntry[]>([]);
+  const activeStackEntry = pageStack[pageStack.length - 1];
+  const activeStackPage = activeStackEntry?.page;
+  const systemInfo = activeStackPage === "system-info";
+  const pushStudioPage = useCallback((entry: StudioPageStackEntry) => {
+    setPageStack((current) =>
+      current[current.length - 1]?.page === entry.page
+        ? current
+        : [...current, entry],
+    );
+  }, []);
+  const popStudioPage = useCallback((page: StudioStackPage) => {
+    setPageStack((current) => {
+      if (current[current.length - 1]?.page === page) return current.slice(0, -1);
+      const index = current.findIndex((entry) => entry.page === page);
+      if (index === -1) return current;
+      return current.filter((_, entryIndex) => entryIndex !== index);
+    });
+  }, []);
   const [applicationsView, setApplicationsView] =
     useState<"catalog" | ApplicationId | null>(null);
   // A search result may belong to a different agent; remember it so the
@@ -3528,7 +3565,7 @@ export default function App() {
     setManageAgents(false);
     setAgentDetailTarget(null);
     setMyAgents(false);
-    setSystemInfo(false);
+    setPageStack([]);
     setApplicationsView(null);
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
@@ -3656,6 +3693,7 @@ export default function App() {
           setSandboxSession(connected);
         }
         setSandboxBusy(connected.busy);
+        popStudioPage("sandbox-agent-detail");
         setSandboxAgentDetailTarget(null);
         setSandboxAgentWorkspace(null);
         setMyAgents(false);
@@ -3669,6 +3707,7 @@ export default function App() {
       operation.succeed({
         sandboxStatus: telemetrySandboxStatus(workspace.session.status),
       });
+      popStudioPage("sandbox-agent-detail");
       setSandboxAgentWorkspace(workspace);
       setSandboxAgentDetailTarget(null);
       setMyAgents(false);
@@ -3697,9 +3736,10 @@ export default function App() {
 
   function openSandboxAgentDetails(session: SandboxAgentResource) {
     setMyAgentsActiveType(session.toolName);
+    pushStudioPage({ page: "sandbox-agent-detail", returnTo: "agents" });
     setSandboxAgentDetailTarget(session);
     setSandboxAgentWorkspace(null);
-    setMyAgents(false);
+    setMyAgents(true);
     setManageAgents(false);
     setError("");
   }
@@ -3716,6 +3756,7 @@ export default function App() {
       }
     }
     setMyAgentsActiveType(session.toolName);
+    popStudioPage("sandbox-agent-detail");
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
     setSandboxAgentRefreshKey((current) => current + 1);
@@ -4446,7 +4487,7 @@ export default function App() {
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
-    setSystemInfo(false);
+    setPageStack([]);
     setApplicationsView(null);
     startNewChat();
   }
@@ -5542,11 +5583,35 @@ export default function App() {
 
   const openMyAgentDetails = (agent: MyAgentCardData) => {
     if (!agent.runtime) return;
+    pushStudioPage({ page: "agent-detail", returnTo: "agents" });
     setAgentDetailTarget(agent);
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId("");
-    setMyAgents(false);
+    setMyAgents(true);
     setManageAgents(true);
+    setError("");
+  };
+
+  const closeAgentDetailPage = () => {
+    popStudioPage("agent-detail");
+    setManageAgents(false);
+    setAgentDetailTarget(null);
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId("");
+    setMyAgents(true);
+    setError("");
+  };
+
+  const closeSandboxAgentDetailPage = () => {
+    popStudioPage("sandbox-agent-detail");
+    setSandboxAgentDetailTarget(null);
+    setSandboxAgentWorkspace(null);
+    setMyAgents(true);
+    setError("");
+  };
+
+  const closeSystemInfoPage = () => {
+    popStudioPage("system-info");
     setError("");
   };
 
@@ -5577,7 +5642,7 @@ export default function App() {
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId("");
     setMyAgents(true);
-    setSystemInfo(false);
+    setPageStack([]);
     setApplicationsView(null);
     setError("");
   };
@@ -5597,7 +5662,7 @@ export default function App() {
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
-    setSystemInfo(false);
+    setPageStack([]);
     setApplicationsView("catalog");
     setError("");
   };
@@ -5651,12 +5716,36 @@ export default function App() {
       }
     : null;
 
-  const sidebarActivePage: SidebarPage = platformFeedbackOrigin !== null
-    ? "feedback"
-    : skillCenter
+  const currentStudioPage: StudioPageId = activeStackPage === "system-info"
+    ? activeStackEntry?.returnTo ?? "new-chat"
+    : activeStackPage === "agent-detail" || activeStackPage === "sandbox-agent-detail"
+      ? activeStackPage
+      : platformFeedbackOrigin !== null
+        ? "feedback"
+        : skillCenter
+          ? "library"
+          : applicationsView
+            ? "applications"
+            : searchView
+              ? "search"
+              : sandboxAgentWorkspace
+                ? "sandbox-agent-workspace"
+                : myAgents || manageAgents
+                  ? "agents"
+                  : sandboxSession
+                    ? "sandbox"
+                    : sessionId
+                      ? "conversation"
+                      : createView || addAgent || addMenu
+                        ? "create"
+                        : "new-chat";
+
+  const sidebarActivePage: SidebarPage = systemInfo
+    ? null
+    : platformFeedbackOrigin !== null
+      ? "feedback"
+      : skillCenter
       ? "library"
-      : systemInfo
-        ? null
         : applicationsView
           ? "applications"
           : searchView
@@ -5723,7 +5812,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
-          setSystemInfo(false);
+          setPageStack([]);
           setApplicationsView(null);
           setSearchView(true);
           setError("");
@@ -5745,7 +5834,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
-          setSystemInfo(false);
+          setPageStack([]);
           setApplicationsView(null);
           setCreateView(null);
           setImportedDraft(null);
@@ -5764,7 +5853,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
-          setSystemInfo(false);
+          setPageStack([]);
           setApplicationsView(null);
           setSkillCenterLaunch(null);
           setLibraryTab("skills");
@@ -5787,7 +5876,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
-          setSystemInfo(false);
+          setPageStack([]);
           setApplicationsView(null);
           setSessionId("");
           setAddMenu(false);
@@ -5797,27 +5886,15 @@ export default function App() {
         onMyAgents={() => requestIntelligentNavigation(openMyAgentsPage)}
         onApplications={() => requestIntelligentNavigation(openApplicationsPage)}
         onSystemInfo={() => requestIntelligentNavigation(() => {
-          setPlatformFeedbackOrigin(null);
-          if (sandboxSession) exitSandboxSession();
-          viewSidRef.current = "";
-          setSessionId("");
-          setCreateView(null);
-          setSkillCenter(false);
-          setAddAgent(false);
-          setAddMenu(false);
-          setSearchView(false);
-          setManageAgents(false);
-          setAgentDetailTarget(null);
-          setSandboxAgentDetailTarget(null);
-          setSandboxAgentWorkspace(null);
-          setMyAgents(false);
-          setApplicationsView(null);
-          setSystemInfo(true);
+          pushStudioPage({
+            page: "system-info",
+            returnTo: currentStudioPage,
+          });
           setError("");
         })}
         onIssueFeedback={() => {
           if (platformFeedbackOrigin !== null) return;
-          setSystemInfo(false);
+          setPageStack([]);
           setPlatformFeedbackOrigin(
             sidebarActivePage ??
               (sandboxSession
@@ -5840,7 +5917,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
-          setSystemInfo(false);
+          setPageStack([]);
           setApplicationsView(null);
           setError("");
           pickSession(id);
@@ -6160,18 +6237,19 @@ export default function App() {
                 </div>
               )}
 
-            {platformFeedbackOrigin !== null ? (
-              <PlatformFeedback
-                initialModule={issueFeedbackModuleForPage(platformFeedbackOrigin)}
-                onSubmit={submitPlatformIssueFeedback}
-              />
-            ) : systemInfo ? (
+            {systemInfo ? (
               <SystemInfo
                 version={version}
                 localMode={agentsSource === "local"}
                 role={access?.role ?? "user"}
                 provider={cloudProvider}
                 region={studioRegion || defaultCloudRegion(cloudProvider)}
+                onBack={closeSystemInfoPage}
+              />
+            ) : platformFeedbackOrigin !== null ? (
+              <PlatformFeedback
+                initialModule={issueFeedbackModuleForPage(platformFeedbackOrigin)}
+                onSubmit={submitPlatformIssueFeedback}
               />
             ) : applicationsView === "coding-agents" ? (
               <CodingAgentsIntegration
@@ -6196,13 +6274,13 @@ export default function App() {
             ) : sandboxAgentDetailTarget ? (
               <SandboxAgentDetails
                 session={sandboxAgentDetailTarget}
-                onBack={openMyAgentsPage}
+                onBack={closeSandboxAgentDetailPage}
                 onOpen={() =>
                   openSandboxAgent(sandboxAgentDetailTarget, "sandbox_detail")
                 }
                 onDelete={() => deleteSandboxAgent(sandboxAgentDetailTarget)}
               />
-            ) : myAgents ? (
+            ) : myAgents && !showManageAgents ? (
               <MyAgents
                 cloudProvider={cloudProvider}
                 canCreate={canCreateAgents}
@@ -6263,6 +6341,7 @@ export default function App() {
                 focusedCaseKind={focusedWorkspaceCaseKind}
                 feedbackCasePreview={feedbackCasePreview}
                 detailOnly
+                onBack={closeAgentDetailPage}
                 onRetryAgents={() => void refreshAgentLibrary()}
                 onAgentOrderChange={saveWorkspaceAgentOrder}
                 onDeleteAgents={deleteWorkspaceAgents}

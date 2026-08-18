@@ -44,7 +44,7 @@ test("Agent navigation uses the card page and keeps only detail workspace routes
   );
   assert.doesNotMatch(appSource, /<Navbar\b/);
   assert.doesNotMatch(appSource, /showManageAgents\s*\?\s*"智能体"/);
-  assert.match(appSource, /myAgents \? \([\s\S]*?<MyAgents/);
+  assert.match(appSource, /myAgents && !showManageAgents \? \([\s\S]*?<MyAgents/);
   assert.match(
     appSource,
     /const showManageAgents = manageAgents && Boolean\([\s\S]*?agentDetailTarget \|\| focusedDeploymentTaskId \|\| focusedWorkspaceAgentId/,
@@ -93,6 +93,16 @@ test("focused agent details can render without the workspace tabs or list sideba
   assert.match(workspaceSource, /const knownApp = selectedAgent\?\.runtimeApp \?\? ""[\s\S]*?getRuntimeAgentInfo\([\s\S]*?knownApp/);
   assert.match(clientSource, /loadDraft = true/);
   assert.match(clientSource, /return fetchAgentInfo\(app, ep, false\)/);
+});
+
+test("focused agent details place the shared back icon beside the title", () => {
+  assert.match(workspaceSource, /onBack\?: \(\) => void/);
+  assert.match(
+    workspaceSource,
+    /className="aw-agent-heading"[\s\S]*?<PageBackButton[\s\S]*?label="返回智能体列表"[\s\S]*?<div className="aw-agent-title-row">/,
+  );
+  assert.match(workspaceStyles, /\.aw-agent-heading\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*gap:\s*8px;/s);
+  assert.match(appSource, /<AgentWorkspace[\s\S]*?detailOnly[\s\S]*?onBack=\{closeAgentDetailPage\}/);
 });
 
 test("agent details show capability badges and deployment state before the flow", () => {

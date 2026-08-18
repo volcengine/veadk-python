@@ -63,6 +63,7 @@ import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
 import { Markdown } from "./Markdown";
+import { PageBackButton } from "./PageBackButton";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./AgentWorkspace.css";
@@ -926,6 +927,7 @@ export interface AgentWorkspaceProps {
   focusedCaseKind?: CaseKind;
   feedbackCasePreview?: AgentFeedbackCase | null;
   detailOnly?: boolean;
+  onBack?: () => void;
   onRetryAgents?: () => void;
   onAgentOrderChange?: (agentIds: string[]) => void;
   onDeleteAgents?: (agents: AgentEntry[]) => Promise<void>;
@@ -958,6 +960,7 @@ export function AgentWorkspace({
   focusedCaseKind = "good",
   feedbackCasePreview = null,
   detailOnly = false,
+  onBack,
   onRetryAgents,
   onAgentOrderChange,
   onDeleteAgents,
@@ -2598,19 +2601,24 @@ export function AgentWorkspace({
               </div>
             )}
             <div className="aw-agent-head">
-              <div>
-                <div className="aw-agent-title-row">
-                  <h2>{selectedName}</h2>
-                  {displayCurrentVersion != null && (
-                    <span>v{displayCurrentVersion}</span>
-                  )}
-                  {selectedDraft && <span>草稿</span>}
-                  {selectedAgentUpdateDraft && <span>待更新</span>}
-                  {!selectedAgent && !selectedDraft && selectedPendingTask && (
-                    <span>{selectedPendingTask.label}</span>
-                  )}
+              <div className="aw-agent-heading">
+                {detailOnly && onBack ? (
+                  <PageBackButton label="返回智能体列表" onClick={onBack} />
+                ) : null}
+                <div className="aw-agent-heading-copy">
+                  <div className="aw-agent-title-row">
+                    <h2>{selectedName}</h2>
+                    {displayCurrentVersion != null && (
+                      <span>v{displayCurrentVersion}</span>
+                    )}
+                    {selectedDraft && <span>草稿</span>}
+                    {selectedAgentUpdateDraft && <span>待更新</span>}
+                    {!selectedAgent && !selectedDraft && selectedPendingTask && (
+                      <span>{selectedPendingTask.label}</span>
+                    )}
+                  </div>
+                  <p>{draft.description || (loadingAgentInfo || (detailOnly && !detailAgentInfoResolved) ? "正在读取智能体信息…" : "暂无描述")}</p>
                 </div>
-                <p>{draft.description || (loadingAgentInfo || (detailOnly && !detailAgentInfoResolved) ? "正在读取智能体信息…" : "暂无描述")}</p>
               </div>
               {(selectedDraft || selectedAgentUpdateDraft || selectedAgent?.canDelete) && (
                 <div className="aw-head-actions">

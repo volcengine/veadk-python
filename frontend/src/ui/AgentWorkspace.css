@@ -36,6 +36,17 @@
   align-items: center;
 }
 
+.aw-agent-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aw-agent-heading-copy {
+  min-width: 0;
+}
+
 .aw-view-tabs {
   flex: 0 0 auto;
   gap: 26px;
@@ -656,6 +667,12 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
+}
+
+.aw-agent-head > .aw-agent-heading {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
 }
 
 .aw-head-actions {

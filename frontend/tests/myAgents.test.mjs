@@ -42,7 +42,7 @@ test("shows only the Agent navigation in the sidebar", () => {
     appSource,
     /<Sidebar[\s\S]*?onMyAgents=\{\(\) => requestIntelligentNavigation\(openMyAgentsPage\)\}/,
   );
-  assert.match(appSource, /myAgents \? \([\s\S]*?<MyAgents/);
+  assert.match(appSource, /myAgents && !showManageAgents \? \([\s\S]*?<MyAgents/);
 });
 
 test("shows the requested title, search, and agent type pills", () => {

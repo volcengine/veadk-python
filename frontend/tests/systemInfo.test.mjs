@@ -13,6 +13,8 @@ const clientSource = read("adk/client.ts");
 const sidebarSource = read("ui/Sidebar.tsx");
 const systemInfoSource = read("ui/SystemInfo.tsx");
 const systemInfoStylesSource = read("ui/SystemInfo.css");
+const pageBackButtonSource = read("ui/PageBackButton.tsx");
+const pageBackButtonStylesSource = read("ui/PageBackButton.css");
 
 const linksBuild = await build({
   entryPoints: [
@@ -45,7 +47,9 @@ test("account menu navigates to the system information page", () => {
     appSource,
     /region=\{studioRegion \|\| defaultCloudRegion\(cloudProvider\)\}/,
   );
-  assert.match(appSource, /const \[systemInfo, setSystemInfo\] = useState\(false\)/);
+  assert.match(appSource, /const \[pageStack, setPageStack\] = useState<StudioPageStackEntry\[\]>\(\[\]\)/);
+  assert.match(appSource, /page: "system-info"[\s\S]*?returnTo: currentStudioPage/);
+  assert.match(appSource, /<SystemInfo[\s\S]*?onBack=\{closeSystemInfoPage\}/);
   assert.match(
     sidebarSource,
     /系统信息[\s\S]*?退出登录/,
@@ -54,6 +58,34 @@ test("account menu navigates to the system information page", () => {
   assert.match(sidebarSource, /onSystemInfo\(\)/);
   assert.doesNotMatch(sidebarSource, /role="dialog"/);
   assert.doesNotMatch(sidebarSource, /createPortal/);
+});
+
+test("system information returns to the page recorded beneath it", () => {
+  assert.match(systemInfoSource, /onBack: \(\) => void/);
+  assert.match(
+    systemInfoSource,
+    /<PageBackButton[\s\S]*?label="返回上一页"[\s\S]*?onClick=\{onBack\}/,
+  );
+  assert.match(
+    appSource,
+    /onSystemInfo=\{\(\) => requestIntelligentNavigation\(\(\) => \{[\s\S]*?pushStudioPage\(\{[\s\S]*?page: "system-info"[\s\S]*?returnTo: currentStudioPage/,
+  );
+  assert.doesNotMatch(
+    appSource,
+    /onSystemInfo=\{\(\) => requestIntelligentNavigation\(\(\) => \{[\s\S]*?setSkillCenter\(false\)[\s\S]*?setSystemInfo\(true\)/,
+  );
+});
+
+test("shared page back button is an accessible fixed-size icon control", () => {
+  assert.match(pageBackButtonSource, /type="button"/);
+  assert.match(pageBackButtonSource, /aria-label=\{label\}/);
+  assert.match(pageBackButtonSource, /title=\{label\}/);
+  assert.match(pageBackButtonSource, /aria-hidden="true"/);
+  assert.match(
+    pageBackButtonStylesSource,
+    /\.page-back-button\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px;[^}]*display:\s*grid;[^}]*place-items:\s*center;/s,
+  );
+  assert.match(pageBackButtonStylesSource, /\.page-back-button:focus-visible/);
 });
 
 test("builds direct console links for Volcengine and BytePlus resources", () => {
