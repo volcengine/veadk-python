@@ -1068,3 +1068,42 @@ class IdentityClient:
             return response2.uid, response2.client_secret
 
         raise ValueError("Either name or client_uid must be provided")
+
+    @refresh_credentials
+    def get_user_pool_client_refresh_token_lifetime(
+        self,
+        *,
+        user_pool_uid: str,
+        client_uid: str,
+    ) -> int | None:
+        """Return the configured maximum refresh-token lifetime in seconds.
+
+        User-pool clients may configure both an idle lifetime and a combined
+        (absolute) lifetime.  The browser session must never outlive the
+        absolute lifetime, so prefer it when present and otherwise fall back
+        to the idle lifetime.
+        """
+        from volcenginesdkid import GetUserPoolClientRequest, GetUserPoolClientResponse
+
+        request = GetUserPoolClientRequest(
+            user_pool_uid=user_pool_uid,
+            client_uid=client_uid,
+        )
+        response: GetUserPoolClientResponse = self._api_client.get_user_pool_client(
+            request
+        )
+        refresh_token = response.refresh_token
+        if not refresh_token:
+            return None
+
+        if refresh_token.has_combined_lifetime:
+            combined_lifetime = int(refresh_token.combined_lifetime_seconds or 0)
+            if combined_lifetime > 0:
+                return combined_lifetime
+
+        if refresh_token.has_idle_lifetime:
+            idle_lifetime = int(refresh_token.idle_lifetime_seconds or 0)
+            if idle_lifetime > 0:
+                return idle_lifetime
+
+        return None
