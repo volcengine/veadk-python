@@ -252,15 +252,43 @@ def test_configure_rejects_symlinked_global_skills_root(
     assert not (outside / "skills").exists()
 
 
-def test_packaged_frontend_contains_the_two_canonical_skills() -> None:
-    root = Path(__file__).parents[2] / "frontend/public/coding-agent-skills"
-
-    assert sorted(path.name for path in root.iterdir() if path.is_dir()) == sorted(
-        SKILLS
+def test_packaged_frontend_contains_canonical_skills_and_synced_veadk_copy() -> None:
+    repository = Path(__file__).parents[2]
+    roots = (
+        repository / "frontend/public/coding-agent-skills",
+        repository / "veadk/webui/coding-agent-skills",
     )
-    for skill_id in SKILLS:
-        skill_md = (root / skill_id / "SKILL.md").read_text(encoding="utf-8")
-        assert f"name: {skill_id}" in skill_md
+
+    for root in roots:
+        assert sorted(path.name for path in root.iterdir() if path.is_dir()) == sorted(
+            SKILLS
+        )
+        for skill_id in SKILLS:
+            skill_md = (root / skill_id / "SKILL.md").read_text(encoding="utf-8")
+            assert f"name: {skill_id}" in skill_md
+
+    source = roots[0] / "veadk-agent-development"
+    packaged = roots[1] / "veadk-agent-development"
+    source_files = {
+        path.relative_to(source).as_posix(): path.read_bytes()
+        for path in source.rglob("*")
+        if path.is_file()
+    }
+    packaged_files = {
+        path.relative_to(packaged).as_posix(): path.read_bytes()
+        for path in packaged.rglob("*")
+        if path.is_file()
+    }
+    assert packaged_files == source_files
+
+    combined = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(source.rglob("*.md"))
+    )
+    assert "`agent_server` (`WebServer App`)" in combined
+    assert "default for a new empty VeADK project" in combined
+    assert "Never run bare `ak init`" in combined
+    assert "Studio" not in combined
+    assert "sandbox" not in combined.lower()
 
 
 def test_launch_route_is_not_exposed(

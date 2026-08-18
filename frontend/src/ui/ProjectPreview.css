@@ -395,7 +395,7 @@
 }
 
 .pp-root.is-deploy {
-  --pp-publish-content-width: min(760px, max(680px, calc(100% - 48px)));
+  --pp-publish-content-width: min(760px, calc(100% - 48px));
   overflow-y: auto;
 }
 

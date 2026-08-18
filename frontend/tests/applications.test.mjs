@@ -83,7 +83,10 @@ test("adds the Automation destination with a repository-owned four-circle icon",
   const applicationsIndex = sidebarSource.indexOf('aria-label="自动化"');
   assert.equal(searchIndex >= 0, true);
   assert.equal(searchIndex < applicationsIndex, true);
-  assert.match(appSource, /onApplications=\{openApplicationsPage\}/);
+  assert.match(
+    appSource,
+    /onApplications=\{\(\) => requestIntelligentNavigation\(openApplicationsPage\)\}/,
+  );
 });
 
 test("renders category-filtered automations from independent capability modules", () => {
@@ -148,7 +151,10 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
   assert.doesNotMatch(githubSource, /<select/);
   assert.match(templateSource, /VOLCENGINE_ACCESS_KEY、VOLCENGINE_SECRET_KEY（必填）/);
   assert.doesNotMatch(appSource, /applicationsView !== "github" \? <Sidebar/);
-  assert.match(appSource, /<Sidebar[\s\S]*?onApplications=\{openApplicationsPage\}/);
+  assert.match(
+    appSource,
+    /<Sidebar[\s\S]*?onApplications=\{\(\) => requestIntelligentNavigation\(openApplicationsPage\)\}/,
+  );
   assert.match(githubStyles, /\.github-section-panel \{[\s\S]*?border: 0/);
   assert.match(githubStyles, /\.github-section-panel \{[\s\S]*?background: transparent/);
   assert.match(githubStyles, /\.github-section-panel \{[^}]*width: 100%;/);

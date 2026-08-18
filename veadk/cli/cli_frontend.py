@@ -211,7 +211,7 @@ def _validate_byteplus_vefaas_application_name(name: str) -> None:
     )
 
 
-def _validate_distinct_sandbox_tool_ids(tool_ids: dict[str, object]) -> None:
+def _validate_distinct_sandbox_tool_ids(tool_ids: Mapping[str, object]) -> None:
     """Reject one Tool id serving both transient and snapshot sessions."""
     labels = {
         "codex": "Codex",
@@ -1581,6 +1581,10 @@ def _run_frontend_server(
         skills_client_factory=_skill_workbench_skills_client,
     )
 
+    def _intelligent_development_owner(request: Request) -> str:
+        principal = _require_agent_management(request)
+        return principal.owner_id if principal is not None else "local"
+
     from veadk.cli.frontend_coding_agents import mount_coding_agent_routes
 
     mount_coding_agent_routes(
@@ -1917,6 +1921,23 @@ def _run_frontend_server(
             provider=provider,
         ),
     )
+    from frontend.server.intelligent_development import StudioCredentials
+    from frontend.server.intelligent_development_routes import (
+        IntelligentDevelopmentGateway,
+        mount_intelligent_development_routes,
+    )
+
+    intelligent_development_tool_id = (os.getenv("SANDBOX_DEV") or "").strip()
+    intelligent_development_service = SandboxConversationService(
+        IntelligentDevelopmentGateway(sandbox_gateway),
+        tool_id=(
+            intelligent_development_tool_id
+            if intelligent_development_tool_id
+            else "__intelligent-development-not-configured__"
+        ),
+        snapshot_tool_id=None,
+        agent_kind="intelligent-development",
+    )
     sandbox_service = SandboxConversationService(
         sandbox_gateway,
         tool_id=sandbox_chat_codex_tool_id,
@@ -1972,6 +1993,25 @@ def _run_frontend_server(
         _sandbox_proxy_target,
         _sandbox_is_admin,
         _sandbox_creator,
+    )
+
+    def _intelligent_development_credentials() -> StudioCredentials:
+        access_key, secret_key, session_token = _resolve_ve_credentials()
+        return StudioCredentials(access_key, secret_key, session_token)
+
+    mount_intelligent_development_routes(
+        app,
+        intelligent_development_service,
+        _intelligent_development_owner,
+        _sandbox_creator,
+        _intelligent_development_credentials,
+        configured=bool(intelligent_development_tool_id),
+        validation_region=(
+            os.getenv("VEADK_STUDIO_DEPLOY_REGION")
+            or os.getenv("AGENTKIT_SANDBOX_REGION")
+            or default_region(provider)
+        ),
+        validation_project=os.getenv("VEADK_STUDIO_PROJECT") or "default",
     )
     mount_sandbox_agent_routes(
         app,
@@ -3750,6 +3790,18 @@ def _run_frontend_server(
         requested_runtime_name = (data.get("runtimeName") or agent_name).strip()
         files = data.get("files", [])
         migration_task_id = str(data.get("migrationTaskId") or "").strip()
+        source = data.get("source") or (
+            {"kind": "migration", "migrationId": migration_task_id}
+            if migration_task_id
+            else {"kind": "inlineFiles"}
+        )
+        if not isinstance(source, dict) or source.get("kind") not in {
+            "inlineFiles",
+            "migration",
+            "intelligentDevelopment",
+        }:
+            raise HTTPException(status_code=400, detail="Invalid deployment source")
+        trusted_intelligent_source = source.get("kind") == "intelligentDevelopment"
         config = data.get("config", {})
         task_id = str(data.get("taskId") or f"deploy-{id(request)}").strip()
         create_evaluation_sets = data.get("createEvaluationSets", True)
@@ -3757,7 +3809,30 @@ def _run_frontend_server(
         owner_id = principal.owner_id if principal else ""
         if not agent_name:
             raise HTTPException(status_code=400, detail="Agent name is required")
-        if not files and not migration_task_id:
+        if trusted_intelligent_source and (
+            len(agent_name) < 4
+            or len(agent_name) > 64
+            or re.fullmatch(r"[A-Za-z0-9_-]+", agent_name) is None
+        ):
+            raise HTTPException(status_code=400, detail="Invalid Runtime name")
+        if trusted_intelligent_source:
+            if files:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Trusted deployment source does not accept browser files",
+                )
+            if runtime_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Intelligent development source can only create a new Runtime",
+                )
+        elif source.get("kind") == "migration":
+            if not migration_task_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Migration deployment source is invalid",
+                )
+        elif not files:
             raise HTTPException(status_code=400, detail="No files provided")
         if not isinstance(create_evaluation_sets, bool):
             raise HTTPException(
@@ -3965,29 +4040,43 @@ def _run_frontend_server(
 
         # Materialize one validated source tree. Migration source is resolved
         # server-side from the caller-owned Session; browser files are ignored.
+        from frontend.server.deployment_source import (
+            DeploymentSourceError,
+            write_inline_source,
+        )
+        from frontend.server.intelligent_development_source import (
+            IntelligentDevelopmentSourceIntegrityError,
+            IntelligentDevelopmentSourceNotFound,
+            IntelligentDevelopmentSourceStale,
+        )
+
         temp_dir = tempfile.mkdtemp(prefix=f"agentkit_deploy_{agent_name}_")
         base = PathlibPath(temp_dir).resolve()
         try:
-            if migration_task_id:
+            if source.get("kind") == "migration":
                 entry_point = await asyncio.to_thread(
                     migration_service.materialize_deployment,
                     migration_task_id,
                     owner_id or "local",
                     base,
                 )
-            else:
-                from frontend.server.deployment_source import (
-                    DeploymentSourceError,
-                    write_inline_source,
+                trusted_agent_name = agent_name
+            elif trusted_intelligent_source:
+                from frontend.server.intelligent_development_source import (
+                    materialize_intelligent_development_source,
                 )
 
-                try:
-                    entry_point = write_inline_source(base, files)
-                except DeploymentSourceError as error:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=str(error),
-                    ) from error
+                materialized = await materialize_intelligent_development_source(
+                    base,
+                    source,
+                    owner_id=owner_id,
+                    service=intelligent_development_service,
+                )
+                entry_point = materialized.entry_point
+                trusted_agent_name = materialized.agent_name
+            else:
+                entry_point = write_inline_source(base, files)
+                trusted_agent_name = agent_name
         except MigrationError as error:
             shutil.rmtree(temp_dir, ignore_errors=True)
             logger.warning(
@@ -3999,8 +4088,25 @@ def _run_frontend_server(
                 status_code=error.status_code,
                 detail=str(error),
             ) from error
-        except Exception:
+        except IntelligentDevelopmentSourceNotFound as error:
             shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except IntelligentDevelopmentSourceStale as error:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except IntelligentDevelopmentSourceIntegrityError as error:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(status_code=502, detail=str(error)) from error
+        except DeploymentSourceError as error:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except Exception as error:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            if trusted_intelligent_source:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Trusted deployment source is unavailable",
+                ) from error
             raise
 
         # Collect env vars from the deployer's environment to forward into the
@@ -4070,6 +4176,7 @@ def _run_frontend_server(
         cloud_config: dict = {
             "region": region,
             "project_name": project_name,
+            **({"runtime_name": agent_name} if trusted_intelligent_source else {}),
             "image_tag": (
                 f"veadk-v{(getattr(existing_runtime, 'current_version_number', 0) or 0) + 1}"
                 if existing_runtime is not None
@@ -4119,7 +4226,7 @@ def _run_frontend_server(
 
         agentkit_config = {
             "common": {
-                "agent_name": agent_name,
+                "agent_name": trusted_agent_name,
                 "entry_point": entry_point,
                 "description": _normalize_runtime_description(data.get("description")),
                 "python_version": "3.12",
@@ -4585,6 +4692,20 @@ def _run_frontend_server(
                         )
                         for key, value in deployment_resource_tag_values.items()
                     )
+                    if trusted_intelligent_source:
+                        extra.extend(
+                            _rt.TagsItemForCreateRuntime.model_validate(
+                                {"Key": key, "Value": value}
+                            )
+                            for key, value in {
+                                "veadk:lifecycle": "production",
+                                "veadk:source": "intelligent-development",
+                                "veadk:artifact": str(source["artifactSha256"]),
+                                "veadk:validation-report": str(
+                                    source["validationReportSha256"]
+                                ),
+                            }.items()
+                        )
 
                     def _tagged_create(self, req, _orig=orig_create, _extra=extra):
                         if task_state["cancel_event"].is_set():
@@ -6003,9 +6124,8 @@ def _run_frontend_server(
 
         # The SPA fetches /web/auth-config and /oauth2/userinfo on every startup, so
         # both must always return JSON. With SSO off we answer with an empty provider
-        # list and a 401 (unauthenticated), and the app renders its normal no-login
-        # UI; otherwise the SPA-fallback serves the HTML shell for these paths and the
-        # app's `await res.json()` throws, leaving a white screen.
+        # list and a 404, which is the client contract for local username mode;
+        # otherwise the SPA fallback serves HTML and `res.json()` leaves a white screen.
         providers: list[dict] = []
 
         if oauth2_config is not None:
@@ -6066,9 +6186,9 @@ def _run_frontend_server(
 
             @app.get("/oauth2/userinfo")
             async def _userinfo_no_sso():
-                # No SSO configured: report unauthenticated (401) so the SPA's auth
-                # check resolves cleanly instead of parsing the HTML shell as JSON.
-                return JSONResponse({"status": "unauthenticated"}, status_code=401)
+                # A JSON 404 is the SPA contract for local username mode and avoids
+                # parsing the HTML fallback while preserving 401 for real auth failures.
+                return JSONResponse({"status": "unauthenticated"}, status_code=404)
 
         @app.get("/web/auth-config")
         async def _web_auth_config():

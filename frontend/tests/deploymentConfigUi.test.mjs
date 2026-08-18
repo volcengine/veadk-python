@@ -172,7 +172,11 @@ test("lets deployment dropdowns escape rounded configuration cards", () => {
 test("aligns the publish overview and deployment settings to one restrained content width", () => {
   assert.match(
     projectPreviewStyles,
-    /--pp-publish-content-width:\s*min\(760px, max\(680px, calc\(100% - 48px\)\)\)/,
+    /--pp-publish-content-width:\s*min\(760px, calc\(100% - 48px\)\)/,
+  );
+  assert.doesNotMatch(
+    projectPreviewStyles,
+    /--pp-publish-content-width:\s*[^;]*max\(680px/,
   );
   assert.match(
     projectPreviewStyles,

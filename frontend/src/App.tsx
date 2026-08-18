@@ -83,6 +83,7 @@ import {
   eventsToTurns,
   sessionTitle,
   type Block,
+  type IntelligentDevelopmentReleaseRef,
   type Turn,
   type TurnActivityDetail,
 } from "./blocks";
@@ -125,6 +126,11 @@ import { Composer } from "./ui/Composer";
 import { InvocationChips } from "./ui/InvocationChips";
 import { MediaGroup } from "./ui/Media";
 import { StackCards } from "./ui/AddAgentMenu";
+import {
+  IntelligentCreate,
+  type IntelligentPreparationStage,
+} from "./create/IntelligentCreate";
+import { IntelligentDeployment } from "./create/IntelligentDeployment";
 import { CustomCreate } from "./create/CustomCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
 import { MigrationWorkspace } from "./migrations/MigrationWorkspace";
@@ -153,6 +159,7 @@ import {
   NEW_CHAT_TASK_TOOLS,
 } from "./ui/new-chat-modes/taskTools";
 import {
+  intelligentDevelopmentClient,
   sandboxClient,
   type SandboxApproval,
   type SandboxApprovalDecision,
@@ -166,6 +173,11 @@ import {
   type SandboxThreadSummary,
   type SandboxToolLaunch,
 } from "./adk/sandbox";
+import {
+  downloadIntelligentDevelopmentRelease,
+  fetchCurrentIntelligentDevelopmentRelease,
+  fetchIntelligentDevelopmentRelease,
+} from "./adk/intelligentDevelopment";
 import {
   getSandboxAgentCapability,
   getSandboxCapability,
@@ -299,6 +311,7 @@ async function probeNewChatCapabilities(
 }
 
 type CreateView = "custom" | "package" | "migration" | null;
+type AppView = CreateView | "intelligent";
 type CustomCreateMode = "custom" | "yaml_import";
 
 // Persist the last view so a page refresh restores where the user was.
@@ -398,9 +411,10 @@ function mentionableDescendants(node: AgentNode): AgentTarget[] {
   return targets;
 }
 
-function loadView(): CreateView {
+function loadView(): AppView {
   const v = typeof localStorage !== "undefined" ? localStorage.getItem(LS.view) : null;
-  if (["menu", "intelligent", "custom", "template", "workflow"].includes(v ?? "")) {
+  if (v === "intelligent") return v;
+  if (["menu", "custom", "template", "workflow"].includes(v ?? "")) {
     return "custom";
   }
   return v === "package" || v === "migration" ? v : null;
@@ -418,6 +432,8 @@ import {
 } from "./ui/responseAnnotation";
 import { PlatformFeedback } from "./ui/PlatformFeedback";
 import { Markdown } from "./ui/Markdown";
+import { withAuth } from "./adk/auth";
+import { withLocalUser } from "./adk/identity";
 import {
   clearLocalUser,
   logout,
@@ -434,6 +450,7 @@ import {
 import {
   beginAgentConnect,
   beginAgentMessage,
+  beginAgentSourceDownload,
   beginSandboxCreate,
   classifyTelemetryError,
   identifyTelemetryUser,
@@ -593,6 +610,7 @@ function turnHasVisibleContent(turn: Turn): boolean {
     if (b.kind === "text") return b.text.trim().length > 0;
     if (b.kind === "attachment") return b.files.length > 0;
     if (b.kind === "artifact") return b.files.length > 0;
+    if (b.kind === "delivery") return true;
     if (b.kind === "tool") return !(b.name === A2UI_TOOL_NAME && b.done);
     if (b.kind === "agent-transfer") return false;
     if (b.kind === "a2ui") return buildSurfaces(b.messages).some((s) => s.components[s.rootId]);
@@ -909,6 +927,49 @@ function sessionUsageKey(app: string, session: string): string {
   return `${app}\u0001${session}`;
 }
 
+function appendIntelligentDelivery(
+  turns: Turn[],
+  delivery: IntelligentDevelopmentReleaseRef,
+): Turn[] {
+  const deliveryBlock: Block = { kind: "delivery", value: delivery };
+  let existingIndex = -1;
+  let assistantIndex = -1;
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+    if (assistantIndex < 0 && turn.role === "assistant") assistantIndex = index;
+    if (turn.blocks.some((block) =>
+      block.kind === "delivery" && block.value.sessionId === delivery.sessionId
+    )) {
+      existingIndex = index;
+      break;
+    }
+  }
+  if (existingIndex >= 0) {
+    return turns.map((turn, index) => index !== existingIndex
+      ? turn
+      : {
+          ...turn,
+          blocks: [
+            ...turn.blocks.filter((block) => block.kind !== "delivery"),
+            deliveryBlock,
+          ],
+        });
+  }
+  if (assistantIndex >= 0) {
+    return turns.map((turn, index) => index !== assistantIndex
+      ? turn
+      : { ...turn, blocks: [...turn.blocks, deliveryBlock] });
+  }
+  return [
+    ...turns,
+    {
+      role: "assistant",
+      blocks: [deliveryBlock],
+      meta: { localId: crypto.randomUUID(), ts: Date.now() / 1_000 },
+    },
+  ];
+}
+
 export default function App() {
   const [apps, setApps] = useState<string[]>([]);
   const [appName, setAppName] = useState("");
@@ -920,6 +981,13 @@ export default function App() {
   const [pendingTurns, setPendingTurns] = useState<Turn[]>([]);
   const [sandboxSession, setSandboxSession] =
     useState<SandboxSessionInfo | null>(null);
+  const [intelligentSessions, setIntelligentSessions] =
+    useState<SandboxSessionInfo[]>([]);
+  const [intelligentSessionsLoading, setIntelligentSessionsLoading] =
+    useState(false);
+  const [intelligentSessionsError, setIntelligentSessionsError] = useState("");
+  const [intelligentSessionOpeningId, setIntelligentSessionOpeningId] =
+    useState("");
   const [sandboxTurns, setSandboxTurns] = useState<Turn[]>([]);
   const [sandboxBusy, setSandboxBusy] = useState(false);
   const [sandboxSettingsBusy, setSandboxSettingsBusy] = useState(false);
@@ -956,7 +1024,18 @@ export default function App() {
   const [sandboxThreadDeleteTarget, setSandboxThreadDeleteTarget] =
     useState<SandboxThreadSummary | null>(null);
   const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
+  const intelligentCreateAbortRef = useRef<AbortController | null>(null);
+  const intelligentOpenAbortRef = useRef<AbortController | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
+  const pendingIntelligentNavigationRef = useRef<(() => void) | null>(null);
+  const [intelligentLeaveOpen, setIntelligentLeaveOpen] = useState(false);
+  const [intelligentLeaveBusy, setIntelligentLeaveBusy] = useState(false);
+  const [intelligentSessionDeleteTarget, setIntelligentSessionDeleteTarget] =
+    useState<SandboxSessionInfo | null>(null);
+  const sandboxStopWaitRef = useRef<{
+    controller: AbortController;
+    promise: Promise<boolean>;
+  } | null>(null);
   const sandboxSessionIdRef = useRef(sandboxSession?.id ?? "");
   const sandboxActiveAssistantTurnIdRef = useRef("");
   const sandboxUploadRunRef = useRef(0);
@@ -1083,6 +1162,90 @@ export default function App() {
   const [newChatSkillTarget, setNewChatSkillTarget] =
     useState<NewChatSkillTarget | null>(null);
   const [newChatTask, setNewChatTask] = useState<NewChatTask | null>(null);
+  const [intelligentCapabilities, setIntelligentCapabilities] = useState<{
+    enabled: boolean;
+    reason: string;
+  } | null>(null);
+  const [intelligentCapabilitiesLoading, setIntelligentCapabilitiesLoading] =
+    useState(true);
+  const [intelligentCapabilitiesError, setIntelligentCapabilitiesError] =
+    useState("");
+  const [intelligentPreparationStage, setIntelligentPreparationStage] =
+    useState<IntelligentPreparationStage | null>(null);
+  const [intelligentDeployment, setIntelligentDeploymentState] =
+    useState<IntelligentDevelopmentReleaseRef | null>(null);
+  const setIntelligentDeployment = useCallback(
+    (delivery: IntelligentDevelopmentReleaseRef | null) => {
+      setIntelligentDeploymentState(delivery);
+      const url = new URL(window.location.href);
+      if (delivery) {
+        url.searchParams.set("view", "runtime-deploy");
+        url.searchParams.set("source", "intelligent-development");
+        url.searchParams.set("sessionId", delivery.sessionId);
+        url.searchParams.set("artifactSha256", delivery.artifactSha256);
+        url.searchParams.set(
+          "validationReportSha256",
+          delivery.validationReportSha256,
+        );
+      } else {
+        for (const key of [
+          "view",
+          "source",
+          "sessionId",
+          "artifactSha256",
+          "validationReportSha256",
+        ]) url.searchParams.delete(key);
+      }
+      window.history.replaceState(null, "", url);
+    },
+    [],
+  );
+  const resolveIntelligentDelivery = useCallback(
+    (delivery: IntelligentDevelopmentReleaseRef) =>
+      fetchIntelligentDevelopmentRelease(
+        delivery.sessionId,
+        delivery.artifactSha256,
+        delivery.validationReportSha256,
+      ),
+    [],
+  );
+  const downloadIntelligentDelivery = useCallback(
+    async (delivery: IntelligentDevelopmentReleaseRef) => {
+      const operation = beginAgentSourceDownload({
+        agentId: delivery.agentName,
+        deployAction: "create",
+        deploySource: "intelligent_development",
+        createMode: "intelligent",
+        aiAssisted: 1,
+      });
+      try {
+        const { blob, filename } = await downloadIntelligentDevelopmentRelease(delivery);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        link.hidden = true;
+        try {
+          document.body.appendChild(link);
+          link.click();
+        } finally {
+          link.remove();
+          window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+        }
+        operation.succeed({
+          fileCount: delivery.fileCount,
+          zipSizeBytes: blob.size,
+        });
+      } catch (cause) {
+        operation.fail({
+          fileCount: delivery.fileCount,
+          ...classifyTelemetryError(cause),
+        });
+        throw cause;
+      }
+    },
+    [],
+  );
   const [videoTask, setVideoTask] = useState<VideoGenerationTask | null>(null);
   const [videoTaskDialogOpen, setVideoTaskDialogOpen] = useState(false);
   const videoTaskRef = useRef<VideoGenerationTask | null>(null);
@@ -1476,7 +1639,13 @@ export default function App() {
     : conversationBusy;
   const activeConversationPresenting =
     activeConversationBusy || (!sandboxSession && presentingStream);
+  const sandboxClientForSession = sandboxSession?.intelligentDevelopment === true
+    ? intelligentDevelopmentClient
+    : sandboxClient;
   const sandboxCommands = useSandboxCodexCommands({
+    client: sandboxClientForSession,
+    allowSkillSelection: sandboxSession?.intelligentDevelopment !== true,
+    allowThreadManagement: sandboxSession?.intelligentDevelopment !== true,
     session: sandboxSession,
     conversationBusy: sandboxBusy,
     onInputChange: setInput,
@@ -1690,7 +1859,7 @@ export default function App() {
       });
     }
   };
-  const [createView, setCreateView] = useState<CreateView>(loadView);
+  const [createView, setCreateView] = useState<AppView>(loadView);
   const [deploymentTasks, setDeploymentTasks] = useState<
     DeploymentTaskUpdate[]
   >([]);
@@ -2328,6 +2497,10 @@ export default function App() {
     conversationSmoothTimerRef.current = window.setTimeout(() => {
       conversationSmoothScrollRef.current = false;
       conversationSmoothTimerRef.current = null;
+      const current = scrollRef.current;
+      if (current && conversationAutoFollowRef.current) {
+        current.scrollTop = current.scrollHeight;
+      }
     }, 450);
   }, [conversationScrollKey, turns.length]);
   useLayoutEffect(() => {
@@ -2469,6 +2642,124 @@ export default function App() {
   useEffect(() => {
     if (localMode && userId) setLocalUser(userId);
   }, [localMode, userId]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !userId) {
+      setIntelligentSessions([]);
+      setIntelligentSessionsError("");
+      setIntelligentSessionsLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setIntelligentSessionsLoading(true);
+    setIntelligentSessionsError("");
+    void intelligentDevelopmentClient.listSessions({ signal: controller.signal })
+      .then((resources) => {
+        if (controller.signal.aborted) return;
+        const now = Date.now();
+        setIntelligentSessions(resources.filter(
+          (resource): resource is SandboxSessionInfo => {
+            if (resource.resourceType !== "session") return false;
+            const expiry = Date.parse(resource.expireAt);
+            return resource.intelligentDevelopment
+              && (!Number.isFinite(expiry) || expiry > now)
+              && resource.status.toLowerCase() === "ready";
+          },
+        ));
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted) {
+          setIntelligentSessionsError(
+            cause instanceof Error ? cause.message : String(cause),
+          );
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIntelligentSessionsLoading(false);
+      });
+    return () => controller.abort();
+  }, [authStatus, userId]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !userId || intelligentDeployment) return;
+    const query = new URLSearchParams(window.location.search);
+    if (
+      query.get("view") !== "runtime-deploy" ||
+      query.get("source") !== "intelligent-development"
+    ) return;
+    const sessionId = query.get("sessionId") ?? "";
+    const artifactSha256 = query.get("artifactSha256") ?? "";
+    const validationReportSha256 = query.get("validationReportSha256") ?? "";
+    if (!sessionId || !artifactSha256 || !validationReportSha256) return;
+    const controller = new AbortController();
+    void fetchIntelligentDevelopmentRelease(
+      sessionId,
+      artifactSha256,
+      validationReportSha256,
+      controller.signal,
+    )
+      .then((delivery) => {
+        if (controller.signal.aborted) return;
+        if (!delivery.deployable) {
+          setIntelligentCapabilitiesError(
+            "该源码尚未准备好，请返回对话继续处理。",
+          );
+          return;
+        }
+        setIntelligentDeploymentState({
+          ...delivery,
+          validatedAt: delivery.validatedAt || "",
+          gateSummary: delivery.gateSummary || [],
+        });
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted) {
+          setIntelligentCapabilitiesError(
+            cause instanceof Error ? cause.message : String(cause),
+          );
+        }
+      });
+    return () => controller.abort();
+  }, [authStatus, intelligentDeployment, userId]);
+
+  useEffect(() => {
+    if (!addMenu && createView !== "intelligent") return;
+    if (authStatus !== "authenticated" || !userId) {
+      setIntelligentCapabilities(null);
+      setIntelligentCapabilitiesError("");
+      setIntelligentCapabilitiesLoading(true);
+      return;
+    }
+    const controller = new AbortController();
+    setIntelligentCapabilitiesLoading(true);
+    setIntelligentCapabilitiesError("");
+    void fetch(withAuth("/web/intelligent-development/capabilities"), {
+      headers: withLocalUser({ Accept: "application/json" }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`智能开发能力检查失败（HTTP ${response.status}）`);
+        return response.json() as Promise<{ enabled?: unknown; reason?: unknown }>;
+      })
+      .then((value) => {
+        if (controller.signal.aborted) return;
+        setIntelligentCapabilities({
+          enabled: value.enabled === true,
+          reason: typeof value.reason === "string" ? value.reason : "",
+        });
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted) {
+          setIntelligentCapabilitiesError(
+            cause instanceof Error ? cause.message : String(cause),
+          );
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIntelligentCapabilitiesLoading(false);
+      });
+    return () => controller.abort();
+  }, [addMenu, authStatus, createView, userId]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || !userId) {
@@ -2973,6 +3264,8 @@ export default function App() {
   useEffect(
     () => () => {
       sandboxLaunchAbortRef.current?.abort();
+      intelligentCreateAbortRef.current?.abort();
+      intelligentOpenAbortRef.current?.abort();
       sandboxMessageAbortRef.current?.abort();
     },
     [],
@@ -3205,6 +3498,113 @@ export default function App() {
     }
   }
 
+  function activateIntelligentDevelopmentSession(
+    connected: SandboxSessionInfo,
+    restoredTurns: Turn[],
+  ) {
+    viewSidRef.current = "";
+    setSessionId("");
+    setPendingTurns([]);
+    setInput("");
+    setInvocation(emptyInvocation());
+    discardDraftAttachments(attachments);
+    setAttachments([]);
+    releaseAllSandboxPreviews();
+    setSandboxTurns(restoredTurns);
+    sandboxSessionIdRef.current = connected.id;
+    setSandboxSession(connected);
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setAgentDetailTarget(null);
+    setMyAgents(false);
+    setSystemInfo(false);
+    setApplicationsView(null);
+    setSandboxAgentDetailTarget(null);
+    setSandboxAgentWorkspace(null);
+  }
+
+  async function openIntelligentDevelopmentSession(
+    session: SandboxSessionInfo,
+  ) {
+    if (sandboxSession?.id === session.id) return;
+    intelligentOpenAbortRef.current?.abort();
+    const controller = new AbortController();
+    intelligentOpenAbortRef.current = controller;
+    setIntelligentSessionOpeningId(session.id);
+    setIntelligentSessionsError("");
+    setError("");
+    try {
+      if (sandboxSession) exitSandboxSession();
+      const connected = await intelligentDevelopmentClient.connectSession(
+        session.id,
+        { signal: controller.signal },
+      );
+      if (controller.signal.aborted) return;
+      const restoredTurns = connected.restoredConversation
+        ? sandboxSnapshotTurns(connected.restoredConversation)
+        : [];
+      activateIntelligentDevelopmentSession(connected, restoredTurns);
+      try {
+        const delivery = await fetchCurrentIntelligentDevelopmentRelease(
+          connected.id,
+          controller.signal,
+        );
+        if (delivery && sandboxSessionIdRef.current === connected.id) {
+          setSandboxTurns((current) =>
+            appendIntelligentDelivery(current, delivery)
+          );
+        }
+      } catch (cause) {
+        if (
+          !controller.signal.aborted &&
+          sandboxSessionIdRef.current === connected.id
+        ) {
+          setError(
+            cause instanceof Error ? cause.message : String(cause),
+          );
+        }
+      }
+    } catch (cause) {
+      if (!controller.signal.aborted) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    } finally {
+      if (intelligentOpenAbortRef.current === controller) {
+        intelligentOpenAbortRef.current = null;
+        setIntelligentSessionOpeningId("");
+      }
+    }
+  }
+
+  async function deleteIntelligentDevelopmentSession(
+    session: SandboxSessionInfo,
+  ) {
+    if (sandboxBusy && sandboxSession?.id === session.id) {
+      setError("当前构建仍在进行，请先停止后再删除会话。");
+      return;
+    }
+    setIntelligentSessionOpeningId(session.id);
+    setError("");
+    try {
+      await intelligentDevelopmentClient.deleteSession(session.id);
+      setIntelligentSessions((current) =>
+        current.filter((item) => item.id !== session.id)
+      );
+      if (sandboxSession?.id === session.id) exitSandboxSession(false);
+      setIntelligentSessionDeleteTarget(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setIntelligentSessionOpeningId((current) =>
+        current === session.id ? "" : current
+      );
+    }
+  }
+
   async function openSandboxAgent(
     resource: SandboxAgentResource,
     source: AgentConnectSource = "my_agents",
@@ -3322,7 +3722,7 @@ export default function App() {
     if (deleted) setSandboxThreadDeleteTarget(null);
   }
 
-  function exitSandboxSession() {
+  function exitSandboxSession(closeRemote = true) {
     sandboxMessageAbortRef.current?.abort();
     sandboxMessageAbortRef.current = null;
     sandboxSessionIdRef.current = "";
@@ -3351,8 +3751,11 @@ export default function App() {
     sandboxUploadRunRef.current += 1;
     const closingSession = sandboxSession;
     setSandboxSession(null);
-    if (closingSession) {
-      void sandboxClient
+    if (closingSession && closeRemote) {
+      const closingClient = closingSession.intelligentDevelopment
+        ? intelligentDevelopmentClient
+        : sandboxClient;
+      void closingClient
         .closeSession(closingSession.id)
         .catch((closeError) => setError(String(closeError)));
     }
@@ -3367,8 +3770,8 @@ export default function App() {
     setSandboxToolLoading(true);
     try {
       const launch = kind === "terminal"
-        ? await sandboxClient.launchTerminal(activeSession.id)
-        : await sandboxClient.launchBrowser(activeSession.id);
+        ? await sandboxClientForSession.launchTerminal(activeSession.id)
+        : await sandboxClientForSession.launchBrowser(activeSession.id);
       setSandboxToolLaunch(launch);
     } catch (cause) {
       setSandboxToolError(
@@ -3412,7 +3815,7 @@ export default function App() {
     setSandboxSettingsBusy(true);
     setSandboxSettingsError("");
     try {
-      const permissions = await sandboxClient.updatePermissions(
+      const permissions = await sandboxClientForSession.updatePermissions(
         activeSession.id,
         value,
       );
@@ -3459,7 +3862,7 @@ export default function App() {
     async (path: string) => {
       const activeSessionId = sandboxSession?.id;
       if (!activeSessionId) throw new Error("当前没有已连接的 Sandbox。");
-      return sandboxClient.listDirectories(activeSessionId, path);
+      return sandboxClientForSession.listDirectories(activeSessionId, path);
     },
     [sandboxSession?.id],
   );
@@ -3474,7 +3877,7 @@ export default function App() {
     setSandboxSettingsBusy(true);
     setSandboxSettingsError("");
     try {
-      const applied = await sandboxClient.updateWorkspace(
+      const applied = await sandboxClientForSession.updateWorkspace(
         activeSession.id,
         cwd,
       );
@@ -3510,7 +3913,7 @@ export default function App() {
     setSandboxApprovalBusy(true);
     setSandboxApprovalError("");
     try {
-      await sandboxClient.resolveApproval(
+      await sandboxClientForSession.resolveApproval(
         activeSession.id,
         activeApproval.id,
         decision,
@@ -3558,7 +3961,7 @@ export default function App() {
       const uploadResults = await Promise.all(
         drafts.map(async ({ file, attachment }) => {
           try {
-            const uploaded = await sandboxClient.uploadFile(
+            const uploaded = await sandboxClientForSession.uploadFile(
               activeSession.id,
               file,
             );
@@ -3633,12 +4036,75 @@ export default function App() {
   }
 
   function stopSandboxGeneration() {
-    const activeSessionId = sandboxSession?.id;
-    sandboxMessageAbortRef.current?.abort();
-    if (activeSessionId) {
-      void sandboxClient
-        .interruptSession(activeSessionId)
-        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    const controller = sandboxMessageAbortRef.current;
+    const activeSession = sandboxSession;
+    if (!controller) return;
+    if (activeSession?.intelligentDevelopment) {
+      if (sandboxStopWaitRef.current?.controller === controller) return;
+      const promise = intelligentDevelopmentClient
+        .interruptSession(activeSession.id)
+        .then(() => {
+          if (sandboxStopWaitRef.current?.controller === controller) {
+            controller.abort();
+          }
+          return true;
+        })
+        .catch((cause) => {
+          if (sandboxStopWaitRef.current?.controller === controller) {
+            sandboxStopWaitRef.current = null;
+          }
+          if (
+            sandboxSessionIdRef.current === activeSession.id &&
+            sandboxMessageAbortRef.current === controller
+          ) {
+            setError(cause instanceof Error ? cause.message : String(cause));
+          }
+          return false;
+        });
+      sandboxStopWaitRef.current = { controller, promise };
+      return;
+    }
+    controller.abort();
+    if (activeSession) {
+      void sandboxClient.interruptSession(activeSession.id).catch((cause) => {
+        if (sandboxSessionIdRef.current === activeSession.id) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+        }
+      });
+    }
+  }
+
+  function requestIntelligentNavigation(action: () => void) {
+    if (sandboxSession?.intelligentDevelopment && sandboxBusy) {
+      pendingIntelligentNavigationRef.current = action;
+      setIntelligentLeaveOpen(true);
+      return;
+    }
+    intelligentOpenAbortRef.current?.abort();
+    action();
+  }
+
+  async function confirmIntelligentNavigation() {
+    const activeSession = sandboxSession;
+    const action = pendingIntelligentNavigationRef.current;
+    if (!activeSession?.intelligentDevelopment || !action) {
+      setIntelligentLeaveOpen(false);
+      pendingIntelligentNavigationRef.current = null;
+      return;
+    }
+    setIntelligentLeaveBusy(true);
+    setError("");
+    try {
+      await intelligentDevelopmentClient.interruptSession(activeSession.id);
+      sandboxMessageAbortRef.current?.abort();
+      pendingIntelligentNavigationRef.current = null;
+      setIntelligentLeaveOpen(false);
+      intelligentOpenAbortRef.current?.abort();
+      action();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setIntelligentLeaveBusy(false);
     }
   }
 
@@ -3646,8 +4112,9 @@ export default function App() {
     text: string,
     messageAttachments: Attachment[] = [],
     selectedSkills: SandboxSkill[] = [],
+    activeSessionOverride?: SandboxSessionInfo,
   ) {
-    const activeSession = sandboxSession;
+    const activeSession = activeSessionOverride ?? sandboxSession;
     const readyAttachments = messageAttachments.filter(
       (attachment) => attachment.status === "ready" && attachment.uri,
     );
@@ -3730,8 +4197,11 @@ export default function App() {
         ? { ...current, busy: true, workspaceLocked: true }
         : current,
     );
+    const activeClient = activeSession.intelligentDevelopment
+      ? intelligentDevelopmentClient
+      : sandboxClient;
     try {
-      const reply = await sandboxClient.sendMessage(
+      const reply = await activeClient.sendMessage(
         {
           sessionId: activeSession.id,
           text: prompt,
@@ -3831,7 +4301,9 @@ export default function App() {
         }
         return next;
       });
-      void sandboxCommands.refreshThreads();
+      if (!activeSession.intelligentDevelopment) {
+        void sandboxCommands.refreshThreads();
+      }
     } catch (messageError) {
       operation.fail({
         sessionId: String(activeSession.id),
@@ -3862,7 +4334,7 @@ export default function App() {
           }`,
       );
       try {
-        const settings = await sandboxClient.getSettings(activeSession.id);
+        const settings = await activeClient.getSettings(activeSession.id);
         setSandboxSession((current) =>
           current?.id === activeSession.id
             ? { ...current, ...settings }
@@ -3873,6 +4345,20 @@ export default function App() {
       }
     } finally {
       if (sandboxMessageAbortRef.current === controller) {
+        const stopWait = sandboxStopWaitRef.current;
+        if (stopWait?.controller === controller) {
+          const cleanupConfirmed = await stopWait.promise;
+          if (sandboxStopWaitRef.current === stopWait) {
+            sandboxStopWaitRef.current = null;
+          }
+          if (cleanupConfirmed) {
+            setSandboxTurns((current) => current.filter(
+              (turn) =>
+                turn.meta?.localId !== assistantTurnId || turn.blocks.length > 0,
+            ));
+            appendSandboxActivity(activeSession.id, "已停止，可继续输入");
+          }
+        }
         sandboxMessageAbortRef.current = null;
         if (sandboxActiveAssistantTurnIdRef.current === assistantTurnId) {
           sandboxActiveAssistantTurnIdRef.current = "";
@@ -3889,7 +4375,10 @@ export default function App() {
   }
 
   async function submitSandboxInput(value: string) {
-    if (await sandboxCommands.executeSlash(value)) return;
+    if (
+      !sandboxSession?.intelligentDevelopment &&
+      await sandboxCommands.executeSlash(value)
+    ) return;
     if (!sandboxSession || sandboxBusy || sandboxCommands.commandBusy) return;
     const messageAttachments = attachments;
     const selectedSkills = sandboxCommands.selectedSkills;
@@ -3936,6 +4425,8 @@ export default function App() {
   }
 
   function openNewChat() {
+    cancelIntelligentPreparation();
+    setIntelligentDeployment(null);
     setPlatformFeedbackOrigin(null);
     setCreateView(null);
     setSkillCenter(false);
@@ -3951,6 +4442,12 @@ export default function App() {
     setSystemInfo(false);
     setApplicationsView(null);
     startNewChat();
+  }
+
+  function cancelIntelligentPreparation() {
+    intelligentCreateAbortRef.current?.abort();
+    intelligentCreateAbortRef.current = null;
+    setIntelligentPreparationStage(null);
   }
 
   async function removeSession(id: string) {
@@ -4964,7 +5461,12 @@ export default function App() {
     setAddAgent(false);
     setAddMenu(false);
     setSearchView(false);
+    setIntelligentDeployment(null);
     startNewChat();
+  };
+
+  const openIntelligentDeploymentChat = async (agentId: string) => {
+    await refreshCurrentAgentAndStartNewChat(agentId);
   };
 
   const selectAgent = async (id: string) => {
@@ -5154,7 +5656,7 @@ export default function App() {
             ? "search"
             : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
               ? "agents"
-              : sessionId || createView || skillCenter || addAgent || addMenu
+              : sessionId || sandboxSession || createView || skillCenter || addAgent || addMenu
                 ? null
                 : "new-chat";
 
@@ -5170,7 +5672,7 @@ export default function App() {
         activePage={sidebarActivePage}
         streamingSids={streamingSids}
         evaluatingSids={evaluatingSids}
-        sandboxHistory={sandboxSession
+        sandboxHistory={sandboxSession && !sandboxSession.intelligentDevelopment
           ? {
               threads: sandboxCommands.threads,
               currentThreadId: sandboxSession.threadId,
@@ -5183,10 +5685,26 @@ export default function App() {
               onSelect: (threadId) => void sandboxCommands.resumeThread(threadId),
               onLoadMore: () => void sandboxCommands.loadMoreThreads(),
               onDelete: setSandboxThreadDeleteTarget,
-            }
+          }
           : undefined}
-        onNewChat={openNewChat}
-        onSearch={() => {
+        intelligentHistory={{
+          sessions: intelligentSessions,
+          currentSessionId: sandboxSession?.intelligentDevelopment
+            ? sandboxSession.id
+            : "",
+          loading: intelligentSessionsLoading,
+          error: intelligentSessionsError,
+          busySessionId: sandboxSession?.intelligentDevelopment && sandboxBusy
+            ? sandboxSession.id
+            : "",
+          openingSessionId: intelligentSessionOpeningId,
+          onSelect: (session) => requestIntelligentNavigation(
+            () => void openIntelligentDevelopmentSession(session),
+          ),
+          onDelete: setIntelligentSessionDeleteTarget,
+        }}
+        onNewChat={() => requestIntelligentNavigation(openNewChat)}
+        onSearch={() => requestIntelligentNavigation(() => {
           setPlatformFeedbackOrigin(null);
           if (sandboxSession) exitSandboxSession();
           setCreateView(null);
@@ -5202,8 +5720,8 @@ export default function App() {
           setApplicationsView(null);
           setSearchView(true);
           setError("");
-        }}
-        onQuickCreate={() => {
+        })}
+        onQuickCreate={() => requestIntelligentNavigation(() => {
           if (!canCreateAgents) {
             setError("当前账号没有添加 Agent 的权限。");
             return;
@@ -5227,8 +5745,8 @@ export default function App() {
           setNewRuntimeRegion(defaultCloudRegion(cloudProvider));
           setAddMenu(true);
           setError("");
-        }}
-        onLibrary={() => {
+        })}
+        onLibrary={() => requestIntelligentNavigation(() => {
           if (sandboxSession) exitSandboxSession();
           setCreateView(null);
           setAddAgent(false);
@@ -5246,8 +5764,8 @@ export default function App() {
           setLibraryPageTitle("技能库");
           setSkillCenter(true);
           setError("");
-        }}
-        onAddAgent={() => {
+        })}
+        onAddAgent={() => requestIntelligentNavigation(() => {
           if (!canCreateAgents) {
             setError("当前账号没有添加 Agent 的权限。");
             return;
@@ -5268,10 +5786,10 @@ export default function App() {
           setAddMenu(false);
           setAddAgent(true);
           setError("");
-        }}
-        onMyAgents={openMyAgentsPage}
-        onApplications={openApplicationsPage}
-        onSystemInfo={() => {
+        })}
+        onMyAgents={() => requestIntelligentNavigation(openMyAgentsPage)}
+        onApplications={() => requestIntelligentNavigation(openApplicationsPage)}
+        onSystemInfo={() => requestIntelligentNavigation(() => {
           setPlatformFeedbackOrigin(null);
           if (sandboxSession) exitSandboxSession();
           viewSidRef.current = "";
@@ -5289,7 +5807,7 @@ export default function App() {
           setApplicationsView(null);
           setSystemInfo(true);
           setError("");
-        }}
+        })}
         onIssueFeedback={() => {
           if (platformFeedbackOrigin !== null) return;
           setSystemInfo(false);
@@ -5303,7 +5821,7 @@ export default function App() {
           );
           setError("");
         }}
-        onPickSession={(id) => {
+        onPickSession={(id) => requestIntelligentNavigation(() => {
           setPlatformFeedbackOrigin(null);
           setCreateView(null);
           setSkillCenter(false);
@@ -5319,7 +5837,7 @@ export default function App() {
           setApplicationsView(null);
           setError("");
           pickSession(id);
-        }}
+        })}
         onDeleteSession={removeSession}
         userInfo={userInfo}
         onLogout={onLogout}
@@ -5333,15 +5851,27 @@ export default function App() {
             {sandboxSession && (
               <SandboxSessionWarning
                 agentName={
-                  sandboxSession.toolName === "codex"
-                    ? "Codex"
-                    : sandboxSession.toolName === "deepseek-harness"
-                      ? "DeepSeek Harness"
-                    : sandboxSession.toolName === "openclaw"
-                      ? "OpenClaw"
-                      : "Hermes"
+                  sandboxSession.intelligentDevelopment
+                    ? "智能开发"
+                    : sandboxSession.toolName === "codex"
+                      ? "Codex"
+                      : sandboxSession.toolName === "deepseek-harness"
+                        ? "DeepSeek Harness"
+                        : sandboxSession.toolName === "openclaw"
+                          ? "OpenClaw"
+                          : "Hermes"
                 }
-                onExit={startNewChat}
+                expireAt={
+                  sandboxSession.intelligentDevelopment
+                    ? sandboxSession.expireAt
+                    : undefined
+                }
+                exitLabel={
+                  sandboxSession.intelligentDevelopment
+                    ? "退出开发环境"
+                    : undefined
+                }
+                onExit={() => requestIntelligentNavigation(startNewChat)}
               />
             )}
             {sandboxSession ? (
@@ -5386,6 +5916,7 @@ export default function App() {
                 selectedSkills={sandboxCommands.selectedSkills}
                 onRequestSkills={() => void sandboxCommands.loadSkills()}
                 onSelectedSkillsChange={sandboxCommands.setSelectedSkills}
+                textOnly={sandboxSession.intelligentDevelopment}
               />
             ) : (
               <Composer
@@ -5587,7 +6118,13 @@ export default function App() {
         );
         return (
           <section className="main-shell">
-            <main className={`main${sandboxSession ? " is-sandbox-session" : ""}`}>
+            <main
+              className={`main${sandboxSession ? " is-sandbox-session" : ""}${
+                sandboxSession?.intelligentDevelopment
+                  ? " is-intelligent-development"
+                  : ""
+              }`}
+            >
             {error && <div className="error" role="alert">{error}</div>}
             {draftStorageError && (
               <div className="error" role="alert">
@@ -5842,6 +6379,32 @@ export default function App() {
                     },
                   },
                   {
+                    key: "intelligent",
+                    icon: ScratchIcon,
+                    title: "智能模式",
+                    desc: intelligentCapabilitiesError
+                      || intelligentCapabilities?.reason
+                      || "描述目标，按你的意图构建、调试并验证 Agent。",
+                    status: intelligentCapabilitiesLoading
+                      ? "能力检查中"
+                      : intelligentCapabilities?.enabled
+                        ? undefined
+                        : "暂不可用",
+                    disabled:
+                      intelligentCapabilitiesLoading ||
+                      intelligentCapabilities?.enabled !== true,
+                    onClick: () => {
+                      setAddMenu(false);
+                      setImportedDraft(null);
+                      setRuntimeUpdateTarget(null);
+                      setFocusedDeploymentTaskId("");
+                      setFocusedWorkspaceAgentId("");
+                      setEditingDraftId("");
+                      editingDraftBaselineRef.current = null;
+                      setCreateView("intelligent");
+                    },
+                  },
+                  {
                     key: "package",
                     icon: PackageIcon,
                     title: "从代码包添加和部署",
@@ -5907,7 +6470,7 @@ export default function App() {
                 }}
                 onArtifactSourceOpen={openFromSearch}
               />
-            ) : visibleCreateView !== null && !hasCreds ? (
+            ) : visibleCreateView !== null && !["menu", "intelligent"].includes(visibleCreateView) && !hasCreds ? (
               <div
                 style={{
                   display: "flex",
@@ -5942,6 +6505,80 @@ export default function App() {
                   后重试。
                 </div>
               </div>
+            ) : intelligentDeployment ? (
+              <IntelligentDeployment
+                delivery={intelligentDeployment}
+                cloudProvider={cloudProvider}
+                initialDeployRegion={newRuntimeRegion}
+                onBack={() => setIntelligentDeployment(null)}
+                onAgentAdded={openIntelligentDeploymentChat}
+                onDeploymentTaskChange={updateDeploymentTask}
+                onDeploymentStarted={startDeployment}
+                onDeploymentComplete={finishDeployment}
+              />
+            ) : visibleCreateView === "intelligent" ? (
+              <IntelligentCreate
+                capabilities={intelligentCapabilities}
+                loading={intelligentCapabilitiesLoading}
+                preparationStage={intelligentPreparationStage}
+                error={intelligentCapabilitiesError}
+                onCancel={cancelIntelligentPreparation}
+                onBack={() => {
+                  cancelIntelligentPreparation();
+                  setCreateView(null);
+                  setAddMenu(true);
+                }}
+                onCreate={async (goal) => {
+                  if (intelligentPreparationStage) return;
+                  intelligentCreateAbortRef.current?.abort();
+                  const controller = new AbortController();
+                  intelligentCreateAbortRef.current = controller;
+                  setIntelligentPreparationStage("preparing");
+                  setIntelligentCapabilitiesError("");
+                  try {
+                    const created = await intelligentDevelopmentClient.startSession({
+                      displayName: goal.slice(0, 40),
+                      signal: controller.signal,
+                    });
+                    if (
+                      controller.signal.aborted ||
+                      intelligentCreateAbortRef.current !== controller
+                    ) return;
+                    setIntelligentSessions((current) => [
+                      created,
+                      ...current.filter((session) => session.id !== created.id),
+                    ]);
+                    setIntelligentPreparationStage("starting");
+                    const connected = await intelligentDevelopmentClient.connectSession(
+                      created.id,
+                      { signal: controller.signal },
+                    );
+                    if (
+                      controller.signal.aborted ||
+                      intelligentCreateAbortRef.current !== controller
+                    ) return;
+                    setIntelligentSessions((current) => [
+                      connected,
+                      ...current.filter((session) => session.id !== connected.id),
+                    ]);
+                    activateIntelligentDevelopmentSession(connected, []);
+                    intelligentCreateAbortRef.current = null;
+                    setIntelligentPreparationStage(null);
+                    await sendSandboxMessage(goal, [], [], connected);
+                  } catch (cause) {
+                    if ((cause as Error)?.name !== "AbortError") {
+                      setIntelligentCapabilitiesError(
+                        cause instanceof Error ? cause.message : "智能开发会话创建失败",
+                      );
+                    }
+                  } finally {
+                    if (intelligentCreateAbortRef.current === controller) {
+                      intelligentCreateAbortRef.current = null;
+                      setIntelligentPreparationStage(null);
+                    }
+                  }
+                }}
+              />
             ) : visibleCreateView === "custom" ? (
               <CustomCreate
                 key={editingDraftId || "custom"}
@@ -6188,6 +6825,9 @@ export default function App() {
                       onArtifactPreview={(filename, version) =>
                         previewArtifact(appName, userId, sessionId, filename, version)
                       }
+                      onResolveDelivery={resolveIntelligentDelivery}
+                      onDownloadDelivery={downloadIntelligentDelivery}
+                      onDeployDelivery={setIntelligentDeployment}
                     />
                     {/* Finalized turn that produced no visible answer (e.g. only
                         thinking + an empty A2UI surface) — show a fallback note. */}
@@ -6382,6 +7022,45 @@ export default function App() {
         onOpenSession={openCodexHandoffSession}
       />
 
+      {intelligentLeaveOpen ? (
+        <StudioConfirmDialog
+          title="当前构建仍在进行"
+          description="离开将停止本轮构建；当前会话仍会保留，可稍后从历史会话重新进入。"
+          confirmLabel="停止并离开"
+          variant="warning"
+          busy={intelligentLeaveBusy}
+          onCancel={() => {
+            if (intelligentLeaveBusy) return;
+            pendingIntelligentNavigationRef.current = null;
+            setIntelligentLeaveOpen(false);
+          }}
+          onConfirm={() => void confirmIntelligentNavigation()}
+        />
+      ) : null}
+
+      {intelligentSessionDeleteTarget ? (
+        <StudioConfirmDialog
+          title="删除构建会话"
+          description={`将删除“${
+            intelligentSessionDeleteTarget.displayName || "智能构建"
+          }”及其中的对话和文件，删除后无法恢复。`}
+          confirmLabel="确认删除"
+          variant="danger"
+          busy={
+            intelligentSessionOpeningId === intelligentSessionDeleteTarget.id
+          }
+          onCancel={() => {
+            if (intelligentSessionOpeningId) return;
+            setIntelligentSessionDeleteTarget(null);
+          }}
+          onConfirm={() =>
+            void deleteIntelligentDevelopmentSession(
+              intelligentSessionDeleteTarget,
+            )
+          }
+        />
+      ) : null}
+
       {sandboxThreadDeleteTarget ? (
         <StudioConfirmDialog
           title="删除 Codex 历史会话"
@@ -6404,7 +7083,7 @@ export default function App() {
       {sandboxSession ? (
         <>
           <SandboxToolDialog
-            open={sandboxToolKind !== null}
+            open={!sandboxSession.intelligentDevelopment && sandboxToolKind !== null}
             kind={sandboxToolKind ?? "terminal"}
             launch={sandboxToolLaunch}
             loading={sandboxToolLoading}
@@ -6420,7 +7099,7 @@ export default function App() {
             }}
           />
           <SandboxPermissionsDialog
-            open={sandboxPermissionsOpen}
+            open={!sandboxSession.intelligentDevelopment && sandboxPermissionsOpen}
             value={sandboxSession.permissions}
             busy={sandboxSettingsBusy || sandboxBusy}
             error={sandboxSettingsError}
@@ -6432,7 +7111,7 @@ export default function App() {
             }}
           />
           <SandboxWorkspaceDialog
-            open={sandboxWorkspaceOpen}
+            open={!sandboxSession.intelligentDevelopment && sandboxWorkspaceOpen}
             cwd={sandboxSession.cwd}
             locked={sandboxSession.workspaceLocked}
             busy={sandboxSettingsBusy}
@@ -6446,7 +7125,7 @@ export default function App() {
             }}
           />
           <SandboxThreadsDialog
-            open={sandboxCommands.threadsOpen}
+            open={!sandboxSession.intelligentDevelopment && sandboxCommands.threadsOpen}
             threads={sandboxCommands.threads}
             currentThreadId={sandboxSession.threadId}
             loading={sandboxCommands.threadsLoading}

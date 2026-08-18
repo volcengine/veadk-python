@@ -191,6 +191,9 @@ const HIDDEN_MODEL_API_KEY_REVEAL: ModelApiKeyRevealState = {
 interface DeploymentConfirmDialogProps {
   open: boolean;
   isUpdate: boolean;
+  title?: string;
+  description?: string;
+  confirmLabel?: string;
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -198,6 +201,9 @@ interface DeploymentConfirmDialogProps {
 function DeploymentConfirmDialog({
   open,
   isUpdate,
+  title,
+  description,
+  confirmLabel,
   onCancel,
   onConfirm,
 }: DeploymentConfirmDialogProps) {
@@ -239,7 +245,7 @@ function DeploymentConfirmDialog({
             <span className="code-browser-title-icon pp-confirm-icon" aria-hidden="true">
               <AlertTriangle />
             </span>
-            <h2 id="pp-confirm-title">{isUpdate ? "确认更新" : "确认部署"}</h2>
+            <h2 id="pp-confirm-title">{title ?? (isUpdate ? "确认更新" : "确认部署")}</h2>
           </div>
           <button
             type="button"
@@ -252,9 +258,9 @@ function DeploymentConfirmDialog({
         </header>
         <div className="pp-confirm-body">
           <p id="pp-confirm-description">
-            {isUpdate
+            {description ?? (isUpdate
               ? "将更新并发布到当前云端 Runtime，过程可能需要几分钟。确定继续吗？"
-              : "将创建新的云端 Runtime，部署过程可能需要几分钟。确定继续吗？"}
+              : "将创建新的云端 Runtime，部署过程可能需要几分钟。确定继续吗？")}
           </p>
         </div>
         <footer className="pp-confirm-actions">
@@ -262,7 +268,7 @@ function DeploymentConfirmDialog({
             取消
           </button>
           <button type="button" className="is-primary" onClick={onConfirm}>
-            {isUpdate ? "确定更新" : "确定部署"}
+            {confirmLabel ?? (isUpdate ? "确定更新" : "确定部署")}
           </button>
         </footer>
       </section>
@@ -605,11 +611,17 @@ export interface ProjectPreviewProps {
     options?: DeployOptions,
   ) => Promise<DeployResult>;
   /** Called after successfully adding the agent to the connection list. */
-  onAgentAdded?: (agentId: string, agentName: string) => void;
+  onAgentAdded?: (agentId: string, agentName: string) => void | Promise<void>;
   /** Called as soon as the Runtime has been deployed or updated successfully. */
   onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
   /** Label for the floating deployment action. */
   deploymentActionLabel?: string;
+  /** Overrides the final confirmation copy for deployments with extra risk. */
+  deploymentConfirmation?: {
+    title: string;
+    description: string;
+    confirmLabel: string;
+  };
   /** Optional external footer slot for the deployment action. */
   deploymentActionTargetId?: string;
   /** Existing Runtime id when this deployment updates an Agent in place. */
@@ -763,6 +775,7 @@ export function ProjectPreview({
   onAgentAdded,
   onDeploymentComplete,
   deploymentActionLabel = "部署",
+  deploymentConfirmation,
   deploymentActionTargetId,
   deploymentRuntimeId,
   deploymentRuntimeName,
@@ -1696,7 +1709,7 @@ export function ProjectPreview({
 
         if (onAgentAdded) {
           const agentId = remoteAppId(conn.id, conn.apps[0]);
-          onAgentAdded(agentId, deployResult.agentName);
+          await onAgentAdded(agentId, deployResult.agentName);
         } else {
           alert(`🎉 Agent "${deployResult.agentName}" 已添加到左上角下拉列表！`);
         }
@@ -2909,6 +2922,7 @@ export function ProjectPreview({
       <DeploymentConfirmDialog
         open={deployConfirmOpen}
         isUpdate={isRuntimeUpdate}
+        {...deploymentConfirmation}
         onCancel={cancelDeploymentConfirmation}
         onConfirm={() => void performDeployment()}
       />

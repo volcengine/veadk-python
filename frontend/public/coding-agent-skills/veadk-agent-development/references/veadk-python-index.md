@@ -1,108 +1,124 @@
-# VeADK (veadk-python) Repository Index
+# VeADK Repository Index
 
-A retrieval map of **github.com/volcengine/veadk-python** so you can jump straight to
-the source for any API. Don't guess signatures — locate the file here, then read it.
+Use this map to locate exact APIs; do not treat the map itself as an API contract.
 
-## How to retrieve
+This navigation snapshot was reviewed against `github.com/volcengine/veadk-python` branch
+`main`, commit `3be05c48a0360b86003f6f67808c943b5a33c4d3` (2026-08-15). It is not the
+required project version: inspect the installed or pinned VeADK source before using an API.
+The `veadk/evaluation/` entries are navigation references only; do not add Datasets,
+Evaluators, Experiments, or LLM scoring unless the accepted intent requires them.
 
-- **Browse a dir:** `https://github.com/volcengine/veadk-python/tree/main/<path>`
-- **Read a file (raw):** `https://raw.githubusercontent.com/volcengine/veadk-python/main/<path>`
-  — use WebFetch on the raw URL.
-- **If a local clone exists:** `grep -rn "<symbol>" <clone>/veadk` / read the file directly.
-- **Find the installed copy:** `python -c "import veadk, os; print(os.path.dirname(veadk.__file__))"`
-  then grep/read under that directory (fastest, matches your installed version).
+## Retrieval order
 
-Prefer reading `examples/` for idiomatic, copy-pasteable usage; read `veadk/<module>` for
-exact parameters and behavior.
+1. If the target project pins or installs VeADK, inspect that version first:
 
-## Core (read these first)
+   ```bash
+   python -c "import os, veadk; print(os.path.dirname(veadk.__file__))"
+   ```
 
-| Path | What's there | Key symbols |
-|---|---|---|
-| `veadk/__init__.py` | Public exports | `Agent`, `Runner`, `VERSION` |
-| `veadk/agent.py` | The Agent class + all its fields | `Agent(name, description, instruction, model_name, model_provider, model_api_base, tools, runtime, knowledgebase, short_term_memory, long_term_memory, skills, sub_agents)` |
-| `veadk/runner.py` | Drives an agent | `Runner(agent, short_term_memory?, app_name)`, `run(messages, user_id, session_id)` (async), `run_async` |
-| `veadk/agent_builder.py` | Programmatic agent construction | agent factory helpers |
-| `veadk/config.py`, `consts.py` | Settings + defaults (default model, instruction) | `settings.model.*`, `DEFAULT_MODEL_AGENT_NAME`, `DEFAULT_INSTRUCTION` |
-| `veadk/types.py` | Shared types | `ToolUnion`, message types |
+2. If a local clone exists and a branch is requested, use Git object reads such as
+   `git show main:<path>` and `git grep <pattern> main -- <paths>`; do not trust a worktree on
+   another branch.
+3. Use matching tests and examples to confirm lifecycle and composition.
+4. Use remote `main` only when the user explicitly targets `main` or no pinned version exists.
 
-## Tools
+## Core
 
-| Path | What's there |
+| Path | Key responsibility |
 |---|---|
-| `veadk/tools/__init__.py` | `get_builtin_tool(name)`, `list_builtin_tools()`, `ToolUnion` |
-| `veadk/tools/builtin_tools/` | One file per built-in: `web_search.py`, `web_fetch.py`, `run_code.py`, `coding.py`, `parallel_web_search.py`, `vesearch.py`, `link_reader.py`, `image_generate.py`, `image_edit.py`, `tts.py`, `video_generate.py`, `playwright.py`, `web_scraper.py`, `mobile_run.py`, `load_knowledgebase.py`, `lark.py`, `supabase_toolset.py`, … |
-| `veadk/tools/mcp_tool/` | MCP tool integration |
-| `veadk/tools/sandbox/` | Sandbox execution tools |
-| `veadk/tools/skills_tools/` | Skill-hub tools (`execute_skills`) |
+| `veadk/__init__.py` | lazy public exports: `Agent`, `Runner`, version |
+| `veadk/agent.py` | `Agent`, model/tool/callback assembly, runtime and flow selection |
+| `veadk/runner.py` | session/memory services, `run`, event execution, multimodal processing |
+| `veadk/config.py`, `veadk/configs/` | environment and YAML-backed configuration |
+| `veadk/types.py` | shared message and tool types |
 
-## Memory & Knowledge
+Read `Agent.model_post_init`, `Agent._llm_flow`, `Agent._run_async_impl`, `Runner.__init__`, and
+`Runner.run` before changing lifecycle behavior.
 
-| Path | What's there |
+## Control flow and runtimes
+
+| Path | Key responsibility |
 |---|---|
-| `veadk/memory/short_term_memory.py` | `ShortTermMemory(backend=...)` — session store |
-| `veadk/memory/short_term_memory_backends/` | `sqlite_backend.py`, `mysql_backend.py`, `postgresql_backend.py` (+ local/in-memory) |
-| `veadk/memory/long_term_memory.py` | `LongTermMemory(backend=..., app_name=...)` — cross-session |
-| `veadk/memory/long_term_memory_backends/` | `vikingdb_memory_backend.py`, `opensearch_backend.py`, `redis_backend.py`, `mem0_backend.py`, `in_memory_backend.py` |
-| `veadk/knowledgebase/__init__.py` | `KnowledgeBase(backend=..., app_name=...)` |
-| `veadk/knowledgebase/backends/` | `vikingdb_knowledge_backend.py`, `opensearch_backend.py`, `redis_backend.py`, `tos_vector_backend.py`, `context_search_backend.py`, `in_memory_backend.py` |
-| `veadk/configs/` | Backend connection config (env var names, e.g. `DATABASE_<BACKEND>_*`) — read `database_configs.py` for exact env keys |
+| `veadk/agents/sequential_agent.py` | ordered workflow wrapper |
+| `veadk/agents/parallel_agent.py` | parallel workflow wrapper |
+| `veadk/agents/loop_agent.py` | bounded loop wrapper |
+| `veadk/agents/supervise_agent.py`, `veadk/flows/` | supervisor Agent and flow extensions |
+| `veadk/runtime/base_runtime.py` | alternate runtime Event contract |
+| `veadk/runtime/piagent/` | PiAgent runtime implementation |
+| `veadk/a2a/` | A2A server, remote Agent, registry, and hub integration |
 
-## Models
+At the reviewed commit, `Agent.runtime` accepts `adk`, `codex`, and `piagent`.
 
-| Path | What's there |
+## Tools and Skills
+
+| Path | Key responsibility |
 |---|---|
-| `veadk/models/` | Model providers, base URLs, catalog; how `model_name` / `model_provider` resolve |
-| `veadk/auth/veauth/` | Ark token resolution (env `MODEL_AGENT_API_KEY` or VeFaaS IAM file on the runtime) |
+| `veadk/tools/__init__.py` | `_BUILTIN_TOOLS`, `list_builtin_tools`, `get_builtin_tool` |
+| `veadk/tools/builtin_tools/` | directly imported built-ins and system tools |
+| `veadk/tools/mcp_tool/` | MCP and Trusted MCP integration |
+| `veadk/tools/skills_tools/` | Skill discovery, registration, file, and shell tools |
+| `veadk/skills/` | Skill model, registry, callbacks, and materialization |
 
-## Serving & Deployment
+Do not infer registry support from a module filename. Inspect `_BUILTIN_TOOLS` for names
+accepted by `get_builtin_tool` in the target version.
 
-| Path | What's there |
+## State and knowledge
+
+| Path | Key responsibility |
 |---|---|
-| `veadk/cloud/harness_app/` | The reference config-driven harness server (env → agent). NOTE: this is `veadk.cloud`; agentkit-cli ships its **own decoupled** copy |
-| `veadk/cli/` | The `veadk` CLI (incl. `harness` commands, templates under `cli/templates/`) |
-| `veadk/runtime/`, `veadk/runtime/codex/` | Agent runtime backends (`runtime="adk"` default, `"codex"`) |
-| (external pkg) `agentkit.apps` | `AgentkitSimpleApp`, `AgentkitAgentServerApp` (ADK API server); serve on `0.0.0.0:8000` |
+| `veadk/memory/short_term_memory.py` | session-service factory and session reuse |
+| `veadk/memory/short_term_memory_backends/` | SQLite, MySQL, and PostgreSQL paths |
+| `veadk/memory/long_term_memory.py` | ADK MemoryService and backend dispatch |
+| `veadk/memory/long_term_memory_backends/` | in-memory, VikingDB, OpenSearch, Redis, mem0, OpenViking, and TOS context implementations |
+| `veadk/knowledgebase/knowledgebase.py` | KnowledgeBase facade and backend dispatch |
+| `veadk/knowledgebase/backends/` | in-memory, VikingDB, OpenSearch, Redis, Milvus, TOS vector, context search, and OpenViking implementations |
 
-## Evaluation, Tracing, Advanced
+Inspect constructor validation and optional dependency checks in the target version before
+recommending a backend.
 
-| Path | What's there |
+## Models, quality, and security
+
+| Path | Key responsibility |
 |---|---|
-| `veadk/evaluation/` | Eval framework: `adk_evaluator/`, `deepeval_evaluator/` |
-| `veadk/tracing/`, `veadk/tracing/telemetry/` | Observability (Cloud Trace / TLS / CozeLoop) |
-| `veadk/a2a/`, `veadk/a2ui/` | Agent-to-agent + A2A UI |
-| `veadk/agents/`, `veadk/flows/`, `veadk/processors/` | Multi-agent, flows, run processors |
-| `veadk/skills/`, `veadk/tools/skills_tools/` | Skill hub loading |
-| `veadk/tunnel/` | Local MCP tunneling into a cloud app |
-| `veadk/integrations/ve_*` | Volcengine service SDK wrappers: `ve_apig`, `ve_code_pipeline`, `ve_cr`, `ve_faas`, `ve_identity`, `ve_tos`, `ve_tls`, `ve_viking_db_memory`, `ve_cozeloop`, `ve_prompt_pilot` |
-| `veadk/prompts/` | Default prompts / instructions |
+| `veadk/models/ark_llm.py` | Ark Responses API adapter, streaming, and fallback behavior |
+| `veadk/models/ark_embedding.py` | Ark embedding adapter |
+| `veadk/tracing/` | OpenTelemetry and exporters |
+| `veadk/evaluation/` | ADK and DeepEval evaluation paths |
+| `veadk/auth/` | credential services and service authentication |
+| `veadk/processors/` | Runner event-generator interception |
 
-## Runnable examples (best for vibe coding — copy these)
+## Serving and delivery
 
-Path: `examples/<name>/main.py`
-
-| Example | Shows |
+| Path | Key responsibility |
 |---|---|
-| `01_quickstart` | Minimal Agent + Runner |
-| `02_custom_tools` | Your own function tools |
-| `03_short_term_memory` | Session memory |
-| `04_web_search` | Built-in `web_search` tool |
-| `05_knowledgebase_rag` | RAG with a KnowledgeBase (+ `docs/`) |
-| `06_multi_agent` | Multi-agent / sub-agents |
-| `07_structured_output` | Structured/typed output |
-| `08_model_config` | Overriding model / provider |
-| `09_long_term_memory` | Cross-session memory |
-| `10_agent_routing` | Routing between agents |
-| `11_tracing` | Observability wiring |
-| `12_mcp-tunnel` | MCP tools via tunnel (`app.py`, `connector.py`, `local_mcp_server.py`) |
-| `14_harness_server_on_agentkit` | Config-driven harness deploy |
-| `basic-app` | A full servable app (`app.py` + `agents/`) |
+| `veadk/integrations/agentkit/app.py` | `create_agentkit_app`, `run_agentkit_app` |
+| `veadk/cli/cli.py` | top-level `veadk` commands |
+| `veadk/cli/cli_agentkit.py` | AgentKit CLI integration |
+| `veadk/cli/cli_init.py`, `veadk/cli/cli_deploy.py` | project initialization and deployment commands |
+| `veadk/cloud/` | VeFaaS/cloud application and deployment engine |
+| `frontend/` | web UI and server surfaces |
 
-## Retrieval recipes
+Use `examples/generated_agentkit_project` as the reviewed AgentKit application reference, then
+verify it against the installed target release and current `ak init` output.
 
-- **"What params does X take?"** → read `veadk/<module>.py` (e.g. Agent → `veadk/agent.py`).
-- **"How does built-in tool `foo` work / what args?"** → `veadk/tools/builtin_tools/foo.py`.
-- **"What env vars does the `viking` memory backend read?"** → `veadk/configs/database_configs.py` and `veadk/memory/long_term_memory_backends/vikingdb_memory_backend.py`.
-- **"Show me a working example of RAG"** → `examples/05_knowledgebase_rag/main.py`.
-- **"How is the harness server assembled from env?"** → `veadk/cloud/harness_app/` (agent.py / utils.py).
-- **"Which models/providers are supported?"** → `veadk/models/` + `examples/08_model_config/main.py`.
+## Examples and tests
+
+| Path | Demonstrates |
+|---|---|
+| `examples/01_quickstart` | minimal Agent and Runner |
+| `examples/02_custom_tools` | typed function tools |
+| `examples/03_short_term_memory` | session persistence |
+| `examples/05_knowledgebase_rag` | KnowledgeBase RAG |
+| `examples/06_multi_agent` | deterministic workflow Agents |
+| `examples/07_structured_output` | structured output |
+| `examples/08_model_config` | model, provider, and fallback configuration |
+| `examples/09_long_term_memory` | cross-session memory |
+| `examples/10_agent_routing` | dynamic Agent routing |
+| `examples/11_tracing` | tracing setup |
+| `examples/12_mcp-tunnel` | MCP tunnel |
+| `examples/13_openviking` | OpenViking integration |
+| `examples/generated_agentkit_project` | current AgentKit application structure |
+| `tests/agent`, `tests/runner`, `tests/memory`, `tests/integrations/agentkit` | selected core contracts |
+
+When docs, examples, and implementation differ, report the mismatch and follow the target
+version's tested implementation rather than silently combining versions.

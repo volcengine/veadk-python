@@ -67,6 +67,10 @@ test("smoothly positions new turns and follows streamed output until interrupted
     /!conversationAutoFollowRef\.current \|\|[\s\S]*?conversationSmoothScrollRef\.current[\s\S]*?el\.scrollTop = el\.scrollHeight/,
   );
   assert.match(
+    appSource,
+    /conversationSmoothScrollRef\.current = false;[\s\S]*?const current = scrollRef\.current;[\s\S]*?conversationAutoFollowRef\.current[\s\S]*?current\.scrollTop = current\.scrollHeight/,
+  );
+  assert.match(
     stylesSource,
     /\.transcript\.is-streaming\s*\{[^}]*overflow-anchor:\s*none/,
   );
@@ -166,9 +170,9 @@ test("welcome screen offers a broader set of prompts", () => {
 });
 
 test("shows full session titles on hover instead of internal ids", () => {
-  assert.match(sidebarSource, /const title = sessionTitle\(s\.events\)/);
-  assert.match(sidebarSource, /title=\{title\}/);
-  assert.doesNotMatch(sidebarSource, /title=\{s\.id\}/);
+  assert.match(sidebarSource, /title: sessionTitle\(session\.events\)/);
+  assert.match(sidebarSource, /title=\{item\.title\}/);
+  assert.doesNotMatch(sidebarSource, /title=\{item\.id\}/);
 });
 
 test("renders a normal-font session id with an inline copy action", () => {
@@ -181,7 +185,7 @@ test("renders a normal-font session id with an inline copy action", () => {
   );
 });
 
-test("uses the selected Agent display name outside dedicated sandbox sessions", () => {
+test("uses product-specific composer copy for Agent and sandbox sessions", () => {
   assert.match(
     appSource,
     /<SandboxComposer[\s\S]*?appName=\{appName\}/,
@@ -190,7 +194,10 @@ test("uses the selected Agent display name outside dedicated sandbox sessions", 
   assert.match(composerSource, /`向 \$\{agentName\} 发消息…`/);
   assert.match(composerSource, /请先选择智能体/);
   assert.doesNotMatch(composerSource, /给智能体发消息/);
-  assert.match(sandboxComposerSource, /placeholder="向 AgentKit 沙箱发送消息/);
+  assert.match(
+    sandboxComposerSource,
+    /textOnly\s*\?\s*"继续说明你想实现或调整的内容"\s*:\s*"向 AgentKit 沙箱发送消息，输入 \/ 查看命令，输入 \$ 调用 Skill…"/,
+  );
 });
 
 test("composer slot keeps the input full width in the centered welcome layout", () => {

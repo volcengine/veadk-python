@@ -2141,6 +2141,118 @@ body {
 }
 .artifact-card__action--primary:hover:not(:disabled) { background: hsl(216 80% 48%); }
 .artifact-card__error { font-size: 12px; color: hsl(var(--destructive)); }
+.delivery-card {
+  display: grid;
+  gap: 12px;
+  width: min(100%, 560px);
+  margin: 8px 0;
+  padding: 16px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+}
+.delivery-card-header { display: flex; align-items: center; gap: 10px; }
+.delivery-card-header > div { display: grid; gap: 2px; }
+.delivery-card-header strong { font-size: 14px; }
+.delivery-card-header span { color: hsl(var(--muted-foreground)); font-size: 12px; }
+.delivery-card-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--primary));
+}
+.delivery-card-icon svg { width: 18px; height: 18px; }
+.delivery-card.is-unverified .delivery-card-icon {
+  color: hsl(var(--muted-foreground));
+}
+.delivery-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 0; }
+.delivery-card-grid div { min-width: 0; }
+.delivery-card-grid dt { color: hsl(var(--muted-foreground)); font-size: 11px; }
+.delivery-card-grid dd { overflow: hidden; margin: 2px 0 0; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.delivery-card-gates { margin: 0; color: hsl(var(--muted-foreground)); font-size: 12px; }
+.delivery-card-guidance {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.55;
+}
+.delivery-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.delivery-card-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid hsl(var(--primary));
+  border-radius: 8px;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.delivery-card-actions button svg { width: 14px; height: 14px; }
+.delivery-card-actions .delivery-card-secondary {
+  border-color: hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+.delivery-card-actions button:disabled { cursor: not-allowed; opacity: .5; }
+.delivery-card-actions button:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.delivery-card-error { margin: 0; color: hsl(var(--destructive)); font-size: 12px; }
+.delivery-card-status { margin: 0; color: hsl(142 52% 32%); font-size: 12px; }
+.trusted-source-pane {
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  color: hsl(var(--foreground));
+}
+.trusted-source-pane h2,
+.trusted-source-pane p,
+.trusted-source-pane dl { margin: 0; }
+.trusted-source-pane__badge {
+  justify-self: start;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--primary));
+  font-size: 11px;
+  font-weight: 600;
+}
+.trusted-source-pane__runtime-name { display: grid; gap: 6px; }
+.trusted-source-pane__runtime-name span { color: hsl(var(--muted-foreground)); font-size: 12px; }
+.trusted-source-pane__runtime-name input {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  outline: none;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 13px;
+}
+.trusted-source-pane__runtime-name input:focus { border-color: hsl(var(--ring)); box-shadow: 0 0 0 2px hsl(var(--ring) / .12); }
+.trusted-source-pane dl { display: grid; gap: 9px; }
+.trusted-source-pane dl div { display: flex; justify-content: space-between; gap: 12px; }
+.trusted-source-pane dt { color: hsl(var(--muted-foreground)); font-size: 12px; }
+.trusted-source-pane dd { overflow: hidden; margin: 0; font-size: 12px; text-overflow: ellipsis; }
+.trusted-source-pane p { color: hsl(var(--muted-foreground)); font-size: 12px; line-height: 1.6; }
+@media (max-width: 640px) {
+  .delivery-card-grid { grid-template-columns: minmax(0, 1fr); }
+  .delivery-card-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .delivery-card-actions button { width: 100%; }
+}
 .artifact-preview {
   position: fixed;
   z-index: 1200;
