@@ -195,6 +195,15 @@ def test_builder_context_uses_launcher_without_secret_values() -> None:
     assert "Never use Chinese or other non-ASCII characters" in prompt
     assert "root and sub-agents" in prompt
     assert "concise user-facing summary" in prompt
+    assert (
+        "same Markdown structure and order for every delivery-changing turn" in prompt
+    )
+    assert "Translate the example headings below to the user's language" in prompt
+    assert "Start with one concise outcome sentence" in prompt
+    assert "`### Completed` section" in prompt
+    assert "`### Validation` section" in prompt
+    assert "`### Remaining issues` section only" in prompt
+    assert "Do not repeat progress messages" in prompt
     contract = prompt.split("It must contain exactly:\n", 1)[1].split("\n\n", 1)[0]
     example = json.loads(contract)
     assert example["status"] == "partial"

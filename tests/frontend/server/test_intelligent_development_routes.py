@@ -15,9 +15,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-import json
 from threading import Event, Thread
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -31,7 +31,13 @@ from frontend.server import intelligent_development_routes as routes
 from frontend.server import intelligent_development_source as source_module
 from frontend.server.deployment_source import DeploymentSourceError
 from frontend.server.intelligent_development import StudioCredentials
-from frontend.server.intelligent_development_task import CompletionContract
+from frontend.server.intelligent_development_task import (
+    CompletionContract,
+    IntentDecision,
+    builder_prompt,
+    intent_gate_prompt,
+    read_only_prompt,
+)
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerEvent,
@@ -91,6 +97,7 @@ class _FakeCodex:
         self.turns: list[list[CodexAppServerEvent] | BaseException] = []
         self.calls: list[dict[str, object]] = []
         self.threads: list[CodexThreadSummary] = []
+        self.thread_messages: tuple[CodexThreadMessage, ...] | None = None
 
     async def stream_turn(
         self,
@@ -151,7 +158,9 @@ class _FakeCodex:
     def _snapshot(self, thread_id: str) -> CodexThreadSnapshot:
         return CodexThreadSnapshot(
             thread=next(thread for thread in self.threads if thread.id == thread_id),
-            messages=(
+            messages=self.thread_messages
+            if self.thread_messages is not None
+            else (
                 CodexThreadMessage(
                     id="message-user",
                     role="user",
@@ -368,6 +377,233 @@ def test_connect_restores_the_latest_non_empty_conversation() -> None:
     assert [
         message["content"] for message in response.json()["conversation"]["messages"]
     ] == ["创建销售 Agent", "已完成"]
+
+
+def test_connect_projects_internal_multi_turn_history_to_user_facing_conversation() -> (
+    None
+):
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud(user_session_id="project-1")
+    gateway.codex.threads = [
+        CodexThreadSummary(
+            id="thread-restored",
+            preview="internal intent gate",
+            cwd="/home/gem/workspace/project-1",
+            updated_at=20,
+        )
+    ]
+    first = IntentDecision(
+        "accept",
+        "",
+        "创建销售 Agent",
+        ("生成销售话术",),
+        True,
+    )
+    second = IntentDecision(
+        "accept",
+        "",
+        "为销售 Agent 增加英文输出",
+        ("保留中文并支持英文",),
+        True,
+    )
+    decisions = [first, second]
+    requests = ["创建销售 Agent", "再支持英文输出"]
+    answers = [
+        "已创建销售 Agent。\n\n### 已完成\n- 生成销售话术",
+        "已完成英文能力优化。\n\n### 已完成\n- 保留中文并支持英文",
+    ]
+    messages: list[CodexThreadMessage] = []
+    timestamp = 1_000
+    for index, (request, decision, answer) in enumerate(
+        zip(requests, decisions, answers, strict=True),
+        start=1,
+    ):
+        messages.extend(
+            (
+                CodexThreadMessage(
+                    id=f"gate-user-{index}",
+                    role="user",
+                    content=intent_gate_prompt(request, expire_at="later"),
+                    timestamp=timestamp,
+                ),
+                CodexThreadMessage(
+                    id=f"gate-assistant-{index}",
+                    role="assistant",
+                    content=json.dumps(
+                        {
+                            "decision": "accept",
+                            "message": "",
+                            "intentSummary": decision.intent_summary,
+                            "acceptanceCriteria": list(decision.acceptance_criteria),
+                            "changesDelivery": True,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    timestamp=timestamp + 1,
+                ),
+                CodexThreadMessage(
+                    id=f"builder-user-{index}",
+                    role="user",
+                    content=builder_prompt(
+                        request,
+                        decision,
+                        launcher_path="/secure/launcher",
+                        completion_path="/workspace/result.json",
+                        expire_at="later",
+                        remaining_lifetime_minutes=60,
+                        validation_region="cn-beijing",
+                        validation_project="default",
+                    ),
+                    timestamp=timestamp + 2,
+                ),
+                CodexThreadMessage(
+                    id=f"builder-assistant-{index}",
+                    role="assistant",
+                    content=answer,
+                    timestamp=timestamp + 3,
+                ),
+            )
+        )
+        timestamp += 10
+    gateway.codex.thread_messages = tuple(messages)
+
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/connect",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 200
+    restored = response.json()["conversation"]["messages"]
+    assert [(message["role"], message["content"]) for message in restored] == [
+        ("user", requests[0]),
+        ("assistant", answers[0]),
+        ("user", requests[1]),
+        ("assistant", answers[1]),
+    ]
+    assert "read-only intent gate" not in json.dumps(restored)
+    assert "changesDelivery" not in json.dumps(restored)
+
+
+def test_connect_projects_clarification_as_one_user_facing_exchange() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud(user_session_id="project-1")
+    gateway.codex.threads = [
+        CodexThreadSummary(
+            id="thread-restored",
+            preview="internal intent gate",
+            cwd="/home/gem/workspace/project-1",
+            updated_at=20,
+        )
+    ]
+    request = "帮我优化一下"
+    clarification = "你希望优先优化响应速度还是回答准确性？"
+    gateway.codex.thread_messages = (
+        CodexThreadMessage(
+            id="gate-user",
+            role="user",
+            content=intent_gate_prompt(request, expire_at="later"),
+            timestamp=1_000,
+        ),
+        CodexThreadMessage(
+            id="gate-assistant",
+            role="assistant",
+            content=json.dumps(
+                {
+                    "decision": "clarify",
+                    "message": clarification,
+                    "intentSummary": "",
+                    "acceptanceCriteria": [],
+                    "changesDelivery": False,
+                },
+                ensure_ascii=False,
+            ),
+            timestamp=2_000,
+        ),
+    )
+
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/connect",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 200
+    restored = response.json()["conversation"]["messages"]
+    assert [(message["role"], message["content"]) for message in restored] == [
+        ("user", request),
+        ("assistant", clarification),
+    ]
+
+
+def test_connect_projects_read_only_history_to_user_facing_exchange() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud(user_session_id="project-1")
+    gateway.codex.threads = [
+        CodexThreadSummary(
+            id="thread-restored",
+            preview="internal intent gate",
+            cwd="/home/gem/workspace/project-1",
+            updated_at=20,
+        )
+    ]
+    request = "这个 Agent 目前支持哪些输入？"
+    answer = "目前支持产品名称、目标人群和内容语气。"
+    decision = IntentDecision(
+        "accept",
+        "",
+        "说明当前 Agent 支持的输入",
+        ("列出已实现的输入字段",),
+        False,
+    )
+    gateway.codex.thread_messages = (
+        CodexThreadMessage(
+            id="gate-user",
+            role="user",
+            content=intent_gate_prompt(request, expire_at="later"),
+            timestamp=1_000,
+        ),
+        CodexThreadMessage(
+            id="gate-assistant",
+            role="assistant",
+            content=json.dumps(
+                {
+                    "decision": "accept",
+                    "message": "",
+                    "intentSummary": decision.intent_summary,
+                    "acceptanceCriteria": list(decision.acceptance_criteria),
+                    "changesDelivery": False,
+                },
+                ensure_ascii=False,
+            ),
+            timestamp=2_000,
+        ),
+        CodexThreadMessage(
+            id="read-only-user",
+            role="user",
+            content=read_only_prompt(request, decision, expire_at="later"),
+            timestamp=3_000,
+        ),
+        CodexThreadMessage(
+            id="read-only-assistant",
+            role="assistant",
+            content=answer,
+            timestamp=4_000,
+        ),
+    )
+
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/connect",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 200
+    restored = response.json()["conversation"]["messages"]
+    assert [(message["role"], message["content"]) for message in restored] == [
+        ("user", request),
+        ("assistant", answer),
+    ]
 
 
 def test_connect_does_not_switch_threads_while_a_build_is_active() -> None:
@@ -769,12 +1005,47 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
                 text="正在实现并验证天气 Agent。",
             ),
             CodexAppServerEvent(
+                kind="thinking",
+                item_id="thinking-1",
+                status="running",
+                text="先检查项目结构。",
+            ),
+            CodexAppServerEvent(
                 kind="tool",
                 item_id="build-1",
                 status="running",
                 name="运行命令",
                 arguments={
-                    "command": "/task/launcher ak build --config-file agentkit.yaml"
+                    "command": (
+                        "/home/gem/.intelligent-development/tasks/task/launcher "
+                        "ak build --config-file agentkit.yaml"
+                    ),
+                    "credential": "access",
+                },
+            ),
+            CodexAppServerEvent(
+                kind="thinking",
+                item_id="thinking-1",
+                status="done",
+                text="项目结构检查完成。",
+            ),
+            CodexAppServerEvent(
+                kind="tool",
+                item_id="build-1",
+                status="done",
+                name="运行命令",
+                arguments={
+                    "command": (
+                        "/home/gem/.intelligent-development/tasks/task/launcher "
+                        "ak build --config-file agentkit.yaml"
+                    )
+                },
+                response={
+                    "output": (
+                        "build complete; credentials="
+                        "/home/gem/.intelligent-development/tasks/task/credentials.json; "
+                        "secret=secret"
+                    )
                 },
             ),
             CodexAppServerEvent(kind="text", text="已完成本地实现"),
@@ -813,6 +1084,7 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
         )
     assert response.status_code == 200
     assert "Codex 正在分析本次请求并确认预期结果" in response.text
+    assert "event: progress" in response.text
     assert "正在判断目标是否属于 VeADK Agent 开发" in response.text
     assert task_progress in response.text
     assert "目标已确认，正在配置构建环境" not in response.text
@@ -820,8 +1092,12 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
     assert "正在构建临时验证版本" in response.text
     assert "已完成本地实现" in response.text
     assert "event: usage" in response.text
-    assert response.text.count("event: activity") == 2
+    assert response.text.count("event: activity") == 6
+    assert response.text.count('"kind": "commentary"') == 2
     assert response.text.count('"kind": "thinking"') == 2
+    assert response.text.count('"kind": "tool"') == 2
+    assert '"command": "ak build --config-file agentkit.yaml"' in response.text
+    assert "build complete" in response.text
     assert response.text.index(
         "Codex 正在分析本次请求并确认预期结果"
     ) < response.text.index("正在判断目标是否属于 VeADK Agent 开发")
@@ -835,7 +1111,10 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
         "已完成本地实现"
     )
     assert "shell" not in response.text
-    assert "/task/launcher" not in response.text
+    assert lease.root not in response.text
+    assert lease.launcher_path not in response.text
+    assert lease.credential_path not in response.text
+    assert all(secret not in response.text for secret in lease.exact_secrets)
     assert "event: development.source_ready" in response.text
     assert "development.succeeded" not in response.text
     assert len(gateway.codex.calls) == 2
