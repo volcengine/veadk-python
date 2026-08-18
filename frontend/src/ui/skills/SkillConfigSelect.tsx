@@ -257,7 +257,11 @@ export function SkillConfigSelect({
                   close(true);
                 }}
                 onKeyDown={(event) => {
-                  if (event.key === "ArrowDown") {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onChange(option.value);
+                    close(true);
+                  } else if (event.key === "ArrowDown") {
                     event.preventDefault();
                     moveActive(index + 1);
                   } else if (event.key === "ArrowUp") {

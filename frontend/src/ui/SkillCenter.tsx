@@ -1053,6 +1053,7 @@ export function SkillCenterView({
                     status={<span className={`skillcenter-status ${statusTone(space.status)}`}>{statusLabel(space.status)}</span>}
                     description={space.description || "暂无描述"}
                     metadata={[
+                      { label: "地域", value: formatCloudRegion(space.region || defaultCloudRegion(cloudProvider), cloudProvider) },
                       { label: "技能数量", value: space.skillCount ?? 0 },
                       { label: "更新时间", value: space.updatedAt ? updatedAtLabel(space.updatedAt) : "—" },
                     ]}
@@ -1115,6 +1116,7 @@ export function SkillCenterView({
       {createSpaceOpen ? (
         <CreateSkillSpaceDialog
           region={defaultCloudRegion(cloudProvider)}
+          regionOptions={cloudRegionOptions(cloudProvider)}
           onClose={() => setCreateSpaceOpen(false)}
           onCreated={(space) => {
             setCreateSpaceOpen(false);
