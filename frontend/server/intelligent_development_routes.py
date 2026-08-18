@@ -52,10 +52,13 @@ from veadk.cli.frontend_sandbox import (
     SandboxConfigurationError,
     SandboxConversationService,
     SandboxError,
+    SandboxInvocationError,
+    SandboxPermissionError,
     SandboxProvisioningError,
     SandboxSessionNotFoundError,
     SandboxSessionUnavailableError,
     SandboxStreamEvent,
+    SandboxToolQuotaError,
     SandboxValidationError,
     mount_sandbox_routes,
 )
@@ -376,6 +379,74 @@ def _conversation_event_sse(event: SandboxStreamEvent) -> str | None:
 def _progress_sse(message: str) -> str:
     payload = {"text": f"{message}\n\n"}
     return f"event: delta\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _stream_error_payload(error: SandboxError) -> dict[str, object]:
+    """Return a stable public error without exposing exception internals."""
+    responses: tuple[tuple[type[SandboxError], str, str, bool], ...] = (
+        (
+            SandboxToolQuotaError,
+            SandboxToolQuotaError.code,
+            "当前云账号的开发环境配额已用尽，请释放资源后重试。",
+            SandboxToolQuotaError.retryable,
+        ),
+        (
+            SandboxConfigurationError,
+            SandboxConfigurationError.code,
+            "智能开发云端配置尚未完成，请联系管理员。",
+            SandboxConfigurationError.retryable,
+        ),
+        (
+            SandboxPermissionError,
+            SandboxPermissionError.code,
+            "当前账号无权执行此操作。",
+            SandboxPermissionError.retryable,
+        ),
+        (
+            SandboxValidationError,
+            SandboxValidationError.code,
+            "请求内容不符合要求，请检查后重试。",
+            SandboxValidationError.retryable,
+        ),
+        (
+            SandboxSessionNotFoundError,
+            SandboxSessionNotFoundError.code,
+            "当前开发环境已结束或不可用，请新建会话后重试。",
+            SandboxSessionNotFoundError.retryable,
+        ),
+        (
+            SandboxCapacityError,
+            SandboxCapacityError.code,
+            "当前任务较多，请稍后重试。",
+            SandboxCapacityError.retryable,
+        ),
+        (
+            SandboxSessionUnavailableError,
+            SandboxSessionUnavailableError.code,
+            "当前开发环境暂时不可用，请在当前会话重试。",
+            SandboxSessionUnavailableError.retryable,
+        ),
+        (
+            SandboxProvisioningError,
+            SandboxProvisioningError.code,
+            "开发环境创建失败，请稍后重试。",
+            SandboxProvisioningError.retryable,
+        ),
+        (
+            SandboxInvocationError,
+            SandboxInvocationError.code,
+            "智能开发任务未能安全完成，请在当前会话重试。",
+            SandboxInvocationError.retryable,
+        ),
+    )
+    for error_type, code, message, retryable in responses:
+        if isinstance(error, error_type):
+            return {"code": code, "message": message, "retryable": retryable}
+    return {
+        "code": SandboxError.code,
+        "message": "智能开发任务未能安全完成，请联系管理员。",
+        "retryable": SandboxError.retryable,
+    }
 
 
 def _command_progress(event: SandboxStreamEvent) -> str | None:
@@ -915,22 +986,14 @@ def mount_intelligent_development_routes(
                     failure = SandboxError(
                         "智能开发任务未能安全清理，请勿继续使用当前会话。"
                     )
-                payload = {
-                    "code": failure.code,
-                    "message": str(failure),
-                    "retryable": failure.retryable,
-                }
+                payload = _stream_error_payload(failure)
                 yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 yield 'event: done\ndata: {"reason":"failed"}\n\n'
             except Exception:
                 try:
                     await cleanup_task_files()
                 except SandboxError as cleanup_error:
-                    payload = {
-                        "code": cleanup_error.code,
-                        "message": str(cleanup_error),
-                        "retryable": cleanup_error.retryable,
-                    }
+                    payload = _stream_error_payload(cleanup_error)
                 except Exception:
                     payload = {
                         "code": "INTELLIGENT_DEVELOPMENT_CLEANUP_FAILED",

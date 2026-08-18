@@ -1217,7 +1217,8 @@ def test_builder_failure_still_cleans_credentials(
 ) -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
-    gateway.codex.turns = [[_gate()], CodexAppServerError("builder failed")]
+    internal_error = "Traceback: /srv/private.py contains upstream-secret"
+    gateway.codex.turns = [[_gate()], CodexAppServerError(internal_error)]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
     monkeypatch.setattr(
         routes, "create_credential_lease", AsyncMock(return_value=lease)
@@ -1232,6 +1233,9 @@ def test_builder_failure_still_cleans_credentials(
             json={"message": "做一个天气 Agent"},
         )
     assert "event: error" in response.text
+    assert "智能开发任务未能安全完成，请在当前会话重试" in response.text
+    assert internal_error not in response.text
+    assert "upstream-secret" not in response.text
     assert lease.cleaned is True
 
 
@@ -1257,7 +1261,7 @@ def test_cleanup_failure_terminates_session_and_is_not_suppressed(
             headers={"X-Test-User": "alice"},
             json={"message": "做一个天气 Agent"},
         )
-    assert "开发环境已自动终止" in response.text
+    assert "当前开发环境已结束或不可用" in response.text
     assert "dev-session" not in gateway.sessions
     assert gateway.codex.closed is True
     assert lease.cleanup_attempts == 1
