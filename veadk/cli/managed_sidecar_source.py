@@ -28,6 +28,7 @@ _REMOVED_DISTRIBUTIONS = {
     "agentkit-harness-sidecar-integration",
     "veadk-python",
 }
+_MANAGED_SDK_REQUIREMENT = "agentkit-sdk-python==0.8.1"
 _IGNORED_PARTS = {".git", "__pycache__"}
 _IGNORED_SUFFIXES = {".pyc", ".pyo"}
 _BLOCKED_SUFFIXES = {".key", ".p12", ".pem", ".pfx"}
@@ -63,7 +64,7 @@ def _canonical_requirement_name(line: str) -> str | None:
 
 
 def rewrite_managed_sidecar_requirements(requirements: str) -> str:
-    """Use in-snapshot VeADK and the SDK already verified in the managed base."""
+    """Use in-snapshot VeADK and install the approved public SDK explicitly."""
 
     lines: list[str] = []
     veadk_removed = False
@@ -77,7 +78,7 @@ def rewrite_managed_sidecar_requirements(requirements: str) -> str:
         raise ManagedSidecarSourceError("veadk_requirement_missing")
     lines.insert(
         0,
-        "# agentkit-sdk-python==0.8.1 is provided by the managed Sidecar base.",
+        _MANAGED_SDK_REQUIREMENT,
     )
     lines.insert(
         0,

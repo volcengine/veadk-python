@@ -3501,10 +3501,6 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
         "VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE",
         managed_base,
     )
-    monkeypatch.setenv(
-        "VEADK_STUDIO_HARNESS_SIDECAR_RUNTIME_NAME",
-        runtime_name,
-    )
     monkeypatch.setattr(sidecar, "agentkit_cli_executable", lambda: "/fake/agentkit")
     monkeypatch.setattr(
         sidecar,
@@ -3630,6 +3626,7 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
             headers={"X-VeADK-Local-User": "developer"},
             json={
                 "name": agent_name,
+                "runtimeName": runtime_name,
                 "minInstance": 1,
                 "maxInstance": 1,
                 "createEvaluationSets": False,

@@ -44,7 +44,7 @@ def _package(root: Path) -> Path:
     return package
 
 
-def test_rewrite_uses_source_snapshot_and_sdk_from_managed_base() -> None:
+def test_rewrite_uses_source_snapshot_and_pins_public_sdk() -> None:
     rewritten = rewrite_managed_sidecar_requirements(
         "\n".join(
             (
@@ -60,12 +60,8 @@ def test_rewrite_uses_source_snapshot_and_sdk_from_managed_base() -> None:
     assert "veadk-python" in rewritten.splitlines()[0]
     assert "veadk-python[" not in rewritten
     assert "agentkit-harness-sidecar-integration" not in rewritten
-    assert "agentkit-sdk-python==0.8.1" in rewritten.splitlines()[1]
-    assert all(
-        not line.startswith("agentkit-sdk-python")
-        for line in rewritten.splitlines()
-        if not line.startswith("#")
-    )
+    assert rewritten.splitlines()[1] == "agentkit-sdk-python==0.8.1"
+    assert rewritten.splitlines().count("agentkit-sdk-python==0.8.1") == 1
     assert "google-adk>=1.34.0" in rewritten
 
 
@@ -80,12 +76,7 @@ def test_rewrite_preserves_comments_and_rejects_missing_veadk() -> None:
         "agentkit-sdk-python>=0.8\nagentkit_sdk_python==0.8.1\n"
     )
     assert "# keep" in rewritten
-    assert "agentkit-sdk-python==0.8.1" in rewritten
-    assert all(
-        not line.startswith("agentkit-sdk-python")
-        for line in rewritten.splitlines()
-        if not line.startswith("#")
-    )
+    assert rewritten.splitlines().count("agentkit-sdk-python==0.8.1") == 1
 
 
 def test_stage_copies_only_safe_runtime_source_and_rewrites_requirements(
@@ -115,12 +106,7 @@ def test_stage_copies_only_safe_runtime_source_and_rewrites_requirements(
     assert not (project / "veadk/__pycache__").exists()
     assert not (project / "veadk/.env.local").exists()
     requirements = (project / "requirements.txt").read_text(encoding="utf-8")
-    assert "agentkit-sdk-python==0.8.1" in requirements
-    assert all(
-        not line.startswith("agentkit-sdk-python")
-        for line in requirements.splitlines()
-        if not line.startswith("#")
-    )
+    assert requirements.splitlines().count("agentkit-sdk-python==0.8.1") == 1
     assert "veadk-python[" not in requirements
 
 

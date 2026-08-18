@@ -121,6 +121,14 @@ _CP_PIPELINE_CREATING_RE = re.compile(r"Creating new pipeline:\s*(?P<name>.+)$")
 _CP_PIPELINE_RUN_RE = re.compile(
     r"Pipeline triggered successfully,\s*run ID:\s*(?P<id>\S+)"
 )
+_CP_STRUCTURED_PIPELINE_RE = re.compile(
+    r"triggering build\s*\(pipeline=(?P<id>[^)\s]+)\)",
+    re.IGNORECASE,
+)
+_CP_STRUCTURED_RUN_RE = re.compile(
+    r"\brun id\s+(?P<id>[^;\s]+);\s*waiting",
+    re.IGNORECASE,
+)
 _RUNTIME_DESCRIPTION_MAX_BYTES = 255
 _RUNTIME_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _RUNTIME_NAME_MIN_LENGTH = 4
@@ -485,6 +493,10 @@ def _cp_metadata_from_reporter_message(message: object) -> dict[str, str]:
     if match := _CP_PIPELINE_CREATING_RE.search(text):
         return {"pipeline_name": match.group("name").strip()}
     if match := _CP_PIPELINE_RUN_RE.search(text):
+        return {"pipeline_run_id": match.group("id").strip()}
+    if match := _CP_STRUCTURED_PIPELINE_RE.search(text):
+        return {"pipeline_id": match.group("id").strip()}
+    if match := _CP_STRUCTURED_RUN_RE.search(text):
         return {"pipeline_run_id": match.group("id").strip()}
     return {}
 
@@ -4947,7 +4959,7 @@ def _run_frontend_server(
         deployment_runtime_name = (
             str(getattr(existing_runtime, "name", "") or "").strip()
             if existing_runtime is not None
-            else ""
+            else requested_runtime_name
         ) or agent_name
         sidecar_build_overrides: dict[str, Any] | None = None
         agentkit_config: dict[str, Any] | None = None
@@ -5592,10 +5604,12 @@ def _run_frontend_server(
                         if event_type == "progress":
                             phase = str(payload.get("phase") or "deploy")
                             state["phase"] = phase
+                            message = str(payload.get("message") or "")
+                            _update_cp_metadata(message)
                             event: dict[str, Any] = {
                                 "level": str(payload.get("level") or "info"),
                                 "phase": phase,
-                                "message": str(payload.get("message") or ""),
+                                "message": message,
                             }
                             if payload.get("pct") is not None:
                                 event["pct"] = payload["pct"]

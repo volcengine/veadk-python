@@ -4646,7 +4646,7 @@ export function CustomCreate({
         ...options,
         onStage,
         runtimeId: deploymentTarget?.runtimeId,
-        runtimeName: deploymentRuntimeName,
+        runtimeName: options?.runtimeName ?? deploymentRuntimeName,
         appName: deploymentTarget?.appName,
         description: draft.description,
         harnessSidecar: draft.harnessSidecar,
