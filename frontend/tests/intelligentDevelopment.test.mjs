@@ -428,6 +428,40 @@ test("intelligent streams preserve thinking and assistant message order", async 
   assert.equal(updates.some((blocks) => blocks[0]?.done === false), true);
 });
 
+test("intelligent progress is visible while running but excluded from the final reply", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const updates = [];
+  globalThis.fetch = async () => sseResponse([
+    'event: progress\ndata: {"text":"正在理解需求并整理验收标准。"}',
+    'event: delta\ndata: {"text":"已完成旅游 Agent。\\n\\n### 已完成\\n- 生成行程"}',
+    'event: progress\ndata: {"text":"正在执行本地检查。"}',
+    'event: done\ndata: {}',
+  ]);
+
+  const reply = await intelligentDevelopmentClient.sendMessage(
+    { sessionId: "dev-1", text: "构建旅游 Agent" },
+    { onBlocks: (blocks) => updates.push(structuredClone(blocks)) },
+  );
+
+  assert.equal(
+    updates.some((blocks) =>
+      blocks.some((block) =>
+        block.kind === "thinking" && block.text === "正在执行本地检查。"
+      )
+    ),
+    true,
+  );
+  assert.deepEqual(reply.blocks, [{
+    kind: "text",
+    text: "已完成旅游 Agent。\n\n### 已完成\n- 生成行程",
+  }]);
+  assert.equal(reply.text.includes("正在理解需求"), false);
+  assert.deepEqual(updates.at(-1), reply.blocks);
+});
+
 test("delivery card separates deployability from verification", () => {
   const releaseInterface = blocksSource.match(
     /export interface IntelligentDevelopmentReleaseRef \{([\s\S]*?)\n\}/,
