@@ -195,6 +195,13 @@ def test_builder_context_uses_launcher_without_secret_values() -> None:
     assert "Never use Chinese or other non-ASCII characters" in prompt
     assert "root and sub-agents" in prompt
     assert "concise user-facing summary" in prompt
+    contract = prompt.split("It must contain exactly:\n", 1)[1].split("\n\n", 1)[0]
+    example = json.loads(contract)
+    assert example["status"] == "partial"
+    assert example["runtimeName"] == ""
+    assert example["acceptanceCriteria"] == []
+    assert "verified|partial|blocked|indeterminate|failed" not in contract
+    assert "Replace every illustrative value with the measured result" in prompt
     assert "entire final assistant response" not in prompt
     assert "If time is running short" not in prompt
     assert "Studio" not in prompt

@@ -328,16 +328,20 @@ environment internals, filesystem paths, launcher details, or internal tool name
 After implementation and validation, write exactly one UTF-8 JSON object to {completion_path},
 including for a non-verified terminal result. This is secondary reporting metadata and must not
 replace the project or its validation work. It must contain exactly:
-{{"schemaVersion":"1","status":"verified|partial|blocked|indeterminate|failed",
-"summary":"short non-secret result","runtimeName":"idv- prefixed validation Runtime name or empty",
+{{"schemaVersion":"1","status":"partial",
+"summary":"short non-secret result","runtimeName":"",
 "attemptCount":0,
 "gates":{{"local-checks":false,"service-probe":false,"ak-config":false,"ak-build":false,
 "ak-deploy":false,"runtime-ready":false,"acceptance-invoke":false,"runtime-logs":false,
-"runtime-cleanup":false}},"acceptanceCriteria":["criterion actually checked"]}}
+"runtime-cleanup":false}},"acceptanceCriteria":[]}}
 
-Use attemptCount 0, 1, or 2. Set `verified` only when every gate is true, representative deployed
-behavior meets the current criteria, and Runtime deletion or confirmed absence is complete. Do
-not put command output, prompts, responses, credentials, endpoints, or tokens in this contract.
+Replace every illustrative value with the measured result. `status` must be exactly `verified`,
+`partial`, `blocked`, `indeterminate`, or `failed`; `runtimeName` must be the actual `idv-` prefixed
+validation Runtime name when one was created, otherwise empty; and `acceptanceCriteria` must list
+the criteria actually checked. Use attemptCount 0, 1, or 2. Set `verified` only when every gate is
+true, representative deployed behavior meets the current criteria, and Runtime deletion or
+confirmed absence is complete. Do not put command output, prompts, responses, credentials,
+endpoints, or tokens in this contract.
 After the successful final build and validation, do not change deliverable source before writing
 the contract; the service packages the final project directory itself. Read the contract back and verify
 its exact schema. Then give a concise user-facing summary of what was built, which tests and cloud
