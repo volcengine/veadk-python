@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { sandboxStatusLabel, type SandboxAgentResource } from "../adk/sandbox";
+import { PageBackButton } from "./PageBackButton";
 import "./SandboxAgentDetails.css";
 
 const AGENT_LABELS = {
@@ -75,18 +76,7 @@ export function SandboxAgentDetails({
   return (
     <section className="sandbox-agent-details">
       <header className="sandbox-agent-details-header">
-        <button type="button" className="sandbox-agent-back" onClick={onBack}>
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path
-              d="m14.5 6-6 6 6 6"
-              stroke="currentColor"
-              strokeWidth="1.75"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          返回智能体
-        </button>
+        <PageBackButton label="返回智能体列表" onClick={onBack} />
         <div>
           <h1>{session.displayName || `${label} 智能体`}</h1>
           <p>{label} AgentKit Session 详情</p>

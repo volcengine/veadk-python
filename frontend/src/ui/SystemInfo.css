@@ -12,6 +12,13 @@
 
 .system-info-page-header {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.system-info-page-header > div {
+  min-width: 0;
 }
 
 .system-info-page-header h1 {
