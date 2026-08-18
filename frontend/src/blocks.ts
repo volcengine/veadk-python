@@ -66,6 +66,7 @@ export interface IntelligentDevelopmentReleaseRef {
 }
 
 export type Block =
+  | { kind: "progress"; text: string }
   | { kind: "thinking"; text: string; done: boolean }
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; args?: unknown; response?: unknown; done: boolean }

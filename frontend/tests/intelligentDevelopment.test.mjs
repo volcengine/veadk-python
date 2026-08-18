@@ -428,6 +428,96 @@ test("intelligent streams preserve thinking and assistant message order", async 
   assert.equal(updates.some((blocks) => blocks[0]?.done === false), true);
 });
 
+test("intelligent progress is visible while running but excluded from the final reply", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const updates = [];
+  globalThis.fetch = async () => sseResponse([
+    'event: progress\ndata: {"text":"正在理解需求并整理验收标准。"}',
+    'event: delta\ndata: {"text":"已完成旅游 Agent。\\n\\n### 已完成\\n- 生成行程"}',
+    'event: progress\ndata: {"text":"正在执行本地检查。"}',
+    'event: done\ndata: {}',
+  ]);
+
+  const reply = await intelligentDevelopmentClient.sendMessage(
+    { sessionId: "dev-1", text: "构建旅游 Agent" },
+    { onBlocks: (blocks) => updates.push(structuredClone(blocks)) },
+  );
+
+  assert.equal(
+    updates.some((blocks) =>
+      blocks.some((block) =>
+        block.kind === "progress" && block.text === "正在执行本地检查。"
+      )
+    ),
+    true,
+  );
+  assert.deepEqual(reply.blocks, [{
+    kind: "text",
+    text: "已完成旅游 Agent。\n\n### 已完成\n- 生成行程",
+  }]);
+  assert.equal(reply.text.includes("正在理解需求"), false);
+  assert.deepEqual(updates.at(-1), reply.blocks);
+});
+
+test("intelligent stream keeps progress, reasoning, output, and tools distinct", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const updates = [];
+  globalThis.fetch = async () => sseResponse([
+    'event: progress\ndata: {"text":"正在确认目标。"}',
+    'event: activity\ndata: {"id":"thought-1","kind":"thinking","status":"running","text":"分析验收标准"}',
+    'event: activity\ndata: {"id":"comment-1","kind":"commentary","status":"running","text":"我会先检查项目结构。"}',
+    'event: activity\ndata: {"id":"tool-1","kind":"tool","status":"running","name":"运行命令","args":{"command":"ak build"},"response":null}',
+    'event: progress\ndata: {"text":"正在构建临时验证版本。"}',
+    'event: activity\ndata: {"id":"thought-1","kind":"thinking","status":"done","text":"验收标准已明确"}',
+    'event: activity\ndata: {"id":"comment-1","kind":"commentary","status":"done","text":"项目结构检查完成。"}',
+    'event: activity\ndata: {"id":"tool-1","kind":"tool","status":"done","name":"运行命令","args":{"command":"ak build"},"response":{"output":"build complete"}}',
+    'event: delta\ndata: {"text":"Agent 已完成并通过验证。"}',
+    'event: done\ndata: {}',
+  ]);
+
+  const reply = await intelligentDevelopmentClient.sendMessage(
+    { sessionId: "dev-1", text: "构建 Agent" },
+    { onBlocks: (blocks) => updates.push(structuredClone(blocks)) },
+  );
+
+  assert.equal(
+    updates.some((blocks) => blocks.some((block) =>
+      block.kind === "progress" && block.text === "正在构建临时验证版本。"
+    )),
+    true,
+  );
+  assert.equal(
+    updates.some((blocks) =>
+      blocks[0]?.kind === "thinking"
+      && blocks[0].text === "分析验收标准"
+      && blocks.at(-1)?.kind === "progress"
+      && blocks.at(-1).text === "正在构建临时验证版本。"
+    ),
+    true,
+  );
+  assert.deepEqual(reply.blocks, [
+    { kind: "thinking", text: "验收标准已明确", done: true },
+    { kind: "text", text: "项目结构检查完成。" },
+    {
+      kind: "tool",
+      name: "运行命令",
+      args: { command: "ak build" },
+      response: { output: "build complete" },
+      done: true,
+    },
+    { kind: "text", text: "Agent 已完成并通过验证。" },
+  ]);
+  assert.equal(reply.text, "Agent 已完成并通过验证。");
+  assert.equal(reply.blocks.some((block) => block.kind === "progress"), false);
+  assert.deepEqual(updates.at(-1), reply.blocks);
+});
+
 test("delivery card separates deployability from verification", () => {
   const releaseInterface = blocksSource.match(
     /export interface IntelligentDevelopmentReleaseRef \{([\s\S]*?)\n\}/,
