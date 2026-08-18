@@ -136,6 +136,31 @@ function VersionCheckIcon() {
   );
 }
 
+function ExternalLinkIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path d="M6.25 3.75H3.5v8.75h8.75V9.75" />
+      <path d="M8.5 3.5h4v4" />
+      <path d="m7.25 8.75 5-5" />
+    </svg>
+  );
+}
+
+function StudioUpdateLogPermissionNotice({ href }: { href: string }) {
+  return (
+    <div className="studio-update-permission-notice" role="status">
+      <p>
+        无法读取 VeFaaS 发布日志。Function 角色缺少
+        <code>vefaas:GetApplicationRevisionLog</code> 权限，更新会继续。
+      </p>
+      <a href={href} target="_blank" rel="noreferrer">
+        前往 IAM 控制台配置权限
+        <ExternalLinkIcon />
+      </a>
+    </div>
+  );
+}
+
 function StudioUpdateLog({
   lines,
   phase,
@@ -287,6 +312,7 @@ export function StudioUpdateControl({
               completionDetectedAtRef.current = now;
             }
             if (
+              next.updateLogsVisible !== false &&
               !deploymentLogComplete(next.updateLogs) &&
               now - completionDetectedAtRef.current < COMPLETION_LOG_SETTLE_TIMEOUT_MS
             ) {
@@ -509,6 +535,11 @@ export function StudioUpdateControl({
                     onCopy={(lines) => void copyUpdateLog(lines)}
                   />
                 )}
+                {status.updateLogsVisible === false && (
+                  <StudioUpdateLogPermissionNotice
+                    href={status.permissionConsoleUrl}
+                  />
+                )}
                 {status.consoleUrl && (
                   <a
                     className="studio-update-console-link"
@@ -517,7 +548,7 @@ export function StudioUpdateControl({
                     rel="noreferrer"
                   >
                     前往 VeFaaS 控制台查看 Function 日志
-                    <span aria-hidden>↗</span>
+                    <ExternalLinkIcon />
                   </a>
                 )}
               </div>
@@ -567,6 +598,11 @@ export function StudioUpdateControl({
                     phase={phase === "published" ? "complete" : "active"}
                     copyState={logCopyState}
                     onCopy={(lines) => void copyUpdateLog(lines)}
+                  />
+                )}
+                {status.updateLogsVisible === false && (
+                  <StudioUpdateLogPermissionNotice
+                    href={status.permissionConsoleUrl}
                   />
                 )}
                 <p className="studio-update-progress-note">

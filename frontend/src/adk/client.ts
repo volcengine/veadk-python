@@ -2615,6 +2615,7 @@ export interface StudioUpdateStatus {
   updateLogs: string[];
   updateLogsVisible: boolean;
   consoleUrl: string;
+  permissionConsoleUrl: string;
 }
 
 /** Check the configured immutable Studio main release channel. */

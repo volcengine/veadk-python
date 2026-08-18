@@ -559,6 +559,57 @@
   text-underline-offset: 2px;
 }
 
+.studio-update-console-link svg,
+.studio-update-permission-notice svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.studio-update-permission-notice {
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  min-height: 92px;
+  padding: 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--muted) / 0.22);
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.studio-update-permission-notice p {
+  margin: 0;
+}
+
+.studio-update-permission-notice code {
+  margin: 0 3px;
+  color: hsl(var(--foreground));
+  font-family: inherit;
+  font-weight: 500;
+}
+
+.studio-update-permission-notice a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  color: hsl(var(--primary));
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.studio-update-permission-notice a:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .studio-update-progress-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

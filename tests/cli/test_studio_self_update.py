@@ -447,6 +447,17 @@ def test_byteplus_console_url_uses_byteplus_domain() -> None:
         "https://console.byteplus.com/vefaas/"
         "region:vefaas+ap-southeast-1/function/detail/function-id"
     )
+    assert updater._permission_console_url() == "https://console.byteplus.com/iam"
+
+
+def test_volcengine_permission_console_url_uses_volcengine_domain() -> None:
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("ak", "sk", ""),
+        branding_logo=None,
+    )
+
+    assert updater._permission_console_url() == "https://console.volcengine.com/iam"
 
 
 def test_application_status_uses_current_function_environment(
@@ -607,7 +618,9 @@ def test_vefaas_log_permission_denial_hides_log_region(
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
 
     assert updater._load_vefaas_logs(7) == []
-    assert updater._progress_payload()["updateLogsVisible"] is False
+    progress = updater._progress_payload()
+    assert progress["updateLogsVisible"] is False
+    assert progress["permissionConsoleUrl"] == "https://console.volcengine.com/iam"
 
 
 def test_non_permission_log_error_keeps_log_region_visible(

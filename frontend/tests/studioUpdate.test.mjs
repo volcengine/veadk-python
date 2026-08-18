@@ -91,6 +91,10 @@ test("update submission is explicit and survives a revision switch", () => {
   assert.match(controlSource, /setDialogOpen\(true\)/);
   assert.match(controlSource, /COMPLETION_LOG_SETTLE_TIMEOUT_MS = 45_000/);
   assert.match(controlSource, /deploymentLogComplete\(next\.updateLogs\)/);
+  assert.match(
+    controlSource,
+    /next\.updateLogsVisible !== false &&[\s\S]*?!deploymentLogComplete\(next\.updateLogs\)/,
+  );
   assert.match(controlSource, /line\.includes\("部署应用成功"\)/);
 });
 
@@ -185,10 +189,18 @@ test("Studio renders bounded VeFaaS logs without stealing manual scroll", () => 
   );
 });
 
-test("Studio hides only the log region when VeFaaS log permission is missing", () => {
+test("Studio explains how to grant optional VeFaaS log permission", () => {
   assert.match(
     controlSource,
     /\{status\.updateLogsVisible !== false && \([\s\S]*?<StudioUpdateLog/,
   );
   assert.match(controlSource, /status\.updateLogsVisible !== false/g);
+  assert.match(controlSource, /status\.updateLogsVisible === false/g);
+  assert.match(controlSource, /vefaas:GetApplicationRevisionLog/);
+  assert.match(controlSource, /更新会继续/);
+  assert.match(controlSource, /前往 IAM 控制台配置权限/);
+  assert.match(controlSource, /href=\{status\.permissionConsoleUrl\}/);
+  assert.match(clientSource, /permissionConsoleUrl: string/);
+  assert.match(controlStyleSource, /studio-update-permission-notice/);
+  assert.doesNotMatch(controlSource, /↗/);
 });
