@@ -196,6 +196,26 @@ export function ThinkingBlock({
   );
 }
 
+function BuildProgressBlock({ text }: { text: string }) {
+  return (
+    <div
+      className="block-progress"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <div className="think-head progress-head">
+        <span className="think-icon" aria-hidden="true">
+          <AgentKitLogoIcon className="thinking-logo is-active" />
+        </span>
+        <TextShimmer className="think-label" duration={2.4} spread={18}>
+          {text}
+        </TextShimmer>
+      </div>
+    </div>
+  );
+}
+
 function DeliveryCard({
   value,
   onResolve,
@@ -744,6 +764,8 @@ export function Blocks({
     <>
       {blocks.map((b, i) => {
         switch (b.kind) {
+          case "progress":
+            return <BuildProgressBlock key="build-progress" text={b.text} />;
           case "thinking": {
             const answerStarted = blocks.slice(i + 1).some(
               (block) => block.kind === "text" && Boolean(block.text.trim()),

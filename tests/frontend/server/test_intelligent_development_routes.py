@@ -1005,12 +1005,47 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
                 text="正在实现并验证天气 Agent。",
             ),
             CodexAppServerEvent(
+                kind="thinking",
+                item_id="thinking-1",
+                status="running",
+                text="先检查项目结构。",
+            ),
+            CodexAppServerEvent(
                 kind="tool",
                 item_id="build-1",
                 status="running",
                 name="运行命令",
                 arguments={
-                    "command": "/task/launcher ak build --config-file agentkit.yaml"
+                    "command": (
+                        "/home/gem/.intelligent-development/tasks/task/launcher "
+                        "ak build --config-file agentkit.yaml"
+                    ),
+                    "credential": "access",
+                },
+            ),
+            CodexAppServerEvent(
+                kind="thinking",
+                item_id="thinking-1",
+                status="done",
+                text="项目结构检查完成。",
+            ),
+            CodexAppServerEvent(
+                kind="tool",
+                item_id="build-1",
+                status="done",
+                name="运行命令",
+                arguments={
+                    "command": (
+                        "/home/gem/.intelligent-development/tasks/task/launcher "
+                        "ak build --config-file agentkit.yaml"
+                    )
+                },
+                response={
+                    "output": (
+                        "build complete; credentials="
+                        "/home/gem/.intelligent-development/tasks/task/credentials.json; "
+                        "secret=secret"
+                    )
                 },
             ),
             CodexAppServerEvent(kind="text", text="已完成本地实现"),
@@ -1057,8 +1092,12 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
     assert "正在构建临时验证版本" in response.text
     assert "已完成本地实现" in response.text
     assert "event: usage" in response.text
-    assert response.text.count("event: activity") == 2
+    assert response.text.count("event: activity") == 6
+    assert response.text.count('"kind": "commentary"') == 2
     assert response.text.count('"kind": "thinking"') == 2
+    assert response.text.count('"kind": "tool"') == 2
+    assert '"command": "ak build --config-file agentkit.yaml"' in response.text
+    assert "build complete" in response.text
     assert response.text.index(
         "Codex 正在分析本次请求并确认预期结果"
     ) < response.text.index("正在判断目标是否属于 VeADK Agent 开发")
@@ -1072,7 +1111,10 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
         "已完成本地实现"
     )
     assert "shell" not in response.text
-    assert "/task/launcher" not in response.text
+    assert lease.root not in response.text
+    assert lease.launcher_path not in response.text
+    assert lease.credential_path not in response.text
+    assert all(secret not in response.text for secret in lease.exact_secrets)
     assert "event: development.source_ready" in response.text
     assert "development.succeeded" not in response.text
     assert len(gateway.codex.calls) == 2
