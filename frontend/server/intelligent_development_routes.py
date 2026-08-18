@@ -450,19 +450,88 @@ async def _prepare_workspace(session: SandboxCloudSession) -> str:
     return workspace
 
 
-def _conversation_event_sse(event: SandboxStreamEvent) -> str | None:
+def _redact_task_event_value(
+    value: object,
+    *,
+    exact_secrets: tuple[str, ...],
+    task_paths: tuple[str, ...],
+    launcher_path: str,
+) -> object:
+    """Remove one task's credentials and private paths from browser events."""
+    if isinstance(value, str):
+        public = value
+        if launcher_path:
+            public = re.sub(
+                rf"{re.escape(launcher_path)}(?=\s+ak(?:\s|$))\s*",
+                "",
+                public,
+            )
+        for secret in sorted(filter(None, exact_secrets), key=len, reverse=True):
+            public = public.replace(secret, "***")
+        for path in sorted(filter(None, task_paths), key=len, reverse=True):
+            public = public.replace(path, "[private task path]")
+        return public
+    if isinstance(value, dict):
+        return {
+            str(key): _redact_task_event_value(
+                item,
+                exact_secrets=exact_secrets,
+                task_paths=task_paths,
+                launcher_path=launcher_path,
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _redact_task_event_value(
+                item,
+                exact_secrets=exact_secrets,
+                task_paths=task_paths,
+                launcher_path=launcher_path,
+            )
+            for item in value
+        ]
+    return value
+
+
+def _conversation_event_sse(
+    event: SandboxStreamEvent,
+    *,
+    exact_secrets: tuple[str, ...] = (),
+    task_paths: tuple[str, ...] = (),
+    launcher_path: str = "",
+) -> str | None:
+    def public(value: object) -> object:
+        return _redact_task_event_value(
+            value,
+            exact_secrets=exact_secrets,
+            task_paths=task_paths,
+            launcher_path=launcher_path,
+        )
+
     if event.kind == "text":
-        payload = {"text": event.text}
+        payload = {"text": public(event.text)}
         return f"event: delta\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
     if event.kind in {"commentary", "thinking"}:
         payload = {
             "id": event.item_id,
-            "kind": "thinking",
+            "kind": event.kind,
             "status": event.status,
-            "text": event.text,
+            "text": public(event.text),
             "name": None,
             "args": None,
             "response": None,
+        }
+        return f"event: activity\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+    if event.kind == "tool":
+        payload = {
+            "id": event.item_id,
+            "kind": "tool",
+            "status": event.status,
+            "text": None,
+            "name": public(event.name),
+            "args": public(event.arguments),
+            "response": public(event.response),
         }
         return f"event: activity\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
     if event.kind == "usage" and event.usage is not None:
@@ -1008,7 +1077,16 @@ def mount_intelligent_development_routes(
                     if progress is not None and progress not in emitted_progress:
                         emitted_progress.add(progress)
                         yield _progress_sse(progress)
-                    public_event = _conversation_event_sse(event)
+                    public_event = _conversation_event_sse(
+                        event,
+                        exact_secrets=lease.exact_secrets,
+                        task_paths=(
+                            lease.credential_path,
+                            lease.launcher_path,
+                            lease.root,
+                        ),
+                        launcher_path=lease.launcher_path,
+                    )
                     if public_event is not None:
                         yield public_event
 

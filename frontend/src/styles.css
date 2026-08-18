@@ -1840,7 +1840,7 @@ body {
 .turn--user .md pre { background: hsl(var(--background) / 0.55); }
 
 /* ---------- thinking / tool blocks (lightweight, like the generating line) ---------- */
-.block-thinking, .block-tool { width: 100%; }
+.block-thinking, .block-progress, .block-tool { width: 100%; }
 .think-head, .tool-head {
   display: inline-flex;
   align-items: center;
@@ -1855,6 +1855,7 @@ body {
   min-height: 32px;
   padding: 3px 7px 3px 3px;
 }
+.progress-head { cursor: default; }
 .think-icon {
   width: 20px;
   height: 26px;

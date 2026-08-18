@@ -892,18 +892,20 @@ async function parseSandboxStream(
   let reply = "";
   const blocks: Block[] = [];
   const activityIndexes = new Map<string, number>();
-  let progressBlock: Block | undefined;
+  let progressBlock: Extract<Block, { kind: "progress" }> | undefined;
   let latestUsage: SandboxTokenUsageUpdate | undefined;
 
   function emitBlocks(): void {
-    const visible = progressBlock ? [progressBlock, ...blocks] : blocks;
+    const visible = progressBlock ? [...blocks, progressBlock] : blocks;
     options.onBlocks?.(visible.map((block) => ({ ...block })));
   }
 
   function appendReply(text: string): void {
     reply += text;
     const last = blocks[blocks.length - 1];
-    if (last?.kind === "text") last.text += text;
+    const lastIndex = blocks.length - 1;
+    const activityBacked = [...activityIndexes.values()].includes(lastIndex);
+    if (last?.kind === "text" && !activityBacked) last.text += text;
     else blocks.push({ kind: "text", text });
     emitBlocks();
   }
@@ -911,7 +913,9 @@ async function parseSandboxStream(
   function applyActivity(payload: SandboxStreamPayload): void {
     if (
       typeof payload.id !== "string" ||
-      (payload.kind !== "thinking" && payload.kind !== "tool") ||
+      (payload.kind !== "thinking"
+        && payload.kind !== "commentary"
+        && payload.kind !== "tool") ||
       (payload.status !== "running" && payload.status !== "done")
     ) return;
     const done = payload.status === "done";
@@ -919,6 +923,9 @@ async function parseSandboxStream(
     if (payload.kind === "thinking") {
       if (typeof payload.text !== "string" || !payload.text) return;
       block = { kind: "thinking", text: payload.text, done };
+    } else if (payload.kind === "commentary") {
+      if (typeof payload.text !== "string" || !payload.text) return;
+      block = { kind: "text", text: payload.text };
     } else {
       if (typeof payload.name !== "string" || !payload.name) return;
       block = {
@@ -963,9 +970,8 @@ async function parseSandboxStream(
     }
     if (event === "progress" && typeof payload.text === "string" && payload.text) {
       progressBlock = {
-        kind: "thinking",
+        kind: "progress",
         text: payload.text,
-        done: false,
       };
       emitBlocks();
     }
