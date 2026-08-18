@@ -892,10 +892,12 @@ async function parseSandboxStream(
   let reply = "";
   const blocks: Block[] = [];
   const activityIndexes = new Map<string, number>();
+  let progressBlock: Block | undefined;
   let latestUsage: SandboxTokenUsageUpdate | undefined;
 
   function emitBlocks(): void {
-    options.onBlocks?.(blocks.map((block) => ({ ...block })));
+    const visible = progressBlock ? [progressBlock, ...blocks] : blocks;
+    options.onBlocks?.(visible.map((block) => ({ ...block })));
   }
 
   function appendReply(text: string): void {
@@ -958,6 +960,14 @@ async function parseSandboxStream(
           ? payload.message
           : "沙箱对话失败，请稍后重试。",
       );
+    }
+    if (event === "progress" && typeof payload.text === "string" && payload.text) {
+      progressBlock = {
+        kind: "thinking",
+        text: payload.text,
+        done: false,
+      };
+      emitBlocks();
     }
     if (event === "activity") applyActivity(payload);
     if (event === "development.source_ready" || event === "development.succeeded") {
@@ -1031,6 +1041,10 @@ async function parseSandboxStream(
     if (event === "done" && !reply && typeof payload.text === "string") {
       appendReply(payload.text);
     }
+    if (event === "done" && progressBlock) {
+      progressBlock = undefined;
+      emitBlocks();
+    }
   }
 
   while (true) {
@@ -1042,6 +1056,10 @@ async function parseSandboxStream(
     if (done) break;
   }
   if (buffer.trim()) consumeFrame(buffer);
+  if (progressBlock) {
+    progressBlock = undefined;
+    emitBlocks();
+  }
   if (blocks.length === 0) throw new Error("沙箱未返回有效回复，请重试。");
   return {
     text: reply,

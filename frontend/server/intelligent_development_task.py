@@ -343,9 +343,17 @@ true, representative deployed behavior meets the current criteria, and Runtime d
 confirmed absence is complete. Do not put command output, prompts, responses, credentials,
 endpoints, or tokens in this contract.
 After the successful final build and validation, do not change deliverable source before writing
-the contract; the service packages the final project directory itself. Read the contract back and verify
-its exact schema. Then give a concise user-facing summary of what was built, which tests and cloud
-checks passed, whether the project is ready to deploy, and any remaining limitation."""
+the contract; the service packages the final project directory itself. Read the contract back and
+verify its exact schema. Then give a concise user-facing summary.
+Use the same Markdown structure and order for every delivery-changing turn, including follow-ups.
+Translate the example headings below to the user's language:
+- Start with one concise outcome sentence.
+- Add a `### Completed` section with two to five concrete bullets.
+- Add a `### Validation` section with measured checks only.
+- Add a `### Remaining issues` section only when a real limitation or unfinished item remains.
+Do not repeat progress messages, command output, or the reporting contract in the final answer.
+State whether the project is ready to deploy without instructing the user to run hidden validation
+steps."""
 
 
 def _json_object(value: str) -> dict[str, object]:
