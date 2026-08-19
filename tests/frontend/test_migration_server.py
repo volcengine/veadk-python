@@ -47,9 +47,12 @@ from frontend.server.migration.service import (
     MIGRATION_UPLOAD_MAX_BYTES,
     MigrationError,
     MigrationService,
+    _activity_payload,
+    _activity_secret_values,
     _analysis_result_message,
     _codex_event_extractor,
     _command_activity_title,
+    _parse_activity_log,
     _public_environment_defaults,
     validate_source_archive,
 )
@@ -718,14 +721,24 @@ def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
             "id": "migration:1:plan-1",
             "kind": "plan",
             "status": "running",
-            "title": "Codex 正在按计划迁移",
+            "title": "项目迁移计划",
             "detail": "已完成 1/2 项",
+            "plan": [
+                {"text": "inspect", "status": "completed"},
+                {"text": "migrate", "status": "pending"},
+            ],
         },
         {
             "id": "migration:1:command-1",
             "kind": "command",
             "status": "completed",
             "title": "已验证迁移结果",
+            "tool": {
+                "name": "已验证迁移结果",
+                "input": {"command": "API_KEY=[已隐藏] bash validate_runtime.sh"},
+                "output": "[已隐藏]",
+                "exitCode": 0,
+            },
         },
         {
             "id": "migration:1:message-1",
@@ -733,12 +746,6 @@ def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
             "status": "completed",
             "title": "Codex 更新",
             "detail": "正在修复配置，API_KEY=[已隐藏]",
-        },
-        {
-            "id": "migration:1:turn",
-            "kind": "status",
-            "status": "completed",
-            "title": "Codex 已完成本轮执行",
         },
     ]
     serialized = json.dumps(activity, ensure_ascii=False)
@@ -852,6 +859,10 @@ def test_agentic_activity_handles_incremental_and_malformed_events() -> None:
         "kind": "command",
         "status": "failed",
         "title": "打包迁移产物未完成",
+        "tool": {
+            "name": "打包迁移产物未完成",
+            "input": {"command": "zip result.zip output"},
+        },
     }
     assert next(item for item in items if item["id"] == "migration:2:install")[
         "title"
@@ -859,10 +870,9 @@ def test_agentic_activity_handles_incremental_and_malformed_events() -> None:
     assert next(item for item in items if item["id"] == "migration:2:3")["title"] == (
         "已运行迁移脚本"
     )
-    assert next(item for item in items if item["id"] == "migration:2:plan")[
-        "status"
-    ] == ("completed")
-    assert items[-1]["title"] == "Codex 本轮执行未完成"
+    assert not any(item["id"] == "migration:2:plan" for item in items)
+    assert items[-1]["title"] == "Codex 项目迁移未完成"
+    assert items[-1]["detail"] == "Codex 本轮执行未完成。"
     assert "private-token-value" not in json.dumps(activity)
 
     status_path = f"{MIGRATION_ROOT}/delivery/migration-status.json"
@@ -889,6 +899,215 @@ def test_agentic_activity_handles_incremental_and_malformed_events() -> None:
         }
     ).encode()
     assert service.activity(task_id, "owner-1")["complete"] is True
+
+
+def test_activity_parser_preserves_useful_codex_events_and_redacts_payloads() -> None:
+    events = [
+        {
+            "type": "item.started",
+            "item": {
+                "id": "command",
+                "type": "command_execution",
+                "status": "in_progress",
+                "command": "custom-tool --token=private-token-value",
+                "aggregated_output": "",
+                "exit_code": None,
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "command",
+                "type": "command_execution",
+                "status": "failed",
+                "command": "custom-tool --token=private-token-value",
+                "aggregated_output": "request failed with password=private-password",
+                "exit_code": 7,
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "files",
+                "type": "file_change",
+                "status": "completed",
+                "changes": [
+                    {"path": "assistant/agent.py", "kind": "update"},
+                    {"path": "main.py", "kind": "add"},
+                ],
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "mcp",
+                "type": "mcp_tool_call",
+                "server": "project",
+                "tool": "inspect",
+                "arguments": {
+                    "path": "assistant/agent.py",
+                    "nested": {"api_key": "private-api-key"},
+                },
+                "result": {"structured_content": {"entry": "root_agent"}},
+                "error": None,
+                "status": "completed",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "mcp-error",
+                "type": "mcp_tool_call",
+                "server": "project",
+                "tool": "inspect",
+                "arguments": {},
+                "result": None,
+                "error": {"message": "failed with token=private-mcp-token"},
+                "status": "failed",
+            },
+        },
+        {
+            "type": "item.started",
+            "item": {
+                "id": "collab",
+                "type": "collab_tool_call",
+                "tool": "spawn_agent",
+                "sender_thread_id": "root",
+                "receiver_thread_ids": ["worker"],
+                "prompt": "Inspect tools",
+                "agents_states": {"worker": {"status": "running"}},
+                "status": "in_progress",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "search",
+                "type": "web_search",
+                "query": "AgentKit runtime contract",
+                "action": {"type": "search"},
+            },
+        },
+        {
+            "type": "item.updated",
+            "item": {
+                "id": "plan",
+                "type": "todo_list",
+                "items": [
+                    {"text": "识别入口", "completed": True},
+                    {"text": "迁移工具", "status": "in_progress"},
+                    {"text": "验证行为", "completed": False},
+                    {"text": "部署检查", "status": "failed"},
+                    "ignored",
+                ],
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "item-error",
+                "type": "error",
+                "message": "tool failed with Authorization: Bearer private-bearer",
+            },
+        },
+        {"type": "error", "message": "stream failed with token=private-stream-token"},
+        {"type": "turn.completed", "usage": {"input_tokens": 10}},
+    ]
+
+    items = _parse_activity_log(
+        "\n".join(json.dumps(event, ensure_ascii=False) for event in events).encode(),
+        1,
+        phase="migration",
+    )
+
+    assert [item["id"] for item in items] == [
+        "migration:1:command",
+        "migration:1:files",
+        "migration:1:mcp",
+        "migration:1:mcp-error",
+        "migration:1:collab",
+        "migration:1:search",
+        "migration:1:plan",
+        "migration:1:item-error",
+        "migration:1:error-10",
+    ]
+    assert items[0] == {
+        "id": "migration:1:command",
+        "kind": "command",
+        "status": "failed",
+        "title": "命令执行未完成",
+        "tool": {
+            "name": "命令执行未完成",
+            "input": {"command": "custom-tool --token=[已隐藏]"},
+            "output": "request failed with password=[已隐藏]",
+            "exitCode": 7,
+        },
+    }
+    assert items[1]["tool"] == {
+        "name": "已更新项目文件",
+        "input": {
+            "changes": [
+                {"path": "assistant/agent.py", "kind": "update"},
+                {"path": "main.py", "kind": "add"},
+            ]
+        },
+    }
+    assert items[2]["tool"] == {
+        "name": "已调用工具 project/inspect",
+        "input": {
+            "path": "assistant/agent.py",
+            "nested": {"api_key": "[已隐藏]"},
+        },
+        "output": {"structured_content": {"entry": "root_agent"}},
+    }
+    assert items[3]["status"] == "failed"
+    failed_tool = items[3]["tool"]
+    assert isinstance(failed_tool, dict)
+    assert failed_tool["error"] == "failed with token=[已隐藏]"
+    assert items[4]["status"] == "running"
+    collaboration_tool = items[4]["tool"]
+    search_tool = items[5]["tool"]
+    assert isinstance(collaboration_tool, dict)
+    assert isinstance(collaboration_tool["input"], dict)
+    assert collaboration_tool["input"]["prompt"] == "Inspect tools"
+    assert isinstance(search_tool, dict)
+    assert isinstance(search_tool["input"], dict)
+    assert search_tool["input"]["query"] == "AgentKit runtime contract"
+    assert items[6]["plan"] == [
+        {"text": "识别入口", "status": "completed"},
+        {"text": "迁移工具", "status": "in_progress"},
+        {"text": "验证行为", "status": "pending"},
+        {"text": "部署检查", "status": "failed"},
+    ]
+    assert items[6]["detail"] == "已完成 1/4 项"
+    assert items[7]["status"] == "failed"
+    assert items[8]["status"] == "failed"
+    serialized = json.dumps(items, ensure_ascii=False)
+    assert "private-" not in serialized
+    assert "Codex 已完成本轮执行" not in serialized
+
+
+def test_activity_payload_bounds_nested_and_untrusted_values() -> None:
+    deep: object = "token=private-deep-token"
+    for _ in range(8):
+        deep = {"value": deep}
+    wide = {f"field-{index}": index for index in range(55)}
+
+    assert _activity_secret_values(deep) == ()
+    assert len(_activity_secret_values(wide)) == 0
+    assert _activity_payload(None) is None
+    bounded_list = _activity_payload([*range(55)])
+    bounded_mapping = _activity_payload(wide)
+    assert isinstance(bounded_list, list)
+    assert bounded_list[-1] == "…内容已截断"
+    assert isinstance(bounded_mapping, dict)
+    assert bounded_mapping["…"] == "内容已截断"
+    assert "内容已截断" in json.dumps(_activity_payload(deep), ensure_ascii=False)
+    with pytest.raises(TypeError, match="non-JSON value"):
+        _activity_payload(SimpleNamespace(value="unsafe"))
+    bounded = _activity_payload({"output": "x" * 12_001})
+    assert isinstance(bounded, str)
+    assert bounded.endswith("…内容已截断")
 
 
 def test_analysis_activity_is_visible_before_route_confirmation() -> None:
@@ -976,35 +1195,44 @@ def test_analysis_activity_is_visible_before_route_confirmation() -> None:
                 "detail": "发现项目包含两个独立入口，正在核对调用关系。",
             },
             {
-                "id": "analysis:1:analysis-plan",
-                "kind": "plan",
-                "status": "completed",
-                "title": "Codex 正在按计划分析",
-                "detail": "已完成 1/1 项",
-            },
-            {
                 "id": "analysis:1:analysis-done",
                 "kind": "command",
                 "status": "completed",
                 "title": "已检查项目结构",
+                "tool": {
+                    "name": "已检查项目结构",
+                    "input": {"command": "rg -n 'Agent|Workflow' ."},
+                },
             },
             {
                 "id": "analysis:1:analysis-failed",
                 "kind": "command",
                 "status": "failed",
                 "title": "读取项目文件未完成",
+                "tool": {
+                    "name": "读取项目文件未完成",
+                    "input": {"command": "cat pyproject.toml"},
+                },
             },
             {
                 "id": "analysis:1:analysis-running",
                 "kind": "command",
                 "status": "running",
                 "title": "正在运行分析脚本",
+                "tool": {
+                    "name": "正在运行分析脚本",
+                    "input": {"command": "python3 scripts/inspect_project.py"},
+                },
             },
             {
-                "id": "analysis:1:turn",
-                "kind": "status",
+                "id": "analysis:1:analysis-unknown",
+                "kind": "command",
                 "status": "completed",
-                "title": "Codex 已完成本轮分析",
+                "title": "已执行命令",
+                "tool": {
+                    "name": "已执行命令",
+                    "input": {"command": "custom-tool --run"},
+                },
             },
         ],
     }

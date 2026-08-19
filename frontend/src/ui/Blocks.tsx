@@ -135,6 +135,27 @@ function GenericToolIcon() {
   );
 }
 
+function PlanIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="m4.5 7 1.8 1.8L9.5 5.5" />
+      <path d="M12 7h7.5" />
+      <path d="m4.5 13 1.8 1.8 3.2-3.3" />
+      <path d="M12 13h7.5" />
+      <path d="M5 19h4" />
+      <path d="M12 19h7.5" />
+    </svg>
+  );
+}
+
 function loadSkillLabel(name: string, args: unknown): string | undefined {
   if (name !== "load_skill" || args == null || typeof args !== "object" || Array.isArray(args)) {
     return undefined;
@@ -438,6 +459,74 @@ const StreamingTextBlock = memo(function StreamingTextBlock({
   ) : null;
 });
 
+type PlanBlockValue = Extract<Block, { kind: "plan" }>;
+
+const PLAN_STATUS_LABELS: Record<PlanBlockValue["items"][number]["status"], string> = {
+  pending: "待处理",
+  in_progress: "进行中",
+  completed: "已完成",
+  failed: "未完成",
+};
+
+function PlanBlock({
+  title,
+  summary,
+  items,
+  done,
+}: Omit<PlanBlockValue, "kind">) {
+  const [open, setOpen] = useState(!done);
+  const touched = useRef(false);
+  useEffect(() => {
+    if (!touched.current) setOpen(!done);
+  }, [done]);
+  const toggle = () => {
+    touched.current = true;
+    setOpen((value) => !value);
+  };
+
+  return (
+    <div className="block-plan">
+      <button
+        className="plan-head"
+        type="button"
+        onClick={toggle}
+        aria-expanded={items.length > 0 ? open : undefined}
+        disabled={items.length === 0}
+      >
+        <span className="plan-icon" aria-hidden="true">
+          <PlanIcon />
+        </span>
+        {done ? (
+          <span className="plan-title">{title}</span>
+        ) : (
+          <TextShimmer className="plan-title" duration={2.2} spread={15}>
+            {title}
+          </TextShimmer>
+        )}
+        {summary ? <span className="plan-summary">{summary}</span> : null}
+        {items.length > 0 ? (
+          <ToolDisclosureIcon className={`plan-chevron${open ? " is-open" : ""}`} />
+        ) : null}
+      </button>
+      <div className={`think-collapse ${open && items.length > 0 ? "open" : ""}`}>
+        <div className="think-collapse-inner">
+          {items.length > 0 ? (
+            <ol className="plan-items">
+              {items.map((item, index) => (
+                <li data-status={item.status} key={`${index}:${item.text}`}>
+                  <span className="plan-item-marker" aria-hidden="true" />
+                  <span className="plan-item-text">{item.text}</span>
+                  <small>{PLAN_STATUS_LABELS[item.status]}</small>
+                </li>
+              ))}
+            </ol>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Tool-call row. Dedicated built-ins use their registered icon and Chinese
  *  status copy; other tools use a neutral repository-drawn tool icon. Both
  *  treatments share the same header and detail alignment. */
@@ -446,15 +535,18 @@ function ToolBlock({
   args,
   response,
   done,
+  status,
 }: {
   name: string;
   args?: unknown;
   response?: unknown;
   done: boolean;
+  status?: "running" | "completed" | "failed";
 }) {
   const [open, setOpen] = useState(false);
   const label = name === A2UI_TOOL ? "渲染 UI" : name;
-  const builtinTool = getBuiltinToolDefinition(name);
+  const toolStatus = status ?? (done ? "completed" : "running");
+  const builtinTool = toolStatus === "failed" ? undefined : getBuiltinToolDefinition(name);
   const respText =
     response == null
       ? null
@@ -466,6 +558,7 @@ function ToolBlock({
   return (
     <motion.div
       className={`block-tool${builtinTool ? " block-tool--builtin" : ""}`}
+      data-status={toolStatus}
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, ease: "easeOut" }}
@@ -795,6 +888,16 @@ export function Blocks({
               />
             ) : null;
           }
+          case "plan":
+            return (
+              <PlanBlock
+                key={i}
+                title={b.title}
+                summary={b.summary}
+                items={b.items}
+                done={b.done}
+              />
+            );
           case "attachment":
             return <MediaGroup key={i} appName={appName} items={b.files} />;
           case "artifact":
@@ -814,7 +917,14 @@ export function Blocks({
           case "tool":
             if (b.name === A2UI_TOOL && b.done) return null;
             return (
-              <ToolBlock key={i} name={b.name} args={b.args} response={b.response} done={b.done} />
+              <ToolBlock
+                key={i}
+                name={b.name}
+                args={b.args}
+                response={b.response}
+                done={b.done}
+                status={b.status}
+              />
             );
           case "agent-transfer":
             return null;

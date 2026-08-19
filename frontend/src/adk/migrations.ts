@@ -126,12 +126,27 @@ export type MigrationActivityKind =
   | "command"
   | "status";
 
+export interface MigrationActivityTool {
+  name: string;
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+  exitCode?: number;
+}
+
+export interface MigrationActivityPlanItem {
+  text: string;
+  status: "pending" | "in_progress" | "completed" | "failed";
+}
+
 export interface MigrationActivityItem {
   id: string;
   kind: MigrationActivityKind;
   status: "running" | "completed" | "failed";
   title: string;
   detail?: string;
+  tool?: MigrationActivityTool;
+  plan?: MigrationActivityPlanItem[];
 }
 
 export interface MigrationActivity {
@@ -241,6 +256,13 @@ const ACTIVITY_KINDS = new Set<MigrationActivityKind>([
 
 const ACTIVITY_STATES = new Set<MigrationActivityItem["status"]>([
   "running",
+  "completed",
+  "failed",
+]);
+
+const ACTIVITY_PLAN_STATES = new Set<MigrationActivityPlanItem["status"]>([
+  "pending",
+  "in_progress",
   "completed",
   "failed",
 ]);
@@ -476,12 +498,60 @@ function normalizeActivity(value: unknown): MigrationActivity {
       ) {
         throw new Error("迁移执行动态项格式错误。");
       }
+      let tool: MigrationActivityTool | undefined;
+      if (item.tool !== undefined) {
+        const value = record(item.tool, "迁移执行工具项");
+        if (
+          typeof value.name !== "string" ||
+          (value.error !== undefined && typeof value.error !== "string") ||
+          (value.exitCode !== undefined && !Number.isInteger(value.exitCode))
+        ) {
+          throw new Error("迁移执行工具项格式错误。");
+        }
+        tool = {
+          name: value.name,
+          ...(Object.prototype.hasOwnProperty.call(value, "input")
+            ? { input: value.input }
+            : {}),
+          ...(Object.prototype.hasOwnProperty.call(value, "output")
+            ? { output: value.output }
+            : {}),
+          ...(typeof value.error === "string" ? { error: value.error } : {}),
+          ...(typeof value.exitCode === "number"
+            ? { exitCode: value.exitCode }
+            : {}),
+        };
+      }
+      let plan: MigrationActivityPlanItem[] | undefined;
+      if (item.plan !== undefined) {
+        if (!Array.isArray(item.plan)) {
+          throw new Error("迁移执行计划格式错误。");
+        }
+        plan = item.plan.map((value) => {
+          const planItem = record(value, "迁移执行计划项");
+          if (
+            typeof planItem.text !== "string" ||
+            typeof planItem.status !== "string" ||
+            !ACTIVITY_PLAN_STATES.has(
+              planItem.status as MigrationActivityPlanItem["status"],
+            )
+          ) {
+            throw new Error("迁移执行计划项格式错误。");
+          }
+          return {
+            text: planItem.text,
+            status: planItem.status as MigrationActivityPlanItem["status"],
+          };
+        });
+      }
       return {
         id: item.id,
         kind: item.kind as MigrationActivityKind,
         status: item.status as MigrationActivityItem["status"],
         title: item.title,
         ...(typeof item.detail === "string" ? { detail: item.detail } : {}),
+        ...(tool ? { tool } : {}),
+        ...(plan ? { plan } : {}),
       };
     }),
   };
