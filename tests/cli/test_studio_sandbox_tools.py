@@ -25,10 +25,12 @@ from agentkit.toolkit.errors import ApiError
 
 import veadk.cli.studio_sandbox_tools as studio_sandbox_tools
 from veadk.cli.studio_sandbox_tools import (
+    ensure_studio_codex_model_environment,
     ensure_studio_agent_model_credential,
     ensure_studio_agent_tool,
     ensure_studio_code_env_tool,
     ensure_studio_dev_env_tool,
+    inspect_studio_codex_model_environment,
     studio_sandbox_agent_model_name,
     studio_sandbox_model_base_url,
     studio_sandbox_tool_name,
@@ -516,6 +518,133 @@ def test_agent_model_credential_is_bound_to_tool_as_complete_env_set() -> None:
         "MODEL_AGENT_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
         "ARK_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
     }
+
+
+def test_codex_model_environment_noops_when_model_envs_are_present() -> None:
+    updates: list[object] = []
+    client = SimpleNamespace(
+        get_tool=lambda _: SimpleNamespace(
+            envs=[
+                SimpleNamespace(key="MODEL_AGENT_API_KEY", value="model-key"),
+                SimpleNamespace(
+                    key="MODEL_AGENT_BASE_URL",
+                    value="https://model.example.com/api/v3",
+                ),
+            ]
+        ),
+        update_tool=updates.append,
+    )
+
+    updated = ensure_studio_codex_model_environment(
+        tool_id="tool-codex",
+        client=client,
+    )
+
+    assert updated is False
+    assert updates == []
+
+
+def test_codex_model_environment_inspection_reports_update_state() -> None:
+    updates: list[object] = []
+    client = SimpleNamespace(
+        get_tool=lambda _: SimpleNamespace(
+            envs=[
+                SimpleNamespace(key="CODEX_API_KEY", value="codex-key"),
+                SimpleNamespace(
+                    key="CODEX_BASE_URL",
+                    value="https://ark.cn-beijing.volces.com/api/v3",
+                ),
+                SimpleNamespace(key="MODEL_AGENT_API_KEY", value="model-key"),
+            ]
+        ),
+        update_tool=updates.append,
+    )
+
+    status = inspect_studio_codex_model_environment(
+        tool_id="tool-codex",
+        client=client,
+    )
+
+    assert status.needs_model_env_update is True
+    assert status.can_update_model_env is True
+    assert status.model_env_error == ""
+    assert status.has_model_agent_api_key is True
+    assert status.has_model_agent_base_url is False
+    assert status.has_codex_api_key is True
+    assert status.has_codex_base_url is True
+    assert updates == []
+
+
+def test_codex_model_environment_inspection_reports_codex_env_errors() -> None:
+    client = SimpleNamespace(
+        get_tool=lambda _: SimpleNamespace(
+            envs=[
+                SimpleNamespace(key="MODEL_AGENT_API_KEY", value="model-key"),
+            ]
+        )
+    )
+
+    status = inspect_studio_codex_model_environment(
+        tool_id="tool-codex",
+        client=client,
+    )
+
+    assert status.needs_model_env_update is True
+    assert status.can_update_model_env is False
+    assert "CODEX_API_KEY" in status.model_env_error
+    assert "CODEX_BASE_URL" in status.model_env_error
+
+
+def test_codex_model_environment_backfills_missing_model_envs_from_codex() -> None:
+    updates: list[object] = []
+    client = SimpleNamespace(
+        get_tool=lambda _: SimpleNamespace(
+            envs=[
+                SimpleNamespace(key="EXISTING_ENV", value="kept"),
+                SimpleNamespace(key="CODEX_API_KEY", value="codex-key"),
+                SimpleNamespace(
+                    key="CODEX_BASE_URL",
+                    value="https://ark.cn-beijing.volces.com/api/v3",
+                ),
+                SimpleNamespace(key="MODEL_AGENT_API_KEY", value="existing-model-key"),
+            ]
+        ),
+        update_tool=updates.append,
+    )
+
+    updated = ensure_studio_codex_model_environment(
+        tool_id=" tool-codex ",
+        client=client,
+    )
+
+    assert updated is True
+    assert len(updates) == 1
+    assert getattr(updates[0], "tool_id") == "tool-codex"
+    envs = {
+        item.key: item.value for item in cast(list[Any], getattr(updates[0], "envs"))
+    }
+    assert envs == {
+        "EXISTING_ENV": "kept",
+        "CODEX_API_KEY": "codex-key",
+        "CODEX_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
+        "MODEL_AGENT_API_KEY": "existing-model-key",
+        "MODEL_AGENT_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
+    }
+
+
+def test_codex_model_environment_requires_codex_envs_before_backfill() -> None:
+    client = SimpleNamespace(
+        get_tool=lambda _: SimpleNamespace(
+            envs=[SimpleNamespace(key="CODEX_API_KEY", value="codex-key")]
+        ),
+        update_tool=lambda _: pytest.fail("invalid Codex envs must not be persisted"),
+    )
+
+    with pytest.raises(ValueError, match="CODEX_BASE_URL"):
+        ensure_studio_codex_model_environment(
+            tool_id="tool-codex",
+            client=client,
+        )
 
 
 def test_byteplus_agent_model_configuration() -> None:

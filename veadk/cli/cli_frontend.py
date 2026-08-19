@@ -2218,6 +2218,209 @@ def _run_frontend_server(
             "telemetry": studio_telemetry_config(version, enabled=studio),
         }
 
+    system_info_sandbox_tools = (
+        ("codex", "Codex Sandbox", "SANDBOX_CHAT_CODEX", False),
+        (
+            "codex_snapshot",
+            "Codex Sandbox",
+            "SANDBOX_CHAT_CODEX_SNAPSHOT",
+            True,
+        ),
+        (
+            "deepseek_harness",
+            "DeepSeek Harness Sandbox",
+            "SANDBOX_CHAT_CODEX",
+            False,
+        ),
+        (
+            "deepseek_harness_snapshot",
+            "DeepSeek Harness Sandbox",
+            "SANDBOX_CHAT_CODEX_SNAPSHOT",
+            True,
+        ),
+        ("openclaw", "OpenClaw Sandbox", "SANDBOX_CHAT_OPENCLAW", False),
+        (
+            "openclaw_snapshot",
+            "OpenClaw Sandbox",
+            "SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+            True,
+        ),
+        ("hermes", "Hermes Sandbox", "SANDBOX_CHAT_HERMES", False),
+        (
+            "hermes_snapshot",
+            "Hermes Sandbox",
+            "SANDBOX_CHAT_HERMES_SNAPSHOT",
+            True,
+        ),
+        ("dev", "Dev Sandbox", "SANDBOX_DEV", False),
+    )
+
+    def _default_model_env_state() -> dict[str, object]:
+        return {
+            "needsModelEnvUpdate": False,
+            "canUpdateModelEnv": False,
+            "modelEnvError": "",
+            "modelEnvErrorCode": "",
+        }
+
+    def _model_env_error_code_state(error_code: str) -> dict[str, object]:
+        state = _default_model_env_state()
+        state["modelEnvErrorCode"] = error_code
+        return state
+
+    def _log_codex_model_env_check_warning(
+        *,
+        error_code: str,
+        kind: str,
+        label: str,
+        tool_id: str,
+        region: str = "",
+        detail: str = "",
+        timeout_seconds: float | None = None,
+    ) -> None:
+        logger.warning(
+            "Codex Sandbox model env check failed: "
+            "error_code=%s kind=%s label=%s tool_id=%s region=%s "
+            "timeout_seconds=%s detail=%s",
+            error_code,
+            kind,
+            label,
+            tool_id,
+            region,
+            timeout_seconds if timeout_seconds is not None else "",
+            detail,
+        )
+
+    system_info_codex_model_env_states = {
+        kind: _default_model_env_state()
+        for kind, _label, _environment_key, _snapshot in system_info_sandbox_tools
+        if kind in {"codex", "codex_snapshot"}
+    }
+
+    async def _inspect_system_info_codex_model_env_state(
+        *,
+        kind: str,
+        tool_id: str,
+        label: str,
+    ) -> dict[str, object]:
+        model_env_state = _default_model_env_state()
+        if not tool_id:
+            return model_env_state
+
+        from veadk.cli.studio_sandbox_tools import (
+            inspect_studio_codex_model_environment,
+        )
+
+        try:
+            access_key, secret_key, session_token = _resolve_ve_credentials()
+        except Exception as error:
+            detail = _safe_exception_detail(error)
+            _log_codex_model_env_check_warning(
+                error_code="codex_model_env_credentials_unavailable",
+                kind=kind,
+                label=label,
+                tool_id=tool_id,
+                detail=detail,
+            )
+            return _model_env_error_code_state(
+                "codex_model_env_credentials_unavailable"
+            )
+
+        last_not_found: Exception | None = None
+        for sandbox_region in sandbox_region_candidates(
+            os.getenv("AGENTKIT_SANDBOX_REGION"),
+            provider=provider,
+        ):
+            try:
+                status = await asyncio.to_thread(
+                    inspect_studio_codex_model_environment,
+                    tool_id=tool_id,
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    session_token=session_token,
+                    region=sandbox_region,
+                )
+                return {
+                    "needsModelEnvUpdate": status.needs_model_env_update,
+                    "canUpdateModelEnv": status.can_update_model_env,
+                    "modelEnvError": status.model_env_error,
+                    "modelEnvErrorCode": "",
+                }
+            except Exception as error:
+                if is_agentkit_resource_not_found(error):
+                    last_not_found = error
+                    continue
+                detail = _safe_exception_detail(
+                    error,
+                    secrets=(access_key, secret_key, session_token),
+                )
+                _log_codex_model_env_check_warning(
+                    error_code="codex_model_env_check_failed",
+                    kind=kind,
+                    label=label,
+                    tool_id=tool_id,
+                    region=sandbox_region,
+                    detail=detail,
+                )
+                return _model_env_error_code_state("codex_model_env_check_failed")
+
+        detail = (
+            _safe_exception_detail(
+                last_not_found,
+                secrets=(access_key, secret_key, session_token),
+            )
+            if last_not_found
+            else f"{label} Tool 不存在"
+        )
+        _log_codex_model_env_check_warning(
+            error_code="codex_model_env_tool_not_found",
+            kind=kind,
+            label=label,
+            tool_id=tool_id,
+            detail=detail,
+        )
+        return _model_env_error_code_state("codex_model_env_tool_not_found")
+
+    async def _refresh_system_info_codex_model_env_states() -> None:
+        async def _refresh_one(
+            kind: str,
+            label: str,
+            environment_key: str,
+        ) -> None:
+            tool_id = (os.getenv(environment_key) or "").strip()
+            if not tool_id:
+                system_info_codex_model_env_states[kind] = _default_model_env_state()
+                return
+            try:
+                timeout_seconds = 8.0
+                state = await asyncio.wait_for(
+                    _inspect_system_info_codex_model_env_state(
+                        kind=kind,
+                        tool_id=tool_id,
+                        label=label,
+                    ),
+                    timeout=timeout_seconds,
+                )
+            except TimeoutError:
+                _log_codex_model_env_check_warning(
+                    error_code="codex_model_env_check_timeout",
+                    kind=kind,
+                    label=label,
+                    tool_id=tool_id,
+                    timeout_seconds=timeout_seconds,
+                    detail="timed out while reading Tool envs",
+                )
+                state = _model_env_error_code_state("codex_model_env_check_timeout")
+            system_info_codex_model_env_states[kind] = state
+
+        await asyncio.gather(
+            *(
+                _refresh_one(kind, label, environment_key)
+                for kind, label, environment_key, _snapshot in system_info_sandbox_tools
+                if kind in {"codex", "codex_snapshot"}
+            )
+        )
+
     @app.get("/web/system-info")
     async def _web_system_info(request: Request):
         """Return non-secret Studio resource identifiers for system diagnostics."""
@@ -2225,56 +2428,105 @@ def _run_frontend_server(
         from frontend.server.storage import StudioStorageConfig
 
         storage_config = StudioStorageConfig.from_env(provider)
-        sandbox_tools = (
-            ("codex", "Codex Sandbox", "SANDBOX_CHAT_CODEX", False),
-            (
-                "codex_snapshot",
-                "Codex Sandbox",
-                "SANDBOX_CHAT_CODEX_SNAPSHOT",
-                True,
-            ),
-            (
-                "deepseek_harness",
-                "DeepSeek Harness Sandbox",
-                "SANDBOX_CHAT_CODEX",
-                False,
-            ),
-            (
-                "deepseek_harness_snapshot",
-                "DeepSeek Harness Sandbox",
-                "SANDBOX_CHAT_CODEX_SNAPSHOT",
-                True,
-            ),
-            ("openclaw", "OpenClaw Sandbox", "SANDBOX_CHAT_OPENCLAW", False),
-            (
-                "openclaw_snapshot",
-                "OpenClaw Sandbox",
-                "SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
-                True,
-            ),
-            ("hermes", "Hermes Sandbox", "SANDBOX_CHAT_HERMES", False),
-            (
-                "hermes_snapshot",
-                "Hermes Sandbox",
-                "SANDBOX_CHAT_HERMES_SNAPSHOT",
-                True,
-            ),
-            ("dev", "Dev Sandbox", "SANDBOX_DEV", False),
-        )
+        sandbox_tools = []
+        for kind, label, environment_key, snapshot in system_info_sandbox_tools:
+            tool_id = (os.getenv(environment_key) or "").strip()
+            model_env_state = (
+                dict(
+                    system_info_codex_model_env_states.get(
+                        kind,
+                        _default_model_env_state(),
+                    )
+                )
+                if kind in {"codex", "codex_snapshot"}
+                else _default_model_env_state()
+            )
+            sandbox_tools.append(
+                {
+                    "kind": kind,
+                    "label": label,
+                    "toolId": tool_id,
+                    "snapshot": snapshot,
+                    **model_env_state,
+                }
+            )
         return {
             "storage": {
                 "tosAddress": storage_config.object_host,
             },
-            "sandboxTools": [
-                {
-                    "kind": kind,
-                    "label": label,
-                    "toolId": (os.getenv(environment_key) or "").strip(),
-                    "snapshot": snapshot,
-                }
-                for kind, label, environment_key, snapshot in sandbox_tools
-            ],
+            "sandboxTools": sandbox_tools,
         }
+
+    @app.post("/web/system-info/sandbox-tools/{kind}/model-env")
+    async def _web_update_system_info_sandbox_tool_model_env(
+        kind: str,
+        request: Request,
+    ):
+        """Backfill Codex Sandbox model envs without exposing secrets."""
+        _require_studio_admin(request)
+        codex_tools = {
+            tool_kind: (label, environment_key)
+            for tool_kind, label, environment_key, _snapshot in system_info_sandbox_tools
+            if tool_kind in {"codex", "codex_snapshot"}
+        }
+        if kind not in codex_tools:
+            raise HTTPException(status_code=400, detail="Unsupported Sandbox Tool kind")
+        label, environment_key = codex_tools[kind]
+        tool_id = (os.getenv(environment_key) or "").strip()
+        if not tool_id:
+            raise HTTPException(status_code=400, detail=f"{label} 未配置 Tool ID")
+
+        from veadk.cli.studio_sandbox_tools import (
+            ensure_studio_codex_model_environment,
+        )
+
+        access_key, secret_key, session_token = _resolve_ve_credentials()
+        last_not_found: Exception | None = None
+        for sandbox_region in sandbox_region_candidates(
+            os.getenv("AGENTKIT_SANDBOX_REGION"),
+            provider=provider,
+        ):
+            try:
+                updated = await asyncio.to_thread(
+                    ensure_studio_codex_model_environment,
+                    tool_id=tool_id,
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    session_token=session_token,
+                    region=sandbox_region,
+                )
+                system_info_codex_model_env_states[kind] = _default_model_env_state()
+                return {"kind": kind, "toolId": tool_id, "updated": updated}
+            except Exception as error:
+                if is_agentkit_resource_not_found(error):
+                    last_not_found = error
+                    continue
+                if isinstance(error, ValueError):
+                    state = _default_model_env_state()
+                    state["needsModelEnvUpdate"] = True
+                    state["modelEnvError"] = str(error)
+                    system_info_codex_model_env_states[kind] = state
+                    raise HTTPException(status_code=400, detail=str(error)) from error
+                raise HTTPException(
+                    status_code=502,
+                    detail=_safe_exception_detail(
+                        error,
+                        secrets=(access_key, secret_key, session_token),
+                    ),
+                ) from error
+
+        detail = (
+            _safe_exception_detail(
+                last_not_found,
+                secrets=(access_key, secret_key, session_token),
+            )
+            if last_not_found
+            else f"{label} Tool 不存在"
+        )
+        state = _default_model_env_state()
+        state["modelEnvError"] = detail
+        system_info_codex_model_env_states[kind] = state
+        raise HTTPException(status_code=404, detail=detail)
 
     @app.get("/web/agent-info/{app_name}")
     async def _web_agent_info(app_name: str):
@@ -5702,7 +5954,7 @@ def _run_frontend_server(
     evaluation_automation: EvaluationAutomationService | None = None
     agent_usage_service: Any | None = None
     if studio:
-        from contextlib import asynccontextmanager
+        from contextlib import asynccontextmanager, suppress
 
         from frontend.server.agent_usage import (
             create_service as create_agent_usage_service,
@@ -5740,10 +5992,26 @@ def _run_frontend_server(
 
         @asynccontextmanager
         async def _studio_services_lifespan(current_app: Any):
+            codex_model_env_task: asyncio.Task[None] | None = None
             async with original_lifespan(current_app):
+                if not getattr(
+                    current_app.state,
+                    "disable_system_info_codex_model_env_prefetch",
+                    False,
+                ):
+                    codex_model_env_task = asyncio.create_task(
+                        _refresh_system_info_codex_model_env_states()
+                    )
                 try:
                     yield
                 finally:
+                    if (
+                        codex_model_env_task is not None
+                        and not codex_model_env_task.done()
+                    ):
+                        codex_model_env_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await codex_model_env_task
                     try:
                         await evaluation_automation.close()
                     finally:
