@@ -1844,7 +1844,10 @@ def _run_frontend_server(
         _require_studio_admin,
     )
 
-    from veadk.cli.agentkit_sandbox_region import sandbox_region_candidates
+    from veadk.cli.agentkit_sandbox_region import (
+        resolve_sandbox_client_region,
+        sandbox_region_candidates,
+    )
     from veadk.cli.frontend_sandbox import (
         AgentkitSandboxGateway,
         SandboxAgentSessionService,
@@ -1862,10 +1865,11 @@ def _run_frontend_server(
             access_key, secret_key, session_token = _resolve_ve_credentials()
         except HTTPException as error:
             raise SandboxConfigurationError(str(error.detail)) from error
+        resolved_region = resolve_sandbox_client_region(region, provider=provider)
         return AgentkitToolsClient(
             access_key=access_key,
             secret_key=secret_key,
-            region=region,
+            region=resolved_region,
             session_token=session_token or "",
         )
 

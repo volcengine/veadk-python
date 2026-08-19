@@ -790,7 +790,9 @@ def deploy(
             "VOLCENGINE_SECRET_KEY."
         )
 
-    resolved_region = region or os.getenv("VOLCENGINE_REGION") or "cn-beijing"
+    resolved_region = (
+        region or os.getenv("VOLCENGINE_REGION") or os.getenv("REGION") or "cn-beijing"
+    )
     cfg = _build_agentkit_config(runtime_name, resolved_region, runtime_envs, auth)
 
     # AgentKit's launch path exposes no hook for runtime tags, so tag the runtime

@@ -115,7 +115,11 @@ class SkillsTool(BaseTool):
         default_region = (
             "ap-southeast-1" if cloud_provider == "byteplus" else "cn-beijing"
         )
-        region = os.getenv("AGENTKIT_TOOL_REGION", default_region)
+        region = (
+            os.getenv("AGENTKIT_TOOL_REGION")
+            or (os.getenv("REGION") if cloud_provider != "byteplus" else None)
+            or default_region
+        )
 
         if skill_name not in self.skills:
             # 1. Download skill from TOS if not found locally
@@ -436,7 +440,11 @@ class SkillsTool(BaseTool):
         default_region = (
             "ap-southeast-1" if cloud_provider == "byteplus" else "cn-beijing"
         )
-        region = os.getenv("AGENTKIT_TOOL_REGION", default_region)
+        region = (
+            os.getenv("AGENTKIT_TOOL_REGION")
+            or (os.getenv("REGION") if cloud_provider != "byteplus" else None)
+            or default_region
+        )
         default_sld = "byteplusapi" if cloud_provider == "byteplus" else "volcengineapi"
         agentkit_skill_host = os.getenv(
             "AGENTKIT_SKILL_HOST",

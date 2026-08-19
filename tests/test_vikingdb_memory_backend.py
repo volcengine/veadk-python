@@ -179,3 +179,69 @@ def test_volcengine_viking_memory_keeps_volcengine_region(
     backend = module.VikingDBLTMBackend(index="agent_memory")
 
     assert backend.region == "cn-shanghai"
+
+
+def test_volcengine_viking_memory_uses_region_env_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_backend_module(monkeypatch)
+    monkeypatch.setenv("CLOUD_PROVIDER", "volcengine")
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "volcengine")
+    monkeypatch.delenv("DATABASE_VIKING_REGION", raising=False)
+    monkeypatch.setenv("REGION", "cn-shanghai")
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "volc-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "volc-sk")
+    monkeypatch.setattr(
+        module.VikingDBLTMBackend,
+        "_collection_exist",
+        lambda self: True,
+    )
+
+    backend = module.VikingDBLTMBackend(index="agent_memory")
+
+    assert backend.region == "cn-shanghai"
+
+
+def test_volcengine_viking_memory_database_region_wins_over_region_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_backend_module(monkeypatch)
+    monkeypatch.setenv("CLOUD_PROVIDER", "volcengine")
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "volcengine")
+    monkeypatch.setenv("DATABASE_VIKING_REGION", "cn-beijing")
+    monkeypatch.setenv("REGION", "cn-shanghai")
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "volc-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "volc-sk")
+    monkeypatch.setattr(
+        module.VikingDBLTMBackend,
+        "_collection_exist",
+        lambda self: True,
+    )
+
+    backend = module.VikingDBLTMBackend(index="agent_memory")
+
+    assert backend.region == "cn-beijing"
+
+
+def test_direct_volcengine_viking_memory_client_uses_region_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from veadk.integrations.ve_viking_db_memory.ve_viking_db_memory import (
+        VikingDBMemoryClient,
+    )
+
+    if hasattr(VikingDBMemoryClient, "_instance"):
+        delattr(VikingDBMemoryClient, "_instance")
+    monkeypatch.setenv("CLOUD_PROVIDER", "volcengine")
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "volcengine")
+    monkeypatch.setenv("REGION", "cn-shanghai")
+    monkeypatch.setattr(
+        VikingDBMemoryClient,
+        "get_body",
+        lambda self, api, params, body: "{}",
+    )
+
+    client = VikingDBMemoryClient()
+
+    assert client.get_host() == "api-knowledgebase.mlp.cn-shanghai.volces.com"
+    assert client.service_info.credentials.region == "cn-shanghai"

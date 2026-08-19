@@ -68,7 +68,11 @@ def get_agentkit_endpoint_config(
         sld = "volces"
         default_region = "cn-beijing"
 
-    region = getenv("AGENTKIT_TOOL_REGION", default_region)
+    region = getenv(
+        "AGENTKIT_TOOL_REGION",
+        (os.getenv("REGION") if cloud_provider != "byteplus" else None)
+        or default_region,
+    )
     host = getenv(host_env_name, service + "." + region + f".{sld}.com")
     scheme = getenv("AGENTKIT_TOOL_SCHEME", "https", allow_false_values=True).lower()
     if scheme not in {"http", "https"}:

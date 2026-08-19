@@ -66,9 +66,10 @@ def _get_api_key_by_api_key_id(
 
 
 def get_viking_mem0_token(
-    api_key_id: str, memory_project_id: str, region: str = "cn-beijing"
+    api_key_id: str, memory_project_id: str, region: str = ""
 ) -> str:
     logger.info("Fetching Viking mem0 token...")
+    region = region or os.getenv("REGION") or "cn-beijing"
 
     access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
     secret_key = os.getenv("VOLCENGINE_SECRET_KEY")

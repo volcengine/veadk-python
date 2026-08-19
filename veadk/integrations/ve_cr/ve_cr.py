@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import time
 
 from veadk.consts import (
@@ -26,9 +27,10 @@ logger = get_logger(__name__)
 
 
 class VeCR:
-    def __init__(self, access_key: str, secret_key: str, region: str = "cn-beijing"):
+    def __init__(self, access_key: str, secret_key: str, region: str = ""):
         self.ak = access_key
         self.sk = secret_key
+        region = region or os.getenv("REGION") or "cn-beijing"
         self.region = region
         assert region in ["cn-beijing", "cn-guangzhou", "cn-shanghai"]
         self.version = "2022-05-12"

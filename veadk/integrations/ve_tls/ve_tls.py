@@ -25,7 +25,7 @@ class VeTLS:
         self,
         access_key: str | None = None,
         secret_key: str | None = None,
-        region: str = "cn-beijing",
+        region: str = "",
     ):
         try:
             from veadk.integrations.ve_tls.utils import ve_tls_request
@@ -43,7 +43,7 @@ class VeTLS:
         self.secret_key = (
             secret_key if secret_key else os.getenv("VOLCENGINE_SECRET_KEY", "")
         )
-        self.region = region
+        self.region = region or os.getenv("REGION") or "cn-beijing"
 
         self._client = TLSService(
             endpoint=f"https://tls-{self.region}.volces.com",

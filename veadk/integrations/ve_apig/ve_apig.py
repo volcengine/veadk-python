@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import time
 
 import volcenginesdkcore
@@ -31,15 +32,19 @@ class APIGateway:
         self,
         access_key: str,
         secret_key: str,
-        region: str = "cn-beijing",
+        region: str = "",
         session_token: str = "",
         provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
     ):
         self.ak = access_key
         self.sk = secret_key
         self.session_token = session_token
-        self.region = region
         self.provider = provider
+        if not region and provider != "byteplus":
+            region = os.getenv("REGION") or "cn-beijing"
+        elif not region:
+            region = "cn-beijing"
+        self.region = region
         self.openapi_host = apig_openapi_host(region, provider)
         configuration = volcenginesdkcore.Configuration()
         configuration.ak = self.ak

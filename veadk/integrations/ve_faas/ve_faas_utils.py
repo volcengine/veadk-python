@@ -33,7 +33,7 @@ from volcenginesdkcore.rest import ApiException
 
 Service = "apig"
 Version = "2021-03-03"
-Region = "cn-beijing"
+Region = os.getenv("REGION") or "cn-beijing"
 Host = "iam.volcengineapi.com"
 ContentType = "application/x-www-form-urlencoded"
 

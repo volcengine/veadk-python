@@ -28,7 +28,7 @@ _ARK_PAGE_SIZE = 100
 
 
 def get_ark_token(
-    region: str = "cn-beijing",
+    region: str = "",
     api_key_name: str | None = None,
     *,
     api_key_id: str | None = None,
@@ -72,6 +72,7 @@ def get_ark_token(
         secret_key = cred.secret_access_key
         session_token = cred.session_token
 
+    region = region or os.getenv("REGION") or "cn-beijing"
     provider = cloud_provider or os.getenv("CLOUD_PROVIDER")
     host = "open.volcengineapi.com"
     if provider and provider.lower() == "byteplus":

@@ -161,6 +161,58 @@ class TestResolveAgentkitToolId(unittest.TestCase):
             self.agentkit_module.resolve_agentkit_tool_id("AGENTKIT_TOOL_ID_SCRIPT")
 
 
+class TestAgentkitEndpointConfig(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.agentkit_module = _load_agentkit_module()
+
+    def setUp(self):
+        self.env_patcher = patch.dict(os.environ, {}, clear=False)
+        self.env_patcher.start()
+        for env_name in [
+            "AGENTKIT_TOOL_REGION",
+            "AGENTKIT_TOOL_HOST",
+            "AGENTKIT_TOOL_SERVICE_CODE",
+            "AGENTKIT_TOOL_SCHEME",
+            "CLOUD_PROVIDER",
+            "REGION",
+        ]:
+            os.environ.pop(env_name, None)
+
+    def tearDown(self):
+        self.env_patcher.stop()
+
+    def test_uses_region_env_as_fallback(self):
+        os.environ["REGION"] = "cn-shanghai"
+
+        service, region, host, scheme = (
+            self.agentkit_module.get_agentkit_endpoint_config()
+        )
+
+        self.assertEqual(service, "agentkit")
+        self.assertEqual(region, "cn-shanghai")
+        self.assertEqual(host, "agentkit.cn-shanghai.volces.com")
+        self.assertEqual(scheme, "https")
+
+    def test_agentkit_tool_region_wins_over_region_env(self):
+        os.environ["AGENTKIT_TOOL_REGION"] = "cn-beijing"
+        os.environ["REGION"] = "cn-shanghai"
+
+        _, region, host, _ = self.agentkit_module.get_agentkit_endpoint_config()
+
+        self.assertEqual(region, "cn-beijing")
+        self.assertEqual(host, "agentkit.cn-beijing.volces.com")
+
+    def test_byteplus_ignores_region_env_fallback(self):
+        os.environ["CLOUD_PROVIDER"] = "byteplus"
+        os.environ["REGION"] = "cn-shanghai"
+
+        _, region, host, _ = self.agentkit_module.get_agentkit_endpoint_config()
+
+        self.assertEqual(region, "ap-southeast-1")
+        self.assertEqual(host, "agentkit.ap-southeast-1.bytepluses.com")
+
+
 class TestInvokeAgentkitExecBash(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -120,7 +121,7 @@ class VeFaaS:
         access_key: str,
         secret_key: str,
         session_token: str = "",
-        region: str = "cn-beijing",
+        region: str = "",
         project_name: str = "default",
         provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
         application_template_id: str | None = None,
@@ -128,9 +129,13 @@ class VeFaaS:
         self.ak = access_key
         self.sk = secret_key
         self.session_token = session_token
-        self.region = region
         self.project_name = project_name
         self.provider = provider
+        if not region and provider != "byteplus":
+            region = os.getenv("REGION") or "cn-beijing"
+        elif not region:
+            region = "cn-beijing"
+        self.region = region
         self.openapi_host = vefaas_openapi_host(region, provider)
 
         configuration = volcenginesdkcore.Configuration()

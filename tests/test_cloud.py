@@ -26,7 +26,7 @@ from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 from veadk.integrations.ve_apig.ve_apig import APIGateway
 from veadk.integrations.ve_code_pipeline.ve_code_pipeline import VeCodePipeline
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
-from veadk.utils.cloud_provider import cp_openapi_host
+from veadk.utils.cloud_provider import cp_openapi_host, default_region
 
 
 def test_vefaas_create_function_uses_configured_project() -> None:
@@ -374,6 +374,49 @@ def test_cloud_agent_engine_passes_application_template() -> None:
         vefaas_class.call_args.kwargs["application_template_id"]
         == "byteplus-template-id"
     )
+
+
+def test_default_volcengine_region_uses_region_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    assert default_region("volcengine") == "cn-shanghai"
+
+
+def test_code_pipeline_uses_region_env_for_volcengine_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    service = VeCodePipeline(
+        volcengine_access_key="test_access_key",
+        volcengine_secret_key="test_secret_key",
+        provider="volcengine",
+    )
+
+    assert service.region == "cn-shanghai"
+    assert service.host == "open.volcengineapi.com"
+
+
+def test_cloud_agent_engine_uses_region_env_when_region_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    with (
+        patch("veadk.cloud.cloud_agent_engine.VeFaaS") as vefaas_class,
+        patch("veadk.cloud.cloud_agent_engine.APIGateway") as apig_class,
+        patch("veadk.cloud.cloud_agent_engine.IdentityClient") as identity_class,
+    ):
+        CloudAgentEngine(
+            volcengine_access_key="test_access_key",
+            volcengine_secret_key="test_secret_key",
+        )
+
+    assert vefaas_class.call_args.kwargs["region"] == "cn-shanghai"
+    assert apig_class.call_args.kwargs["region"] == "cn-shanghai"
+    assert identity_class.call_args.kwargs["region"] == "cn-shanghai"
 
 
 def test_code_pipeline_uses_byteplus_region_host() -> None:

@@ -96,6 +96,13 @@ class CloudAgentEngine(BaseModel):
         Note:
             This is a Pydantic lifecycle method, ensuring service readiness after init.
         """
+        if (
+            self.provider != "byteplus"
+            and "region" not in self.model_fields_set
+            and os.getenv("REGION")
+        ):
+            self.region = os.getenv("REGION") or self.region
+
         self._vefaas_service = VeFaaS(
             access_key=self.volcengine_access_key,
             secret_key=self.volcengine_secret_key,

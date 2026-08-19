@@ -70,10 +70,11 @@ def get_instance_id_by_name(instance_name: str, region: str, project_name: str) 
 
 def get_mse_cridential(
     instance_name: str,
-    region: str = "cn-beijing",
+    region: str = "",
     project_name: str = "default",
 ) -> MSENacosConfig:
     logger.info("Fetching MSE Nacos token...")
+    region = region or os.getenv("REGION") or "cn-beijing"
 
     access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
     secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
