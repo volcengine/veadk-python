@@ -102,7 +102,8 @@ test("trace loading state is centered in the drawer content area", () => {
 test("sidebar opens a platform feedback page with suggested issue pills", () => {
   assert.match(sidebarSource, /className="sidebar-footer"/);
   assert.match(sidebarSource, /onIssueFeedback/);
-  assert.match(sidebarSource, /activePage === "feedback"/);
+  assert.match(sidebarSource, /系统信息[\s\S]*?问题反馈[\s\S]*?退出登录/);
+  assert.match(sidebarSource, /<AgentKitPromoCard cloudProvider=\{cloudProvider\}/);
   assert.match(sidebarSource, /className="sidebar-beta-badge">Beta/);
   assert.match(appSource, /initialModule=\{issueFeedbackModuleForPage\(platformFeedbackOrigin\)\}/);
   assert.match(appSource, /source: "platform"/);
