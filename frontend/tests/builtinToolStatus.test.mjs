@@ -53,6 +53,7 @@ test("maps supported built-in tools to dedicated Chinese running and done labels
     ["load_memory", "正在检索长期记忆", "已完成记忆检索"],
     ["load_knowledgebase", "正在检索知识库", "已完成知识库检索"],
     ["load_skill", "正在加载技能", "已加载技能"],
+    ["generate_agent", "正在定制智能体", "智能体定制完毕"],
   ];
 
   for (const [name, running, done] of expected) {
@@ -69,6 +70,7 @@ test("renders built-in tool calls through the extensible dedicated header", () =
   assert.match(headerSource, /aria-expanded=\{open\}/);
   assert.match(toolStylesSource, /data-tool-tone="search"/);
   assert.match(toolStylesSource, /data-tool-tone="skill"/);
+  assert.match(toolStylesSource, /data-tool-tone="agent"/);
   assert.match(blocksSource, /function loadSkillLabel/);
   assert.match(blocksSource, /label=\{loadSkillLabel\(name, args\)\}/);
   assert.match(blocksSource, /`使用 \$\{skillName\.trim\(\)\} 技能`/);
@@ -160,6 +162,14 @@ test("uses repository-owned current-color SVG icons for every special tool", () 
   assert.match(iconsSource, /viewBox="0 0 24 24"/);
   assert.match(iconsSource, /stroke="currentColor"/);
   assert.doesNotMatch(iconsSource, /lucide-react|<img|https?:\/\//);
+  assert.match(
+    registrySource,
+    /import \{ AgentFaceSquareIcon \} from "\.\.\/icons\/CreateAgentIcons";/,
+  );
+  assert.match(
+    registrySource,
+    /generate_agent:[\s\S]*?icon:\s*AgentFaceSquareIcon/,
+  );
 });
 
 test("centralizes all loading text shimmer behavior in TextShimmer", () => {

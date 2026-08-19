@@ -245,7 +245,7 @@ export const BUILTIN_TOOLS: ToolOption[] = [
   },
   {
     id: "run_code",
-    label: "代码执行",
+    label: "代码沙箱",
     desc: "在沙箱中执行代码",
     importLine: "from veadk.tools.builtin_tools.run_code import run_code",
     toolNames: ["run_code"],
@@ -254,7 +254,7 @@ export const BUILTIN_TOOLS: ToolOption[] = [
         key: "AGENTKIT_TOOL_ID",
         required: true,
         placeholder: "t-xxxx",
-        comment: "代码执行沙箱 ID",
+        comment: "代码沙箱 ID",
       },
       {
         key: "AGENTKIT_TOOL_REGION",
@@ -275,7 +275,9 @@ export const BUILTIN_TOOLS: ToolOption[] = [
 ];
 
 const HIDDEN_CREATE_TOOL_IDS = new Set([
+  "link_reader",
   "web_scraper",
+  "image_edit",
   "text_to_speech",
   "vesearch",
 ]);

@@ -14,6 +14,10 @@ const createStyles = readFileSync(
   new URL("../src/create/CustomCreate.css", import.meta.url),
   "utf8",
 );
+const createIconSource = readFileSync(
+  new URL("../src/ui/icons/CreateAgentIcons.tsx", import.meta.url),
+  "utf8",
+);
 const catalogSource = readFileSync(
   new URL("../src/create/veadkCatalog.ts", import.meta.url),
   "utf8",
@@ -73,12 +77,25 @@ test("system prompt lazily loads a focused Markdown editor", () => {
   assert.match(editorSource, /suppressHtmlProcessing/);
   assert.match(editorSource, /trim=\{false\}/);
   assert.match(editorSource, /if \(!initialMarkdownNormalize\)/);
+  assert.match(
+    createStyles,
+    /\.cw-markdown-editor:not\(\.mdxeditor-popup-container\):focus-within\s*\{[\s\S]*?border-color:\s*hsl\(var\(--border\)\);[\s\S]*?0 0 0 1px hsl\(var\(--ring\) \/ 0\.38\) inset,[\s\S]*?0 0 0 3px hsl\(var\(--ring\) \/ 0\.09\),[\s\S]*?inset 0 1px 0 hsl\(var\(--foreground\) \/ 0\.015\);/,
+  );
+});
+
+test("agent builder waits for real conversation events without placeholder thinking", () => {
+  assert.match(
+    createSource,
+    /id: assistantMessageId,\s*role: "assistant",\s*blocks: \[\],\s*streaming: true/,
+  );
+  assert.doesNotMatch(createSource, /正在理解你的需求。/);
+  assert.match(createSource, /acc = applyEvent\(acc, adkEvent\)/);
 });
 
 test("description remains a plain text field", () => {
   assert.match(
     createSource,
-    /<textarea[\s\S]*?value=\{node\.description\}[\s\S]*?patch\(\{ description:/,
+    /<Textarea[\s\S]*?id="cw-agent-description"[\s\S]*?value=\{node\.description\}[\s\S]*?patch\(\{ description:/,
   );
 });
 
@@ -98,11 +115,11 @@ test("long form content scrolls inside bounded editors", () => {
   assert.doesNotMatch(createStyles, /(?:^|,)\s*\.cw-markdown-editor\s*\{/m);
   assert.match(
     createStyles,
-    /\.cw-textarea-sm\s*\{[\s\S]*?max-height:\s*160px;[\s\S]*?overflow-y:\s*auto;/,
+    /\.cw-markdown-content\s*\{[\s\S]*?max-height:\s*360px;[\s\S]*?overflow-y:\s*auto;/,
   );
   assert.match(
     createStyles,
-    /\.cw-markdown-content\s*\{[\s\S]*?max-height:\s*360px;[\s\S]*?overflow-y:\s*auto;/,
+    /\.cw-detail \.cw-markdown-content\s*\{[\s\S]*?padding:\s*6px 12px;/,
   );
 });
 
@@ -127,77 +144,34 @@ test("configuration form omits the redundant right-side step rail", () => {
   assert.doesNotMatch(createStyles, /\.cw-rail\s*\{/);
 });
 
-test("workspace uses one title and a bottom five-stage lifecycle", () => {
-  const headerRule = createStyles.match(/\.cw-workspace-header\s*\{[^}]*\}/)?.[0] ?? "";
-  assert.match(createSource, /build:\s*"个性化您的智能体架构"/);
-  assert.match(createSource, /optimize:\s*"为您的智能体选择优化项"/);
-  assert.match(createSource, /validate:\s*"调试您的智能体"/);
-  assert.match(createSource, /environment:\s*"配置云上环境"/);
-  assert.match(createSource, /publish:\s*"准备好部署您的智能体"/);
-  assert.match(createSource, /<h1>\{WORKSPACE_TITLES\[mode\]\}<\/h1>/);
-  assert.doesNotMatch(createSource, /agentName=\{workspaceAgentName\(draft\)\}/);
-  assert.match(headerRule, /display:\s*flex/);
-  assert.match(headerRule, /justify-content:\s*center/);
-  assert.match(headerRule, /align-items:\s*center/);
-  assert.match(headerRule, /background:\s*transparent/);
-  assert.doesNotMatch(createSource, />放弃编辑</);
+test("build workspace reuses the Figma navigation and hides the old footer", () => {
+  assert.match(createSource, /import \{ CreateAgentHeader \}/);
+  assert.match(
+    createSource,
+    /<CreateAgentHeader[\s\S]*?onBack=\{onBack\}[\s\S]*?onDebug=\{onDebug\}[\s\S]*?onDeploy=\{onDeploy\}[\s\S]*?debugMode=\{debugMode\}/,
+  );
+  assert.doesNotMatch(createSource, /WORKSPACE_TITLES/);
   assert.match(createSource, /\{ id: "build", label: "架构" \}/);
-  assert.match(createSource, /\{ id: "optimize", label: "优化" \}/);
   assert.match(createSource, /\{ id: "validate", label: "调试" \}/);
   assert.match(createSource, /\{ id: "environment", label: "环境" \}/);
   assert.match(createSource, /\{ id: "publish", label: "发布" \}/);
   assert.match(createSource, /function WorkspaceLifecycleFooter/);
-  assert.match(createSource, /className="cw-workspace-footer"/);
-  assert.match(createSource, /className=\{`cw-workspace-nav-actions\$\{assistant/);
-  assert.match(createSource, /className="cw-workspace-progress" aria-label="Agent 创建进度"/);
-  assert.match(createSource, /mode === "build" \? " is-placeholder" : ""/);
+  assert.match(createSource, /\{\(workspaceMode === "environment" \|\| workspaceMode === "publish"\) && <WorkspaceLifecycleFooter/);
   assert.match(createSource, /id="cw-publish-primary-action"/);
-  assert.match(
-    createStyles,
-    /\.cw-workspace-footer\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?padding:/,
-  );
-  assert.match(createStyles, /\.cw-workspace-nav-button\.is-placeholder\s*\{[\s\S]*?visibility:\s*hidden/);
-  assert.match(createStyles, /\.cw-workspace-progress\s*\{[\s\S]*?grid-template-columns:\s*repeat\(5, minmax\(0, 1fr\)\)/);
 });
 
-test("build workspace uses a narrow 60-percent canvas and grouped configuration cards", () => {
+test("build workspace uses a continuous dotted canvas and compact configuration drawer", () => {
   const rootRule = createStyles.match(/\.cw-root\s*\{[^}]*\}/)?.[0] ?? "";
   const mainRule = createStyles.match(/\.cw-workspace-main\s*\{[^}]*\}/)?.[0] ?? "";
-  const headerRule = createStyles.match(/\.cw-workspace-header\s*\{[^}]*\}/)?.[0] ?? "";
-  const footerRule = createStyles.match(/\.cw-workspace-footer\s*\{[^}]*\}/)?.[0] ?? "";
-  const sectionRule = createStyles.match(/\.cw-section\s*\{[^}]*\}/)?.[0] ?? "";
-  const sectionHeadRule = createStyles.match(/\.cw-sec-head\s*\{[^}]*\}/)?.[0] ?? "";
-  const fieldRule = createStyles.match(/\.cw-field\s*\{[^}]*\}/)?.[0] ?? "";
-  const toggleRule = createStyles.match(/(?:^|\n)\.cw-toggle\s*\{[^}]*\}/)?.[0] ?? "";
-
-  assert.match(rootRule, /--cw-workspace-width:\s*60%/);
-  assert.match(rootRule, /background:\s*hsl\(var\(--background\)\)/);
+  assert.match(rootRule, /background-color:\s*#f0f0f0/);
+  assert.match(rootRule, /background-size:\s*18px 18px/);
   assert.match(mainRule, /width:\s*var\(--cw-workspace-width\)/);
-  assert.match(headerRule, /background:\s*transparent/);
-  assert.match(footerRule, /background:\s*transparent/);
-  assert.match(sectionRule, /border:\s*1px solid hsl\(var\(--border\) \/ 0\.72\)/);
-  assert.match(sectionRule, /border-radius:\s*18px/);
-  assert.match(sectionRule, /background:\s*hsl\(var\(--panel\)\)/);
-  assert.match(sectionHeadRule, /background:\s*hsl\(var\(--muted\) \/ 0\.34\);/);
-  assert.match(sectionHeadRule, /border-bottom:\s*1px solid hsl\(var\(--border\) \/ 0\.68\);/);
-  assert.match(createSource, /<div className="cw-sec-body">\{children\}<\/div>/);
-  assert.match(createStyles, /\.cw-form > \.cw-field \+ \.cw-field,[\s\S]*?border-top:\s*1px dashed/);
-  assert.match(fieldRule, /grid-template-columns:\s*minmax\(124px, 0\.34fr\) minmax\(0, 1fr\)/);
-  assert.match(
-    createStyles,
-    /\.cw-field > \.cw-label,[\s\S]*?align-self:\s*start;/,
-  );
-  assert.match(
-    createStyles,
-    /\.cw-field:has\(> \.cw-input\) > \.cw-label\s*\{[\s\S]*?align-self:\s*center;/,
-  );
-  assert.match(
-    createStyles,
-    /\.cw-label\s*\{[\s\S]*?font-weight:\s*400;/,
-  );
-  assert.match(toggleRule, /grid-template-columns:\s*minmax\(0, 1fr\) auto/);
-  assert.doesNotMatch(fieldRule, /border-bottom:/);
-  assert.doesNotMatch(toggleRule, /border-bottom:/);
+  assert.match(createStyles, /\.cw-detail\s*\{[\s\S]*?width:\s*420px/);
+  assert.match(createStyles, /\.cw-detail-tabs\s*\{[\s\S]*?height:\s*28px/);
+  assert.match(createStyles, /\.cw-detail \.cw-field\s*\{[\s\S]*?flex-direction:\s*column/);
+  assert.doesNotMatch(createStyles, /\.cw-detail \.cw-input\s*\{/);
+  assert.doesNotMatch(createStyles, /\.cw-detail \.cw-textarea/);
+  assert.doesNotMatch(createStyles, /\.cw-detail \[role="combobox"\]/);
 });
 
 test("lets searchable configuration menus escape rounded sections", () => {
@@ -211,72 +185,60 @@ test("lets searchable configuration menus escape rounded sections", () => {
   );
 });
 
-test("build-stage intelligent generation sits before next in the footer", () => {
-  assert.match(createSource, /assistant\?: React\.ReactNode/);
+test("build-stage intelligent generation lives in the Figma chat drawer", () => {
+  assert.match(createSource, /<AgentBuilderChatPanel/);
   assert.match(
     createSource,
-    /<div className="cw-workspace-ai-slot">\{assistant\}<\/div>[\s\S]*?下一步/,
+    /onSubmit=\{\(goal\) => void runAgentBuilderConversation\(goal\)\}/,
   );
-  assert.match(
-    createSource,
-    /assistant=\{workspaceMode === "build" \? aiComposer : undefined\}/,
-  );
-  assert.doesNotMatch(
-    createSource,
-    /<div className="cw-detail">\s*<section[\s\S]*?aria-label="AI 自动填写 Agent 配置"/,
-  );
-  assert.match(
-    createStyles,
-    /\.cw-workspace-nav-actions\.has-assistant\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) auto;[\s\S]*?grid-template-areas:\s*"assistant next"/,
-  );
-  const aiRule = createStyles.match(/\.cw-ai-compose-form\s*\{[^}]*\}/)?.[0] ?? "";
-  assert.match(aiRule, /background:\s*hsl\(var\(--panel\)\)/);
-  assert.doesNotMatch(aiRule, /#[0-9a-f]{3,8}|rgba?\(/i);
-  assert.match(
-    createStyles,
-    /\.cw-ai-compose-form:has\(input:focus-visible\)\s*\{[\s\S]*?box-shadow:/,
-  );
-  assert.match(
-    createStyles,
-    /\.cw-ai-compose-form input:focus,[\s\S]*?\.cw-ai-compose-form input:focus-visible\s*\{[\s\S]*?outline:\s*none;[\s\S]*?box-shadow:\s*none;/,
-  );
-  assert.doesNotMatch(
-    createStyles,
-    /\.cw-ai-compose-form input:focus-visible,\s*\n\.cw-ai-compose-form button:focus-visible/,
-  );
-  assert.match(
-    createStyles,
-    /@media \(max-width:\s*1280px\)[\s\S]*?--cw-workspace-width:\s*calc\(100% - 48px\)/,
-  );
+  assert.match(createSource, /initialGoalGenerationRef/);
+  assert.match(createSource, /void runAgentBuilderConversation\(goal\)/);
+  assert.match(createSource, /createGeneratedAgentConversation\(/);
+  assert.match(createSource, /runGeneratedAgentConversationSSE\(/);
+  assert.match(createSource, /eventType === "agent_draft"/);
+  assert.match(createSource, /\{\(workspaceMode === "environment" \|\| workspaceMode === "publish"\) && <WorkspaceLifecycleFooter/);
 });
 
 test("debug comparison configuration explains duplicate disabled actions", () => {
   assert.match(
     createSource,
-    /className=\{`cw-ab-config-done-wrap\$\{disabledReason \? " is-disabled" : ""\}`\}[\s\S]*?className="cw-ab-config-done"[\s\S]*?disabled=\{[\s\S]*?configurationUnavailable[\s\S]*?className="cw-ab-config-done-tip"\s*role="tooltip"/,
+    /const configurationUnavailable =[\s\S]*?duplicateConfiguration/,
   );
   assert.match(
-    createStyles,
-    /\.cw-ab-config-done:disabled\s*\{[\s\S]*?background:[\s\S]*?color:[\s\S]*?cursor:\s*not-allowed/,
+    createSource,
+    /duplicateConfiguration[\s\S]*?"该配置与已有测试组相同"/,
   );
   assert.match(
-    createStyles,
-    /\.cw-ab-config-done-wrap\.is-disabled:hover \.cw-ab-config-done-tip/,
+    createSource,
+    /\{configurationUnavailable && \([\s\S]*?className="cw-ab-config-error"[\s\S]*?\{disabledReason\}/,
   );
+  assert.match(createStyles, /\.cw-ab-config-error\s*\{[\s\S]*?color:\s*hsl\(var\(--destructive\)\)/);
 });
 
-test("debug variants configure and deploy their own model, description, and prompt", () => {
+test("debug variants configure and run their own model, description, and prompt", () => {
   assert.match(
     createSource,
     /interface DebugVariant \{[\s\S]*?modelName: string;[\s\S]*?description: string;[\s\S]*?instruction: string;/,
   );
   assert.match(
     createSource,
-    /<span>描述<\/span>[\s\S]*?value=\{variant\.description\}[\s\S]*?<span>系统提示词<\/span>[\s\S]*?value=\{variant\.instruction\}/,
+    /<span>描述 <b>\*<\/b>[\s\S]*?value=\{variant\.description\}[\s\S]*?<span>系统提示词 <b>\*<\/b>[\s\S]*?value=\{variant\.instruction\}/,
   );
   assert.match(
     createSource,
-    /const releaseDraft = releaseVariant[\s\S]*?releaseDraftFromDebugVariant\(providerDraft, releaseVariant\)/,
+    /<Textarea[\s\S]*?className="cw-ab-config-control"[\s\S]*?value=\{variant\.description\}[\s\S]*?<Input[\s\S]*?className="cw-ab-config-control"[\s\S]*?value=\{variant\.modelName\}[\s\S]*?<Textarea[\s\S]*?className="cw-ab-config-control"[\s\S]*?value=\{variant\.instruction\}/,
+  );
+  assert.match(
+    createSource,
+    /const renderComposer = \(compact: boolean\)[\s\S]*?<Textarea[\s\S]*?className="cw-debug-input"[\s\S]*?isImeCompositionEvent\(event\.nativeEvent\)[\s\S]*?event\.key === "Enter" && !event\.shiftKey/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-debug-input > textarea\s*\{[\s\S]*?resize:\s*none;[\s\S]*?overflow-y:\s*auto;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-ab-config \.cw-ab-config-control\s*\{[\s\S]*?padding:\s*0;[\s\S]*?box-shadow:\s*none;/,
   );
   assert.match(
     createSource,
@@ -285,6 +247,45 @@ test("debug variants configure and deploy their own model, description, and prom
   assert.match(
     createSource,
     /function debugVariantConfigurationKey[\s\S]*?modelName: variant\.modelName\.trim\(\)[\s\S]*?description: variant\.description\.trim\(\)[\s\S]*?instruction: variant\.instruction\.trim\(\)/,
+  );
+});
+
+test("debug workspace keeps a fixed Figma settings entry across views", () => {
+  assert.match(
+    createSource,
+    /className="cw-ab-settings-toggle"[\s\S]*?aria-label=\{view === "config" \? "关闭调试设置" : "打开调试设置"\}/,
+  );
+  assert.match(
+    createSource,
+    /view === "config" \? <CreateCloseIcon \/> : <DebugSettingsIcon \/>/,
+  );
+  assert.match(
+    createSource,
+    /onOpenSettings=\{\(\) =>[\s\S]*?configOpen: index === 0/,
+  );
+  assert.match(
+    createSource,
+    /\.\.\.current\.map\(\(variant\) => \(\{ \.\.\.variant, configOpen: false \}\)\)[\s\S]*?configOpen: true/,
+  );
+  assert.match(
+    createSource,
+    /onCancelConfig=\{\(\) =>[\s\S]*?configOpen: false/,
+  );
+  assert.match(
+    createSource,
+    /className="cw-ab-group-chip"[\s\S]*?variantIndex > 0 && \([\s\S]*?className="cw-ab-change-summary"/,
+  );
+  assert.doesNotMatch(
+    createSource,
+    /className="cw-ab-change-summary">\s*\{variantIndex === 0[\s\S]*?"基准组 A"/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-ab-settings-toggle\s*\{[\s\S]*?top:\s*16px;[\s\S]*?right:\s*16px;[\s\S]*?width:\s*32px;[\s\S]*?height:\s*32px;/,
+  );
+  assert.match(
+    createIconSource,
+    /export function DebugSettingsIcon[\s\S]*?M0\.75 3H9\.75[\s\S]*?stroke="currentColor"/,
   );
 });
 
@@ -304,6 +305,21 @@ test("baseline debug config defaults to the first configured Agent model", () =>
   assert.match(
     createSource,
     /variant\.id === "baseline"[\s\S]*?modelName: baselineModelEditedRef\.current[\s\S]*?variant\.modelName[\s\S]*?defaultDebugModelName\(providerDraft\)/,
+  );
+});
+
+test("debug starts with one baseline and adds the comparison only on demand", () => {
+  assert.match(
+    createSource,
+    /const \[debugVariants, setDebugVariants\][\s\S]*?return \[[\s\S]*?id: "baseline"[\s\S]*?\];/,
+  );
+  assert.match(
+    createSource,
+    /const openValidation = \(\) => \{[\s\S]*?current[\s\S]*?\.filter\(\(variant\) => variant\.id === "baseline"\)[\s\S]*?setSelectedVariantId\("baseline"\)[\s\S]*?debugVariantSequenceRef\.current = 1/,
+  );
+  assert.match(
+    createSource,
+    /const addDebugVariant = \(\) => \{[\s\S]*?if \(current\.length >= 2\) return current;[\s\S]*?name: `对照组 \$\{sequence\}`/,
   );
 });
 
@@ -388,10 +404,6 @@ test("configuration checkboxes use Apps SDK UI controls", () => {
   assert.match(
     createSource,
     /function Checklist[\s\S]*?<Checkbox[\s\S]*?checked=\{on\}[\s\S]*?onCheckedChange=/,
-  );
-  assert.match(
-    createSource,
-    /className="cw-optimize-option"/,
   );
   assert.doesNotMatch(createSource, /type="checkbox"/);
 });
@@ -481,57 +493,63 @@ test("debug workspace compares multiple configurations behind one shared input",
     createSource,
     /function DebugComparisonWorkspace[\s\S]*?aria-label="A\/B 调试工作台"/,
   );
+  assert.match(createSource, /type DebugWorkspaceView = "intro" \| "config" \| "results"/);
   assert.match(
     createSource,
-    /className="cw-ab-composer"[\s\S]*?className="cw-btn cw-btn-soft cw-ab-add"[\s\S]*?添加对照组/,
+    /function debugWorkspaceView[\s\S]*?variant\.configOpen[\s\S]*?variant\.phase === "error" \|\| variant\.messages\.length > 0[\s\S]*?return "intro"/,
   );
+  assert.match(createSource, /className="cw-debug-intro"/);
+  assert.match(createSource, /className="cw-ab-config-grid"/);
+  assert.match(createSource, /className="cw-ab-results-grid"/);
+  assert.match(createSource, /const DEBUG_SUGGESTED_QUESTIONS = \[/);
+  assert.match(createSource, /请用一句话介绍你能帮我完成哪些任务/);
+  assert.match(createSource, /帮我处理一个典型任务，并说明关键步骤/);
+  assert.match(createSource, /如果信息不足，请先向我提问再继续/);
+  assert.match(createSource, /const renderComposer = \(compact: boolean\)/);
   assert.doesNotMatch(createSource, /快速调试|同一条输入将同时发送到全部对照组/);
-  assert.match(createSource, /className="cw-ab-config-trigger"[\s\S]*?测试配置/);
-  assert.match(createSource, /cw-ab-card-inner\$\{variant\.configOpen \? " is-flipped" : ""\}/);
-  assert.doesNotMatch(createSource, /variant\.optimizations/);
-  assert.doesNotMatch(createSource, /className="cw-ab-optimizations"/);
-  assert.doesNotMatch(createSource, /className="cw-ab-optimizations-disabled"/);
+  assert.doesNotMatch(createSource, /<legend>优化选项/);
+  assert.doesNotMatch(createSource, /className="cw-ab-optimization-checkbox"/);
   assert.match(createSource, /const startDebugVariant = async \(id: string\)/);
   assert.match(
     createSource,
-    /const completeDebugVariantConfig = \(id: string\) => \{[\s\S]*?if \(id === "baseline"\)[\s\S]*?void startDebugVariant\(id\);/,
-  );
-  assert.match(createSource, /完成并启动/);
-  assert.match(
-    createSource,
-    /className="cw-ab-config-head-actions"[\s\S]*?className="cw-icon-btn cw-icon-danger cw-ab-config-remove"[\s\S]*?aria-label=\{`删除\$\{variant\.name\}`\}[\s\S]*?onClick=\{\(\) => onRemoveVariant\(variant\.id\)\}/,
+    /const completeDebugVariantConfig = \(id: string\) => \{[\s\S]*?void startDebugVariant\(id\);/,
   );
   assert.match(
     createSource,
-    /const removeDebugVariant = async \(id: string\) => \{[\s\S]*?await cleanupDebugVariantRun\(id\);[\s\S]*?current\.filter\(\(variant\) => variant\.id !== id\)[\s\S]*?setSelectedVariantId\("baseline"\)/,
+    /workspaceMode !== "validate" \|\| !debugEnabled[\s\S]*?startDebugVariantRef\.current\?\.\("baseline"\)/,
+  );
+  assert.match(
+    createSource,
+    /className="cw-ab-remove"[\s\S]*?aria-label=\{`删除\$\{variant\.name\}`\}[\s\S]*?onClick=\{\(\) => onRemoveVariant\(variant\.id\)\}/,
+  );
+  assert.match(
+    createSource,
+    /const removeDebugVariant = async \(id: string\) => \{[\s\S]*?if \(id === "baseline"\) return;[\s\S]*?await cleanupDebugVariantRun\(id\);[\s\S]*?current\.filter\(\(variant\) => variant\.id !== id\)[\s\S]*?setSelectedVariantId\("baseline"\)/,
   );
   assert.match(createSource, /targets\.map\(async \(variant\)/);
   assert.match(
     createSource,
     /modelName: variant\.modelName \|\| providerDraft\.modelName/,
   );
-  assert.match(createSource, /variants\.length < 3/);
+  assert.match(createSource, /if \(current\.length >= 2\) return current/);
   assert.doesNotMatch(createSource, /name="debug-release-variant"|发布候选/);
+  assert.match(createSource, /<Blocks blocks=\{message\.blocks\} onAction=\{\(\) => \{\}\} \/>/);
+  assert.match(createSource, /className="cw-ab-verdict"/);
   assert.match(
     createSource,
-    /className="cw-ab-deploy"[\s\S]*?onClick=\{\(\) => onUseVariant\(variant\.id\)\}[\s\S]*?使用该配置/,
+    /function debugVariantChangeLabel[\s\S]*?normalizedOptimizations[\s\S]*?"优化选项"[\s\S]*?changes\.length/,
   );
-  assert.match(createSource, /className="cw-ab-ready-title"[\s\S]*?已就绪/);
-  assert.match(
+  assert.doesNotMatch(
     createSource,
-    /className="cw-ab-start cw-ab-footer-start"[\s\S]*?onClick=\{\(\) => onStartVariant\(variant\.id\)\}[\s\S]*?\{startLabel\}/,
+    /1\.8s|2\.3s|本轮裁判推荐|来源更完整，结论更可信/,
   );
   assert.doesNotMatch(createSource, /下一步：部署发布|>部署发布</);
   assert.doesNotMatch(createSource, />验证中心</);
   assert.doesNotMatch(createSource, /className="cw-debug-deploy"/);
   assert.doesNotMatch(createStyles, /\.cw-debug-next/);
-  assert.match(createStyles, /\.cw-ab-ready-title\s*\{[\s\S]*?font-size:\s*20px;/);
-  assert.match(createStyles, /\.cw-ab-footer-start\s*\{/);
-  assert.match(createStyles, /\.cw-ab-deploy\s*\{[\s\S]*?background:\s*#111;[\s\S]*?color:\s*#fff;/);
-  assert.match(createStyles, /\.cw-ab-card-face\s*\{[\s\S]*?border:\s*1px dashed/);
   assert.match(
     createStyles,
-    /\.cw-ab-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(var\(--cw-ab-column-count\), minmax\(0, 1fr\)\)/,
+    /\.cw-ab-config-grid,[\s\S]*?\.cw-ab-results-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(var\(--cw-ab-column-count\), minmax\(0, 1fr\)\)/,
   );
   assert.match(
     createSource,
@@ -539,21 +557,31 @@ test("debug workspace compares multiple configurations behind one shared input",
   );
   assert.match(
     createStyles,
-    /\.cw-root\.is-validate\s*\{[\s\S]*?--cw-workspace-width:\s*min\(88%, 1440px\)/,
-  );
-  assert.match(createStyles, /\.cw-ab-card-inner\.is-flipped\s*\{[\s\S]*?rotateY\(180deg\)/);
-  assert.match(createStyles, /\.cw-ab-config\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);
-  assert.match(
-    createStyles,
-    /\.cw-ab-config-head \.cw-ab-config-done-tip\s*\{[\s\S]*?background:\s*hsl\(var\(--foreground\)\);[\s\S]*?color:\s*#fff;/,
+    /\.cw-root\.is-validate\s*\{[\s\S]*?--cw-workspace-width:\s*100%/,
   );
   assert.match(
     createStyles,
-    /\.cw-ab-workspace\s*\{[\s\S]*?display:\s*grid;[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\) auto;/,
+    /\.cw-validation-workspace\s*\{[\s\S]*?--cw-validation-content-width:\s*471px/,
+  );
+  assert.match(
+    createSource,
+    /"--cw-validation-content-width": `\$\{Math\.max\([\s\S]*?debugVariants\.length,[\s\S]*?\) \* 471\}px`/,
   );
   assert.match(
     createStyles,
-    /\.cw-ab-composer\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) auto;/,
+    /\.cw-validation-workspace\.is-intro \.cw-validation-canvas,\s*\.cw-validation-workspace\.is-config \.cw-validation-canvas,\s*\.cw-validation-workspace\.is-results \.cw-validation-canvas\s*\{[\s\S]*?flex:\s*1 1 auto/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-validation-workspace\.is-intro \.cw-validation-content,\s*\.cw-validation-workspace\.is-config \.cw-validation-content,\s*\.cw-validation-workspace\.is-results \.cw-validation-content\s*\{[\s\S]*?width:\s*min\(100%, var\(--cw-validation-content-width\)\);[\s\S]*?flex:\s*0 0 min\(100%, var\(--cw-validation-content-width\)\)/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-ab-workspace\.is-intro\s*\{[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\) auto;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-ab-composer\s*\{[\s\S]*?min-height:\s*120px;[\s\S]*?border-radius:\s*24px/,
   );
   assert.doesNotMatch(
     createSource,
@@ -585,18 +613,83 @@ test("narrow workbench keeps the canvas and configuration stacked without page s
   );
 });
 
-test("only the configuration panel scrolls between the fixed canvas and footer", () => {
+test("debug workspace motion preserves direction, column continuity, and reduced motion", () => {
+  assert.match(
+    createSource,
+    /function DebugComparisonWorkspace[\s\S]*?const reduceMotion = useReducedMotion\(\)/,
+  );
+  assert.match(
+    createSource,
+    /viewOrder\[view\] >= viewOrder\[previousViewRef\.current\] \? 1 : -1/,
+  );
+  assert.match(
+    createSource,
+    /<AnimatePresence initial=\{false\} mode="wait" custom=\{viewDirection\}>[\s\S]*?key=\{enabled \? view : "disabled"\}[\s\S]*?variants=\{viewMotion\}/,
+  );
+  assert.match(
+    createSource,
+    /initial: \(direction: number\)[\s\S]*?x: reduceMotion \? 0 : direction \* 18[\s\S]*?exit: \(direction: number\)[\s\S]*?direction \* -10/,
+  );
+  assert.match(
+    createSource,
+    /<AnimatePresence mode="popLayout">[\s\S]*?<motion\.section[\s\S]*?\.\.\.columnMotion\(variantIndex\)/,
+  );
+  assert.match(
+    createSource,
+    /className="cw-ab-conversation"[\s\S]*?variantIndex \* DEBUG_COLUMN_STAGGER_SECONDS/,
+  );
+  assert.match(
+    createSource,
+    /<motion\.button[\s\S]*?index \* DEBUG_COLUMN_STAGGER_SECONDS[\s\S]*?onOpenTrace\(variant\.id\)/,
+  );
+  assert.match(
+    createSource,
+    /layout: reduceMotion \? false : \("position" as const\)/,
+  );
+
+  const viewEnter = Number(
+    createSource.match(/const DEBUG_VIEW_ENTER_SECONDS = ([\d.]+);/)?.[1],
+  );
+  const viewExit = Number(
+    createSource.match(/const DEBUG_VIEW_EXIT_SECONDS = ([\d.]+);/)?.[1],
+  );
+  const columnEnter = Number(
+    createSource.match(/const DEBUG_COLUMN_ENTER_SECONDS = ([\d.]+);/)?.[1],
+  );
+  const columnExit = Number(
+    createSource.match(/const DEBUG_COLUMN_EXIT_SECONDS = ([\d.]+);/)?.[1],
+  );
+  assert.ok(viewExit < viewEnter, "debug view exit should be faster than enter");
+  assert.ok(
+    columnExit < columnEnter,
+    "debug column exit should be faster than enter",
+  );
+  assert.match(
+    createSource,
+    /duration: reduceMotion \? 0 : DEBUG_VIEW_ENTER_SECONDS[\s\S]*?duration: reduceMotion \? 0 : DEBUG_VIEW_EXIT_SECONDS/,
+  );
+});
+
+test("the configuration drawer scrolls independently beside the canvas", () => {
   assert.match(
     createStyles,
-    /\.cw-editor\s*\{[\s\S]*?flex-direction:\s*column;[\s\S]*?overflow:\s*hidden;/,
+    /\.cw-editor\s*\{[\s\S]*?flex-direction:\s*row;[\s\S]*?overflow:\s*hidden;/,
   );
   assert.match(
     createStyles,
-    /\.cw-editor > \.abc-root\s*\{[\s\S]*?flex:\s*0 0 200px;/,
+    /\.cw-editor > \.abc-root\s*\{[\s\S]*?flex:\s*1 1 auto;/,
   );
   assert.match(
     createStyles,
-    /\.cw-detail-scroll\s*\{[\s\S]*?flex:\s*1;[\s\S]*?overflow-y:\s*auto;/,
+    /\.cw-detail-scroll\s*\{[\s\S]*?flex:\s*1;[\s\S]*?min-width:\s*0;[\s\S]*?overflow-x:\s*hidden;[\s\S]*?overflow-y:\s*auto;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-detail-inner\s*\{[\s\S]*?width:\s*100%;[\s\S]*?min-width:\s*0;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-lower\s*\{[\s\S]*?width:\s*100%;[\s\S]*?min-width:\s*0;/,
   );
 });
 
@@ -604,15 +697,16 @@ test("custom model connection settings stay visible without a disclosure", () =>
   assert.doesNotMatch(createSource, /modelAdvancedOpen/);
   assert.match(
     createSource,
-    /modelSource === "ark"[\s\S]*?服务商 Provider[\s\S]*?API Base[\s\S]*?API Key/,
+    /modelSource === "ark"[\s\S]*?提供商[\s\S]*?API Base[\s\S]*?API Key/,
   );
+  assert.doesNotMatch(createSource, /服务商 Provider/);
 });
 
 test("built-in tools adapt columns and scroll after six rows", () => {
   assert.match(createSource, /items=\{createBuiltinTools\}[\s\S]*?scrollRows=\{6\}/);
   assert.match(
     catalogSource,
-    /HIDDEN_CREATE_TOOL_IDS = new Set\(\[[\s\S]*?"web_scraper"[\s\S]*?"text_to_speech"[\s\S]*?"vesearch"/,
+    /HIDDEN_CREATE_TOOL_IDS = new Set\(\[[\s\S]*?"link_reader"[\s\S]*?"web_scraper"[\s\S]*?"image_edit"[\s\S]*?"text_to_speech"[\s\S]*?"vesearch"/,
   );
   assert.match(
     catalogSource,
@@ -657,6 +751,25 @@ test("MCP tools stay directly visible and align with their field label", () => {
   );
 });
 
+test("capability sections share one dashed divider and spacing rhythm", () => {
+  assert.match(
+    createSource,
+    /className="cw-field cw-mcp-field"[\s\S]*?<Section meta=\{metaOf\("skills"\)\}>[\s\S]*?<Section meta=\{metaOf\("knowledge"\)\}>/,
+  );
+  assert.match(
+    createSource,
+    /className="cw-capability-memory-group"[\s\S]*?title="短期记忆"[\s\S]*?className="cw-capability-memory-group"[\s\S]*?title="长期记忆"/,
+  );
+  assert.match(
+    createStyles,
+    /--cw-capability-section-space:\s*24px;[\s\S]*?--cw-capability-section-divider:\s*1px dashed hsl\(var\(--border\) \/ 0\.72\);/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-section-skills,[\s\S]*?\.cw-section-knowledge,[\s\S]*?\.cw-section-memory,[\s\S]*?\.cw-capabilities-form[\s\S]*?> \.cw-field[\s\S]*?\+ \.cw-field,[\s\S]*?\.cw-capability-memory-group[\s\S]*?\+ \.cw-capability-memory-group\s*\{[\s\S]*?margin-top:\s*var\(--cw-capability-section-space\);[\s\S]*?padding-top:\s*var\(--cw-capability-section-space\);[\s\S]*?border-top:\s*var\(--cw-capability-section-divider\) !important;/,
+  );
+});
+
 test("leaving debug confirms and cleans every temporary environment", () => {
   assert.match(
     createSource,
@@ -674,23 +787,98 @@ test("leaving debug confirms and cleans every temporary environment", () => {
     createSource,
     /current\.map\(\(variant\) => \(\{[\s\S]*?phase: "idle"/,
   );
+  assert.match(
+    createSource,
+    /const debugRunPending = debugVariants\.some[\s\S]*?variant\.phase === "starting" \|\| variant\.phase === "sending"/,
+  );
+  assert.match(
+    createSource,
+    /const cleanupDebugRuns = async \(\) => \{[\s\S]*?debugRunGenerationRef\.current \+= 1/,
+  );
+  assert.match(
+    createSource,
+    /if \(runGeneration !== debugRunGenerationRef\.current\)[\s\S]*?deleteGeneratedAgentTestRun\(createdRun\.runId\)/,
+  );
   assert.match(createSource, /if \(!\(await confirmLeaveDebug\(\)\)\) return;/);
 });
 
-test("debug environment uses a dedicated hand-drawn run icon", () => {
-  assert.match(createSource, /function DebugRunIcon/);
+test("chat drawer reveals from a fixed icon anchor while configuration slides in", () => {
+  assert.match(createSource, /const reduceMotion = useReducedMotion\(\)/);
   assert.match(
     createSource,
-    /<DebugRunIcon className="cw-i cw-debug-run-icon" \/>[\s\S]*?\{startLabel\}/,
+    /<AnimatePresence initial=\{false\} mode="popLayout">[\s\S]*?key="builder-chat"[\s\S]*?key="builder-chat-trigger"/,
   );
-  assert.doesNotMatch(createSource, /<Bug className="cw-i" \/>/);
+  const chatMotion = createSource.match(
+    /className="cw-builder-chat-motion"[\s\S]*?<AgentBuilderChatPanel/,
+  )?.[0] ?? "";
+  assert.doesNotMatch(chatMotion, /\bx:/);
+  assert.match(
+    createSource,
+    /className="cw-builder-chat-motion"[\s\S]*?clipPath: "inset\(0 100% 0 0 round 16px\)"[\s\S]*?animate=\{\{[\s\S]*?opacity: 1,[\s\S]*?clipPath: "inset\(0 0% 0 0 round 16px\)"[\s\S]*?exit=\{\{[\s\S]*?opacity: 0,[\s\S]*?clipPath: reduceMotion[\s\S]*?"inset\(0 100% 0 0 round 16px\)"[\s\S]*?pointerEvents: "none",[\s\S]*?duration: reduceMotion \? 0 : 0\.2,[\s\S]*?ease: \[0\.22, 1, 0\.36, 1\]/,
+  );
+  assert.match(
+    createSource,
+    /className="cw-open-chat-motion"[\s\S]*?initial=\{reduceMotion \? false : \{ opacity: 0 \}\}[\s\S]*?animate=\{\{ opacity: 1 \}\}[\s\S]*?exit=\{\{ opacity: 0 \}\}[\s\S]*?duration: reduceMotion \? 0 : 0\.16/,
+  );
+  const triggerMotion = createSource.match(
+    /className="cw-open-chat-motion"[\s\S]*?<\/motion\.div>/,
+  )?.[0] ?? "";
+  assert.doesNotMatch(triggerMotion, /\bx:/);
+  assert.match(
+    createSource,
+    /className="cw-canvas-motion"[\s\S]*?layout=\{reduceMotion \? false : "position"\}/,
+  );
+});
+
+test("configuration drawer slides without leaving an interactive layout slot", () => {
+  assert.match(
+    createSource,
+    /<AnimatePresence initial=\{false\} mode="popLayout">[\s\S]*?key="builder-config"[\s\S]*?className=\{`cw-detail is-\$\{configTab\}`\}/,
+  );
+  assert.match(
+    createSource,
+    /key="builder-config"[\s\S]*?initial=\{reduceMotion \? false : \{ opacity: 0, x: 18 \}\}[\s\S]*?animate=\{\{ opacity: 1, x: 0 \}\}[\s\S]*?exit=\{\{[\s\S]*?opacity: 0,[\s\S]*?x: reduceMotion \? 0 : 18,[\s\S]*?pointerEvents: "none",[\s\S]*?duration: reduceMotion \? 0 : 0\.2,[\s\S]*?ease: \[0\.22, 1, 0\.36, 1\]/,
+  );
+  assert.doesNotMatch(
+    createSource,
+    /\{builderPanel === "config" && \(\s*<div className=\{`cw-detail/,
+  );
   assert.match(
     createStyles,
-    /\.cw-debug-start\s*\{[\s\S]*?background:\s*#111;[\s\S]*?box-shadow:\s*none;[\s\S]*?color:\s*#fff;/,
+    /\.cw-editor\s*\{[\s\S]*?--cw-builder-panel-inset:\s*8px;[\s\S]*?padding:\s*var\(--cw-builder-panel-inset\);/,
+  );
+  assert.match(
+    createSource,
+    /className="cw-canvas-motion"[\s\S]*?layout=\{reduceMotion \? false : "position"\}/,
+  );
+});
+
+test("chat and configuration panels share equal visible header and bottom spacing", () => {
+  assert.match(
+    createStyles,
+    /\.cw-editor\s*\{[\s\S]*?--cw-builder-panel-inset:\s*8px;[\s\S]*?--cw-builder-header-action-height:\s*36px;[\s\S]*?--cw-builder-header-edge-space:\s*calc\([\s\S]*?var\(--cw-workbench-toolbar-height\)[\s\S]*?var\(--cw-builder-header-action-height\)[\s\S]*?\/ 2[\s\S]*?\);/,
   );
   assert.match(
     createStyles,
-    /\.cw-debug-start:hover:not\(:disabled\)\s*\{[\s\S]*?background:\s*#29292b;[\s\S]*?box-shadow:\s*0 7px 18px hsl\(0 0% 0% \/ 0\.16\);\s*\}/,
+    /\.cw-editor:has\(> \.cw-builder-chat-motion\)\s*\{[\s\S]*?padding:\s*var\(--cw-builder-panel-inset\);/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-open-chat-motion\s*\{[\s\S]*?top:\s*var\(--cw-builder-panel-inset\);/,
+  );
+  assert.doesNotMatch(createStyles, /margin-top:\s*calc\(-1 \* var\(--cw-builder-header-edge-space\)\)/);
+});
+
+test("debug empty state reuses the current site logo", () => {
+  assert.doesNotMatch(createSource, /DebugWorkspaceMarkIcon/);
+  assert.match(createSource, /<img src=\{siteLogoUrl\} alt="" \/>[\s\S]*?<h2>调试你的 Agent<\/h2>/);
+  assert.match(
+    createStyles,
+    /\.cw-debug-intro-title > span\s*\{[\s\S]*?width:\s*44px;[\s\S]*?height:\s*43px/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-debug-intro-title img\s*\{[\s\S]*?width:\s*44px;[\s\S]*?height:\s*43px/,
   );
 });
 
@@ -873,7 +1061,10 @@ test("remote Agent configures only the AgentKit center", () => {
     createStyles,
     /\.cw-agent-type-disabled-hint\s*\{[\s\S]*?top:\s*calc\(100% \+ 17px\)/,
   );
-  assert.match(createSource, /\{!a2a && \(\s*<>[\s\S]*?Agent 名称/);
+  assert.match(
+    createSource,
+    /\{!a2a && \(\s*<>[\s\S]*?<label className="cw-label" htmlFor="cw-agent-name">\s*名称/,
+  );
   assert.match(
     createSource,
     /if \(isRoot\) return "远程 Agent 只能作为子 Agent";/,

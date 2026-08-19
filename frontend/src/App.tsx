@@ -10,8 +10,6 @@ import {
 import { Share } from "@openai/apps-sdk-ui/components/Icon";
 import {
   ArrowLeft,
-  Check,
-  Copy,
   CornerDownRight,
   Loader2,
 } from "lucide-react";
@@ -90,6 +88,9 @@ import {
   type TurnActivityDetail,
 } from "./blocks";
 import { Sidebar, type SidebarPage } from "./ui/Sidebar";
+import {
+  ConversationCopyButton as CopyButton,
+} from "./ui/ConversationActions";
 import { AgentInfoPanel } from "./ui/AgentTopology";
 import type { SkillCenterWorkspaceLaunch } from "./ui/SkillCenter";
 import { LibraryView, type LibraryTab } from "./ui/LibraryView";
@@ -127,7 +128,7 @@ import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
 import { Composer } from "./ui/Composer";
 import { InvocationChips } from "./ui/InvocationChips";
 import { MediaGroup } from "./ui/Media";
-import { StackCards } from "./ui/AddAgentMenu";
+import { AddAgentMenu } from "./ui/AddAgentMenu";
 import {
   IntelligentCreate,
   type IntelligentPreparationStage,
@@ -547,66 +548,6 @@ function telemetrySandboxStatus(
   }
 }
 
-/** Hand-drawn "from zero" mark: a blank Agent canvas ready to create. */
-function ScratchIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.45"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3.75" y="3.75" width="16.5" height="16.5" rx="3.25" />
-      <path d="M12 8.5v7M8.5 12h7" />
-      <path d="M6.75 6.75h1M16.25 17.25h1" opacity="0.6" />
-    </svg>
-  );
-}
-
-/** Hand-drawn code package mark: an archive with source inside. */
-function PackageIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.45"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3.5" y="5" width="17" height="14.75" rx="2.25" />
-      <path d="M3.5 9h17M9.25 12.25 7.1 14.4l2.15 2.15M14.75 12.25l2.15 2.15-2.15 2.15M12.8 11.85l-1.6 5.1" />
-    </svg>
-  );
-}
-
-/** Hand-drawn migration mark: an existing project moving into a new runtime. */
-function MigrationIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.45"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="2.75" y="5" width="6.5" height="14" rx="1.6" />
-      <path d="M5.25 8.5h1.5M5.25 11.5h1.5" />
-      <rect x="14.75" y="5" width="6.5" height="14" rx="1.6" />
-      <path d="M17.25 15.5h1.5M17.25 12.5h1.5M8.75 12h6.5m-2.5-2.5 2.5 2.5-2.5 2.5" />
-    </svg>
-  );
-}
-
 /** Hand-drawn "tracing / observability" icon (stacked spans). */
 function TraceIcon() {
   return (
@@ -767,29 +708,6 @@ function withAuthResponseUri(authConfig: unknown, callbackUrl: string): unknown 
   cred.oauth2 = o;
   cfg.exchangedAuthCredential = cred;
   return cfg;
-}
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      className="icon-btn"
-      title={copied ? "已复制" : "复制"}
-      disabled={!text}
-      onClick={async () => {
-        if (!text) return;
-        try {
-          await navigator.clipboard.writeText(text);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        } catch {
-          /* clipboard unavailable */
-        }
-      }}
-    >
-      {copied ? <Check className="icon" /> : <Copy className="icon" />}
-    </button>
-  );
 }
 
 function ShareMessageButton({
@@ -1945,6 +1863,7 @@ export default function App() {
   const [addAgent, setAddAgent] = useState(false);
   // The "添加 Agent" chooser (two cards: AgentKit / 从 0 快速创建).
   const [addMenu, setAddMenu] = useState(false);
+  const [intelligentInitialGoal, setIntelligentInitialGoal] = useState("");
   // A draft imported from YAML, used to pre-fill the custom wizard once.
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
   const [customCreateMode, setCustomCreateMode] =
@@ -5874,6 +5793,7 @@ export default function App() {
         sessions={sessions}
         currentSessionId={sessionId}
         activePage={sidebarActivePage}
+        collapseRequested={showAddMenu || Boolean(visibleCreateView)}
         streamingSids={streamingSids}
         evaluatingSids={evaluatingSids}
         sandboxHistory={sandboxSession && !sandboxSession.intelligentDevelopment
@@ -6584,76 +6504,50 @@ export default function App() {
                 }}
               />
             ) : showAddMenu ? (
-              <StackCards
-                title="您想以哪种方式添加 Agent 来运行？"
-                sub="选择最适合你的方式，下一步即可开始"
-                cards={[
-                  {
-                    key: "scratch",
-                    icon: ScratchIcon,
-                    title: "从 0 快速创建",
-                    desc: "用智能 / 自定义 / 模板 / 工作流的方式从零创建一个 Agent。",
-                    onClick: () => {
-                      setAddMenu(false);
-                      setImportedDraft(null);
-                      setCustomCreateMode("custom");
-                      setRuntimeUpdateTarget(null);
-                      setFocusedDeploymentTaskId("");
-                      setFocusedWorkspaceAgentId("");
-                      setEditingDraftId(`draft-${Date.now().toString(36)}`);
-                      editingDraftBaselineRef.current = null;
-                      setCreateView("custom");
-                    },
-                  },
-                  {
-                    key: "intelligent",
-                    icon: ScratchIcon,
-                    title: "智能模式",
-                    desc: intelligentCapabilitiesError
-                      || intelligentCapabilities?.reason
-                      || "描述目标，按你的意图构建、调试并验证 Agent。",
-                    status: intelligentCapabilitiesLoading
-                      ? "能力检查中"
-                      : intelligentCapabilities?.enabled
-                        ? undefined
-                        : "暂不可用",
-                    disabled:
-                      intelligentCapabilitiesLoading ||
-                      intelligentCapabilities?.enabled !== true,
-                    onClick: () => {
-                      setAddMenu(false);
-                      setImportedDraft(null);
-                      setRuntimeUpdateTarget(null);
-                      setFocusedDeploymentTaskId("");
-                      setFocusedWorkspaceAgentId("");
-                      setEditingDraftId("");
-                      editingDraftBaselineRef.current = null;
-                      setCreateView("intelligent");
-                    },
-                  },
-                  {
-                    key: "package",
-                    icon: PackageIcon,
-                    title: "从代码包添加和部署",
-                    desc: "上传 Agent 项目压缩包，查看代码并直接部署到 AgentKit Runtime。",
-                    onClick: () => {
-                      setAddMenu(false);
-                      setImportedDraft(null);
-                      setCreateView("package");
-                    },
-                  },
-                  {
-                    key: "migration",
-                    icon: MigrationIcon,
-                    title: "从存量迁移",
-                    desc: "从您的 LangChain / Dify 等存量项目迁移至 AgentKit Runtime",
-                    onClick: () => {
-                      setAddMenu(false);
-                      setImportedDraft(null);
-                      setCreateView("migration");
-                    },
-                  },
-                ]}
+              <AddAgentMenu
+                intelligentEnabled={intelligentCapabilities?.enabled === true}
+                intelligentLoading={intelligentCapabilitiesLoading}
+                intelligentReason={
+                  intelligentCapabilitiesError || intelligentCapabilities?.reason
+                }
+                onBack={() => setAddMenu(false)}
+                onDescribe={(goal) => {
+                  setAddMenu(false);
+                  setImportedDraft(null);
+                  setRuntimeUpdateTarget(null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setEditingDraftId("");
+                  editingDraftBaselineRef.current = null;
+                  setIntelligentInitialGoal(goal);
+                  setEditingDraftId(`draft-${Date.now().toString(36)}`);
+                  setCustomCreateMode("custom");
+                  setCreateView("custom");
+                }}
+                onTemplate={() => {
+                  setAddMenu(false);
+                  setIntelligentInitialGoal("");
+                  setImportedDraft(null);
+                  setCustomCreateMode("custom");
+                  setRuntimeUpdateTarget(null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setEditingDraftId(`draft-${Date.now().toString(36)}`);
+                  editingDraftBaselineRef.current = null;
+                  setCreateView("custom");
+                }}
+                onPackage={() => {
+                  setAddMenu(false);
+                  setIntelligentInitialGoal("");
+                  setImportedDraft(null);
+                  setCreateView("package");
+                }}
+                onMigration={() => {
+                  setAddMenu(false);
+                  setIntelligentInitialGoal("");
+                  setImportedDraft(null);
+                  setCreateView("migration");
+                }}
               />
             ) : searchView ? (
               <SearchView
@@ -6745,6 +6639,7 @@ export default function App() {
               />
             ) : visibleCreateView === "intelligent" ? (
               <IntelligentCreate
+                initialGoal={intelligentInitialGoal}
                 capabilities={intelligentCapabilities}
                 loading={intelligentCapabilitiesLoading}
                 preparationStage={intelligentPreparationStage}
@@ -6752,6 +6647,7 @@ export default function App() {
                 onCancel={cancelIntelligentPreparation}
                 onBack={() => {
                   cancelIntelligentPreparation();
+                  setIntelligentInitialGoal("");
                   setCreateView(null);
                   setAddMenu(true);
                 }}
@@ -6810,8 +6706,19 @@ export default function App() {
               <CustomCreate
                 key={editingDraftId || "custom"}
                 cloudProvider={cloudProvider}
+                siteLogoUrl={
+                  siteBranding.logoUrl ||
+                  (cloudProvider === "byteplus" ? byteplusLogo : defaultSiteLogo)
+                }
+                initialGoal={intelligentInitialGoal}
+                agentBuilderStorageKey={
+                  userId && editingDraftId
+                    ? `${workspaceDraftsKey(userId)}.${encodeURIComponent(editingDraftId)}.builderConversation`
+                    : undefined
+                }
                 initialDraft={importedDraft ?? undefined}
                 onBack={() => {
+                  setIntelligentInitialGoal("");
                   setCreateView(null);
                   setAddMenu(true);
                 }}

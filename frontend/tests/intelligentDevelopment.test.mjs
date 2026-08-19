@@ -80,6 +80,10 @@ const appSource = readFileSync(
   new URL("../src/App.tsx", import.meta.url),
   "utf8",
 );
+const addAgentMenuSource = readFileSync(
+  new URL("../src/ui/AddAgentMenu.tsx", import.meta.url),
+  "utf8",
+);
 const deploymentSource = readFileSync(
   new URL("../src/create/IntelligentDeployment.tsx", import.meta.url),
   "utf8",
@@ -771,8 +775,8 @@ test("intelligent preparation acknowledges the goal and exposes cancellable prog
 
   const idle = render(null);
   assert.match(
-    appSource,
-    /描述目标，按你的意图构建、调试并验证 Agent。/,
+    addAgentMenuSource,
+    /描述你想创建的智能体/,
   );
   assert.match(
     idle,

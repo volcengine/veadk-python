@@ -42,6 +42,10 @@
   --builtin-tool-accent: 154 50% 34%;
 }
 
+.builtin-tool-head[data-tool-tone="agent"] {
+  --builtin-tool-accent: 229 42% 42%;
+}
+
 .builtin-tool-head[data-tool-tone="sandbox"] {
   --builtin-tool-accent: 32 67% 42%;
 }

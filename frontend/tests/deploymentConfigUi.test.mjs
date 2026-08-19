@@ -34,7 +34,7 @@ const catalogSource = readFileSync(
 test("offers code execution with its sandbox configuration", () => {
   assert.match(
     catalogSource,
-    /id: "run_code"[\s\S]*?label: "代码执行"[\s\S]*?desc: "在沙箱中执行代码"/,
+    /id: "run_code"[\s\S]*?label: "代码沙箱"[\s\S]*?desc: "在沙箱中执行代码"/,
   );
   assert.match(
     catalogSource,
@@ -53,13 +53,14 @@ test("offers code execution with its sandbox configuration", () => {
     customCreateSource,
     /builtinTools\.includes\("run_code"\)[\s\S]*?<RuntimeEnvFields/,
   );
+  assert.match(customCreateSource, /代码沙箱配置[\s\S]*?指定 AgentKit 代码沙箱/);
   assert.match(
     customCreateSource,
     /createGeneratedAgentTestRun\([\s\S]*?debugRuntimeDraft\(variantDraft, transientModelSecretValues\)[\s\S]*?runtimeId: deploymentTarget\.runtimeId[\s\S]*?region: deploymentTarget\.region/,
   );
   assert.match(
     customCreateSource,
-    /if \(isImeCompositionEvent\(e\.nativeEvent\)\) return;[\s\S]*?e\.key === "Enter"/,
+    /if \(isImeCompositionEvent\(event\.nativeEvent\)\) return;[\s\S]*?event\.key === "Enter"/,
   );
 });
 

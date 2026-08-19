@@ -149,7 +149,10 @@ test("adds an Apps SDK UI environment step before publishing", () => {
     /type WorkspaceMode =[\s\S]*?\| "environment"[\s\S]*?\| "publish";/,
   );
   assert.match(createSource, /\{ id: "environment", label: "环境" \}/);
-  assert.match(createSource, /environment:\s*"配置云上环境"/);
+  assert.match(
+    createSource,
+    /onDeploy=\{\(\) => void handleWorkspaceChange\("environment"\)\}/,
+  );
   assert.match(
     createSource,
     /workspaceMode === "environment"[\s\S]*?<CloudEnvironmentConfigurator/,

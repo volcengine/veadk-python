@@ -68,9 +68,8 @@ body {
 *::-webkit-scrollbar-corner { background: transparent; }
 
 /* ---------- layout ----------
- * One big rounded "window": the whole app (sidebar + main) is a single rounded
- * panel floating on the gray canvas, with the gray showing as a margin all
- * around (LobeChat-style). */
+ * The sidebar sits on the neutral app chrome while the workspace remains one
+ * continuous white canvas. */
 .layout {
   display: flex;
   height: 100vh;
@@ -1079,11 +1078,12 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  margin: 10px;
-  background: hsl(var(--panel));
-  border: 1px solid hsl(var(--border));
-  border-radius: 12px;
-  overflow: hidden; /* clip inner scroll regions to the rounded corners */
+  margin: 0;
+  background: hsl(var(--background));
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: hidden;
 }
 .error {
   position: relative;

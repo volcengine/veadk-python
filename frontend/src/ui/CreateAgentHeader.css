@@ -1,0 +1,198 @@
+.create-agent-header {
+  --create-agent-header-motion-duration: 220ms;
+  --create-agent-header-motion-easing: cubic-bezier(0.16, 1, 0.3, 1);
+
+  position: relative;
+  z-index: 12;
+  display: flex;
+  width: 100%;
+  height: 64px;
+  flex: 0 0 64px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  background: transparent;
+  color: #0c0d0e;
+  transition:
+    width var(--create-agent-header-motion-duration) var(--create-agent-header-motion-easing),
+    height var(--create-agent-header-motion-duration) var(--create-agent-header-motion-easing),
+    flex-basis var(--create-agent-header-motion-duration) var(--create-agent-header-motion-easing),
+    margin-left var(--create-agent-header-motion-duration) var(--create-agent-header-motion-easing),
+    margin-right var(--create-agent-header-motion-duration) var(--create-agent-header-motion-easing);
+}
+
+.create-agent-header.is-debug-results {
+  width: calc(100% - 40px);
+  height: 60px;
+  flex-basis: 60px;
+  margin-inline: 20px;
+}
+
+.create-agent-header-start,
+.create-agent-header-actions {
+  display: flex;
+  align-items: center;
+}
+
+.create-agent-header-start {
+  width: 260px;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 26px;
+  letter-spacing: 0.003em;
+}
+
+.create-agent-header-back {
+  --button-size: 20px;
+  --button-icon-size: 15px;
+
+  position: relative;
+  flex: 0 0 20px;
+  border-radius: 4px;
+  color: #42464e;
+}
+
+.create-agent-header-back::before {
+  background: transparent !important;
+}
+
+.create-agent-header-back::after {
+  position: absolute;
+  inset: -4px;
+  content: "";
+}
+
+.create-agent-header-title {
+  white-space: nowrap;
+}
+
+.create-agent-header-preview {
+  position: absolute;
+  left: 50%;
+  width: 168px;
+  height: 36px;
+  padding: 3px;
+  transform: translateX(-50%);
+  border-radius: 20px;
+  background: rgb(0 0 0 / 8%);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+.create-agent-header-preview button {
+  min-width: 78px;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.create-agent-header-preview button:disabled {
+  color: #383740;
+  opacity: 1;
+}
+
+.create-agent-header-actions {
+  position: relative;
+  width: 260px;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.create-agent-header.is-debug-preview .create-agent-header-actions,
+.create-agent-header.is-debug-results .create-agent-header-actions {
+  gap: 16px;
+}
+
+.create-agent-header-action {
+  --button-size: 36px;
+  --button-gutter: 12px;
+  --button-icon-size: 16px;
+  --button-gap: 5px;
+
+  min-width: 80px;
+  border-radius: 8px;
+  color: #101013;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.create-agent-header-action::before {
+  border: 0 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 0 0 0.5px #c9cdd4 inset !important;
+}
+
+.create-agent-header-action.is-debug {
+  --button-icon-size: 10px;
+  --button-gap: 4px;
+
+  font-weight: 400;
+  line-height: 22px;
+}
+
+.create-agent-header-action.is-debug::before {
+  border: 0.5px solid #c9cdd4 !important;
+  background: #fff !important;
+  box-shadow: none !important;
+}
+
+.create-agent-header-action.is-code {
+  min-width: 72px;
+  color: #101013;
+}
+
+.create-agent-header-debug-action {
+  --button-size: 32px;
+  --button-gutter: 12px;
+  --button-icon-size: 16px;
+  --button-gap: 4px;
+
+  min-width: 100px;
+  border-radius: 8px;
+  color: #383740;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.create-agent-header-debug-action.is-add::before {
+  box-shadow: none !important;
+}
+
+.create-agent-header-debug-action:not(.is-add)::before {
+  border: 0 !important;
+  border-radius: 8px !important;
+  background: hsl(var(--background)) !important;
+  box-shadow: 0 0 0 0.5px #b8b7c3 inset !important;
+}
+
+.create-agent-header-action.is-code::before {
+  box-shadow: none !important;
+}
+
+.create-agent-header-action.is-deploy {
+  color: #fff;
+}
+
+.create-agent-header-action.is-deploy::before {
+  background: #101013 !important;
+  box-shadow: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .create-agent-header {
+    transition: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .create-agent-header-preview,
+  .create-agent-header-action.is-code,
+  .create-agent-header-action:not(.is-deploy) {
+    display: none;
+  }
+
+  .create-agent-header-actions {
+    width: auto;
+  }
+}

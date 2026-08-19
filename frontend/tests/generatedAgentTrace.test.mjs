@@ -24,14 +24,20 @@ test("loads generated-agent traces through the run-scoped API", () => {
   assert.match(traceDrawerSource, /getGeneratedAgentTestTrace\(testRunId, sessionId\)/);
 });
 
-test("shows a per-variant trace action only after a completed debug turn", () => {
+test("shows trace actions for variants with real completed debug output", () => {
   assert.match(customCreateSource, /onOpenTrace: \(id: string\) => void/);
   assert.match(
     customCreateSource,
-    /const traceAvailable =\s*ready &&[\s\S]*?variant\.phase !== "sending"[\s\S]*?message\.role === "assistant"/,
+    /const traceableVariants = variants\.filter[\s\S]*?message\.role === "assistant" && !message\.error/,
   );
-  assert.match(customCreateSource, /className="cw-ab-trace"/);
-  assert.match(customCreateSource, /disabled=\{!traceAvailable\}/);
-  assert.match(customCreateSource, /onClick=\{\(\) => onOpenTrace\(variant\.id\)\}/);
+  assert.match(
+    customCreateSource,
+    /\{traceableVariants\.length > 0 && \([\s\S]*?className="cw-ab-verdict"/,
+  );
+  assert.match(
+    customCreateSource,
+    /traceableVariants\.map[\s\S]*?onClick=\{\(\) => onOpenTrace\(variant\.id\)\}[\s\S]*?调用链路/,
+  );
+  assert.doesNotMatch(customCreateSource, /本轮裁判推荐|1\.8s|2\.3s/);
   assert.match(customCreateSource, /testRunId=\{debugTraceTarget\.runId\}/);
 });

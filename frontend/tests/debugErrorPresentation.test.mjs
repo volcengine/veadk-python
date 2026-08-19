@@ -36,7 +36,7 @@ test("debug errors show the complete backend detail by default", () => {
   assert.match(errorComponentSource, /role="alert"/);
   assert.match(
     source,
-    /className="cw-ab-start cw-ab-footer-start"[\s\S]*?onClick=\{\(\) => onStartVariant\(variant\.id\)\}/,
+    /className="cw-ab-results-grid"[\s\S]*?message=\{variant\.error\}[\s\S]*?defaultExpanded/,
   );
 });
 

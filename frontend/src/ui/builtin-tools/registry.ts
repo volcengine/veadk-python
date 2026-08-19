@@ -1,4 +1,5 @@
 import type { ComponentType, SVGProps } from "react";
+import { AgentFaceSquareIcon } from "../icons/CreateAgentIcons";
 import {
   ImageGenerateIcon,
   LoadKnowledgebaseIcon,
@@ -18,6 +19,7 @@ export type BuiltinToolTone =
   | "memory"
   | "knowledge"
   | "skill"
+  | "agent"
   | "sandbox";
 
 export interface BuiltinToolDefinition {
@@ -84,6 +86,13 @@ const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
     doneLabel: "已加载技能",
     tone: "skill",
     icon: LoadSkillIcon,
+  },
+  generate_agent: {
+    name: "generate_agent",
+    runningLabel: "正在定制智能体",
+    doneLabel: "智能体定制完毕",
+    tone: "agent",
+    icon: AgentFaceSquareIcon,
   },
 };
 

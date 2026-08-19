@@ -46,7 +46,12 @@ test("chat, deployment, and debug streams explicitly disable deadlines", () => {
     "export async function* runGeneratedAgentTestSSE",
     "export async function deleteGeneratedAgentTestRun",
   );
+  const agentBuilder = functionSource(
+    "export async function* runGeneratedAgentConversationSSE",
+    "export async function createGeneratedAgentTestRun",
+  );
   assert.match(chat, /ep,\s+0,/);
   assert.match(deployment, /\{\},\s+0,/);
   assert.match(debug, /\{\},\s+0,/);
+  assert.match(agentBuilder, /\{\},\s+0,/);
 });

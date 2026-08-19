@@ -212,10 +212,20 @@ test("filters A2A spaces and Viking knowledgebases locally by name or id", () =>
   assert.equal(localPickerMatches("客服", ["客服中心", "space-123"]), true);
   assert.equal(localPickerMatches("SPACE-123", ["客服中心", "space-123"]), true);
   assert.equal(localPickerMatches("missing", ["客服中心", "space-123"]), false);
-  assert.match(customCreateSource, /filteredSpaces = useMemo/);
-  assert.match(customCreateSource, /filteredItems = useMemo/);
-  assert.match(customCreateSource, /搜索 AgentKit 智能体中心/);
-  assert.match(customCreateSource, /搜索 VikingDB 知识库/);
+  assert.match(customCreateSource, /spaceOptions = useMemo/);
+  assert.match(
+    customCreateSource,
+    /const options = useMemo<ResourceCatalogOption<T>\[]>/,
+  );
+  assert.match(
+    customCreateSource,
+    /searchTerms: getSearchFields\(item\)\.filter/,
+  );
+  assert.match(customCreateSource, /searchPredicate=\{catalogSearchPredicate\}/);
+  assert.equal(
+    customCreateSource.match(/searchPlaceholder="搜索名称或 ID"/g)?.length,
+    2,
+  );
 });
 
 test("maps active feature settings to VeADK runtime env rows", () => {
@@ -574,7 +584,11 @@ test("declares the OpenViking long-term memory runtime configuration", () => {
   assert.equal(openvikingUrl?.link?.url, openvikingConsoleUrl);
   assert.equal(openvikingApiKey?.link?.url, openvikingConsoleUrl);
   assert.equal(openvikingPolicy?.link?.url, openvikingSessionsDocUrl);
-  assert.match(customCreateSource, /className="cw-input cw-env-textarea"/);
+  assert.match(
+    customCreateSource,
+    /item\.multiline \|\| item\.format === "json" \? \([\s\S]*?<Textarea[\s\S]*?rows=\{4\}/,
+  );
+  assert.doesNotMatch(customCreateSource, /cw-env-textarea/);
   assert.match(customCreateSource, /runtimeEnvJsonError\(item, values\)/);
   assert.match(customCreateSource, /firstInvalidRuntimeEnv\(/);
   assert.match(projectPreviewSource, /className="pp-env-value pp-env-json-value"/);

@@ -148,22 +148,22 @@ server that `veadk frontend` launches — no separate backend.
   instead of credentials. Long descriptions, names, component summaries, IDs,
   and environment values stay inside the scrollable panel.
 - **Custom-agent workbench**: configure an agent with a rich Markdown
-  system-prompt editor (including heading and list shortcuts), choose Harness
-  Sidecar optimizations, then debug with expandable, copyable runner error
-  details and per-result Trace inspection. The workbench order is `架构` →
-  `优化` → `调试` → `环境` → `发布`. On the optimization page, `自定义`
-  appears first and starts with no components, while `运维场景` applies the
-  `ops` component combination. Component checkboxes remain editable and an empty
-  selection keeps Sidecar disabled. The Environment step can optionally add the
-  official Lark CLI, GitHub CLI, and Pandoc to the cloud runtime. Selecting a
-  tool generates an inspectable provider-specific Dockerfile with pinned
-  releases, amd64/arm64 assets, and SHA-256 verification. Advanced configuration
-  can edit that Dockerfile directly or restore the generated version; selecting
+  system-prompt editor (including heading and list shortcuts), then debug with
+  expandable, copyable runner error details, per-result Trace inspection, and
+  review. Its intelligent-creation drawer keeps one expiring, user-scoped
+  multi-turn conversation and renders normal model and tool events through the
+  shared conversation blocks. The model asks for missing scenario details and
+  may call `generate_agent` only when the requirement is sufficiently complete;
+  the canvas changes only after that tool returns a validated Agent draft.
+  The lifecycle follows Architecture, Debug, Environment, and Publish.
+  The Environment step can optionally add the official Lark CLI, GitHub CLI,
+  and Pandoc to the cloud runtime. Selecting a tool generates an inspectable
+  provider-specific Dockerfile with pinned releases, amd64/arm64 assets, and
+  SHA-256 verification. Advanced configuration can edit that Dockerfile
+  directly or restore the provider-specific generated version; selecting
   no tool and leaving the Dockerfile unchanged keeps AgentKit's default image
-  build. Credentials are never written into the generated Dockerfile. Published
-  Agent details display the saved Sidecar scenario and selected components as
-  read-only information. In-progress drafts are stored only in the current
-  browser and scoped
+  build. Credentials are never written into the generated Dockerfile.
+  In-progress drafts are stored only in the current browser and scoped
   to the signed-in user. MCP tokens are converted to Runtime environment
   variables: generated source retains only the `${ENV_NAME}` reference, while
   YAML and browser drafts preserve the corresponding environment value.

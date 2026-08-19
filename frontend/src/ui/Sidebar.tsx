@@ -107,6 +107,8 @@ export interface SidebarProps {
   sessions: AdkSession[];
   currentSessionId: string;
   activePage: SidebarPage;
+  /** Collapse once when this page-scoped request becomes active. */
+  collapseRequested?: boolean;
   /** Per-module feature gates; omitted modules default to shown. */
   features?: UiFeatures;
   /** Server-derived role and capabilities. */
@@ -292,6 +294,7 @@ export function Sidebar({
   sessions,
   currentSessionId,
   activePage,
+  collapseRequested = false,
   features,
   access,
   streamingSids,
@@ -362,6 +365,11 @@ export function Sidebar({
     query.addEventListener("change", handleViewportChange);
     return () => query.removeEventListener("change", handleViewportChange);
   }, []);
+  useEffect(() => {
+    if (!collapseRequested) return;
+    setCollapsed(true);
+    setMenuFor(null);
+  }, [collapseRequested]);
   const fallbackLogo = cloudProvider === "byteplus" ? byteplusLogo : defaultSiteLogo;
   return (
     <aside className={`sidebar ${collapsed ? "is-collapsed" : ""}`}>

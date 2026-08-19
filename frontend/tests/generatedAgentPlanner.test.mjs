@@ -45,7 +45,7 @@ test("removes hidden capabilities from every generated Agent", () => {
   );
   assert.match(
     createSource,
-    /setDraft\([\s\S]*?draftForCloudProvider\([\s\S]*?sanitizeGeneratedDraftCapabilities\([\s\S]*?normalizeDraft\(result\.draft\),[\s\S]*?cloudProvider,[\s\S]*?\),[\s\S]*?cloudProvider,[\s\S]*?\)/,
+    /setDraft\([\s\S]*?draftForCloudProvider\([\s\S]*?sanitizeGeneratedDraftCapabilities\([\s\S]*?normalizeDraft\(generatedDraft\),[\s\S]*?cloudProvider,[\s\S]*?\),[\s\S]*?cloudProvider,[\s\S]*?\)/,
   );
 });
 
@@ -88,6 +88,17 @@ test("dims the input and shows a spinner while generation is active", () => {
   assert.match(createStyles, /@keyframes cw-ai-orb-spin/);
 });
 
+test("planner composer uses the Apps SDK input without submitting during IME composition", () => {
+  assert.match(
+    createSource,
+    /<Input[\s\S]*?className="cw-ai-compose-input"[\s\S]*?invalid=\{Boolean\(aiRequirementError\)\}[\s\S]*?isImeCompositionEvent\(event\.nativeEvent\)[\s\S]*?event\.key === "Enter"/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-ai-compose-form \.cw-ai-compose-input\s*\{[\s\S]*?padding:\s*0;[\s\S]*?box-shadow:\s*none;/,
+  );
+});
+
 test("names the planner model and preserves generation errors verbatim", () => {
   assert.match(
     createSource,
@@ -112,7 +123,7 @@ test("validates short generation requirements beside the input before requesting
   assert.match(createSource, /const GENERATED_AGENT_REQUIREMENT_MIN_LENGTH = 4/);
   assert.match(
     handler,
-    /if \(requirement\.length < GENERATED_AGENT_REQUIREMENT_MIN_LENGTH\) return/,
+    /!options\?\.preserveCurrentDraft &&[\s\S]*?requirement\.length < GENERATED_AGENT_REQUIREMENT_MIN_LENGTH/,
   );
   assert.match(
     createSource,
@@ -122,7 +133,7 @@ test("validates short generation requirements beside the input before requesting
     handler.indexOf(
       "requirement.length < GENERATED_AGENT_REQUIREMENT_MIN_LENGTH",
     ) <
-      handler.indexOf("generateAgentDraftFromRequirement(requirement)"),
+      handler.indexOf("generateAgentDraftFromRequirement(generationRequirement)"),
   );
   assert.match(createSource, /aria-invalid=\{Boolean\(aiRequirementError\)\}/);
   assert.match(

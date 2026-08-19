@@ -3493,6 +3493,21 @@ export interface GeneratedAgentDraftResult {
   unresolvedItems: string[];
 }
 
+export interface GeneratedAgentConversation {
+  conversationId: string;
+  expiresAt: number;
+}
+
+export interface GeneratedAgentDraftEvent extends GeneratedAgentDraftResult {
+  type: "agent_draft";
+}
+
+export type GeneratedAgentConversationEvent =
+  | AdkEvent
+  | GeneratedAgentDraftEvent
+  | { type: "done" }
+  | { type: "error"; message: string };
+
 const GENERATED_AGENT_DRAFT_TIMEOUT_MS = 190_000;
 
 export async function generateAgentDraftFromRequirement(
@@ -3512,6 +3527,53 @@ export async function generateAgentDraftFromRequirement(
     throw new Error(await httpErrorMessage(res, "生成 Agent 配置失败"));
   }
   return parseJsonResponse<GeneratedAgentDraftResult>(res, "生成 Agent 配置失败");
+}
+
+export async function createGeneratedAgentConversation(
+  signal?: AbortSignal,
+): Promise<GeneratedAgentConversation> {
+  const res = await apiFetch("/web/generated-agent-conversations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+    signal,
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "创建智能创建会话失败"));
+  }
+  return parseJsonResponse<GeneratedAgentConversation>(
+    res,
+    "创建智能创建会话失败",
+  );
+}
+
+export async function* runGeneratedAgentConversationSSE({
+  conversationId,
+  message,
+  signal,
+}: {
+  conversationId: string;
+  message: string;
+  signal?: AbortSignal;
+}): AsyncGenerator<GeneratedAgentConversationEvent, void, unknown> {
+  const res = await apiFetch(
+    `/web/generated-agent-conversations/${encodeURIComponent(conversationId)}/run_sse`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+      signal,
+    },
+    {},
+    0,
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "智能创建对话失败"));
+  }
+  for await (const event of parseSSE(res)) {
+    if (!event || typeof event !== "object") continue;
+    yield event as GeneratedAgentConversationEvent;
+  }
 }
 
 export async function createGeneratedAgentTestRun(

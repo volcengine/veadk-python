@@ -2927,6 +2927,12 @@ def _run_frontend_server(
         GeneratedAgentDraftRequest,
         generate_agent_draft,
     )
+    from veadk.cli.generated_agent_conversation import (
+        ConversationBusyError,
+        ConversationNotFoundError,
+        GeneratedAgentConversationRunRequest,
+        GeneratedAgentConversationService,
+    )
     from veadk.cli.generated_agent_mcp import (
         McpDebugConnectionError,
         resolve_debug_mcp_endpoints,
@@ -2950,6 +2956,7 @@ def _run_frontend_server(
     _TEST_RUN_MAX_TOTAL_BYTES = 2 * 1024 * 1024
     _TEST_RUN_MAX_ACTIVE = 3
     _TEST_RUN_READY_TIMEOUT = 30.0
+    generated_agent_conversations = GeneratedAgentConversationService()
 
     def _enabled_env_flag(name: str) -> bool:
         value = os.getenv(name, "")
@@ -4017,6 +4024,69 @@ def _run_frontend_server(
                 status_code=502,
                 detail=_safe_exception_detail(error),
             ) from error
+
+    @app.post("/web/generated-agent-conversations")
+    async def _create_generated_agent_conversation(request: Request):
+        principal = _require_agent_management(request)
+        owner_id = principal.owner_id if principal is not None else "local"
+        return generated_agent_conversations.create(owner_id)
+
+    @app.post("/web/generated-agent-conversations/{conversation_id}/run_sse")
+    async def _run_generated_agent_conversation(
+        conversation_id: str,
+        request: Request,
+    ):
+        from fastapi.responses import StreamingResponse
+
+        principal = _require_agent_management(request)
+        owner_id = principal.owner_id if principal is not None else "local"
+        try:
+            payload = GeneratedAgentConversationRunRequest.model_validate(
+                await request.json()
+            )
+        except ValidationError as error:
+            raise HTTPException(status_code=422, detail=error.errors()) from error
+
+        try:
+            conversation = generated_agent_conversations.reserve(
+                conversation_id,
+                owner_id,
+            )
+        except ConversationNotFoundError as error:
+            raise HTTPException(
+                status_code=404,
+                detail="智能创建会话不存在或已过期。",
+            ) from error
+        except ConversationBusyError as error:
+            raise HTTPException(
+                status_code=409,
+                detail="该会话正在生成回复，请等待当前请求完成。",
+            ) from error
+
+        async def _stream():
+            try:
+                async for event_json in generated_agent_conversations.stream_turn(
+                    conversation,
+                    payload.message,
+                ):
+                    yield f"data: {event_json}\n\n"
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.exception("Generated-Agent conversation turn failed")
+                detail = _safe_exception_detail(error)
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {"type": "error", "message": detail},
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                )
+            finally:
+                generated_agent_conversations.release(conversation)
+
+        return StreamingResponse(_stream(), media_type="text/event-stream")
 
     @app.post("/web/generated-agent-test-runs")
     async def _create_generated_agent_test_run(request: Request):

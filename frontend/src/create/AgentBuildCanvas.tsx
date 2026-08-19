@@ -13,6 +13,7 @@ import {
   Controls,
   EdgeLabelRenderer,
   getSmoothStepPath,
+  getStraightPath,
   Handle,
   MarkerType,
   MiniMap,
@@ -30,16 +31,18 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import dagre from "@dagrejs/dagre";
-import {
-  ArrowRightLeft,
-  Bot,
-  Globe,
-  ListOrdered,
-  Plus,
-  Repeat,
-  Trash2,
-} from "lucide-react";
+import { Button } from "@openai/apps-sdk-ui/components/Button";
+import { Plus, Trash2 } from "lucide-react";
 import type { AgentDraft } from "./types";
+import {
+  AgentSkillCountIcon,
+  AgentToolCountIcon,
+  CanvasAgentTypeIcon,
+} from "../ui/CapabilityIcons";
+import {
+  TerminalFinalReplyIcon,
+  TerminalUserRequestIcon,
+} from "../ui/icons/CreateAgentIcons";
 import "@xyflow/react/dist/style.css";
 import "./AgentBuildCanvas.css";
 
@@ -48,67 +51,131 @@ type AgentType = NonNullable<AgentDraft["agentType"]>;
 
 const PATTERN_COPY: Record<
   AgentType,
-  { label: string; description: string; icon: typeof Bot }
+  { label: string; description: string }
 > = {
   llm: {
     label: "智能体",
     description: "理解任务并直接完成一个具体工作",
-    icon: Bot,
   },
   sequential: {
     label: "分步协作",
     description: "内部步骤按照顺序依次执行",
-    icon: ListOrdered,
   },
   parallel: {
     label: "同时处理",
     description: "内部步骤同时工作，完成后统一汇总",
-    icon: ArrowRightLeft,
   },
   loop: {
     label: "循环执行",
     description: "重复执行内部步骤，直到满足停止条件",
-    icon: Repeat,
   },
   a2a: {
     label: "远程智能体",
     description: "调用已经存在的远程 Agent",
-    icon: Globe,
   },
 };
 
 type CanvasNodeData = {
-  kind: "agent" | "terminal";
+  kind: "agent" | "terminal" | "junction";
   path?: NodePath;
   agent?: AgentDraft;
   title: string;
+  nameMissing?: boolean;
   pattern?: AgentType;
+  modelLabel?: string;
   description?: string;
+  toolCount?: number;
+  skillCount?: number;
   childCount?: number;
   containedIn?: AgentType;
   layoutWidth?: number;
   layoutHeight?: number;
-  compactEmptyGroup?: boolean;
+  terminalKind?: "input" | "output";
+  junctionKind?: "split" | "merge";
+  junctionDirection?: CanvasDirection;
 };
 
 type CanvasNode = Node<CanvasNodeData>;
 
-const NODE_WIDTH = 220;
-const NODE_HEIGHT = 88;
-const TERMINAL_WIDTH = 96;
-const TERMINAL_HEIGHT = 34;
-const GROUP_HEADER_HEIGHT = 64;
+const NODE_WIDTH = 214;
+const NODE_HEIGHT = 168;
+const COMPACT_NODE_HEIGHT = 138;
+const READ_ONLY_NODE_HEIGHT = 133;
+const READ_ONLY_COMPACT_NODE_HEIGHT = 104;
+
+function canvasAgentTitle(agent: AgentDraft): string {
+  if (agent.agentType === "a2a") return "远程智能体";
+  return agent.name.trim() || "名称未配置";
+}
+function canvasAgentModel(agent: AgentDraft): string {
+  return agent.modelName?.trim() || agent.model?.trim() || "模型未配置";
+}
+
+function uniqueCapabilityCount(values: Array<string | undefined>): number {
+  return new Set(
+    values.map((value) => value?.trim()).filter((value): value is string => !!value),
+  ).size;
+}
+
+function canvasAgentCardData(agent: AgentDraft) {
+  return {
+    modelLabel: canvasAgentModel(agent),
+    description: agent.description.trim() || "描述未配置",
+    toolCount: uniqueCapabilityCount([
+      ...agent.tools,
+      ...(agent.builtinTools ?? []),
+      ...(agent.customTools ?? []).map((tool) => tool.name),
+      ...(agent.mcpTools ?? []).map((tool) => tool.name),
+    ]),
+    skillCount: uniqueCapabilityCount([
+      ...agent.skills,
+      ...(agent.selectedSkills ?? []).map((skill) => skill.name),
+    ]),
+  };
+}
+const TERMINAL_WIDTH = 120;
+const TERMINAL_HEIGHT = 52;
+const FIGMA_FLOW_LINE_LENGTH = 69;
+const FLOW_HANDLE_SIZE = 7;
+const GROUP_HEADER_HEIGHT = 46;
+const GROUP_SUMMARY_HEIGHT = 122;
+const GROUP_COMPACT_SUMMARY_HEIGHT = 84;
+const READ_ONLY_GROUP_SUMMARY_HEIGHT = 84;
+const READ_ONLY_GROUP_COMPACT_SUMMARY_HEIGHT = 46;
 const GROUP_MIN_WIDTH = 310;
 const GROUP_PADDING = 24;
 const GROUP_BOUNDARY_PADDING = 56;
 const GROUP_GAP = 40;
-const GROUP_ADD_HEIGHT = 40;
-const GROUP_ADD_GAP = 18;
 const LOOP_EDGE_SPACE = 58;
+const PARALLEL_RAIL_SPACE = 44;
+const JUNCTION_SIZE = 18;
 const MINIMAP_ENABLED = false;
 
 const isContainerType = (type: AgentType) =>
   type === "sequential" || type === "parallel" || type === "loop";
+
+const showsModelCapabilities = (type: AgentType): boolean => type === "llm";
+
+const nodeHeight = (type: AgentType, readOnly: boolean): number =>
+  showsModelCapabilities(type)
+    ? readOnly
+      ? READ_ONLY_NODE_HEIGHT
+      : NODE_HEIGHT
+    : readOnly
+      ? READ_ONLY_COMPACT_NODE_HEIGHT
+      : COMPACT_NODE_HEIGHT;
+
+const groupSummaryHeight = (type: AgentType, readOnly: boolean): number =>
+  showsModelCapabilities(type)
+    ? readOnly
+      ? READ_ONLY_GROUP_SUMMARY_HEIGHT
+      : GROUP_SUMMARY_HEIGHT
+    : readOnly
+      ? READ_ONLY_GROUP_COMPACT_SUMMARY_HEIGHT
+      : GROUP_COMPACT_SUMMARY_HEIGHT;
+
+const groupContentTop = (type: AgentType, readOnly: boolean): number =>
+  GROUP_HEADER_HEIGHT + groupSummaryHeight(type, readOnly);
 
 function rendersAsGroup(agent: AgentDraft, path: NodePath): boolean {
   const type = agent.agentType ?? "llm";
@@ -124,17 +191,15 @@ function measureAgent(
   agent: AgentDraft,
   path: NodePath = [],
   direction: CanvasDirection = "horizontal",
-  compactEmptyGroups = false,
+  readOnly = false,
 ): { width: number; height: number } {
   const type = agent.agentType ?? "llm";
   if (!rendersAsGroup(agent, path)) {
-    return { width: NODE_WIDTH, height: NODE_HEIGHT };
+    return { width: NODE_WIDTH, height: nodeHeight(type, readOnly) };
   }
-  if (compactEmptyGroups && agent.subAgents.length === 0) {
-    return { width: GROUP_MIN_WIDTH, height: GROUP_HEADER_HEIGHT };
-  }
+  const contentTop = groupContentTop(type, readOnly);
   const sizes = agent.subAgents.map((child, index) =>
-    measureAgent(child, [...path, index], direction, compactEmptyGroups),
+    measureAgent(child, [...path, index], direction, readOnly),
   );
   const widestChild = sizes.length
     ? Math.max(...sizes.map((size) => size.width))
@@ -148,21 +213,24 @@ function measureAgent(
   const horizontalChildren = direction === "horizontal"
     ? type !== "parallel"
     : type === "parallel";
-  const bottomSpace = sizes.length
-    ? type === "parallel"
-      ? GROUP_ADD_GAP + GROUP_ADD_HEIGHT
-      : type === "loop"
-        ? LOOP_EDGE_SPACE
-        : 0
-    : GROUP_ADD_HEIGHT;
+  if (sizes.length === 0) {
+    return { width: GROUP_MIN_WIDTH, height: contentTop };
+  }
+  const bottomSpace = type === "loop" ? LOOP_EDGE_SPACE : 0;
+  const parallelHorizontalRails = type === "parallel" && !horizontalChildren
+    ? PARALLEL_RAIL_SPACE * 2
+    : 0;
+  const parallelVerticalRails = type === "parallel" && horizontalChildren
+    ? PARALLEL_RAIL_SPACE * 2
+    : 0;
   if (!horizontalChildren) {
     return {
       width: Math.max(
         GROUP_MIN_WIDTH,
-        widestChild + GROUP_PADDING * 2,
+        widestChild + GROUP_PADDING * 2 + parallelHorizontalRails,
       ),
       height:
-        GROUP_HEADER_HEIGHT +
+        contentTop +
         flowPadding +
         sizes.reduce((sum, size) => sum + size.height, 0) +
         GROUP_GAP * Math.max(0, sizes.length - 1) +
@@ -178,8 +246,9 @@ function measureAgent(
       flowPadding * 2,
     ),
     height:
-      GROUP_HEADER_HEIGHT +
+      contentTop +
       GROUP_PADDING +
+      parallelVerticalRails +
       tallestChild +
       bottomSpace +
       GROUP_PADDING,
@@ -206,6 +275,8 @@ type CanvasEdgeData = {
   insert?: { parentPath: NodePath; index: number };
   loop?: boolean;
   tone?: AgentType;
+  figmaFlow?: boolean;
+  semantic?: "call" | "sequence" | "branch" | "merge" | "return";
 };
 
 type CanvasEdge = Edge<CanvasEdgeData>;
@@ -218,20 +289,27 @@ function makeEdge(
     loop?: boolean;
     tone?: AgentType;
     insert?: CanvasEdgeData["insert"];
+    figmaFlow?: boolean;
+    semantic?: CanvasEdgeData["semantic"];
+    sourceHandle?: string;
+    targetHandle?: string;
   },
 ): CanvasEdge {
-  const edgeColor =
-    options?.tone === "sequential"
+  const edgeColor = options?.figmaFlow
+    ? "#C9CDD4"
+    : options?.tone === "sequential"
       ? "hsl(213 40% 40%)"
-      : options?.tone === "loop"
-        ? "hsl(151 34% 34%)"
-        : "hsl(220 9% 38%)";
+      : options?.tone === "parallel"
+        ? "hsl(40 43% 38%)"
+        : options?.tone === "loop"
+          ? "hsl(151 34% 34%)"
+          : "hsl(220 9% 38%)";
   return {
     id: `${source}-${target}${options?.loop ? "-loop" : ""}`,
     source,
     target,
-    sourceHandle: options?.loop ? "loop-source" : undefined,
-    targetHandle: options?.loop ? "loop-target" : undefined,
+    sourceHandle: options?.loop ? "loop-source" : options?.sourceHandle,
+    targetHandle: options?.loop ? "loop-target" : options?.targetHandle,
     label,
     type: "insertStep",
     data: options
@@ -239,19 +317,24 @@ function makeEdge(
           insert: options.insert,
           loop: options.loop,
           tone: options.tone,
+          figmaFlow: options.figmaFlow,
+          semantic: options.semantic,
         }
       : undefined,
     animated: options?.loop,
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      width: 16,
-      height: 16,
-      color: edgeColor,
-    },
+    markerEnd: options?.figmaFlow
+      ? undefined
+      : {
+          type: MarkerType.ArrowClosed,
+          width: 16,
+          height: 16,
+          color: edgeColor,
+        },
     style: {
       stroke: edgeColor,
       strokeWidth: 1.5,
     },
+    zIndex: options?.figmaFlow ? 0 : 2,
     labelStyle: {
       fill: "hsl(215 14% 42%)",
       fontSize: 10,
@@ -267,7 +350,7 @@ function makeEdge(
 function buildCanvasGraph(
   root: AgentDraft,
   direction: CanvasDirection,
-  compactEmptyGroups = false,
+  readOnly = false,
 ): {
   nodes: CanvasNode[];
   edges: CanvasEdge[];
@@ -277,7 +360,7 @@ function buildCanvasGraph(
       id: "terminal-input",
       type: "terminal",
       position: { x: 0, y: 0 },
-      data: { kind: "terminal", title: "用户请求" },
+      data: { kind: "terminal", title: "用户请求", terminalKind: "input" },
       selectable: false,
       draggable: false,
     },
@@ -285,12 +368,13 @@ function buildCanvasGraph(
       id: "terminal-output",
       type: "terminal",
       position: { x: 0, y: 0 },
-      data: { kind: "terminal", title: "最终回复" },
+      data: { kind: "terminal", title: "最终回复", terminalKind: "output" },
       selectable: false,
       draggable: false,
     },
   ];
   const edges: CanvasEdge[] = [];
+  const groupExitIds = new Map<string, string[]>();
 
   function addContainedNode(
     agent: AgentDraft,
@@ -305,24 +389,54 @@ function buildCanvasGraph(
       addGroupNode(agent, path, parentId, position, containedIn);
       return id;
     }
+    const height = nodeHeight(type, readOnly);
     nodes.push({
       id,
       type: "agent",
       parentId,
       extent: "parent",
       position,
+      style: { width: NODE_WIDTH, height },
       data: {
         kind: "agent",
         path,
         agent,
-        title:
-          type === "a2a"
-            ? "远程智能体"
-            : agent.name.trim() || (path.length === 0 ? "主 Agent" : "未命名步骤"),
+        title: canvasAgentTitle(agent),
+        ...canvasAgentCardData(agent),
+        nameMissing: type !== "a2a" && agent.name.trim().length === 0,
         pattern: type,
-        description: agent.description.trim() || PATTERN_COPY[type].description,
         childCount: agent.subAgents.length,
         containedIn,
+        layoutWidth: NODE_WIDTH,
+        layoutHeight: height,
+      },
+    });
+    return id;
+  }
+
+  function addParallelJunction(
+    kind: "split" | "merge",
+    parentId: string,
+    path: NodePath,
+    position: { x: number; y: number },
+    junctionDirection: CanvasDirection,
+  ): string {
+    const id = `${pathId(path)}-parallel-${kind}`;
+    nodes.push({
+      id,
+      type: "junction",
+      parentId,
+      extent: "parent",
+      position,
+      style: { width: JUNCTION_SIZE, height: JUNCTION_SIZE },
+      selectable: false,
+      draggable: false,
+      connectable: false,
+      data: {
+        kind: "junction",
+        title: kind === "split" ? "并行分发" : "并行汇合",
+        junctionKind: kind,
+        junctionDirection,
       },
     });
     return id;
@@ -336,8 +450,9 @@ function buildCanvasGraph(
     containedIn?: AgentType,
   ): string {
     const type = agent.agentType ?? "sequential";
+    const contentTop = groupContentTop(type, readOnly);
     const id = pathId(path);
-    const size = measureAgent(agent, path, direction, compactEmptyGroups);
+    const size = measureAgent(agent, path, direction, readOnly);
     nodes.push({
       id,
       type: "group",
@@ -349,21 +464,19 @@ function buildCanvasGraph(
         kind: "agent",
         path,
         agent,
-        title:
-          agent.name.trim() ||
-          (path.length === 0 ? "主 Agent" : PATTERN_COPY[type].label),
+        title: canvasAgentTitle(agent),
+        ...canvasAgentCardData(agent),
+        nameMissing: type !== "a2a" && agent.name.trim().length === 0,
         pattern: type,
-        description: agent.description.trim() || PATTERN_COPY[type].description,
         childCount: agent.subAgents.length,
         containedIn,
         layoutWidth: size.width,
         layoutHeight: size.height,
-        compactEmptyGroup: compactEmptyGroups && agent.subAgents.length === 0,
       },
     });
 
     const childSizes = agent.subAgents.map((child, index) =>
-      measureAgent(child, [...path, index], direction, compactEmptyGroups),
+      measureAgent(child, [...path, index], direction, readOnly),
     );
     const flowPadding = childSizes.length && type !== "parallel"
       ? GROUP_BOUNDARY_PADDING
@@ -371,18 +484,24 @@ function buildCanvasGraph(
     const horizontalChildren = direction === "horizontal"
       ? type !== "parallel"
       : type === "parallel";
-    let cursor = flowPadding;
+    let cursor = horizontalChildren ? flowPadding : GROUP_BOUNDARY_PADDING;
     const childIds = agent.subAgents.map((child, index) => {
       const childSize = childSizes[index];
       const childPosition =
         horizontalChildren
           ? {
               x: cursor,
-              y: GROUP_HEADER_HEIGHT + GROUP_PADDING,
+              y:
+                contentTop +
+                GROUP_PADDING +
+                (type === "parallel" ? PARALLEL_RAIL_SPACE : 0),
             }
           : {
-              x: (size.width - childSize.width) / 2,
-              y: GROUP_HEADER_HEIGHT + cursor,
+              x:
+                type === "parallel"
+                  ? GROUP_PADDING + PARALLEL_RAIL_SPACE
+                  : (size.width - childSize.width) / 2,
+              y: contentTop + cursor,
             };
       cursor +=
         (horizontalChildren ? childSize.width : childSize.height) + GROUP_GAP;
@@ -395,11 +514,30 @@ function buildCanvasGraph(
       );
     });
 
+    if (childIds.length === 0) {
+      groupExitIds.set(id, [id]);
+      return id;
+    }
+
+    if (type === "llm") {
+      for (let index = 0; index < childIds.length - 1; index += 1) {
+        edges.push(
+          makeEdge(childIds[index], childIds[index + 1], "然后", {
+            tone: "llm",
+            semantic: "sequence",
+            insert: { parentPath: path, index: index + 1 },
+          }),
+        );
+      }
+      groupExitIds.set(id, [id]);
+    }
+
     if (type === "sequential" || type === "loop") {
       for (let index = 0; index < childIds.length - 1; index += 1) {
         edges.push(
           makeEdge(childIds[index], childIds[index + 1], "然后", {
             tone: type,
+            semantic: "sequence",
             insert: { parentPath: path, index: index + 1 },
           }),
         );
@@ -409,9 +547,90 @@ function buildCanvasGraph(
           makeEdge(childIds[childIds.length - 1], childIds[0], "继续循环", {
             loop: true,
             tone: "loop",
+            semantic: "return",
           }),
         );
       }
+      groupExitIds.set(id, [id]);
+    }
+
+    if (type === "parallel") {
+      const junctionDirection = horizontalChildren ? "vertical" : "horizontal";
+      const tallestChild = Math.max(...childSizes.map((child) => child.height));
+      const widestChild = Math.max(...childSizes.map((child) => child.width));
+      const stackedHeight = childSizes.reduce(
+        (total, child) => total + child.height,
+        GROUP_GAP * Math.max(0, childSizes.length - 1),
+      );
+      const splitPosition = horizontalChildren
+        ? {
+            x: size.width / 2 - JUNCTION_SIZE / 2,
+            y:
+              contentTop +
+              GROUP_PADDING +
+              PARALLEL_RAIL_SPACE / 2 -
+              JUNCTION_SIZE / 2,
+          }
+        : {
+            x:
+              GROUP_PADDING +
+              PARALLEL_RAIL_SPACE / 2 -
+              JUNCTION_SIZE / 2,
+            y:
+              contentTop +
+              GROUP_PADDING +
+              (stackedHeight - JUNCTION_SIZE) / 2,
+          };
+      const mergePosition = horizontalChildren
+        ? {
+            x: size.width / 2 - JUNCTION_SIZE / 2,
+            y:
+              contentTop +
+              GROUP_PADDING +
+              PARALLEL_RAIL_SPACE +
+              tallestChild +
+              PARALLEL_RAIL_SPACE / 2 -
+              JUNCTION_SIZE / 2,
+          }
+        : {
+            x:
+              GROUP_PADDING +
+              PARALLEL_RAIL_SPACE +
+              widestChild +
+              PARALLEL_RAIL_SPACE / 2 -
+              JUNCTION_SIZE / 2,
+            y:
+              contentTop +
+              GROUP_PADDING +
+              (stackedHeight - JUNCTION_SIZE) / 2,
+          };
+      const splitId = addParallelJunction(
+        "split",
+        id,
+        path,
+        splitPosition,
+        junctionDirection,
+      );
+      const mergeId = addParallelJunction(
+        "merge",
+        id,
+        path,
+        mergePosition,
+        junctionDirection,
+      );
+      childIds.forEach((childId) => {
+        edges.push(
+          makeEdge(splitId, childId, undefined, {
+            tone: "parallel",
+            semantic: "branch",
+          }),
+          makeEdge(childId, mergeId, undefined, {
+            tone: "parallel",
+            semantic: "merge",
+          }),
+        );
+      });
+      groupExitIds.set(id, [id]);
     }
     return id;
   }
@@ -421,46 +640,35 @@ function buildCanvasGraph(
     const id = pathId(path);
     if (rendersAsGroup(agent, path)) {
       addGroupNode(agent, path);
-      return [id];
+      return groupExitIds.get(id) ?? [id];
     }
+    const height = nodeHeight(type, readOnly);
     nodes.push({
       id,
       type: "agent",
       position: { x: 0, y: 0 },
+      style: { width: NODE_WIDTH, height },
       data: {
         kind: "agent",
         path,
         agent,
-        title:
-          type === "a2a"
-            ? "远程智能体"
-            : agent.name.trim() || (path.length === 0 ? "主 Agent" : "未命名步骤"),
+        title: canvasAgentTitle(agent),
+        ...canvasAgentCardData(agent),
+        nameMissing: type !== "a2a" && agent.name.trim().length === 0,
         pattern: type,
-        description: agent.description.trim() || PATTERN_COPY[type].description,
         childCount: agent.subAgents.length,
+        layoutWidth: NODE_WIDTH,
+        layoutHeight: height,
       },
     });
-    if (agent.subAgents.length === 0) return [id];
-
-    const exits: string[] = [];
-    agent.subAgents.forEach((child, index) => {
-      const childPath = [...path, index];
-      const childId = pathId(childPath);
-      edges.push(
-        makeEdge(id, childId, "调用", {
-          insert: { parentPath: path, index },
-        }),
-      );
-      exits.push(...addTopLevelNode(child, childPath));
-    });
-    return exits;
+    return [id];
   };
 
   const rootId = pathId([]);
   const exits = addTopLevelNode(root, []);
-  edges.push(makeEdge("terminal-input", rootId));
+  edges.push(makeEdge("terminal-input", rootId, undefined, { figmaFlow: true }));
   exits.forEach((exitId) =>
-    edges.push(makeEdge(exitId, "terminal-output")),
+    edges.push(makeEdge(exitId, "terminal-output", undefined, { figmaFlow: true })),
   );
   return layoutGraph(nodes, edges, direction);
 }
@@ -473,43 +681,55 @@ function layoutGraph(
   const graph = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
   graph.setGraph({
     rankdir: direction === "vertical" ? "TB" : "LR",
-    ranksep: 50,
+    // Invisible React Flow handles inset each endpoint by half their diameter.
+    ranksep: FIGMA_FLOW_LINE_LENGTH + FLOW_HANDLE_SIZE,
     nodesep: 34,
     edgesep: 14,
     marginx: 24,
     marginy: 24,
   });
-  const topLevelIds = new Set(
-    nodes.filter((node) => !node.parentId).map((node) => node.id),
-  );
+  const nodeById = new Map(nodes.map((node) => [node.id, node] as const));
+  const topLevelId = (nodeId: string): string => {
+    let node = nodeById.get(nodeId);
+    while (node?.parentId) {
+      node = nodeById.get(node.parentId);
+    }
+    return node?.id ?? nodeId;
+  };
   nodes.filter((node) => !node.parentId).forEach((node) => {
     const terminal = node.data.kind === "terminal";
+    const groupHeaderAligned = node.type === "group" && direction === "horizontal";
     graph.setNode(node.id, {
       width: terminal
         ? TERMINAL_WIDTH
         : node.data.layoutWidth ?? NODE_WIDTH,
       height: terminal
         ? TERMINAL_HEIGHT
-        : node.data.layoutHeight ?? NODE_HEIGHT,
+        : groupHeaderAligned
+          ? GROUP_HEADER_HEIGHT
+          : node.data.layoutHeight ?? NODE_HEIGHT,
     });
   });
-  edges
-    .filter(
-      (edge) => topLevelIds.has(edge.source) && topLevelIds.has(edge.target),
-    )
-    .forEach((edge) => graph.setEdge(edge.source, edge.target));
+  edges.forEach((edge) => {
+    const source = topLevelId(edge.source);
+    const target = topLevelId(edge.target);
+    if (source !== target) graph.setEdge(source, target);
+  });
   dagre.layout(graph);
   return {
     nodes: nodes.map((node) => {
       if (node.parentId) return node;
       const position = graph.node(node.id) as { x: number; y: number };
       const terminal = node.data.kind === "terminal";
+      const groupHeaderAligned = node.type === "group" && direction === "horizontal";
       const width = terminal
         ? TERMINAL_WIDTH
         : node.data.layoutWidth ?? NODE_WIDTH;
       const height = terminal
         ? TERMINAL_HEIGHT
-        : node.data.layoutHeight ?? NODE_HEIGHT;
+        : groupHeaderAligned
+          ? GROUP_HEADER_HEIGHT
+          : node.data.layoutHeight ?? NODE_HEIGHT;
       return {
         ...node,
         position: { x: position.x - width / 2, y: position.y - height / 2 },
@@ -543,15 +763,17 @@ function InsertStepEdge({
 }: EdgeProps<CanvasEdge>) {
   const actions = useContext(CanvasActionsContext);
   const [showInsert, setShowInsert] = useState(false);
-  const [edgePath, labelX, labelY] = getSmoothStepPath({
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    sourcePosition,
-    targetPosition,
-    offset: data?.loop ? 28 : 20,
-  });
+  const [edgePath, labelX, labelY] = data?.figmaFlow
+    ? getStraightPath({ sourceX, sourceY, targetX, targetY })
+    : getSmoothStepPath({
+        sourceX,
+        sourceY,
+        targetX,
+        targetY,
+        sourcePosition,
+        targetPosition,
+        offset: data?.loop ? 28 : 20,
+      });
   return (
     <>
       <BaseEdge
@@ -605,6 +827,72 @@ function InsertStepEdge({
   );
 }
 
+function AgentCardContent({
+  data,
+  onAdd,
+}: {
+  data: CanvasNodeData;
+  onAdd?: () => void;
+}) {
+  const patternLabel = PATTERN_COPY[data.pattern ?? "llm"].label;
+  const type = data.pattern ?? "llm";
+  const showModelCapabilities = showsModelCapabilities(type);
+  return (
+    <div className={`abc-agent-card is-${type}`}>
+      <div className="abc-agent-card-head">
+        <span className="abc-agent-card-mark" title={patternLabel}>
+          <CanvasAgentTypeIcon type={type} />
+        </span>
+        <span className="abc-agent-card-identity">
+          <strong
+            className={data.nameMissing ? "is-name-missing" : undefined}
+            title={data.title}
+          >
+            {data.title}
+          </strong>
+          {showModelCapabilities && (
+            <span className="abc-agent-card-model" title={data.modelLabel}>
+              {data.modelLabel}
+            </span>
+          )}
+        </span>
+      </div>
+      <div className="abc-agent-card-main">
+        <p title={data.description}>{data.description}</p>
+        {onAdd && (
+          <Button
+            type="button"
+            color="secondary"
+            variant="outline"
+            size="sm"
+            pill={false}
+            className="abc-agent-card-add nodrag nopan"
+            onClick={(event) => {
+              event.stopPropagation();
+              onAdd();
+            }}
+          >
+            <Plus />
+            添加子 Agent
+          </Button>
+        )}
+      </div>
+      {showModelCapabilities && (
+        <div className="abc-agent-card-stats" aria-label="Agent 能力统计">
+          <span title={`技能 ${data.skillCount ?? 0} 个`}>
+            <AgentSkillCountIcon />
+            <b>{data.skillCount ?? 0}</b>
+          </span>
+          <span title={`工具 ${data.toolCount ?? 0} 个`}>
+            <AgentToolCountIcon />
+            <b>{data.toolCount ?? 0}</b>
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AgentCanvasNode({ data, selected }: NodeProps<CanvasNode>) {
   const actions = useContext(CanvasActionsContext);
   const direction = useContext(CanvasDirectionContext);
@@ -612,8 +900,6 @@ function AgentCanvasNode({ data, selected }: NodeProps<CanvasNode>) {
   const sourcePosition = direction === "vertical" ? Position.Bottom : Position.Right;
   const loopPosition = direction === "vertical" ? Position.Right : Position.Bottom;
   const type = data.pattern ?? "llm";
-  const copy = PATTERN_COPY[type];
-  const Icon = copy.icon;
   return (
     <div
       className={`abc-node is-${type}${
@@ -621,16 +907,14 @@ function AgentCanvasNode({ data, selected }: NodeProps<CanvasNode>) {
       }${selected ? " is-selected" : ""}`}
     >
       <Handle type="target" position={targetPosition} className="abc-handle" />
-      {type !== "llm" && (
-        <span className="abc-node-icon"><Icon /></span>
-      )}
-      <span className="abc-node-copy">
-        <span className="abc-node-meta">
-          <span>{copy.label}</span>
-        </span>
-        <strong>{data.title}</strong>
-        <small>{data.description}</small>
-      </span>
+      <AgentCardContent
+        data={data}
+        onAdd={
+          actions && data.path !== undefined && type !== "a2a"
+            ? () => actions.onAdd(data.path!)
+            : undefined
+        }
+      />
       {actions && data.path !== undefined && data.path.length > 0 && (
         <button
           type="button"
@@ -674,87 +958,70 @@ function AgentGroupNode({ data, selected }: NodeProps<CanvasNode>) {
   const loopPosition = direction === "vertical" ? Position.Right : Position.Bottom;
   const type = data.pattern ?? "sequential";
   const childCount = data.childCount ?? 0;
-  const addLabel =
-    type === "llm"
-      ? "添加子 Agent"
-      : type === "parallel"
-      ? "添加一个同时处理的步骤"
-      : type === "loop"
-        ? "添加循环步骤"
-        : "添加下一个步骤";
+  const showModelCapabilities = showsModelCapabilities(type);
   return (
     <div
       className={`abc-group is-${type}${
-        data.compactEmptyGroup ? " is-compact-empty" : ""
+        childCount > 0 ? " has-children" : " is-empty"
+      }${
+        data.containedIn ? ` is-contained-in-${data.containedIn}` : ""
       }${selected ? " is-selected" : ""}`}
     >
       <Handle type="target" position={targetPosition} className="abc-handle" />
+      <div
+        className="abc-group-body"
+        aria-label={`${data.title} 的子 Agent 容器`}
+      />
       <header className="abc-group-head">
-        <span>
-          <strong title={data.title}>{data.title}</strong>
-          <small>{data.description}</small>
+        <span className="abc-group-head-mark" aria-hidden="true">
+          <CanvasAgentTypeIcon type={type} />
+        </span>
+        <span className="abc-group-head-identity">
+          <strong
+            className={data.nameMissing ? "is-name-missing" : undefined}
+            title={data.title}
+          >
+            {data.title}
+          </strong>
+          {showModelCapabilities && (
+            <small title={data.modelLabel}>{data.modelLabel}</small>
+          )}
         </span>
       </header>
-      {actions &&
-        data.path !== undefined &&
-        childCount > 0 &&
-        type !== "parallel" && (
-        <div className="abc-group-boundary-actions">
-          <button
+      <div className="abc-group-summary">
+        <p className="abc-group-description" title={data.description}>
+          {data.description}
+        </p>
+        {actions && data.path !== undefined && (
+          <Button
             type="button"
-            className="abc-group-boundary-add is-start nodrag nopan"
-            aria-label="添加到最前"
-            title="添加到最前"
-            onClick={(event) => {
-              event.stopPropagation();
-              actions.onInsert(data.path!, 0);
-            }}
-          >
-            <Plus />
-          </button>
-          <button
-            type="button"
-            className="abc-group-boundary-add is-end nodrag nopan"
-            aria-label="添加到最后"
-            title="添加到最后"
+            color="secondary"
+            variant="outline"
+            size="sm"
+            pill={false}
+            className="abc-group-summary-add nodrag nopan"
             onClick={(event) => {
               event.stopPropagation();
               actions.onAdd(data.path!);
             }}
           >
             <Plus />
-          </button>
-        </div>
-      )}
-      {actions &&
-        data.path !== undefined &&
-        childCount > 0 &&
-        type === "parallel" && (
-        <button
-          type="button"
-          className="abc-group-add abc-group-add-bottom nodrag nopan"
-          onClick={(event) => {
-            event.stopPropagation();
-            actions.onAdd(data.path!);
-          }}
-        >
-          <Plus />
-          <span>{addLabel}</span>
-        </button>
-      )}
-      {actions && data.path !== undefined && childCount === 0 && (
-        <button
-          type="button"
-          className="abc-group-add abc-group-add-empty nodrag nopan"
-          onClick={(event) => {
-            event.stopPropagation();
-            actions.onAdd(data.path!);
-          }}
-        >
-          <Plus />
-          <span>{addLabel}</span>
-        </button>
-      )}
+            添加子 Agent
+          </Button>
+        )}
+        {showModelCapabilities && (
+          <div className="abc-group-summary-stats" aria-label="Agent 能力统计">
+            <span title={`技能 ${data.skillCount ?? 0} 个`}>
+              <AgentSkillCountIcon />
+              <b>{data.skillCount ?? 0}</b>
+            </span>
+            <span title={`工具 ${data.toolCount ?? 0} 个`}>
+              <AgentToolCountIcon />
+              <b>{data.toolCount ?? 0}</b>
+            </span>
+          </div>
+        )}
+      </div>
       {actions && data.path !== undefined && data.path.length > 0 && (
         <button
           type="button"
@@ -790,16 +1057,38 @@ function AgentGroupNode({ data, selected }: NodeProps<CanvasNode>) {
   );
 }
 
+function ParallelJunctionNode({ data }: NodeProps<CanvasNode>) {
+  const direction = data.junctionDirection ?? "vertical";
+  const split = data.junctionKind === "split";
+  const targetPosition = direction === "vertical" ? Position.Top : Position.Left;
+  const sourcePosition = direction === "vertical" ? Position.Bottom : Position.Right;
+  return (
+    <div
+      className={`abc-junction is-${split ? "split" : "merge"} is-${direction}`}
+      aria-label={data.title}
+    >
+      <Handle type="target" position={targetPosition} className="abc-handle" />
+      <span className="abc-junction-mark" aria-hidden="true" />
+      <span className="abc-junction-label">{split ? "分发" : "汇合"}</span>
+      <Handle type="source" position={sourcePosition} className="abc-handle" />
+    </div>
+  );
+}
+
 function TerminalNode({ data }: NodeProps<CanvasNode>) {
   const direction = useContext(CanvasDirectionContext);
+  const input = data.terminalKind === "input";
   return (
-    <div className="abc-terminal">
+    <div className={`abc-terminal is-${input ? "input" : "output"}`}>
       <Handle
         type="target"
         position={direction === "vertical" ? Position.Top : Position.Left}
         className="abc-handle"
       />
-      <span>{data.title}</span>
+      <span className="abc-terminal-mark" aria-hidden="true">
+        {input ? <TerminalUserRequestIcon /> : <TerminalFinalReplyIcon />}
+      </span>
+      <span className="abc-terminal-title">{data.title}</span>
       <Handle
         type="source"
         position={direction === "vertical" ? Position.Bottom : Position.Right}
@@ -812,6 +1101,7 @@ function TerminalNode({ data }: NodeProps<CanvasNode>) {
 const NODE_TYPES = {
   agent: AgentCanvasNode,
   group: AgentGroupNode,
+  junction: ParallelJunctionNode,
   terminal: TerminalNode,
 };
 
@@ -1009,7 +1299,7 @@ function AgentBuildCanvasInner({
   onDelete,
   readOnly = false,
   interactivePreview = false,
-  direction = "horizontal",
+  direction = "vertical",
 }: AgentBuildCanvasProps) {
   const initialGraph = useMemo(
     () => buildCanvasGraph(draft, direction, readOnly),
@@ -1024,6 +1314,7 @@ function AgentBuildCanvasInner({
     `${direction}:${readOnly ? "readonly" : "editable"}:${structureKey(draft)}`,
   );
   const canvasRef = useRef<HTMLDivElement>(null);
+  const fitFrameRef = useRef<number | null>(null);
   const { fitView } = useReactFlow<CanvasNode, CanvasEdge>();
   const currentGraph = useMemo(
     () => buildCanvasGraph(draft, direction, readOnly),
@@ -1041,22 +1332,27 @@ function AgentBuildCanvasInner({
         : { padding: 0.14, minZoom: 0.42, maxZoom: 1.1 },
     [compactCanvas, readOnly],
   );
+  const cancelScheduledFit = useCallback(() => {
+    if (fitFrameRef.current === null) return;
+    window.cancelAnimationFrame(fitFrameRef.current);
+    fitFrameRef.current = null;
+  }, []);
   const fitAfterLayout = useCallback((attempt = 0) => {
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        const container = canvasRef.current;
-        if (
-          container &&
-          (container.clientWidth === 0 || container.clientHeight === 0) &&
-          attempt < 8
-        ) {
-          fitAfterLayout(attempt + 1);
-          return;
-        }
-        void fitView(fitOptions);
-      });
+    cancelScheduledFit();
+    fitFrameRef.current = window.requestAnimationFrame(() => {
+      fitFrameRef.current = null;
+      const container = canvasRef.current;
+      if (
+        container &&
+        (container.clientWidth === 0 || container.clientHeight === 0) &&
+        attempt < 8
+      ) {
+        fitAfterLayout(attempt + 1);
+        return;
+      }
+      void fitView(fitOptions);
     });
-  }, [fitOptions, fitView]);
+  }, [cancelScheduledFit, fitOptions, fitView]);
 
   useEffect(() => {
     const query = window.matchMedia("(max-width: 860px)");
@@ -1113,12 +1409,16 @@ function AgentBuildCanvasInner({
   }, [currentGraph, fitAfterLayout, nodesInitialized]);
 
   useEffect(() => {
-    if (!readOnly || !canvasRef.current) return;
+    const container = canvasRef.current;
+    if (!container) return;
     const observer = new ResizeObserver(() => fitAfterLayout());
-    observer.observe(canvasRef.current);
+    observer.observe(container);
     fitAfterLayout();
-    return () => observer.disconnect();
-  }, [fitAfterLayout, readOnly]);
+    return () => {
+      observer.disconnect();
+      cancelScheduledFit();
+    };
+  }, [cancelScheduledFit, fitAfterLayout]);
 
   const canvasActions = useMemo(
     () =>
@@ -1162,7 +1462,7 @@ function AgentBuildCanvasInner({
           maxZoom={1.6}
           proOptions={{ hideAttribution: true }}
         >
-          <Background gap={20} size={1.2} color="hsl(34 20% 82%)" />
+          <Background gap={18} size={2} color="#D8D8D8" />
           {(!readOnly || interactivePreview) && (
             <Controls showInteractive={false} />
           )}

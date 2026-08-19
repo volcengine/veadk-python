@@ -183,7 +183,7 @@ test("main panel fills the shell with equal outer spacing and no global navbar",
   );
   assert.match(
     stylesSource,
-    /\.main\s*\{[\s\S]*?flex:\s*1;[\s\S]*?margin:\s*10px;/,
+    /\.main\s*\{[\s\S]*?flex:\s*1;[\s\S]*?margin:\s*0;/,
   );
   assert.doesNotMatch(appSource, /<Navbar\b/);
   assert.doesNotMatch(appSource, /<DeploymentTaskStatus\b/);
