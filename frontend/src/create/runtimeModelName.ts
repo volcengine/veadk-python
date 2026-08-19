@@ -128,6 +128,8 @@ function cloudDraftWithDefaults(
     },
     shortTermBackend: draft.shortTermBackend ?? defaults.shortTermBackend,
     longTermBackend: draft.longTermBackend ?? defaults.longTermBackend,
+    longTermMemoryIndex:
+      draft.longTermMemoryIndex ?? defaults.longTermMemoryIndex,
     autoSaveSession: draft.autoSaveSession ?? defaults.autoSaveSession,
     knowledgebaseBackend:
       draft.knowledgebaseBackend ?? defaults.knowledgebaseBackend,

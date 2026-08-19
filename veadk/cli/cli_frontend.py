@@ -55,6 +55,7 @@ from veadk.cli.studio_model_catalog import (
 from veadk.cli.studio_telemetry import studio_telemetry_config
 from veadk.utils.cloud_provider import (
     DEFAULT_BYTEPLUS_REGION,
+    DEFAULT_BYTEPLUS_VIKING_MEMORY_HOST,
     DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION,
     DEFAULT_CLOUD_PROVIDER,
     CloudProvider,
@@ -264,6 +265,27 @@ def _candidate_vikingdb_projects(project: str | None) -> list[str | None]:
             continue
         seen.add(key)
         result.append(normalized or None)
+    return result
+
+
+def _candidate_viking_memory_projects(project: str | None) -> list[str]:
+    """Return likely VikingDB Memory projects to list when Studio has no picker."""
+    explicit = (project or "").strip()
+    if explicit:
+        return [explicit]
+    candidates = [
+        os.getenv("DATABASE_VIKINGMEM_PROJECT"),
+        os.getenv("VEADK_STUDIO_PROJECT"),
+        "default",
+    ]
+    result: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = (candidate or "").strip() or "default"
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
     return result
 
 
@@ -7690,6 +7712,11 @@ def _run_frontend_server(
             )
         return (f"api-knowledgebase.mlp.{region}.volces.com", "https")
 
+    def _viking_memory_host(region: str) -> tuple[str, str]:
+        if provider == "byteplus":
+            return (DEFAULT_BYTEPLUS_VIKING_MEMORY_HOST, "https")
+        return (f"api-knowledgebase.mlp.{region}.volces.com", "https")
+
     def _collection_attr(collection: Any, name: str, fallback: Any = "") -> Any:
         value = getattr(collection, name, None)
         if value is not None:
@@ -7714,6 +7741,146 @@ def _run_frontend_server(
             return
         seen.add(key)
         items.append(item)
+
+    def _viking_memory_response_items(response: Any) -> list[Any]:
+        if not isinstance(response, dict):
+            return []
+        result = (
+            response.get("Result")
+            or response.get("result")
+            or response.get("Data")
+            or response.get("data")
+            or response
+        )
+        if isinstance(result, list):
+            return result
+        if not isinstance(result, dict):
+            return []
+        for key in (
+            "Collections",
+            "collections",
+            "CollectionList",
+            "collection_list",
+            "Items",
+            "items",
+            "List",
+            "list",
+            "ResultList",
+            "result_list",
+        ):
+            value = result.get(key)
+            if isinstance(value, list):
+                return value
+        return []
+
+    def _viking_memory_response_total(response: Any, item_count: int) -> int:
+        if not isinstance(response, dict):
+            return item_count
+        result = (
+            response.get("Result")
+            or response.get("result")
+            or response.get("Data")
+            or response.get("data")
+            or response
+        )
+        if not isinstance(result, dict):
+            return item_count
+        for key in ("TotalCount", "total_count", "Total", "total"):
+            try:
+                return int(result.get(key) or item_count)
+            except (TypeError, ValueError):
+                continue
+        return item_count
+
+    def _viking_memory_field(collection: Any, *names: str) -> Any:
+        for name in names:
+            if isinstance(collection, dict):
+                value = collection.get(name)
+                if value is not None:
+                    return value
+                snake = re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+                value = collection.get(snake)
+                if value is not None:
+                    return value
+            value = getattr(collection, name, None)
+            if value is not None:
+                return value
+            snake = re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+            value = getattr(collection, snake, None)
+            if value is not None:
+                return value
+        return None
+
+    def _normalize_viking_memory_item(
+        collection: Any,
+        *,
+        project_name: str,
+        region: str,
+    ) -> dict[str, Any] | None:
+        name = str(
+            _viking_memory_field(
+                collection,
+                "CollectionName",
+                "collection_name",
+                "Name",
+                "name",
+            )
+            or ""
+        ).strip()
+        if not name:
+            return None
+        memory_types = _viking_memory_field(
+            collection,
+            "BuiltinEventTypes",
+            "builtin_event_types",
+            "MemoryTypes",
+            "memory_types",
+        )
+        if isinstance(memory_types, str):
+            memory_types = [
+                item.strip() for item in memory_types.split(",") if item.strip()
+            ]
+        elif not isinstance(memory_types, list):
+            memory_types = []
+        return {
+            "id": name,
+            "name": name,
+            "description": str(
+                _viking_memory_field(collection, "Description", "description") or ""
+            ),
+            "projectName": str(
+                _viking_memory_field(
+                    collection,
+                    "ProjectName",
+                    "project_name",
+                    "Project",
+                    "project",
+                )
+                or project_name
+            ),
+            "region": region,
+            "resourceId": str(
+                _viking_memory_field(
+                    collection,
+                    "ResourceId",
+                    "resource_id",
+                    "ID",
+                    "id",
+                )
+                or ""
+            ),
+            "updatedAt": str(
+                _viking_memory_field(
+                    collection,
+                    "UpdateTime",
+                    "update_time",
+                    "UpdatedAt",
+                    "updated_at",
+                )
+                or ""
+            ),
+            "memoryTypes": memory_types,
+        }
 
     def _agentkit_viking_index(name: str, provider_knowledge_id: str) -> str:
         provider_id = (provider_knowledge_id or "").strip()
@@ -7874,6 +8041,131 @@ def _run_frontend_server(
                     break
                 page_number += 1
         return items
+
+    def _list_viking_memory_collections(
+        *,
+        access_key: str,
+        secret_key: str,
+        session_token: str | None,
+        region: str,
+        project: str | None,
+    ) -> list[dict[str, Any]]:
+        from veadk.integrations.ve_viking_db_memory.ve_viking_db_memory import (
+            VikingDBMemoryClient,
+        )
+
+        host, scheme = _viking_memory_host(region)
+        client = VikingDBMemoryClient(
+            host=host,
+            region=region,
+            ak=access_key,
+            sk=secret_key,
+            sts_token=session_token or "",
+            scheme=scheme,
+        )
+
+        items: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        attempts = 0
+        failures = 0
+        page_size = 100
+        for project_name in _candidate_viking_memory_projects(project):
+            page_number = 1
+            for _ in range(100):
+                attempts += 1
+                try:
+                    response = client.list_collections(
+                        project=project_name,
+                        page_number=page_number,
+                        page_size=page_size,
+                    )
+                except Exception:
+                    failures += 1
+                    logger.debug(
+                        "skip VikingDB memory project %s in %s",
+                        project_name,
+                        region,
+                        exc_info=True,
+                    )
+                    break
+                collections = _viking_memory_response_items(response)
+                for collection in collections:
+                    item = _normalize_viking_memory_item(
+                        collection,
+                        project_name=project_name,
+                        region=region,
+                    )
+                    if not item:
+                        continue
+                    key = (item["projectName"], item["region"], item["id"])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    items.append(item)
+                total_count = _viking_memory_response_total(
+                    response,
+                    len(collections),
+                )
+                if (
+                    not collections
+                    or page_number * page_size >= total_count
+                    or len(collections) < page_size
+                ):
+                    break
+                page_number += 1
+        if attempts > 0 and failures == attempts and not items:
+            raise RuntimeError("all VikingDB memory list requests failed")
+        return items
+
+    @app.get("/web/viking-memories")
+    async def _web_list_viking_memories(
+        region: str = "",
+        project: str = "",
+    ):
+        """List VikingDB Memory collections visible to server creds."""
+        region = _coerce_cloud_region(region)
+
+        try:
+            ak, sk, token = _resolve_ve_credentials()
+        except HTTPException:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Server BytePlus credentials not configured "
+                    "(set BYTEPLUS_ACCESS_KEY/BYTEPLUS_SECRET_KEY)."
+                    if provider == "byteplus"
+                    else "Server Volcengine credentials not configured "
+                    "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY)."
+                ),
+            )
+
+        project_name = (project or "").strip() or None
+        try:
+            items = await asyncio.to_thread(
+                _list_viking_memory_collections,
+                access_key=ak,
+                secret_key=sk,
+                session_token=token,
+                region=region,
+                project=project_name,
+            )
+        except Exception as e:
+            logger.warning(
+                f"List VikingDB memories error for {region}: {e}",
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="暂时无法加载 VikingDB 记忆库，请稍后重试。",
+            ) from e
+
+        items.sort(
+            key=lambda item: (
+                str(item.get("projectName") or ""),
+                str(item.get("name") or ""),
+            )
+        )
+        return {"items": items, "totalCount": len(items)}
 
     @app.get("/web/viking-knowledgebases")
     async def _web_list_viking_knowledgebases(

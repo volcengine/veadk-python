@@ -392,6 +392,21 @@ def test_openviking_long_term_memory_generates_required_runtime_env() -> None:
     assert files["requirements.txt"].splitlines()[0] == _veadk_requirement(set())
 
 
+def test_viking_long_term_memory_uses_selected_index() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="ltm-viking",
+            memory=MemoryConfig(longTerm=True),
+            longTermBackend="viking",
+            longTermMemoryIndex="existing_memory",
+        )
+    )
+    agent_py = _files(project)["agents/ltm_viking/agent.py"]
+
+    assert 'LongTermMemory(backend="viking", index="existing_memory"' in agent_py
+    _assert_python_files_compile(project)
+
+
 @pytest.mark.parametrize("backend", KB_BACKENDS, ids=lambda item: item.id)
 def test_every_knowledgebase_backend_generates_code_env_and_dependency(
     backend: BackendOption,

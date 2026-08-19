@@ -14,6 +14,8 @@ export interface RuntimeEnvSpec {
   readOnly?: boolean;
   /** Secret is resolved by the Studio server and never sent to the browser. */
   serverManaged?: boolean;
+  /** Value is managed by Studio and should not be shown as a user-facing field. */
+  hidden?: boolean;
 }
 
 export interface RuntimeEnvSelection {
@@ -67,12 +69,14 @@ export function runtimeEnvDisplayRows(
   values: Record<string, string>,
 ): RuntimeEnvDisplayRow[] {
   const deduped = runtimeEnvConfiguration([{ env: specs }]).specs;
-  return deduped.map((spec) => ({
-    ...spec,
-    value: spec.serverManaged
-      ? spec.placeholder || "由服务端注入"
-      : runtimeEnvValue(spec, values),
-  }));
+  return deduped
+    .filter((spec) => !spec.hidden)
+    .map((spec) => ({
+      ...spec,
+      value: spec.serverManaged
+        ? spec.placeholder || "由服务端注入"
+        : runtimeEnvValue(spec, values),
+    }));
 }
 
 /** Convert only the currently active feature settings into runtime env rows. */
