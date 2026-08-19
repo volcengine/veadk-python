@@ -2233,6 +2233,18 @@ def _run_frontend_server(
                 "SANDBOX_CHAT_CODEX_SNAPSHOT",
                 True,
             ),
+            (
+                "deepseek_harness",
+                "DeepSeek Harness Sandbox",
+                "SANDBOX_CHAT_CODEX",
+                False,
+            ),
+            (
+                "deepseek_harness_snapshot",
+                "DeepSeek Harness Sandbox",
+                "SANDBOX_CHAT_CODEX_SNAPSHOT",
+                True,
+            ),
             ("openclaw", "OpenClaw Sandbox", "SANDBOX_CHAT_OPENCLAW", False),
             (
                 "openclaw_snapshot",
