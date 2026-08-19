@@ -22,10 +22,12 @@ from agentkit.sdk.tools import types as tools_types
 from pydantic import Field
 
 SESSION_DISPLAY_NAME_MAX_LENGTH = 40
+SESSION_METADATA_VALUE_MAX_BYTES = 63
 SESSION_DISPLAY_NAME_METADATA_KEY = "veadk_display_name"
 SESSION_CREATOR_NAME_METADATA_KEY = "veadk_creator_name"
 SESSION_AGENT_KIND_METADATA_KEY = "veadk_agent_kind"
 SESSION_USERNAME_METADATA_KEY = "Username"
+_SESSION_DISPLAY_NAME_TRUNCATION_MARK = "…"
 
 
 class _SessionMetadata(tools_types.ToolsBaseModel):
@@ -71,6 +73,23 @@ def _model_supports_alias(model: Any, alias: str) -> bool:
     return any(getattr(field, "alias", None) == alias for field in fields.values())
 
 
+def session_display_name_metadata_value(value: str) -> str:
+    """Fit a display name into VeFaaS metadata without splitting UTF-8 text."""
+    if len(value.encode("utf-8")) <= SESSION_METADATA_VALUE_MAX_BYTES:
+        return value
+    marker_bytes = len(_SESSION_DISPLAY_NAME_TRUNCATION_MARK.encode("utf-8"))
+    prefix_byte_limit = SESSION_METADATA_VALUE_MAX_BYTES - marker_bytes
+    prefix: list[str] = []
+    prefix_bytes = 0
+    for character in value:
+        character_bytes = len(character.encode("utf-8"))
+        if prefix_bytes + character_bytes > prefix_byte_limit:
+            break
+        prefix.append(character)
+        prefix_bytes += character_bytes
+    return "".join(prefix) + _SESSION_DISPLAY_NAME_TRUNCATION_MARK
+
+
 def build_create_session_request(
     *,
     tool_id: str,
@@ -84,6 +103,7 @@ def build_create_session_request(
     """Build a native or compatibility CreateSession request."""
     metadata = []
     if display_name:
+        display_name = session_display_name_metadata_value(display_name)
         metadata.append(
             _SessionMetadata(
                 Key=SESSION_DISPLAY_NAME_METADATA_KEY,

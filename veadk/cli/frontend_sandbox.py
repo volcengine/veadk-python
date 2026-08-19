@@ -43,6 +43,7 @@ from veadk.cli.agentkit_session_metadata import (
     session_agent_kind,
     session_creator_name,
     session_display_name,
+    session_display_name_metadata_value,
     session_username,
 )
 from veadk.cli.codex_app_server import (
@@ -1212,6 +1213,7 @@ class AgentkitSandboxGateway:
         agent_kind: str = "",
     ) -> SandboxCloudSession:
         user_session_id = _build_studio_user_session_id()
+        display_name = session_display_name_metadata_value(display_name)
         regions = self._region_candidates or ("",)
         for index, region in enumerate(regions):
             request = build_create_session_request(
