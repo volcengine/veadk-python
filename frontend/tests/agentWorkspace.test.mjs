@@ -586,6 +586,33 @@ test("runtime updates use the Agent selected in management instead of the active
   assert.doesNotMatch(handler, /draftEnvValues|selectedAgentUpdateDraft\?\.draft/);
   assert.match(handler, /hydrateRuntimeModelSelection\(/);
   assert.match(handler, /network:\s*capability\.runtime\.network/);
+  assert.match(
+    handler,
+    /exitAgentDetailContext\(\)[\s\S]*?setCreateView\("custom"\)/,
+  );
+});
+
+test("agent detail actions clear the detail stack before opening another view", () => {
+  assert.match(
+    appSource,
+    /const exitAgentDetailContext = useCallback\(\(\) => \{[\s\S]*?popStudioPage\("agent-detail"\)[\s\S]*?setAgentDetailTarget\(null\)[\s\S]*?setMyAgents\(false\)[\s\S]*?setManageAgents\(false\)/,
+  );
+  assert.match(
+    appSource,
+    /const refreshCurrentAgentAndStartNewChat[\s\S]*?exitAgentDetailContext\(\)[\s\S]*?startNewChat\(\)/,
+  );
+  assert.match(
+    appSource,
+    /async function openFeedbackCaseInStudio[\s\S]*?exitAgentDetailContext\(\)[\s\S]*?await pickSession/,
+  );
+  assert.match(
+    appSource,
+    /onCreateAgent=\{\(\) => \{[\s\S]*?exitAgentDetailContext\(\)[\s\S]*?setAddMenu\(true\)/,
+  );
+  assert.match(
+    appSource,
+    /onEditDraft=\{\(item\) => \{[\s\S]*?exitAgentDetailContext\(\)[\s\S]*?setCreateView\("custom"\)/,
+  );
 });
 
 test("runtime update capability checks ignore aborted and stale selections", () => {
@@ -633,7 +660,7 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   );
   assert.match(
     appSource,
-    /deletedRuntimeIds\.has\(agentDetailTarget\.runtime\.runtimeId\)[\s\S]*?setManageAgents\(false\)[\s\S]*?setAgentDetailTarget\(null\)[\s\S]*?setMyAgents\(true\)/,
+    /deletedRuntimeIds\.has\(agentDetailTarget\.runtime\.runtimeId\)[\s\S]*?exitAgentDetailContext\(\)[\s\S]*?setMyAgents\(true\)/,
   );
   assert.match(appSource, /onDeleteAgents=\{deleteWorkspaceAgents\}/);
   assert.match(appSource, /const deleteWorkspaceDrafts = useCallback/);
