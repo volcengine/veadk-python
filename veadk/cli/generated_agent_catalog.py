@@ -31,6 +31,7 @@ class EnvVar:
     required: bool
     placeholder: str = ""
     comment: str = ""
+    hidden: bool = False
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,7 @@ def env_for_provider(provider: str, env: tuple[EnvVar, ...]) -> tuple[EnvVar, ..
             item.required,
             placeholders.get(item.key, item.placeholder),
             item.comment,
+            item.hidden,
         )
         for item in env
     )
@@ -140,6 +142,29 @@ VIKING_KB_ENV = (
     EnvVar("DATABASE_VIKING_REGION", False),
     EnvVar("DATABASE_VIKING_COLLECTION_KIND", False),
     EnvVar("DATABASE_VIKING_RESOURCE_ID", False),
+)
+VIKING_MEMORY_ENV = (
+    EnvVar(
+        "DATABASE_VIKINGMEM_PROJECT",
+        False,
+        "default",
+        "VikingDB 记忆库项目",
+        hidden=True,
+    ),
+    EnvVar(
+        "DATABASE_VIKING_REGION",
+        False,
+        None,
+        "VikingDB 记忆库地域",
+        hidden=True,
+    ),
+    EnvVar(
+        "DATABASE_VIKINGMEM_MEMORY_TYPE",
+        False,
+        "sys_event_v1,sys_profile_v1",
+        "记忆类型",
+        hidden=True,
+    ),
 )
 
 A2A_REGISTRY_ENV = (
@@ -339,7 +364,7 @@ KB_BACKENDS = (
         ),
         pip_extra="extensions",
     ),
-    BackendOption("viking", env=VOLC_ENV),
+    BackendOption("viking", env=VIKING_MEMORY_ENV),
     BackendOption(
         "context_search",
         env=(

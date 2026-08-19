@@ -65,6 +65,10 @@ const vikingKnowledgebasesSource = readFileSync(
   new URL("../src/create/vikingKnowledgebases.ts", import.meta.url),
   "utf8",
 );
+const vikingMemoriesSource = readFileSync(
+  new URL("../src/create/vikingMemories.ts", import.meta.url),
+  "utf8",
+);
 
 test("recognizes only the selected cloud's exact official model endpoint", () => {
   assert.equal(
@@ -230,6 +234,32 @@ test("maps active feature settings to VeADK runtime env rows", () => {
   );
 });
 
+test("keeps hidden runtime env values out of user-facing rows", () => {
+  const specs = [
+    {
+      key: "DATABASE_VIKINGMEM_PROJECT",
+      required: false,
+      placeholder: "default",
+      hidden: true,
+    },
+    { key: "DATABASE_REDIS_HOST", required: true },
+  ];
+
+  assert.deepEqual(runtimeEnvDisplayRows(specs, {}), [
+    { key: "DATABASE_REDIS_HOST", required: true, value: "" },
+  ]);
+  assert.deepEqual(
+    runtimeEnvVars(specs, {
+      DATABASE_VIKINGMEM_PROJECT: "agent-project",
+      DATABASE_REDIS_HOST: "redis.local",
+    }),
+    [
+      { key: "DATABASE_VIKINGMEM_PROJECT", value: "agent-project" },
+      { key: "DATABASE_REDIS_HOST", value: "redis.local" },
+    ],
+  );
+});
+
 test("keeps runtime env comments on deployment summary rows", () => {
   const rows = runtimeEnvDisplayRows(
     [
@@ -369,6 +399,46 @@ test("declares the Mem0 runtime configuration and database dependency", () => {
     mem0.env.map((env) => env.key),
     ["DATABASE_MEM0_API_KEY", "DATABASE_MEM0_BASE_URL"],
   );
+});
+
+test("declares the VikingDB long-term memory runtime configuration", () => {
+  const viking = LTM_BACKENDS.find((option) => option.id === "viking");
+
+  assert.ok(viking);
+  assert.equal(viking.label, "VikingDB Memory");
+  assert.deepEqual(
+    viking.env.map((env) => [
+      env.key,
+      env.required,
+      env.placeholder ?? "",
+      env.hidden,
+    ]),
+    [
+      ["DATABASE_VIKINGMEM_PROJECT", false, "default", true],
+      ["DATABASE_VIKING_REGION", false, "", true],
+      [
+        "DATABASE_VIKINGMEM_MEMORY_TYPE",
+        false,
+        "sys_event_v1,sys_profile_v1",
+        true,
+      ],
+    ],
+  );
+  assert.deepEqual(runtimeEnvDisplayRows(viking.env, {}), []);
+  assert.deepEqual(
+    runtimeEnvVars(viking.env, {
+      DATABASE_VIKINGMEM_PROJECT: "agent-project",
+      DATABASE_VIKING_REGION: "cn-beijing",
+    }),
+    [
+      { key: "DATABASE_VIKINGMEM_PROJECT", value: "agent-project" },
+      { key: "DATABASE_VIKING_REGION", value: "cn-beijing" },
+    ],
+  );
+  assert.match(vikingMemoriesSource, /\/web\/viking-memories/);
+  assert.match(customCreateSource, /function VikingMemorySelect/);
+  assert.match(customCreateSource, /longTermMemoryIndex:\s*memory\.id/);
+  assert.match(customCreateSource, /DATABASE_VIKINGMEM_PROJECT/);
 });
 
 test("declares the OpenViking long-term memory runtime configuration", () => {

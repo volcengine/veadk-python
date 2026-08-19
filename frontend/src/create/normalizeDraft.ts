@@ -149,6 +149,7 @@ function parseSubAgents(
       memory: { shortTerm: asBool(mem.shortTerm), longTerm: asBool(mem.longTerm) },
       shortTermBackend: pick(so.shortTermBackend, STM_IDS, "local"),
       longTermBackend: pick(so.longTermBackend, LTM_IDS, "local"),
+      longTermMemoryIndex: asString(so.longTermMemoryIndex),
       autoSaveSession: asBool(so.autoSaveSession),
       knowledgebase: asBool(so.knowledgebase),
       knowledgebaseBackend: pick(
@@ -293,6 +294,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     memory: { shortTerm: asBool(mem.shortTerm), longTerm: asBool(mem.longTerm) },
     shortTermBackend: pick(o.shortTermBackend, STM_IDS, "local"),
     longTermBackend: pick(o.longTermBackend, LTM_IDS, "local"),
+    longTermMemoryIndex: asString(o.longTermMemoryIndex),
     autoSaveSession: asBool(o.autoSaveSession),
     knowledgebase: asBool(o.knowledgebase),
     knowledgebaseBackend: pick(o.knowledgebaseBackend, KB_IDS, DEFAULT_KB_BACKEND),
@@ -342,6 +344,7 @@ export function sanitizeGeneratedDraftCapabilities(
     memory: { shortTerm: false, longTerm: false },
     shortTermBackend: "local",
     longTermBackend: "local",
+    longTermMemoryIndex: "",
     autoSaveSession: false,
     knowledgebase: false,
     knowledgebaseBackend: DEFAULT_KB_BACKEND,
