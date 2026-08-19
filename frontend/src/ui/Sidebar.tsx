@@ -26,6 +26,7 @@ import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
 import { AgentFaceIcon } from "./AgentFaceIcon";
+import { AgentKitPromoCard } from "./AgentKitPromoCard";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
 import defaultSiteLogo from "../assets/logo.svg";
 import byteplusLogo from "../assets/byteplus.svg";
@@ -169,8 +170,12 @@ function SidebarUser({
   access,
   userInfo,
   onSystemInfo,
+  onIssueFeedback,
   onLogout,
-}: Pick<SidebarProps, "access" | "userInfo" | "onSystemInfo" | "onLogout">) {
+}: Pick<
+  SidebarProps,
+  "access" | "userInfo" | "onSystemInfo" | "onIssueFeedback" | "onLogout"
+>) {
   const [open, setOpen] = useState(false);
   const [failedAvatarUrl, setFailedAvatarUrl] = useState("");
   if (!userInfo) return null;
@@ -253,6 +258,16 @@ function SidebarUser({
               }}
             >
               <Info className="icon" /> 系统信息
+            </button>
+            <button
+              type="button"
+              className="account-action"
+              onClick={() => {
+                setOpen(false);
+                onIssueFeedback();
+              }}
+            >
+              <IssueFeedbackIcon className="icon" /> 问题反馈
             </button>
             <button
               type="button"
@@ -658,23 +673,12 @@ export function Sidebar({
       )}
 
       <div className="sidebar-footer">
-        <button
-          type="button"
-          className={`sidebar-feedback${
-            activePage === "feedback" ? " is-active" : ""
-          }`}
-          onClick={onIssueFeedback}
-          aria-label="问题反馈"
-          aria-current={activePage === "feedback" ? "page" : undefined}
-          title="问题反馈"
-        >
-          <IssueFeedbackIcon className="icon" />
-          <span className="sidebar-nav-label">问题反馈</span>
-        </button>
+        <AgentKitPromoCard cloudProvider={cloudProvider} />
         <SidebarUser
           access={access}
           userInfo={userInfo}
           onSystemInfo={onSystemInfo}
+          onIssueFeedback={onIssueFeedback}
           onLogout={onLogout}
         />
       </div>
