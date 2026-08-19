@@ -17,6 +17,7 @@
 import base64
 import itertools
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -419,6 +420,7 @@ def test_system_info_lists_configured_sandbox_tool_ids(
         admins="admin",
         developers="developer",
     )
+    app.state.disable_system_info_codex_model_env_prefetch = True
 
     with TestClient(app) as client:
         response = client.get(
@@ -435,6 +437,12 @@ def test_system_info_lists_configured_sandbox_tool_ids(
         )
 
     assert response.status_code == 200
+    default_model_env_state = {
+        "needsModelEnvUpdate": False,
+        "canUpdateModelEnv": False,
+        "modelEnvError": "",
+        "modelEnvErrorCode": "",
+    }
     assert response.json() == {
         "storage": {
             "tosAddress": "teststudio.tos-cn-beijing.volces.com",
@@ -445,59 +453,297 @@ def test_system_info_lists_configured_sandbox_tool_ids(
                 "label": "Codex Sandbox",
                 "toolId": "tool-codex",
                 "snapshot": False,
+                **default_model_env_state,
             },
             {
                 "kind": "codex_snapshot",
                 "label": "Codex Sandbox",
                 "toolId": "tool-codex-snapshot",
                 "snapshot": True,
+                **default_model_env_state,
             },
             {
                 "kind": "deepseek_harness",
                 "label": "DeepSeek Harness Sandbox",
                 "toolId": "tool-codex",
                 "snapshot": False,
+                **default_model_env_state,
             },
             {
                 "kind": "deepseek_harness_snapshot",
                 "label": "DeepSeek Harness Sandbox",
                 "toolId": "tool-codex-snapshot",
                 "snapshot": True,
+                **default_model_env_state,
             },
             {
                 "kind": "openclaw",
                 "label": "OpenClaw Sandbox",
                 "toolId": "tool-openclaw",
                 "snapshot": False,
+                **default_model_env_state,
             },
             {
                 "kind": "openclaw_snapshot",
                 "label": "OpenClaw Sandbox",
                 "toolId": "tool-openclaw-snapshot",
                 "snapshot": True,
+                **default_model_env_state,
             },
             {
                 "kind": "hermes",
                 "label": "Hermes Sandbox",
                 "toolId": "tool-hermes",
                 "snapshot": False,
+                **default_model_env_state,
             },
             {
                 "kind": "hermes_snapshot",
                 "label": "Hermes Sandbox",
                 "toolId": "tool-hermes-snapshot",
                 "snapshot": True,
+                **default_model_env_state,
             },
             {
                 "kind": "dev",
                 "label": "Dev Sandbox",
                 "toolId": "tool-dev",
                 "snapshot": False,
+                **default_model_env_state,
             },
         ],
     }
     assert developer_denied.status_code == 403
     assert user_denied.status_code == 403
+
+
+def test_system_info_prefetches_codex_model_env_state_on_startup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from veadk.cli.studio_sandbox_tools import StudioCodexModelEnvironmentStatus
+
+    monkeypatch.setenv("SANDBOX_CHAT_CODEX", "tool-codex")
+    monkeypatch.setenv("SANDBOX_CHAT_CODEX_SNAPSHOT", "tool-codex-snapshot")
+    monkeypatch.setenv("VEADK_STUDIO_TOS_BUCKET", "teststudio")
+    monkeypatch.setenv("VEADK_STUDIO_TOS_REGION", "cn-beijing")
+    inspect_calls: list[dict[str, Any]] = []
+
+    def _inspect_codex_env(**kwargs: Any) -> StudioCodexModelEnvironmentStatus:
+        inspect_calls.append(kwargs)
+        if kwargs["tool_id"] == "tool-codex":
+            return StudioCodexModelEnvironmentStatus(
+                needs_model_env_update=True,
+                can_update_model_env=True,
+                model_env_error="",
+                has_model_agent_api_key=True,
+                has_model_agent_base_url=False,
+                has_codex_api_key=True,
+                has_codex_base_url=True,
+            )
+        return StudioCodexModelEnvironmentStatus(
+            needs_model_env_update=True,
+            can_update_model_env=False,
+            model_env_error=(
+                "Codex Sandbox 缺少 CODEX_BASE_URL，无法回填 "
+                "MODEL_AGENT_API_KEY 和 MODEL_AGENT_BASE_URL。"
+            ),
+            has_model_agent_api_key=False,
+            has_model_agent_base_url=False,
+            has_codex_api_key=True,
+            has_codex_base_url=False,
+        )
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.inspect_studio_codex_model_environment",
+        _inspect_codex_env,
+    )
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+        admins="admin",
+    )
+
+    with TestClient(app) as client:
+        for _ in range(100):
+            if len(inspect_calls) >= 2:
+                break
+            time.sleep(0.01)
+        response = client.get(
+            "/web/system-info",
+            headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'admin'})}"},
+        )
+
+    assert [call["tool_id"] for call in inspect_calls] == [
+        "tool-codex",
+        "tool-codex-snapshot",
+    ]
+    assert response.status_code == 200
+    sandbox_tools = {item["kind"]: item for item in response.json()["sandboxTools"]}
+    assert sandbox_tools["codex"]["needsModelEnvUpdate"] is True
+    assert sandbox_tools["codex"]["canUpdateModelEnv"] is True
+    assert sandbox_tools["codex"]["modelEnvError"] == ""
+    assert sandbox_tools["codex"]["modelEnvErrorCode"] == ""
+    assert sandbox_tools["codex_snapshot"]["needsModelEnvUpdate"] is True
+    assert sandbox_tools["codex_snapshot"]["canUpdateModelEnv"] is False
+    assert "CODEX_BASE_URL" in sandbox_tools["codex_snapshot"]["modelEnvError"]
+    assert sandbox_tools["codex_snapshot"]["modelEnvErrorCode"] == ""
+
+
+def test_system_info_prefetch_hides_get_tool_failures_but_reports_error_code(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("SANDBOX_CHAT_CODEX", "tool-codex")
+    monkeypatch.setenv("VEADK_STUDIO_TOS_BUCKET", "teststudio")
+    monkeypatch.setenv("VEADK_STUDIO_TOS_REGION", "cn-beijing")
+    inspect_calls: list[dict[str, Any]] = []
+
+    def _inspect_codex_env(**kwargs: Any) -> object:
+        inspect_calls.append(kwargs)
+        raise RuntimeError("agentkit unavailable")
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.inspect_studio_codex_model_environment",
+        _inspect_codex_env,
+    )
+    caplog.set_level("WARNING", logger="veadk.cli.cli_frontend")
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+        admins="admin",
+    )
+
+    with TestClient(app) as client:
+        for _ in range(100):
+            if inspect_calls:
+                break
+            time.sleep(0.01)
+        response = client.get(
+            "/web/system-info",
+            headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'admin'})}"},
+        )
+
+    assert response.status_code == 200
+    sandbox_tools = {item["kind"]: item for item in response.json()["sandboxTools"]}
+    assert sandbox_tools["codex"]["modelEnvError"] == ""
+    assert sandbox_tools["codex"]["modelEnvErrorCode"] == "codex_model_env_check_failed"
+    assert any(
+        "error_code=codex_model_env_check_failed" in record.getMessage()
+        and "tool_id=tool-codex" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_system_info_updates_configured_codex_sandbox_tool_envs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("SANDBOX_CHAT_CODEX_SNAPSHOT", "tool-codex-snapshot")
+    monkeypatch.setenv("AGENTKIT_SANDBOX_REGION", "cn-shanghai")
+    calls: list[dict[str, Any]] = []
+
+    def _ensure_codex_env(**kwargs: Any) -> bool:
+        calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_codex_model_environment",
+        _ensure_codex_env,
+    )
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+        admins="admin",
+        developers="developer",
+    )
+    app.state.disable_system_info_codex_model_env_prefetch = True
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/system-info/sandbox-tools/codex_snapshot/model-env",
+            headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'admin'})}"},
+        )
+        developer_denied = client.post(
+            "/web/system-info/sandbox-tools/codex_snapshot/model-env",
+            headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'developer'})}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "kind": "codex_snapshot",
+        "toolId": "tool-codex-snapshot",
+        "updated": True,
+    }
+    assert developer_denied.status_code == 403
+    assert len(calls) == 1
+    assert calls[0]["tool_id"] == "tool-codex-snapshot"
+    assert calls[0]["access_key"] == "test-ak"
+    assert calls[0]["secret_key"] == "test-sk"
+    assert calls[0]["region"] == "cn-shanghai"
+
+
+def test_system_info_codex_update_rejects_missing_or_unsupported_tool(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+        admins="admin",
+    )
+    monkeypatch.delenv("SANDBOX_CHAT_CODEX", raising=False)
+
+    with TestClient(app) as client:
+        missing = client.post(
+            "/web/system-info/sandbox-tools/codex/model-env",
+            headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'admin'})}"},
+        )
+        unsupported = client.post(
+            "/web/system-info/sandbox-tools/openclaw/model-env",
+            headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'admin'})}"},
+        )
+
+    assert missing.status_code == 400
+    assert "未配置 Tool ID" in missing.text
+    assert unsupported.status_code == 400
+    assert "Unsupported Sandbox Tool kind" in unsupported.text
+
+
+def test_system_info_codex_update_returns_configuration_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("SANDBOX_CHAT_CODEX", "tool-codex")
+
+    def _raise_codex_env_error(**_kwargs: Any) -> bool:
+        raise ValueError("Codex Sandbox 缺少 CODEX_API_KEY")
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_codex_model_environment",
+        _raise_codex_env_error,
+    )
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+        admins="admin",
+    )
+    app.state.disable_system_info_codex_model_env_prefetch = True
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/system-info/sandbox-tools/codex/model-env",
+            headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'admin'})}"},
+        )
+
+    assert response.status_code == 400
+    assert "CODEX_API_KEY" in response.text
 
 
 def test_current_user_pool_deployment_forwards_studio_jwt_to_run_sse(

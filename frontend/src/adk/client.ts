@@ -2095,12 +2095,20 @@ export type SandboxToolKind =
   | "hermes"
   | "hermes_snapshot"
   | "dev";
+export type CodexSandboxToolKind = Extract<
+  SandboxToolKind,
+  "codex" | "codex_snapshot"
+>;
 
 export interface SandboxToolInfo {
   kind: SandboxToolKind;
   label: string;
   toolId: string;
   snapshot: boolean;
+  needsModelEnvUpdate: boolean;
+  canUpdateModelEnv: boolean;
+  modelEnvError: string;
+  modelEnvErrorCode: string;
 }
 
 export interface SystemInfoResponse {
@@ -2108,6 +2116,12 @@ export interface SystemInfoResponse {
     tosAddress: string;
   };
   sandboxTools: SandboxToolInfo[];
+}
+
+export interface SandboxToolModelEnvUpdateResponse {
+  kind: CodexSandboxToolKind;
+  toolId: string;
+  updated: boolean;
 }
 
 const SANDBOX_TOOL_DISPLAY_ORDER: Record<string, number> = {
@@ -2147,7 +2161,11 @@ export async function getSystemInfo(
         typeof (item as SandboxToolInfo).kind !== "string" ||
         typeof (item as SandboxToolInfo).label !== "string" ||
         typeof (item as SandboxToolInfo).toolId !== "string" ||
-        typeof (item as SandboxToolInfo).snapshot !== "boolean"
+        typeof (item as SandboxToolInfo).snapshot !== "boolean" ||
+        typeof (item as SandboxToolInfo).needsModelEnvUpdate !== "boolean" ||
+        typeof (item as SandboxToolInfo).canUpdateModelEnv !== "boolean" ||
+        typeof (item as SandboxToolInfo).modelEnvError !== "string" ||
+        typeof (item as SandboxToolInfo).modelEnvErrorCode !== "string"
       ) {
         throw new Error("系统信息响应格式无效");
       }
@@ -2161,6 +2179,32 @@ export async function getSystemInfo(
     storage: { tosAddress: payload.storage.tosAddress },
     sandboxTools,
   };
+}
+
+export async function updateCodexSandboxToolModelEnv(
+  kind: CodexSandboxToolKind,
+  signal?: AbortSignal,
+): Promise<SandboxToolModelEnvUpdateResponse> {
+  const response = await apiFetch(
+    `/web/system-info/sandbox-tools/${encodeURIComponent(kind)}/model-env`,
+    { method: "POST", signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "更新 Codex Sandbox 失败"));
+  }
+  const payload = (await response.json()) as {
+    kind?: unknown;
+    toolId?: unknown;
+    updated?: unknown;
+  };
+  if (
+    (payload.kind !== "codex" && payload.kind !== "codex_snapshot") ||
+    typeof payload.toolId !== "string" ||
+    typeof payload.updated !== "boolean"
+  ) {
+    throw new Error("Codex Sandbox 更新响应格式无效");
+  }
+  return payload as SandboxToolModelEnvUpdateResponse;
 }
 
 export interface IdentityUserPool {

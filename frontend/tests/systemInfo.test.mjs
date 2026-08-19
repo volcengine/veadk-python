@@ -189,11 +189,74 @@ test("system information page lists sandbox tools and the current identity user 
   );
   assert.match(clientSource, /\.sort\(\(left, right\) =>/);
   assert.match(clientSource, /typeof \(item as SandboxToolInfo\)\.snapshot !== "boolean"/);
+  assert.match(clientSource, /needsModelEnvUpdate: boolean/);
+  assert.match(clientSource, /canUpdateModelEnv: boolean/);
+  assert.match(clientSource, /modelEnvError: string/);
+  assert.match(clientSource, /modelEnvErrorCode: string/);
+  assert.match(
+    clientSource,
+    /typeof \(item as SandboxToolInfo\)\.needsModelEnvUpdate !== "boolean"/,
+  );
+  assert.match(
+    clientSource,
+    /typeof \(item as SandboxToolInfo\)\.canUpdateModelEnv !== "boolean"/,
+  );
+  assert.match(
+    clientSource,
+    /typeof \(item as SandboxToolInfo\)\.modelEnvError !== "string"/,
+  );
+  assert.match(
+    clientSource,
+    /typeof \(item as SandboxToolInfo\)\.modelEnvErrorCode !== "string"/,
+  );
+  assert.match(clientSource, /export type CodexSandboxToolKind = Extract/);
+  assert.match(clientSource, /updateCodexSandboxToolModelEnv/);
+  assert.match(
+    clientSource,
+    /\/web\/system-info\/sandbox-tools\/\$\{encodeURIComponent\(kind\)\}\/model-env/,
+  );
+  assert.match(clientSource, /method: "POST"/);
+  assert.match(clientSource, /updated: boolean/);
   assert.match(
     systemInfoSource,
     /tool\.snapshot \?\s*\(\s*<span className="system-info-tool-badge">快照版<\/span>\s*\)\s*: null/,
   );
+  assert.match(systemInfoSource, /function isCodexSandboxToolKind/);
+  assert.match(systemInfoSource, /kind === "codex" \|\| kind === "codex_snapshot"/);
+  assert.match(systemInfoSource, /const updateVisible =/);
+  assert.match(systemInfoSource, /tool\.needsModelEnvUpdate/);
+  assert.match(systemInfoSource, /tool\.canUpdateModelEnv/);
+  assert.match(systemInfoSource, /tool\.modelEnvError/);
+  assert.doesNotMatch(systemInfoSource, /tool\.modelEnvErrorCode/);
+  assert.match(systemInfoSource, /setSandboxTools\(\(current\) =>/);
+  assert.match(systemInfoSource, /needsModelEnvUpdate: false/);
+  assert.match(systemInfoSource, /modelEnvErrorCode: ""/);
+  assert.doesNotMatch(systemInfoSource, /has-action/);
+  assert.doesNotMatch(systemInfoSource, /system-info-resource-actions/);
+  assert.match(systemInfoSource, /className="system-info-resource-update"/);
+  assert.match(systemInfoSource, /RefreshCw/);
+  assert.match(systemInfoSource, /aria-label=\{`更新/);
+  assert.doesNotMatch(systemInfoSource, /<span>更新<\/span>/);
+  assert.match(systemInfoSource, /updateSandboxToolModelEnv\(tool\)/);
+  assert.match(systemInfoSource, /result\.updated \? "已更新" : "无需更新"/);
+  assert.match(systemInfoSource, /const inlineError =/);
+  assert.match(systemInfoSource, /className="system-info-inline-error" role="alert"/);
+  assert.match(systemInfoSource, /className="system-info-inline-status" role="status"/);
   assert.match(systemInfoStylesSource, /\.system-info-tool-badge\s*\{/);
+  assert.doesNotMatch(systemInfoStylesSource, /\.system-info-resource-value\.has-action\s*\{/);
+  assert.doesNotMatch(systemInfoStylesSource, /\.system-info-resource-actions\s*\{/);
+  assert.doesNotMatch(systemInfoStylesSource, /flex-wrap:\s*wrap/);
+  assert.doesNotMatch(
+    systemInfoStylesSource,
+    /\.system-info-resource-link > span\s*\{[^}]*text-overflow:/s,
+  );
+  assert.match(systemInfoStylesSource, /\.system-info-resource-update\s*\{/);
+  assert.match(systemInfoStylesSource, /width:\s*30px/);
+  assert.match(systemInfoStylesSource, /margin-left:\s*18px/);
+  assert.match(systemInfoStylesSource, /\.system-info-resource-update svg\s*\{/);
+  assert.match(systemInfoStylesSource, /system-info-spin/);
+  assert.match(systemInfoStylesSource, /\.system-info-resource-update:disabled\s*\{/);
+  assert.match(systemInfoStylesSource, /\.system-info-inline-error\s*\{/);
   assert.match(systemInfoSource, /本地模式未配置用户池/);
   assert.match(systemInfoSource, /当前 Studio 未配置用户池/);
   assert.match(systemInfoSource, /Volcengine credentials not found/);
