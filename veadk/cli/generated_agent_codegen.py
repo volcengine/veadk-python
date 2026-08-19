@@ -378,6 +378,8 @@ def _safe_draft_payload(draft: AgentDraft) -> dict[str, Any]:
             node.pop("cloudProvider", None)
         if node.get("modelSource") is None:
             node.pop("modelSource", None)
+        if not str(node.get("longTermMemoryIndex") or "").strip():
+            node.pop("longTermMemoryIndex", None)
         cloud_environment = node.get("cloudEnvironment")
         if (
             isinstance(cloud_environment, dict)
