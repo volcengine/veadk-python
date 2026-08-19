@@ -307,7 +307,7 @@ def test_deployment_config_keeps_only_public_intent_and_checks_plan_hash(
         )
 
 
-def test_compressor_selection_uses_sidecar_heuristic_provider(
+def test_compressor_selection_uses_sidecar_headroom_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
@@ -337,9 +337,10 @@ def test_compressor_selection_uses_sidecar_heuristic_provider(
         transport="local",
     )
 
-    assert deployment["model_proxy"] == {"compression_provider": "heuristic"}
-    assert captured["model_proxy"]["compression_provider"] == "heuristic"
-    assert runtime_env["HARNESS_MODEL_COMPRESSION_PROVIDER"] == "heuristic"
+    assert deployment["model_proxy"] == {"compression_provider": "headroom"}
+    assert captured["model_proxy"]["compression_provider"] == "headroom"
+    assert runtime_env["HARNESS_MODEL_COMPRESSION_PROVIDER"] == "headroom"
+    assert "HARNESS_HEADROOM_BASE_URL" not in runtime_env
 
 
 def test_disabled_selection_never_loads_runtime_integration(

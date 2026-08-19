@@ -61,7 +61,7 @@ def test_ops_profile_expands_product_defaults() -> None:
     config = HarnessSidecarConfig(profile="ops")
 
     assert config.model_proxy.enabled is True
-    assert config.model_proxy.compression_provider == "heuristic"
+    assert config.model_proxy.compression_provider == "headroom"
     assert config.mcp_gateway.enabled is True
     assert config.mcp_gateway.presets == ["sql_readonly"]
     assert config.mcp_gateway.readonly_segments == ["*"]
@@ -283,7 +283,7 @@ def test_default_env_profile_does_not_enable_mcp_gateway_implicitly() -> None:
 
     assert config.profile == "default"
     assert config.model_proxy.enabled is True
-    assert config.model_proxy.compression_provider == "heuristic"
+    assert config.model_proxy.compression_provider == "headroom"
     assert config.mcp_gateway.enabled is False
     assert config.required_runtime_components == [
         "harness_core",
@@ -388,11 +388,11 @@ def test_explicit_compression_provider_remains_supported() -> None:
     config = HarnessSidecarConfig.from_env(
         {
             "HARNESS_SIDECAR_ENABLED": "true",
-            "HARNESS_MODEL_COMPRESSION_PROVIDER": "headroom",
+            "HARNESS_MODEL_COMPRESSION_PROVIDER": "heuristic",
         }
     )
 
-    assert config.model_proxy.compression_provider == "headroom"
+    assert config.model_proxy.compression_provider == "heuristic"
 
 
 def test_disabled_sidecar_has_no_runtime_or_product_components() -> None:
