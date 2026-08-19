@@ -238,6 +238,7 @@ class AgentDraft(BaseModel):
     a2aRegistry: A2ARegistryConfig = Field(default_factory=A2ARegistryConfig)
     shortTermBackend: str = "local"
     longTermBackend: str = "local"
+    longTermMemoryIndex: str = ""
     autoSaveSession: bool = False
     knowledgebaseBackend: str = "viking"
     knowledgebaseIndex: str = ""
@@ -377,6 +378,8 @@ def _safe_draft_payload(draft: AgentDraft) -> dict[str, Any]:
             node.pop("cloudProvider", None)
         if node.get("modelSource") is None:
             node.pop("modelSource", None)
+        if not str(node.get("longTermMemoryIndex") or "").strip():
+            node.pop("longTermMemoryIndex", None)
         cloud_environment = node.get("cloudEnvironment")
         if (
             isinstance(cloud_environment, dict)
@@ -780,7 +783,7 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
         backend = LTM_BY_ID.get(draft.longTermBackend or "local")
         if backend:
             _add_import(acc, "from veadk.memory.long_term_memory import LongTermMemory")
-            idx = ident(draft.name, var_name)
+            idx = draft.longTermMemoryIndex.strip() or ident(draft.name, var_name)
             v = f"ltm_{var_name}"
             acc.pre_lines.append(
                 f"{v} = LongTermMemory(backend={_py_str(backend.id)}, "
@@ -862,6 +865,7 @@ def _dedupe_env(env: list[EnvVar]) -> list[EnvVar]:
                 True,
                 cur.placeholder,
                 cur.comment,
+                cur.hidden,
             )
     return list(deduped.values())
 
@@ -1515,6 +1519,7 @@ def _materialize_a2a_registry_env(env: list[EnvVar], draft: AgentDraft) -> list[
             item.required,
             values.get(item.key, item.placeholder),
             item.comment,
+            item.hidden,
         )
         for item in env
     ]

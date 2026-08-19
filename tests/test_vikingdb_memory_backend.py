@@ -141,6 +141,42 @@ def test_direct_byteplus_viking_memory_client_uses_fixed_hong_kong_default(
     assert client.service_info.credentials.region == "cn-hongkong"
 
 
+def test_direct_viking_memory_client_lists_collections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from veadk.integrations.ve_viking_db_memory.ve_viking_db_memory import (
+        VikingDBMemoryClient,
+    )
+
+    if hasattr(VikingDBMemoryClient, "_instance"):
+        delattr(VikingDBMemoryClient, "_instance")
+    monkeypatch.setattr(
+        VikingDBMemoryClient,
+        "get_body",
+        lambda self, api, params, body: "{}",
+    )
+    captured: dict[str, Any] = {}
+
+    def fake_json(self, api: str, params: dict[str, Any], body: str) -> str:
+        captured.update({"api": api, "params": params, "body": body})
+        return '{"Result":{"Collections":[{"CollectionName":"agent_memory"}]}}'
+
+    monkeypatch.setattr(VikingDBMemoryClient, "json", fake_json)
+
+    client = VikingDBMemoryClient(region="cn-beijing")
+    result = client.list_collections(
+        project="agent-project",
+        page_number=2,
+        page_size=50,
+    )
+
+    assert captured["api"] == "ListCollection"
+    assert captured["body"] == (
+        '{"ProjectName": "agent-project", "PageNumber": 2, "PageSize": 50}'
+    )
+    assert result["Result"]["Collections"][0]["CollectionName"] == "agent_memory"
+
+
 def test_byteplus_viking_memory_keeps_hong_kong_region(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

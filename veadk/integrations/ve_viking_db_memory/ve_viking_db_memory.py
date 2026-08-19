@@ -155,6 +155,16 @@ class VikingDBMemoryClient(Service):
                     "Content-Type": "application/json",
                 },
             ),
+            "ListCollection": ApiInfo(
+                "POST",
+                "/api/memory/collection/list",
+                {},
+                {},
+                {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+            ),
             "DropCollection": ApiInfo(
                 "POST",
                 "/api/memory/collection/delete",
@@ -312,6 +322,15 @@ class VikingDBMemoryClient(Service):
     def get_collection(self, collection_name, project="default"):
         params = {"CollectionName": collection_name, "ProjectName": project}
         res = self.json("GetCollection", {}, json.dumps(params))
+        return json.loads(res)
+
+    def list_collections(self, project="default", page_number=1, page_size=100):
+        params = {
+            "ProjectName": project,
+            "PageNumber": page_number,
+            "PageSize": page_size,
+        }
+        res = self.json("ListCollection", {}, json.dumps(params))
         return json.loads(res)
 
     def drop_collection(self, collection_name):

@@ -21,6 +21,7 @@ export interface EnvVar {
   secret?: boolean;
   readOnly?: boolean;
   serverManaged?: boolean;
+  hidden?: boolean;
 }
 
 export interface ToolOption {
@@ -93,6 +94,29 @@ const VIKING_KB_ENV: EnvVar[] = [
   { key: "DATABASE_VIKING_REGION", required: false },
   { key: "DATABASE_VIKING_COLLECTION_KIND", required: false },
   { key: "DATABASE_VIKING_RESOURCE_ID", required: false },
+];
+
+const VIKING_MEMORY_ENV: EnvVar[] = [
+  {
+    key: "DATABASE_VIKINGMEM_PROJECT",
+    required: false,
+    placeholder: "default",
+    comment: "VikingDB 记忆库项目",
+    hidden: true,
+  },
+  {
+    key: "DATABASE_VIKING_REGION",
+    required: false,
+    comment: "VikingDB 记忆库地域",
+    hidden: true,
+  },
+  {
+    key: "DATABASE_VIKINGMEM_MEMORY_TYPE",
+    required: false,
+    placeholder: "sys_event_v1,sys_profile_v1",
+    comment: "记忆类型",
+    hidden: true,
+  },
 ];
 
 /** Feishu Channel runtime credentials. */
@@ -348,7 +372,7 @@ export const LTM_BACKENDS: BackendOption[] = [
     id: "viking",
     label: "VikingDB Memory",
     desc: "VikingDB 记忆库（支持用户画像）。",
-    env: VOLC_ENV,
+    env: VIKING_MEMORY_ENV,
   },
   {
     id: "openviking",

@@ -65,6 +65,9 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
       o.shortTermBackend = draft.shortTermBackend || "local";
     if (draft.memory.longTerm) {
       o.longTermBackend = draft.longTermBackend || "local";
+      if (draft.longTermMemoryIndex?.trim()) {
+        o.longTermMemoryIndex = draft.longTermMemoryIndex.trim();
+      }
       o.autoSaveSession = !!draft.autoSaveSession;
     }
   }

@@ -139,6 +139,8 @@ export interface AgentDraft {
   /** Chosen backends when memory is enabled. */
   shortTermBackend?: string;
   longTermBackend?: string;
+  /** Existing long-term memory collection/index selected for managed backends. */
+  longTermMemoryIndex?: string;
   /** Persist finished sessions into long-term memory. */
   autoSaveSession?: boolean;
   /** Chosen knowledgebase backend when knowledgebase is enabled. */
@@ -206,6 +208,7 @@ export function emptyDraft(cloudProvider: CloudProvider = "volcengine"): AgentDr
     modelApiBase: "",
     shortTermBackend: "local",
     longTermBackend: "local",
+    longTermMemoryIndex: "",
     autoSaveSession: false,
     knowledgebaseBackend: DEFAULT_KB_BACKEND,
     knowledgebaseIndex: "",

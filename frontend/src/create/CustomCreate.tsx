@@ -108,6 +108,7 @@ import {
   listVikingKnowledgebases,
   type VikingKnowledgebaseRef,
 } from "./vikingKnowledgebases";
+import { listVikingMemories, type VikingMemoryRef } from "./vikingMemories";
 import {
   ProjectPreview,
   type DeployResult,
@@ -550,12 +551,13 @@ function RuntimeEnvFields({
   onChange: (key: string, value: string) => void;
   renderAfterField?: (item: EnvVar) => ReactNode;
 }) {
-  if (env.length === 0) {
+  const visibleEnv = env.filter((item) => !item.hidden);
+  if (visibleEnv.length === 0) {
     return <p className="cw-env-empty">此后端无需额外运行参数。</p>;
   }
   return (
     <div className="cw-env-fields">
-      {env.map((item) => {
+      {visibleEnv.map((item) => {
         const value = values[item.key] ?? item.defaultValue ?? "";
         const jsonError = runtimeEnvJsonError(item, values);
         const controlId = `cw-env-${item.key}`;
@@ -683,6 +685,10 @@ function vikingKnowledgebaseDisplayName(item: VikingKnowledgebaseRef): string {
   const name = item.name.trim() || item.id || "未命名知识库";
   const details = [item.sourceLabel, item.projectName].filter(Boolean);
   return details.length ? `${name} · ${details.join(" · ")}` : name;
+}
+
+function vikingMemoryDisplayName(item: VikingMemoryRef): string {
+  return item.name.trim() || item.id || "未命名记忆库";
 }
 
 function modelAvailabilityLabel(model: ModelOption): string {
@@ -1466,67 +1472,70 @@ function A2aSpaceSelect({
   );
 }
 
-function VikingKnowledgebaseSelect({
+type ResourcePickerItem = { id: string };
+
+function ResourcePicker<T extends ResourcePickerItem>({
   value,
+  items,
+  loading,
+  error,
+  pickerClassName,
+  selectLabel,
+  searchLabel,
+  listLabel,
+  placeholder,
+  emptyMessage,
+  loadedMessage,
+  refreshLabel,
+  noMatchesMessage,
+  getLabel,
+  getSearchFields,
+  getKey,
+  getOptionIds,
+  makeUnknownItem,
   onChange,
+  onRefresh,
 }: {
   value: string;
-  onChange: (item: VikingKnowledgebaseRef) => void;
+  items: T[];
+  loading: boolean;
+  error: string | null;
+  pickerClassName: string;
+  selectLabel: string;
+  searchLabel: string;
+  listLabel: string;
+  placeholder: string;
+  emptyMessage: ReactNode;
+  loadedMessage: (count: number) => ReactNode;
+  refreshLabel: string;
+  noMatchesMessage: string;
+  getLabel: (item: T) => string;
+  getSearchFields: (item: T) => Array<string | undefined>;
+  getKey: (item: T) => string;
+  getOptionIds: (item: T) => Array<string | undefined>;
+  makeUnknownItem: (id: string) => T;
+  onChange: (item: T) => void;
+  onRefresh: () => void;
 }) {
-  const [items, setItems] = useState<VikingKnowledgebaseRef[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const pickerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    listVikingKnowledgebases()
-      .then((next) => {
-        if (!cancelled) setItems(next);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setItems([]);
-          setError(err instanceof Error ? err.message : "加载失败");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [reloadKey]);
 
   const selectedKnown =
     !value || items.some((item) => item.id === value.trim());
   const selectedItem = items.find((item) => item.id === value.trim());
   const selectedLabel = selectedItem
-    ? vikingKnowledgebaseDisplayName(selectedItem)
+    ? getLabel(selectedItem)
     : value && !selectedKnown
       ? value
-      : "请选择 VikingDB 知识库";
+      : placeholder;
   const disabled = loading && items.length === 0;
   const filteredItems = useMemo(
     () =>
       items.filter((item) =>
-        localPickerMatches(searchQuery, [
-          vikingKnowledgebaseDisplayName(item),
-          item.id,
-          item.description,
-          item.projectName,
-          item.resourceId,
-          item.agentkitKnowledgeId,
-          item.providerKnowledgeId,
-          item.sourceLabel,
-        ]),
+        localPickerMatches(searchQuery, getSearchFields(item)),
       ),
-    [items, searchQuery],
+    [getSearchFields, items, searchQuery],
   );
   const showUnknownItem = Boolean(
     value && !selectedKnown && localPickerMatches(searchQuery, [value]),
@@ -1555,7 +1564,7 @@ function VikingKnowledgebaseSelect({
     };
   }, [open]);
 
-  const selectItem = (item: VikingKnowledgebaseRef) => {
+  const selectItem = (item: T) => {
     onChange(item);
     setOpen(false);
   };
@@ -1571,7 +1580,7 @@ function VikingKnowledgebaseSelect({
 
   return (
     <div
-      className={`cw-a2a-space-picker cw-viking-kb-picker${open ? " is-open" : ""}`}
+      className={`cw-a2a-space-picker ${pickerClassName}${open ? " is-open" : ""}`}
       ref={pickerRef}
     >
       <div className="cw-a2a-space-row">
@@ -1582,7 +1591,7 @@ function VikingKnowledgebaseSelect({
             disabled={disabled}
             aria-haspopup="listbox"
             aria-expanded={open}
-            aria-label="选择 VikingDB 知识库"
+            aria-label={selectLabel}
             onClick={() => {
               setSearchQuery("");
               setOpen((current) => !current);
@@ -1602,7 +1611,7 @@ function VikingKnowledgebaseSelect({
                   value={searchQuery}
                   autoFocus
                   autoComplete="off"
-                  aria-label="搜索 VikingDB 知识库"
+                  aria-label={searchLabel}
                   placeholder="搜索名称或 ID"
                   onChange={(event) =>
                     setSearchQuery(event.currentTarget.value)
@@ -1612,7 +1621,7 @@ function VikingKnowledgebaseSelect({
               <div
                 className="cw-picker-options"
                 role="listbox"
-                aria-label="VikingDB 知识库"
+                aria-label={listLabel}
               >
                 {showUnknownItem && (
                   <button
@@ -1620,36 +1629,20 @@ function VikingKnowledgebaseSelect({
                     role="option"
                     aria-selected
                     className="cw-a2a-space-option is-selected"
-                    onClick={() =>
-                      selectItem({
-                        id: value,
-                        name: value,
-                        description: "",
-                        projectName: "",
-                        region: "",
-                        sourceKind: "knowledge",
-                        sourceLabel: "Knowledge Engine",
-                        resourceId: "",
-                      })
-                    }
+                    onClick={() => selectItem(makeUnknownItem(value))}
                   >
                     {value}
                   </button>
                 )}
                 {filteredItems.map((item) => {
-                  const optionLabel = vikingKnowledgebaseDisplayName(item);
+                  const optionLabel = getLabel(item);
                   const selected = item.id === value;
-                  const optionIds = [
-                    item.id,
-                    item.resourceId,
-                    item.agentkitKnowledgeId,
-                    item.providerKnowledgeId,
-                  ]
+                  const optionIds = getOptionIds(item)
                     .filter(Boolean)
                     .join(" / ");
                   return (
                     <button
-                      key={item.id}
+                      key={getKey(item)}
                       type="button"
                       role="option"
                       aria-selected={selected}
@@ -1668,7 +1661,7 @@ function VikingKnowledgebaseSelect({
                   );
                 })}
                 {!showUnknownItem && filteredItems.length === 0 && (
-                  <div className="cw-picker-empty">未找到匹配的知识库</div>
+                  <div className="cw-picker-empty">{noMatchesMessage}</div>
                 )}
               </div>
             </div>
@@ -1677,10 +1670,10 @@ function VikingKnowledgebaseSelect({
         <button
           type="button"
           className="cw-icon-btn cw-a2a-space-refresh cw-viking-kb-refresh"
-          title="刷新知识库列表"
-          aria-label="刷新知识库列表"
+          title={refreshLabel}
+          aria-label={refreshLabel}
           disabled={loading}
-          onClick={() => setReloadKey((key) => key + 1)}
+          onClick={onRefresh}
         >
           {loading ? (
             <Loader2 className="cw-i cw-i-sm cw-spin" />
@@ -1695,13 +1688,172 @@ function VikingKnowledgebaseSelect({
           <span>{error}</span>
         </div>
       ) : items.length === 0 ? (
-        <span className="cw-help">此账号下暂无 VikingDB 知识库。</span>
+        <span className="cw-help">{emptyMessage}</span>
       ) : (
-        <span className="cw-help">
-          已加载 {items.length} 个知识库，选择的知识库会用于当前 Agent。
-        </span>
+        <span className="cw-help">{loadedMessage(items.length)}</span>
       )}
     </div>
+  );
+}
+
+function VikingKnowledgebaseSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (item: VikingKnowledgebaseRef) => void;
+}) {
+  const [items, setItems] = useState<VikingKnowledgebaseRef[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    listVikingKnowledgebases()
+      .then((next) => {
+        if (!cancelled) setItems(next);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setItems([]);
+          setError(err instanceof Error ? err.message : "加载失败");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
+
+  return (
+    <ResourcePicker
+      value={value}
+      items={items}
+      loading={loading}
+      error={error}
+      pickerClassName="cw-viking-kb-picker"
+      selectLabel="选择 VikingDB 知识库"
+      searchLabel="搜索 VikingDB 知识库"
+      listLabel="VikingDB 知识库"
+      placeholder="请选择 VikingDB 知识库"
+      emptyMessage="此账号下暂无 VikingDB 知识库。"
+      loadedMessage={(count) =>
+        `已加载 ${count} 个知识库，选择的知识库会用于当前 Agent。`
+      }
+      refreshLabel="刷新知识库列表"
+      noMatchesMessage="未找到匹配的知识库"
+      getLabel={vikingKnowledgebaseDisplayName}
+      getSearchFields={(item) => [
+        vikingKnowledgebaseDisplayName(item),
+        item.id,
+        item.description,
+        item.projectName,
+        item.resourceId,
+        item.agentkitKnowledgeId,
+        item.providerKnowledgeId,
+        item.sourceLabel,
+      ]}
+      getKey={(item) => item.id}
+      getOptionIds={(item) => [
+        item.id,
+        item.resourceId,
+        item.agentkitKnowledgeId,
+        item.providerKnowledgeId,
+      ]}
+      makeUnknownItem={(id) => ({
+        id,
+        name: id,
+        description: "",
+        projectName: "",
+        region: "",
+        sourceKind: "knowledge" as const,
+        sourceLabel: "Knowledge Engine",
+        resourceId: "",
+      })}
+      onChange={onChange}
+      onRefresh={() => setReloadKey((key) => key + 1)}
+    />
+  );
+}
+
+function VikingMemorySelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (item: VikingMemoryRef) => void;
+}) {
+  const [items, setItems] = useState<VikingMemoryRef[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    listVikingMemories()
+      .then((next) => {
+        if (!cancelled) setItems(next);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setItems([]);
+          setError(err instanceof Error ? err.message : "加载失败");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
+
+  return (
+    <ResourcePicker
+      value={value}
+      items={items}
+      loading={loading}
+      error={error}
+      pickerClassName="cw-viking-memory-picker"
+      selectLabel="选择 VikingDB 记忆库"
+      searchLabel="搜索 VikingDB 记忆库"
+      listLabel="VikingDB 记忆库"
+      placeholder="请选择 VikingDB 记忆库，不选择则自动创建"
+      emptyMessage="此账号下暂无 VikingDB 记忆库，未选择时会自动创建。"
+      loadedMessage={(count) => `已加载 ${count} 个记忆库；不选择时会自动创建。`}
+      refreshLabel="刷新记忆库列表"
+      noMatchesMessage="未找到匹配的记忆库"
+      getLabel={vikingMemoryDisplayName}
+      getSearchFields={(item) => [
+        vikingMemoryDisplayName(item),
+        item.id,
+        item.description,
+        item.projectName,
+        item.region,
+        item.resourceId,
+        ...(item.memoryTypes ?? []),
+      ]}
+      getKey={(item) => `${item.projectName}:${item.region}:${item.id}`}
+      getOptionIds={(item) => [item.id, item.resourceId]}
+      makeUnknownItem={(id) => ({
+        id,
+        name: id,
+        description: "",
+        projectName: "",
+        region: "",
+        resourceId: "",
+        memoryTypes: [],
+      })}
+      onChange={onChange}
+      onRefresh={() => setReloadKey((key) => key + 1)}
+    />
   );
 }
 
@@ -5208,9 +5360,47 @@ export function CustomCreate({
                                         options={LTM_BACKENDS}
                                         value={node.longTermBackend}
                                         onChange={(id) =>
-                                          patch({ longTermBackend: id })
+                                          patch({
+                                            longTermBackend: id,
+                                            longTermMemoryIndex:
+                                              id === "viking"
+                                                ? node.longTermMemoryIndex
+                                                : "",
+                                          })
                                         }
                                       />
+                                      {(node.longTermBackend ?? "local") ===
+                                        "viking" && (
+                                        <div className="cw-field cw-subfield">
+                                          <label className="cw-label">
+                                            VikingDB 记忆库
+                                          </label>
+                                          <VikingMemorySelect
+                                            value={
+                                              node.longTermMemoryIndex ?? ""
+                                            }
+                                            onChange={(memory) => {
+                                              patch({
+                                                longTermMemoryIndex: memory.id,
+                                              });
+                                              patchDeploymentEnv(
+                                                "DATABASE_VIKINGMEM_PROJECT",
+                                                memory.projectName,
+                                              );
+                                              patchDeploymentEnv(
+                                                "DATABASE_VIKING_REGION",
+                                                memory.region,
+                                              );
+                                              patchDeploymentEnv(
+                                                "DATABASE_VIKINGMEM_MEMORY_TYPE",
+                                                (memory.memoryTypes ?? []).join(
+                                                  ",",
+                                                ),
+                                              );
+                                            }}
+                                          />
+                                        </div>
+                                      )}
                                       <RuntimeEnvFields
                                         env={
                                           LTM_BACKENDS.find(

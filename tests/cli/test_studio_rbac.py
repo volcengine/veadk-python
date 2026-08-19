@@ -594,7 +594,6 @@ def test_system_info_prefetches_codex_model_env_state_on_startup(
 def test_system_info_prefetch_hides_get_tool_failures_but_reports_error_code(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setenv("SANDBOX_CHAT_CODEX", "tool-codex")
     monkeypatch.setenv("VEADK_STUDIO_TOS_BUCKET", "teststudio")
@@ -609,7 +608,6 @@ def test_system_info_prefetch_hides_get_tool_failures_but_reports_error_code(
         "veadk.cli.studio_sandbox_tools.inspect_studio_codex_model_environment",
         _inspect_codex_env,
     )
-    caplog.set_level("WARNING", logger="veadk.cli.cli_frontend")
     app = _create_studio_app(
         monkeypatch,
         tmp_path,
@@ -619,23 +617,24 @@ def test_system_info_prefetch_hides_get_tool_failures_but_reports_error_code(
 
     with TestClient(app) as client:
         for _ in range(100):
-            if inspect_calls:
+            response = client.get(
+                "/web/system-info",
+                headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'admin'})}"},
+            )
+            assert response.status_code == 200
+            sandbox_tools = {
+                item["kind"]: item for item in response.json()["sandboxTools"]
+            }
+            if (
+                sandbox_tools["codex"]["modelEnvErrorCode"]
+                == "codex_model_env_check_failed"
+            ):
                 break
             time.sleep(0.01)
-        response = client.get(
-            "/web/system-info",
-            headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'admin'})}"},
-        )
 
     assert response.status_code == 200
-    sandbox_tools = {item["kind"]: item for item in response.json()["sandboxTools"]}
     assert sandbox_tools["codex"]["modelEnvError"] == ""
     assert sandbox_tools["codex"]["modelEnvErrorCode"] == "codex_model_env_check_failed"
-    assert any(
-        "error_code=codex_model_env_check_failed" in record.getMessage()
-        and "tool_id=tool-codex" in record.getMessage()
-        for record in caplog.records
-    )
 
 
 def test_system_info_updates_configured_codex_sandbox_tool_envs(

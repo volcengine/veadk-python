@@ -163,6 +163,11 @@ def _validate_node(
         )
     if draft.longTermBackend not in LTM_BY_ID:
         raise DebugPolicyError(f"Unsupported longTermBackend: {draft.longTermBackend}")
+    _check_len(
+        "longTermMemoryIndex",
+        draft.longTermMemoryIndex,
+        MAX_KNOWLEDGEBASE_INDEX_LEN,
+    )
     if draft.knowledgebaseBackend not in KB_BY_ID:
         raise DebugPolicyError(
             f"Unsupported knowledgebaseBackend: {draft.knowledgebaseBackend}"

@@ -629,6 +629,74 @@ def test_viking_knowledgebases_include_agentkit_imported_bases(
     assert items[1]["sourceLabel"] == "AgentKit Knowledge Base"
 
 
+def test_viking_memories_list_route_uses_server_credentials(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    class _FakeMemoryClient:
+        def __init__(self, **kwargs: Any) -> None:
+            calls.append({"init": kwargs})
+
+        def list_collections(
+            self,
+            *,
+            project: str,
+            page_number: int,
+            page_size: int,
+        ) -> dict[str, Any]:
+            calls.append(
+                {
+                    "project": project,
+                    "page_number": page_number,
+                    "page_size": page_size,
+                }
+            )
+            return {
+                "Result": {
+                    "TotalCount": 1,
+                    "Collections": [
+                        {
+                            "CollectionName": "agent_memory",
+                            "Description": "Agent memory",
+                            "ProjectName": project,
+                            "ResourceId": "mem-123",
+                            "BuiltinEventTypes": [
+                                "sys_event_v1",
+                                "sys_profile_v1",
+                            ],
+                        }
+                    ],
+                }
+            }
+
+    monkeypatch.setattr(
+        "veadk.integrations.ve_viking_db_memory.ve_viking_db_memory.VikingDBMemoryClient",
+        _FakeMemoryClient,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/web/viking-memories")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert calls[0]["init"]["ak"] == "ak"
+    assert calls[0]["init"]["sk"] == "sk"
+    assert calls[1] == {"project": "default", "page_number": 1, "page_size": 100}
+    assert data["totalCount"] == 1
+    assert data["items"][0] == {
+        "id": "agent_memory",
+        "name": "agent_memory",
+        "description": "Agent memory",
+        "projectName": "default",
+        "region": "cn-beijing",
+        "resourceId": "mem-123",
+        "updatedAt": "",
+        "memoryTypes": ["sys_event_v1", "sys_profile_v1"],
+    }
+
+
 @pytest.mark.parametrize(
     ("authorizer", "expected_authorization"),
     [
