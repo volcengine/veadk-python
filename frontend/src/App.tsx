@@ -1994,6 +1994,12 @@ export default function App() {
   const [focusedWorkspaceAgentId, setFocusedWorkspaceAgentId] = useState("");
   const [agentDetailTarget, setAgentDetailTarget] =
     useState<MyAgentCardData | null>(null);
+  const exitAgentDetailContext = useCallback(() => {
+    popStudioPage("agent-detail");
+    setAgentDetailTarget(null);
+    setMyAgents(false);
+    setManageAgents(false);
+  }, [popStudioPage]);
   // Shown when the user clicks the breadcrumb root to leave a create mode;
   // warns that the in-progress draft will be discarded.
   const [confirmLeave, setConfirmLeave] = useState(false);
@@ -2269,8 +2275,7 @@ export default function App() {
         setAddAgent(false);
         setAddMenu(false);
         setSearchView(false);
-        setManageAgents(false);
-        setAgentDetailTarget(null);
+        exitAgentDetailContext();
         setFocusedDeploymentTaskId("");
         setFocusedWorkspaceAgentId("");
         setMyAgents(true);
@@ -2291,7 +2296,7 @@ export default function App() {
       const suffix = failures.length > 3 ? `；另有 ${failures.length - 3} 个失败` : "";
       throw new Error(`${failures.length} 个 Agent 删除失败：${shown}${suffix}`);
     }
-  }, [agentDetailTarget, appName, commitWorkspaceDrafts, connections, userId]);
+  }, [agentDetailTarget, appName, commitWorkspaceDrafts, connections, exitAgentDetailContext, userId]);
 
   const refreshAgentLibrary = useCallback(async () => {
     setAgentLibraryLoading(true);
@@ -2355,14 +2360,13 @@ export default function App() {
   const openDeploymentDetail = useCallback((task: DeploymentTaskUpdate) => {
     setCreateView(null);
     setAddMenu(false);
-    setMyAgents(false);
-    setAgentDetailTarget(null);
+    exitAgentDetailContext();
     setManageAgents(true);
     setFocusedWorkspaceAgentId("");
     setFocusedWorkspaceAgentSection("basic");
     setFocusedDeploymentTaskId(task.id);
     setError("");
-  }, []);
+  }, [exitAgentDetailContext]);
 
   const startDeployment = useCallback((task: DeploymentTaskUpdate) => {
     flushPendingWorkspaceDraft();
@@ -4573,7 +4577,7 @@ export default function App() {
     setAddAgent(false);
     setAddMenu(false);
     setSkillCenter(false);
-    setManageAgents(false);
+    exitAgentDetailContext();
     setFeedbackCaseReturnAgentId(appName);
     setFeedbackCaseReturnKind(item.kind);
     setFeedbackTargetEventId(item.messageId);
@@ -5499,11 +5503,9 @@ export default function App() {
     setNewChatCapabilities(capabilities);
     setAgentInfoRefreshKey((key) => key + 1);
     setAppName(id);
-    setAgentDetailTarget(null);
+    exitAgentDetailContext();
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId("");
-    setMyAgents(false);
-    setManageAgents(false);
     setCreateView(null);
     setSkillCenter(false);
     setAddAgent(false);
@@ -5593,9 +5595,7 @@ export default function App() {
   };
 
   const closeAgentDetailPage = () => {
-    popStudioPage("agent-detail");
-    setManageAgents(false);
-    setAgentDetailTarget(null);
+    exitAgentDetailContext();
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId("");
     setMyAgents(true);
@@ -6355,7 +6355,7 @@ export default function App() {
                     setError("当前账号没有添加 Agent 的权限。");
                     return;
                   }
-                  setManageAgents(false);
+                  exitAgentDetailContext();
                   setAddMenu(true);
                   setCreateView(null);
                   setImportedDraft(null);
@@ -6441,7 +6441,7 @@ export default function App() {
                     hydratedDraft,
                     arkModelIds,
                   );
-                  setManageAgents(false);
+                  exitAgentDetailContext();
                   setImportedDraft(classifiedDraft);
                   setCustomCreateMode("custom");
                   const nextDraftId = `runtime-${capability.runtime.runtimeId}`;
@@ -6463,7 +6463,7 @@ export default function App() {
                   setError("");
                 }}
                 onEditDraft={(item) => {
-                  setManageAgents(false);
+                  exitAgentDetailContext();
                   setImportedDraft(item.draft);
                   setCustomCreateMode("custom");
                   setEditingDraftId(item.id);
