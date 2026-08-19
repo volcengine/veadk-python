@@ -36,6 +36,8 @@ from veadk.utils.misc import safe_json_serialize
 
 logger = get_logger(__name__)
 
+_LLM_REQUEST_EVENTS_RECORDED_ATTR = "_veadk_llm_request_events_recorded"
+
 
 def _upload_call_llm_metrics(
     invocation_context: InvocationContext,
@@ -425,8 +427,19 @@ def trace_call_llm(
     )
 
     for attr_name, attr_extractor in llm_attributes_mapping.items():
+        if attr_name == "gen_ai.messages" and getattr(
+            span, _LLM_REQUEST_EVENTS_RECORDED_ATTR, False
+        ):
+            continue
+
         response: ExtractorResponse = attr_extractor(params)
         ExtractorResponse.update_span(span, attr_name, response)
+
+        # ADK invokes this hook once for every streamed response chunk. Request
+        # events belong to the call_llm span, so emit them only on the first
+        # chunk while continuing to record response choices for every chunk.
+        if attr_name == "gen_ai.messages":
+            setattr(span, _LLM_REQUEST_EVENTS_RECORDED_ATTR, True)
 
     _upload_call_llm_metrics(invocation_context, event_id, llm_request, llm_response)
 

@@ -24,6 +24,11 @@ from opentelemetry.sdk.trace import _Span
 from opentelemetry.trace.span import Span
 
 
+def _remove_none_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
+    """Remove None attribute values before sending them to OpenTelemetry."""
+    return {key: value for key, value in attributes.items() if value is not None}
+
+
 @dataclass
 class ExtractorResponse:
     """Response container for telemetry attribute extractors.
@@ -91,24 +96,33 @@ class ExtractorResponse:
             if isinstance(res, list):
                 for _res in res:
                     if isinstance(_res, dict):
-                        for k, v in _res.items():
-                            if v is not None:
-                                span.set_attribute(k, v)
+                        for k, v in _remove_none_attributes(_res).items():
+                            span.set_attribute(k, v)
             else:
                 span.set_attribute(attr_name, res)  # type: ignore
         elif response.type == "event":
             if isinstance(response.content, dict):
-                span.add_event(attr_name, response.content)
+                span.add_event(attr_name, _remove_none_attributes(response.content))
             elif isinstance(response.content, list):
                 for event in response.content:
-                    span.add_event(attr_name, event)  # type: ignore
+                    event_attributes = (
+                        _remove_none_attributes(event)
+                        if isinstance(event, dict)
+                        else event
+                    )
+                    span.add_event(attr_name, event_attributes)  # type: ignore
         elif response.type == "event_list":
             if isinstance(response.content, list):
                 for event in response.content:
                     if isinstance(event, dict):
                         # we ensure this dict only have one key-value pair
                         key, value = next(iter(event.items()))
-                        span.add_event(key, value)
+                        event_attributes = (
+                            _remove_none_attributes(value)
+                            if isinstance(value, dict)
+                            else value
+                        )
+                        span.add_event(key, event_attributes)
                     else:
                         # Unsupported response type, discard it.
                         pass
