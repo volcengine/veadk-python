@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import importlib.util
+import hashlib
 import json
 import sys
 import types
@@ -80,8 +81,7 @@ def _load_run_sandbox_agent_module():
 def _load_execute_skills_module(
     *,
     ensure_agentkit_session_endpoint=lambda **_kwargs: "",
-    run_sandbox_agent=lambda **_kwargs: "",
-    wait_for_skill_api_health=lambda **_kwargs: None,
+    logger=None,
 ):
     module_path = (
         Path(__file__).resolve().parents[3]
@@ -95,6 +95,15 @@ def _load_execute_skills_module(
     fake_google.__path__ = []  # type: ignore[attr-defined]
     fake_google_adk = types.ModuleType("google.adk")
     fake_google_adk.__path__ = []  # type: ignore[attr-defined]
+    fake_google_adk_agents = types.ModuleType("google.adk.agents")
+    fake_google_adk_agents.__path__ = []  # type: ignore[attr-defined]
+    fake_callback_context = types.ModuleType("google.adk.agents.callback_context")
+
+    class FakeCallbackContext:
+        def __init__(self, invocation_context):
+            self._invocation_context = invocation_context
+
+    fake_callback_context.CallbackContext = FakeCallbackContext
     fake_google_adk_tools = types.ModuleType("google.adk.tools")
     fake_google_adk_tools.ToolContext = object
 
@@ -105,30 +114,42 @@ def _load_execute_skills_module(
     fake_builtin_tools = types.ModuleType("veadk.tools.builtin_tools")
     fake_builtin_tools.__path__ = []  # type: ignore[attr-defined]
     fake_agentkit = types.ModuleType("veadk.tools.builtin_tools._agentkit")
-    fake_agentkit.get_agentkit_account_id = lambda _state: "test-account"
     fake_agentkit.resolve_agentkit_tool_id = lambda _name: "test-tool"
     fake_agentkit.ensure_agentkit_session_endpoint = ensure_agentkit_session_endpoint
-    fake_runner = types.ModuleType("veadk.tools.builtin_tools.run_sandbox_agent")
-    fake_runner.run_sandbox_agent = run_sandbox_agent
     fake_utils = types.ModuleType("veadk.utils")
     fake_utils.__path__ = []  # type: ignore[attr-defined]
+    fake_auth = types.ModuleType("veadk.utils.auth")
+
+    def fake_build_auth_config(**kwargs):
+        credential = (
+            types.SimpleNamespace(api_key=kwargs["token"])
+            if kwargs.get("token")
+            else None
+        )
+        return types.SimpleNamespace(
+            **kwargs,
+            exchanged_auth_credential=credential,
+        )
+
+    fake_auth.build_auth_config = fake_build_auth_config
     fake_logger = types.ModuleType("veadk.utils.logger")
-    fake_logger.get_logger = lambda _name: types.SimpleNamespace(
+    fake_logger.get_logger = lambda _name: logger or types.SimpleNamespace(
         debug=lambda *_args, **_kwargs: None,
         warning=lambda *_args, **_kwargs: None,
         error=lambda *_args, **_kwargs: None,
     )
-
     stub_modules = {
         "google": fake_google,
         "google.adk": fake_google_adk,
+        "google.adk.agents": fake_google_adk_agents,
+        "google.adk.agents.callback_context": fake_callback_context,
         "google.adk.tools": fake_google_adk_tools,
         "veadk": fake_veadk,
         "veadk.tools": fake_tools,
         "veadk.tools.builtin_tools": fake_builtin_tools,
         "veadk.tools.builtin_tools._agentkit": fake_agentkit,
-        "veadk.tools.builtin_tools.run_sandbox_agent": fake_runner,
         "veadk.utils": fake_utils,
+        "veadk.utils.auth": fake_auth,
         "veadk.utils.logger": fake_logger,
     }
 
@@ -140,9 +161,11 @@ def _load_execute_skills_module(
         assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        if wait_for_skill_api_health is not None:
-            module._wait_for_skill_api_health = wait_for_skill_api_health
         return module
+
+
+def _headers_lower(request_obj):
+    return {key.lower(): value for key, value in request_obj.headers.items()}
 
 
 class TestMergeExecutionEnvVars(unittest.TestCase):
@@ -202,14 +225,41 @@ class TestMergeExecutionEnvVars(unittest.TestCase):
 
 
 class TestExecuteSkillsSkillApi(unittest.TestCase):
-    def _tool_context(self):
+    def _tool_context(self, *, inbound_credential=None, credentials_by_key=None):
+        credentials_by_key = credentials_by_key or {}
+
+        class FakeCredentialService:
+            def __init__(self):
+                self.stored_credentials = {}
+
+            async def load_credential(self, *, auth_config, callback_context):
+                self.auth_config = auth_config
+                self.callback_context = callback_context
+                if auth_config.credential_key in credentials_by_key:
+                    return credentials_by_key[auth_config.credential_key]
+                return inbound_credential
+
+            async def set_credential(
+                self, *, app_name, user_id, credential_key, credential
+            ):
+                self.stored_credentials[(app_name, user_id, credential_key)] = (
+                    credential
+                )
+
+        credential_service = (
+            FakeCredentialService()
+            if inbound_credential or credentials_by_key
+            else None
+        )
         invocation_context = types.SimpleNamespace(
             session=types.SimpleNamespace(id="session-1"),
             agent=types.SimpleNamespace(name="agent"),
+            app_name="assistant",
             user_id="user",
+            credential_service=credential_service,
         )
         return types.SimpleNamespace(
-            state={"TIP_TOKEN_KEY": "tip-from-state"},
+            state={},
             _invocation_context=invocation_context,
         )
 
@@ -265,11 +315,142 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         self.assertEqual("https://sandbox.test/a2a", request_obj.full_url)
         self.assertEqual(60, timeout)
         self.assertEqual("POST", request_obj.get_method())
+        headers = _headers_lower(request_obj)
+        self.assertEqual({"content-type"}, set(headers))
         self.assertEqual("message/send", payload["method"])
         self.assertEqual("do work", payload["params"]["message"]["parts"][0]["text"])
         self.assertFalse(payload["params"]["configuration"]["blocking"])
         self.assertEqual("user", payload["params"]["metadata"]["user_id"])
         self.assertEqual("session-1", payload["params"]["metadata"]["session_id"])
+
+    def test_a2a_forwards_inbound_auth_from_credential_service(self):
+        captured_requests = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "req",
+                        "result": {
+                            "kind": "task",
+                            "id": "task-1",
+                            "status": {"state": "completed"},
+                            "artifacts": [
+                                {"parts": [{"kind": "text", "text": "a2a result"}]}
+                            ],
+                        },
+                    }
+                ).encode()
+
+        def fake_urlopen(request, timeout=None):
+            captured_requests.append((request, timeout))
+            return FakeResponse()
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
+        inbound_credential = types.SimpleNamespace(
+            auth_type="HTTP",
+            http=types.SimpleNamespace(
+                credentials=types.SimpleNamespace(token="inbound-user-jwt")
+            ),
+            api_key=None,
+        )
+        tool_context = self._tool_context(
+            credentials_by_key={"inbound_auth": inbound_credential}
+        )
+
+        with patch.object(module.request, "urlopen", fake_urlopen):
+            result = module.execute_skills("do work", tool_context=tool_context)
+
+        self.assertEqual(result, "a2a result")
+        credential_service = tool_context._invocation_context.credential_service
+        self.assertEqual("inbound_auth", credential_service.auth_config.credential_key)
+        self.assertEqual("header", credential_service.auth_config.auth_method)
+        self.assertEqual("bearer", credential_service.auth_config.header_scheme)
+        request_obj, _timeout = captured_requests[0]
+        headers = _headers_lower(request_obj)
+        self.assertEqual({"content-type", "inbound_auth"}, set(headers))
+        self.assertEqual("inbound-user-jwt", headers["inbound_auth"])
+
+    def test_logs_inbound_auth_summaries_without_secret_value(self):
+        captured_logs = []
+        logger = types.SimpleNamespace(
+            debug=lambda message, *args: captured_logs.append(message % args),
+            warning=lambda *_args, **_kwargs: None,
+            error=lambda *_args, **_kwargs: None,
+        )
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "req",
+                        "result": {
+                            "kind": "task",
+                            "id": "task-1",
+                            "status": {"state": "completed"},
+                            "artifacts": [
+                                {"parts": [{"kind": "text", "text": "a2a result"}]}
+                            ],
+                        },
+                    }
+                ).encode()
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+            logger=logger,
+        )
+        token = "inbound-secret-token"
+        inbound_credential = types.SimpleNamespace(
+            auth_type="HTTP",
+            http=types.SimpleNamespace(credentials=types.SimpleNamespace(token=token)),
+            api_key=None,
+        )
+        tool_context = self._tool_context(
+            credentials_by_key={"inbound_auth": inbound_credential}
+        )
+
+        with patch.object(
+            module.request, "urlopen", lambda *_args, **_kwargs: FakeResponse()
+        ):
+            result = module.execute_skills("do work", tool_context=tool_context)
+
+        self.assertEqual("a2a result", result)
+        logs = "\n".join(captured_logs)
+        self.assertNotIn(token, logs)
+        self.assertEqual(2, len(captured_logs))
+
+        received_prefix = "execute_skills inbound_auth received before sandbox send: "
+        send_prefix = "execute_skills inbound_auth header before sandbox request: "
+        self.assertTrue(captured_logs[0].startswith(received_prefix))
+        self.assertTrue(captured_logs[1].startswith(send_prefix))
+
+        expected = {
+            "present": True,
+            "len": len(token),
+            "sha256_8": hashlib.sha256(token.encode("utf-8")).hexdigest()[:8],
+        }
+        self.assertEqual(
+            expected, json.loads(captured_logs[0].removeprefix(received_prefix))
+        )
+        self.assertEqual(
+            expected, json.loads(captured_logs[1].removeprefix(send_prefix))
+        )
 
     def test_a2a_retries_502_until_upstream_is_ready(self):
         attempts = []
@@ -393,12 +574,22 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         module = _load_execute_skills_module(
             ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
         )
+        inbound_credential = types.SimpleNamespace(
+            auth_type="HTTP",
+            http=types.SimpleNamespace(
+                credentials=types.SimpleNamespace(token="inbound-user-jwt")
+            ),
+            api_key=None,
+        )
+        tool_context = self._tool_context(
+            credentials_by_key={"inbound_auth": inbound_credential}
+        )
 
         with (
             patch.object(module.request, "urlopen", fake_urlopen),
             patch.object(module.time, "sleep") as sleep,
         ):
-            result = module.execute_skills("do work", tool_context=self._tool_context())
+            result = module.execute_skills("do work", tool_context=tool_context)
 
         self.assertEqual(result, "poll result")
         self.assertEqual(2, len(captured_requests))
@@ -406,6 +597,18 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         get_request, _get_timeout = captured_requests[1]
         send_payload = json.loads(send_request.data.decode())
         get_payload = json.loads(get_request.data.decode())
+        self.assertEqual(
+            "inbound-user-jwt", _headers_lower(send_request)["inbound_auth"]
+        )
+        self.assertEqual(
+            "inbound-user-jwt", _headers_lower(get_request)["inbound_auth"]
+        )
+        self.assertEqual(
+            {"content-type", "inbound_auth"}, set(_headers_lower(send_request))
+        )
+        self.assertEqual(
+            {"content-type", "inbound_auth"}, set(_headers_lower(get_request))
+        )
         self.assertEqual("message/send", send_payload["method"])
         self.assertEqual("tasks/get", get_payload["method"])
         self.assertEqual("task-1", get_payload["params"]["id"])
@@ -517,10 +720,10 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         )
 
         self.assertEqual(
-            "https://sandbox.test/v1/skills/execute?faasInstanceName=inst&Authorization=key",
+            "https://sandbox.test/a2a?faasInstanceName=inst&Authorization=key",
             module._skill_api_url(
                 "https://sandbox.test/?faasInstanceName=inst&Authorization=key",
-                "/v1/skills/execute",
+                "/a2a",
             ),
         )
 
