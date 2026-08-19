@@ -1,0 +1,162 @@
+.agentkit-promo-stack {
+  position: relative;
+  width: calc(100% - 20px);
+  height: 46px;
+  margin: 0 10px;
+  transition: height 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.agentkit-promo-stack:hover,
+.agentkit-promo-stack:focus-within {
+  height: 82px;
+}
+
+.agentkit-promo-link {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 38px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  color: hsl(215 42% 20%);
+  text-decoration: none;
+  transition:
+    bottom 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    left 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    width 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    filter 160ms ease-out;
+}
+
+.agentkit-promo-link.is-console {
+  z-index: 2;
+  background: linear-gradient(
+    124deg,
+    hsl(191 68% 94%) 0%,
+    hsl(211 62% 92%) 52%,
+    hsl(226 56% 94%) 100%
+  );
+}
+
+.agentkit-promo-link.is-docs {
+  z-index: 1;
+  bottom: 7px;
+  left: 4px;
+  width: calc(100% - 8px);
+  background: linear-gradient(
+    124deg,
+    hsl(270 58% 94%) 0%,
+    hsl(309 56% 92%) 52%,
+    hsl(251 60% 92%) 100%
+  );
+}
+
+.agentkit-promo-stack:hover .agentkit-promo-link.is-docs,
+.agentkit-promo-stack:focus-within .agentkit-promo-link.is-docs {
+  bottom: 44px;
+  left: 0;
+  width: 100%;
+}
+
+.agentkit-promo-link::before {
+  content: "";
+  position: absolute;
+  inset: -10px;
+  background:
+    linear-gradient(112deg, transparent 12%, hsl(0 0% 100% / 0.36) 38%, transparent 60%),
+    linear-gradient(150deg, transparent 48%, hsl(251 78% 78% / 0.22) 74%, transparent 94%);
+  filter: blur(3px);
+  transform: scale(1.05);
+  pointer-events: none;
+}
+
+.agentkit-promo-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      132deg,
+      transparent 0 3px,
+      hsl(0 0% 100% / 0.05) 3px 4px
+    ),
+    linear-gradient(104deg, hsl(0 0% 100% / 0.12), transparent 60%);
+  opacity: 0.76;
+  pointer-events: none;
+}
+
+.agentkit-promo-link:hover {
+  filter: saturate(1.04) brightness(0.99);
+}
+
+.agentkit-promo-link:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.42);
+  outline-offset: 2px;
+}
+
+.agentkit-promo-content,
+.agentkit-promo-external-icon {
+  position: relative;
+  z-index: 1;
+}
+
+.agentkit-promo-content {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.agentkit-promo-copy {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentkit-promo-external-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  margin-left: 6px;
+  opacity: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: opacity 160ms ease;
+}
+
+.agentkit-promo-link:hover .agentkit-promo-external-icon,
+.agentkit-promo-link:focus-visible .agentkit-promo-external-icon {
+  opacity: 1;
+}
+
+.sidebar.is-collapsed .agentkit-promo-stack {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agentkit-promo-stack,
+  .agentkit-promo-link,
+  .agentkit-promo-external-icon {
+    transition: none;
+  }
+}
+
+@media (hover: none) {
+  .agentkit-promo-external-icon {
+    opacity: 1;
+  }
+
+  .agentkit-promo-link:hover {
+    filter: none;
+  }
+}
