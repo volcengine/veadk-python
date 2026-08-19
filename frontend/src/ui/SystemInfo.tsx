@@ -1,9 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import {
   getSystemInfo,
   listIdentityUserPools,
+  updateCodexSandboxToolModelEnv,
+  type CodexSandboxToolKind,
   type IdentityUserPool,
   type SandboxToolInfo,
+  type SandboxToolKind,
   type StudioRole,
 } from "../adk/client";
 import type { CloudProvider } from "../adk/cloudProvider";
@@ -58,6 +62,20 @@ function isMissingLocalCredentials(cause: unknown): boolean {
   );
 }
 
+function isCodexSandboxToolKind(kind: SandboxToolKind): kind is CodexSandboxToolKind {
+  return kind === "codex" || kind === "codex_snapshot";
+}
+
+interface SandboxToolUpdateState {
+  busy: boolean;
+  error: string;
+  message: string;
+}
+
+function defaultSandboxToolUpdateState(): SandboxToolUpdateState {
+  return { busy: false, error: "", message: "" };
+}
+
 export function SystemInfo({
   version,
   localMode,
@@ -76,6 +94,68 @@ export function SystemInfo({
   const [userPoolsError, setUserPoolsError] = useState("");
   const [sandboxReloadKey, setSandboxReloadKey] = useState(0);
   const [userPoolsReloadKey, setUserPoolsReloadKey] = useState(0);
+  const mountedRef = useRef(false);
+  const [sandboxToolUpdates, setSandboxToolUpdates] = useState<
+    Partial<Record<CodexSandboxToolKind, SandboxToolUpdateState>>
+  >({});
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  function patchSandboxToolUpdate(
+    kind: CodexSandboxToolKind,
+    patch: Partial<SandboxToolUpdateState>,
+  ) {
+    setSandboxToolUpdates((current) => ({
+      ...current,
+      [kind]: {
+        ...defaultSandboxToolUpdateState(),
+        ...current[kind],
+        ...patch,
+      },
+    }));
+  }
+
+  async function updateSandboxToolModelEnv(tool: SandboxToolInfo) {
+    if (!isCodexSandboxToolKind(tool.kind) || !tool.toolId) return;
+    const currentState =
+      sandboxToolUpdates[tool.kind] ?? defaultSandboxToolUpdateState();
+    if (currentState.busy) return;
+    patchSandboxToolUpdate(tool.kind, { busy: true, error: "", message: "" });
+    try {
+      const result = await updateCodexSandboxToolModelEnv(tool.kind);
+      if (!mountedRef.current) return;
+      setSandboxTools((current) =>
+        current.map((item) =>
+          item.kind === tool.kind
+            ? {
+                ...item,
+                needsModelEnvUpdate: false,
+                canUpdateModelEnv: false,
+                modelEnvError: "",
+                modelEnvErrorCode: "",
+              }
+            : item,
+        ),
+      );
+      patchSandboxToolUpdate(tool.kind, {
+        busy: false,
+        error: "",
+        message: result.updated ? "已更新" : "无需更新",
+      });
+    } catch (cause) {
+      if (!mountedRef.current) return;
+      patchSandboxToolUpdate(tool.kind, {
+        busy: false,
+        error: cause instanceof Error ? cause.message : String(cause),
+        message: "",
+      });
+    }
+  }
 
   useEffect(() => {
     if (!isAdmin) {
@@ -224,32 +304,74 @@ export function SystemInfo({
                 </div>
               ) : (
                 <div className="system-info-tool-list">
-                  {sandboxTools.map((tool) => (
-                    <dl className="system-info-tool" key={tool.kind}>
-                      <div className="system-info-resource-row">
-                        <dt className="system-info-tool-label">
-                          <span>{tool.label}</span>
-                          {tool.snapshot ? (
-                            <span className="system-info-tool-badge">快照版</span>
-                          ) : null}
-                        </dt>
-                        <dd
-                          className={`system-info-resource-value${tool.toolId ? "" : " is-empty"}`}
-                        >
-                          <ConsoleLink
-                            href={sandboxToolConsoleUrl(
-                              provider,
-                              region,
-                              tool.toolId,
-                            )}
-                            label={`在云控制台中打开${tool.label}`}
+                  {sandboxTools.map((tool) => {
+                    const codexKind = isCodexSandboxToolKind(tool.kind)
+                      ? tool.kind
+                      : null;
+                    const updateState = codexKind
+                      ? sandboxToolUpdates[codexKind]
+                      : undefined;
+                    const updateVisible =
+                      codexKind !== null &&
+                      Boolean(tool.toolId) &&
+                      tool.needsModelEnvUpdate &&
+                      tool.canUpdateModelEnv;
+                    const inlineError = codexKind
+                      ? updateState?.error || tool.modelEnvError
+                      : "";
+                    return (
+                      <dl className="system-info-tool" key={tool.kind}>
+                        <div className="system-info-resource-row">
+                          <dt className="system-info-tool-label">
+                            <span>{tool.label}</span>
+                            {tool.snapshot ? (
+                              <span className="system-info-tool-badge">快照版</span>
+                            ) : null}
+                          </dt>
+                          <dd
+                            className={`system-info-resource-value${tool.toolId ? "" : " is-empty"}`}
                           >
-                            {tool.toolId || "未配置"}
-                          </ConsoleLink>
-                        </dd>
-                      </div>
-                    </dl>
-                  ))}
+                            <ConsoleLink
+                              href={sandboxToolConsoleUrl(
+                                provider,
+                                region,
+                                tool.toolId,
+                              )}
+                              label={`在云控制台中打开${tool.label}`}
+                            >
+                              {tool.toolId || "未配置"}
+                            </ConsoleLink>
+                            {updateVisible ? (
+                              <button
+                                type="button"
+                                className="system-info-resource-update"
+                                disabled={updateState?.busy}
+                                aria-busy={updateState?.busy || undefined}
+                                aria-label={`更新${tool.snapshot ? "快照版 " : ""}${tool.label}模型环境变量`}
+                                title={`更新${tool.snapshot ? "快照版 " : ""}${tool.label}模型环境变量`}
+                                onClick={() => void updateSandboxToolModelEnv(tool)}
+                              >
+                                <RefreshCw
+                                  aria-hidden="true"
+                                  className={updateState?.busy ? "is-spinning" : ""}
+                                />
+                              </button>
+                            ) : null}
+                            {codexKind && updateState?.message ? (
+                              <span className="system-info-inline-status" role="status">
+                                {updateState.message}
+                              </span>
+                            ) : null}
+                            {inlineError ? (
+                              <span className="system-info-inline-error" role="alert">
+                                {inlineError}
+                              </span>
+                            ) : null}
+                          </dd>
+                        </div>
+                      </dl>
+                    );
+                  })}
                 </div>
               )}
             </section>

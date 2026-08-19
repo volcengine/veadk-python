@@ -167,6 +167,83 @@
   text-decoration-color: currentColor;
 }
 
+.system-info-resource-update {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 30px;
+  min-height: 29px;
+  margin-left: 18px;
+  padding: 0;
+  border: 1px solid hsl(var(--foreground) / 0.14);
+  border-radius: 7px;
+  background: hsl(var(--secondary) / 0.62);
+  box-shadow: inset 0 1px 0 hsl(var(--background) / 0.72);
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 560;
+  line-height: 1;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.system-info-resource-update svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  stroke-width: 2;
+}
+
+.system-info-resource-update:hover:not(:disabled) {
+  border-color: hsl(var(--foreground) / 0.26);
+  background: hsl(var(--secondary) / 0.86);
+  box-shadow:
+    inset 0 1px 0 hsl(var(--background) / 0.82),
+    0 1px 5px hsl(var(--foreground) / 0.08);
+  transform: translateY(-1px);
+}
+
+.system-info-resource-update:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.system-info-resource-update:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+.system-info-resource-update:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.system-info-resource-update svg.is-spinning {
+  animation: system-info-spin 800ms linear infinite;
+}
+
+.system-info-inline-status,
+.system-info-inline-error {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.system-info-inline-status {
+  color: hsl(var(--muted-foreground));
+}
+
+.system-info-inline-error {
+  color: hsl(var(--destructive));
+}
+
 .system-info-tool-list {
   display: grid;
   gap: 8px;
@@ -287,8 +364,19 @@
 
 @media (prefers-reduced-motion: reduce) {
   .system-info-resource-link,
-  .system-info-resource-link svg {
+  .system-info-resource-link svg,
+  .system-info-resource-update {
     transition: none;
+  }
+
+  .system-info-resource-update svg.is-spinning {
+    animation: none;
+  }
+}
+
+@keyframes system-info-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 

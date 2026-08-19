@@ -22,6 +22,7 @@ import threading
 import time
 import zlib
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from veadk.cli.studio_model_catalog import (
@@ -46,6 +47,10 @@ _AGENT_TOOL_TYPES = {
     "openclaw": "ArkClawEnv",
     "hermes": "HermesEnv",
 }
+_CODEX_API_KEY_ENV = "CODEX_API_KEY"
+_CODEX_BASE_URL_ENV = "CODEX_BASE_URL"
+_MODEL_AGENT_API_KEY_ENV = "MODEL_AGENT_API_KEY"
+_MODEL_AGENT_BASE_URL_ENV = "MODEL_AGENT_BASE_URL"
 _READY_STATUS = "Ready"
 _FAILED_STATUSES = frozenset({"Error", "Failed", "CreateFailed", "Deleting", "Deleted"})
 _RETRYABLE_CREATE_STATUS_CODES = frozenset({408, 409, 425, 429})
@@ -77,6 +82,19 @@ _RETRYABLE_CREATE_ERROR_MARKERS = (
 )
 _CREATE_TOOL_RATE_LOCK = threading.Lock()
 _NEXT_CREATE_TOOL_AT = 0.0
+
+
+@dataclass(frozen=True)
+class StudioCodexModelEnvironmentStatus:
+    """Read-only status for Codex Tool model environment repair."""
+
+    needs_model_env_update: bool
+    can_update_model_env: bool
+    model_env_error: str
+    has_model_agent_api_key: bool
+    has_model_agent_base_url: bool
+    has_codex_api_key: bool
+    has_codex_base_url: bool
 
 
 def studio_sandbox_agent_model_name(provider: str) -> str:
@@ -584,7 +602,10 @@ def ensure_studio_agent_model_credential(
     ):
         return
     envs.update(updates)
-    updated_envs = [{"Key": key, "Value": value} for key, value in envs.items()]
+    updated_envs = [
+        tools_types.EnvsItemForUpdateTool(Key=key, Value=value)
+        for key, value in envs.items()
+    ]
     tools_client.update_tool(
         tools_types.UpdateToolRequest(
             ToolId=tool_id,
@@ -592,3 +613,125 @@ def ensure_studio_agent_model_credential(
             Envs=updated_envs,
         )
     )
+
+
+def _env_value(envs: dict[str, Any], key: str) -> str:
+    return str(envs.get(key) or "").strip()
+
+
+def _tool_envs(tool: Any) -> dict[str, Any]:
+    return {item.key: item.value for item in tool.envs or [] if item.key}
+
+
+def _codex_missing_env_error(missing_codex_keys: list[str]) -> str:
+    return (
+        "Codex Sandbox 缺少 "
+        + "、".join(missing_codex_keys)
+        + "，无法回填 MODEL_AGENT_API_KEY 和 MODEL_AGENT_BASE_URL。"
+    )
+
+
+def _codex_model_environment_status(
+    envs: dict[str, Any],
+) -> StudioCodexModelEnvironmentStatus:
+    has_model_agent_api_key = bool(_env_value(envs, _MODEL_AGENT_API_KEY_ENV))
+    has_model_agent_base_url = bool(_env_value(envs, _MODEL_AGENT_BASE_URL_ENV))
+    has_codex_api_key = bool(_env_value(envs, _CODEX_API_KEY_ENV))
+    has_codex_base_url = bool(_env_value(envs, _CODEX_BASE_URL_ENV))
+    missing_codex_keys = [
+        key
+        for key, present in (
+            (_CODEX_API_KEY_ENV, has_codex_api_key),
+            (_CODEX_BASE_URL_ENV, has_codex_base_url),
+        )
+        if not present
+    ]
+    needs_model_env_update = not (has_model_agent_api_key and has_model_agent_base_url)
+    return StudioCodexModelEnvironmentStatus(
+        needs_model_env_update=needs_model_env_update,
+        can_update_model_env=needs_model_env_update and not missing_codex_keys,
+        model_env_error=(
+            _codex_missing_env_error(missing_codex_keys) if missing_codex_keys else ""
+        ),
+        has_model_agent_api_key=has_model_agent_api_key,
+        has_model_agent_base_url=has_model_agent_base_url,
+        has_codex_api_key=has_codex_api_key,
+        has_codex_base_url=has_codex_base_url,
+    )
+
+
+def inspect_studio_codex_model_environment(
+    *,
+    tool_id: str,
+    access_key: str = "",
+    secret_key: str = "",
+    session_token: str | None = None,
+    region: str = "cn-beijing",
+    client: Any | None = None,
+) -> StudioCodexModelEnvironmentStatus:
+    """Inspect whether a Codex Tool needs model env repair without mutation."""
+    normalized_tool_id = tool_id.strip()
+    if not normalized_tool_id:
+        raise ValueError("tool_id must not be empty")
+
+    from agentkit.sdk.tools import types as tools_types
+    from agentkit.sdk.tools.client import AgentkitToolsClient
+
+    tools_client = client or AgentkitToolsClient(
+        access_key=access_key,
+        secret_key=secret_key,
+        session_token=session_token or "",
+        region=region,
+    )
+    tool = tools_client.get_tool(tools_types.GetToolRequest(ToolId=normalized_tool_id))
+    return _codex_model_environment_status(_tool_envs(tool))
+
+
+def ensure_studio_codex_model_environment(
+    *,
+    tool_id: str,
+    access_key: str = "",
+    secret_key: str = "",
+    session_token: str | None = None,
+    region: str = "cn-beijing",
+    client: Any | None = None,
+) -> bool:
+    """Backfill MODEL_AGENT envs from CODEX envs on a Codex CodeEnv Tool."""
+    normalized_tool_id = tool_id.strip()
+    if not normalized_tool_id:
+        raise ValueError("tool_id must not be empty")
+
+    from agentkit.sdk.tools import types as tools_types
+    from agentkit.sdk.tools.client import AgentkitToolsClient
+
+    tools_client = client or AgentkitToolsClient(
+        access_key=access_key,
+        secret_key=secret_key,
+        session_token=session_token or "",
+        region=region,
+    )
+    tool = tools_client.get_tool(tools_types.GetToolRequest(ToolId=normalized_tool_id))
+    envs = _tool_envs(tool)
+    status = _codex_model_environment_status(envs)
+    if not status.needs_model_env_update:
+        return False
+    if not status.can_update_model_env:
+        raise ValueError(status.model_env_error)
+
+    updates: dict[str, str] = {}
+    if not status.has_model_agent_api_key:
+        updates[_MODEL_AGENT_API_KEY_ENV] = _env_value(envs, _CODEX_API_KEY_ENV)
+    if not status.has_model_agent_base_url:
+        updates[_MODEL_AGENT_BASE_URL_ENV] = _env_value(envs, _CODEX_BASE_URL_ENV)
+    if not updates:
+        return False
+
+    envs.update(updates)
+    updated_envs = [
+        tools_types.EnvsItemForUpdateTool(Key=key, Value=value)
+        for key, value in envs.items()
+    ]
+    tools_client.update_tool(
+        tools_types.UpdateToolRequest(ToolId=normalized_tool_id, Envs=updated_envs)
+    )
+    return True
