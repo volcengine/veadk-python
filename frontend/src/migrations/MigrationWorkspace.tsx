@@ -22,13 +22,11 @@ import {
   uploadMigrationSource,
   type MigrationAnalysis,
   type MigrationActivity,
-  type MigrationActivityItem,
   type MigrationArtifact,
   type MigrationCapabilities,
   type MigrationFramework,
   type MigrationTask,
 } from "../adk/migrations";
-import type { Block } from "../blocks";
 import {
   deployAgentkitProject,
   type DeployStage,
@@ -66,6 +64,7 @@ import {
   isSecretEnvironmentKey,
   migrationDeploymentEnvDefaults,
 } from "./deploymentEnvironment";
+import { migrationActivityBlocks } from "./migrationActivityBlocks";
 import "./MigrationWorkspace.css";
 
 const MAX_SOURCE_BYTES = 50 * 1024 * 1024;
@@ -437,20 +436,6 @@ function AnalysisSummary({ analysis }: { analysis: MigrationAnalysis }) {
   );
 }
 
-function migrationActivityBlock(item: MigrationActivityItem): Block | null {
-  if (item.kind === "reasoning" && item.detail) {
-    return {
-      kind: "thinking",
-      text: item.detail,
-      done: item.status !== "running",
-    };
-  }
-  if (item.kind === "message" && item.detail) {
-    return { kind: "text", text: item.detail };
-  }
-  return null;
-}
-
 function MigrationActivityFeed({
   activity,
   loading,
@@ -463,6 +448,7 @@ function MigrationActivityFeed({
   analyzing: boolean;
 }) {
   const items = activity?.items ?? [];
+  const blocks = migrationActivityBlocks(items);
 
   return (
     <section className="migration-activity" aria-label="Codex 执行动态">
@@ -473,30 +459,9 @@ function MigrationActivityFeed({
         />
         <strong>Codex 执行动态</strong>
       </div>
-      {items.length > 0 ? (
+      {blocks.length > 0 ? (
         <div className="migration-activity__stream">
-          {items.map((item) => {
-            const block = migrationActivityBlock(item);
-            return block ? (
-              <Blocks
-                key={item.id}
-                blocks={[block]}
-                onAction={ignoreMigrationAction}
-              />
-            ) : (
-              <div
-                className="migration-activity__status"
-                data-status={item.status}
-                key={item.id}
-              >
-                <span className="migration-activity__marker" aria-hidden="true" />
-                <span>
-                  <strong>{item.title}</strong>
-                  {item.detail ? <small>{item.detail}</small> : null}
-                </span>
-              </div>
-            );
-          })}
+          <Blocks blocks={blocks} onAction={ignoreMigrationAction} />
         </div>
       ) : loading || !activity?.complete ? (
         <TextShimmer>

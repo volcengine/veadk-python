@@ -40,6 +40,7 @@ const moduleUrl = `data:text/javascript;base64,${Buffer.from(
   result.outputFiles[0].contents,
 ).toString("base64")}`;
 const {
+  getMigrationActivity,
   getMigrationArtifact,
   getMigrationCapabilities,
   getMigrationTask,
@@ -213,4 +214,124 @@ test("normalizes public migration environment defaults and legacy artifacts", as
     MODEL_AGENT_API_BASE: "https://ark.example/api/v3",
   });
   assert.deepEqual(legacyArtifact.environment.defaults, {});
+});
+
+test("normalizes structured migration activity while accepting legacy items", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const responses = [
+    {
+      available: true,
+      complete: false,
+      items: [
+        {
+          id: "migration:1:command",
+          kind: "command",
+          status: "failed",
+          title: "命令执行未完成",
+          tool: {
+            name: "命令执行未完成",
+            input: { command: "python migrate.py" },
+            output: "exit 1",
+            error: "execution failed",
+            exitCode: 1,
+          },
+        },
+        {
+          id: "migration:1:plan",
+          kind: "plan",
+          status: "running",
+          title: "项目迁移计划",
+          detail: "已完成 1/2 项",
+          plan: [
+            { text: "识别入口", status: "completed" },
+            { text: "迁移工具", status: "in_progress" },
+          ],
+        },
+      ],
+    },
+    {
+      available: true,
+      complete: true,
+      items: [
+        {
+          id: "migration:1:message",
+          kind: "message",
+          status: "completed",
+          title: "Codex 更新",
+          detail: "迁移代码已生成。",
+        },
+      ],
+    },
+  ];
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify(responses.shift()), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  const structured = await getMigrationActivity("task-1");
+  const legacy = await getMigrationActivity("task-1");
+
+  assert.deepEqual(structured.items[0].tool, {
+    name: "命令执行未完成",
+    input: { command: "python migrate.py" },
+    output: "exit 1",
+    error: "execution failed",
+    exitCode: 1,
+  });
+  assert.deepEqual(structured.items[1].plan, [
+    { text: "识别入口", status: "completed" },
+    { text: "迁移工具", status: "in_progress" },
+  ]);
+  assert.equal(legacy.items[0].detail, "迁移代码已生成。");
+  assert.equal("tool" in legacy.items[0], false);
+  assert.equal("plan" in legacy.items[0], false);
+});
+
+test("rejects malformed optional migration activity fields", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const responses = [
+    {
+      available: true,
+      complete: false,
+      items: [{
+        id: "tool",
+        kind: "command",
+        status: "running",
+        title: "执行工具",
+        tool: { name: 1 },
+      }],
+    },
+    {
+      available: true,
+      complete: false,
+      items: [{
+        id: "plan",
+        kind: "plan",
+        status: "running",
+        title: "迁移计划",
+        plan: [{ text: "迁移", status: "done" }],
+      }],
+    },
+  ];
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify(responses.shift()), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  await assert.rejects(
+    () => getMigrationActivity("task-1"),
+    /迁移执行工具项格式错误/,
+  );
+  await assert.rejects(
+    () => getMigrationActivity("task-1"),
+    /迁移执行计划项格式错误/,
+  );
 });

@@ -125,6 +125,8 @@ _MIGRATION_ACTIVITY_LOG_PATHS = tuple(
 _MAX_ACTIVITY_LOG_BYTES = 16 * 1024 * 1024
 _MAX_ACTIVITY_TEXT_CHARS = 12_000
 _MAX_ACTIVITY_ITEMS = 200
+_MAX_ACTIVITY_COLLECTION_ITEMS = 50
+_MAX_ACTIVITY_VALUE_DEPTH = 6
 _MAX_ENV_EXAMPLE_BYTES = 256 * 1024
 _MAX_PUBLIC_ENV_VALUE_CHARS = 16_384
 _ACTIVITY_COMPLETE_STATES = {
@@ -141,9 +143,18 @@ _ACTIVITY_SECRET_ASSIGNMENT_RE = re.compile(
     r"token|secret|password|passwd|pwd)[a-z0-9_.-]*"
     r")(\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;，；!?！？]+)"
 )
+_ACTIVITY_SECRET_VALUE_RE = re.compile(
+    r"(?i)\b(?:[a-z0-9_.-]*(?:api[_-]?key|access[_-]?key|secret[_-]?key|"
+    r"token|secret|password|passwd|pwd)[a-z0-9_.-]*)\s*[:=]\s*"
+    r"(?P<value>\"[^\"]*\"|'[^']*'|[^\s,;，；!?！？]+)"
+)
 _ACTIVITY_BEARER_RE = re.compile(r"(?i)\b(bearer\s+)[a-z0-9._~+/=-]+")
 _ACTIVITY_CREDENTIAL_RE = re.compile(
     r"(?i)\b(?:ark|sk)-[a-z0-9_-]{12,}\b|\bAK[A-Z0-9]{16,}\b"
+)
+_ACTIVITY_SENSITIVE_FIELD_RE = re.compile(
+    r"(?i)(?:authorization|cookie|api[_-]?key|access[_-]?key|secret[_-]?key|"
+    r"private[_-]?key|token|secret|password|passwd|pwd|credential)"
 )
 _SENSITIVE_ENV_KEY_RE = re.compile(
     r"(?i)(?:API_KEY|ACCESS_KEY|SECRET_KEY|PRIVATE_KEY|TOKEN|SECRET|"
@@ -216,7 +227,37 @@ def _public_environment_defaults(
     return defaults
 
 
-def _redact_activity_text(value: str) -> str:
+def _activity_secret_values(value: object, *, depth: int = 0) -> tuple[str, ...]:
+    if depth >= _MAX_ACTIVITY_VALUE_DEPTH:
+        return ()
+    secrets: set[str] = set()
+    if isinstance(value, str):
+        for match in _ACTIVITY_SECRET_VALUE_RE.finditer(value):
+            secret = match.group("value").strip("\"'")
+            if len(secret) >= 4:
+                secrets.add(secret)
+    elif isinstance(value, list):
+        for item in value[:_MAX_ACTIVITY_COLLECTION_ITEMS]:
+            secrets.update(_activity_secret_values(item, depth=depth + 1))
+    elif isinstance(value, dict):
+        for index, (raw_key, item) in enumerate(value.items()):
+            if index >= _MAX_ACTIVITY_COLLECTION_ITEMS:
+                break
+            if (
+                _ACTIVITY_SENSITIVE_FIELD_RE.search(str(raw_key))
+                and isinstance(item, str)
+                and len(item) >= 4
+            ):
+                secrets.add(item)
+            secrets.update(_activity_secret_values(item, depth=depth + 1))
+    return tuple(sorted(secrets, key=len, reverse=True))
+
+
+def _redact_activity_text(
+    value: str,
+    *,
+    secret_values: tuple[str, ...] = (),
+) -> str:
     text = "".join(
         character for character in value if character in "\n\t" or ord(character) >= 32
     ).strip()
@@ -229,17 +270,79 @@ def _redact_activity_text(value: str) -> str:
         text,
     )
     text = _ACTIVITY_CREDENTIAL_RE.sub("[已隐藏]", text)
+    for secret in secret_values:
+        text = text.replace(secret, "[已隐藏]")
     if len(text) > _MAX_ACTIVITY_TEXT_CHARS:
         return f"{text[:_MAX_ACTIVITY_TEXT_CHARS].rstrip()}\n…内容已截断"
     return text
 
 
+def _redact_activity_value(
+    value: object,
+    *,
+    secret_values: tuple[str, ...] = (),
+    depth: int = 0,
+) -> object:
+    if depth >= _MAX_ACTIVITY_VALUE_DEPTH:
+        return "…内容已截断"
+    if isinstance(value, str):
+        return _redact_activity_text(value, secret_values=secret_values)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, list):
+        items = [
+            _redact_activity_value(
+                item,
+                secret_values=secret_values,
+                depth=depth + 1,
+            )
+            for item in value[:_MAX_ACTIVITY_COLLECTION_ITEMS]
+        ]
+        if len(value) > _MAX_ACTIVITY_COLLECTION_ITEMS:
+            items.append("…内容已截断")
+        return items
+    if isinstance(value, dict):
+        result: dict[str, object] = {}
+        for index, (raw_key, item) in enumerate(value.items()):
+            if index >= _MAX_ACTIVITY_COLLECTION_ITEMS:
+                result["…"] = "内容已截断"
+                break
+            key = str(raw_key)
+            result[key] = (
+                "[已隐藏]"
+                if _ACTIVITY_SENSITIVE_FIELD_RE.search(key)
+                else _redact_activity_value(
+                    item,
+                    secret_values=secret_values,
+                    depth=depth + 1,
+                )
+            )
+        return result
+    raise TypeError("Codex activity payload contains a non-JSON value.")
+
+
+def _activity_payload(
+    value: object,
+    *,
+    secret_values: tuple[str, ...] = (),
+) -> object:
+    sanitized = _redact_activity_value(value, secret_values=secret_values)
+    serialized = json.dumps(sanitized, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized) > _MAX_ACTIVITY_TEXT_CHARS:
+        return _redact_activity_text(serialized, secret_values=secret_values)
+    return sanitized
+
+
+def _has_activity_payload(value: object) -> bool:
+    return value is not None and value != ""
+
+
 def _activity_status(event_type: str, item: dict[str, object]) -> str:
     status = str(item.get("status") or "").lower()
+    if event_type.endswith(".failed") or status in {"failed", "error", "declined"}:
+        return "failed"
     if event_type.endswith(".completed") or status in {"completed", "done"}:
         return "completed"
-    if event_type.endswith(".failed") or status in {"failed", "error"}:
-        return "failed"
     return "running"
 
 
@@ -326,12 +429,12 @@ def _parse_activity_log(
     attempt: int,
     *,
     phase: str,
-) -> list[dict[str, str]]:
-    items: list[dict[str, str]] = []
+) -> list[dict[str, object]]:
+    items: list[dict[str, object]] = []
     item_indexes: dict[str, int] = {}
 
-    def upsert(item: dict[str, str]) -> None:
-        item_id = item["id"]
+    def upsert(item: dict[str, object]) -> None:
+        item_id = str(item["id"])
         index = item_indexes.get(item_id)
         if index is None:
             item_indexes[item_id] = len(items)
@@ -361,6 +464,7 @@ def _parse_activity_log(
         )
         activity_id = f"{phase}:{attempt}:{item_id}"
         status = _activity_status(event_type, item)
+        secret_values = _activity_secret_values(event)
 
         if item_type in {"reasoning", "agent_message"}:
             raw_text = item.get("text")
@@ -372,7 +476,7 @@ def _parse_activity_log(
                 and _analysis_result_message(raw_text)
             ):
                 continue
-            detail = _redact_activity_text(raw_text)
+            detail = _redact_activity_text(raw_text, secret_values=secret_values)
             if not detail:
                 continue
             upsert(
@@ -389,70 +493,284 @@ def _parse_activity_log(
         if item_type == "todo_list":
             raw_todos = item.get("items")
             todos = raw_todos if isinstance(raw_todos, list) else []
-            completed = sum(
-                1
-                for todo in todos
-                if isinstance(todo, dict)
-                and (
-                    todo.get("completed") is True
-                    or str(todo.get("status") or "").lower() in {"completed", "done"}
+            plan: list[dict[str, str]] = []
+            plan_states: list[str] = []
+            for todo in todos:
+                if not isinstance(todo, dict):
+                    continue
+                raw_todo_status = str(todo.get("status") or "").lower()
+                if todo.get("completed") is True or raw_todo_status in {
+                    "completed",
+                    "done",
+                }:
+                    todo_status = "completed"
+                elif raw_todo_status in {"failed", "error"}:
+                    todo_status = "failed"
+                elif raw_todo_status in {"in_progress", "running"}:
+                    todo_status = "in_progress"
+                else:
+                    todo_status = "pending"
+                raw_text = todo.get("text")
+                if isinstance(raw_text, str):
+                    text = _redact_activity_text(
+                        raw_text,
+                        secret_values=secret_values,
+                    )
+                    if text:
+                        plan.append({"text": text, "status": todo_status})
+                        plan_states.append(todo_status)
+            if not plan:
+                continue
+            completed = plan_states.count("completed")
+            todo_status = (
+                "failed"
+                if status == "failed" or "failed" in plan_states
+                else (
+                    "completed"
+                    if plan_states and completed == len(plan_states)
+                    else "running"
                 )
             )
-            todo_status = "completed" if todos and completed == len(todos) else status
             upsert(
                 {
                     "id": activity_id,
                     "kind": "plan",
                     "status": todo_status,
-                    "title": (
-                        "Codex 正在按计划分析"
-                        if phase == "analysis"
-                        else "Codex 正在按计划迁移"
-                    ),
-                    "detail": f"已完成 {completed}/{len(todos)} 项",
+                    "title": "项目分析计划" if phase == "analysis" else "项目迁移计划",
+                    "detail": f"已完成 {completed}/{len(plan)} 项",
+                    "plan": plan,
                 }
             )
             continue
 
         if item_type == "command_execution":
             command = item.get("command")
+            command_text = command if isinstance(command, str) else ""
             title = _command_activity_title(
-                command if isinstance(command, str) else "",
+                command_text,
                 status,
                 phase,
             )
             if title is None:
-                continue
+                title = {
+                    "running": "正在执行命令",
+                    "completed": "已执行命令",
+                    "failed": "命令执行未完成",
+                }[status]
+            tool: dict[str, object] = {"name": title}
+            if command_text:
+                tool["input"] = _activity_payload(
+                    {"command": command_text},
+                    secret_values=secret_values,
+                )
+            output = item.get("aggregated_output")
+            if _has_activity_payload(output):
+                tool["output"] = _activity_payload(
+                    output,
+                    secret_values=secret_values,
+                )
+            exit_code = item.get("exit_code")
+            if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+                tool["exitCode"] = exit_code
             upsert(
                 {
                     "id": activity_id,
                     "kind": "command",
                     "status": status,
                     "title": title,
+                    "tool": tool,
                 }
             )
             continue
 
-        if event_type in {"turn.completed", "turn.failed"}:
-            turn_status = "completed" if event_type == "turn.completed" else "failed"
+        if item_type == "file_change":
+            title = {
+                "running": "正在更新项目文件",
+                "completed": "已更新项目文件",
+                "failed": "项目文件更新未完成",
+            }[status]
+            changes = item.get("changes")
+            tool: dict[str, object] = {"name": title}
+            if isinstance(changes, list):
+                tool["input"] = _activity_payload(
+                    {"changes": changes},
+                    secret_values=secret_values,
+                )
+            upsert(
+                {
+                    "id": activity_id,
+                    "kind": "command",
+                    "status": status,
+                    "title": title,
+                    "tool": tool,
+                }
+            )
+            continue
+
+        if item_type == "mcp_tool_call":
+            server = _redact_activity_text(
+                str(item.get("server") or ""),
+                secret_values=secret_values,
+            )
+            tool_name = _redact_activity_text(
+                str(item.get("tool") or ""),
+                secret_values=secret_values,
+            )
+            label = "/".join(part for part in (server, tool_name) if part) or "外部工具"
+            title = {
+                "running": f"正在调用工具 {label}",
+                "completed": f"已调用工具 {label}",
+                "failed": f"工具 {label} 调用未完成",
+            }[status]
+            tool = {"name": title}
+            arguments = item.get("arguments")
+            if _has_activity_payload(arguments):
+                tool["input"] = _activity_payload(
+                    arguments,
+                    secret_values=secret_values,
+                )
+            result = item.get("result")
+            if _has_activity_payload(result):
+                tool["output"] = _activity_payload(
+                    result,
+                    secret_values=secret_values,
+                )
+            error = item.get("error")
+            if isinstance(error, dict) and isinstance(error.get("message"), str):
+                tool["error"] = _redact_activity_text(
+                    str(error["message"]),
+                    secret_values=secret_values,
+                )
+            upsert(
+                {
+                    "id": activity_id,
+                    "kind": "command",
+                    "status": status,
+                    "title": title,
+                    "tool": tool,
+                }
+            )
+            continue
+
+        if item_type == "collab_tool_call":
+            title = {
+                "running": "正在协调子任务",
+                "completed": "已完成子任务协作",
+                "failed": "子任务协作未完成",
+            }[status]
+            input_value = {
+                key: item[key]
+                for key in ("tool", "receiver_thread_ids", "prompt")
+                if _has_activity_payload(item.get(key))
+            }
+            tool = {"name": title}
+            if input_value:
+                tool["input"] = _activity_payload(
+                    input_value,
+                    secret_values=secret_values,
+                )
+            agents_states = item.get("agents_states")
+            if isinstance(agents_states, dict) and agents_states:
+                tool["output"] = _activity_payload(
+                    agents_states,
+                    secret_values=secret_values,
+                )
+            upsert(
+                {
+                    "id": activity_id,
+                    "kind": "command",
+                    "status": status,
+                    "title": title,
+                    "tool": tool,
+                }
+            )
+            continue
+
+        if item_type == "web_search":
+            title = {
+                "running": "正在进行网络搜索",
+                "completed": "已完成网络搜索",
+                "failed": "网络搜索未完成",
+            }[status]
+            input_value = {
+                key: item[key]
+                for key in ("query", "action")
+                if _has_activity_payload(item.get(key))
+            }
+            tool = {"name": title}
+            if input_value:
+                tool["input"] = _activity_payload(
+                    input_value,
+                    secret_values=secret_values,
+                )
+            upsert(
+                {
+                    "id": activity_id,
+                    "kind": "command",
+                    "status": status,
+                    "title": title,
+                    "tool": tool,
+                }
+            )
+            continue
+
+        if item_type == "error":
+            raw_message = item.get("message")
+            detail = (
+                _redact_activity_text(raw_message, secret_values=secret_values)
+                if isinstance(raw_message, str)
+                else "Codex 返回了未说明原因的错误。"
+            )
+            upsert(
+                {
+                    "id": activity_id,
+                    "kind": "status",
+                    "status": "failed",
+                    "title": "Codex 执行遇到错误",
+                    "detail": detail,
+                }
+            )
+            continue
+
+        if event_type == "error":
+            raw_message = event.get("message")
+            detail = (
+                _redact_activity_text(raw_message, secret_values=secret_values)
+                if isinstance(raw_message, str)
+                else "Codex 事件流异常结束。"
+            )
+            upsert(
+                {
+                    "id": f"{phase}:{attempt}:error-{line_number}",
+                    "kind": "status",
+                    "status": "failed",
+                    "title": "Codex 事件流异常",
+                    "detail": detail,
+                }
+            )
+            continue
+
+        if event_type == "turn.failed":
+            raw_error = event.get("error")
+            detail = (
+                _redact_activity_text(
+                    str(raw_error.get("message")),
+                    secret_values=secret_values,
+                )
+                if isinstance(raw_error, dict) and raw_error.get("message")
+                else "Codex 本轮执行未完成。"
+            )
             upsert(
                 {
                     "id": f"{phase}:{attempt}:turn",
                     "kind": "status",
-                    "status": turn_status,
+                    "status": "failed",
                     "title": (
-                        (
-                            "Codex 已完成本轮分析"
-                            if phase == "analysis"
-                            else "Codex 已完成本轮执行"
-                        )
-                        if turn_status == "completed"
-                        else (
-                            "Codex 本轮分析未完成"
-                            if phase == "analysis"
-                            else "Codex 本轮执行未完成"
-                        )
+                        "Codex 项目分析未完成"
+                        if phase == "analysis"
+                        else "Codex 项目迁移未完成"
                     ),
+                    "detail": detail,
                 }
             )
     return items
@@ -3113,7 +3431,7 @@ class MigrationService:
         if isinstance(confirmation, dict):
             if not agentic_migration:
                 return {"available": False, "complete": False, "items": []}
-            items: list[dict[str, str]] = []
+            items: list[dict[str, object]] = []
             for attempt, path in enumerate(_MIGRATION_ACTIVITY_LOG_PATHS, start=1):
                 content = self._read(
                     session,
@@ -3150,7 +3468,7 @@ class MigrationService:
         if analysis_attempt < 1:
             return {"available": False, "complete": False, "items": []}
 
-        items: list[dict[str, str]] = []
+        items: list[dict[str, object]] = []
         analysis_log = self._read(
             session,
             f"{MIGRATION_ROOT}/diagnostics/analysis/attempt-{analysis_attempt}.log",

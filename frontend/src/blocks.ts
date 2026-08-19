@@ -69,7 +69,24 @@ export type Block =
   | { kind: "progress"; text: string }
   | { kind: "thinking"; text: string; done: boolean }
   | { kind: "text"; text: string }
-  | { kind: "tool"; name: string; args?: unknown; response?: unknown; done: boolean }
+  | {
+      kind: "tool";
+      name: string;
+      args?: unknown;
+      response?: unknown;
+      done: boolean;
+      status?: "running" | "completed" | "failed";
+    }
+  | {
+      kind: "plan";
+      title: string;
+      summary?: string;
+      items: Array<{
+        text: string;
+        status: "pending" | "in_progress" | "completed" | "failed";
+      }>;
+      done: boolean;
+    }
   | { kind: "agent-transfer"; agentName: string; done: boolean }
   | { kind: "a2ui"; messages: A2uiMessage[] }
   | { kind: "attachment"; files: AttachmentView[] }

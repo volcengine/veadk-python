@@ -6,6 +6,10 @@ const blocksSource = readFileSync(
   new URL("../src/ui/Blocks.tsx", import.meta.url),
   "utf8",
 );
+const blockTypesSource = readFileSync(
+  new URL("../src/blocks.ts", import.meta.url),
+  "utf8",
+);
 const agentKitLogoSource = readFileSync(
   new URL("../src/ui/icons/AgentKitLogoIcon.tsx", import.meta.url),
   "utf8",
@@ -126,6 +130,18 @@ test("renders ordinary tools with a neutral drawn icon and shared geometry", () 
     sharedStylesSource,
     /\.tool-icon--generic\s*\{\s*color:\s*hsl\(var\(--muted-foreground\)\)/,
   );
+});
+
+test("additively supports tool outcomes and plans in the shared block renderer", () => {
+  assert.match(
+    blockTypesSource,
+    /kind: "tool"[\s\S]*?status\?: "running" \| "completed" \| "failed"/,
+  );
+  assert.match(blockTypesSource, /kind: "plan"/);
+  assert.match(blockTypesSource, /status: "pending" \| "in_progress" \| "completed" \| "failed"/);
+  assert.match(blocksSource, /function PlanBlock/);
+  assert.match(blocksSource, /case "plan"/);
+  assert.match(blocksSource, /data-status=\{toolStatus\}/);
 });
 
 test("uses repository-owned current-color SVG icons for every special tool", () => {
