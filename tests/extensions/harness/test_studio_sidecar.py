@@ -254,6 +254,7 @@ def test_runtime_env_uses_resolved_plan_without_private_artifact_data(
     assert captured["fail_open"] is False
     assert captured["transport"] == "apig_runtime_port"
     assert captured["model_proxy"]["port"] == 18787
+    assert captured["model_proxy"]["compression_provider"] == "noop"
     assert captured["mcp_gateway"]["enabled"] is False
     assert captured["component_overrides"]["sql_readonly"] is False
     assert captured["profile_arg"] == "default"
@@ -292,6 +293,7 @@ def test_deployment_config_keeps_only_public_intent_and_checks_plan_hash(
             "long_run_control": False,
             "mcp_resilience": True,
         },
+        "model_proxy": {"compression_provider": "noop"},
     }
     assert plan["planHash"] == "sha256:runtime-plan"
     assert "artifact" not in str(config).lower()
@@ -303,6 +305,41 @@ def test_deployment_config_keeps_only_public_intent_and_checks_plan_hash(
                 "planHash": "sha256:stale",
             }
         )
+
+
+def test_compressor_selection_uses_sidecar_heuristic_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def to_env(config: dict[str, Any], *, profile: str) -> dict[str, str]:
+        captured.update(config)
+        return {
+            "HARNESS_MODEL_COMPRESSION_PROVIDER": config["model_proxy"][
+                "compression_provider"
+            ]
+        }
+
+    class RuntimeApi:
+        sidecar_config_to_env = staticmethod(to_env)
+
+    plan = _plan(
+        effective=["compressor"],
+        model_components=["compressor"],
+    )
+    monkeypatch.setattr(sidecar, "_sidecar_runtime_api", RuntimeApi)
+    monkeypatch.setattr(sidecar, "_run_agentkit_cli_json", lambda _arguments: plan)
+    selected = {"componentOverrides": {"compressor": True}}
+
+    deployment, _deployment_plan = sidecar.studio_harness_deployment_config(selected)
+    runtime_env, _runtime_plan = sidecar.studio_harness_runtime_env(
+        selected,
+        transport="local",
+    )
+
+    assert deployment["model_proxy"] == {"compression_provider": "heuristic"}
+    assert captured["model_proxy"]["compression_provider"] == "heuristic"
+    assert runtime_env["HARNESS_MODEL_COMPRESSION_PROVIDER"] == "heuristic"
 
 
 def test_disabled_selection_never_loads_runtime_integration(

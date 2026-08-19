@@ -82,6 +82,8 @@ _INCOMPATIBLE_IMAGE_MESSAGE = (
     "Use a Sidecar-enabled managed Runtime image."
 )
 _AGENTKIT_CLI_ENV = "VEADK_AGENTKIT_CLI"
+_SIDECAR_COMPRESSION_PROVIDER = "heuristic"
+_SIDECAR_NO_COMPRESSION_PROVIDER = "noop"
 
 
 class HarnessSidecarDependencyError(RuntimeError):
@@ -291,6 +293,9 @@ def studio_harness_deployment_config(
             "profile": intent.profile,
             "catalog_version": plan.get("catalog_version"),
             "component_overrides": dict(intent.component_overrides),
+            "model_proxy": {
+                "compression_provider": _sidecar_compression_provider(plan),
+            },
         },
         studio_plan,
     )
@@ -366,6 +371,7 @@ def studio_harness_runtime_env(
         "model_proxy": {
             "enabled": True,
             "components": model_components,
+            "compression_provider": _sidecar_compression_provider(plan),
             "fail_open": False,
         },
         "mcp_gateway": {
@@ -394,6 +400,14 @@ def studio_harness_runtime_env(
     )
     env["HARNESS_SIDECAR_EXPECTED_PLAN_HASH"] = str(plan.get("plan_hash") or "")
     return env, _studio_plan_payload(intent, plan)
+
+
+def _sidecar_compression_provider(plan: Mapping[str, Any]) -> str:
+    """Select the private Runtime provider from the resolved product plan."""
+
+    if "compressor" in (plan.get("effective_components") or []):
+        return _SIDECAR_COMPRESSION_PROVIDER
+    return _SIDECAR_NO_COMPRESSION_PROVIDER
 
 
 def studio_harness_env_example(value: Any | None) -> dict[str, str]:

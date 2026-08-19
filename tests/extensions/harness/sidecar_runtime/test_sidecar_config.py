@@ -61,6 +61,7 @@ def test_ops_profile_expands_product_defaults() -> None:
     config = HarnessSidecarConfig(profile="ops")
 
     assert config.model_proxy.enabled is True
+    assert config.model_proxy.compression_provider == "heuristic"
     assert config.mcp_gateway.enabled is True
     assert config.mcp_gateway.presets == ["sql_readonly"]
     assert config.mcp_gateway.readonly_segments == ["*"]
@@ -202,7 +203,9 @@ def test_apig_runtime_port_rejects_unsafe_config(
     }
     for key, value in override.items():
         if key in {"model_proxy", "mcp_gateway"} and isinstance(value, dict):
-            values[key] = {**dict(values[key]), **value}
+            current = values[key]
+            assert isinstance(current, dict)
+            values[key] = {**current, **value}
         else:
             values[key] = value
 
@@ -211,10 +214,12 @@ def test_apig_runtime_port_rejects_unsafe_config(
 
 
 def test_explicit_browser_component_resolves_dependency_closure() -> None:
-    config = HarnessSidecarConfig(
-        profile="default",
-        components=["browser"],
-        model_proxy={"enabled": False},
+    config = HarnessSidecarConfig.model_validate(
+        {
+            "profile": "default",
+            "components": ["browser"],
+            "model_proxy": {"enabled": False},
+        }
     )
 
     assert config.runtime_flavor == "harness-sidecar"
@@ -228,10 +233,12 @@ def test_explicit_browser_component_resolves_dependency_closure() -> None:
 def test_legacy_ops_component_alias_resolves_internal_dependency(
     legacy_alias: str,
 ) -> None:
-    config = HarnessSidecarConfig(
-        profile="default",
-        components=[legacy_alias],
-        model_proxy={"enabled": False},
+    config = HarnessSidecarConfig.model_validate(
+        {
+            "profile": "default",
+            "components": [legacy_alias],
+            "model_proxy": {"enabled": False},
+        }
     )
 
     assert config.required_runtime_components == ["harness_core", "ops"]
@@ -276,6 +283,7 @@ def test_default_env_profile_does_not_enable_mcp_gateway_implicitly() -> None:
 
     assert config.profile == "default"
     assert config.model_proxy.enabled is True
+    assert config.model_proxy.compression_provider == "heuristic"
     assert config.mcp_gateway.enabled is False
     assert config.required_runtime_components == [
         "harness_core",
@@ -362,6 +370,29 @@ def test_product_component_overrides_drive_technical_config_and_plan_env() -> No
     assert "sql_readonly" not in plan["effective_components"]
     assert env["HARNESS_MCP_PRESETS"] == ""
     assert env["HARNESS_MCP_READONLY_SEGMENTS"] == ""
+
+
+def test_disabling_compressor_selects_noop_provider() -> None:
+    config = resolve_sidecar_config(
+        {
+            "profile": "default",
+            "component_overrides": {"compressor": False},
+        }
+    )
+
+    assert "compressor" not in config.resolved_plan.effective_components
+    assert config.model_proxy.compression_provider == "noop"
+
+
+def test_explicit_compression_provider_remains_supported() -> None:
+    config = HarnessSidecarConfig.from_env(
+        {
+            "HARNESS_SIDECAR_ENABLED": "true",
+            "HARNESS_MODEL_COMPRESSION_PROVIDER": "headroom",
+        }
+    )
+
+    assert config.model_proxy.compression_provider == "headroom"
 
 
 def test_disabled_sidecar_has_no_runtime_or_product_components() -> None:

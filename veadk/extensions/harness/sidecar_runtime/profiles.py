@@ -95,7 +95,9 @@ def expand_sidecar_profile(
         "model_proxy": {
             "enabled": bool(model_components),
             "components": model_components,
-            "compression_provider": "noop",
+            "compression_provider": (
+                "heuristic" if "compressor" in selected else "noop"
+            ),
             "fail_open": True,
         },
         "mcp_gateway": {

@@ -208,6 +208,27 @@ class HarnessSidecarConfig(SidecarConfigModel):
             )
         if "HARNESS_MCP_PRESETS" in values:
             mcp_gateway["presets"] = _csv(values.get("HARNESS_MCP_PRESETS"))
+        model_proxy: dict[str, Any] = {
+            "enabled": model_enabled,
+            "host": values.get("HARNESS_MODEL_PROXY_HOST", "127.0.0.1"),
+            "port": int(values.get("HARNESS_MODEL_PROXY_PORT", "0")),
+            "upstream_base_url_env": values.get(
+                "HARNESS_MODEL_UPSTREAM_BASE_URL_ENV",
+                "MODEL_AGENT_API_BASE",
+            ),
+            "upstream_api_key_env": values.get(
+                "HARNESS_MODEL_UPSTREAM_API_KEY_ENV",
+                "MODEL_AGENT_API_KEY",
+            ),
+            "prefer_configured_upstream_api_key": _env_bool(
+                values.get("HARNESS_MODEL_PREFER_CONFIGURED_UPSTREAM_API_KEY"),
+                False,
+            ),
+        }
+        if "HARNESS_MODEL_COMPRESSION_PROVIDER" in values:
+            model_proxy["compression_provider"] = values[
+                "HARNESS_MODEL_COMPRESSION_PROVIDER"
+            ]
         return cls.model_validate(
             {
                 "enabled": _env_bool(values.get("HARNESS_SIDECAR_ENABLED"), False),
@@ -234,26 +255,7 @@ class HarnessSidecarConfig(SidecarConfigModel):
                 "runtime_command": shlex.split(runtime_command)
                 if runtime_command
                 else None,
-                "model_proxy": {
-                    "enabled": model_enabled,
-                    "host": values.get("HARNESS_MODEL_PROXY_HOST", "127.0.0.1"),
-                    "port": int(values.get("HARNESS_MODEL_PROXY_PORT", "0")),
-                    "upstream_base_url_env": values.get(
-                        "HARNESS_MODEL_UPSTREAM_BASE_URL_ENV",
-                        "MODEL_AGENT_API_BASE",
-                    ),
-                    "upstream_api_key_env": values.get(
-                        "HARNESS_MODEL_UPSTREAM_API_KEY_ENV",
-                        "MODEL_AGENT_API_KEY",
-                    ),
-                    "prefer_configured_upstream_api_key": _env_bool(
-                        values.get("HARNESS_MODEL_PREFER_CONFIGURED_UPSTREAM_API_KEY"),
-                        False,
-                    ),
-                    "compression_provider": values.get(
-                        "HARNESS_MODEL_COMPRESSION_PROVIDER", "noop"
-                    ),
-                },
+                "model_proxy": model_proxy,
                 "mcp_gateway": mcp_gateway,
             }
         )
