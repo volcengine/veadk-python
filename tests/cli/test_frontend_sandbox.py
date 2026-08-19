@@ -29,6 +29,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from veadk.cli import frontend_sandbox
+from veadk.cli.agentkit_session_metadata import (
+    SESSION_METADATA_VALUE_MAX_BYTES,
+    session_display_name_metadata_value,
+)
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerEvent,
@@ -2600,6 +2604,45 @@ async def test_gateway_creates_session_with_username_metadata() -> None:
     assert session.created_by == "alice"
     assert session.creator_name == "alice@example.com"
     assert session.agent_kind == "deepseek-harness"
+
+
+@pytest.mark.asyncio
+async def test_gateway_truncates_multibyte_display_name_to_metadata_limit() -> None:
+    requests: list[dict[str, object]] = []
+
+    class _Client:
+        def create_session(self, request: object) -> SimpleNamespace:
+            requests.append(request.model_dump(by_alias=True, exclude_none=True))
+            return SimpleNamespace(
+                session_id="remote-multibyte",
+                user_session_id="multibyte-agent",
+                endpoint="https://sandbox.example",
+            )
+
+    display_name = "我想开发一个devops agent，能够使用veops Cli的能力，达到L3"
+    assert len(display_name) == STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH
+    assert len(display_name.encode("utf-8")) == 74
+
+    session = await AgentkitSandboxGateway(_Client()).create_session(
+        "tool-sdk",
+        display_name,
+    )
+
+    metadata = requests[0]["Metadata"]
+    assert isinstance(metadata, list)
+    metadata_display_name = metadata[0]["Value"]
+    assert metadata_display_name == ("我想开发一个devops agent，能够使用veops Cli的能…")
+    assert len(metadata_display_name.encode("utf-8")) < 64
+    assert session.display_name == metadata_display_name
+
+
+def test_display_name_metadata_value_preserves_exact_byte_limit() -> None:
+    at_limit = "名" * 21
+    over_limit = at_limit + "名"
+
+    assert len(at_limit.encode("utf-8")) == SESSION_METADATA_VALUE_MAX_BYTES
+    assert session_display_name_metadata_value(at_limit) == at_limit
+    assert session_display_name_metadata_value(over_limit) == "名" * 20 + "…"
 
 
 @pytest.mark.asyncio
