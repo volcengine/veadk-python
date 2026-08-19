@@ -99,7 +99,9 @@ class VikingDBAgentMemory(AgentMemory):
         self.region = region or (
             os.getenv("DATABASE_VIKING_REGION", DEFAULT_BYTEPLUS_REGION)
             if self.cloud_provider == "byteplus"
-            else os.getenv("DATABASE_VIKING_REGION", "cn-beijing")
+            else os.getenv("DATABASE_VIKING_REGION")
+            or os.getenv("REGION")
+            or "cn-beijing"
         )
 
         # Auto-generate host based on cloud provider

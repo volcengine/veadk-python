@@ -23,6 +23,19 @@ from veadk.consts import DEFAULT_TOS_BUCKET_NAME
 from veadk.integrations.ve_tos.ve_tos import VeTOS
 
 
+def _region_env_fallback(configured_fields: set[str]) -> str:
+    cloud_provider = (
+        (os.getenv("AGENTKIT_CLOUD_PROVIDER") or os.getenv("CLOUD_PROVIDER") or "")
+        .strip()
+        .lower()
+    )
+    if cloud_provider == "byteplus":
+        return ""
+    if "region" in configured_fields:
+        return ""
+    return os.getenv("REGION", "").strip()
+
+
 class OpensearchConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DATABASE_OPENSEARCH_")
 
@@ -154,6 +167,11 @@ class VikingKnowledgebaseConfig(BaseSettings):
 
     region: str = "cn-beijing"
 
+    def model_post_init(self, __context, /) -> None:
+        region_from_region_env = _region_env_fallback(set(self.model_fields_set))
+        if region_from_region_env:
+            self.region = region_from_region_env
+
 
 class TOSConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DATABASE_TOS_")
@@ -165,12 +183,21 @@ class TOSConfig(BaseSettings):
     def model_post_init(self, __context, /) -> None:
         cloud_provider = os.getenv("CLOUD_PROVIDER", "volces").lower()
         configured_fields = set(self.model_fields_set)
+        region_from_region_env = _region_env_fallback(configured_fields)
 
         if cloud_provider == "byteplus":
             if "endpoint" not in configured_fields:
                 self.endpoint = "tos-ap-southeast-1.bytepluses.com"
             if "region" not in configured_fields:
                 self.region = "ap-southeast-1"
+        else:
+            if region_from_region_env:
+                self.region = region_from_region_env
+
+            if "endpoint" not in configured_fields and (
+                "region" in configured_fields or region_from_region_env
+            ):
+                self.endpoint = f"tos-{self.region}.volces.com"
 
     @cached_property
     def bucket(self) -> str:
@@ -188,6 +215,16 @@ class NormalTOSConfig(BaseSettings):
     region: str = "cn-beijing"
 
     bucket: str
+
+    def model_post_init(self, __context, /) -> None:
+        configured_fields = set(self.model_fields_set)
+        region_from_region_env = _region_env_fallback(configured_fields)
+        if region_from_region_env:
+            self.region = region_from_region_env
+        if "endpoint" not in configured_fields and (
+            "region" in configured_fields or region_from_region_env
+        ):
+            self.endpoint = f"tos-{self.region}.volces.com"
 
 
 class TOSVectorConfig(BaseSettings):
@@ -233,6 +270,16 @@ class TOSVectorConfig(BaseSettings):
 
     user_agent_customized_key_values: dict[str, str] | None = None
 
+    def model_post_init(self, __context, /) -> None:
+        configured_fields = set(self.model_fields_set)
+        region_from_region_env = _region_env_fallback(configured_fields)
+        if region_from_region_env:
+            self.region = region_from_region_env
+        if "endpoint" not in configured_fields and (
+            "region" in configured_fields or region_from_region_env
+        ):
+            self.endpoint = f"tosvectors-{self.region}.volces.com"
+
 
 class TOSContextBucketConfig(BaseSettings):
     """Configuration for the TOS ContextBucket controller APIs."""
@@ -244,6 +291,16 @@ class TOSContextBucketConfig(BaseSettings):
     region: str = "cn-beijing"
 
     control_endpoint: str | None = None
+
+    def model_post_init(self, __context, /) -> None:
+        configured_fields = set(self.model_fields_set)
+        region_from_region_env = _region_env_fallback(configured_fields)
+        if region_from_region_env:
+            self.region = region_from_region_env
+        if "endpoint" not in configured_fields and (
+            "region" in configured_fields or region_from_region_env
+        ):
+            self.endpoint = f"tos-{self.region}.volces.com"
 
 
 class MSENacosConfig(BaseSettings):

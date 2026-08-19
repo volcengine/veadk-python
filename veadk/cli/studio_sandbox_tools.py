@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import secrets
 import threading
@@ -51,6 +52,19 @@ _CODEX_API_KEY_ENV = "CODEX_API_KEY"
 _CODEX_BASE_URL_ENV = "CODEX_BASE_URL"
 _MODEL_AGENT_API_KEY_ENV = "MODEL_AGENT_API_KEY"
 _MODEL_AGENT_BASE_URL_ENV = "MODEL_AGENT_BASE_URL"
+
+
+def _volcengine_region_fallback() -> str:
+    cloud_provider = (
+        (os.getenv("AGENTKIT_CLOUD_PROVIDER") or os.getenv("CLOUD_PROVIDER") or "")
+        .strip()
+        .lower()
+    )
+    if cloud_provider == "byteplus":
+        return "cn-beijing"
+    return os.getenv("REGION") or "cn-beijing"
+
+
 _READY_STATUS = "Ready"
 _FAILED_STATUSES = frozenset({"Error", "Failed", "CreateFailed", "Deleting", "Deleted"})
 _RETRYABLE_CREATE_STATUS_CODES = frozenset({408, 409, 425, 429})
@@ -366,7 +380,7 @@ def _ensure_studio_environment_tool(
     tool_type: str,
     access_key: str = "",
     secret_key: str = "",
-    region: str = "cn-beijing",
+    region: str = "",
     session_token: str = "",
     enable_snapshot: bool = False,
     legacy_names: tuple[str, ...] = (),
@@ -382,6 +396,7 @@ def _ensure_studio_environment_tool(
     from agentkit.sdk.tools import types as tools_types
     from agentkit.sdk.tools.client import AgentkitToolsClient
 
+    region = region or _volcengine_region_fallback()
     tools_client = client or AgentkitToolsClient(
         access_key=access_key,
         secret_key=secret_key,
@@ -467,7 +482,7 @@ def ensure_studio_agent_tool(
     model_name: str,
     access_key: str = "",
     secret_key: str = "",
-    region: str = "cn-beijing",
+    region: str = "",
     session_token: str = "",
     enable_snapshot: bool = False,
     client: Any | None = None,
@@ -482,6 +497,7 @@ def ensure_studio_agent_tool(
     from agentkit.sdk.tools import types as tools_types
     from agentkit.sdk.tools.client import AgentkitToolsClient
 
+    region = region or _volcengine_region_fallback()
     tool_type = _AGENT_TOOL_TYPES.get(kind)
     if tool_type is None:
         raise ValueError(f"Unsupported Studio sandbox agent kind: {kind}")
@@ -556,12 +572,13 @@ def ensure_studio_agent_model_credential(
     access_key: str,
     secret_key: str,
     session_token: str | None = None,
-    region: str = "cn-beijing",
+    region: str = "",
     model_base_url: str = STUDIO_SANDBOX_MODEL_BASE_URLS["volcengine"],
     provider: str = "volcengine",
     client: Any | None = None,
 ) -> None:
     """Bind the complete model environment required by Hermes/OpenClaw."""
+    region = region or _volcengine_region_fallback()
     if kind not in _AGENT_TOOL_TYPES:
         raise ValueError(f"Unsupported Studio sandbox agent kind: {kind}")
     normalized_model_name = model_name.strip()

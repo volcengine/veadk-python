@@ -59,6 +59,163 @@ def test_ve_tos_explicit_bucket_wins_over_environment(monkeypatch, fake_tos):
     assert client.bucket_name == "explicit-bucket"
 
 
+def test_ve_tos_uses_region_env_as_fallback(monkeypatch, fake_tos):
+    monkeypatch.setenv("CLOUD_PROVIDER", "volces")
+    monkeypatch.delenv("DATABASE_TOS_REGION", raising=False)
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    client = VeTOS()
+
+    assert client.region == "cn-shanghai"
+    assert client._client.init_kwargs["region"] == "cn-shanghai"
+    assert client._client.init_kwargs["endpoint"] == "tos-cn-shanghai.volces.com"
+
+
+def test_ve_tos_database_region_wins_over_region_env(monkeypatch, fake_tos):
+    monkeypatch.setenv("CLOUD_PROVIDER", "volces")
+    monkeypatch.setenv("DATABASE_TOS_REGION", "cn-beijing")
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    client = VeTOS()
+
+    assert client.region == "cn-beijing"
+    assert client._client.init_kwargs["region"] == "cn-beijing"
+    assert client._client.init_kwargs["endpoint"] == "tos-cn-beijing.volces.com"
+
+
+def test_tos_config_uses_region_env_fallback_and_updates_endpoint(monkeypatch):
+    from veadk.configs.database_configs import TOSConfig
+
+    monkeypatch.setenv("CLOUD_PROVIDER", "volces")
+    monkeypatch.delenv("DATABASE_TOS_REGION", raising=False)
+    monkeypatch.delenv("DATABASE_TOS_ENDPOINT", raising=False)
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    config = TOSConfig()
+
+    assert config.region == "cn-shanghai"
+    assert config.endpoint == "tos-cn-shanghai.volces.com"
+
+
+def test_tos_config_database_region_wins_over_region_env(monkeypatch):
+    from veadk.configs.database_configs import TOSConfig
+
+    monkeypatch.setenv("CLOUD_PROVIDER", "volces")
+    monkeypatch.setenv("DATABASE_TOS_REGION", "cn-beijing")
+    monkeypatch.delenv("DATABASE_TOS_ENDPOINT", raising=False)
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    config = TOSConfig()
+
+    assert config.region == "cn-beijing"
+    assert config.endpoint == "tos-cn-beijing.volces.com"
+
+
+def test_related_database_configs_use_region_env_fallback(monkeypatch):
+    from veadk.configs.database_configs import (
+        NormalTOSConfig,
+        TOSContextBucketConfig,
+        TOSVectorConfig,
+        VikingKnowledgebaseConfig,
+    )
+
+    monkeypatch.setenv("CLOUD_PROVIDER", "volces")
+    for env_name in [
+        "DATABASE_VIKING_REGION",
+        "DATABASE_TOS_REGION",
+        "DATABASE_TOS_ENDPOINT",
+        "DATABASE_TOS_VECTOR_REGION",
+        "DATABASE_TOS_VECTOR_ENDPOINT",
+        "DATABASE_TOS_CONTEXT_REGION",
+        "DATABASE_TOS_CONTEXT_ENDPOINT",
+    ]:
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    viking_config = VikingKnowledgebaseConfig()
+    normal_tos_config = NormalTOSConfig(bucket="bucket")
+    vector_config = TOSVectorConfig()
+    context_config = TOSContextBucketConfig()
+
+    assert viking_config.region == "cn-shanghai"
+    assert normal_tos_config.region == "cn-shanghai"
+    assert normal_tos_config.endpoint == "tos-cn-shanghai.volces.com"
+    assert vector_config.region == "cn-shanghai"
+    assert vector_config.endpoint == "tosvectors-cn-shanghai.volces.com"
+    assert context_config.region == "cn-shanghai"
+    assert context_config.endpoint == "tos-cn-shanghai.volces.com"
+
+
+def test_byteplus_related_database_configs_ignore_region_env(monkeypatch):
+    from veadk.configs.database_configs import (
+        NormalTOSConfig,
+        TOSContextBucketConfig,
+        TOSVectorConfig,
+        VikingKnowledgebaseConfig,
+    )
+
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "byteplus")
+    for env_name in [
+        "DATABASE_VIKING_REGION",
+        "DATABASE_TOS_REGION",
+        "DATABASE_TOS_ENDPOINT",
+        "DATABASE_TOS_VECTOR_REGION",
+        "DATABASE_TOS_VECTOR_ENDPOINT",
+        "DATABASE_TOS_CONTEXT_REGION",
+        "DATABASE_TOS_CONTEXT_ENDPOINT",
+    ]:
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setenv("REGION", "cn-hongkong")
+
+    assert VikingKnowledgebaseConfig().region == "cn-beijing"
+    normal_tos_config = NormalTOSConfig(bucket="bucket")
+    assert normal_tos_config.region == "cn-beijing"
+    assert normal_tos_config.endpoint == "tos-cn-beijing.volces.com"
+    assert TOSVectorConfig().region == "cn-beijing"
+    assert TOSContextBucketConfig().region == "cn-beijing"
+
+
+def test_byteplus_tos_config_ignores_region_env_fallback(monkeypatch):
+    from veadk.configs.database_configs import TOSConfig
+
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.delenv("DATABASE_TOS_REGION", raising=False)
+    monkeypatch.delenv("DATABASE_TOS_ENDPOINT", raising=False)
+    monkeypatch.setenv("REGION", "cn-hongkong")
+
+    config = TOSConfig()
+
+    assert config.region == "ap-southeast-1"
+    assert config.endpoint == "tos-ap-southeast-1.bytepluses.com"
+
+
+def test_byteplus_ve_tos_keeps_existing_region_precedence(monkeypatch, fake_tos):
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("DATABASE_TOS_REGION", "ap-southeast-1")
+    monkeypatch.setenv("REGION", "cn-hongkong")
+
+    client = VeTOS()
+
+    assert client.region == "cn-hongkong"
+    assert client._client.init_kwargs["region"] == "cn-hongkong"
+    assert client._client.init_kwargs["endpoint"] == "tos-cn-hongkong.bytepluses.com"
+
+
+def test_byteplus_tos_config_database_region_still_sets_endpoint(monkeypatch):
+    from veadk.configs.database_configs import TOSConfig
+
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("DATABASE_TOS_REGION", "ap-southeast-1")
+    monkeypatch.delenv("DATABASE_TOS_ENDPOINT", raising=False)
+    monkeypatch.setenv("REGION", "cn-hongkong")
+
+    config = TOSConfig()
+
+    assert config.region == "ap-southeast-1"
+    assert config.endpoint == "tos-ap-southeast-1.bytepluses.com"
+
+
 @pytest.mark.asyncio
 async def test_async_upload_bytes_reports_success(monkeypatch, fake_tos):
     client = VeTOS(bucket_name="test-bucket")

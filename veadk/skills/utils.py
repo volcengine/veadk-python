@@ -178,7 +178,11 @@ def _get_agentkit_endpoint() -> tuple[str, str, str]:
         sld = "volcengineapi"
         default_region = "cn-beijing"
 
-    region = os.getenv("AGENTKIT_TOOL_REGION", default_region)
+    region = (
+        os.getenv("AGENTKIT_TOOL_REGION")
+        or (os.getenv("REGION") if provider != "byteplus" else None)
+        or default_region
+    )
     host = os.getenv("AGENTKIT_SKILL_HOST", service + "." + region + f".{sld}.com")
     return service, region, host
 

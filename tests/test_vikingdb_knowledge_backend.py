@@ -234,6 +234,31 @@ def test_byteplus_viking_knowledgebase_keeps_explicit_tos_env(
     assert backend.tos_config.endpoint == "tos-ap-southeast-1.bytepluses.com"
 
 
+def test_volces_viking_knowledgebase_uses_region_env_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from veadk.knowledgebase.backends.vikingdb_knowledge_backend import (
+        VikingDBKnowledgeBackend,
+    )
+
+    monkeypatch.setenv("CLOUD_PROVIDER", "volces")
+    monkeypatch.delenv("DATABASE_VIKING_REGION", raising=False)
+    monkeypatch.setenv("REGION", "cn-shanghai")
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "volc-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "volc-sk")
+    monkeypatch.setattr(
+        VikingDBKnowledgeBackend,
+        "collection_status",
+        lambda self: {"existed": True},
+    )
+
+    backend = VikingDBKnowledgeBackend(index="vikingkl_we4191n")
+
+    assert backend.region == "cn-shanghai"
+    assert backend.host == "api-knowledgebase.mlp.cn-shanghai.volces.com"
+    assert backend.base_url == "https://api-knowledgebase.mlp.cn-shanghai.volces.com"
+
+
 def test_byteplus_viking_knowledgebase_get_tos_client_uses_aligned_region(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

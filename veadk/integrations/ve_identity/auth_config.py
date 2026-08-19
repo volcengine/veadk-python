@@ -18,6 +18,7 @@ Authentication configuration classes for Identity integration.
 
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from typing import Any, Callable, List, Literal, Optional, Union
 
@@ -33,13 +34,27 @@ def _get_default_region() -> str:
     Returns:
         The configured region from VeIdentityConfig, or "cn-beijing" as fallback.
     """
+    cloud_provider = (
+        (os.getenv("AGENTKIT_CLOUD_PROVIDER") or os.getenv("CLOUD_PROVIDER") or "")
+        .strip()
+        .lower()
+    )
     try:
         from veadk.config import settings
 
-        return settings.veidentity.region
+        configured_region = settings.veidentity.region
+        if (
+            cloud_provider == "byteplus"
+            or os.getenv("VEIDENTITY_REGION")
+            or configured_region != "cn-beijing"
+        ):
+            return configured_region
+        return os.getenv("REGION") or configured_region
     except Exception:
         # Fallback to default if config loading fails
-        return "cn-beijing"
+        if cloud_provider == "byteplus":
+            return "cn-beijing"
+        return os.getenv("REGION") or "cn-beijing"
 
 
 def get_default_identity_client(region: Optional[str] = None) -> IdentityClient:
@@ -51,6 +66,9 @@ def get_default_identity_client(region: Optional[str] = None) -> IdentityClient:
     try:
         from veadk.config import settings
 
+        resolved_region = region or _get_default_region()
+        if resolved_region != settings.veidentity.region:
+            return IdentityClient(region=resolved_region)
         return settings.veidentity.get_identity_client()
     except Exception:
         # Fallback to new instance if config loading fails

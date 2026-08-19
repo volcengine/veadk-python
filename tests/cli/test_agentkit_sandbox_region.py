@@ -24,11 +24,70 @@ from agentkit.platform.context import (
 )
 from agentkit.sdk.tools.client import AgentkitToolsClient
 
-from veadk.cli.agentkit_sandbox_region import sandbox_region_candidates
+from veadk.cli.agentkit_sandbox_region import (
+    resolve_sandbox_client_region,
+    sandbox_region_candidates,
+)
 from veadk.cli.frontend_sandbox import AgentkitSandboxGateway
 
 
-def test_byteplus_sandbox_regions_never_fall_back_to_volcengine() -> None:
+def test_sandbox_regions_use_region_env_as_volcengine_preference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    assert sandbox_region_candidates(provider="volcengine") == (
+        "cn-shanghai",
+        "cn-beijing",
+    )
+
+
+def test_explicit_sandbox_region_preference_wins_over_region_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    assert sandbox_region_candidates("cn-beijing", provider="volcengine") == (
+        "cn-beijing",
+        "cn-shanghai",
+    )
+
+
+def test_sandbox_client_region_uses_region_env_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENTKIT_SANDBOX_REGION", raising=False)
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    assert resolve_sandbox_client_region("", provider="volcengine") == "cn-shanghai"
+
+
+def test_sandbox_client_region_prefers_explicit_and_sandbox_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTKIT_SANDBOX_REGION", "cn-shanghai")
+    monkeypatch.setenv("REGION", "cn-beijing")
+
+    assert (
+        resolve_sandbox_client_region("cn-beijing", provider="volcengine")
+        == "cn-beijing"
+    )
+    assert resolve_sandbox_client_region("", provider="volcengine") == "cn-shanghai"
+
+
+def test_byteplus_sandbox_client_region_ignores_volcengine_region_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    assert resolve_sandbox_client_region("", provider="byteplus") == "ap-southeast-1"
+
+
+def test_byteplus_sandbox_regions_never_fall_back_to_volcengine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
     assert sandbox_region_candidates(
         "cn-beijing",
         provider="byteplus",
