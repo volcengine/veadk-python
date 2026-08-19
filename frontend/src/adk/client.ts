@@ -2088,6 +2088,8 @@ export async function listDeploymentResources(
 export type SandboxToolKind =
   | "codex"
   | "codex_snapshot"
+  | "deepseek_harness"
+  | "deepseek_harness_snapshot"
   | "openclaw"
   | "openclaw_snapshot"
   | "hermes"
@@ -2108,6 +2110,18 @@ export interface SystemInfoResponse {
   sandboxTools: SandboxToolInfo[];
 }
 
+const SANDBOX_TOOL_DISPLAY_ORDER: Record<string, number> = {
+  codex: 0,
+  codex_snapshot: 1,
+  deepseek_harness: 2,
+  deepseek_harness_snapshot: 3,
+  openclaw: 4,
+  openclaw_snapshot: 5,
+  hermes: 6,
+  hermes_snapshot: 7,
+  dev: 8,
+};
+
 export async function getSystemInfo(
   signal?: AbortSignal,
 ): Promise<SystemInfoResponse> {
@@ -2125,19 +2139,24 @@ export async function getSystemInfo(
   ) {
     throw new Error("系统信息响应格式无效");
   }
-  const sandboxTools = payload.sandboxTools.map((item) => {
-    if (
-      !item ||
-      typeof item !== "object" ||
-      typeof (item as SandboxToolInfo).kind !== "string" ||
-      typeof (item as SandboxToolInfo).label !== "string" ||
-      typeof (item as SandboxToolInfo).toolId !== "string" ||
-      typeof (item as SandboxToolInfo).snapshot !== "boolean"
-    ) {
-      throw new Error("系统信息响应格式无效");
-    }
-    return item as SandboxToolInfo;
-  });
+  const sandboxTools = payload.sandboxTools
+    .map((item) => {
+      if (
+        !item ||
+        typeof item !== "object" ||
+        typeof (item as SandboxToolInfo).kind !== "string" ||
+        typeof (item as SandboxToolInfo).label !== "string" ||
+        typeof (item as SandboxToolInfo).toolId !== "string" ||
+        typeof (item as SandboxToolInfo).snapshot !== "boolean"
+      ) {
+        throw new Error("系统信息响应格式无效");
+      }
+      return item as SandboxToolInfo;
+    })
+    .sort((left, right) => (
+      (SANDBOX_TOOL_DISPLAY_ORDER[left.kind] ?? Number.MAX_SAFE_INTEGER) -
+      (SANDBOX_TOOL_DISPLAY_ORDER[right.kind] ?? Number.MAX_SAFE_INTEGER)
+    ));
   return {
     storage: { tosAddress: payload.storage.tosAddress },
     sandboxTools,
