@@ -11,6 +11,10 @@ const stylesUrl = new URL(
   "../src/migrations/MigrationWorkspace.css",
   import.meta.url,
 );
+const activityBlocksUrl = new URL(
+  "../src/migrations/migrationActivityBlocks.ts",
+  import.meta.url,
+);
 const deploymentEnvironmentUrl = new URL(
   "../src/migrations/deploymentEnvironment.ts",
   import.meta.url,
@@ -72,6 +76,7 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.equal(existsSync(iconsUrl), true);
   const source = readFileSync(workspaceUrl, "utf8");
   const styles = readFileSync(stylesUrl, "utf8");
+  const activityBlocks = readFileSync(activityBlocksUrl, "utf8");
   const deploymentEnvironment = readFileSync(deploymentEnvironmentUrl, "utf8");
 
   assert.doesNotMatch(source, /from "lucide-react"/);
@@ -93,8 +98,8 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(source, /function MigrationActivityFeed/);
   assert.match(source, /import \{ Blocks \} from "\.\.\/ui\/Blocks"/);
   assert.match(source, /useStickToBottom<HTMLDivElement>/);
-  assert.match(source, /kind: "thinking"/);
-  assert.match(source, /kind: "text"/);
+  assert.match(activityBlocks, /kind: "thinking"/);
+  assert.match(activityBlocks, /kind: "text"/);
   assert.match(source, /Codex 执行动态/);
   assert.match(source, /暂时无法读取 Codex 执行动态，不影响当前任务/);
   assert.match(source, /function shouldShowCodexActivity/);
@@ -249,4 +254,18 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(styles, /\.migration-activity/);
   assert.match(styles, /\.migration-activity__marker/);
   assert.doesNotMatch(styles, /\.migration-transfer-progress > div > span/);
+});
+
+test("renders Codex migration events through one shared block stream", () => {
+  const source = readFileSync(workspaceUrl, "utf8");
+  const styles = readFileSync(stylesUrl, "utf8");
+  const activityBlocks = readFileSync(activityBlocksUrl, "utf8");
+
+  assert.match(source, /import \{ migrationActivityBlocks \}/);
+  assert.match(activityBlocks, /function migrationActivityBlocks/);
+  assert.match(activityBlocks, /kind: "plan"/);
+  assert.match(activityBlocks, /kind: "tool"/);
+  assert.match(source, /<Blocks[\s\S]*?blocks=\{blocks\}/);
+  assert.doesNotMatch(source, /migration-activity__status/);
+  assert.doesNotMatch(styles, /\.migration-activity__status/);
 });
