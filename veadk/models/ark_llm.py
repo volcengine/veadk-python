@@ -296,9 +296,8 @@ def _content_to_input_item(
                         type="function_call",
                     )
                 )
-            elif part.text or part.inline_data:
-                if input_content:
-                    input_list.append(input_content)
+        if input_content:
+            input_list.append(input_content)
     return input_list
 
 
