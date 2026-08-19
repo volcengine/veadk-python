@@ -12,15 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""VeADK extension facade for Harness plugins."""
+"""VeADK extension facade for legacy plugins and the managed Sidecar."""
 
 from __future__ import annotations
 
 import os
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from google.adk.plugins import BasePlugin
 from pydantic import Field
 from typing_extensions import Self
 
@@ -28,23 +27,26 @@ from veadk.extensions.harness.env import (
     build_harness_plugins_from_env,
     harness_enabled_from_env,
 )
-from veadk.extensions.harness.modules.final_response_verifier import (
-    FinalResponseVerifierConfig,
-)
-from veadk.extensions.harness.modules.invocation_context import (
-    HarnessInvocationContextConfig,
-)
-from veadk.extensions.harness.modules.tool_result_compactor import (
-    ToolResultCompactorConfig,
-)
-from veadk.extensions.harness.plugins import build_harness_plugins
 from veadk.extensions.harness.schemas import HarnessBaseModel
 from veadk.extensions.harness.sidecar import (
     ManagedHarnessSidecar,
     normalize_sidecar_config,
     sidecar_config_from_env,
 )
-from veadk.extensions.harness.stores import HarnessStoreProtocol
+
+if TYPE_CHECKING:
+    from google.adk.plugins import BasePlugin
+
+    from veadk.extensions.harness.modules.final_response_verifier import (
+        FinalResponseVerifierConfig,
+    )
+    from veadk.extensions.harness.modules.invocation_context import (
+        HarnessInvocationContextConfig,
+    )
+    from veadk.extensions.harness.modules.tool_result_compactor import (
+        ToolResultCompactorConfig,
+    )
+    from veadk.extensions.harness.stores import HarnessStoreProtocol
 
 
 class HarnessExtensionConfig(HarnessBaseModel):
@@ -63,11 +65,11 @@ class HarnessExtensionConfig(HarnessBaseModel):
 
 
 class HarnessExtension:
-    """Small VeADK-facing wrapper for Harness plugin assembly.
+    """Small VeADK-facing wrapper for Harness lifecycle integration.
 
-    The extension owns no core Harness logic. It keeps the public VeADK entry
-    point compact while delegating atomic behavior to the modules in this
-    package.
+    Managed Sidecar mode only starts the private Runtime and applies its model
+    and MCP bindings. It never assembles application-process Harness plugins.
+    Legacy plugin assembly remains available only when Sidecar mode is disabled.
     """
 
     def __init__(
@@ -98,8 +100,8 @@ class HarnessExtension:
             plan = self.sidecar.plan
             if plan is None:
                 raise RuntimeError("Harness Sidecar enabled without a resolved plan")
-            component_list = list(plan.activation_targets.veadk_plugins)
-            plugin_enabled = True
+            component_list = []
+            plugin_enabled = False
         elif components is None:
             component_list = _default_components(profile)
             plugin_enabled = True if enabled is None else enabled
@@ -143,22 +145,17 @@ class HarnessExtension:
         )
 
     def plugins(self) -> list[BasePlugin]:
-        """Build plugins for ``Runner(..., plugins=...)``."""
+        """Build legacy plugins, or return none for managed Sidecar mode."""
 
         self.sidecar.start()
         if self.sidecar.enabled:
-            return build_harness_plugins(
-                components=self.config.components,
-                profile=self.config.profile,
-                store=self.store,
-                context_config=self.context_config,
-                compaction_config=self.compaction_config,
-                verifier_config=self.verifier_config,
-            )
+            return []
         if self.env is not None:
             return build_harness_plugins_from_env(self.env)
         if not self.config.enabled:
             return []
+        from veadk.extensions.harness.plugins import build_harness_plugins
+
         return build_harness_plugins(
             components=self.config.components,
             profile=self.config.profile,
