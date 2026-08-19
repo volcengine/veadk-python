@@ -54,6 +54,7 @@ import {
   HARNESS_SIDECAR_PROFILES,
   harnessIntentFromOptimizations,
   harnessProfileDefaultOptimizations,
+  harnessSidecarProviderNotice,
   harnessSidecarOptionLabel,
   harnessSidecarProfileLabel,
   releaseDraftFromDebugVariant,
@@ -3442,11 +3443,13 @@ function DebugComparisonWorkspace({
 function HarnessOptimizationWorkspace({
   profile,
   optimizations,
+  unavailableMessage,
   onProfileChange,
   onOptimizationChange,
 }: {
   profile: HarnessSidecarProfileId;
   optimizations: HarnessSidecarOptionId[];
+  unavailableMessage?: string | null;
   onProfileChange: (profile: HarnessSidecarProfileId) => void;
   onOptimizationChange: (
     optionId: HarnessSidecarOptionId,
@@ -3456,6 +3459,12 @@ function HarnessOptimizationWorkspace({
   return (
     <section className="cw-optimize-workspace" aria-label="智能体优化选项">
       <div className="cw-optimize-panel">
+        {unavailableMessage ? (
+          <div className="cw-banner" role="alert">
+            <Info className="cw-i" />
+            <span>{unavailableMessage}</span>
+          </div>
+        ) : null}
         <fieldset className="cw-optimize-section">
           <legend>优化场景</legend>
           <RadioGroup<HarnessSidecarProfileId>
@@ -4088,6 +4097,7 @@ export function CustomCreate({
   );
   const harnessOptimizationProfile = selectedHarnessProfile(draft);
   const harnessOptimizations = selectedHarnessOptimizations(draft);
+  const harnessProviderNotice = harnessSidecarProviderNotice(cloudProvider);
   const currentDebugSnapshot = useMemo(
     () => debugSnapshotKey(providerDraft, transientModelSecretValues),
     [providerDraft, transientModelSecretValues],
@@ -4258,6 +4268,11 @@ export function CustomCreate({
     setBuildErr("");
     if (!requireCompleteDraft()) {
       setWorkspaceMode("build");
+      return;
+    }
+    if (providerDraft.harnessSidecar?.enabled && harnessProviderNotice) {
+      setBuildErr(harnessProviderNotice);
+      setWorkspaceMode("optimize");
       return;
     }
     if (
@@ -4557,6 +4572,10 @@ export function CustomCreate({
     optionId: HarnessSidecarOptionId,
     selected: boolean,
   ) => {
+    if (selected && harnessProviderNotice) {
+      setBuildErr(harnessProviderNotice);
+      return;
+    }
     const optimizations = selected
       ? [...new Set([...harnessOptimizations, optionId])]
       : harnessOptimizations.filter((item) => item !== optionId);
@@ -4567,6 +4586,7 @@ export function CustomCreate({
         harnessOptimizationProfile,
       ),
     }));
+    setBuildErr("");
     setProject(null);
   };
 
@@ -4574,10 +4594,15 @@ export function CustomCreate({
     profile: HarnessSidecarProfileId,
   ) => {
     const optimizations = harnessProfileDefaultOptimizations(profile);
+    if (optimizations.length > 0 && harnessProviderNotice) {
+      setBuildErr(harnessProviderNotice);
+      return;
+    }
     setDraft((current) => ({
       ...current,
       harnessSidecar: harnessIntentFromOptimizations(optimizations, profile),
     }));
+    setBuildErr("");
     setProject(null);
   };
 
@@ -5644,6 +5669,7 @@ export function CustomCreate({
           <HarnessOptimizationWorkspace
             profile={harnessOptimizationProfile}
             optimizations={harnessOptimizations}
+            unavailableMessage={harnessProviderNotice}
             onProfileChange={updateHarnessOptimizationProfile}
             onOptimizationChange={updateHarnessOptimization}
           />

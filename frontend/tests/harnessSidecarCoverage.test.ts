@@ -6,6 +6,7 @@ import {
   harnessIntentFromOptimizations,
   harnessIntentFromRuntimeEnvs,
   harnessProfileDefaultOptimizations,
+  harnessSidecarProviderNotice,
   harnessSidecarProfileLabel,
   harnessSidecarOptionLabel,
   releaseDraftFromDebugVariant,
@@ -16,6 +17,13 @@ import {
 import { emptyDraft } from "../src/create/types";
 
 describe("Studio Harness Sidecar metadata options", () => {
+  it("keeps BytePlus ordinary deployment available while rejecting Sidecar selection", () => {
+    expect(harnessSidecarProviderNotice("volcengine")).toBeNull();
+    expect(harnessSidecarProviderNotice("byteplus")).toContain(
+      "BytePlus 账号暂不支持 Harness Sidecar 优化项",
+    );
+  });
+
   it("publishes the five capabilities integrated by this Studio release", () => {
     expect(HARNESS_SIDECAR_OPTION_IDS).toEqual([
       "context_engine",

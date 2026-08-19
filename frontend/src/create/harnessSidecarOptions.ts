@@ -74,6 +74,17 @@ export const HARNESS_SIDECAR_OPTION_GROUPS: readonly HarnessSidecarOptionGroup[]
 export const HARNESS_SIDECAR_OPTION_IDS: HarnessSidecarOptionId[] =
   HARNESS_SIDECAR_OPTIONS.map((item) => item.id);
 
+export const BYTEPLUS_HARNESS_SIDECAR_UNAVAILABLE_MESSAGE =
+  "BytePlus 账号暂不支持 Harness Sidecar 优化项。请保持优化项为空后继续部署，普通 BytePlus 智能体不受影响。";
+
+export function harnessSidecarProviderNotice(
+  cloudProvider: "volcengine" | "byteplus",
+): string | null {
+  return cloudProvider === "byteplus"
+    ? BYTEPLUS_HARNESS_SIDECAR_UNAVAILABLE_MESSAGE
+    : null;
+}
+
 const HARNESS_MODEL_PROXY_OPTION_IDS: readonly HarnessSidecarOptionId[] = [
   "context_engine",
   "compressor",

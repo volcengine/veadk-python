@@ -45,6 +45,7 @@ const { normalizeDraft } = await loadTypeScriptModule(
   "../src/create/normalizeDraft.ts",
 );
 const {
+  harnessSidecarProviderNotice,
   harnessProfileDefaultOptimizations,
   releaseDraftFromDebugVariant,
   selectedHarnessModelProxyOptimizations,
@@ -159,6 +160,26 @@ test("uses this Studio release's integrated optimization metadata", () => {
   assert.match(customCreateSource, /<strong>\{item\.displayName\}<\/strong>/);
   assert.match(customCreateSource, /onProfileChange/);
   assert.match(customCreateSource, /harnessProfileDefaultOptimizations/);
+});
+
+test("fails fast with a clear BytePlus Sidecar notice without blocking ordinary agents", () => {
+  assert.equal(harnessSidecarProviderNotice("volcengine"), null);
+  assert.match(
+    harnessSidecarProviderNotice("byteplus"),
+    /BytePlus 账号暂不支持 Harness Sidecar 优化项/,
+  );
+  assert.match(
+    customCreateSource,
+    /providerDraft\.harnessSidecar\?\.enabled && harnessProviderNotice/,
+  );
+  assert.match(
+    customCreateSource,
+    /selected && harnessProviderNotice[\s\S]*?setBuildErr\(harnessProviderNotice\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /unavailableMessage=\{harnessProviderNotice\}/,
+  );
 });
 
 test("derives Model Proxy dependencies from the selected optimization catalog", () => {
