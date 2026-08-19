@@ -96,7 +96,7 @@ def expand_sidecar_profile(
             "enabled": bool(model_components),
             "components": model_components,
             "compression_provider": (
-                "headroom" if "compressor" in selected else "noop"
+                "heuristic" if "compressor" in selected else "noop"
             ),
             "fail_open": True,
         },
