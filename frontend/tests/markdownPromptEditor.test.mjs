@@ -153,10 +153,10 @@ test("build workspace reuses the Figma navigation and hides the old footer", () 
   assert.doesNotMatch(createSource, /WORKSPACE_TITLES/);
   assert.match(createSource, /\{ id: "build", label: "架构" \}/);
   assert.match(createSource, /\{ id: "validate", label: "调试" \}/);
-  assert.match(createSource, /\{ id: "environment", label: "环境" \}/);
+  assert.doesNotMatch(createSource, /\{ id: "environment", label: "环境" \}/);
   assert.match(createSource, /\{ id: "publish", label: "发布" \}/);
   assert.match(createSource, /function WorkspaceLifecycleFooter/);
-  assert.match(createSource, /\{\(workspaceMode === "environment" \|\| workspaceMode === "publish"\) && <WorkspaceLifecycleFooter/);
+  assert.match(createSource, /\{workspaceMode === "publish" && <WorkspaceLifecycleFooter/);
   assert.match(createSource, /id="cw-publish-primary-action"/);
 });
 
@@ -196,7 +196,7 @@ test("build-stage intelligent generation lives in the Figma chat drawer", () => 
   assert.match(createSource, /createGeneratedAgentConversation\(/);
   assert.match(createSource, /runGeneratedAgentConversationSSE\(/);
   assert.match(createSource, /eventType === "agent_draft"/);
-  assert.match(createSource, /\{\(workspaceMode === "environment" \|\| workspaceMode === "publish"\) && <WorkspaceLifecycleFooter/);
+  assert.match(createSource, /\{workspaceMode === "publish" && <WorkspaceLifecycleFooter/);
 });
 
 test("debug comparison configuration explains duplicate disabled actions", () => {
@@ -250,18 +250,19 @@ test("debug variants configure and run their own model, description, and prompt"
   );
 });
 
-test("debug workspace keeps a fixed Figma settings entry across views", () => {
+test("debug groups keep independent, aligned config controls", () => {
+  assert.doesNotMatch(createSource, /className="cw-ab-settings-toggle"/);
   assert.match(
     createSource,
-    /className="cw-ab-settings-toggle"[\s\S]*?aria-label=\{view === "config" \? "关闭调试设置" : "打开调试设置"\}/,
+    /className="cw-ab-group-config-toggle"[\s\S]*?aria-label=\{variant\.configOpen[\s\S]*?variant\.configOpen \? <CreateCloseIcon \/> : <DebugSettingsIcon \/>/,
   );
   assert.match(
     createSource,
-    /view === "config" \? <CreateCloseIcon \/> : <DebugSettingsIcon \/>/,
+    /onClick=\{\(\) =>[\s\S]*?variant\.configOpen[\s\S]*?onCancelConfig\(variant\.id\)[\s\S]*?onOpenSettings\(variant\.id\)/,
   );
   assert.match(
     createSource,
-    /onOpenSettings=\{\(\) =>[\s\S]*?configOpen: index === 0/,
+    /onOpenSettings=\{\(id\) =>[\s\S]*?configOpen: variant\.id === id/,
   );
   assert.match(
     createSource,
@@ -269,11 +270,19 @@ test("debug workspace keeps a fixed Figma settings entry across views", () => {
   );
   assert.match(
     createSource,
-    /onCancelConfig=\{\(\) =>[\s\S]*?configOpen: false/,
+    /onCancelConfig=\{\(id\) =>[\s\S]*?configOpen:[\s\S]*?variant\.id === id \? false : variant\.configOpen/,
   );
   assert.match(
     createSource,
-    /className="cw-ab-group-chip"[\s\S]*?variantIndex > 0 && \([\s\S]*?className="cw-ab-change-summary"/,
+    /className="cw-ab-column-label"[\s\S]*?className="cw-ab-group-chip"[\s\S]*?className="cw-ab-change-summary"[\s\S]*?className="cw-ab-group-config-toggle"/,
+  );
+  assert.match(
+    createSource,
+    /className="cw-ab-config-column"[\s\S]*?layoutDependency=\{variants\.length\}/,
+  );
+  assert.match(
+    createSource,
+    /className="cw-ab-result-column"[\s\S]*?layoutDependency=\{variants\.length\}/,
   );
   assert.doesNotMatch(
     createSource,
@@ -281,7 +290,11 @@ test("debug workspace keeps a fixed Figma settings entry across views", () => {
   );
   assert.match(
     createStyles,
-    /\.cw-ab-settings-toggle\s*\{[\s\S]*?top:\s*16px;[\s\S]*?right:\s*16px;[\s\S]*?width:\s*32px;[\s\S]*?height:\s*32px;/,
+    /\.cw-ab-column-label\s*\{[\s\S]*?grid-template-columns:\s*auto minmax\(0, 1fr\) 28px;[\s\S]*?align-items:\s*center;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-ab-group-config-toggle\s*\{[\s\S]*?width:\s*28px;[\s\S]*?height:\s*28px;[\s\S]*?place-items:\s*center;/,
   );
   assert.match(
     createIconSource,

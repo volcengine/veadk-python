@@ -24,11 +24,8 @@
 .cw-root.is-validate {
   --cw-workspace-width: 100%;
 }
-.cw-root.is-environment {
-  --cw-workspace-width: min(76%, 1100px);
-}
 .cw-root.is-publish {
-  --cw-workspace-width: min(80%, 1180px);
+  --cw-workspace-width: 100%;
 }
 
 /* ---------- workspace lifecycle navigation ---------- */
@@ -95,6 +92,10 @@
   margin: 0 auto 24px;
   padding: 12px 0 4px;
   background: transparent;
+}
+.cw-root.is-publish .cw-workspace-footer {
+  box-sizing: border-box;
+  padding-inline: 24px;
 }
 .cw-workspace-footer-accessory {
   width: 100%;
@@ -183,7 +184,7 @@
 .cw-workspace-progress {
   width: min(176px, 48vw);
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 5px;
   margin: 0 auto;
 }
@@ -568,7 +569,7 @@
   overflow: hidden;
   border: 0;
   border-radius: 0;
-  background: #f0f0f0;
+  background: transparent;
   box-shadow: none;
 }
 
@@ -625,7 +626,7 @@
   overflow: hidden;
   border: 0;
   border-radius: 0;
-  background: #f0f0f0;
+  background: transparent;
   box-shadow: none;
 }
 
@@ -887,11 +888,10 @@
   gap: 20px;
 }
 
-.cw-detail.is-basic .cw-basic-category-field { order: 0; }
-.cw-detail.is-basic .cw-basic-name-field { order: 1; }
-.cw-detail.is-basic .cw-basic-description-field { order: 2; }
-.cw-detail.is-basic .cw-section:nth-child(3) .cw-model-form { order: 3; }
-.cw-detail.is-basic .cw-basic-prompt-field { order: 4; }
+.cw-detail.is-basic .cw-basic-name-field { order: 0; }
+.cw-detail.is-basic .cw-basic-description-field { order: 1; }
+.cw-detail.is-basic .cw-section:nth-child(3) .cw-model-form { order: 2; }
+.cw-detail.is-basic .cw-basic-prompt-field { order: 3; }
 
 .cw-detail .cw-model-form {
   width: 100%;
@@ -2325,46 +2325,6 @@
   contain: layout paint;
 }
 
-.cw-ab-settings-toggle {
-  position: absolute;
-  z-index: 6;
-  top: 16px;
-  right: 16px;
-  width: 32px;
-  height: 32px;
-  display: inline-grid;
-  flex: 0 0 auto;
-  padding: 0;
-  place-items: center;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: #3f3f51;
-  cursor: pointer;
-  transition: background-color 150ms ease, color 150ms ease;
-}
-
-.cw-ab-settings-toggle:hover {
-  background: hsl(var(--muted) / 0.64);
-  color: hsl(var(--foreground));
-}
-
-.cw-ab-settings-toggle:focus-visible {
-  outline: 2px solid hsl(var(--ring));
-  outline-offset: 1px;
-}
-
-.cw-ab-settings-toggle svg {
-  width: 16px;
-  height: 16px;
-  display: block;
-}
-
-.cw-ab-settings-toggle svg[viewBox="0 0 15 12"] {
-  width: 15px;
-  height: 12px;
-}
-
 .cw-validation-canvas {
   min-width: 0;
   min-height: 0;
@@ -2602,10 +2562,10 @@
 
 .cw-ab-column-label {
   min-height: 36px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 8px;
   padding: 0 24px 12px;
   color: #383740;
   font-size: 13px;
@@ -2620,10 +2580,10 @@
 
 .cw-ab-change-summary {
   min-width: 0;
-  padding-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: right;
 }
 
 .cw-ab-config-column:not(:first-child) .cw-ab-change-summary,
@@ -2631,12 +2591,40 @@
   color: #d99000;
 }
 
-.cw-ab-config-column:last-child .cw-ab-column-label {
-  padding-right: 64px;
+.cw-ab-group-config-toggle {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  flex: 0 0 28px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--foreground) / 0.78);
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease;
 }
 
-.cw-ab-results-grid .cw-ab-column-label {
-  justify-content: flex-start;
+.cw-ab-group-config-toggle:hover {
+  background: hsl(var(--muted) / 0.64);
+  color: hsl(var(--foreground));
+}
+
+.cw-ab-group-config-toggle:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+
+.cw-ab-group-config-toggle svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.cw-ab-group-config-toggle svg[viewBox="0 0 15 12"] {
+  width: 15px;
+  height: 12px;
 }
 
 .cw-ab-agent-heading {
@@ -5467,18 +5455,6 @@
 .cw-preview-body > * {
   flex: 1;
   min-height: 0;
-}
-
-/* ---------- cloud environment ---------- */
-.cw-environment-workspace {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  align-items: flex-start;
-  overflow-x: hidden;
-  overflow-y: auto;
-  padding: 20px 0 24px;
 }
 
 /* ---------- skill hub picker ---------- */

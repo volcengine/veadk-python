@@ -2394,8 +2394,6 @@ type DebugPhase = "idle" | "starting" | "ready" | "sending" | "error";
 type WorkspaceMode =
   | "build"
   | "validate"
-  | "optimize"
-  | "environment"
   | "publish";
 interface DebugMessage {
   role: "user" | "assistant";
@@ -2669,7 +2667,7 @@ function DebugComparisonWorkspace({
   onRemoveVariant: (id: string) => void;
   onCompleteConfig: (id: string) => void;
   onCancelConfig: (id: string) => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (id: string) => void;
   onConfigChange: (
     id: string,
     field: "modelName" | "description" | "instruction",
@@ -2797,23 +2795,6 @@ function DebugComparisonWorkspace({
       className={`cw-ab-workspace is-${view}`}
       aria-label="A/B 调试工作台"
     >
-      {enabled && (
-        <button
-          type="button"
-          className="cw-ab-settings-toggle"
-          aria-label={view === "config" ? "关闭调试设置" : "打开调试设置"}
-          title={view === "config" ? "关闭调试设置" : "调试设置"}
-          onClick={() => {
-            if (view === "config" && configVariant) {
-              onCancelConfig(configVariant.id);
-              return;
-            }
-            onOpenSettings();
-          }}
-        >
-          {view === "config" ? <CreateCloseIcon /> : <DebugSettingsIcon />}
-        </button>
-      )}
       <AnimatePresence initial={false} mode="wait" custom={viewDirection}>
         <motion.div
           key={enabled ? view : "disabled"}
@@ -2908,15 +2889,31 @@ function DebugComparisonWorkspace({
                   <motion.section
                     key={variant.id}
                     className="cw-ab-config-column"
+                    layoutDependency={variants.length}
                     {...columnMotion(variantIndex)}
                   >
                   <header className="cw-ab-column-label">
                     <span className="cw-ab-group-chip">
                       {variantIndex === 0 ? "基准组 A" : "对照组 B"}
                     </span>
-                    {variantIndex > 0 && (
-                      <span className="cw-ab-change-summary">{changeLabel}</span>
-                    )}
+                    <span className="cw-ab-change-summary">
+                      {variantIndex > 0 ? changeLabel : null}
+                    </span>
+                    <button
+                      type="button"
+                      className="cw-ab-group-config-toggle"
+                      aria-label={variant.configOpen ? "关闭当前组设置" : "配置当前组"}
+                      title={variant.configOpen ? "关闭当前组设置" : "配置当前组"}
+                      onClick={() => {
+                        if (variant.configOpen) {
+                          onCancelConfig(variant.id);
+                          return;
+                        }
+                        onOpenSettings(variant.id);
+                      }}
+                    >
+                      {variant.configOpen ? <CreateCloseIcon /> : <DebugSettingsIcon />}
+                    </button>
                   </header>
                   <div className="cw-ab-agent-heading">
                     <span aria-hidden="true"><AgentFaceSquareIcon /></span>
@@ -3011,15 +3008,31 @@ function DebugComparisonWorkspace({
                   <motion.section
                     key={variant.id}
                     className="cw-ab-result-column"
+                    layoutDependency={variants.length}
                     {...columnMotion(variantIndex)}
                   >
                   <header className="cw-ab-column-label">
                     <span className="cw-ab-group-chip">
                       {variantIndex === 0 ? "基准组 A" : "对照组 B"}
                     </span>
-                    {variantIndex > 0 && (
-                      <span className="cw-ab-change-summary">{changeLabel}</span>
-                    )}
+                    <span className="cw-ab-change-summary">
+                      {variantIndex > 0 ? changeLabel : null}
+                    </span>
+                    <button
+                      type="button"
+                      className="cw-ab-group-config-toggle"
+                      aria-label={variant.configOpen ? "关闭当前组设置" : "配置当前组"}
+                      title={variant.configOpen ? "关闭当前组设置" : "配置当前组"}
+                      onClick={() => {
+                        if (variant.configOpen) {
+                          onCancelConfig(variant.id);
+                          return;
+                        }
+                        onOpenSettings(variant.id);
+                      }}
+                    >
+                      {variant.configOpen ? <CreateCloseIcon /> : <DebugSettingsIcon />}
+                    </button>
                   </header>
                   <motion.div
                     className="cw-ab-conversation"
@@ -3262,8 +3275,6 @@ const WORKSPACE_MODES: Array<{
 }> = [
   { id: "build", label: "架构" },
   { id: "validate", label: "调试" },
-  { id: "optimize", label: "优化" },
-  { id: "environment", label: "环境" },
   { id: "publish", label: "发布" },
 ];
 
@@ -4035,15 +4046,6 @@ export function CustomCreate({
   // Detail-pane branching is driven by the SELECTED node's type.
   const orchestrator = isOrchestratorType(node.agentType);
   const a2a = isA2aType(node.agentType);
-  const agentTypeOptions = useMemo<SelectOption<AgentType>[]>(
-    () =>
-      AGENT_TYPES.map((type) => ({
-        value: type.id,
-        label: AGENT_TYPE_BAR_LABELS[type.id],
-        disabled: isRootAgent && type.id === "a2a",
-      })),
-    [isRootAgent],
-  );
   useEffect(() => {
     if (orchestrator && configTab === "capabilities") {
       setConfigTab("basic");
@@ -4271,52 +4273,51 @@ export function CustomCreate({
     });
   };
 
-  const openEnvironment = async (variantId?: string) => {
+  const openPublishPreview = async (
+    variantId?: string,
+    draftOverride?: AgentDraft,
+  ) => {
     if (!(await confirmLeaveDebug())) return;
-    if (!requireCompleteDraft()) {
-      setWorkspaceMode("build");
-      return;
-    }
-    if (variantId) setSelectedVariantId(variantId);
-    setWorkspaceMode("environment");
-  };
-
-  const materializePublishRelease = async (variantId?: string) => {
     setBuildErr("");
     if (!requireCompleteDraft()) {
       setWorkspaceMode("build");
       return;
     }
-    if (providerDraft.harnessSidecar?.enabled && harnessProviderNotice) {
+    const releaseProviderDraft = draftForCloudProvider(
+      draftOverride ?? draft,
+      cloudProvider,
+    );
+    if (
+      releaseProviderDraft.harnessSidecar?.enabled &&
+      harnessProviderNotice
+    ) {
       setBuildErr(harnessProviderNotice);
       setWorkspaceMode("optimize");
       return;
     }
     if (
-      providerDraft.cloudEnvironment?.dockerfile !== undefined &&
-      !providerDraft.cloudEnvironment.dockerfile.trim()
+      releaseProviderDraft.cloudEnvironment?.dockerfile !== undefined &&
+      !releaseProviderDraft.cloudEnvironment.dockerfile.trim()
     ) {
       setBuildErr("Dockerfile 不能为空。请输入有效内容，或恢复自动生成。");
-      setWorkspaceMode("environment");
       return;
     }
     if (
-      (providerDraft.cloudEnvironment?.dockerfile?.length ?? 0) >
+      (releaseProviderDraft.cloudEnvironment?.dockerfile?.length ?? 0) >
       MAX_CLOUD_DOCKERFILE_LENGTH
     ) {
       setBuildErr("Dockerfile 不能超过 64 KiB。请精简内容后重试。");
-      setWorkspaceMode("environment");
       return;
     }
+    const releaseDeploymentEnv = collectDeploymentEnv(releaseProviderDraft);
     const invalidEnv = firstInvalidRuntimeEnv(
-      deploymentEnv.specs,
-      providerDraft.deployment?.envValues ?? {},
+      releaseDeploymentEnv.specs,
+      releaseProviderDraft.deployment?.envValues ?? {},
     );
     if (invalidEnv) {
       setBuildErr(
         `${invalidEnv.spec.comment || invalidEnv.spec.key}：${invalidEnv.error}`,
       );
-      setWorkspaceMode("build");
       return;
     }
     setBuilding(true);
@@ -4326,8 +4327,8 @@ export function CustomCreate({
         : selectedDebugVariant;
       if (releaseVariant) setSelectedVariantId(releaseVariant.id);
       const releaseDraft = releaseVariant
-        ? releaseDraftFromDebugVariant(providerDraft, releaseVariant)
-        : providerDraft;
+        ? releaseDraftFromDebugVariant(releaseProviderDraft, releaseVariant)
+        : releaseProviderDraft;
       const generated = await generateAgentProject(codegenDraft(releaseDraft));
       setDraft(releaseDraft);
       setProject(generated);
@@ -4734,20 +4735,11 @@ export function CustomCreate({
 
   const handleWorkspaceChange = async (nextMode: WorkspaceMode) => {
     if (nextMode === "publish") {
-      if (!(await confirmLeaveDebug())) return;
-      await materializePublishRelease();
+      await openPublishPreview();
       return;
     }
     if (nextMode === "validate") {
       openValidation();
-      return;
-    }
-    if (nextMode === "optimize") {
-      await openOptimization();
-      return;
-    }
-    if (nextMode === "environment") {
-      void openEnvironment();
       return;
     }
     if (!(await confirmLeaveDebug())) return;
@@ -4755,12 +4747,14 @@ export function CustomCreate({
   };
 
   const updateCloudEnvironment = (cloudEnvironment: CloudEnvironmentConfig) => {
-    setDraft((current) => ({
-      ...current,
-      cloudEnvironment,
-    }));
+    const nextDraft = { ...draft, cloudEnvironment };
+    setDraft(nextDraft);
     setBuildErr("");
-    setProject(null);
+    if (workspaceMode === "publish" && !cloudEnvironmentEditorOpen) {
+      void openPublishPreview(undefined, nextDraft);
+    } else if (workspaceMode !== "publish") {
+      setProject(null);
+    }
   };
 
   const Section = sectionImpl.current;
@@ -4871,7 +4865,7 @@ export function CustomCreate({
       <WorkspaceHeader
         onBack={onBack}
         onDebug={() => void handleWorkspaceChange("validate")}
-        onDeploy={() => void handleWorkspaceChange("environment")}
+        onDeploy={() => void handleWorkspaceChange("publish")}
         debugMode={workspaceMode === "validate"}
         showDebugPreview={
           workspaceMode !== "validate" ||
@@ -5104,27 +5098,6 @@ export function CustomCreate({
                         </Section>
                         <Section meta={metaOf("basic")}>
                           <div className="cw-form">
-                            <div className="cw-field cw-model-config-row cw-basic-category-field">
-                              <label
-                                className="cw-label"
-                                htmlFor="cw-agent-type"
-                              >
-                                类别
-                              </label>
-                              <Select
-                                id="cw-agent-type"
-                                options={agentTypeOptions}
-                                value={node.agentType ?? "llm"}
-                                size="lg"
-                                pill={false}
-                                align="start"
-                                triggerClassName="cw-agent-config-select-trigger"
-                                optionClassName="cw-agent-config-select-option"
-                                onChange={(option) =>
-                                  selectAgentType(option.value)
-                                }
-                              />
-                            </div>
                             {!a2a && (
                               <>
                                 <div className="cw-field cw-model-config-row cw-basic-name-field">
@@ -5929,19 +5902,20 @@ export function CustomCreate({
                 onStartVariant={startDebugVariant}
                 onRemoveVariant={removeDebugVariant}
                 onCompleteConfig={completeDebugVariantConfig}
-                onCancelConfig={() =>
+                onCancelConfig={(id) =>
                   setDebugVariants((current) =>
                     current.map((variant) => ({
                       ...variant,
-                      configOpen: false,
+                      configOpen:
+                        variant.id === id ? false : variant.configOpen,
                     })),
                   )
                 }
-                onOpenSettings={() =>
+                onOpenSettings={(id) =>
                   setDebugVariants((current) =>
-                    current.map((variant, index) => ({
+                    current.map((variant) => ({
                       ...variant,
-                      configOpen: index === 0,
+                      configOpen: variant.id === id,
                     })),
                   )
                 }
@@ -5952,34 +5926,35 @@ export function CustomCreate({
           </div>
         )}
 
-        {workspaceMode === "optimize" && (
-          <HarnessOptimizationWorkspace
-            profile={harnessOptimizationProfile}
-            optimizations={harnessOptimizations}
-            unavailableMessage={harnessProviderNotice}
-            onProfileChange={updateHarnessOptimizationProfile}
-            onOptimizationChange={updateHarnessOptimization}
-          />
-        )}
-
-        {workspaceMode === "environment" && (
-          <div className="cw-environment-workspace">
-            <CloudEnvironmentConfigurator
-              cloudProvider={cloudProvider}
-              value={draft.cloudEnvironment ?? { cliTools: [] }}
-              onChange={updateCloudEnvironment}
-              editorOpen={cloudEnvironmentEditorOpen}
-              onEditorOpenChange={setCloudEnvironmentEditorOpen}
-              disabled={building}
-            />
-          </div>
-        )}
-
         {workspaceMode === "publish" && (
           <div className="cw-preview-body">
             {project ? (
               <ProjectPreview
                 embedded
+                deploymentTitle="环境与部署"
+                deploymentEnvironmentPane={
+                  <section className="pp-config-section pp-cloud-environment-section">
+                    <div className="pp-config-label">运行环境</div>
+                    <CloudEnvironmentConfigurator
+                      cloudProvider={cloudProvider}
+                      value={draft.cloudEnvironment ?? { cliTools: [] }}
+                      onChange={updateCloudEnvironment}
+                      editorOpen={cloudEnvironmentEditorOpen}
+                      onEditorOpenChange={(open) => {
+                        setCloudEnvironmentEditorOpen(open);
+                        if (!open) void openPublishPreview();
+                      }}
+                      disabled={building}
+                    />
+                    <CloudEnvironmentAdvancedTrigger
+                      customized={
+                        draft.cloudEnvironment?.dockerfile !== undefined
+                      }
+                      disabled={building}
+                      onClick={() => setCloudEnvironmentEditorOpen(true)}
+                    />
+                  </section>
+                }
                 cloudProvider={cloudProvider}
                 project={project}
                 agentDraft={draft}
@@ -6007,6 +5982,10 @@ export function CustomCreate({
                 onDeploymentTaskChange={onDeploymentTaskChange}
                 deploymentActionLabel={deploymentTarget ? "更新并发布" : "部署"}
                 deploymentActionTargetId="cw-publish-primary-action"
+                deployDisabled={building || Boolean(buildErr)}
+                deployDisabledReason={
+                  building ? "正在更新部署配置" : buildErr || undefined
+                }
                 deploymentRuntimeId={deploymentTarget?.runtimeId}
                 deploymentRuntimeName={deploymentRuntimeName}
                 deploymentRuntimeNameCustomized={
@@ -6085,20 +6064,11 @@ export function CustomCreate({
           </div>
         )}
       </main>
-      {(workspaceMode === "environment" || workspaceMode === "publish") && <WorkspaceLifecycleFooter
+      {workspaceMode === "publish" && <WorkspaceLifecycleFooter
         mode={workspaceMode}
         busy={building}
         onChange={handleWorkspaceChange}
         assistant={undefined}
-        accessory={
-          workspaceMode === "environment" ? (
-            <CloudEnvironmentAdvancedTrigger
-              customized={draft.cloudEnvironment?.dockerfile !== undefined}
-              disabled={building}
-              onClick={() => setCloudEnvironmentEditorOpen(true)}
-            />
-          ) : undefined
-        }
       />}
       {debugTraceTarget && (
         <TraceDrawer

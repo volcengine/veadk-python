@@ -1,5 +1,4 @@
 import { Button } from "@openai/apps-sdk-ui/components/Button";
-import { SegmentedControl } from "@openai/apps-sdk-ui/components/SegmentedControl";
 import {
   CreateAddIcon,
   CreateBackIcon,
@@ -60,22 +59,6 @@ export function CreateAgentHeader({
         </Button>
         <span className="create-agent-header-title">创建智能体</span>
       </div>
-
-      {debugMode && showDebugPreview && (
-        <SegmentedControl
-          className="create-agent-header-preview"
-          value="canvas"
-          size="sm"
-          gutterSize="sm"
-          pill
-          aria-label="调试预览"
-        >
-          <SegmentedControl.Option value="canvas">画布预览</SegmentedControl.Option>
-          <SegmentedControl.Option value="list" disabled>
-            列表预览
-          </SegmentedControl.Option>
-        </SegmentedControl>
-      )}
 
       <div
         className="create-agent-header-actions"

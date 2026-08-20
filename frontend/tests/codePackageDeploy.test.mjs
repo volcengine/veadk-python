@@ -38,6 +38,14 @@ const projectPreviewStyles = readFileSync(
   new URL("../src/ui/ProjectPreview.css", import.meta.url),
   "utf8",
 );
+const deploymentResourcesStyles = readFileSync(
+  new URL("../src/ui/DeploymentResources.css", import.meta.url),
+  "utf8",
+);
+const customCreateSource = readFileSync(
+  new URL("../src/create/CustomCreate.tsx", import.meta.url),
+  "utf8",
+);
 const appStyles = readFileSync(
   new URL("../src/styles.css", import.meta.url),
   "utf8",
@@ -69,6 +77,46 @@ test("offers code package deployment beside scratch creation", () => {
   assert.doesNotMatch(appSource, /import \{ FileArchive \} from "lucide-react"/);
   assert.match(appSource, /import \{ CodePackageCreate \}/);
   assert.match(appSource, /visibleCreateView === "package"/);
+});
+
+test("uses the Figma deployment-panel rhythm for embedded Agent deployment", () => {
+  assert.match(customCreateSource, /deploymentTitle="环境与部署"/);
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-root\.is-deploy\.is-embedded \.pp-body\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) minmax\(420px, 480px\)/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-root\.is-deploy\.is-embedded \.pp-config-scroll\s*\{[\s\S]*?padding:\s*0 24px 32px;[\s\S]*?overflow-y:\s*auto/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-root\.is-deploy\.is-embedded \.pp-config-section\s*\{[\s\S]*?margin:\s*0 0 32px;[\s\S]*?border:\s*0/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-root\.is-deploy\.is-embedded \.pp-config-label\s*\{[\s\S]*?margin:\s*0 0 8px;[\s\S]*?font-size:\s*14px;[\s\S]*?font-weight:\s*500/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /@media \(max-width: 1000px\)[\s\S]*?\.pp-root\.is-deploy\.is-embedded \.pp-body\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-direction:\s*column/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /@media \(max-width: 1000px\)[\s\S]*?\.pp-root\.is-deploy\.is-embedded \.pp-artifact-actions\.is-rail\s*\{[\s\S]*?flex-direction:\s*row/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /@media \(max-width: 1000px\)[\s\S]*?\.pp-root\.is-deploy\.is-embedded \.pp-config\s*\{[\s\S]*?width:\s*min\(100%, 480px\);[\s\S]*?align-self:\s*center/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-root\.is-deploy\.is-embedded \.pp-resource-grid\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/,
+  );
+  assert.match(
+    deploymentResourcesStyles,
+    /\.pp-resource-auto-names dd\s*\{[\s\S]*?overflow:\s*hidden;[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?white-space:\s*nowrap/,
+  );
 });
 
 test("opens custom creation directly from the template entry", () => {
@@ -113,10 +161,7 @@ test("shows existing-project migration as an enabled option", () => {
     addAgentMenuSource,
     /from "@openai\/apps-sdk-ui\/components\/Input"/,
   );
-  assert.match(
-    createAgentHeaderSource,
-    /from "@openai\/apps-sdk-ui\/components\/SegmentedControl"/,
-  );
+  assert.doesNotMatch(createAgentHeaderSource, /SegmentedControl/);
   assert.match(appSource, /onMigration=\{\(\) => \{[\s\S]*?setCreateView\("migration"\)/);
   assert.match(addAgentMenuStyles, /\.create-entry-card\s*\{/);
   assert.doesNotMatch(addAgentMenuSource, /Badge|ChevronRight/);
@@ -128,8 +173,8 @@ test("matches the Figma create-agent landing geometry", () => {
   assert.match(createAgentHeaderSource, /<CreateDownloadIcon \/>[\s\S]*?代码/);
   assert.match(createAgentHeaderSource, /<CreateDebugIcon \/>[\s\S]*?调试/);
   assert.match(createAgentHeaderSource, /<CreateDeployIcon \/>[\s\S]*?部署/);
-  assert.match(createAgentHeaderSource, /画布预览/);
-  assert.match(createAgentHeaderSource, /列表预览/);
+  assert.doesNotMatch(createAgentHeaderSource, /画布预览|列表预览/);
+  assert.doesNotMatch(createAgentHeaderStyles, /create-agent-header-preview/);
   assert.match(createAgentHeaderSource, /添加对照/);
   assert.match(createAgentHeaderSource, /退出调试/);
   assert.doesNotMatch(createAgentHeaderSource, /CreateShareIcon|collaborator/);
@@ -186,10 +231,7 @@ test("uses Apps SDK UI controls for the create header actions", () => {
     createAgentHeaderSource,
     /import \{ Button \} from "@openai\/apps-sdk-ui\/components\/Button"/,
   );
-  assert.match(
-    createAgentHeaderSource,
-    /import \{ SegmentedControl \} from "@openai\/apps-sdk-ui\/components\/SegmentedControl"/,
-  );
+  assert.doesNotMatch(createAgentHeaderSource, /SegmentedControl/);
   assert.doesNotMatch(createAgentHeaderSource, /<button\b/);
   assert.match(
     createAgentHeaderSource,

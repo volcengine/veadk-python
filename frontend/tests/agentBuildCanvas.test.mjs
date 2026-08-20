@@ -65,15 +65,64 @@ test("flattens every Agent into an independent workflow node", () => {
 test("removes every in-node child Agent action", () => {
   assert.doesNotMatch(source, /添加子 Agent/);
   assert.doesNotMatch(source, /abc-agent-card-add|abc-group-summary-add/);
-  assert.doesNotMatch(cssSource, /\.abc-agent-card-add|\.abc-group-summary-add/);
+  assert.doesNotMatch(
+    cssSource,
+    /\.abc-agent-card-add|\.abc-group-summary-add/,
+  );
 });
 
-test("adds nodes from a canvas-level Apps SDK UI action", () => {
+test("adds nodes from a FlowGram-native action placed inside each line", () => {
   assert.match(source, /@openai\/apps-sdk-ui\/components\/Button/);
-  assert.match(source, /className="abc-add-node"/);
-  assert.match(source, />\s*添加节点\s*</);
-  assert.match(source, /onClick=\{\(\) => onAdd\(\[\]\)\}/);
-  assert.match(cssSource, /\.abc-add-node\s*\{/);
+  assert.match(source, /WorkflowLinesLayer/);
+  assert.match(source, /WorkflowLineRenderData/);
+  assert.match(source, /renderInsideLine = FlowgramLineInsertAction/);
+  assert.match(source, /className="abc-line-insert flow-canvas-not-draggable"/);
+  assert.match(source, /variant="outline"/);
+  assert.match(source, /size="2xs"/);
+  assert.match(source, /iconSize="sm"/);
+  assert.match(
+    source,
+    /actions\.onInsert\(target\.parentPath, target\.index\)/,
+  );
+  assert.match(cssSource, /\.abc-line-insert\s*\{/);
+  assert.match(cssSource, /\.abc-flowgram-line:hover \.abc-line-insert/);
+  assert.match(cssSource, /\.abc-flowgram-line:focus-within \.abc-line-insert/);
+  assert.match(
+    cssSource,
+    /\.abc-line-insert\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?transition:\s*opacity 140ms ease;/,
+  );
+  assert.doesNotMatch(source, /className="abc-add-node"/);
+  assert.doesNotMatch(cssSource, /\.abc-add-node\s*\{/);
+});
+
+test("offers insertion on the first edge and free side connections", () => {
+  assert.match(
+    source,
+    /workflowEdge\("terminal-input", rootFlow\.entry, \{[\s\S]*?parentPath: \[\],[\s\S]*?index: 0,/,
+  );
+  assert.match(source, /portID: `input-\$\{inputLocation\}`/);
+  assert.match(source, /portID: `input-\$\{secondaryInputLocation\}`/);
+  assert.match(source, /portID: `output-\$\{outputLocation\}`/);
+  assert.match(source, /portID: `output-\$\{secondaryOutputLocation\}`/);
+  assert.match(source, /twoWayConnection:\s*true/);
+});
+
+test("matches the Figma connector color, weight, orthogonal shape, and arrow style", () => {
+  assert.match(source, /setLineRenderType:\s*\(\) => LineType\.LINE_CHART/);
+  assert.match(source, /setLineClassName:\s*\(\) => "abc-flowgram-line"/);
+  assert.match(source, /isHideArrowLine:\s*\(\) => true/);
+  assert.match(source, /default:\s*"#C9CDD4"/);
+  assert.match(
+    cssSource,
+    /\.abc-flowgram-line svg path\s*\{[\s\S]*?stroke-width:\s*1\.5px;/,
+  );
+});
+
+test("stores insertion targets on generated workflow edges", () => {
+  assert.match(source, /type LineInsertTarget/);
+  assert.match(source, /data:\s*\{ insert \} satisfies WorkflowEdgeData/);
+  assert.match(source, /rootFlow\.appendTarget/);
+  assert.match(source, /parentPath:\s*path/);
 });
 
 test("enables native FlowGram node, edge, and history interactions", () => {
@@ -81,9 +130,13 @@ test("enables native FlowGram node, edge, and history interactions", () => {
   assert.match(source, /canDeleteLine:/);
   assert.match(source, /canDeleteNode:/);
   assert.match(source, /history:\s*\{[\s\S]*?enable:\s*true/);
-  assert.match(source, /twoWayConnection:\s*false/);
+  assert.match(source, /twoWayConnection:\s*true/);
   assert.match(source, /onContentChange\(ctx/);
   assert.match(source, /ctx\.document\.toJSON\(\)/);
+  assert.match(
+    source,
+    /const preserveLayout =\s*!structureChanged &&\s*!directionChanged/,
+  );
   assert.match(source, /!structureChanged && !directionChanged/);
   assert.match(
     source,
@@ -97,6 +150,14 @@ test("keeps vertical and horizontal ports aligned with the requested layout", ()
   assert.match(source, /defaultPorts:/);
   assert.match(source, /type: "input"/);
   assert.match(source, /type: "output"/);
+  assert.match(source, /function routeWorkflowEdges/);
+  assert.match(source, /sourcePortID: primaryOutputPortID\(direction\)/);
+  assert.match(source, /targetPortID: primaryInputPortID\(direction\)/);
+  assert.match(
+    source,
+    /position:\s*\{\s*x:\s*position\.x,\s*y:\s*position\.y - data\.layoutHeight \/ 2/,
+  );
+  assert.doesNotMatch(source, /position\.x - data\.layoutWidth \/ 2/);
 });
 
 test("keeps the Figma Agent card DOM and visual dimensions", () => {
@@ -107,46 +168,69 @@ test("keeps the Figma Agent card DOM and visual dimensions", () => {
   assert.match(source, /className="abc-agent-card-stats"/);
   assert.match(
     cssSource,
-    /\.abc-agent-card\s*\{[\s\S]*?--abc-agent-card-tone:\s*#e8ebf9;[\s\S]*?width:\s*214px;[\s\S]*?height:\s*100%;[\s\S]*?padding:\s*8px;[\s\S]*?border:\s*0\.5px solid var\(--abc-agent-card-tone\);[\s\S]*?border-radius:\s*12px;[\s\S]*?background:\s*#fff;/,
+    /\.abc-agent-card\s*\{[\s\S]*?--abc-agent-card-tone:\s*#e8ebf9;[\s\S]*?width:\s*260px;[\s\S]*?height:\s*100%;[\s\S]*?gap:\s*10px;[\s\S]*?padding:\s*12px;[\s\S]*?border:\s*1px solid transparent;[\s\S]*?border-radius:\s*12px;[\s\S]*?background:\s*#fff;/,
   );
   assert.match(
     cssSource,
-    /\.abc-agent-card-head\s*\{[\s\S]*?flex:\s*0 0 42px;[\s\S]*?border-radius:\s*6px;[\s\S]*?background:\s*var\(--abc-agent-card-tone\);/,
+    /\.abc-agent-card-head\s*\{[\s\S]*?flex:\s*0 0 36px;[\s\S]*?gap:\s*8px;[\s\S]*?background:\s*transparent;/,
   );
   assert.match(
     cssSource,
-    /\.abc-agent-card-head strong\s*\{[\s\S]*?font-size:\s*12px;[\s\S]*?line-height:\s*16px;/,
+    /\.abc-agent-card-head strong\s*\{[\s\S]*?font-size:\s*14px;[\s\S]*?font-weight:\s*500;[\s\S]*?line-height:\s*22px;/,
   );
   assert.match(
     cssSource,
-    /\.abc-agent-card-main p\s*\{[\s\S]*?font-size:\s*10\.5px;[\s\S]*?line-height:\s*15px;[\s\S]*?-webkit-line-clamp:\s*2;/,
+    /\.abc-agent-card-main p\s*\{[\s\S]*?color:\s*#7a7880;[\s\S]*?font-size:\s*12px;[\s\S]*?line-height:\s*18px;[\s\S]*?-webkit-line-clamp:\s*2;/,
   );
 });
 
 test("keeps selected nodes stable without changing their geometry", () => {
   assert.match(source, /selected \? " is-selected" : ""/);
-  const selectionRule = cssSource.match(
-    /\.abc-node\.is-selected > \.abc-agent-card\s*\{[^}]*\}/,
-  )?.[0] ?? "";
-  assert.match(selectionRule, /box-shadow:\s*inset 0 0 0 0\.5px/);
+  const selectionRule =
+    cssSource.match(
+      /\.abc-node\.is-selected > \.abc-agent-card\s*\{[^}]*\}/,
+    )?.[0] ?? "";
+  assert.match(selectionRule, /border-color:\s*#0c0d0e/);
+  assert.match(selectionRule, /box-shadow:\s*0 0 0 4px rgb\(0 0 0 \/ 16%\)/);
   assert.doesNotMatch(selectionRule, /transform|translate|margin|padding/);
 });
 
 test("shows description and LLM capability counts without system prompts", () => {
-  assert.match(source, /description: agent\.description\.trim\(\) \|\| "描述未配置"/);
+  assert.match(
+    source,
+    /description: agent\.description\.trim\(\) \|\| "描述未配置"/,
+  );
   assert.doesNotMatch(source, /instruction: agent\.instruction/);
   assert.match(source, /AgentToolCountIcon/);
   assert.match(source, /AgentSkillCountIcon/);
-  assert.match(source, /const showsModelCapabilities = \(type: AgentType\): boolean => type === "llm"/);
-  assert.match(source, /\{showModelCapabilities && \([\s\S]*?abc-agent-card-model/);
-  assert.match(source, /\{showModelCapabilities && \([\s\S]*?abc-agent-card-stats/);
+  assert.match(
+    source,
+    /const showsModelCapabilities = \(type: AgentType\): boolean => type === "llm"/,
+  );
+  assert.match(
+    source,
+    /\{showModelCapabilities && \([\s\S]*?abc-agent-card-model/,
+  );
+  assert.match(
+    source,
+    /\{showModelCapabilities && \([\s\S]*?abc-agent-card-stats/,
+  );
 });
 
 test("shows missing Agent names in red on canvas and configuration", () => {
   assert.match(source, /return agent\.name\.trim\(\) \|\| "名称未配置"/);
-  assert.match(source, /nameMissing: type !== "a2a" && agent\.name\.trim\(\)\.length === 0/);
-  assert.match(source, /className=\{data\.nameMissing \? "is-name-missing" : undefined\}/);
-  assert.match(cssSource, /\.abc-agent-card-head strong\.is-name-missing\s*\{[\s\S]*?color: hsl\(var\(--destructive\)\);/);
+  assert.match(
+    source,
+    /nameMissing: type !== "a2a" && agent\.name\.trim\(\)\.length === 0/,
+  );
+  assert.match(
+    source,
+    /className=\{data\.nameMissing \? "is-name-missing" : undefined\}/,
+  );
+  assert.match(
+    cssSource,
+    /\.abc-agent-card-head strong\.is-name-missing\s*\{[\s\S]*?color: hsl\(var\(--destructive\)\);/,
+  );
   assert.match(customCreateSource, /node\.name\.trim\(\) \|\| "名称未配置"/);
 });
 
@@ -155,9 +239,18 @@ test("keeps the request and reply terminal cards", () => {
   assert.match(source, /terminalKind: "output"/);
   assert.match(source, /TerminalUserRequestIcon/);
   assert.match(source, /TerminalFinalReplyIcon/);
-  assert.match(cssSource, /\.abc-terminal\s*\{[\s\S]*?width:\s*120px;[\s\S]*?height:\s*52px;[\s\S]*?border-radius:\s*10px;[\s\S]*?background:\s*#fff;/);
-  assert.match(cssSource, /\.abc-terminal\.is-input \.abc-terminal-mark\s*\{[\s\S]*?background:\s*#f9eea2;/);
-  assert.match(cssSource, /\.abc-terminal\.is-output \.abc-terminal-mark\s*\{[\s\S]*?background:\s*#d2e6ff;/);
+  assert.match(
+    cssSource,
+    /\.abc-terminal\s*\{[\s\S]*?width:\s*120px;[\s\S]*?height:\s*52px;[\s\S]*?border-radius:\s*10px;[\s\S]*?background:\s*#fff;/,
+  );
+  assert.match(
+    cssSource,
+    /\.abc-terminal\.is-input \.abc-terminal-mark\s*\{[\s\S]*?background:\s*#f9eea2;/,
+  );
+  assert.match(
+    cssSource,
+    /\.abc-terminal\.is-output \.abc-terminal-mark\s*\{[\s\S]*?background:\s*#d2e6ff;/,
+  );
 });
 
 test("preserves read-only preview pan and zoom without mutation actions", () => {
@@ -167,15 +260,28 @@ test("preserves read-only preview pan and zoom without mutation actions", () => 
   assert.match(source, /enableReadonlyNodeDragging:\s*false/);
   assert.match(source, /canAddLine:[\s\S]*?!readOnly/);
   assert.match(source, /canDeleteLine:[\s\S]*?!readOnly/);
-  assert.match(source, /\{!readOnly && \([\s\S]*?abc-add-node/);
+  assert.match(source, /readOnly \? null : \{ onInsert \}/);
+  assert.match(
+    source,
+    /<LineInsertActionsContext\.Provider value=\{lineInsertActions\}>/,
+  );
 });
 
 test("uses the existing Figma canvas surface and FlowGram editor", () => {
   const rootRule = cssSource.match(/\.abc-root\s*\{[^}]*\}/)?.[0] ?? "";
   const canvasRule = cssSource.match(/\.abc-canvas\s*\{[^}]*\}/)?.[0] ?? "";
-  assert.match(rootRule, /background:\s*#f0f0f0;/);
-  assert.match(canvasRule, /background-color:\s*#f0f0f0;/);
-  assert.match(canvasRule, /radial-gradient/);
+  assert.match(rootRule, /background-color:\s*#f0f0f0;/);
+  assert.match(rootRule, /radial-gradient/);
+  assert.match(canvasRule, /background:\s*transparent;/);
+  assert.doesNotMatch(canvasRule, /radial-gradient/);
+  assert.match(
+    cssSource,
+    /\.abc-flowgram-editor \.gedit-playground\s*\{[\s\S]*?background:\s*transparent !important;/,
+  );
+  assert.match(
+    customCreateStyles,
+    /\.cw-canvas-motion > \.abc-root\s*\{[\s\S]*?background:\s*transparent;/,
+  );
   assert.match(source, /background:\s*false/);
   assert.match(source, /context\.tools\.fitView\(false\)/);
 });
@@ -183,27 +289,69 @@ test("uses the existing Figma canvas surface and FlowGram editor", () => {
 test("reuses canvas across builder, workspace, and preview surfaces", () => {
   assert.match(source, /direction\?: CanvasDirection/);
   assert.match(source, /direction = "vertical"/);
-  assert.match(customCreateSource, /<AgentBuildCanvas[\s\S]*?direction="vertical"/);
-  assert.match(agentWorkspaceSource, /<AgentBuildCanvas[\s\S]*?direction="horizontal"/);
-  assert.match(projectPreviewSource, /<AgentBuildCanvas[\s\S]*?direction="horizontal"/);
-  assert.match(customCreateSource, /<AgentBuilderChatPanel[\s\S]*?<AgentBuildCanvas[\s\S]*?key="builder-config"/);
-  assert.match(customCreateStyles, /\.cw-editor > \.abc-root\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?min-height:\s*0;/);
+  assert.match(
+    customCreateSource,
+    /<AgentBuildCanvas[\s\S]*?direction="vertical"/,
+  );
+  assert.match(
+    agentWorkspaceSource,
+    /<AgentBuildCanvas[\s\S]*?direction="horizontal"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /<AgentBuildCanvas[\s\S]*?direction="horizontal"/,
+  );
+  assert.match(
+    customCreateSource,
+    /<AgentBuilderChatPanel[\s\S]*?<AgentBuildCanvas[\s\S]*?key="builder-config"/,
+  );
+  assert.match(
+    customCreateStyles,
+    /\.cw-editor > \.abc-root\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?min-height:\s*0;/,
+  );
 });
 
 test("keeps existing chat and configuration panel contracts", () => {
   assert.match(builderChatSource, /@openai\/apps-sdk-ui\/components\/Textarea/);
-  assert.match(builderChatSource, /isImeCompositionEvent\(event\.nativeEvent\)/);
-  assert.match(builderChatSource, /import \{ Blocks \} from "\.\.\/ui\/Blocks"/);
-  assert.doesNotMatch(builderChatSource, /ConversationCopyButton|ConversationFeedbackButtons/);
-  assert.match(builderChatStyles, /\.agent-builder-chat\s*\{[\s\S]*?width:\s*var\(--cw-builder-chat-width, 420px\);/);
-  assert.match(customCreateStyles, /\.cw-detail\s*\{[\s\S]*?width:\s*420px;[\s\S]*?max-width:\s*420px;/);
-  assert.match(customCreateStyles, /\.cw-detail-scroll\s*\{[\s\S]*?padding:\s*24px;/);
+  assert.match(
+    builderChatSource,
+    /isImeCompositionEvent\(event\.nativeEvent\)/,
+  );
+  assert.match(
+    builderChatSource,
+    /import \{ Blocks \} from "\.\.\/ui\/Blocks"/,
+  );
+  assert.doesNotMatch(
+    builderChatSource,
+    /ConversationCopyButton|ConversationFeedbackButtons/,
+  );
+  assert.match(
+    builderChatStyles,
+    /\.agent-builder-chat\s*\{[\s\S]*?width:\s*var\(--cw-builder-chat-width, 420px\);/,
+  );
+  assert.match(
+    customCreateStyles,
+    /\.cw-detail\s*\{[\s\S]*?width:\s*420px;[\s\S]*?max-width:\s*420px;/,
+  );
+  assert.match(
+    customCreateStyles,
+    /\.cw-detail-scroll\s*\{[\s\S]*?padding:\s*24px;/,
+  );
 });
 
 test("keeps concise labels and capability visibility in selected-node form", () => {
-  assert.match(customCreateSource, /<label className="cw-label" htmlFor="cw-agent-name">\s*名称/);
+  assert.match(
+    customCreateSource,
+    /<label className="cw-label" htmlFor="cw-agent-name">\s*名称/,
+  );
   assert.match(customCreateSource, /\{isRootAgent \? "描述" : "智能体描述"\}/);
   assert.doesNotMatch(customCreateSource, /"步骤名称"|"任务说明"/);
-  assert.match(customCreateSource, /if \(orchestrator && configTab === "capabilities"\)/);
-  assert.match(customCreateSource, /\{!orchestrator && \([\s\S]*?>能力扩展<\/button>/);
+  assert.match(
+    customCreateSource,
+    /if \(orchestrator && configTab === "capabilities"\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /\{!orchestrator && \([\s\S]*?>能力扩展<\/button>/,
+  );
 });

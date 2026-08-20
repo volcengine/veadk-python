@@ -49,7 +49,7 @@ test("model configuration switches between ModelArk and custom fields", () => {
   );
   assert.match(
     customCreateStyles,
-    /\.cw-detail\.is-basic \.cw-section:nth-child\(3\) \.cw-model-form \{ order: 3; \}/,
+    /\.cw-detail\.is-basic \.cw-section:nth-child\(3\) \.cw-model-form \{ order: 2; \}/,
   );
   assert.match(customCreateSource, /提供商/);
   assert.match(customCreateSource, /API Base/);
@@ -69,14 +69,10 @@ test("model configuration switches between ModelArk and custom fields", () => {
 
 test("Agent configuration form uses Apps SDK form controls with associated labels", () => {
   assert.doesNotMatch(customCreateSource, /cw-basic-section-title/);
-  assert.match(
-    customCreateSource,
-    /const agentTypeOptions = useMemo<SelectOption<AgentType>\[]>[\s\S]*?AGENT_TYPES\.map\(\(type\) => \(\{[\s\S]*?value: type\.id,[\s\S]*?label: AGENT_TYPE_BAR_LABELS\[type\.id\],[\s\S]*?disabled: isRootAgent && type\.id === "a2a"/,
-  );
-  assert.match(
-    customCreateSource,
-    /htmlFor="cw-agent-type"[\s\S]*?>\s*类别\s*<\/label>[\s\S]*?<Select[\s\S]*?id="cw-agent-type"[\s\S]*?options=\{agentTypeOptions\}[\s\S]*?onChange=\{\(option\) =>\s*selectAgentType\(option\.value\)/,
-  );
+  assert.doesNotMatch(customCreateSource, /const agentTypeOptions =/);
+  assert.doesNotMatch(customCreateSource, /htmlFor="cw-agent-type"/);
+  assert.doesNotMatch(customCreateSource, /id="cw-agent-type"/);
+  assert.doesNotMatch(customCreateSource, /cw-basic-category-field/);
   assert.match(
     customCreateSource,
     /@openai\/apps-sdk-ui\/components\/Input/,
@@ -240,11 +236,11 @@ test("ModelArk picker exposes search, status, loading, empty and retry states", 
   );
   assert.equal(
     customCreateSource.match(/triggerClassName="cw-agent-config-select-trigger"/g)?.length,
-    7,
+    6,
   );
   assert.equal(
     customCreateSource.match(/optionClassName="cw-agent-config-select-option"/g)?.length,
-    7,
+    6,
   );
   assert.match(
     customCreateStyles,

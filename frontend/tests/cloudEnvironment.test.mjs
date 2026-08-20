@@ -41,6 +41,10 @@ const environmentStyles = readFileSync(
   new URL("../src/ui/CloudEnvironmentConfigurator.css", import.meta.url),
   "utf8",
 );
+const projectPreviewSource = readFileSync(
+  new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
+  "utf8",
+);
 const codeEditorSource = readFileSync(
   new URL("../src/ui/CodeEditor.tsx", import.meta.url),
   "utf8",
@@ -143,20 +147,40 @@ test("exports cloud environment selections through YAML", () => {
   assert.match(configYamlSource, /return normalizeDraft\(obj\)/);
 });
 
-test("adds an Apps SDK UI environment step before publishing", () => {
+test("keeps publish mode visible when deployment environment validation fails", () => {
+  const publishStart = createSource.indexOf("const openPublishPreview = async");
+  const publishEnd = createSource.indexOf(
+    "const openValidation =",
+    publishStart,
+  );
+  const publishSource = createSource.slice(publishStart, publishEnd);
+  const validationStart = publishSource.indexOf("const invalidEnv =");
+  const validationEnd = publishSource.indexOf("setBuilding(true)", validationStart);
+  const validationSource = publishSource.slice(validationStart, validationEnd);
+  assert.match(validationSource, /if \(invalidEnv\)/);
+  assert.doesNotMatch(
+    validationSource,
+    /if \(invalidEnv\)[\s\S]*?setWorkspaceMode\("build"\)/,
+  );
+});
+
+test("combines the Apps SDK UI environment controls with deployment", () => {
   assert.match(
     createSource,
-    /type WorkspaceMode =[\s\S]*?\| "environment"[\s\S]*?\| "publish";/,
+    /type WorkspaceMode =[\s\S]*?\| "build"[\s\S]*?\| "optimize"[\s\S]*?\| "validate"[\s\S]*?\| "publish";/,
   );
-  assert.match(createSource, /\{ id: "environment", label: "环境" \}/);
+  assert.doesNotMatch(createSource, /\{ id: "environment", label: "环境" \}/);
   assert.match(
     createSource,
-    /onDeploy=\{\(\) => void handleWorkspaceChange\("environment"\)\}/,
+    /onDeploy=\{\(\) => void handleWorkspaceChange\("publish"\)\}/,
   );
   assert.match(
     createSource,
-    /workspaceMode === "environment"[\s\S]*?<CloudEnvironmentConfigurator/,
+    /deploymentEnvironmentPane=\{[\s\S]*?<CloudEnvironmentConfigurator[\s\S]*?<CloudEnvironmentAdvancedTrigger/,
   );
+  assert.match(createSource, /deploymentTitle="环境与部署"/);
+  assert.match(projectPreviewSource, /deploymentEnvironmentPane\?: ReactNode/);
+  assert.match(projectPreviewSource, /\{deploymentEnvironmentPane\}/);
   assert.match(environmentSource, /@openai\/apps-sdk-ui\/components\/Button/);
   assert.match(environmentSource, /aria-pressed=\{checked\}/);
   assert.match(environmentSource, /label: "效率"/);
@@ -176,6 +200,10 @@ test("adds an Apps SDK UI environment step before publishing", () => {
   assert.match(environmentSource, /高阶配置/);
   assert.match(environmentSource, /EditCloudEnvironmentIcon/);
   assert.match(environmentSource, /关闭 Dockerfile 编辑器/);
+  assert.match(
+    environmentSource,
+    /closeButtonRef\.current\?\.focus\(\);[\s\S]*?\}, \[editorOpen\]\);/,
+  );
   assert.match(environmentSource, /恢复自动生成/);
   assert.match(environmentSource, /Lark CLI/);
   assert.match(environmentSource, /GitHub CLI/);

@@ -23,6 +23,11 @@ import {
   type WorkflowNodeProps,
   type WorkflowNodeRegistry,
 } from "@flowgram.ai/free-layout-editor";
+import { WorkflowLineRenderData } from "@flowgram.ai/free-layout-core";
+import {
+  WorkflowLinesLayer,
+  type LineRenderProps,
+} from "@flowgram.ai/free-lines-plugin";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import type { AgentDraft } from "./types";
 import {
@@ -72,11 +77,11 @@ const PATTERN_COPY: Record<AgentType, { label: string }> = {
   a2a: { label: "远程智能体" },
 };
 
-const NODE_WIDTH = 214;
-const NODE_HEIGHT = 168;
-const COMPACT_NODE_HEIGHT = 138;
-const READ_ONLY_NODE_HEIGHT = 133;
-const READ_ONLY_COMPACT_NODE_HEIGHT = 104;
+const NODE_WIDTH = 260;
+const NODE_HEIGHT = 151;
+const COMPACT_NODE_HEIGHT = 111;
+const READ_ONLY_NODE_HEIGHT = 151;
+const READ_ONLY_COMPACT_NODE_HEIGHT = 111;
 const TERMINAL_WIDTH = 120;
 const TERMINAL_HEIGHT = 52;
 const FIGMA_FLOW_LINE_LENGTH = 69;
@@ -162,31 +167,81 @@ function agentNodeData(
 
 type WorkflowEdge = WorkflowJSON["edges"][number];
 
-function workflowEdge(sourceNodeID: string, targetNodeID: string): WorkflowEdge {
-  return { sourceNodeID, targetNodeID };
+type LineInsertTarget = {
+  parentPath: NodePath;
+  index: number;
+};
+
+type WorkflowEdgeData = {
+  insert?: LineInsertTarget;
+};
+
+function workflowEdge(
+  sourceNodeID: string,
+  targetNodeID: string,
+  insert?: LineInsertTarget,
+): WorkflowEdge {
+  return {
+    sourceNodeID,
+    targetNodeID,
+    ...(insert ? { data: { insert } satisfies WorkflowEdgeData } : {}),
+  };
+}
+
+const primaryInputPortID = (direction: CanvasDirection): string =>
+  `input-${direction === "vertical" ? "top" : "left"}`;
+
+const primaryOutputPortID = (direction: CanvasDirection): string =>
+  `output-${direction === "vertical" ? "bottom" : "right"}`;
+
+function routeWorkflowEdges(
+  edges: WorkflowEdge[],
+  direction: CanvasDirection,
+): WorkflowEdge[] {
+  return edges.map((edge) => ({
+    ...edge,
+    sourcePortID: primaryOutputPortID(direction),
+    targetPortID: primaryInputPortID(direction),
+  }));
 }
 
 function buildAgentEdges(
   agent: AgentDraft,
   path: NodePath,
   edges: WorkflowEdge[],
-): { entry: string; exits: string[] } {
+): { entry: string; exits: string[]; appendTarget: LineInsertTarget } {
   const id = pathId(path);
   const children = agent.subAgents.map((child, index) =>
     buildAgentEdges(child, [...path, index], edges),
   );
-  if (children.length === 0) return { entry: id, exits: [id] };
+  const appendTarget = { parentPath: path, index: children.length };
+  if (children.length === 0) {
+    return { entry: id, exits: [id], appendTarget };
+  }
 
   const type = agent.agentType ?? "llm";
   if (type === "parallel") {
-    children.forEach((child) => edges.push(workflowEdge(id, child.entry)));
-    return { entry: id, exits: children.flatMap((child) => child.exits) };
+    children.forEach((child, index) =>
+      edges.push(workflowEdge(id, child.entry, { parentPath: path, index })),
+    );
+    return {
+      entry: id,
+      exits: children.flatMap((child) => child.exits),
+      appendTarget,
+    };
   }
 
-  edges.push(workflowEdge(id, children[0].entry));
+  edges.push(
+    workflowEdge(id, children[0].entry, { parentPath: path, index: 0 }),
+  );
   for (let index = 0; index < children.length - 1; index += 1) {
     children[index].exits.forEach((exit) =>
-      edges.push(workflowEdge(exit, children[index + 1].entry)),
+      edges.push(
+        workflowEdge(exit, children[index + 1].entry, {
+          parentPath: path,
+          index: index + 1,
+        }),
+      ),
     );
   }
   if (type === "loop") {
@@ -194,9 +249,13 @@ function buildAgentEdges(
     lastChild.exits.forEach((exit: string) =>
       edges.push(workflowEdge(exit, children[0].entry)),
     );
-    return { entry: id, exits: [id] };
+    return { entry: id, exits: [id], appendTarget };
   }
-  return { entry: id, exits: children[children.length - 1].exits };
+  return {
+    entry: id,
+    exits: children[children.length - 1].exits,
+    appendTarget,
+  };
 }
 
 function layoutWorkflow(
@@ -230,7 +289,7 @@ function layoutWorkflow(
       meta: {
         ...node.meta,
         position: {
-          x: position.x - data.layoutWidth / 2,
+          x: position.x,
           y: position.y - data.layoutHeight / 2,
         },
       },
@@ -246,9 +305,14 @@ function buildFlowgramWorkflow(
   const flatAgents = flattenAgentNodes(draft);
   const edges: WorkflowEdge[] = [];
   const rootFlow = buildAgentEdges(draft, [], edges);
-  edges.unshift(workflowEdge("terminal-input", rootFlow.entry));
+  edges.unshift(
+    workflowEdge("terminal-input", rootFlow.entry, {
+      parentPath: [],
+      index: 0,
+    }),
+  );
   rootFlow.exits.forEach((exit) =>
-    edges.push(workflowEdge(exit, "terminal-output")),
+    edges.push(workflowEdge(exit, "terminal-output", rootFlow.appendTarget)),
   );
 
   const nodes: WorkflowJSON["nodes"] = [
@@ -284,7 +348,11 @@ function buildFlowgramWorkflow(
     },
   ];
 
-  return { nodes: layoutWorkflow(nodes, edges, direction), edges };
+  const routedEdges = routeWorkflowEdges(edges, direction);
+  return {
+    nodes: layoutWorkflow(nodes, routedEdges, direction),
+    edges: routedEdges,
+  };
 }
 
 function structureKey(draft: AgentDraft): string {
@@ -331,7 +399,8 @@ function mergeLiveWorkflow(
   const currentIds = new Set(current.nodes.map((node) => node.id));
   const edgesForNewNodes = next.edges.filter(
     (edge) =>
-      (!currentIds.has(edge.sourceNodeID) || !currentIds.has(edge.targetNodeID)) &&
+      (!currentIds.has(edge.sourceNodeID) ||
+        !currentIds.has(edge.targetNodeID)) &&
       !retainedKeys.has(edgeKey(edge)),
   );
   return {
@@ -346,6 +415,51 @@ type CanvasActions = {
 };
 
 const CanvasActionsContext = createContext<CanvasActions | null>(null);
+
+type LineInsertActions = {
+  onInsert: (parentPath: NodePath, index: number) => void;
+};
+
+const LineInsertActionsContext = createContext<LineInsertActions | null>(null);
+
+function isLineInsertTarget(value: unknown): value is LineInsertTarget {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<LineInsertTarget>;
+  return (
+    Array.isArray(candidate.parentPath) && Number.isInteger(candidate.index)
+  );
+}
+
+function FlowgramLineInsertAction({ line }: LineRenderProps) {
+  const actions = useContext(LineInsertActionsContext);
+  const data = line.lineData as WorkflowEdgeData | undefined;
+  const target = data?.insert;
+  if (!actions || !isLineInsertTarget(target)) return null;
+
+  const center = line.getData(WorkflowLineRenderData).center;
+  return (
+    <Button
+      type="button"
+      color="secondary"
+      variant="outline"
+      size="2xs"
+      iconSize="sm"
+      uniform
+      pill
+      className="abc-line-insert flow-canvas-not-draggable"
+      style={{ left: center.labelX, top: center.labelY }}
+      aria-label="在连接线上添加节点"
+      title="添加节点"
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        actions.onInsert(target.parentPath, target.index);
+      }}
+    >
+      <CreateAddIcon />
+    </Button>
+  );
+}
 
 function CanvasDeleteIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -376,10 +490,7 @@ function AgentCardContent({
   return (
     <div className={`abc-agent-card is-${type}`} onClick={onSelect}>
       <div className="abc-agent-card-head">
-        <span
-          className="abc-agent-card-mark"
-          title={PATTERN_COPY[type].label}
-        >
+        <span className="abc-agent-card-mark" title={PATTERN_COPY[type].label}>
           <CanvasAgentTypeIcon type={type} />
         </span>
         <span className="abc-agent-card-identity">
@@ -475,23 +586,59 @@ function createNodeRegistries(
 ): WorkflowNodeRegistry[] {
   const inputLocation = direction === "vertical" ? "top" : "left";
   const outputLocation = direction === "vertical" ? "bottom" : "right";
+  const secondaryInputLocation = direction === "vertical" ? "left" : "top";
+  const secondaryOutputLocation = direction === "vertical" ? "right" : "bottom";
   return [
     {
       type: "agent",
       meta: {
         defaultPorts: [
-          { type: "input", location: inputLocation },
-          { type: "output", location: outputLocation },
+          {
+            portID: `input-${inputLocation}`,
+            type: "input",
+            location: inputLocation,
+          },
+          {
+            portID: `input-${secondaryInputLocation}`,
+            type: "input",
+            location: secondaryInputLocation,
+          },
+          {
+            portID: `output-${outputLocation}`,
+            type: "output",
+            location: outputLocation,
+          },
+          {
+            portID: `output-${secondaryOutputLocation}`,
+            type: "output",
+            location: secondaryOutputLocation,
+          },
         ],
       },
     },
     {
       type: "terminal-input",
-      meta: { defaultPorts: [{ type: "output", location: outputLocation }] },
+      meta: {
+        defaultPorts: [
+          {
+            portID: primaryOutputPortID(direction),
+            type: "output",
+            location: outputLocation,
+          },
+        ],
+      },
     },
     {
       type: "terminal-output",
-      meta: { defaultPorts: [{ type: "input", location: inputLocation }] },
+      meta: {
+        defaultPorts: [
+          {
+            portID: primaryInputPortID(direction),
+            type: "input",
+            location: inputLocation,
+          },
+        ],
+      },
     },
   ];
 }
@@ -542,7 +689,8 @@ function CanvasLifecycleBridge({
     const nextStructure = structureKey(draft);
     const structureChanged = lastStructureRef.current !== nextStructure;
     const directionChanged = lastDirectionRef.current !== direction;
-    const preserveLayout = !directionChanged && !!liveWorkflowRef.current;
+    const preserveLayout =
+      !structureChanged && !directionChanged && !!liveWorkflowRef.current;
     const merged = mergeLiveWorkflow(
       workflow,
       liveWorkflowRef.current,
@@ -595,7 +743,7 @@ export function AgentBuildCanvas({
   interactivePreview = false,
   direction = "vertical",
 }: AgentBuildCanvasProps) {
-  void onInsert;
+  void onAdd;
   void interactivePreview;
   const canvasRef = useRef<HTMLDivElement>(null);
   const liveWorkflowRef = useRef<WorkflowJSON | null>(null);
@@ -645,7 +793,7 @@ export function AgentBuildCanvas({
       initialData: workflow,
       nodeRegistries,
       materials: { renderDefaultNode: FlowgramCanvasNode },
-      twoWayConnection: false,
+      twoWayConnection: true,
       canAddLine: (_ctx, fromPort, toPort) =>
         !readOnly &&
         fromPort.node.id !== toPort.node.id &&
@@ -654,6 +802,8 @@ export function AgentBuildCanvas({
       canDeleteLine: () => !readOnly,
       canDeleteNode: () => false,
       setLineRenderType: () => LineType.LINE_CHART,
+      setLineClassName: () => "abc-flowgram-line",
+      isHideArrowLine: () => true,
       lineColor: {
         hidden: "transparent",
         default: "#C9CDD4",
@@ -673,6 +823,10 @@ export function AgentBuildCanvas({
         }
       },
       onInit(ctx) {
+        const linesLayer = ctx.playground.getLayer(WorkflowLinesLayer);
+        if (linesLayer) {
+          linesLayer.options.renderInsideLine = FlowgramLineInsertAction;
+        }
         liveWorkflowRef.current = ctx.document.toJSON();
       },
       onAllLayersRendered(ctx) {
@@ -695,48 +849,40 @@ export function AgentBuildCanvas({
     () => (readOnly ? null : { onSelect, onDelete }),
     [onDelete, onSelect, readOnly],
   );
+  const lineInsertActions = useMemo(
+    () => (readOnly ? null : { onInsert }),
+    [onInsert, readOnly],
+  );
 
   return (
     <CanvasActionsContext.Provider value={canvasActions}>
-      <section
-        className={`abc-root is-${direction}${readOnly ? " is-readonly" : ""}`}
-        aria-label={readOnly ? "只读 Agent 执行画布" : "Agent 执行画布"}
-      >
-        <div ref={canvasRef} className="abc-canvas">
-          <FreeLayoutEditorProvider
-            key={`${direction}-${readOnly ? "readonly" : "editable"}`}
-            {...editorProps}
-          >
-            <EditorRenderer className="abc-flowgram-editor" />
-            <CanvasLifecycleBridge
-              canvasRef={canvasRef}
-              direction={direction}
-              draft={draft}
-              liveWorkflowRef={liveWorkflowRef}
-              syncingRef={syncingRef}
-              lastStructureRef={lastStructureRef}
-              lastDirectionRef={lastDirectionRef}
-              selectedPath={selectedPath}
-              scheduleFit={scheduleFit}
-              workflow={workflow}
-            />
-            {!readOnly && (
-              <Button
-                type="button"
-                color="secondary"
-                variant="outline"
-                size="sm"
-                pill={false}
-                className="abc-add-node"
-                onClick={() => onAdd([])}
-              >
-                <CreateAddIcon />
-                添加节点
-              </Button>
-            )}
-          </FreeLayoutEditorProvider>
-        </div>
-      </section>
+      <LineInsertActionsContext.Provider value={lineInsertActions}>
+        <section
+          className={`abc-root is-${direction}${readOnly ? " is-readonly" : ""}`}
+          aria-label={readOnly ? "只读 Agent 执行画布" : "Agent 执行画布"}
+        >
+          <div ref={canvasRef} className="abc-canvas">
+            <FreeLayoutEditorProvider
+              key={`${direction}-${readOnly ? "readonly" : "editable"}`}
+              {...editorProps}
+            >
+              <EditorRenderer className="abc-flowgram-editor" />
+              <CanvasLifecycleBridge
+                canvasRef={canvasRef}
+                direction={direction}
+                draft={draft}
+                liveWorkflowRef={liveWorkflowRef}
+                syncingRef={syncingRef}
+                lastStructureRef={lastStructureRef}
+                lastDirectionRef={lastDirectionRef}
+                selectedPath={selectedPath}
+                scheduleFit={scheduleFit}
+                workflow={workflow}
+              />
+            </FreeLayoutEditorProvider>
+          </div>
+        </section>
+      </LineInsertActionsContext.Provider>
     </CanvasActionsContext.Provider>
   );
 }

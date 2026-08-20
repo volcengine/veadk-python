@@ -164,6 +164,14 @@ export function CloudEnvironmentConfigurator({
         : null;
     document.body.style.overflow = "hidden";
     closeButtonRef.current?.focus();
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [editorOpen]);
+
+  useEffect(() => {
+    if (!editorOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !resetConfirmOpen) {
         onEditorOpenChange(false);
@@ -171,9 +179,7 @@ export function CloudEnvironmentConfigurator({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => {
-      document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleKeyDown);
-      if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, [editorOpen, onEditorOpenChange, resetConfirmOpen]);
 

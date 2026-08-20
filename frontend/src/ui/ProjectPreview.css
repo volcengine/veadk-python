@@ -401,6 +401,142 @@
 
 .pp-root.is-deploy.is-embedded {
   --pp-publish-content-width: 100%;
+  overflow: hidden;
+}
+
+/* Figma 71:74878 — embedded Agent deployment keeps the canvas visible and
+   uses the 480px configuration drawer's spacing, typography and controls. */
+.pp-root.is-deploy.is-embedded .pp-body {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 480px);
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.pp-root.is-deploy.is-embedded .pp-release-overview {
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid hsl(var(--border) / 0.72);
+}
+
+.pp-root.is-deploy.is-embedded .pp-release-preview.is-embedded {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+}
+
+.pp-root.is-deploy.is-embedded .pp-flow-thumbnail {
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+}
+
+.pp-root.is-deploy.is-embedded .pp-artifact-actions.is-rail {
+  position: absolute;
+  z-index: 6;
+  top: 16px;
+  right: 16px;
+  width: 132px;
+  padding: 8px;
+  border: 1px solid hsl(var(--border) / 0.72);
+  border-radius: 10px;
+  background: hsl(var(--background) / 0.94);
+  backdrop-filter: blur(10px);
+}
+
+.pp-root.is-deploy.is-embedded .pp-config {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: hsl(var(--background));
+}
+
+.pp-root.is-deploy.is-embedded .pp-config-head {
+  width: 100%;
+  flex: 0 0 54px;
+  height: 54px;
+  margin: 0;
+  padding: 14px 24px;
+}
+
+.pp-root.is-deploy.is-embedded .pp-config-title {
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 25px;
+}
+
+.pp-root.is-deploy.is-embedded .pp-config-scroll {
+  width: 100%;
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 0 24px 32px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.pp-root.is-deploy.is-embedded .pp-config-section {
+  margin: 0 0 32px;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.pp-root.is-deploy.is-embedded .pp-config-section:last-child {
+  margin-bottom: 0;
+}
+
+.pp-root.is-deploy.is-embedded .pp-config-label {
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  letter-spacing: 0;
+}
+
+.pp-root.is-deploy.is-embedded .pp-env-head {
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+}
+
+.pp-root.is-deploy.is-embedded .pp-env-head .pp-config-label {
+  margin-bottom: 0;
+}
+
+.pp-root.is-deploy.is-embedded .pp-runtime-name-input,
+.pp-root.is-deploy.is-embedded .pp-channel-fields input,
+.pp-root.is-deploy.is-embedded .pp-instance-fields input,
+.pp-root.is-deploy.is-embedded .pp-network-fields input,
+.pp-root.is-deploy.is-embedded .pp-env-row input,
+.pp-root.is-deploy.is-embedded .pp-env-row textarea,
+.pp-root.is-deploy.is-embedded .pp-deployment-select-trigger {
+  min-height: 32px;
+  height: 32px;
+  padding-inline: 12px;
+  border-color: #dde2e9;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.pp-root.is-deploy.is-embedded .pp-cloud-environment-section {
+  padding-bottom: 0;
+}
+
+.pp-root.is-deploy.is-embedded .pp-resource-grid {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .pp-root.is-deploy .pp-body {
@@ -2538,6 +2674,60 @@
   }
 }
 
+@media (max-width: 1000px) {
+  .pp-root.is-deploy.is-embedded {
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .pp-root.is-deploy.is-embedded .pp-body {
+    height: auto;
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .pp-root.is-deploy.is-embedded .pp-release-overview {
+    flex: 0 0 280px;
+    height: 280px;
+    border-right: 0;
+    border-bottom: 1px solid hsl(var(--border) / 0.72);
+  }
+
+  .pp-root.is-deploy.is-embedded .pp-config {
+    width: min(100%, 480px);
+    height: auto;
+    min-height: 0;
+    align-self: center;
+    overflow: visible;
+  }
+
+  .pp-root.is-deploy.is-embedded .pp-config-scroll {
+    overflow: visible;
+    padding: 0 20px 32px;
+  }
+
+  .pp-root.is-deploy.is-embedded .pp-artifact-actions.is-rail {
+    left: 12px;
+    right: 12px;
+    top: 12px;
+    width: auto;
+    flex-direction: row;
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .pp-root.is-deploy.is-embedded .pp-artifact-actions.is-rail .pp-secondary,
+  .pp-root.is-deploy.is-embedded .pp-artifact-actions.is-rail .code-browser-trigger {
+    width: auto;
+    min-width: 0;
+    min-height: 32px;
+    padding-inline: 8px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+}
+
 @media (max-width: 860px) {
   .layout {
     --pp-sidebar-width: 204px;
@@ -2549,6 +2739,35 @@
 
   .pp-root.is-deploy {
     --pp-publish-content-width: min(88%, calc(100% - 36px));
+  }
+
+  .pp-root.is-deploy.is-embedded {
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .pp-root.is-deploy.is-embedded .pp-body {
+    height: auto;
+    display: flex;
+    overflow: visible;
+  }
+
+  .pp-root.is-deploy.is-embedded .pp-release-overview {
+    flex: 0 0 280px;
+    height: 280px;
+    border-right: 0;
+    border-bottom: 1px solid hsl(var(--border) / 0.72);
+  }
+
+  .pp-root.is-deploy.is-embedded .pp-config {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .pp-root.is-deploy.is-embedded .pp-config-scroll {
+    overflow: visible;
+    padding: 0 20px 32px;
   }
 
   .pp-toolbar {

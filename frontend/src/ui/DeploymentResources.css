@@ -128,9 +128,11 @@
 }
 
 .pp-resource-auto-names dd {
-  overflow-wrap: anywhere;
+  overflow: hidden;
   color: hsl(var(--foreground));
   font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pp-resource-auto-names > small {

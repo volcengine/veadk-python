@@ -603,6 +603,10 @@ export interface ProjectPreviewProps {
   project: AgentProject;
   /** Render inside the Agent workspace without taking over the app toolbar. */
   embedded?: boolean;
+  /** Heading shown above the deployment configuration column. */
+  deploymentTitle?: string;
+  /** Optional environment configuration rendered before deployment fields. */
+  deploymentEnvironmentPane?: ReactNode;
   /** Keep the deployment layout visible while the final action is unavailable. */
   deployDisabledReason?: string;
   /** Draft metadata summarized on the deployment page. */
@@ -785,6 +789,8 @@ function ProjectHeaderPortal({
 export function ProjectPreview({
   project,
   embedded = false,
+  deploymentTitle = "部署配置",
+  deploymentEnvironmentPane,
   deployDisabledReason,
   agentDraft,
   agentName,
@@ -2394,9 +2400,10 @@ export function ProjectPreview({
         {onDeploy && (
           <aside className="pp-config" aria-label="部署配置">
             <div className="pp-config-head">
-              <div className="pp-config-title">部署配置</div>
+              <div className="pp-config-title">{deploymentTitle}</div>
             </div>
             <div className="pp-config-scroll">
+              {deploymentEnvironmentPane}
               {deploymentPrimaryPane}
 
               {!deploymentPrimaryPane && (
