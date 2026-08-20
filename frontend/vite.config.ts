@@ -25,6 +25,29 @@ function localApiProxy(): ProxyOptions {
 // CORS headers, so the browser cannot call it cross-origin directly.
 const SKILLHUB_TARGET = "https://skills.volces.com";
 
+function chunkDirectory(moduleIds: readonly string[]): string {
+  const normalizedIds = moduleIds.map((moduleId) => moduleId.replaceAll("\\", "/"));
+  if (
+    normalizedIds.some(
+      (moduleId) =>
+        moduleId.includes("/node_modules/mermaid/") ||
+        moduleId.includes("/node_modules/@mermaid-js/"),
+    )
+  ) {
+    return "assets/visualizations/mermaid";
+  }
+  if (
+    normalizedIds.some(
+      (moduleId) =>
+        moduleId.includes("/node_modules/echarts/") ||
+        moduleId.includes("/node_modules/zrender/"),
+    )
+  ) {
+    return "assets/visualizations/echarts";
+  }
+  return "assets/chunks";
+}
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
@@ -52,5 +75,18 @@ export default defineConfig({
     // with the wheel and works for pip-installed users.
     outDir: "../veadk/webui",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        entryFileNames: "assets/app/[name]-[hash].js",
+        chunkFileNames: (chunkInfo) =>
+          `${chunkDirectory(chunkInfo.moduleIds)}/[name]-[hash].js`,
+        assetFileNames: (assetInfo) => {
+          const name = assetInfo.names?.[0] ?? assetInfo.name ?? "asset";
+          return name.endsWith(".css")
+            ? "assets/styles/[name]-[hash][extname]"
+            : "assets/media/[name]-[hash][extname]";
+        },
+      },
+    },
   },
 });

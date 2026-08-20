@@ -454,7 +454,7 @@ const StreamingTextBlock = memo(function StreamingTextBlock({
   );
   return displayedText ? (
     <div className="bubble">
-      <Markdown text={displayedText} />
+      <Markdown text={displayedText} streaming={streaming} />
     </div>
   ) : null;
 });

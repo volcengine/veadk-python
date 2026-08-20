@@ -34,3 +34,12 @@ test("local API proxy strips browser origin headers before forwarding", () => {
     assert.match(source, new RegExp(`['"]${route}['"]\\s*:\\s*localApiProxy\\(\\)`));
   }
 });
+
+test("groups built assets by role and visualization runtime", () => {
+  assert.match(source, /entryFileNames:\s*["']assets\/app\/\[name\]-\[hash\]\.js["']/);
+  assert.match(source, /assets\/visualizations\/mermaid/);
+  assert.match(source, /assets\/visualizations\/echarts/);
+  assert.match(source, /assets\/chunks/);
+  assert.match(source, /assets\/styles\/\[name\]-\[hash\]\[extname\]/);
+  assert.match(source, /assets\/media\/\[name\]-\[hash\]\[extname\]/);
+});
