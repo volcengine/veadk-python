@@ -45,6 +45,17 @@ test("shows only the Agent navigation in the sidebar", () => {
   assert.match(appSource, /myAgents && !showManageAgents \? \([\s\S]*?<MyAgents/);
 });
 
+test("opens Agent creation directly without visiting the Runtime-backed library", () => {
+  assert.match(
+    sidebarSource,
+    /access\.capabilities\.createAgents && show\("addAgent"\)[\s\S]*?onClick=\{onQuickCreate\}[\s\S]*?aria-label="添加智能体"/,
+  );
+  assert.match(
+    appSource,
+    /onQuickCreate=\{\(\) => requestIntelligentNavigation\(\(\) => \{[\s\S]*?setCreateView\(null\)[\s\S]*?setAddMenu\(true\)/,
+  );
+});
+
 test("shows the requested title, search, and agent type pills", () => {
   assert.match(pageSource, /<h1>智能体<\/h1>/);
   assert.doesNotMatch(pageSource, /Runtime 地域|regionMenuOpen/);

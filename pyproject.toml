@@ -96,11 +96,15 @@ eval = [
 harness = [
     "headroom",
 ]
+harness-sidecar = [
+    "agentkit-sdk-python>=0.8.1,<0.9.0",
+]
 cli = []
 dev = [
     "pre-commit>=4.2.0",            # Format checking
     "pytest>=8.4.1",
     "pytest-asyncio>=1.0.0",
+    "pytest-cov>=7.0.0,<8.0.0",
     "pytest-xdist>=3.8.0",
 ]
 
@@ -109,6 +113,7 @@ dev = [
     "pre-commit>=4.2.0",            # Format checking
     "pytest>=8.4.1",
     "pytest-asyncio>=1.0.0",
+    "pytest-cov>=7.0.0,<8.0.0",
     "pytest-xdist>=3.8.0",
 ]
 

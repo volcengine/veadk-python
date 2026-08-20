@@ -2,14 +2,21 @@
 
 [中文](README.zh.md)
 
-`veadk.extensions.harness` is a lightweight Harness extension for VeADK applications. It adds three reusable capabilities:
+`veadk.extensions.harness` exposes two mutually exclusive integration modes.
+The legacy in-process mode adds three reusable capabilities:
 
 - context preparation for each agent turn
 - tool-result compaction
 - answer verification and hallucination suppression
 
-The extension can be used directly as Python modules or attached to a VeADK
-Runner. It does not require a separate runtime service.
+The legacy extension can be used directly as Python modules or attached to a
+VeADK Runner. It does not require a separate runtime service.
+
+Managed Sidecar mode is different: all Harness behavior runs in the private
+Sidecar Runtime. `HarnessExtension.from_env()` only starts that Runtime, applies
+its model/MCP bindings, and owns its lifecycle. In this mode `plugins()` always
+returns an empty list and no `veadk.extensions.harness.plugins` implementation is
+loaded or attached to the application process. Do not combine the two modes.
 
 ## Install
 

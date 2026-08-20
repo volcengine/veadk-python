@@ -60,14 +60,17 @@ import { generateRuntimeName, runtimeNameProblem } from "../create/runtimeName";
 import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
 import {
   FEISHU_ENV,
-  type EnvVar,
 } from "../create/veadkCatalog";
 import {
   firstInvalidRuntimeEnv,
   firstMissingRuntimeEnv,
+  missingRuntimeEnvs,
   runtimeEnvDisplayRows,
   runtimeEnvJsonError,
+  runtimeEnvMissingError,
+  runtimeEnvRequirementHint,
   runtimeEnvVars,
+  type RuntimeEnvSpec,
 } from "../create/deploymentEnv";
 import {
   checkRuntimeNameAvailability,
@@ -600,6 +603,9 @@ export interface ProjectPreviewProps {
     description: string;
     instruction: string;
     optimizations: string[];
+    effectiveOptimizations?: string[];
+    autoAddedOptimizations?: string[];
+    planHash?: string;
   };
   /** When provided, files are editable and changes call onChange with the new project. Omit for read-only. */
   onChange?: (project: AgentProject) => void;
@@ -641,7 +647,7 @@ export interface ProjectPreviewProps {
   /** Update the Feishu channel selection from the deploy page. */
   onFeishuEnabledChange?: (enabled: boolean) => void | Promise<void>;
   /** Environment variables required by the selected memory/knowledge backends. */
-  deploymentEnv?: EnvVar[];
+  deploymentEnv?: RuntimeEnvSpec[];
   /** Required deployment secrets kept only in this mounted publish page. */
   requiredSecretEnv?: Array<{ key: string; label: string }>;
   /** Optional controlled secret values entered earlier in the configuration flow. */
@@ -843,6 +849,7 @@ export function ProjectPreview({
   const runtimeNameError = runtimeNameSyntaxError ?? runtimeNameConflictError;
   const selectedModelApiKeyId =
     agentDraft?.deployment?.modelApiKeyId?.trim() ?? "";
+  const sidecarEnabled = agentDraft?.harnessSidecar?.enabled === true;
 
   // Initialize all hooks BEFORE any conditional returns (React hooks rule)
   const [selected, setSelected] = useState<string | null>(
@@ -878,6 +885,12 @@ export function ProjectPreview({
   );
   const effectiveSecretEnvValues = requiredSecretEnvValues ?? secretEnvValues;
   const [secretEnvErrorKey, setSecretEnvErrorKey] = useState<string | null>(null);
+  const [deploymentEnvErrors, setDeploymentEnvErrors] = useState<
+    Record<string, string>
+  >({});
+  const deploymentEnvInputRefs = useRef(
+    new Map<string, HTMLInputElement | HTMLTextAreaElement>(),
+  );
   const [deployResources, setDeployResources] = useState<DeployResources>(
     DEFAULT_DEPLOY_RESOURCES,
   );
@@ -895,7 +908,7 @@ export function ProjectPreview({
   const deployRegionLabel = formatCloudRegion(deployRegion, cloudProvider);
   const [minInstance, setMinInstance] = useState("1");
   const [maxInstance, setMaxInstance] = useState(
-    inMemorySession ? "1" : "5",
+    inMemorySession || sidecarEnabled ? "1" : "5",
   );
   const [createEvaluationSets, setCreateEvaluationSets] = useState(true);
   const supportsEvaluationSets = cloudProvider !== "byteplus";
@@ -906,6 +919,12 @@ export function ProjectPreview({
   const mountedRef = useRef(true);
   const requiredSecretEnvSignature = requiredSecretEnv
     .map((env) => `${env.key}:${env.label}`)
+    .join("|");
+  const deploymentEnvRequirementSignature = deploymentEnv
+    .map(
+      (env) =>
+        `${env.key}:${env.required}:${env.serverManaged ?? false}:${(env.requiredBy ?? []).join(",")}`,
+    )
     .join("|");
   const previousDeployRegionRef = useRef(deployRegion);
   const instanceRange = validateRuntimeInstanceRange(minInstance, maxInstance);
@@ -986,6 +1005,14 @@ export function ProjectPreview({
 
   useEffect(() => {
     clearModelApiKeyReveal();
+    if (selectedModelApiKeyId) {
+      setDeploymentEnvErrors((current) => {
+        if (!("MODEL_AGENT_API_KEY" in current)) return current;
+        const next = { ...current };
+        delete next.MODEL_AGENT_API_KEY;
+        return next;
+      });
+    }
   }, [selectedModelApiKeyId]);
 
   useEffect(() => {
@@ -1009,6 +1036,18 @@ export function ProjectPreview({
       current && allowed.has(current) ? current : null,
     );
   }, [requiredSecretEnvSignature, requiredSecretEnvValues]);
+
+  useEffect(() => {
+    const activeKeys = new Set(deploymentEnv.map((env) => env.key));
+    setDeploymentEnvErrors((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([key]) => activeKeys.has(key)),
+      );
+      return Object.keys(next).length === Object.keys(current).length
+        ? current
+        : next;
+    });
+  }, [deploymentEnvRequirementSignature]);
 
   useEffect(() => {
     if (!onDeployRegionChange || isRuntimeUpdate) return;
@@ -1096,8 +1135,8 @@ export function ProjectPreview({
 
   useEffect(() => {
     setMinInstance("1");
-    setMaxInstance(inMemorySession ? "1" : "5");
-  }, [inMemorySession]);
+    setMaxInstance(inMemorySession || sidecarEnabled ? "1" : "5");
+  }, [inMemorySession, sidecarEnabled]);
 
   useEffect(() => {
     if (previousDeployRegionRef.current === deployRegion) return;
@@ -1245,6 +1284,24 @@ export function ProjectPreview({
     setEnvRows((rows) => [...rows, newEnvRow()]);
   }
 
+  function clearDeploymentEnvError(key: string) {
+    setDeploymentEnvErrors((current) => {
+      if (!(key in current)) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
+
+  function focusDeploymentEnv(key: string) {
+    window.requestAnimationFrame(() => {
+      const field = deploymentEnvInputRefs.current.get(key);
+      if (!field) return;
+      field.focus({ preventScroll: true });
+      field.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }
+
   function setNetworkMode(mode: NetworkConfig["mode"]) {
     if (!onNetworkChange) return;
     onNetworkChange(
@@ -1343,15 +1400,36 @@ export function ProjectPreview({
       return;
     }
     setSecretEnvErrorKey(null);
-    const missingFeatureEnv = firstMissingRuntimeEnv(
+    const missingFeatureEnvs = missingRuntimeEnvs(
       deploymentEnv,
       deploymentEnvValues,
     );
-    if (missingFeatureEnv) {
-      const env = deploymentEnv.find((item) => item.key === missingFeatureEnv.key);
-      setDeployError(`请返回配置页填写 ${env?.comment || env?.key}（${env?.key}）。`);
+    const missingManagedModelEnv = deploymentEnv.find(
+      (env) =>
+        env.key === "MODEL_AGENT_API_KEY" &&
+        env.required &&
+        env.serverManaged &&
+        !selectedModelApiKeyId,
+    );
+    const missingEnvs = [
+      ...(missingManagedModelEnv ? [missingManagedModelEnv] : []),
+      ...missingFeatureEnvs,
+    ];
+    if (missingEnvs.length) {
+      const errors = Object.fromEntries(
+        missingEnvs.map((env) => [
+          env.key,
+          env.serverManaged
+            ? `${runtimeEnvRequirementHint(env)?.replace(/。$/, "") || env.comment || env.key}，请先返回模型配置选择 API Key。`
+            : runtimeEnvMissingError(env),
+        ]),
+      );
+      setDeploymentEnvErrors(errors);
+      setDeployError(errors[missingEnvs[0].key]);
+      focusDeploymentEnv(missingEnvs[0].key);
       return;
     }
+    setDeploymentEnvErrors({});
     const invalidFeatureEnv = firstInvalidRuntimeEnv(
       deploymentEnv,
       deploymentEnvValues,
@@ -1925,6 +2003,32 @@ export function ProjectPreview({
                               : "未启用"}
                           </dd>
                         </div>
+                        {releaseConfiguration.effectiveOptimizations &&
+                          releaseConfiguration.effectiveOptimizations.length > 0 && (
+                            <div>
+                              <dt>生效能力</dt>
+                              <dd>
+                                {releaseConfiguration.effectiveOptimizations.join("、")}
+                              </dd>
+                            </div>
+                          )}
+                        {releaseConfiguration.autoAddedOptimizations &&
+                          releaseConfiguration.autoAddedOptimizations.length > 0 && (
+                            <div>
+                              <dt>自动保护</dt>
+                              <dd>
+                                {releaseConfiguration.autoAddedOptimizations.join("、")}
+                              </dd>
+                            </div>
+                          )}
+                        {releaseConfiguration.planHash && (
+                          <div>
+                            <dt>Plan Hash</dt>
+                            <dd className="pp-release-fact-long">
+                              {releaseConfiguration.planHash}
+                            </dd>
+                          </div>
+                        )}
                       </>
                     )}
                     </dl>
@@ -2242,7 +2346,7 @@ export function ProjectPreview({
                         step="1"
                         inputMode="numeric"
                         value={minInstance}
-                        disabled={deploying}
+                        disabled={deploying || sidecarEnabled}
                         aria-invalid={!instanceRange.valid}
                         onChange={(event) => setMinInstance(event.currentTarget.value)}
                       />
@@ -2256,15 +2360,17 @@ export function ProjectPreview({
                         step="1"
                         inputMode="numeric"
                         value={maxInstance}
-                        disabled={deploying}
+                        disabled={deploying || sidecarEnabled}
                         aria-invalid={!instanceRange.valid}
                         onChange={(event) => setMaxInstance(event.currentTarget.value)}
                       />
                     </label>
                   </div>
-                  {inMemorySession && (
+                  {(inMemorySession || sidecarEnabled) && (
                     <p className="pp-instance-note" role="note">
-                      为避免多实例间会话丢失，推荐将 Runtime 固定为 1～1
+                      {sidecarEnabled
+                        ? "Harness Sidecar 首期仅支持单实例，Runtime 固定为 1～1"
+                        : "为避免多实例间会话丢失，推荐将 Runtime 固定为 1～1"}
                     </p>
                   )}
                   {!instanceRange.valid && (
@@ -2427,6 +2533,12 @@ export function ProjectPreview({
                             row,
                             deploymentEnvValues,
                           );
+                          const fieldError = deploymentEnvErrors[row.key];
+                          const errorId = `deployment-env-${row.key.toLowerCase()}-error`;
+                          const helpText =
+                            runtimeEnvRequirementHint(row) ||
+                            row.help ||
+                            row.comment;
                           const multiline = row.multiline || row.format === "json";
                           return (
                             <div
@@ -2439,16 +2551,16 @@ export function ProjectPreview({
                                 aria-disabled={deploying}
                               >
                                 <span title={row.key}>{row.key}</span>
-                                {(row.help || row.comment) && (
+                                {helpText && (
                                   <span
                                     className="pp-env-help"
                                     tabIndex={0}
-                                    data-help={row.help || row.comment}
-                                    aria-label={`${row.key}说明：${row.help || row.comment}`}
+                                    data-help={helpText}
+                                    aria-label={`${row.key}说明：${helpText}`}
                                   >
                                     ?
                                     <span className="pp-env-help-popover" role="tooltip">
-                                      {row.help || row.comment}
+                                      {helpText}
                                     </span>
                                   </span>
                                 )}
@@ -2468,6 +2580,16 @@ export function ProjectPreview({
                               <div className="pp-env-value-wrap">
                                 {multiline ? (
                                   <textarea
+                                    ref={(element) => {
+                                      if (element) {
+                                        deploymentEnvInputRefs.current.set(
+                                          row.key,
+                                          element,
+                                        );
+                                      } else {
+                                        deploymentEnvInputRefs.current.delete(row.key);
+                                      }
+                                    }}
                                     className="pp-env-value pp-env-json-value"
                                     value={row.value}
                                     placeholder={
@@ -2479,14 +2601,22 @@ export function ProjectPreview({
                                     }
                                     autoComplete="off"
                                     spellCheck={false}
-                                    aria-invalid={!!jsonError}
+                                    aria-invalid={Boolean(fieldError || jsonError)}
+                                    aria-describedby={
+                                      fieldError ? errorId : undefined
+                                    }
                                     aria-label={`${row.key} 环境变量值`}
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                      const value = event.currentTarget.value;
                                       onDeploymentEnvChange?.(
                                         row.key,
-                                        event.currentTarget.value,
-                                      )
-                                    }
+                                        value,
+                                      );
+                                      if (fieldError && value.trim()) {
+                                        clearDeploymentEnvError(row.key);
+                                        setDeployError(null);
+                                      }
+                                    }}
                                   />
                                 ) : (
                                   <div
@@ -2497,6 +2627,18 @@ export function ProjectPreview({
                                     }
                                   >
                                     <input
+                                      ref={(element) => {
+                                        if (element) {
+                                          deploymentEnvInputRefs.current.set(
+                                            row.key,
+                                            element,
+                                          );
+                                        } else {
+                                          deploymentEnvInputRefs.current.delete(
+                                            row.key,
+                                          );
+                                        }
+                                      }}
                                       className="pp-env-value"
                                       type={
                                         serverManagedModelApiKey
@@ -2520,14 +2662,22 @@ export function ProjectPreview({
                                         row.secret ? "new-password" : "off"
                                       }
                                       spellCheck={row.secret ? false : undefined}
-                                      aria-invalid={!!jsonError}
+                                      aria-invalid={Boolean(fieldError || jsonError)}
+                                      aria-describedby={
+                                        fieldError ? errorId : undefined
+                                      }
                                       aria-label={`${row.key} 环境变量值`}
-                                      onChange={(event) =>
+                                      onChange={(event) => {
+                                        const value = event.currentTarget.value;
                                         onDeploymentEnvChange?.(
                                           row.key,
-                                          event.currentTarget.value,
-                                        )
-                                      }
+                                          value,
+                                        );
+                                        if (fieldError && value.trim()) {
+                                          clearDeploymentEnvError(row.key);
+                                          setDeployError(null);
+                                        }
+                                      }}
                                     />
                                     {serverManagedModelApiKey && (
                                       <button
@@ -2562,6 +2712,15 @@ export function ProjectPreview({
                                       </button>
                                     )}
                                   </div>
+                                )}
+                                {fieldError && (
+                                  <span
+                                    id={errorId}
+                                    className="pp-env-error"
+                                    role="alert"
+                                  >
+                                    {fieldError}
+                                  </span>
                                 )}
                                 {jsonError && (
                                   <span className="pp-env-error">{jsonError}</span>

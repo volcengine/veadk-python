@@ -12,6 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from veadk.extensions.feishu_channel import FeishuChannelExtension
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from veadk.extensions.feishu_channel import FeishuChannelExtension
+
+
+def __getattr__(name: str) -> Any:
+    """Load optional extensions only when callers request them."""
+
+    if name == "FeishuChannelExtension":
+        from veadk.extensions.feishu_channel import FeishuChannelExtension
+
+        return FeishuChannelExtension
+    raise AttributeError(f"module 'veadk.extensions' has no attribute {name!r}")
+
 
 __all__ = ["FeishuChannelExtension"]

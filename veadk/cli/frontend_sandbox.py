@@ -32,6 +32,7 @@ from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Protocol
 
 from fastapi import File, Request, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from frontend.server.sandbox.tool_sessions import SandboxToolPair
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
@@ -2730,7 +2731,6 @@ def mount_sandbox_agent_routes(
 ) -> None:
     """Mount list/create/open routes for managed agent Sessions."""
     from fastapi import HTTPException
-    from fastapi.responses import JSONResponse
 
     from veadk.cli.frontend_agent_proxy import (
         agent_surface_prefix,
@@ -2963,7 +2963,6 @@ def mount_sandbox_routes(
 ) -> None:
     """Mount Studio HTTP routes for reusable Sandbox Sessions."""
     from fastapi import HTTPException
-    from fastapi.responses import JSONResponse, StreamingResponse
 
     def _http_error(error: SandboxError) -> HTTPException:
         status_code = 500

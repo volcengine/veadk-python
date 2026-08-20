@@ -22,7 +22,12 @@ on:
   workflow_dispatch:
 
 jobs:
+  harness-sidecar-release-gate:
+    if: github.repository == 'volcengine/veadk-python'
+    uses: ./.github/workflows/harness-sidecar-release-gate.yaml
+
   build-and-push:
+    needs: harness-sidecar-release-gate
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -16,6 +16,8 @@ export interface RuntimeEnvSpec {
   serverManaged?: boolean;
   /** Value is managed by Studio and should not be shown as a user-facing field. */
   hidden?: boolean;
+  /** User-facing optimization names that require this Runtime setting. */
+  requiredBy?: string[];
 }
 
 export interface RuntimeEnvSelection {
@@ -97,12 +99,39 @@ export function firstMissingRuntimeEnv(
   specs: RuntimeEnvSpec[],
   values: Record<string, string>,
 ): RuntimeEnvSpec | undefined {
-  return specs.find(
+  return missingRuntimeEnvs(specs, values)[0];
+}
+
+export function missingRuntimeEnvs(
+  specs: RuntimeEnvSpec[],
+  values: Record<string, string>,
+): RuntimeEnvSpec[] {
+  return specs.filter(
     (spec) =>
       spec.required &&
       !spec.serverManaged &&
       !runtimeEnvValue(spec, values).trim(),
   );
+}
+
+function runtimeEnvRequirementLabels(spec: RuntimeEnvSpec): string[] {
+  return [...new Set((spec.requiredBy ?? []).map((item) => item.trim()).filter(Boolean))];
+}
+
+export function runtimeEnvRequirementHint(
+  spec: RuntimeEnvSpec,
+): string | undefined {
+  const labels = runtimeEnvRequirementLabels(spec);
+  return labels.length
+    ? `优化项「${labels.join("、")}」依赖此配置。`
+    : undefined;
+}
+
+export function runtimeEnvMissingError(spec: RuntimeEnvSpec): string {
+  const labels = runtimeEnvRequirementLabels(spec);
+  return labels.length
+    ? `优化项「${labels.join("、")}」依赖此配置，请填写 ${spec.key}。`
+    : `请填写 ${spec.comment || spec.key}（${spec.key}）。`;
 }
 
 export function runtimeEnvJsonError(

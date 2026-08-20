@@ -1,0 +1,87 @@
+name: Harness Sidecar Release Gate
+
+on:
+  workflow_call:
+  push:
+    paths:
+      - '.github/workflows/harness-sidecar-release-gate.yaml'
+      - 'frontend/**'
+      - 'tests/cli/test_generated_agent_harness_sidecar.py'
+      - 'tests/cli/test_managed_sidecar_source.py'
+      - 'tests/cli/test_generated_agent_backend_codegen_extended.py'
+      - 'tests/cli/test_studio_rbac.py'
+      - 'tests/extensions/harness/**'
+      - 'tests/integrations/agentkit/test_app.py'
+      - 'veadk/cli/generated_agent_codegen.py'
+      - 'veadk/cli/cli_frontend.py'
+      - 'veadk/cli/managed_sidecar_source.py'
+      - 'veadk/extensions/harness/**'
+      - 'veadk/integrations/agentkit/app.py'
+      - 'pyproject.toml'
+  pull_request:
+    paths:
+      - '.github/workflows/harness-sidecar-release-gate.yaml'
+      - 'frontend/**'
+      - 'tests/cli/test_generated_agent_harness_sidecar.py'
+      - 'tests/cli/test_managed_sidecar_source.py'
+      - 'tests/cli/test_generated_agent_backend_codegen_extended.py'
+      - 'tests/cli/test_studio_rbac.py'
+      - 'tests/extensions/harness/**'
+      - 'tests/integrations/agentkit/test_app.py'
+      - 'veadk/cli/generated_agent_codegen.py'
+      - 'veadk/cli/cli_frontend.py'
+      - 'veadk/cli/managed_sidecar_source.py'
+      - 'veadk/extensions/harness/**'
+      - 'veadk/integrations/agentkit/app.py'
+      - 'pyproject.toml'
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.17.0
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Python test dependencies
+        run: python -m pip install -e '.[dev]'
+
+      - name: Enforce public Python Sidecar coverage above 90 percent
+        run: |
+          python -m pytest -q \
+            tests/extensions/harness/test_studio_sidecar.py \
+            tests/extensions/harness/test_sidecar_public_api.py \
+            tests/extensions/harness/test_extension.py \
+            tests/cli/test_generated_agent_harness_sidecar.py \
+            tests/cli/test_managed_sidecar_source.py \
+            tests/integrations/agentkit/test_app.py \
+            tests/cli/test_studio_rbac.py::test_sidecar_deployment_uses_agentkit_cli_structured_release \
+            tests/cli/test_generated_agent_backend_codegen_extended.py::test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan \
+            --cov=. --cov-branch --cov-report= --cov-fail-under=0
+          python -m coverage report \
+            --include='*/veadk/extensions/harness/sidecar.py' \
+            --fail-under=91 --show-missing
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --ignore-scripts
+
+      - name: Enforce public Studio Sidecar coverage above 90 percent
+        working-directory: frontend
+        run: npm run test:harness-sidecar-coverage
+
+      - name: Verify frontend Sidecar integration
+        working-directory: frontend
+        run: npm test

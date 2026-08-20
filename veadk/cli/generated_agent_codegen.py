@@ -33,6 +33,11 @@ from veadk.cli.generated_agent_catalog import (
     model_env_for_provider,
 )
 from veadk.cli.studio_model_catalog import is_provider_modelark_base_url
+from veadk.extensions.harness.sidecar import (
+    normalize_studio_harness_intent,
+    studio_harness_env_example,
+    studio_harness_intent_payload,
+)
 
 _PYTHON_LICENSE_HEADER = """# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
 #
@@ -211,6 +216,21 @@ class CloudEnvironmentConfig(BaseModel):
         return value
 
 
+class HarnessSidecarIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    profile: Literal["default", "ops"] = "default"
+    componentOverrides: dict[str, bool] = Field(default_factory=dict)
+    catalogVersion: str | None = None
+    planHash: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_selection(cls, value: Any) -> dict[str, Any]:
+        return studio_harness_intent_payload(value)
+
+
 class AgentDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -249,6 +269,7 @@ class AgentDraft(BaseModel):
     cloudEnvironment: CloudEnvironmentConfig = Field(
         default_factory=CloudEnvironmentConfig
     )
+    harnessSidecar: HarnessSidecarIntent | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -387,6 +408,11 @@ def _safe_draft_payload(draft: AgentDraft) -> dict[str, Any]:
             and cloud_environment.get("dockerfile") is None
         ):
             node.pop("cloudEnvironment", None)
+        # Keep generated metadata byte-for-byte compatible for ordinary
+        # projects. This optional field is emitted only when Sidecar is
+        # actually selected.
+        if node.get("harnessSidecar") is None:
+            node.pop("harnessSidecar", None)
         agent_segment = _env_segment(str(node.get("name") or ""), "AGENT")
         tools = node.get("mcpTools")
         if isinstance(tools, list):
@@ -894,8 +920,9 @@ def render_requirements(extras: set[str], include_feishu_channel: bool) -> str:
         all_extras.add("extensions")
     unique_extras = sorted(all_extras)
     extras_str = f"[{','.join(unique_extras)}]" if unique_extras else ""
-    pkg = f"veadk-python{extras_str}>=1.0.5"
-    packages = [pkg, "agentkit-sdk-python", "google-adk", "starlette<1.0.0"]
+    minimum_version = "1.1.1" if "harness-sidecar" in all_extras else "1.0.5"
+    pkg = f"veadk-python{extras_str}>={minimum_version}"
+    packages = [pkg, "agentkit-sdk-python==0.8.1", "google-adk", "starlette<1.0.0"]
     return "\n".join(packages) + "\n"
 
 
@@ -925,20 +952,39 @@ def render_readme(name: str, draft: AgentDraft) -> str:
                 "",
             ]
         )
+    if draft.harnessSidecar and draft.harnessSidecar.enabled:
+        lines.extend(
+            [
+                "## Harness Sidecar",
+                "",
+                "项目已启用 Harness Sidecar 公有集成。运行前请使用受支持的 Sidecar-enabled Runtime，并按 `.env.example` 配置所选能力。",
+                "",
+            ]
+        )
     return "\n".join(lines)
 
 
 def _render_app_py(
     pkg: str,
     feishu_channel_enabled: bool,
+    harness_sidecar_enabled: bool,
 ) -> str:
     lines = [
         _PYTHON_LICENSE_HEADER.rstrip(),
         "",
         "from inspect import signature",
         "",
-        f"from agents.{pkg}.agent import AGENT_DISPLAY_NAMES, AGENT_DRAFT, root_agent",
     ]
+    if harness_sidecar_enabled:
+        lines.append(
+            f"from agents.{pkg}.agent import ("
+            "AGENT_DISPLAY_NAMES, AGENT_DRAFT, app as agent_app, "
+            "harness_extension, root_agent)"
+        )
+    else:
+        lines.append(
+            f"from agents.{pkg}.agent import AGENT_DISPLAY_NAMES, AGENT_DRAFT, root_agent"
+        )
     lines.append(f"from agents.{pkg}.dynamic_a2a import enable_dynamic_a2a_tools")
     lines.extend(
         [
@@ -950,11 +996,31 @@ def _render_app_py(
             'if "agent_draft" in signature(create_agentkit_app).parameters:',
             '    _app_options["agent_draft"] = AGENT_DRAFT',
             "",
-            "app = create_agentkit_app(",
-            "    root_agent,",
-            "    AGENT_DISPLAY_NAMES,",
-            "    **_app_options,",
-            ")",
+        ]
+    )
+    if harness_sidecar_enabled:
+        lines.extend(
+            [
+                "app = create_agentkit_app(",
+                "    app=agent_app,",
+                "    display_names=AGENT_DISPLAY_NAMES,",
+                "    harness_extension=harness_extension,",
+                "    **_app_options,",
+                ")",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "app = create_agentkit_app(",
+                "    root_agent,",
+                "    AGENT_DISPLAY_NAMES,",
+                "    **_app_options,",
+                ")",
+            ]
+        )
+    lines.extend(
+        [
             "",
             "_agent_info_index = next(",
             "    index",
@@ -974,6 +1040,22 @@ def _render_app_py(
     lines.extend(["", "enable_dynamic_a2a_tools(app, root_agent)"])
     lines.extend(["", 'if __name__ == "__main__":', "    run_agentkit_app(app)", ""])
     return "\n".join(lines)
+
+
+def _render_managed_main_py() -> str:
+    """Bridge the CLI-managed Python Dockerfile to VeStudio's app entrypoint."""
+    return "\n".join(
+        [
+            _PYTHON_LICENSE_HEADER.rstrip(),
+            "",
+            "from app import app",
+            "from veadk.integrations.agentkit import run_agentkit_app",
+            "",
+            'if __name__ == "__main__":',
+            "    run_agentkit_app(app)",
+            "",
+        ]
+    )
 
 
 def _render_dynamic_a2a_py() -> str:
@@ -1408,12 +1490,13 @@ def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
     allowed_keys: set[str] = set()
     fixed_values: dict[str, str] = {}
     uses_ark_model = False
+    ark_model_name = ""
 
     def allow_env(items: tuple[EnvVar, ...]) -> None:
         allowed_keys.update(item.key for item in items)
 
     def visit(node: AgentDraft) -> None:
-        nonlocal uses_ark_model
+        nonlocal ark_model_name, uses_ark_model
         is_custom_model = node.modelSource == "custom" or (
             node.modelSource is None
             and bool(node.modelApiBase.strip())
@@ -1445,6 +1528,8 @@ def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
             allowed_keys.add(api_key_env)
         elif node.agentType == "llm":
             uses_ark_model = True
+            if not ark_model_name:
+                ark_model_name = node.modelName.strip()
         for tool_id in node.builtinTools:
             tool = TOOL_BY_ID.get(tool_id)
             if tool:
@@ -1494,6 +1579,10 @@ def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
             model_env.get("MODEL_AGENT_PROVIDER") or "openai"
         )
         fixed_values["MODEL_AGENT_API_BASE"] = model_env.get("MODEL_AGENT_API_BASE", "")
+        selected_model_name = ark_model_name or model_env.get("MODEL_AGENT_NAME", "")
+        fixed_values["MODEL_AGENT_NAME"] = selected_model_name
+        # The managed Sidecar runtime still reads the legacy model-name key.
+        fixed_values["MODEL_NAME"] = selected_model_name
     if draft.deployment.modelApiKeyId.strip():
         fixed_values["MODEL_AGENT_API_KEY_ID"] = draft.deployment.modelApiKeyId.strip()
     if draft.deployment.modelApiKeyName.strip():
@@ -1663,6 +1752,7 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
     if draft.agentType == "a2a":
         raise ValueError("Remote Agent cannot be the root Agent.")
 
+    draft = _normalize_harness_sidecar_draft(draft)
     draft = prepare_mcp_auth(draft)
     pkg = ident(draft.name, "my_agent")
     acc = _Acc(draft.cloudProvider)
@@ -1684,19 +1774,51 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
                 ),
             ]
         )
+    harness_sidecar_enabled = bool(
+        draft.harnessSidecar and draft.harnessSidecar.enabled
+    )
+    if harness_sidecar_enabled:
+        acc.extras.add("harness-sidecar")
+        for key, value in studio_harness_env_example(draft.harnessSidecar).items():
+            acc.env.append(
+                EnvVar(
+                    key,
+                    False,
+                    value,
+                    "Harness Sidecar 公有运行配置",
+                )
+            )
 
     _build_agent(acc, draft, "agent")
+    if harness_sidecar_enabled:
+        _add_import(acc, "from google.adk.apps.app import App")
+        _add_import(acc, "from veadk.extensions.harness import HarnessExtension")
 
     import_block = "\n".join(["from veadk import Agent", *_dedupe_imports(acc.imports)])
+    harness_definition = ""
+    if harness_sidecar_enabled:
+        harness_definition = (
+            "\nharness_extension = HarnessExtension.from_env()\n"
+            "app = App(\n"
+            '    name=__package__.split(".")[-1],\n'
+            "    root_agent=root_agent,\n"
+            "    plugins=harness_extension.plugins(),\n"
+            ")\n"
+        )
     agent_definition = (
         "\n\n".join(acc.pre_lines)
         + f"\n\nAGENT_DISPLAY_NAMES = {acc.agent_display_names!r}\n"
         + f"AGENT_DRAFT = {_safe_draft_payload(draft)!r}\n"
         + "\n# ADK 加载器要求：顶层 agent 必须命名为 root_agent\nroot_agent = agent\n"
+        + harness_definition
     )
     agent_py = f"{_PYTHON_LICENSE_HEADER}\n{import_block}\n\n{agent_definition}"
 
-    app_py = _render_app_py(pkg, feishu_channel_enabled)
+    app_py = _render_app_py(
+        pkg,
+        feishu_channel_enabled,
+        harness_sidecar_enabled,
+    )
     files = [
         GeneratedFile(path="app.py", content=app_py),
         # Top-level agents package marker so `from agents.<pkg>.agent import
@@ -1730,4 +1852,24 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
     dockerfile = render_cloud_environment_dockerfile(draft)
     if dockerfile is not None:
         files.append(GeneratedFile(path="Dockerfile", content=dockerfile))
+    if harness_sidecar_enabled:
+        files.insert(
+            1, GeneratedFile(path="main.py", content=_render_managed_main_py())
+        )
     return GeneratedProject(name=pkg, files=files)
+
+
+def _normalize_harness_sidecar_draft(draft: AgentDraft) -> AgentDraft:
+    for sub_agent in draft.subAgents:
+        if sub_agent.harnessSidecar and sub_agent.harnessSidecar.enabled:
+            raise ValueError("Harness Sidecar can only be configured on the root Agent")
+    if not draft.harnessSidecar:
+        return draft
+    intent = normalize_studio_harness_intent(draft.harnessSidecar)
+    if not intent.enabled:
+        return draft.model_copy(update={"harnessSidecar": None})
+    metadata = studio_harness_intent_payload(intent)
+    metadata.pop("catalogVersion", None)
+    metadata.pop("planHash", None)
+    normalized = HarnessSidecarIntent.model_validate(metadata)
+    return draft.model_copy(update={"harnessSidecar": normalized})

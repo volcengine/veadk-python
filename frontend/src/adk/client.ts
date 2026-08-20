@@ -18,7 +18,10 @@ import {
   TRANSFER_REQUEST_TIMEOUT_MS,
 } from "./timeout";
 import type { AgentProject } from "../create/project";
-import type { AgentDraft, NetworkConfig } from "../create/types";
+import type {
+  AgentDraft,
+  NetworkConfig,
+} from "../create/types";
 import type { IssueFeedbackReport } from "./issueFeedback";
 import {
   BYTEPLUS_DEFAULT_REGION,
@@ -635,6 +638,11 @@ export function runtimeRegionCandidates(region?: string): string[] {
   ];
 }
 
+function selectedRuntimeRegionCandidates(region?: string): string[] {
+  const explicit = (region || "").trim();
+  return explicit ? [explicit] : runtimeRegionCandidates();
+}
+
 function cacheKey(...parts: Array<string | number | undefined>): string {
   return parts.map((part) => String(part ?? "")).join("\u0001");
 }
@@ -848,7 +856,7 @@ export async function getAgentFeedbackCases(args: {
   if (!options.force && existing?.promise) return existing.promise;
   let lastError: Error | null = null;
   const promise = (async () => {
-    for (const region of runtimeRegionCandidates(args.region)) {
+    for (const region of selectedRuntimeRegionCandidates(args.region)) {
       const query = new URLSearchParams({
         runtimeId: args.runtimeId,
         region,
@@ -892,7 +900,7 @@ export async function getAutomaticEvaluationStatuses(args: {
   userId: string;
 }): Promise<AutomaticEvaluationStatusesResponse> {
   let lastError: Error | null = null;
-  for (const region of runtimeRegionCandidates(args.region)) {
+  for (const region of selectedRuntimeRegionCandidates(args.region)) {
     const query = new URLSearchParams({
       runtimeId: args.runtimeId,
       region,
@@ -914,7 +922,7 @@ export async function getAgentOptimizations(args: {
   appName: string;
 }): Promise<AgentOptimizationsResponse> {
   let lastError: Error | null = null;
-  for (const region of runtimeRegionCandidates(args.region)) {
+  for (const region of selectedRuntimeRegionCandidates(args.region)) {
     const query = new URLSearchParams({
       runtimeId: args.runtimeId,
       region,
@@ -1052,7 +1060,7 @@ export async function deleteAgentFeedbackCases(args: {
   itemIds: string[];
 }): Promise<{ deletedCount: number }> {
   let lastError: Error | null = null;
-  for (const region of runtimeRegionCandidates(args.region)) {
+  for (const region of selectedRuntimeRegionCandidates(args.region)) {
     const res = await apiFetch(
       "/web/evaluation/feedback-cases/delete",
       {
@@ -2316,6 +2324,7 @@ export async function deployAgentkitProject(
     envs?: { key: string; value: string }[];
     resources?: DeployResources;
     source?: DeploymentSource;
+    harnessSidecar?: AgentDraft["harnessSidecar"];
   },
 ): Promise<DeployAgentkitResult> {
   const taskId = opts?.taskId;
@@ -2365,6 +2374,7 @@ export async function deployAgentkitProject(
               ? { kind: "migration", migrationId: opts.migrationTaskId }
               : { kind: "inlineFiles" }
           ),
+          harnessSidecar: opts?.harnessSidecar,
         }),
       },
       {},
@@ -3137,6 +3147,7 @@ export interface GeneratedAgentTestRun {
   runId: string;
   appName: string;
   expiresAt: number;
+  planHash?: string;
 }
 
 export async function generateAgentProject(

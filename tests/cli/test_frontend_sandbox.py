@@ -514,6 +514,16 @@ def _agent_app(
     return app
 
 
+def test_sandbox_route_response_types_resolve_in_openapi() -> None:
+    gateway = _FakeGateway()
+
+    for app in (_app(gateway), _agent_app(gateway)):
+        schema = app.openapi()
+
+        assert schema["openapi"]
+        assert schema["paths"]
+
+
 @pytest.mark.parametrize(
     ("kind", "tool_id"),
     [("openclaw", "tool-openclaw"), ("hermes", "tool-hermes")],

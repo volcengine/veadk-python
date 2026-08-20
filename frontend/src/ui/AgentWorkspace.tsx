@@ -33,7 +33,6 @@ import {
   getRuntimeUpdateCapability,
   probeRuntimeA2a,
   probeRuntimeApps,
-  prefetchAgentFeedbackCases,
   prefetchRuntimeAgentInfo,
   prefetchRuntimeDetail,
   revealRuntimeApiKey,
@@ -58,6 +57,12 @@ import {
   modelNameFromRuntime,
   runtimeAgentDraftFromCloud,
 } from "../create/runtimeModelName";
+import {
+  HARNESS_SIDECAR_OPTION_IDS,
+  harnessIntentFromRuntimeEnvs,
+  harnessSidecarOptionLabel,
+  harnessSidecarProfileLabel,
+} from "../create/harnessSidecarOptions";
 import type { AgentDraft } from "../create/types";
 import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
@@ -1311,6 +1316,14 @@ export function AgentWorkspace({
       selectedUpdateCapability?.agent,
     ],
   );
+  const publishedHarnessSidecar =
+    selectedAgentInfo?.draft?.harnessSidecar ??
+    harnessIntentFromRuntimeEnvs(runtimeDetail?.envs);
+  const publishedHarnessOptimizations = publishedHarnessSidecar
+    ? HARNESS_SIDECAR_OPTION_IDS.filter(
+        (id) => publishedHarnessSidecar.componentOverrides[id],
+      )
+    : [];
   const updateBlockedReason = selectedDraft
     ? canCreate ? "" : "当前账号没有新建 Agent 的权限。"
     : !canUpdate
@@ -1453,34 +1466,8 @@ export function AgentWorkspace({
       const region = agent.region ?? "cn-beijing";
       prefetchRuntimeDetail(agent.runtimeId, region);
       prefetchRuntimeAgentInfo(agent.runtimeId, region, agent.runtimeApp ?? "");
-      void getRuntimeAgentInfo(agent.runtimeId, region, agent.runtimeApp ?? "")
-        .then((info) => {
-          const appName = info.appName || agent.app;
-          if (!appName) return;
-          prefetchAgentFeedbackCases({
-            runtimeId: agent.runtimeId ?? "",
-            region,
-            appName,
-            pageSize: 100,
-          });
-        })
-        .catch(() => {});
     }
   }, [listedAgents]);
-
-  useEffect(() => {
-    if (!selectedAgent?.runtimeId || !selectedAgentAppName) return;
-    prefetchAgentFeedbackCases({
-      runtimeId: selectedAgent.runtimeId,
-      region: selectedAgent.region ?? "cn-beijing",
-      appName: selectedAgentAppName,
-      pageSize: 100,
-    });
-  }, [
-    selectedAgentAppName,
-    selectedAgent?.region,
-    selectedAgent?.runtimeId,
-  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2807,6 +2794,51 @@ export function AgentWorkspace({
                                 : selectedAgentUpdateDraft
                                   ? "待更新"
                                   : <><span className="aw-status-dot" />可用</>}
+                        </dd>
+                      </div>
+                    </dl>
+                  </section>
+                  <section
+                    className="aw-sidecar-panel aw-settings-card"
+                    aria-label="已选择的优化项"
+                  >
+                    <div className="aw-section-head">
+                      <div>
+                        <h3>已选择的优化项</h3>
+                        <p>发布时选择的智能体优化项。</p>
+                      </div>
+                    </div>
+                    <dl className="aw-readonly-config">
+                      <div>
+                        <dt>配置状态</dt>
+                        <dd className={publishedHarnessSidecar?.enabled ? "is-ready" : undefined}>
+                          {publishedHarnessSidecar
+                            ? publishedHarnessSidecar.enabled
+                              ? <><span className="aw-status-dot" />已启用</>
+                              : "未启用"
+                            : "未记录"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>优化场景</dt>
+                        <dd>
+                          {publishedHarnessSidecar
+                            ? harnessSidecarProfileLabel(publishedHarnessSidecar.profile)
+                            : "旧版本未保存此配置"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>已选优化项</dt>
+                        <dd className="aw-fact-badges">
+                          {!publishedHarnessSidecar
+                            ? "旧版本未保存此配置"
+                            : publishedHarnessOptimizations.length
+                              ? publishedHarnessOptimizations.map((optionId) => (
+                                  <span key={optionId}>
+                                    {harnessSidecarOptionLabel(optionId)}
+                                  </span>
+                                ))
+                              : "未选择"}
                         </dd>
                       </div>
                     </dl>

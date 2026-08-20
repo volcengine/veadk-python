@@ -19,6 +19,7 @@ import io
 import json
 import secrets
 import socket
+import sys
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -71,7 +72,7 @@ _MINIMAL_FRONTEND_GOLDEN = {
     "agents/demo_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/demo_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "ec3258da9bef4e74333376d8554c265ccb12a4a1e5d4e1e1b0acdf5c9ae93ab6",
-    "requirements.txt": "9a04e5f16e94d5e751681082776f1c99f13da7a577c8753c3835e0ea507245e4",
+    "requirements.txt": "220cfbc918879965e134924dd704b76d2282392a371da60492d5405d7b83bf48",
     "README.md": "a34208314cf9061c02662028d7a9dd97448e6b73c1d732cb4aeaa8f70dbbc684",
 }
 
@@ -82,7 +83,7 @@ _FULL_FRONTEND_GOLDEN = {
     "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/full_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "2bfd3afda4e661fbb71588ec5f0d584ce6682363cacc81b0394f8da09f7977e8",
-    "requirements.txt": "4a941e1bf7efb43d57f608649ac238f2e5ea833f9e0aae92f8bc3fef67b8874e",
+    "requirements.txt": "17a9afc0b90bf3ba6e8bc3711181b8f0b01918824d554f1b435cf22ef780bff4",
     "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
 }
 
@@ -817,6 +818,8 @@ class _FakeAsyncClient:
     streamed_payloads: list[dict[str, Any]] = []
     trace_requests: ClassVar[list[str]] = []
     listed_apps: ClassVar[list[str]] = ["demo_agent"]
+    sidecar_status: ClassVar[dict[str, Any] | None] = None
+    gateway_requests: ClassVar[list[dict[str, str]]] = []
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
@@ -827,9 +830,14 @@ class _FakeAsyncClient:
     async def __aexit__(self, *args: Any) -> None:
         return None
 
-    async def get(self, url: str) -> _FakeResponse:
+    async def get(self, url: str, **kwargs: Any) -> _FakeResponse:
         if url.endswith("/list-apps"):
             return _FakeResponse(json_data=self.listed_apps)
+        if url.endswith("/web/harness-sidecar/status"):
+            return _FakeResponse(json_data=self.sidecar_status)
+        if url.endswith("/healthz"):
+            self.gateway_requests.append(dict(kwargs.get("headers") or {}))
+            return _FakeResponse(json_data={"status": "ok"})
         assert url.endswith("/dev/apps/demo_agent/debug/trace/session/session-1")
         self.trace_requests.append(url)
         return _FakeResponse(
@@ -1341,6 +1349,124 @@ def test_generated_agent_debug_omits_stdio_mcp_on_remote_bind(
             f"/web/generated-agent-test-runs/{run['runId']}"
         )
         assert delete_response.status_code == 200
+
+
+def test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    if sys.version_info[:2] != (3, 12):
+        pytest.skip("managed Sidecar debug Runtime requires CPython 3.12")
+
+    from veadk.extensions.harness import sidecar
+
+    captured: dict[str, Any] = {}
+    runtime_key = secrets.token_urlsafe(18)
+    runtime_endpoint = "https://runtime.example.com"
+    _FakeProcess.created.clear()
+    monkeypatch.setattr(_FakeAsyncClient, "listed_apps", ["sidecar_agent"])
+    monkeypatch.setattr(
+        _FakeAsyncClient,
+        "sidecar_status",
+        {
+            "status": "ready",
+            "planHash": "sha256:test-plan",
+            "effectiveComponents": ["mcp_resilience", "sql_readonly"],
+        },
+    )
+    monkeypatch.setattr(_FakeAsyncClient, "gateway_requests", [])
+    monkeypatch.setenv("VEADK_STUDIO_HARNESS_SIDECAR_DEBUG_ENABLED", "true")
+    monkeypatch.setenv("HARNESS_SIDECAR_APIG_ENDPOINT", runtime_endpoint)
+    monkeypatch.setenv("HARNESS_SIDECAR_APIG_API_KEY", runtime_key)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+    monkeypatch.setattr(
+        sidecar,
+        "studio_harness_runtime_env",
+        lambda _intent, *, transport: (
+            {
+                "HARNESS_SIDECAR_ENABLED": "true",
+                "HARNESS_SIDECAR_TRANSPORT": transport,
+                "HARNESS_MODEL_PROXY_PORT": "18787",
+            },
+            {
+                "planHash": "sha256:test-plan",
+                "effectiveComponents": ["mcp_resilience", "sql_readonly"],
+            },
+        ),
+    )
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "uvicorn.run",
+        lambda app, **kwargs: captured.setdefault("app", app),
+    )
+
+    _run_frontend_server(
+        agents_dir=str(tmp_path),
+        frontend_dir=None,
+        site_logo=None,
+        site_title=None,
+        host="127.0.0.1",
+        port=8765,
+        dev=True,
+        vite=True,
+        oauth2_user_pool=None,
+        oauth2_user_pool_client=None,
+        oauth2_user_pool_uid=None,
+        oauth2_user_pool_client_uid=None,
+        oauth2_redirect_uri=None,
+        oauth2_provider=None,
+        oauth2_provider_label=None,
+        auth_mode="frontend",
+        generated_agent_test_run_ttl=60,
+        open_browser=False,
+    )
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    real_socket = socket.socket
+    monkeypatch.setattr(
+        "socket.socket",
+        lambda *args, **kwargs: (
+            real_socket(*args, **kwargs)
+            if len(args) >= 4 or "fileno" in kwargs
+            else _FakeSocket(*args, **kwargs)
+        ),
+    )
+
+    with TestClient(captured["app"]) as client:
+        run_response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": {
+                    "name": "sidecar-agent",
+                    "instruction": "Answer briefly.",
+                    "harnessSidecar": {
+                        "componentOverrides": {"mcp_resilience": True},
+                    },
+                }
+            },
+        )
+
+    assert run_response.status_code == 200
+    assert run_response.json()["planHash"] == "sha256:test-plan"
+    process_env = _FakeProcess.created[-1].env
+    assert process_env["HARNESS_SIDECAR_TRANSPORT"] == "apig_runtime_port"
+    assert process_env["HARNESS_SIDECAR_APIG_ENDPOINT"] == runtime_endpoint
+    assert process_env["HARNESS_SIDECAR_APIG_API_KEY"] == runtime_key
+    assert runtime_key not in run_response.text
+    assert _FakeAsyncClient.gateway_requests == [
+        {
+            "Authorization": f"Bearer {runtime_key}",
+            "X-Faas-Proxy-Port": "18787",
+        },
+        {
+            "Authorization": f"Bearer {runtime_key}",
+            "X-Faas-Proxy-Port": "18788",
+        },
+    ]
 
 
 def test_generated_agent_debug_allows_large_skill_projects(

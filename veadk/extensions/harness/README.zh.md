@@ -2,14 +2,19 @@
 
 [English](README.md)
 
-`veadk.extensions.harness` 是一个轻量级 Harness Extension，它提供三个可复用能力：
+`veadk.extensions.harness` 提供两种互斥的接入模式。旧的进程内模式提供三个可复用能力：
 
 - 为每轮 Agent 调用准备上下文
 - 压缩大体积工具结果
 - 验证最终回答，降低幻觉
 
-Extension 可以作为普通 Python 模块直接使用，也可以挂载到 VeADK Runner。
-它不需要单独启动运行时服务。
+旧 Extension 可以作为普通 Python 模块直接使用，也可以挂载到 VeADK Runner，
+不需要单独启动运行时服务。
+
+受管 Sidecar 模式采用另一条边界：全部 Harness 行为只在闭源 Sidecar Runtime 中执行。
+`HarnessExtension.from_env()` 仅负责启动 Runtime、应用模型/MCP 绑定和管理生命周期；该模式下
+`plugins()` 始终返回空列表，应用进程不会加载或挂载
+`veadk.extensions.harness.plugins` 的实现。两种模式不得混用。
 
 ## 安装
 

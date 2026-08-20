@@ -119,6 +119,7 @@ def test_related_database_configs_use_region_env_fallback(monkeypatch):
         VikingKnowledgebaseConfig,
     )
 
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
     monkeypatch.setenv("CLOUD_PROVIDER", "volces")
     for env_name in [
         "DATABASE_VIKING_REGION",

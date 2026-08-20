@@ -15,9 +15,12 @@ async function loadTypeScriptModule(relativePath) {
 const {
   firstInvalidRuntimeEnv,
   firstMissingRuntimeEnv,
+  missingRuntimeEnvs,
   runtimeEnvConfiguration,
   runtimeEnvDisplayRows,
   runtimeEnvJsonError,
+  runtimeEnvMissingError,
+  runtimeEnvRequirementHint,
   runtimeEnvVars,
 } = await loadTypeScriptModule("../src/create/deploymentEnv.ts");
 const {
@@ -310,6 +313,69 @@ test("reports the first missing required runtime setting", () => {
   );
 });
 
+test("explains optimization dependencies and reports every missing runtime setting", () => {
+  const specs = [
+    {
+      key: "MODEL_AGENT_API_KEY",
+      required: true,
+      serverManaged: true,
+      requiredBy: ["上下文治理", "回答校验与修复"],
+    },
+    {
+      key: "MCP_URLS",
+      required: true,
+      requiredBy: ["MCP 稳定性治理"],
+    },
+    {
+      key: "MCP_API_KEY",
+      required: true,
+      requiredBy: ["MCP 稳定性治理"],
+    },
+  ];
+
+  assert.equal(
+    runtimeEnvRequirementHint(specs[0]),
+    "优化项「上下文治理、回答校验与修复」依赖此配置。",
+  );
+  assert.equal(
+    runtimeEnvMissingError(specs[1]),
+    "优化项「MCP 稳定性治理」依赖此配置，请填写 MCP_URLS。",
+  );
+  assert.deepEqual(
+    missingRuntimeEnvs(specs, {}).map((spec) => spec.key),
+    ["MCP_URLS", "MCP_API_KEY"],
+  );
+  assert.deepEqual(
+    missingRuntimeEnvs(specs, {
+      MCP_URLS: "https://mcp.example.test/mcp",
+      MCP_API_KEY: "test-key",
+    }),
+    [],
+  );
+});
+
+test("marks missing optimization env inputs invalid and focuses the first error", () => {
+  assert.match(
+    customCreateSource,
+    /requiredBy:\s*modelProxyHarnessOptimizationLabels/,
+  );
+  assert.match(
+    customCreateSource,
+    /requiredBy:\s*\[harnessSidecarOptionLabel\("mcp_resilience"\)\]/,
+  );
+  assert.match(projectPreviewSource, /missingRuntimeEnvs\(/);
+  assert.match(projectPreviewSource, /setDeploymentEnvErrors\(/);
+  assert.match(projectPreviewSource, /focusDeploymentEnv\(/);
+  assert.match(
+    projectPreviewSource,
+    /aria-invalid=\{Boolean\(fieldError \|\| jsonError\)\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /className="pp-env-error"[\s\S]*?role="alert"[\s\S]*?\{fieldError\}/,
+  );
+});
+
 test("uses copyable default runtime values and validates JSON settings", () => {
   const specs = [
     {
@@ -522,7 +588,11 @@ test("declares the OpenViking long-term memory runtime configuration", () => {
   assert.match(projectPreviewSource, /className="pp-env-help"/);
   assert.match(projectPreviewSource, /className="pp-env-link"/);
   assert.match(projectPreviewSource, /title=\{`打开 OpenViking \$\{row\.link\.label\}`\}/);
-  assert.match(projectPreviewSource, /data-help=\{row\.help \|\| row\.comment\}/);
+  assert.match(
+    projectPreviewSource,
+    /const helpText =[\s\S]*?runtimeEnvRequirementHint\(row\)[\s\S]*?row\.help \|\|[\s\S]*?row\.comment/,
+  );
+  assert.match(projectPreviewSource, /data-help=\{helpText\}/);
   assert.match(projectPreviewSource, /className="pp-env-help-popover"/);
   assert.match(projectPreviewStyles, /\.pp-env-key-cell\s*\{/);
   assert.match(projectPreviewStyles, /\.pp-env-help\s*\{/);
@@ -672,7 +742,7 @@ test("keeps the generated project stable when only deployment channel settings c
   assert.doesNotMatch(customCreateSource, /buildPreviewProject/);
   assert.match(
     customCreateSource,
-    /const releaseDraft = releaseVariant[\s\S]*?\.\.\.providerDraft[\s\S]*?generateAgentProject\(codegenDraft\(releaseDraft\)\)/,
+    /const releaseDraft = releaseVariant[\s\S]*?releaseDraftFromDebugVariant\(providerDraft, releaseVariant\)[\s\S]*?generateAgentProject\(codegenDraft\(releaseDraft\)\)/,
   );
   assert.match(projectPreviewSource, /await onFeishuEnabledChange\(!feishuEnabled\)/);
   assert.match(projectPreviewSource, /deploying \|\| feishuUpdating/);
