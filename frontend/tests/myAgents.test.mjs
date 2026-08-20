@@ -45,15 +45,9 @@ test("shows only the Agent navigation in the sidebar", () => {
   assert.match(appSource, /myAgents && !showManageAgents \? \([\s\S]*?<MyAgents/);
 });
 
-test("opens Agent creation directly without visiting the Runtime-backed library", () => {
-  assert.match(
-    sidebarSource,
-    /access\.capabilities\.createAgents && show\("addAgent"\)[\s\S]*?onClick=\{onQuickCreate\}[\s\S]*?aria-label="添加智能体"/,
-  );
-  assert.match(
-    appSource,
-    /onQuickCreate=\{\(\) => requestIntelligentNavigation\(\(\) => \{[\s\S]*?setCreateView\(null\)[\s\S]*?setAddMenu\(true\)/,
-  );
+test("keeps Agent creation out of the sidebar navigation", () => {
+  assert.doesNotMatch(sidebarSource, /new-chat--add-agent/);
+  assert.doesNotMatch(sidebarSource, /aria-label="添加智能体"/);
 });
 
 test("shows the requested title, search, and agent type pills", () => {
