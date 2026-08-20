@@ -5,6 +5,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useCallback,
   useMemo,
   useRef,
   useState,
@@ -76,12 +77,16 @@ import {
   checkRuntimeNameAvailability,
   listIdentityUserPools,
   revealModelApiKey,
+  bindGithubCicdRuntime,
+  initializeGithubDeliveryMain,
+  syncGithubCicdRuntime,
   RuntimeProbeError,
   type DeployAuthentication,
   type DeployBuildLogSnapshot,
   type DeployResources,
   type DeployStage,
   type IdentityUserPool,
+  type GithubCicdPipelineResult,
 } from "../adk/client";
 import {
   beginAgentDeploy,
@@ -111,6 +116,10 @@ import {
   type DeploymentSelectOption,
 } from "./DeploymentSelect";
 import { mergeDeployBuildLog } from "./deployBuildLog";
+import {
+  GithubCicdPanel,
+  type PendingGithubCicdConfig,
+} from "./GithubCicdPanel";
 import "./ProjectPreview.css";
 
 interface DeploymentTelemetryOrigin {
@@ -485,6 +494,7 @@ const DEPLOY_STEPS: { phase: string; label: string }[] = [
   { phase: "deploy", label: "部署" },
   { phase: "publish", label: "发布" },
 ];
+const GITHUB_SYNC_STEP = { phase: "github", label: "同步代码" };
 
 const CODE_PACKAGE_DEPLOY_STEPS: { phase: string; label: string }[] = [
   { phase: "upload", label: "上传代码包" },
@@ -575,6 +585,10 @@ export interface DeploymentTaskUpdate {
   message?: string;
   pct?: number;
   buildLog?: DeployBuildLogSnapshot;
+  /** Whether the detail progress card should include the GitHub delivery step. */
+  githubDelivery?: boolean;
+  /** Logs for GitHub source / workflow initialization shown on the delivery step. */
+  githubLog?: DeployBuildLogSnapshot;
   /** Instance range applied through UpdateRuntime after creation. */
   instanceRange?: { min: number; max: number };
   /** Whether this deployment initializes the Studio feedback evaluation sets. */
@@ -869,6 +883,10 @@ export function ProjectPreview({
   const [feishuUpdating, setFeishuUpdating] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
+  const [githubCicdBinding, setGithubCicdBinding] =
+    useState<GithubCicdPipelineResult | null>(null);
+  const [pendingGithubCicd, setPendingGithubCicd] =
+    useState<PendingGithubCicdConfig | null>(null);
   // Latest progress frame per deploy phase + the phase currently in flight,
   // driving the build/deploy/publish stepper.
   const [stageMap, setStageMap] = useState<Record<string, DeployStage>>({});
@@ -938,9 +956,13 @@ export function ProjectPreview({
   const deploymentStepsWithInstanceUpdate = needsInstanceUpdate
     ? [...baseDeploymentSteps, INSTANCE_UPDATE_STEP]
     : baseDeploymentSteps;
-  const deploymentSteps = effectiveCreateEvaluationSets
+  const deploymentStepsBeforeGithub = effectiveCreateEvaluationSets
     ? [...deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP]
     : deploymentStepsWithInstanceUpdate;
+  const deploymentSteps =
+    (deploymentRuntimeId && githubCicdBinding?.pipelineId) || pendingGithubCicd
+      ? [...deploymentStepsBeforeGithub, GITHUB_SYNC_STEP]
+      : deploymentStepsBeforeGithub;
 
   function clearModelApiKeyReveal() {
     modelApiKeyRevealAbortRef.current?.abort();
@@ -1360,6 +1382,13 @@ export function ProjectPreview({
     }
   }
 
+  const handleGithubCicdBindingChange = useCallback(
+    (binding: GithubCicdPipelineResult | null) => {
+      setGithubCicdBinding(binding);
+    },
+    [],
+  );
+
   async function requestDeploymentConfirmation() {
     if (!onDeploy || deploying || runtimeNameChecking || deployDisabled) return;
     if (runtimeNameError) {
@@ -1519,6 +1548,7 @@ export function ProjectPreview({
       phase: "prepare",
       label: "准备部署",
       agentDraft,
+      githubDelivery: Boolean(pendingGithubCicd),
       instanceRange: needsInstanceUpdate
         ? { min: instanceRange.min, max: instanceRange.max }
         : undefined,
@@ -1527,6 +1557,7 @@ export function ProjectPreview({
     onDeploymentTaskChange?.(initialTask);
     onDeploymentStarted?.(initialTask);
     let latestBuildLog: DeployBuildLogSnapshot | undefined;
+    let latestGithubLog: DeployBuildLogSnapshot | undefined;
     let latestPhase = initialTask.phase ?? "prepare";
     const terminalBuildLog = (
       status: DeployBuildLogSnapshot["status"],
@@ -1550,6 +1581,23 @@ export function ProjectPreview({
       updatedAt: Date.now(),
       pendingMessage: "正在等待构建日志…",
     });
+    const githubDeliveryLog = (
+      line: string,
+      status: DeployBuildLogSnapshot["status"] = "running",
+    ): DeployBuildLogSnapshot => {
+      const previousText = latestGithubLog?.text ?? "";
+      const text = [previousText, line].filter(Boolean).join("\n");
+      latestGithubLog = {
+        source: "github-delivery",
+        status,
+        text,
+        lineCount: text ? text.split("\n").length : 0,
+        truncated: false,
+        updatedAt: Date.now(),
+        pendingMessage: status === "running" ? "正在等待 GitHub 挂载日志…" : undefined,
+      };
+      return latestGithubLog;
+    };
     const mergeBuildFailureLog = (message: string): DeployBuildLogSnapshot | undefined => {
       if (latestPhase !== "build") return undefined;
       const failureText = [
@@ -1568,6 +1616,75 @@ export function ProjectPreview({
       return latestBuildLog;
     };
     try {
+      let activeGithubBinding = githubCicdBinding;
+      if (deploymentRuntimeId && githubCicdBinding?.pipelineId) {
+        latestPhase = "github";
+        const githubLog = githubDeliveryLog("正在同步当前源码到 GitHub");
+        const githubSyncStage: DeployStage = {
+          level: "info",
+          phase: "github",
+          message: "正在同步当前源码到 GitHub",
+          pct: 0,
+        };
+        if (mountedRef.current) {
+          setStageMap((prev) => ({ ...prev, github: githubSyncStage }));
+          setActivePhase("github");
+        }
+        onDeploymentTaskChange?.({
+          id: taskId,
+          agentName: taskAgentName,
+          runtimeName: taskRuntimeName,
+          runtimeId: deploymentRuntimeId,
+          region: deployRegion,
+          startedAt: taskStartedAt,
+          status: "running",
+          phase: "github",
+          label: "同步 GitHub 代码",
+          message: githubSyncStage.message,
+          pct: 0,
+          githubDelivery: true,
+          githubLog,
+        });
+        const synced = await syncGithubCicdRuntime({
+          runtimeId: deploymentRuntimeId,
+          project,
+        });
+        activeGithubBinding = synced;
+        if (mountedRef.current) {
+          setGithubCicdBinding(synced);
+          setStageMap((prev) => ({
+            ...prev,
+            github: {
+              level: "success",
+              phase: "github",
+              message: "GitHub 代码已同步",
+              pct: 100,
+            },
+          }));
+          setActivePhase(null);
+        }
+        if (synced.cicd?.enabled) {
+          onDeploymentTaskChange?.({
+            id: taskId,
+            agentName: taskAgentName,
+            runtimeName: taskRuntimeName,
+            runtimeId: deploymentRuntimeId,
+            region: deployRegion,
+            startedAt: taskStartedAt,
+            status: "success",
+            phase: "github",
+            label: "GitHub 代码已提交",
+            message: "代码已提交到 GitHub，GitHub Actions 正在更新同一个 Runtime",
+            pct: 100,
+            githubDelivery: true,
+            githubLog: githubDeliveryLog(
+              "代码已提交到 GitHub，GitHub Actions 正在更新同一个 Runtime",
+              "complete",
+            ),
+          });
+          return;
+        }
+      }
       const result = await onDeploy(
         project,
         (s) => {
@@ -1630,6 +1747,129 @@ export function ProjectPreview({
           ...(!isRuntimeUpdate ? { resources: deployResources } : {}),
         },
       );
+      if (
+        !deploymentRuntimeId &&
+        pendingGithubCicd &&
+        result.runtimeId
+      ) {
+        latestPhase = "github";
+        const githubLog = githubDeliveryLog("开始初始化 GitHub main 分支与 Actions workflow");
+        const githubAttachStage: DeployStage = {
+          level: "info",
+          phase: "github",
+          message: "正在初始化 GitHub 持续交付目标分支",
+          pct: 0,
+        };
+        if (mountedRef.current) {
+          setStageMap((prev) => ({ ...prev, github: githubAttachStage }));
+          setActivePhase("github");
+        }
+        onDeploymentTaskChange?.({
+          id: taskId,
+          agentName: result.agentName || taskAgentName,
+          runtimeName: result.runtimeName || taskRuntimeName,
+          runtimeId: result.runtimeId,
+          region: result.region || deployRegion,
+          startedAt: taskStartedAt,
+          status: "running",
+          phase: "github",
+          label: "挂载 GitHub 持续交付",
+          message: githubAttachStage.message,
+          pct: 0,
+          githubDelivery: true,
+          githubLog,
+        });
+        try {
+          const attached = await initializeGithubDeliveryMain({
+            project,
+            githubUrl: pendingGithubCicd.githubUrl,
+            githubToken: pendingGithubCicd.githubToken,
+            baseBranch: pendingGithubCicd.baseBranch,
+            runtimeName: result.agentName || taskRuntimeName,
+            runtimeId: result.runtimeId,
+            region: result.region || deployRegion,
+            cloudProvider: pendingGithubCicd.cloudProvider,
+            projectPath: ".",
+            volcengineAccessKey: pendingGithubCicd.volcengineAccessKey,
+            volcengineSecretKey: pendingGithubCicd.volcengineSecretKey,
+            volcengineSessionToken: pendingGithubCicd.volcengineSessionToken,
+          });
+          activeGithubBinding = attached;
+          if (mountedRef.current) {
+            setGithubCicdBinding(attached);
+            setPendingGithubCicd(null);
+            setStageMap((prev) => ({
+              ...prev,
+              github: {
+                level: "success",
+                phase: "github",
+                message: "GitHub 持续交付已初始化目标分支",
+                pct: 100,
+              },
+            }));
+            setActivePhase(null);
+          }
+          onDeploymentTaskChange?.({
+            id: taskId,
+            agentName: result.agentName || taskAgentName,
+            runtimeName: result.runtimeName || taskRuntimeName,
+            runtimeId: result.runtimeId,
+            region: result.region || deployRegion,
+            startedAt: taskStartedAt,
+            status: "running",
+            phase: "github",
+            label: "GitHub 持续交付已挂载",
+            message: "GitHub 持续交付已初始化目标分支",
+            pct: 100,
+            githubDelivery: true,
+            githubLog: githubDeliveryLog("GitHub 持续交付已初始化目标分支", "complete"),
+          });
+        } catch (error) {
+          const githubLog = githubDeliveryLog(
+            `GitHub 持续交付挂载失败：${error instanceof Error ? error.message : String(error)}`,
+            "error",
+          );
+          onDeploymentTaskChange?.({
+            id: taskId,
+            agentName: result.agentName || taskAgentName,
+            runtimeName: result.runtimeName || taskRuntimeName,
+            runtimeId: result.runtimeId,
+            region: result.region || deployRegion,
+            startedAt: taskStartedAt,
+            status: "error",
+            phase: "github",
+            label: "挂载 GitHub 持续交付失败",
+            message: "挂载 GitHub 持续交付失败，详见 GitHub 日志。",
+            pct: 100,
+            githubDelivery: true,
+            githubLog,
+          });
+          throw new Error(
+            `部署成功，但挂载 GitHub 持续交付失败：${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      } else if (!deploymentRuntimeId && activeGithubBinding?.pipelineId && result.runtimeId) {
+        try {
+          const bound = await bindGithubCicdRuntime({
+            pipelineId: activeGithubBinding.pipelineId,
+            runtimeId: result.runtimeId,
+            region: result.region || deployRegion,
+            cloudProvider: activeGithubBinding.cloudProvider ?? cloudProvider,
+          });
+          activeGithubBinding = bound;
+          if (mountedRef.current) setGithubCicdBinding(bound);
+        } catch (error) {
+          if (mountedRef.current) {
+            setDeployError(
+              `部署成功，但绑定 GitHub 失败：${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
+        }
+      }
       if (mountedRef.current) {
         setDeployResult(result);
         setActivePhase(null);
@@ -1648,6 +1888,8 @@ export function ProjectPreview({
         phase: "complete",
         label: "部署完成",
         message: result.warnings?.join("；"),
+        githubDelivery: Boolean(pendingGithubCicd || latestGithubLog),
+        ...(latestGithubLog ? { githubLog: latestGithubLog } : {}),
         ...terminalBuildLogUpdate("complete"),
       });
       try {
@@ -1694,11 +1936,14 @@ export function ProjectPreview({
         return;
       }
       if (mountedRef.current) setDeployError(message);
+      if (mountedRef.current) setDeployResult(null);
       const buildLog = mergeBuildFailureLog(message);
       operation.fail({
         failedPhase: telemetryDeployPhase(latestPhase),
         ...classifyTelemetryError(err, { phase: latestPhase }),
       });
+      const failedInBuild = Boolean(buildLog);
+      const failedInGithub = latestPhase === "github" && Boolean(latestGithubLog);
       onDeploymentTaskChange?.({
         id: taskId,
         agentName: taskAgentName,
@@ -1709,8 +1954,15 @@ export function ProjectPreview({
         status: "error",
         phase: latestPhase,
         label: "部署失败",
-        message,
+        message: failedInBuild
+          ? "构建镜像失败，详见构建日志。"
+          : failedInGithub
+            ? "挂载 GitHub 持续交付失败，详见 GitHub 日志。"
+            : message,
         ...(buildLog ? { buildLog } : terminalBuildLogUpdate("complete")),
+        ...(failedInGithub
+          ? { githubDelivery: true, githubLog: latestGithubLog }
+          : {}),
         retry: requestDeploymentConfirmation,
       });
     } finally {
@@ -2200,6 +2452,7 @@ export function ProjectPreview({
               )}
 
               {!deploymentPrimaryPane && (
+                <>
                 <section className="pp-config-section pp-auth-section">
                   <div className="pp-config-label">访问鉴权</div>
                   {isRuntimeUpdate ? (
@@ -2240,6 +2493,23 @@ export function ProjectPreview({
                     </div>
                   )}
                 </section>
+                <GithubCicdPanel
+                  project={project}
+                  region={deployRegion}
+                  cloudProvider={cloudProvider}
+                  runtimeId={deploymentRuntimeId}
+                  binding={githubCicdBinding}
+                  showSetup={!isRuntimeUpdate}
+                  onPendingCicdChange={setPendingGithubCicd}
+                  onBindingChange={handleGithubCicdBindingChange}
+                  disabled={
+                    deploying ||
+                    feishuUpdating ||
+                    deployDisabled ||
+                    !!deployDisabledReason
+                  }
+                />
+                </>
               )}
 
               {!deploymentPrimaryPane && (
@@ -2859,14 +3129,14 @@ export function ProjectPreview({
                       const failed =
                         !!deployError &&
                         (activeIndex === -1 ? index === 0 : index === activeIndex);
+                      const frame = stageMap[step.phase];
                       let status: "pending" | "active" | "done" | "failed";
-                      if (deployResult) status = "done";
+                      if (deployResult || frame?.level === "success") status = "done";
                       else if (failed) status = "failed";
                       else if (activeIndex === -1) status = deploying ? "active" : "pending";
                       else if (index < activeIndex) status = "done";
                       else if (index === activeIndex) status = deployError ? "failed" : "active";
                       else status = "pending";
-                      const frame = stageMap[step.phase];
                       return (
                         <li key={step.phase} className={`pp-step is-${status}`}>
                           <span className="pp-step-dot">

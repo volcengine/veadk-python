@@ -3732,6 +3732,270 @@ def _run_frontend_server(
         project = await _generate_project_from_request(data, debug=False)
         return project.model_dump()
 
+    @app.post("/web/github-delivery/source-sync")
+    async def _create_github_source_sync(request: Request):
+        """Push Studio-generated Agent source to the configured GitHub branch."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                create_github_cicd_pipeline,
+            )
+
+            return create_github_cicd_pipeline(
+                project=data.get("project") or {},
+                github_url=str(data.get("githubUrl") or ""),
+                github_token=str(data.get("githubToken") or ""),
+                base_branch=str(data.get("baseBranch") or "main"),
+                region=str(data.get("region") or "cn-beijing"),
+                cloud_provider=str(data.get("cloudProvider") or provider),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except Exception as error:
+            logger.exception("Failed to sync GitHub source")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(
+                    error,
+                    secrets=(str(data.get("githubToken") or ""),),
+                ),
+            ) from error
+
+    @app.post("/web/github-delivery/cicd-pipeline")
+    async def _create_github_delivery_cicd_pipeline(request: Request):
+        """Create or update the GitHub Actions workflow for Runtime delivery."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                create_github_delivery_cicd_pipeline,
+            )
+
+            return create_github_delivery_cicd_pipeline(
+                github_url=str(data.get("githubUrl") or ""),
+                github_token=str(data.get("githubToken") or ""),
+                base_branch=str(data.get("baseBranch") or "main"),
+                runtime_name=str(data.get("runtimeName") or ""),
+                runtime_id=str(data.get("runtimeId") or ""),
+                region=str(data.get("region") or "cn-beijing"),
+                cloud_provider=str(data.get("cloudProvider") or provider),
+                project_path=str(data.get("projectPath") or "."),
+                volcengine_access_key=str(data.get("volcengineAccessKey") or ""),
+                volcengine_secret_key=str(data.get("volcengineSecretKey") or ""),
+                volcengine_session_token=str(data.get("volcengineSessionToken") or ""),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except Exception as error:
+            logger.exception("Failed to create GitHub delivery CICD pipeline")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(
+                    error,
+                    secrets=(
+                        str(data.get("githubToken") or ""),
+                        str(data.get("volcengineAccessKey") or ""),
+                        str(data.get("volcengineSecretKey") or ""),
+                        str(data.get("volcengineSessionToken") or ""),
+                    ),
+                ),
+            ) from error
+
+    @app.post("/web/github-delivery/init-main")
+    async def _initialize_github_delivery_main(request: Request):
+        """Initialize target branch with Agent source and Runtime delivery workflow."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                initialize_github_delivery_main,
+            )
+
+            return initialize_github_delivery_main(
+                project=data.get("project") or {},
+                github_url=str(data.get("githubUrl") or ""),
+                github_token=str(data.get("githubToken") or ""),
+                base_branch=str(data.get("baseBranch") or "main"),
+                runtime_name=str(data.get("runtimeName") or ""),
+                runtime_id=str(data.get("runtimeId") or ""),
+                region=str(data.get("region") or "cn-beijing"),
+                cloud_provider=str(data.get("cloudProvider") or provider),
+                project_path=str(data.get("projectPath") or "."),
+                volcengine_access_key=str(data.get("volcengineAccessKey") or ""),
+                volcengine_secret_key=str(data.get("volcengineSecretKey") or ""),
+                volcengine_session_token=str(data.get("volcengineSessionToken") or ""),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except Exception as error:
+            logger.exception("Failed to initialize GitHub delivery main")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(
+                    error,
+                    secrets=(
+                        str(data.get("githubToken") or ""),
+                        str(data.get("volcengineAccessKey") or ""),
+                        str(data.get("volcengineSecretKey") or ""),
+                        str(data.get("volcengineSessionToken") or ""),
+                    ),
+                ),
+            ) from error
+
+    @app.post("/web/github-delivery/source-sync/cicd")
+    async def _attach_github_delivery_cicd_to_source_sync(request: Request):
+        """Attach Runtime delivery workflow to an existing source sync branch."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                attach_github_delivery_cicd_pipeline,
+            )
+
+            return attach_github_delivery_cicd_pipeline(
+                pipeline_id=str(data.get("pipelineId") or ""),
+                runtime_name=str(data.get("runtimeName") or ""),
+                runtime_id=str(data.get("runtimeId") or ""),
+                region=str(data.get("region") or "cn-beijing"),
+                cloud_provider=str(data.get("cloudProvider") or provider),
+                project_path=str(data.get("projectPath") or "."),
+                github_token=str(data.get("githubToken") or ""),
+                volcengine_access_key=str(data.get("volcengineAccessKey") or ""),
+                volcengine_secret_key=str(data.get("volcengineSecretKey") or ""),
+                volcengine_session_token=str(data.get("volcengineSessionToken") or ""),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except Exception as error:
+            logger.exception("Failed to attach GitHub delivery CICD pipeline")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(
+                    error,
+                    secrets=(
+                        str(data.get("githubToken") or ""),
+                        str(data.get("volcengineAccessKey") or ""),
+                        str(data.get("volcengineSecretKey") or ""),
+                        str(data.get("volcengineSessionToken") or ""),
+                    ),
+                ),
+            ) from error
+
+    @app.get("/web/github-delivery/versions")
+    async def _list_github_delivery_versions(
+        request: Request,
+        runtimeId: str = "",
+    ):
+        """Return GitHub delivery versions for a Runtime."""
+        _require_agent_management(request)
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                list_github_delivery_versions,
+            )
+
+            return list_github_delivery_versions(runtime_id=runtimeId)
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+
+    @app.post("/web/github-delivery/rollback-pr")
+    async def _create_github_delivery_rollback_pr(request: Request):
+        """Create a GitHub rollback PR for a Runtime-bound delivery branch."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                create_github_delivery_rollback_pr,
+            )
+
+            return create_github_delivery_rollback_pr(
+                runtime_id=str(data.get("runtimeId") or ""),
+                target_commit_sha=str(data.get("targetCommitSha") or ""),
+                github_token=str(data.get("githubToken") or ""),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except Exception as error:
+            logger.exception("Failed to create GitHub delivery rollback PR")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(
+                    error,
+                    secrets=(str(data.get("githubToken") or ""),),
+                ),
+            ) from error
+
+    @app.get("/web/github-cicd/runtime-binding")
+    async def _get_github_cicd_runtime_binding(
+        request: Request,
+        runtimeId: str = "",
+    ):
+        """Return the GitHub CI/CD binding for a Runtime, when present."""
+        _require_agent_management(request)
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                get_github_cicd_runtime_binding,
+            )
+
+            return get_github_cicd_runtime_binding(runtime_id=runtimeId)
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+
+    @app.post("/web/github-cicd/runtime-binding")
+    async def _bind_github_cicd_runtime(request: Request):
+        """Bind a GitHub CI/CD pipeline record to an AgentKit Runtime."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                bind_github_cicd_runtime,
+            )
+
+            return bind_github_cicd_runtime(
+                pipeline_id=str(data.get("pipelineId") or ""),
+                runtime_id=str(data.get("runtimeId") or ""),
+                region=str(data.get("region") or "cn-beijing"),
+                cloud_provider=str(data.get("cloudProvider") or provider),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+
+    @app.post("/web/github-cicd/runtime-sync")
+    async def _sync_github_cicd_runtime(request: Request):
+        """Sync current AgentProject files to the PR bound to a Runtime."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                sync_github_cicd_runtime,
+            )
+
+            return sync_github_cicd_runtime(
+                runtime_id=str(data.get("runtimeId") or ""),
+                project=data.get("project") or {},
+                github_token=str(data.get("githubToken") or ""),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except Exception as error:
+            logger.exception("Failed to sync GitHub CI/CD pipeline")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(
+                    error,
+                    secrets=(str(data.get("githubToken") or ""),),
+                ),
+            ) from error
+
     @app.post("/web/generated-agent-drafts")
     async def _generate_agent_draft(request: Request):
         _require_agent_management(request)

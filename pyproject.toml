@@ -59,6 +59,9 @@ dependencies = [
 veadk = "veadk.cli.cli:veadk"
 
 [project.optional-dependencies]
+github-cicd = [
+    "PyNaCl>=1.5.0", # Encrypt GitHub Actions secrets for Runtime delivery
+]
 codex = [
     "openai-codex==0.1.0b3",
     "openai-codex-cli-bin==0.137.0a4",
