@@ -245,6 +245,60 @@ all six Tools when their IDs are omitted; the three snapshot Tool names end in
 `_snapshot`. The matching `--sandbox-chat-*-tool-id` and
 `--sandbox-chat-*-snapshot-tool-id` options select existing Tools instead.
 
+## Mermaid diagrams in model messages
+
+Agents can render diagrams in conversation replies by returning standard
+Markdown fenced code blocks with the `mermaid` language tag. No tool call or
+custom JSON envelope is required. Studio uses the official Mermaid renderer,
+so the same contract covers flowcharts, line charts, pie charts, and the other
+diagram types supported by the installed Mermaid version.
+
+````markdown
+```mermaid
+flowchart LR
+  Request --> Agent --> Response
+```
+
+```mermaid
+xychart-beta
+  title "Requests"
+  x-axis [Jan, Feb, Mar]
+  y-axis "Count" 0 --> 100
+  line [24, 58, 91]
+```
+
+```mermaid
+pie showData
+  title Traffic sources
+  "Direct" : 42
+  "Search" : 58
+```
+````
+
+Studio keeps the Mermaid source visible while a response is streaming and
+renders it after the message completes. Users can switch each diagram between
+its preview and original Mermaid code. If a definition is invalid, Studio shows
+an error while keeping the original source available in the code view.
+
+For interactive data charts, agents can return an ECharts option as JSON or
+JSON5 in an `echarts` fenced block. The common `option = { ... };` wrapper is
+also accepted. ECharts linear and radial gradient constructors are converted
+to their equivalent data objects without execution. Other functions and
+executable JavaScript are not part of this data-only contract. Tooltip content
+is forced to ECharts rich-text rendering.
+
+````markdown
+```echarts
+{
+  "tooltip": { "trigger": "axis" },
+  "legend": { "data": ["Requests"] },
+  "xAxis": { "type": "category", "data": ["Jan", "Feb", "Mar"] },
+  "yAxis": { "type": "value" },
+  "series": [{ "name": "Requests", "type": "line", "data": [24, 58, 91] }]
+}
+```
+````
+
 ## Development specification
 
 All frontend changes must follow [`SPEC.md`](SPEC.md). It defines the required

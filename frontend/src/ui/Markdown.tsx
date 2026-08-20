@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { Children, isValidElement, memo, useState, type ReactNode } from "react";
 import { Maximize2, X, Download } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { PhotoView } from "react-photo-view";
@@ -6,6 +6,9 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
 import "highlight.js/styles/github.css";
+import { EChartsDiagram } from "./EChartsDiagram";
+import { MermaidDiagram } from "./MermaidDiagram";
+import { VisualizationPanel } from "./VisualizationPanel";
 
 interface VideoData {
   src: string;
@@ -13,6 +16,24 @@ interface VideoData {
 }
 
 const VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov", ".m4v", ".ogg", ".avi"];
+
+function textFromReactNode(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(textFromReactNode).join("");
+  if (isValidElement<{ children?: ReactNode }>(node)) {
+    return textFromReactNode(node.props.children);
+  }
+  return "";
+}
+
+function codeBlockLanguage(node: ReactNode): string | undefined {
+  const child = Children.toArray(node)[0];
+  if (!isValidElement<{ className?: string }>(child)) return undefined;
+  const languageClass = child.props.className
+    ?.split(/\s+/)
+    .find((className) => className.startsWith("language-"));
+  return languageClass?.slice("language-".length);
+}
 
 function isVideoUrl(url: string): boolean {
   if (!url) return false;
@@ -53,10 +74,12 @@ function MarkdownImpl({
   text,
   className,
   allowRawHtml = true,
+  streaming = false,
 }: {
   text: string;
   className?: string;
   allowRawHtml?: boolean;
+  streaming?: boolean;
 }) {
   const [videoViewerOpen, setVideoViewerOpen] = useState<VideoData | null>(null);
 
@@ -111,6 +134,27 @@ function MarkdownImpl({
         remarkPlugins={[remarkGfm]}
         rehypePlugins={allowRawHtml ? [rehypeRaw, rehypeHighlight] : [rehypeHighlight]}
         components={{
+          pre: ({ node: _node, children, ...props }) => {
+            const language = codeBlockLanguage(children);
+            if (language === "mermaid" || language === "echarts") {
+              const source = textFromReactNode(children).replace(/\n$/, "");
+              return (
+                <VisualizationPanel
+                  label={language === "mermaid" ? "Mermaid" : "ECharts"}
+                  language={language}
+                  source={source}
+                  streaming={streaming}
+                >
+                  {language === "mermaid" ? (
+                    <MermaidDiagram source={source} />
+                  ) : (
+                    <EChartsDiagram source={source} />
+                  )}
+                </VisualizationPanel>
+              );
+            }
+            return <pre {...props}>{children}</pre>;
+          },
           a: ({ node, ...props }) => {
             const href = props.href;
             if (href && (isVideoUrl(href) || isVideoLink(node))) {
