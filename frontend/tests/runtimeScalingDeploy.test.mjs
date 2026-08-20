@@ -69,11 +69,15 @@ test("renders Runtime instance inputs with memory-aware and Sidecar-safe default
 test("renders the Runtime update progress step conditionally", () => {
   assert.match(
     projectPreviewSource,
-    /needsInstanceUpdate[\s\S]*?\[\.\.\.baseDeploymentSteps, INSTANCE_UPDATE_STEP\][\s\S]*?: baseDeploymentSteps[\s\S]*?createEvaluationSets/,
+    /deploymentStepsWithInstanceUpdate = needsInstanceUpdate[\s\S]*?\[\.\.\.baseDeploymentSteps, INSTANCE_UPDATE_STEP\][\s\S]*?: baseDeploymentSteps[\s\S]*?deploymentStepsBeforeGithub = effectiveCreateEvaluationSets[\s\S]*?EVALUATION_SET_STEP[\s\S]*?pendingGithubCicd[\s\S]*?GITHUB_SYNC_STEP/,
   );
   assert.match(
     workspaceSource,
-    /task\.instanceRange[\s\S]*?instanceUpdateStep\(task\.instanceRange\)[\s\S]*?: DEPLOYMENT_STEPS/,
+    /if \(task\.instanceRange\) steps\.push\(instanceUpdateStep\(task\.instanceRange\)\)/,
+  );
+  assert.match(
+    workspaceSource,
+    /if \(task\.instanceRange\)[\s\S]*?if \(task\.createEvaluationSets\) steps\.push\(EVALUATION_SET_STEP\);[\s\S]*?if \(task\.githubDelivery\) steps\.push\(GITHUB_DELIVERY_STEP\)[\s\S]*?steps\.push\(DEPLOYMENT_STEPS\[DEPLOYMENT_STEPS\.length - 1\]\)/,
   );
   assert.match(
     workspaceSource,
