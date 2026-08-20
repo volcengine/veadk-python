@@ -14,10 +14,6 @@ const adkClientSource = readFileSync(
   new URL("../src/adk/client.ts", import.meta.url),
   "utf8",
 );
-const appStyles = readFileSync(
-  new URL("../src/styles.css", import.meta.url),
-  "utf8",
-);
 const customCreateSource = readFileSync(
   new URL("../src/create/CustomCreate.tsx", import.meta.url),
   "utf8",
@@ -82,7 +78,7 @@ test("reuses the build canvas as a full embedded canvas and expandable standalon
   );
   assert.match(
     projectPreviewSource,
-    /embedded \? \([\s\S]*?<AgentBuildCanvas[\s\S]*?direction="vertical"[\s\S]*?readOnly[\s\S]*?\{artifactActions\}/,
+    /embedded \? \([\s\S]*?<AgentBuildCanvas[\s\S]*?direction="vertical"[\s\S]*?readOnly/,
   );
   assert.match(
     projectPreviewSource,
@@ -93,8 +89,7 @@ test("reuses the build canvas as a full embedded canvas and expandable standalon
     /className="pp-flow-dialog"[\s\S]*?<AgentBuildCanvas[\s\S]*?interactivePreview/,
   );
   assert.doesNotMatch(projectPreviewSource, /Agent 拓扑|pp-topology-pane/);
-  assert.match(projectPreviewSource, /导出 YAML/);
-  assert.match(projectPreviewSource, />\s*下载源代码\s*</);
+  assert.doesNotMatch(projectPreviewSource, /导出 YAML|查看源代码|下载源代码|artifactActions/);
   assert.match(
     projectPreviewSource,
     /className="pp-release-description"[\s\S]*?title=\{agentDraft\.description\}/,
@@ -124,7 +119,7 @@ test("reuses the build canvas as a full embedded canvas and expandable standalon
   );
 });
 
-test("lets the whole publish page scroll with white deployment cards", () => {
+test("lets the whole publish page scroll without a detached action bar", () => {
   assert.match(
     projectPreviewStyles,
     /\.pp-root\.is-deploy\s*\{[\s\S]*?overflow-y:\s*auto;/,
@@ -149,20 +144,18 @@ test("lets the whole publish page scroll with white deployment cards", () => {
     projectPreviewStyles,
     /\.pp-release-info\s*\{[\s\S]*?box-shadow:\s*none;/,
   );
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-config-actions\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?left:\s*calc\(\(100vw \+ var\(--pp-sidebar-width, 0px\)\) \/ 2\);[\s\S]*?transform:\s*translateX\(-50%\);/,
-  );
+  assert.doesNotMatch(projectPreviewStyles, /\.pp-config-actions\s*\{/);
+  assert.doesNotMatch(projectPreviewSource, /className="pp-config-actions"/);
 });
 
 test("keeps Runtime name help and errors below the input", () => {
   assert.match(
     projectPreviewSource,
-    /className="pp-runtime-name-field"[\s\S]*?className="pp-runtime-name-input"[\s\S]*?className="pp-config-note"[\s\S]*?className="pp-runtime-name-error"/,
+    /className="pp-form-field pp-runtime-name-field"[\s\S]*?className="pp-runtime-name-input"[\s\S]*?className="pp-config-note pp-form-help"[\s\S]*?className="pp-runtime-name-error"/,
   );
   assert.match(
     projectPreviewStyles,
-    /\.pp-runtime-name-field\s*\{[\s\S]*?display:\s*grid;[\s\S]*?gap:\s*6px;/,
+    /\.pp-form-field\s*\{[\s\S]*?flex-direction:\s*column;[\s\S]*?gap:\s*8px;/,
   );
   assert.match(
     projectPreviewStyles,
@@ -235,25 +228,13 @@ test("aligns the publish overview and deployment settings to one restrained cont
     projectPreviewStyles,
     /\.pp-flow-expand\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;/,
   );
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-artifact-actions \.pp-secondary,[\s\S]*?border:\s*0;[\s\S]*?background:\s*hsl\(var\(--secondary\) \/ 0\.58\)/,
-  );
+  assert.doesNotMatch(projectPreviewStyles, /\.pp-artifact-actions/);
   assert.match(
     projectPreviewStyles,
     /@media \(max-width:\s*860px\)[\s\S]*?--pp-publish-content-width:\s*min\(88%, calc\(100% - 36px\)\)/,
   );
   assert.doesNotMatch(projectPreviewSource, /DeployIcon|RotateCcw className="pp-ic"/);
-  assert.match(
-    projectPreviewSource,
-    /className="pp-deploy studio-update-action"/,
-  );
-  assert.match(projectPreviewSource, /deploymentActionTargetId/);
-  assert.match(projectPreviewSource, /createPortal\([\s\S]*?deploymentActionTarget/);
-  assert.match(
-    appStyles,
-    /\.studio-update-action\s*\{[\s\S]*?background:\s*#111;[\s\S]*?color:\s*#fff;[\s\S]*?backdrop-filter:\s*blur\(7px\);[\s\S]*?font-size:\s*12\.5px;/,
-  );
+  assert.doesNotMatch(projectPreviewSource, /pp-deploy studio-update-action|deploymentActionTargetId/);
 });
 
 test("uses a flipping Feishu channel card instead of a switch", () => {
@@ -284,10 +265,10 @@ test("uses a flipping Feishu channel card instead of a switch", () => {
   );
 
   assert.doesNotMatch(projectPreviewSource, /<select[\s\S]*?aria-label="部署区域"/);
-  assert.match(projectPreviewSource, /deploymentRegionPicker\(false\)/);
+  assert.match(projectPreviewSource, /deploymentRegionPicker\(true\)/);
   assert.match(
-    projectPreviewStyles,
-    /\.pp-region-trigger:disabled\s*\{[\s\S]*?cursor:\s*not-allowed;[\s\S]*?opacity:\s*0\.58;/,
+    projectPreviewSource,
+    /<Select[\s\S]*?id="pp-deploy-region"[\s\S]*?triggerClassName="pp-app-select-trigger"/,
   );
   assert.match(
     projectPreviewStyles,
@@ -307,28 +288,26 @@ test("configures API Key or Identity user-pool authentication for deployment", (
   assert.match(projectPreviewSource, />访问鉴权</);
   assert.match(projectPreviewSource, /label: "API Key"/);
   assert.match(projectPreviewSource, /label: "用户池"/);
-  assert.match(projectPreviewSource, /badge: pool\.isCurrent \? "当前用户池"/);
+  assert.match(
+    projectPreviewSource,
+    /description: pool\.isCurrent[\s\S]*?`当前用户池 · \$\{pool\.domain \|\| pool\.uid\}`/,
+  );
   assert.match(projectPreviewSource, /当前 Studio/);
   assert.match(
     projectPreviewSource,
     /className="pp-user-pool-error" role="alert"[\s\S]*?部署后无法从 Studio[\s\S]*?调用此 Runtime/,
   );
-  assert.match(projectPreviewSource, /role="listbox"/);
-  assert.match(projectPreviewSource, /aria-selected=\{selected\}/);
+  assert.match(
+    projectPreviewSource,
+    /<Select[\s\S]*?id="pp-deployment-user-pool"[\s\S]*?loading=\{loading\}[\s\S]*?searchPlaceholder="搜索用户池"/,
+  );
   assert.match(
     projectPreviewSource,
     /authenticationType === "user_pool"[\s\S]*?userPoolUid/,
   );
   assert.match(adkClientSource, /"\/web\/identity\/user-pools"/);
   assert.match(adkClientSource, /authentication: opts\?\.authentication/);
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-deployment-select-trigger\s*\{[\s\S]*?height:\s*36px;[\s\S]*?border-radius:\s*6px;/,
-  );
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-deployment-select-badge\s*\{[\s\S]*?background:\s*hsl\(211 100% 45% \/ 0\.1\);[\s\S]*?color:\s*hsl\(211 76% 40%\);/,
-  );
+  assert.match(projectPreviewSource, /triggerClassName="pp-app-select-trigger"/);
 });
 
 test("offers the AgentKit-backed remote Agent type", () => {
@@ -385,7 +364,7 @@ test("keeps ordinary environment values visible while masking secrets", () => {
   );
   assert.match(
     projectPreviewSource,
-    /className="pp-env-value"\s*type="password"[\s\S]*?placeholder="必填，仅用于本次发布"/,
+    /className="pp-env-value"[\s\S]*?type="password"[\s\S]*?placeholder="必填，仅用于本次发布"/,
   );
   assert.match(
     projectPreviewSource,
@@ -393,14 +372,14 @@ test("keeps ordinary environment values visible while masking secrets", () => {
   );
 });
 
-test("lays out network settings in two columns", () => {
+test("lays out network settings as vertical Apps SDK UI controls", () => {
   assert.match(
     projectPreviewSource,
-    /className="pp-network-layout"[\s\S]*?type="radio"[\s\S]*?className="pp-network-fields"/,
+    /className="pp-form-stack pp-network-layout"[\s\S]*?<Select[\s\S]*?id="pp-deployment-network-mode"[\s\S]*?className="pp-network-fields"/,
   );
   assert.match(
     projectPreviewStyles,
-    /\.pp-network-layout\s*\{[\s\S]*?grid-template-columns:\s*minmax\(132px, 0\.36fr\) minmax\(0, 0\.64fr\);/,
+    /\.pp-network-layout\s*\{[\s\S]*?width:\s*100%;/,
   );
 });
 
@@ -461,7 +440,7 @@ test("requires explicit confirmation before starting deployment", () => {
   assert.match(projectPreviewSource, /const networkMode = network\?\.mode \?\? "public"/);
   assert.match(
     projectPreviewSource,
-    /checked=\{networkMode === mode\}[\s\S]*?disabled=\{deploying \|\| isRuntimeUpdate \|\| !onNetworkChange\}/,
+    /id="pp-deployment-network-mode"[\s\S]*?disabled=\{deploying \|\| isRuntimeUpdate \|\| !onNetworkChange\}/,
   );
 });
 
@@ -480,7 +459,7 @@ test("creates feedback evaluation sets by default and sends the deployment choic
   );
   assert.match(
     projectPreviewSource,
-    /type="checkbox"[\s\S]*?checked=\{createEvaluationSets\}[\s\S]*?setCreateEvaluationSets/,
+    /<Checkbox[\s\S]*?checked=\{createEvaluationSets\}[\s\S]*?onCheckedChange=\{setCreateEvaluationSets\}/,
   );
   assert.match(
     projectPreviewSource,

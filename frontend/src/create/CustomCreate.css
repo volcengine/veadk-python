@@ -28,7 +28,7 @@
   --cw-workspace-width: 100%;
 }
 
-/* ---------- workspace lifecycle navigation ---------- */
+/* ---------- workspace shell ---------- */
 .cw-workspace-header {
   position: relative;
   z-index: 12;
@@ -83,142 +83,6 @@
   padding: 0;
   background: transparent;
 }
-.cw-workspace-footer {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  width: var(--cw-workspace-width);
-  gap: 12px;
-  margin: 0 auto 24px;
-  padding: 12px 0 4px;
-  background: transparent;
-}
-.cw-root.is-publish .cw-workspace-footer {
-  box-sizing: border-box;
-  padding-inline: 24px;
-}
-.cw-workspace-footer-accessory {
-  width: 100%;
-}
-.cw-workspace-nav-actions {
-  width: 100%;
-  display: grid;
-  grid-template-columns: minmax(120px, 1fr) auto minmax(120px, 1fr);
-  align-items: center;
-  gap: 12px;
-  margin: 0 auto;
-}
-.cw-workspace-nav-actions.has-assistant {
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: "assistant next";
-}
-.cw-workspace-nav-actions.has-assistant > .cw-workspace-nav-button:first-child,
-.cw-workspace-nav-actions.has-assistant > span[aria-hidden="true"] {
-  display: none;
-}
-.cw-workspace-nav-actions.has-assistant > .cw-workspace-ai-slot {
-  grid-area: assistant;
-}
-.cw-publish-action-slot {
-  grid-column: 3;
-  display: flex;
-  justify-content: flex-end;
-}
-.cw-publish-action-slot .pp-deploy {
-  position: static;
-  min-width: 70px;
-  min-height: 38px;
-  transform: none;
-}
-.cw-workspace-nav-actions.has-assistant > .cw-workspace-nav-button:last-child {
-  grid-area: next;
-}
-.cw-workspace-ai-slot {
-  min-width: 0;
-}
-.cw-workspace-nav-button {
-  min-height: 36px;
-  justify-self: start;
-  padding: 0 18px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 8px;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  cursor: pointer;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  transition:
-    background-color 160ms ease,
-    border-color 160ms ease;
-}
-.cw-workspace-nav-button:last-child {
-  justify-self: end;
-}
-.cw-workspace-nav-button:hover:not(:disabled) {
-  border-color: hsl(var(--foreground) / 0.22);
-  background: hsl(var(--muted) / 0.55);
-}
-.cw-workspace-nav-button.is-primary {
-  border-color: hsl(var(--foreground));
-  background: hsl(var(--foreground));
-  color: hsl(var(--background));
-}
-.cw-workspace-nav-button.is-primary:hover:not(:disabled) {
-  border-color: hsl(var(--foreground) / 0.86);
-  background: hsl(var(--foreground) / 0.86);
-}
-.cw-workspace-nav-button:focus-visible,
-.cw-workspace-progress button:focus-visible {
-  outline: 2px solid hsl(var(--primary) / 0.35);
-  outline-offset: 2px;
-}
-.cw-workspace-nav-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-.cw-workspace-nav-button.is-placeholder {
-  visibility: hidden;
-  pointer-events: none;
-}
-.cw-workspace-progress {
-  width: min(176px, 48vw);
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 5px;
-  margin: 0 auto;
-}
-.cw-workspace-progress button {
-  height: 12px;
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-}
-.cw-workspace-progress button > span {
-  display: block;
-  height: 3px;
-  border-radius: 999px;
-  background: hsl(var(--muted-foreground) / 0.16);
-  transition: background-color 160ms ease;
-}
-.cw-workspace-progress button.is-complete > span,
-.cw-workspace-progress button.is-active > span {
-  background: hsl(var(--foreground) / 0.46);
-}
-.cw-workspace-progress button.is-active > span {
-  height: 4px;
-}
-.cw-workspace-progress button:disabled {
-  cursor: not-allowed;
-}
-@media (prefers-reduced-motion: reduce) {
-  .cw-workspace-nav-button,
-  .cw-workspace-progress button > span {
-    transition: none;
-  }
-}
-
 /* Figma-aligned build workspace drawers. Keep the underlying form logic while
    presenting it as a continuous, compact inspector rather than stacked cards. */
 .cw-open-chat {
@@ -610,6 +474,9 @@
 }
 
 .cw-canvas-motion {
+  position: relative;
+  z-index: 0;
+  isolation: isolate;
   flex: 1 1 auto;
   width: auto;
   min-width: 0;
@@ -2566,7 +2433,7 @@
 }
 
 .cw-ab-config-column {
-  padding-top: 24px;
+  padding-top: 20px;
 }
 
 .cw-ab-config-column:first-child,
@@ -6084,6 +5951,8 @@
     border-left: 0;
   }
   .cw-builder-chat-motion {
+    flex: 0 0 auto;
+    width: 100%;
     margin-top: 0;
   }
   .cw-detail-scroll {
@@ -6112,12 +5981,6 @@
 @media (max-width: 700px) {
   .cw-workspace-header h1 {
     text-align: center;
-  }
-  .cw-workspace-nav-actions {
-    grid-template-columns: minmax(88px, 1fr) auto minmax(88px, 1fr);
-  }
-  .cw-workspace-nav-button {
-    padding-inline: 12px;
   }
   .cw-form > .cw-more-options,
   .cw-dependency-hint {

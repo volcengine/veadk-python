@@ -46,10 +46,6 @@ const customCreateSource = readFileSync(
   new URL("../src/create/CustomCreate.tsx", import.meta.url),
   "utf8",
 );
-const appStyles = readFileSync(
-  new URL("../src/styles.css", import.meta.url),
-  "utf8",
-);
 const clientSource = readFileSync(
   new URL("../src/adk/client.ts", import.meta.url),
   "utf8",
@@ -101,10 +97,7 @@ test("uses the Figma deployment-panel rhythm for embedded Agent deployment", () 
     projectPreviewStyles,
     /@media \(max-width: 1000px\)[\s\S]*?\.pp-root\.is-deploy\.is-embedded \.pp-body\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-direction:\s*column/,
   );
-  assert.match(
-    projectPreviewStyles,
-    /@media \(max-width: 1000px\)[\s\S]*?\.pp-root\.is-deploy\.is-embedded \.pp-artifact-actions\.is-rail\s*\{[\s\S]*?flex-direction:\s*row/,
-  );
+  assert.doesNotMatch(projectPreviewStyles, /\.pp-artifact-actions/);
   assert.match(
     projectPreviewStyles,
     /@media \(max-width: 1000px\)[\s\S]*?\.pp-root\.is-deploy\.is-embedded \.pp-config\s*\{[\s\S]*?width:\s*min\(100%, 480px\);[\s\S]*?align-self:\s*center/,
@@ -383,38 +376,20 @@ test("centers code package deployment in a single configuration column", () => {
   );
   assert.match(
     projectPreviewStyles,
-    /\.pp-root\.is-deploy\.has-primary-pane \.pp-config-head,[\s\S]*?\.pp-config-actions\s*\{[\s\S]*?border:\s*0/,
+    /\.pp-root\.is-deploy\.has-primary-pane \.pp-config-head\s*\{[\s\S]*?border:\s*0/,
   );
   assert.match(packageCreateSource, /className="package-source-label">代码包/);
   assert.match(packageCreateStyles, /\.package-dropzone\s*\{[\s\S]*?min-height:\s*152px/);
 });
 
-test("uses a themed region menu and a centered icon-free deploy button", () => {
-  assert.match(projectPreviewSource, /className="pp-region-trigger"/);
-  assert.match(projectPreviewSource, /role="listbox" aria-label="部署区域"/);
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-root\.is-deploy\.has-primary-pane \.pp-config-actions\s*\{[\s\S]*?justify-content:\s*center/,
-  );
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-root\.is-deploy\.has-primary-pane \.pp-config-actions\s*\{[\s\S]*?position:\s*sticky/,
-  );
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-root\.is-deploy\.has-primary-pane \.pp-config-actions\s*\{[\s\S]*?bottom:\s*0/,
-  );
+test("uses the Apps SDK UI region control without a standalone deploy button", () => {
+  assert.match(projectPreviewSource, /<Select[\s\S]*?id="pp-deploy-region"/);
+  assert.doesNotMatch(projectPreviewSource, /className="pp-region-trigger"|className="pp-config-actions"/);
+  assert.doesNotMatch(projectPreviewStyles, /\.pp-config-actions\s*\{/);
   assert.doesNotMatch(projectPreviewSource, /<DeployIcon/);
 });
 
-test("uses the PR 748 update-button treatment for deployment", () => {
-  assert.match(projectPreviewSource, /className="pp-deploy studio-update-action"/);
-  assert.match(
-    appStyles,
-    /\.studio-update-action\s*\{[\s\S]*?min-width:\s*104px;[\s\S]*?min-height:\s*40px;[\s\S]*?border-radius:\s*999px;/,
-  );
-  assert.match(
-    appStyles,
-    /\.studio-update-action:not\(:disabled\):hover\s*\{[\s\S]*?background:\s*#29292b;[\s\S]*?color:\s*#fff;/,
-  );
+test("removes the old floating deployment action treatment", () => {
+  assert.doesNotMatch(projectPreviewSource, /pp-deploy studio-update-action|deploymentActionLabel/);
+  assert.doesNotMatch(projectPreviewStyles, /\.pp-config-actions\s*\{/);
 });

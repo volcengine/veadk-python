@@ -347,6 +347,28 @@
   transition: opacity 140ms ease;
 }
 
+/* FlowGram renders input and output ports at the same coordinates. Keep both
+   native ports usable by separating their hit targets along the node edge. */
+.abc-flowgram-port[data-port-entity-type="input"][data-port-entity-id$="-top"],
+.abc-flowgram-port[data-port-entity-type="input"][data-port-entity-id$="-bottom"] {
+  transform: translateX(-6px);
+}
+
+.abc-flowgram-port[data-port-entity-type="output"][data-port-entity-id$="-top"],
+.abc-flowgram-port[data-port-entity-type="output"][data-port-entity-id$="-bottom"] {
+  transform: translateX(6px);
+}
+
+.abc-flowgram-port[data-port-entity-type="input"][data-port-entity-id$="-left"],
+.abc-flowgram-port[data-port-entity-type="input"][data-port-entity-id$="-right"] {
+  transform: translateY(-6px);
+}
+
+.abc-flowgram-port[data-port-entity-type="output"][data-port-entity-id$="-left"],
+.abc-flowgram-port[data-port-entity-type="output"][data-port-entity-id$="-right"] {
+  transform: translateY(6px);
+}
+
 .abc-node:hover ~ .abc-flowgram-port,
 .abc-node.is-selected ~ .abc-flowgram-port,
 .abc-terminal:hover ~ .abc-flowgram-port,

@@ -378,7 +378,7 @@ test("marks missing optimization env inputs invalid and focuses the first error"
   assert.match(projectPreviewSource, /focusDeploymentEnv\(/);
   assert.match(
     projectPreviewSource,
-    /aria-invalid=\{Boolean\(fieldError \|\| jsonError\)\}/,
+    /invalid=\{Boolean\(fieldError \|\| jsonError\)\}/,
   );
   assert.match(
     projectPreviewSource,
@@ -853,9 +853,7 @@ test("summarizes the Agent above the deployment configuration", () => {
     /embedded \? \([\s\S]*?<AgentBuildCanvas[\s\S]*?direction="vertical"[\s\S]*?readOnly/,
   );
   assert.match(projectPreviewSource, /Agent 数量/);
-  assert.match(projectPreviewSource, />\s*导出 YAML\s*</);
-  assert.match(projectPreviewSource, /<ProjectCodeBrowser[\s\S]*?pp-artifact-source/);
-  assert.match(projectPreviewSource, />\s*下载源代码\s*</);
+  assert.doesNotMatch(projectPreviewSource, /导出 YAML|查看源代码|下载源代码|pp-artifact-source/);
   assert.match(
     projectPreviewStyles,
     /grid-template-rows:\s*auto auto/,
@@ -877,34 +875,21 @@ test("keeps root project files visible before expanded folders", () => {
   }
 });
 
-test("keeps artifact actions beside the embedded publish canvas", () => {
+test("keeps the embedded publish canvas free of artifact actions", () => {
   assert.match(
     projectPreviewSource,
     /className={`pp-release-overview\$\{embedded \? " is-embedded-canvas" : ""\}`}/,
   );
   assert.match(
     projectPreviewSource,
-    /embedded \? \([\s\S]*?direction="vertical"[\s\S]*?\{artifactActions\}[\s\S]*?: \(/,
+    /embedded \? \([\s\S]*?direction="vertical"[\s\S]*?readOnly[\s\S]*?: \(/,
   );
-  assert.match(projectPreviewSource, />\s*导出 YAML\s*</);
-  assert.match(projectPreviewSource, /label="查看源代码"/);
-  assert.match(projectPreviewSource, />\s*下载源代码\s*</);
+  assert.doesNotMatch(projectPreviewSource, /导出 YAML|查看源代码|下载源代码|artifactActions/);
   assert.match(
     projectPreviewStyles,
     /\.pp-root\.is-deploy\.is-embedded \.pp-release-overview\.is-embedded-canvas > \.abc-root\s*\{[\s\S]*?width:\s*100%;[\s\S]*?height:\s*100%;/,
   );
-  assert.match(
-    projectPreviewStyles,
-    /@media \(max-width: 560px\)[\s\S]*?\.pp-artifact-actions\.is-rail\s*\{[\s\S]*?width:\s*40px;[\s\S]*?flex-direction:\s*column;[\s\S]*?font-size:\s*0;/,
-  );
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-artifact-actions\.is-rail\s*\{[\s\S]*?flex-direction:\s*column/,
-  );
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-artifact-actions\.is-rail \.pp-secondary,[\s\S]*?flex:\s*1 1 0;[\s\S]*?justify-content:\s*center/,
-  );
+  assert.doesNotMatch(projectPreviewStyles, /\.pp-artifact-actions/);
 });
 
 test("lets the narrow publish overview shrink to its content", () => {

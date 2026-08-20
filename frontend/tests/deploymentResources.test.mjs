@@ -85,17 +85,18 @@ test("shows AgentKit automatic resource naming rules", () => {
 });
 
 test("aligns resource fields on one shared grid without gray card fills", () => {
-  assert.match(resourceStyles, /--pp-resource-mode-column:/);
-  assert.match(resourceStyles, /grid-template-columns:\s*var\(--pp-resource-mode-column\)/);
-  assert.match(resourceStyles, /\.pp-resource-auto-names/);
+  const itemRule = resourceStyles.match(/\.pp-resource-item\s*\{[^}]*\}/)?.[0] ?? "";
   assert.match(
     resourceStyles,
-    /\.pp-resource-item\s*\{[\s\S]*?background:\s*hsl\(var\(--background\)\)/,
+    /\.pp-resource-grid\s*\{[\s\S]*?flex-direction:\s*column;[\s\S]*?gap:\s*16px;/,
   );
-  assert.doesNotMatch(
+  assert.match(
     resourceStyles,
-    /\.pp-resource-item\s*\{[\s\S]*?background:\s*hsl\(var\(--secondary\)/,
+    /\.pp-resource-field\s*\{[\s\S]*?flex-direction:\s*column;[\s\S]*?gap:\s*8px;/,
   );
+  assert.match(resourceStyles, /\.pp-resource-auto-names/);
+  assert.match(itemRule, /padding:\s*16px 0/);
+  assert.doesNotMatch(itemRule, /background:/);
   assert.match(
     projectPreviewStyles,
     /\.pp-config-label\s*\{[\s\S]*?background:\s*transparent/,
@@ -140,17 +141,16 @@ test("loads large resource collections one page at a time", () => {
   assert.doesNotMatch(resourceSource, /className="pp-resource-more"/);
 });
 
-test("searches the complete cloud resource collection with request cancellation", () => {
-  assert.match(clientSource, /search\?: string/);
-  assert.match(clientSource, /params\.set\("search", query\.search\)/);
-  assert.match(resourceSource, /setTimeout\([\s\S]*?250/);
-  assert.match(resourceSource, /search: debouncedSearch/);
+test("searches loaded cloud resources through Apps SDK UI with request cancellation", () => {
+  assert.match(
+    resourceSource,
+    /from "@openai\/apps-sdk-ui\/components\/Select"/,
+  );
   assert.match(resourceSource, /requestRef\.current\?\.abort\(\)/);
-  assert.match(resourceSource, /searchValue=\{state\.search\}/);
-  assert.match(resourceSource, /onSearchChange=\{state\.setSearch\}/);
-  assert.match(deploymentSelectSource, /type="search"/);
-  assert.match(deploymentSelectSource, /aria-label=\{`搜索\$\{ariaLabel\}`\}/);
-  assert.match(deploymentSelectSource, /selectedOption\?\.label \?\? \(value \? valueLabel/);
+  assert.match(resourceSource, /searchPlaceholder="搜索资源名称"/);
+  assert.match(resourceSource, /searchEmptyMessage="未找到匹配资源"/);
+  assert.match(resourceSource, /options=\{options\}/);
+  assert.doesNotMatch(resourceSource, /setTimeout\(|debouncedSearch|searchValue=|onSearchChange=/);
   assert.match(resourceSource, /valueLabel=\{value\.codePipeline\.pipelineName\}/);
 });
 

@@ -11,16 +11,20 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { Button } from "@openai/apps-sdk-ui/components/Button";
+import { Checkbox } from "@openai/apps-sdk-ui/components/Checkbox";
+import { Input } from "@openai/apps-sdk-ui/components/Input";
+import {
+  Select,
+  type Option as SelectOption,
+} from "@openai/apps-sdk-ui/components/Select";
+import { Textarea } from "@openai/apps-sdk-ui/components/Textarea";
 import {
   AlertTriangle,
   ArrowLeft,
-  Check,
-  ChevronDown,
   ChevronRight,
-  Download,
   ExternalLink,
   File,
-  FileDown,
   FilePlus,
   Folder,
   Loader2,
@@ -90,7 +94,6 @@ import {
 } from "../adk/client";
 import {
   beginAgentDeploy,
-  beginAgentSourceDownload,
   classifyTelemetryError,
   type AgentDeployFailedProps,
   type AgentDeployStartedProps,
@@ -102,8 +105,6 @@ import {
   type CloudProvider,
 } from "../adk/cloudProvider";
 import feishuLogo from "../assets/feishu-logo.svg";
-import { buildZip } from "./zip";
-import { ProjectCodeBrowser } from "./CodeBrowserDialog";
 import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
 import {
   DEFAULT_DEPLOY_RESOURCES,
@@ -111,10 +112,6 @@ import {
   deploymentResourcesError,
 } from "./DeploymentResources";
 
-import {
-  DeploymentSelect,
-  type DeploymentSelectOption,
-} from "./DeploymentSelect";
 import { mergeDeployBuildLog } from "./deployBuildLog";
 import {
   GithubCicdPanel,
@@ -327,8 +324,9 @@ function IdentityUserPoolSelect({
         .map((pool) => ({
           value: pool.uid,
           label: pool.name.trim() || "未命名用户池",
-          description: pool.domain || pool.uid,
-          badge: pool.isCurrent ? "当前用户池" : undefined,
+          description: pool.isCurrent
+            ? `当前用户池 · ${pool.domain || pool.uid}`
+            : pool.domain || pool.uid,
         })),
     [pools],
   );
@@ -336,26 +334,37 @@ function IdentityUserPoolSelect({
 
   return (
     <div className="pp-user-pool-picker">
-      <DeploymentSelect
-        ariaLabel="部署用户池"
+      <Select
+        id="pp-deployment-user-pool"
         value={value}
-        placeholder={loading ? "正在加载用户池…" : "请选择用户池"}
+        placeholder="请选择用户池"
+        loadingPlaceholder="正在加载用户池…"
+        loading={loading}
         options={options}
+        size="md"
+        pill={false}
+        align="start"
+        triggerClassName="pp-app-select-trigger"
+        optionClassName="pp-app-select-option"
+        searchPlaceholder="搜索用户池"
+        searchEmptyMessage="未找到匹配用户池"
         disabled={disabled || loading || Boolean(error)}
-        onChange={onChange}
+        onChange={(option) => onChange(option.value)}
       />
       {error ? (
         <div className="pp-user-pool-error" role="alert">
           <span>{error}</span>
-          <button type="button" onClick={() => setReloadKey((key) => key + 1)}>
+          <Button
+            type="button"
+            color="secondary"
+            variant="ghost"
+            size="sm"
+            pill={false}
+            onClick={() => setReloadKey((key) => key + 1)}
+          >
             重试
-          </button>
+          </Button>
         </div>
-      ) : loading ? (
-        <span className="pp-user-pool-status" aria-live="polite">
-          <Loader2 aria-hidden="true" className="pp-user-pool-spinner" />
-          正在加载 Identity 用户池…
-        </span>
       ) : pools.length === 0 ? (
         <span className="pp-user-pool-status">当前账号下暂无 Identity 用户池。</span>
       ) : selectedPool?.isCurrent ? (
@@ -378,7 +387,7 @@ function IdentityUserPoolSelect({
   );
 }
 
-const DEPLOYMENT_AUTHENTICATION_OPTIONS: DeploymentSelectOption[] = [
+const DEPLOYMENT_AUTHENTICATION_OPTIONS: SelectOption[] = [
   {
     value: "api_key",
     label: "API Key",
@@ -389,6 +398,12 @@ const DEPLOYMENT_AUTHENTICATION_OPTIONS: DeploymentSelectOption[] = [
     label: "用户池",
     description: "使用 Identity 用户池签发的 JWT",
   },
+];
+
+const DEPLOYMENT_NETWORK_OPTIONS: SelectOption[] = [
+  { value: "public", label: "公网" },
+  { value: "private", label: "VPC" },
+  { value: "both", label: "公网 + VPC" },
 ];
 
 // --- syntax highlighting ----------------------------------------------------
@@ -607,8 +622,6 @@ export interface ProjectPreviewProps {
   deploymentTitle?: string;
   /** Optional environment configuration rendered before deployment fields. */
   deploymentEnvironmentPane?: ReactNode;
-  /** Keep the deployment layout visible while the final action is unavailable. */
-  deployDisabledReason?: string;
   /** Draft metadata summarized on the deployment page. */
   agentDraft?: AgentDraft;
   /** Main Agent display name. Generated project names may be normalized. */
@@ -638,16 +651,12 @@ export interface ProjectPreviewProps {
   onAgentAdded?: (agentId: string, agentName: string) => void | Promise<void>;
   /** Called as soon as the Runtime has been deployed or updated successfully. */
   onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
-  /** Label for the floating deployment action. */
-  deploymentActionLabel?: string;
   /** Overrides the final confirmation copy for deployments with extra risk. */
   deploymentConfirmation?: {
     title: string;
     description: string;
     confirmLabel: string;
   };
-  /** Optional external footer slot for the deployment action. */
-  deploymentActionTargetId?: string;
   /** Existing Runtime id when this deployment updates an Agent in place. */
   deploymentRuntimeId?: string;
   /** Existing platform Runtime resource name when publishing an update. */
@@ -688,7 +697,6 @@ export interface ProjectPreviewProps {
   /** Deploy-page toolbar actions. */
   onBack?: () => void;
   backLabel?: string;
-  onExportYaml?: () => void;
   /** Replaces the Agent preview pane for deployment flows with their own source area. */
   deploymentPrimaryPane?: ReactNode;
   /** Keeps deployment configuration visible while its primary input is incomplete. */
@@ -791,7 +799,6 @@ export function ProjectPreview({
   embedded = false,
   deploymentTitle = "部署配置",
   deploymentEnvironmentPane,
-  deployDisabledReason,
   agentDraft,
   agentName,
   agentCount,
@@ -800,9 +807,7 @@ export function ProjectPreview({
   onDeploy,
   onAgentAdded,
   onDeploymentComplete,
-  deploymentActionLabel = "部署",
   deploymentConfirmation,
-  deploymentActionTargetId,
   deploymentRuntimeId,
   deploymentRuntimeName,
   deploymentRuntimeNameCustomized = false,
@@ -829,7 +834,6 @@ export function ProjectPreview({
   },
   onBack,
   backLabel = "返回配置",
-  onExportYaml,
   deploymentPrimaryPane,
   deployDisabled = false,
 }: ProjectPreviewProps) {
@@ -920,7 +924,6 @@ export function ProjectPreview({
   );
   const [deployResourcesValidationError, setDeployResourcesValidationError] =
     useState<string | null>(null);
-  const [regionMenuOpen, setRegionMenuOpen] = useState(false);
   const deploymentRegionHelpId = useId();
   const runtimeNameInputId = useId();
   const runtimeNameHelpId = useId();
@@ -929,7 +932,9 @@ export function ProjectPreview({
     useState<DeployAuthentication["type"]>("api_key");
   const [userPoolUid, setUserPoolUid] = useState("");
   const deployRegionOptions = cloudRegionOptions(cloudProvider);
-  const deployRegionLabel = formatCloudRegion(deployRegion, cloudProvider);
+  const deployRegionSelectOptions: SelectOption[] = deployRegionOptions.map(
+    (region) => ({ value: region.value, label: region.label }),
+  );
   const [minInstance, setMinInstance] = useState("1");
   const [maxInstance, setMaxInstance] = useState(
     inMemorySession || sidecarEnabled ? "1" : "5",
@@ -938,8 +943,6 @@ export function ProjectPreview({
   const supportsEvaluationSets = cloudProvider !== "byteplus";
   const effectiveCreateEvaluationSets =
     supportsEvaluationSets && createEvaluationSets;
-  const [deploymentActionTarget, setDeploymentActionTarget] =
-    useState<HTMLElement | null>(null);
   const mountedRef = useRef(true);
   const requiredSecretEnvSignature = requiredSecretEnv
     .map((env) => `${env.key}:${env.label}`)
@@ -1089,63 +1092,22 @@ export function ProjectPreview({
     onDeployRegionChange,
   ]);
 
-  useEffect(() => {
-    if (!deploymentActionTargetId) {
-      setDeploymentActionTarget(null);
-      return;
-    }
-    setDeploymentActionTarget(document.getElementById(deploymentActionTargetId));
-  }, [deploymentActionTargetId]);
-
   const deploymentRegionPicker = (showLabel: boolean) => (
-    <div
-      className={`pp-network-region${regionMenuOpen ? " is-open" : ""}`}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") setRegionMenuOpen(false);
-      }}
-    >
-      {showLabel && <span>发布区域</span>}
-      <button
-        type="button"
-        className="pp-region-trigger"
-        aria-label="部署区域"
-        aria-haspopup="listbox"
-        aria-expanded={regionMenuOpen}
-        aria-describedby={isRuntimeUpdate ? deploymentRegionHelpId : undefined}
+    <div className="pp-form-field pp-network-region">
+      {showLabel && <label htmlFor="pp-deploy-region">发布区域</label>}
+      <Select
+        id="pp-deploy-region"
+        options={deployRegionSelectOptions}
+        value={deployRegion}
+        placeholder="请选择发布区域"
+        size="md"
+        pill={false}
+        align="start"
+        triggerClassName="pp-app-select-trigger"
+        optionClassName="pp-app-select-option"
         disabled={deploying || isRuntimeUpdate || !onDeployRegionChange}
-        onClick={() => setRegionMenuOpen((open) => !open)}
-      >
-        <span>{deployRegionLabel}</span>
-        <ChevronDown
-          className={`pp-region-chevron${regionMenuOpen ? " is-open" : ""}`}
-        />
-      </button>
-      {regionMenuOpen && (
-        <>
-          <div className="menu-scrim" onClick={() => setRegionMenuOpen(false)} />
-          <div className="pp-region-menu" role="listbox" aria-label="部署区域">
-            {deployRegionOptions.map((region) => {
-              const selected = region.value === deployRegion;
-              return (
-                <button
-                  key={region.value}
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  className={`pp-region-option${selected ? " is-selected" : ""}`}
-                  onClick={() => {
-                    onDeployRegionChange?.(region.value);
-                    setRegionMenuOpen(false);
-                  }}
-                >
-                  <span>{region.label}</span>
-                  {selected && <Check aria-hidden="true" />}
-                </button>
-              );
-            })}
-          </div>
-        </>
-      )}
+        onChange={(option) => onDeployRegionChange?.(option.value)}
+      />
       {isRuntimeUpdate && (
         <span id={deploymentRegionHelpId} className="pp-region-help">
           更新时沿用现有 Runtime 的部署区域，无法修改。
@@ -2059,70 +2021,6 @@ export function ProjectPreview({
     }
   }
 
-  function handleDownloadZip() {
-    const base = deploymentTelemetryBase();
-    const operation = beginAgentSourceDownload({
-      agentId: base.agentId,
-      deployAction: base.deployAction,
-      deploySource: base.deploySource,
-      createMode: base.createMode,
-      aiAssisted: base.aiAssisted,
-    });
-    try {
-      const blob = buildZip(project.files);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${project.name || "project"}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      operation.succeed({
-        fileCount: project.files.length,
-        zipSizeBytes: blob.size,
-      });
-    } catch (error) {
-      operation.fail({
-        fileCount: project.files.length,
-        ...classifyTelemetryError(error),
-      });
-      throw error;
-    }
-  }
-
-  const artifactActions = (
-    <div
-      className={`pp-artifact-actions${embedded ? " is-rail" : ""}`}
-      aria-label="发布产物操作"
-    >
-      {onExportYaml && (
-        <button type="button" className="pp-secondary" onClick={onExportYaml}>
-          <FileDown className="pp-ic" />
-          导出 YAML
-        </button>
-      )}
-      {editable && onChange && (
-        <ProjectCodeBrowser
-          project={project}
-          onChange={onChange}
-          className="pp-artifact-source"
-          label="查看源代码"
-        />
-      )}
-      {project.files.length > 0 && (
-        <button
-          type="button"
-          className="pp-secondary"
-          onClick={handleDownloadZip}
-        >
-          <Download className="pp-ic" />
-          下载源代码
-        </button>
-      )}
-    </div>
-  );
-
   function renderNode(node: TreeNode, depth: number, prefix: string) {
     return sortedChildren(node, depth === 0).map((child) => {
       const key = prefix ? `${prefix}/${child.name}` : child.name;
@@ -2208,7 +2106,6 @@ export function ProjectPreview({
                     interactivePreview
                   />
                 )}
-                {artifactActions}
               </>
             ) : (
               <div className="pp-release-preview">
@@ -2310,7 +2207,6 @@ export function ProjectPreview({
                     )}
                     </dl>
                   </div>
-                  {artifactActions}
                 </div>
                 </div>
               </div>
@@ -2427,19 +2323,18 @@ export function ProjectPreview({
 
               {!deploymentPrimaryPane && (
                 <section className="pp-config-section">
-                  <label className="pp-config-label" htmlFor={runtimeNameInputId}>
-                    Runtime 名称
-                  </label>
-                  <div className="pp-runtime-name-field">
-                    <input
+                  <div className="pp-form-field pp-runtime-name-field">
+                    <label htmlFor={runtimeNameInputId}>Runtime 名称</label>
+                    <Input
                       id={runtimeNameInputId}
                       className="pp-runtime-name-input"
+                      size="md"
+                      invalid={Boolean(runtimeNameError)}
                       value={effectiveRuntimeName}
                       disabled={deploying || runtimeNameChecking || isRuntimeUpdate}
                       maxLength={64}
                       autoComplete="off"
                       aria-label="Runtime 名称"
-                      aria-invalid={Boolean(runtimeNameError)}
                       aria-describedby={`${runtimeNameHelpId}${runtimeNameError ? ` ${runtimeNameErrorId}` : ""}`}
                       onChange={(event) => {
                         const value = event.currentTarget.value;
@@ -2452,7 +2347,7 @@ export function ProjectPreview({
                         }
                       }}
                     />
-                    <p id={runtimeNameHelpId} className="pp-config-note">
+                    <p id={runtimeNameHelpId} className="pp-config-note pp-form-help">
                       {isRuntimeUpdate
                         ? "更新时保持现有 Runtime 名称不变。"
                         : "默认根据 Root Agent 名称生成，并添加随机后缀避免重名；支持 4-64 位字母、数字、连字符和下划线"}
@@ -2472,8 +2367,7 @@ export function ProjectPreview({
 
               {!deploymentPrimaryPane && (
                 <section className="pp-config-section">
-                  <div className="pp-config-label">发布区域</div>
-                  {deploymentRegionPicker(false)}
+                  {deploymentRegionPicker(true)}
                 </section>
               )}
 
@@ -2486,26 +2380,31 @@ export function ProjectPreview({
                       更新时保持现有 Runtime 的鉴权方式不变。
                     </p>
                   ) : (
-                    <div className="pp-auth-fields">
-                      <label>
-                        <span>鉴权方式</span>
-                        <DeploymentSelect
-                          ariaLabel="部署鉴权方式"
+                    <div className="pp-form-stack pp-auth-fields">
+                      <div className="pp-form-field">
+                        <label htmlFor="pp-deploy-authentication">鉴权方式</label>
+                        <Select
+                          id="pp-deploy-authentication"
                           value={authenticationType}
                           placeholder="请选择鉴权方式"
                           options={DEPLOYMENT_AUTHENTICATION_OPTIONS}
+                          size="md"
+                          pill={false}
+                          align="start"
+                          triggerClassName="pp-app-select-trigger"
+                          optionClassName="pp-app-select-option"
                           disabled={deploying}
-                          onChange={(value) => {
+                          onChange={(option) => {
                             setDeployError(null);
                             setAuthenticationType(
-                              value as DeployAuthentication["type"],
+                              option.value as DeployAuthentication["type"],
                             );
                           }}
                         />
-                      </label>
+                      </div>
                       {authenticationType === "user_pool" && (
-                        <label>
-                          <span>用户池</span>
+                        <div className="pp-form-field">
+                          <label>用户池</label>
                           <IdentityUserPoolSelect
                             value={userPoolUid}
                             disabled={deploying}
@@ -2514,7 +2413,7 @@ export function ProjectPreview({
                               setUserPoolUid(uid);
                             }}
                           />
-                        </label>
+                        </div>
                       )}
                     </div>
                   )}
@@ -2600,7 +2499,8 @@ export function ProjectPreview({
                               {env.comment || env.key}
                               {env.required && <small>必填</small>}
                             </span>
-                            <input
+                            <Input
+                              size="md"
                               type={
                                 env.key.includes("SECRET") ? "password" : "text"
                               }
@@ -2632,35 +2532,37 @@ export function ProjectPreview({
               {!isRuntimeUpdate && (
                 <section className="pp-config-section">
                   <div className="pp-config-label">实例设置</div>
-                  <div className="pp-instance-fields">
-                    <label htmlFor="runtime-min-instance">
-                      <span>最小实例数</span>
-                      <input
+                  <div className="pp-form-stack pp-instance-fields">
+                    <div className="pp-form-field">
+                      <label htmlFor="runtime-min-instance">最小实例数</label>
+                      <Input
                         id="runtime-min-instance"
+                        size="md"
                         type="number"
                         min="1"
                         step="1"
                         inputMode="numeric"
                         value={minInstance}
                         disabled={deploying || sidecarEnabled}
-                        aria-invalid={!instanceRange.valid}
+                        invalid={!instanceRange.valid}
                         onChange={(event) => setMinInstance(event.currentTarget.value)}
                       />
-                    </label>
-                    <label htmlFor="runtime-max-instance">
-                      <span>最大实例数</span>
-                      <input
+                    </div>
+                    <div className="pp-form-field">
+                      <label htmlFor="runtime-max-instance">最大实例数</label>
+                      <Input
                         id="runtime-max-instance"
+                        size="md"
                         type="number"
                         min="1"
                         step="1"
                         inputMode="numeric"
                         value={maxInstance}
                         disabled={deploying || sidecarEnabled}
-                        aria-invalid={!instanceRange.valid}
+                        invalid={!instanceRange.valid}
                         onChange={(event) => setMaxInstance(event.currentTarget.value)}
                       />
-                    </label>
+                    </div>
                   </div>
                   {(inMemorySession || sidecarEnabled) && (
                     <p className="pp-instance-note" role="note">
@@ -2683,59 +2585,60 @@ export function ProjectPreview({
                 {isRuntimeUpdate && (
                   <p className="pp-config-note">现有 Runtime 的区域与网络模式保持不变。</p>
                 )}
-                <div className="pp-network-layout">
-                  <div className="pp-network-modes" role="radiogroup" aria-label="网络模式">
-                    {(["public", "private", "both"] as const).map((mode) => (
-                      <label className="pp-network-option" key={mode}>
-                        <input
-                          type="radio"
-                          name="deployment-network-mode"
-                          value={mode}
-                          checked={networkMode === mode}
-                          onChange={() => setNetworkMode(mode)}
-                          disabled={deploying || isRuntimeUpdate || !onNetworkChange}
-                        />
-                        <span>
-                          {mode === "public"
-                            ? "公网"
-                            : mode === "private"
-                              ? "VPC"
-                              : "公网 + VPC"}
-                        </span>
-                      </label>
-                    ))}
+                <div className="pp-form-stack pp-network-layout">
+                  <div className="pp-form-field pp-network-modes">
+                    <label htmlFor="pp-deployment-network-mode">网络模式</label>
+                    <Select
+                      id="pp-deployment-network-mode"
+                      options={DEPLOYMENT_NETWORK_OPTIONS}
+                      value={networkMode}
+                      size="md"
+                      pill={false}
+                      align="start"
+                      triggerClassName="pp-app-select-trigger"
+                      optionClassName="pp-app-select-option"
+                      disabled={deploying || isRuntimeUpdate || !onNetworkChange}
+                      onChange={(option) =>
+                        setNetworkMode(option.value as "public" | "private" | "both")
+                      }
+                    />
                   </div>
                   {networkMode !== "public" && (
                     <div className="pp-network-fields">
-                      <label>
-                        <span>VPC ID</span>
-                        <input
+                      <div className="pp-form-field">
+                        <label htmlFor="pp-vpc-id">VPC ID</label>
+                        <Input
+                          id="pp-vpc-id"
+                          size="md"
                           value={network?.vpcId ?? ""}
                           placeholder="vpc-xxxxxxxx"
                           disabled={deploying || isRuntimeUpdate}
                           onChange={(e) => patchNetwork({ vpcId: e.target.value })}
                         />
-                      </label>
-                      <label>
-                        <span>子网 ID <small>可选，多个用逗号分隔</small></span>
-                        <input
+                      </div>
+                      <div className="pp-form-field">
+                        <label htmlFor="pp-subnet-ids">
+                          子网 ID <small>可选，多个用逗号分隔</small>
+                        </label>
+                        <Input
+                          id="pp-subnet-ids"
+                          size="md"
                           value={network?.subnetIds ?? ""}
                           placeholder="subnet-xxx, subnet-yyy"
                           disabled={deploying || isRuntimeUpdate}
                           onChange={(e) => patchNetwork({ subnetIds: e.target.value })}
                         />
-                      </label>
-                      <label className="pp-network-check">
-                        <input
-                          type="checkbox"
-                          checked={!!network?.enableSharedInternetAccess}
-                          disabled={deploying || isRuntimeUpdate}
-                          onChange={(e) =>
-                            patchNetwork({ enableSharedInternetAccess: e.target.checked })
-                          }
-                        />
-                        VPC 内共享公网出口
-                      </label>
+                      </div>
+                      <Checkbox
+                        id="pp-shared-internet-access"
+                        className="pp-network-check"
+                        checked={Boolean(network?.enableSharedInternetAccess)}
+                        label="VPC 内共享公网出口"
+                        disabled={deploying || isRuntimeUpdate}
+                        onCheckedChange={(checked) =>
+                          patchNetwork({ enableSharedInternetAccess: checked })
+                        }
+                      />
                     </div>
                   )}
                 </div>
@@ -2744,22 +2647,21 @@ export function ProjectPreview({
               {supportsEvaluationSets && (
                 <section className="pp-config-section">
                   <div className="pp-config-label">评测集</div>
-                  <label className="pp-evaluation-set-option">
-                    <input
-                      type="checkbox"
-                      checked={createEvaluationSets}
-                      disabled={deploying}
-                      onChange={(event) =>
-                        setCreateEvaluationSets(event.currentTarget.checked)
-                      }
-                    />
-                    <span>
-                      <strong>自动创建评测集</strong>
-                      <small>
-                        部署成功后，自动创建 Good Case 和 Bad Case 评测集。
-                      </small>
-                    </span>
-                  </label>
+                  <Checkbox
+                    id="pp-create-evaluation-sets"
+                    className="pp-evaluation-set-option"
+                    checked={createEvaluationSets}
+                    disabled={deploying}
+                    onCheckedChange={setCreateEvaluationSets}
+                    label={
+                      <span>
+                        <strong>自动创建评测集</strong>
+                        <small>
+                          部署成功后，自动创建 Good Case 和 Bad Case 评测集。
+                        </small>
+                      </span>
+                    }
+                  />
                 </section>
               )}
 
@@ -2795,15 +2697,19 @@ export function ProjectPreview({
                     </div>
                   </div>
                 </div>
-                <button
+                <Button
                   type="button"
                   className="pp-env-add"
+                  color="secondary"
+                  variant="outline"
+                  size="sm"
+                  pill={false}
                   onClick={addEnvRow}
                   disabled={deploying}
                 >
                   <Plus className="pp-ic" />
                   添加变量
-                </button>
+                </Button>
                 {(automaticEnvRows.length > 0 ||
                   requiredSecretEnv.length > 0 ||
                   envRows.length > 0) && (
@@ -2875,7 +2781,7 @@ export function ProjectPreview({
                               </div>
                               <div className="pp-env-value-wrap">
                                 {multiline ? (
-                                  <textarea
+                                  <Textarea
                                     ref={(element) => {
                                       if (element) {
                                         deploymentEnvInputRefs.current.set(
@@ -2887,6 +2793,7 @@ export function ProjectPreview({
                                       }
                                     }}
                                     className="pp-env-value pp-env-json-value"
+                                    size="md"
                                     value={row.value}
                                     placeholder={
                                       row.required ? "必填，尚未填写" : "可选，尚未填写"
@@ -2897,7 +2804,7 @@ export function ProjectPreview({
                                     }
                                     autoComplete="off"
                                     spellCheck={false}
-                                    aria-invalid={Boolean(fieldError || jsonError)}
+                                    invalid={Boolean(fieldError || jsonError)}
                                     aria-describedby={
                                       fieldError ? errorId : undefined
                                     }
@@ -2922,7 +2829,7 @@ export function ProjectPreview({
                                         : undefined
                                     }
                                   >
-                                    <input
+                                    <Input
                                       ref={(element) => {
                                         if (element) {
                                           deploymentEnvInputRefs.current.set(
@@ -2936,6 +2843,7 @@ export function ProjectPreview({
                                         }
                                       }}
                                       className="pp-env-value"
+                                      size="md"
                                       type={
                                         serverManagedModelApiKey
                                           ? "text"
@@ -2958,7 +2866,7 @@ export function ProjectPreview({
                                         row.secret ? "new-password" : "off"
                                       }
                                       spellCheck={row.secret ? false : undefined}
-                                      aria-invalid={Boolean(fieldError || jsonError)}
+                                      invalid={Boolean(fieldError || jsonError)}
                                       aria-describedby={
                                         fieldError ? errorId : undefined
                                       }
@@ -3062,16 +2970,17 @@ export function ProjectPreview({
                                 <span>{env.key}</span>
                               </label>
                               <div className="pp-env-value-wrap">
-                                <input
+                                <Input
                                   id={env.key}
                                   className="pp-env-value"
+                                  size="md"
                                   type="password"
                                   value={effectiveSecretEnvValues[env.key] ?? ""}
                                   placeholder="必填，仅用于本次发布"
                                   disabled={deploying}
                                   autoComplete="new-password"
                                   spellCheck={false}
-                                  aria-invalid={invalid}
+                                  invalid={invalid}
                                   aria-describedby={invalid ? errorId : undefined}
                                   aria-label={env.label}
                                   onChange={(event) => {
@@ -3114,14 +3023,16 @@ export function ProjectPreview({
                     )}
                     {envRows.map((row) => (
                       <div className="pp-env-row" key={row.id}>
-                        <input
+                        <Input
+                          size="md"
                           value={row.key}
                           placeholder="名称"
                           disabled={deploying}
                           autoComplete="off"
                           onChange={(e) => updateEnvRow(row.id, { key: e.currentTarget.value })}
                         />
-                        <input
+                        <Input
+                          size="md"
                           type="text"
                           value={row.value}
                           placeholder="值"
@@ -3129,15 +3040,19 @@ export function ProjectPreview({
                           autoComplete="off"
                           onChange={(e) => updateEnvRow(row.id, { value: e.currentTarget.value })}
                         />
-                        <button
+                        <Button
                           type="button"
                           className="pp-icon-btn pp-env-remove"
-                          title="删除变量"
+                          color="secondary"
+                          variant="ghost"
+                          size="sm"
+                          uniform
+                          aria-label="删除变量"
                           disabled={deploying}
                           onClick={() => removeEnvRow(row.id)}
                         >
                           <X className="pp-ic" />
-                        </button>
+                        </Button>
                       </div>
                     ))}
                   </div>
@@ -3270,60 +3185,6 @@ export function ProjectPreview({
                   </div>
                 </section>
               )}
-            </div>
-            <div
-              className={`pp-config-actions${deploymentActionTarget ? " is-external" : ""}`}
-            >
-              {deploymentActionTarget
-                ? createPortal(
-                    <button
-                      type="button"
-                      className="pp-deploy studio-update-action"
-                      onClick={requestDeploymentConfirmation}
-                      disabled={
-                        deploying ||
-                        runtimeNameChecking ||
-                        feishuUpdating ||
-                        deployDisabled ||
-                        !!deployDisabledReason ||
-                        Boolean(runtimeNameError)
-                      }
-                      title={deployDisabledReason || runtimeNameError || undefined}
-                    >
-                      {deploying
-                        ? `${deploymentActionLabel}中…`
-                        : runtimeNameChecking
-                          ? "正在检查名称…"
-                        : deployError
-                          ? `重试${deploymentActionLabel}`
-                          : deploymentActionLabel}
-                    </button>,
-                    deploymentActionTarget,
-                  )
-                : (
-              <button
-                type="button"
-                className="pp-deploy studio-update-action"
-                onClick={requestDeploymentConfirmation}
-                disabled={
-                  deploying ||
-                  runtimeNameChecking ||
-                  feishuUpdating ||
-                  deployDisabled ||
-                  !!deployDisabledReason ||
-                  Boolean(runtimeNameError)
-                }
-                title={deployDisabledReason || runtimeNameError || undefined}
-              >
-                {deploying
-                  ? `${deploymentActionLabel}中…`
-                  : runtimeNameChecking
-                    ? "正在检查名称…"
-                  : deployError
-                    ? `重试${deploymentActionLabel}`
-                    : deploymentActionLabel}
-              </button>
-                  )}
             </div>
           </aside>
         )}

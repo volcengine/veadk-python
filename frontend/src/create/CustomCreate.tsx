@@ -51,18 +51,11 @@ import {
   type AgentDraft,
   type CloudEnvironmentConfig,
   MAX_CLOUD_DOCKERFILE_LENGTH,
-  type HarnessSidecarOptionId,
-  type HarnessSidecarProfileId,
   type McpTool,
   type SelectedSkill,
   emptyDraft,
 } from "./types";
 import {
-  HARNESS_SIDECAR_OPTIONS,
-  HARNESS_SIDECAR_OPTION_GROUPS,
-  HARNESS_SIDECAR_PROFILES,
-  harnessIntentFromOptimizations,
-  harnessProfileDefaultOptimizations,
   harnessSidecarProviderNotice,
   harnessSidecarOptionLabel,
   harnessSidecarProfileLabel,
@@ -101,7 +94,6 @@ import {
 } from "./agentTypeMeta";
 import { displayDescription } from "./displayText";
 import { localPickerMatches } from "./localPickerSearch";
-import { draftToYaml } from "./configYaml";
 import {
   mcpAuthTokenInputValue,
   mcpUrlNeedsPathWarning,
@@ -252,20 +244,6 @@ function forgetDebugTestRun(runId: string) {
   writeStoredDebugTestRunIds(
     readStoredDebugTestRunIds().filter((item) => item !== runId),
   );
-}
-
-/** Trigger a browser download of a text file. */
-function downloadText(filename: string, text: string, mime = "text/plain") {
-  const url = URL.createObjectURL(
-    new Blob([text], { type: `${mime};charset=utf-8` }),
-  );
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
 }
 
 /* ---------------------------------------------------------------- *
@@ -2391,10 +2369,7 @@ export function TreeNode({
 
 type DebugPhase = "idle" | "starting" | "ready" | "sending" | "error";
 
-type WorkspaceMode =
-  | "build"
-  | "validate"
-  | "publish";
+type WorkspaceMode = "build" | "validate" | "publish";
 interface DebugMessage {
   role: "user" | "assistant";
   content: string;
@@ -2800,7 +2775,7 @@ function DebugComparisonWorkspace({
       className={`cw-ab-workspace is-${view}`}
       aria-label="A/B 调试工作台"
     >
-      <AnimatePresence initial={false} mode="wait" custom={viewDirection}>
+      <AnimatePresence initial={false} mode="popLayout" custom={viewDirection}>
         <motion.div
           key={enabled ? view : "disabled"}
           custom={viewDirection}
@@ -3010,6 +2985,12 @@ function DebugComparisonWorkspace({
                 (message) => message.role === "assistant",
               );
               const changeLabel = debugVariantChangeLabel(variant, baseline);
+              const stale = Boolean(
+                variant.phase === "ready" &&
+                variant.runtimeSnapshot &&
+                variant.runtimeSnapshot !==
+                  debugVariantSnapshot(draftSnapshot, variant),
+              );
                 return (
                   <motion.section
                     key={variant.id}
@@ -3057,7 +3038,16 @@ function DebugComparisonWorkspace({
                       },
                     }}
                   >
-                    {variant.error ? (
+                    {stale ? (
+                      <div className="cw-ab-empty">
+                        <button
+                          type="button"
+                          onClick={() => onStartVariant(variant.id)}
+                        >
+                          配置已变更，请重新启动此环境
+                        </button>
+                      </div>
+                    ) : variant.error ? (
                       <DeploymentErrorMessage
                         message={variant.error}
                         className="cw-debug-error-detail"
@@ -3168,122 +3158,6 @@ function DebugComparisonWorkspace({
   );
 }
 
-function HarnessOptimizationWorkspace({
-  profile,
-  optimizations,
-  unavailableMessage,
-  onProfileChange,
-  onOptimizationChange,
-}: {
-  profile: HarnessSidecarProfileId;
-  optimizations: HarnessSidecarOptionId[];
-  unavailableMessage?: string | null;
-  onProfileChange: (profile: HarnessSidecarProfileId) => void;
-  onOptimizationChange: (
-    optionId: HarnessSidecarOptionId,
-    selected: boolean,
-  ) => void;
-}) {
-  return (
-    <section className="cw-optimize-workspace" aria-label="智能体优化选项">
-      <div className="cw-optimize-panel">
-        {unavailableMessage ? (
-          <div className="cw-banner" role="alert">
-            <Info className="cw-i" />
-            <span>{unavailableMessage}</span>
-          </div>
-        ) : null}
-        <fieldset className="cw-optimize-section">
-          <legend>优化场景</legend>
-          <RadioGroup<HarnessSidecarProfileId>
-            className="cw-optimize-profile-options"
-            aria-label="优化场景"
-            value={profile}
-            onChange={onProfileChange}
-          >
-            {HARNESS_SIDECAR_PROFILES.map((item) => (
-              <div
-                key={item.id}
-                className={`cw-optimize-profile-option${
-                  profile === item.id ? " is-on" : ""
-                }`}
-              >
-                <RadioGroup.Item
-                  value={item.id}
-                  block
-                  className="cw-optimize-profile-control"
-                >
-                  <span className="cw-optimize-profile-copy">
-                    <strong>{item.displayName}</strong>
-                    <small>{item.description}</small>
-                  </span>
-                </RadioGroup.Item>
-              </div>
-            ))}
-          </RadioGroup>
-        </fieldset>
-
-        <fieldset className="cw-optimize-section">
-          <legend>优化组件</legend>
-          <div className="cw-optimize-option-list">
-            {HARNESS_SIDECAR_OPTION_GROUPS.map((group) => (
-              <section
-                key={group.id}
-                className="cw-optimize-option-group"
-                aria-labelledby={`cw-optimize-group-${group.id}`}
-              >
-                <h3
-                  id={`cw-optimize-group-${group.id}`}
-                  className="cw-optimize-option-group-title"
-                >
-                  {group.displayName}
-                </h3>
-                <div className="cw-optimize-option-group-items">
-                  {group.componentIds.map((optionId) => {
-                    const item = HARNESS_SIDECAR_OPTIONS.find(
-                      (option) => option.id === optionId,
-                    );
-                    if (!item) return null;
-                    const checked = optimizations.includes(item.id);
-                    return (
-                      <Checkbox
-                        key={item.id}
-                        checked={checked}
-                        onCheckedChange={(next) => {
-                          const selected = Boolean(next);
-                          if (selected !== checked) {
-                            onOptimizationChange(item.id, selected);
-                          }
-                        }}
-                        label={
-                          <span className="cw-optimize-option-copy">
-                            <strong>{item.displayName}</strong>
-                            <small>{item.description}</small>
-                          </span>
-                        }
-                        className="cw-optimize-option"
-                      />
-                    );
-                  })}
-                </div>
-              </section>
-            ))}
-          </div>
-        </fieldset>
-      </div>
-    </section>
-  );
-}
-
-const WORKSPACE_MODES: Array<{
-  id: WorkspaceMode;
-  label: string;
-}> = [
-  { id: "build", label: "架构" },
-  { id: "validate", label: "调试" },
-  { id: "publish", label: "发布" },
-];
-
 function WorkspaceHeader({
   onBack,
   onDebug,
@@ -3355,80 +3229,6 @@ function conversationUpdateRequirement(
     "当前 Agent 配置：",
     JSON.stringify(conversationDraftContext(currentDraft), null, 2),
   ].join("\n");
-}
-
-function WorkspaceLifecycleFooter({
-  mode,
-  busy,
-  onChange,
-  assistant,
-  accessory,
-}: {
-  mode: WorkspaceMode;
-  busy: boolean;
-  onChange: (mode: WorkspaceMode) => void;
-  assistant?: React.ReactNode;
-  accessory?: React.ReactNode;
-}) {
-  const activeIndex = WORKSPACE_MODES.findIndex((item) => item.id === mode);
-  const previousMode = WORKSPACE_MODES[activeIndex - 1];
-  const nextMode = WORKSPACE_MODES[activeIndex + 1];
-  return (
-    <footer className="cw-workspace-footer">
-      {accessory ? <div className="cw-workspace-footer-accessory">{accessory}</div> : null}
-      <div
-        className={`cw-workspace-nav-actions${assistant ? " has-assistant" : ""}`}
-      >
-        <button
-          type="button"
-          className={`cw-workspace-nav-button${mode === "build" ? " is-placeholder" : ""}`}
-          aria-hidden={mode === "build" || undefined}
-          tabIndex={mode === "build" ? -1 : 0}
-          disabled={!previousMode || busy}
-          onClick={() => previousMode && onChange(previousMode.id)}
-        >
-          上一步
-        </button>
-        <span aria-hidden="true" />
-        {assistant ? (
-          <div className="cw-workspace-ai-slot">{assistant}</div>
-        ) : null}
-        {mode === "publish" ? (
-          <div
-            id="cw-publish-primary-action"
-            className="cw-publish-action-slot"
-          />
-        ) : (
-          <button
-            type="button"
-            className="cw-workspace-nav-button is-primary"
-            disabled={!nextMode || busy}
-            onClick={() => nextMode && onChange(nextMode.id)}
-          >
-            下一步
-          </button>
-        )}
-      </div>
-      <nav className="cw-workspace-progress" aria-label="Agent 创建进度">
-        {WORKSPACE_MODES.map((item, index) => {
-          const active = item.id === mode;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              className={`${active ? "is-active" : ""}${index < activeIndex ? " is-complete" : ""}`}
-              aria-current={active ? "step" : undefined}
-              aria-label={item.label}
-              disabled={busy}
-              onClick={() => onChange(item.id)}
-            >
-              <span aria-hidden="true" />
-            </button>
-          );
-        })}
-      </nav>
-    </footer>
-  );
 }
 
 /* ================================================================ *
@@ -4320,7 +4120,6 @@ export function CustomCreate({
       harnessProviderNotice
     ) {
       setBuildErr(harnessProviderNotice);
-      setWorkspaceMode("optimize");
       return;
     }
     if (
@@ -4366,15 +4165,6 @@ export function CustomCreate({
     } finally {
       setBuilding(false);
     }
-  };
-
-  const openOptimization = async () => {
-    if (!(await confirmLeaveDebug())) return;
-    if (!requireCompleteDraft()) {
-      setWorkspaceMode("build");
-      return;
-    }
-    setWorkspaceMode("optimize");
   };
 
   const startDebugVariant = async (id: string) => {
@@ -4630,44 +4420,6 @@ export function CustomCreate({
         variant.id === id ? { ...variant, ...patch } : variant,
       ),
     );
-
-  const updateHarnessOptimization = (
-    optionId: HarnessSidecarOptionId,
-    selected: boolean,
-  ) => {
-    if (selected && harnessProviderNotice) {
-      setBuildErr(harnessProviderNotice);
-      return;
-    }
-    const optimizations = selected
-      ? [...new Set([...harnessOptimizations, optionId])]
-      : harnessOptimizations.filter((item) => item !== optionId);
-    setDraft((current) => ({
-      ...current,
-      harnessSidecar: harnessIntentFromOptimizations(
-        optimizations,
-        harnessOptimizationProfile,
-      ),
-    }));
-    setBuildErr("");
-    setProject(null);
-  };
-
-  const updateHarnessOptimizationProfile = (
-    profile: HarnessSidecarProfileId,
-  ) => {
-    const optimizations = harnessProfileDefaultOptimizations(profile);
-    if (optimizations.length > 0 && harnessProviderNotice) {
-      setBuildErr(harnessProviderNotice);
-      return;
-    }
-    setDraft((current) => ({
-      ...current,
-      harnessSidecar: harnessIntentFromOptimizations(optimizations, profile),
-    }));
-    setBuildErr("");
-    setProject(null);
-  };
 
   const updateDebugVariantConfig = (
     id: string,
@@ -6046,12 +5798,7 @@ export function CustomCreate({
                 onDeploy={handleDeploy}
                 onAgentAdded={onAgentAdded}
                 onDeploymentTaskChange={onDeploymentTaskChange}
-                deploymentActionLabel={deploymentTarget ? "更新并发布" : "部署"}
-                deploymentActionTargetId="cw-publish-primary-action"
                 deployDisabled={building || Boolean(buildErr)}
-                deployDisabledReason={
-                  building ? "正在更新部署配置" : buildErr || undefined
-                }
                 deploymentRuntimeId={deploymentTarget?.runtimeId}
                 deploymentRuntimeName={deploymentRuntimeName}
                 deploymentRuntimeNameCustomized={
@@ -6112,13 +5859,6 @@ export function CustomCreate({
                   createMode,
                   aiAssisted: usedAiGeneration,
                 }}
-                onExportYaml={() =>
-                  downloadText(
-                    `${providerDraft.name || "agent"}.yaml`,
-                    draftToYaml(providerDraft),
-                    "text/yaml",
-                  )
-                }
               />
             ) : (
               <div className="cw-publish-loading" role="status">
@@ -6131,12 +5871,6 @@ export function CustomCreate({
         )}
         </AnimatePresence>
       </main>
-      {workspaceMode === "publish" && <WorkspaceLifecycleFooter
-        mode={workspaceMode}
-        busy={building}
-        onChange={handleWorkspaceChange}
-        assistant={undefined}
-      />}
       {debugTraceTarget && (
         <TraceDrawer
           testRunId={debugTraceTarget.runId}

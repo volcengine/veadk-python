@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Input } from "@openai/apps-sdk-ui/components/Input";
 import {
   checkRuntimeNameAvailability,
   deployAgentkitProject,
@@ -111,16 +112,7 @@ export function IntelligentDeployment({
       onNetworkChange={setNetwork}
       deployRegion={deployRegion}
       onDeployRegionChange={setDeployRegion}
-      deploymentActionLabel="部署"
       deployDisabled={Boolean(runtimeNameError) || runtimeNameAvailable === false || runtimeNameChecking}
-      deployDisabledReason={
-        runtimeNameError
-          ?? (runtimeNameAvailable === false
-            ? "Runtime 名称已存在，请更换后重试"
-            : runtimeNameChecking
-              ? "正在检查 Runtime 名称"
-              : undefined)
-      }
       deploymentTelemetry={{
         source: "intelligent_development",
         createMode: "intelligent",
@@ -139,7 +131,8 @@ export function IntelligentDeployment({
           <h2>{delivery.agentName}</h2>
           <label className="trusted-source-pane__runtime-name">
             <span>Runtime 名称</span>
-            <input
+            <Input
+              size="md"
               value={project.name}
               maxLength={64}
               onChange={(event) => setProject((current) => ({

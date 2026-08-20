@@ -256,7 +256,6 @@ export function CodePackageCreate({
         onBack={onBack}
         backLabel="返回创建方式"
         deployDisabled={!project || reading}
-        deployDisabledReason={reading ? "正在读取代码包" : !project ? "请先上传代码包" : undefined}
         deploymentPrimaryPane={
           <section className="package-source-pane" aria-label="代码包上传">
             <div className="package-source-label">代码包</div>

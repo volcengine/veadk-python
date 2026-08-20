@@ -7,10 +7,7 @@ const projectPreviewSource = readFileSync(
   "utf8",
 );
 
-test("keeps the deployment action text-only", () => {
+test("omits the standalone deployment action", () => {
   assert.doesNotMatch(projectPreviewSource, /DeployIcon|CloudUpload|RotateCcw/);
-  assert.match(
-    projectPreviewSource,
-    /deploying[\s\S]*?`\$\{deploymentActionLabel\}中…`[\s\S]*?deployError[\s\S]*?`重试\$\{deploymentActionLabel\}`[\s\S]*?: deploymentActionLabel/,
-  );
+  assert.doesNotMatch(projectPreviewSource, /deploymentActionLabel|pp-config-actions|pp-deploy studio-update-action/);
 });

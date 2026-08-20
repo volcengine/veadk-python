@@ -167,8 +167,9 @@ test("keeps publish mode visible when deployment environment validation fails", 
 test("combines the Apps SDK UI environment controls with deployment", () => {
   assert.match(
     createSource,
-    /type WorkspaceMode =[\s\S]*?\| "build"[\s\S]*?\| "optimize"[\s\S]*?\| "validate"[\s\S]*?\| "publish";/,
+    /type WorkspaceMode = "build" \| "validate" \| "publish";/,
   );
+  assert.doesNotMatch(createSource, /\| "optimize"/);
   assert.doesNotMatch(createSource, /\{ id: "environment", label: "环境" \}/);
   assert.match(
     createSource,

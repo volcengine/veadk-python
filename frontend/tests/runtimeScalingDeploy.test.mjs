@@ -100,21 +100,23 @@ test("renders the evaluation-set progress step only when selected", () => {
   );
 });
 
-test("draws complete native radio and checkbox states after the global reset", () => {
+test("uses Apps SDK UI Select and Checkbox controls instead of native states", () => {
   assert.match(
-    projectPreviewStyles,
-    /\.pp-network-option input\s*\{[\s\S]*?appearance:\s*none;[\s\S]*?border-radius:\s*50%/,
+    projectPreviewSource,
+    /from "@openai\/apps-sdk-ui\/components\/Checkbox"/,
   );
   assert.match(
-    projectPreviewStyles,
-    /\.pp-network-option input:checked::before\s*\{[\s\S]*?transform:\s*scale\(1\)/,
+    projectPreviewSource,
+    /<Select[\s\S]*?id="pp-deployment-network-mode"[\s\S]*?options=\{DEPLOYMENT_NETWORK_OPTIONS\}/,
   );
   assert.match(
-    projectPreviewStyles,
-    /\.pp-network-check input,\s*\.pp-evaluation-set-option input\s*\{[\s\S]*?appearance:\s*none;[\s\S]*?border-radius:\s*4px/,
+    projectPreviewSource,
+    /<Checkbox[\s\S]*?id="pp-shared-internet-access"[\s\S]*?checked=\{Boolean\(network\?\.enableSharedInternetAccess\)\}/,
   );
   assert.match(
-    projectPreviewStyles,
-    /\.pp-network-check input:checked::before,\s*\.pp-evaluation-set-option input:checked::before\s*\{[\s\S]*?rotate\(45deg\)/,
+    projectPreviewSource,
+    /<Checkbox[\s\S]*?id="pp-create-evaluation-sets"[\s\S]*?checked=\{createEvaluationSets\}/,
   );
+  assert.doesNotMatch(projectPreviewSource, /type="radio"|type="checkbox"/);
+  assert.doesNotMatch(projectPreviewStyles, /\.pp-network-option input|appearance:\s*none/);
 });

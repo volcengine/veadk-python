@@ -586,34 +586,15 @@ function createNodeRegistries(
 ): WorkflowNodeRegistry[] {
   const inputLocation = direction === "vertical" ? "top" : "left";
   const outputLocation = direction === "vertical" ? "bottom" : "right";
-  const secondaryInputLocation = direction === "vertical" ? "left" : "top";
-  const secondaryOutputLocation = direction === "vertical" ? "right" : "bottom";
+  const agentPortLocations = ["top", "right", "bottom", "left"] as const;
   return [
     {
       type: "agent",
       meta: {
-        defaultPorts: [
-          {
-            portID: `input-${inputLocation}`,
-            type: "input",
-            location: inputLocation,
-          },
-          {
-            portID: `input-${secondaryInputLocation}`,
-            type: "input",
-            location: secondaryInputLocation,
-          },
-          {
-            portID: `output-${outputLocation}`,
-            type: "output",
-            location: outputLocation,
-          },
-          {
-            portID: `output-${secondaryOutputLocation}`,
-            type: "output",
-            location: secondaryOutputLocation,
-          },
-        ],
+        defaultPorts: agentPortLocations.flatMap((location) => [
+          { portID: `input-${location}`, type: "input", location },
+          { portID: `output-${location}`, type: "output", location },
+        ]),
       },
     },
     {

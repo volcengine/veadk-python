@@ -358,7 +358,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(customCreateSource, /onDeploymentComplete\?: \(result: DeployResult\)/);
   assert.match(customCreateSource, /onDeploymentStarted\?: \(task: DeploymentTaskUpdate\)/);
   assert.match(customCreateSource, /<ProjectPreview[\s\S]*?embedded[\s\S]*?project=\{project\}/);
-  assert.match(customCreateSource, /deploymentActionLabel=\{deploymentTarget \? "更新并发布" : "部署"\}/);
+  assert.doesNotMatch(customCreateSource, /deploymentActionLabel=/);
   assert.match(customCreateSource, /deploymentRuntimeId=\{deploymentTarget\?\.runtimeId\}/);
   assert.match(customCreateSource, /onDeploymentStarted=\{onDeploymentStarted\}/);
   assert.match(customCreateSource, /onDeploymentComplete=\{onDeploymentComplete\}/);
@@ -385,7 +385,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(customCreateSource, /resolveRuntimeName\([\s\S]*?draft\.name,[\s\S]*?configuredRuntimeName,[\s\S]*?runtimeNameCustomized/);
   assert.match(
     projectPreviewSource,
-    /aria-describedby=\{isRuntimeUpdate \? deploymentRegionHelpId : undefined\}/,
+    /<Select[\s\S]*?id="pp-deploy-region"[\s\S]*?disabled=\{deploying \|\| isRuntimeUpdate \|\| !onDeployRegionChange\}/,
   );
   assert.match(
     projectPreviewSource,

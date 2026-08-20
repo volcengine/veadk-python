@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Button } from "@openai/apps-sdk-ui/components/Button";
+import { Input } from "@openai/apps-sdk-ui/components/Input";
+import {
+  Select,
+  type Option as SelectOption,
+} from "@openai/apps-sdk-ui/components/Select";
 import {
   listDeploymentResources,
   type DeploymentResource,
@@ -6,18 +12,13 @@ import {
   type DeploymentResourceQuery,
   type DeployResources,
 } from "../adk/client";
-import {
-  DeploymentSelect,
-  type DeploymentSelectOption,
-} from "./DeploymentSelect";
 import "./DeploymentResources.css";
 
-const RESOURCE_MODE_OPTIONS: DeploymentSelectOption[] = [
+const RESOURCE_MODE_OPTIONS: SelectOption[] = [
   {
     value: "auto",
     label: "自动创建",
     description: "部署时自动创建所需资源",
-    badge: "推荐",
   },
   {
     value: "create",
@@ -44,8 +45,6 @@ interface ResourceListState {
   hasMore: boolean;
   loading: boolean;
   error: string | null;
-  search: string;
-  setSearch: (value: string) => void;
   reload: () => void;
   loadMore: () => void;
 }
@@ -60,28 +59,12 @@ function useDeploymentResourceList(
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [loadedQueryKey, setLoadedQueryKey] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
   const loadingRef = useRef(false);
   const requestRef = useRef<AbortController | null>(null);
   const baseQueryKey = query ? JSON.stringify(query) : "";
-  const queryKey = query
-    ? JSON.stringify({ ...query, search: debouncedSearch })
-    : "";
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setDebouncedSearch(search.trim());
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [search]);
-
-  useEffect(() => {
-    setSearch("");
-    setDebouncedSearch("");
-  }, [baseQueryKey]);
+  const queryKey = baseQueryKey;
 
   const loadPage = useCallback((nextPage: number, replace: boolean) => {
     if (!queryKey) return;
@@ -147,9 +130,7 @@ function useDeploymentResourceList(
     return () => requestRef.current?.abort();
   }, [loadPage, queryKey, reloadKey]);
 
-  const queryReady = Boolean(queryKey)
-    && loadedQueryKey === queryKey
-    && search.trim() === debouncedSearch;
+  const queryReady = Boolean(queryKey) && loadedQueryKey === queryKey;
   const reload = useCallback(() => {
     setLoadedQueryKey("");
     setReloadKey((key) => key + 1);
@@ -166,8 +147,6 @@ function useDeploymentResourceList(
     hasMore: queryReady ? hasMore : false,
     loading: Boolean(queryKey) && (!queryReady || loading),
     error,
-    search,
-    setSearch,
     reload,
     loadMore,
   };
@@ -176,7 +155,7 @@ function useDeploymentResourceList(
 function resourceOptions(
   items: DeploymentResource[],
   valueField: "id" | "name",
-): DeploymentSelectOption[] {
+): SelectOption[] {
   return items.map((item) => ({
     value: item[valueField],
     label: item.name,
@@ -204,28 +183,55 @@ function ResourcePicker({
   onChange: (resource: DeploymentResource) => void;
 }) {
   const options = useMemo(
-    () => resourceOptions(state.items, valueField),
-    [state.items, valueField],
+    () => {
+      const available = resourceOptions(state.items, valueField);
+      if (!value || available.some((option) => option.value === value)) {
+        return available;
+      }
+      return [
+        {
+          value,
+          label: valueLabel || value,
+          description: "当前选择",
+        },
+        ...available,
+      ];
+    },
+    [state.items, value, valueField, valueLabel],
   );
+  const selectId = useId();
   return (
     <div className="pp-resource-picker">
-      <DeploymentSelect
-        ariaLabel={ariaLabel}
+      <Select
+        id={selectId}
+        name={ariaLabel}
         value={value}
-        valueLabel={valueLabel}
-        placeholder={state.loading ? "正在加载…" : "请选择已有资源"}
-        options={options}
-        disabled={disabled || Boolean(state.error)}
-        searchValue={state.search}
-        searchPlaceholder="搜索资源名称"
+        placeholder="请选择已有资源"
+        loadingPlaceholder="正在加载…"
         loading={state.loading}
-        hasMore={state.hasMore}
-        emptyMessage={state.search.trim() ? "未找到匹配资源" : "暂无可用资源"}
-        onSearchChange={state.setSearch}
-        onLoadMore={state.loadMore}
-        onChange={(selectedValue) => {
+        options={options}
+        size="md"
+        pill={false}
+        align="start"
+        triggerClassName="pp-app-select-trigger"
+        optionClassName="pp-app-select-option"
+        disabled={disabled || Boolean(state.error)}
+        searchPlaceholder="搜索资源名称"
+        searchEmptyMessage="未找到匹配资源"
+        actions={
+          state.hasMore
+            ? [
+                {
+                  id: "load-more",
+                  label: state.loading ? "正在加载…" : "加载更多",
+                  onSelect: state.loadMore,
+                },
+              ]
+            : []
+        }
+        onChange={(option) => {
           const resource = state.items.find(
-            (item) => item[valueField] === selectedValue,
+            (item) => item[valueField] === option.value,
           );
           if (resource) onChange(resource);
         }}
@@ -233,16 +239,19 @@ function ResourcePicker({
       {state.error ? (
         <div className="pp-resource-error" role="alert">
           <span>{state.error}</span>
-          <button type="button" onClick={state.reload}>重试</button>
+          <Button
+            type="button"
+            color="secondary"
+            variant="ghost"
+            size="sm"
+            pill={false}
+            onClick={state.reload}
+          >重试</Button>
         </div>
       ) : state.loading && state.items.length === 0 ? (
-        <span className="pp-resource-status" aria-live="polite">
-          {state.search.trim() ? "正在搜索云资源…" : "正在加载云资源…"}
-        </span>
+        <span className="pp-resource-status" aria-live="polite">正在加载云资源…</span>
       ) : state.items.length === 0 ? (
-        <span className="pp-resource-status">
-          {state.search.trim() ? "未找到匹配资源。" : "暂无可用资源。"}
-        </span>
+        <span className="pp-resource-status">暂无可用资源。</span>
       ) : state.serviceRegion ? (
         <span className="pp-resource-status">
           实际服务区域：{state.serviceRegion} · 已加载 {state.items.length}
@@ -265,17 +274,24 @@ function ModeField({
   onChange: (mode: DeploymentResourceMode) => void;
 }) {
   return (
-    <label className="pp-resource-field pp-resource-mode">
-      <span>配置方式</span>
-      <DeploymentSelect
-        ariaLabel={`${resource}配置方式`}
+    <div className="pp-resource-field pp-resource-mode">
+      <label htmlFor={`pp-resource-mode-${resource}`}>配置方式</label>
+      <Select
+        id={`pp-resource-mode-${resource}`}
         value={value}
         placeholder="请选择配置方式"
         options={RESOURCE_MODE_OPTIONS}
+        size="md"
+        pill={false}
+        align="start"
+        triggerClassName="pp-app-select-trigger"
+        optionClassName="pp-app-select-option"
         disabled={disabled}
-        onChange={(mode) => onChange(mode as DeploymentResourceMode)}
+        onChange={(option) =>
+          onChange(option.value as DeploymentResourceMode)
+        }
       />
-    </label>
+    </div>
   );
 }
 
@@ -293,16 +309,17 @@ function TextField({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="pp-resource-field">
-      <span>{label}</span>
-      <input
+    <div className="pp-resource-field">
+      <label>{label}</label>
+      <Input
+        size="md"
         value={value}
         placeholder={placeholder}
         disabled={disabled}
         autoComplete="off"
         onChange={(event) => onChange(event.currentTarget.value)}
       />
-    </label>
+    </div>
   );
 }
 

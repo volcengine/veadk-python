@@ -286,7 +286,8 @@ test("starts each Studio operation at its business boundary", () => {
   assert.match(appSource, /const messageOperation = currentRuntime[\s\S]*beginAgentMessage\(/);
   assert.match(agentSelectorSource, /const operation = beginAgentConnect\(/);
   assert.match(projectPreviewSource, /const operation = beginAgentDeploy\(/);
-  assert.match(projectPreviewSource, /const operation = beginAgentSourceDownload\(/);
+  assert.match(appSource, /const operation = beginAgentSourceDownload\(/);
+  assert.doesNotMatch(projectPreviewSource, /beginAgentSourceDownload/);
   assert.match(customCreateSource, /const operation = beginAgentDebug\(/);
   assert.match(feishuIntegrationSource, /const operation = beginAgentDeploy\(/);
 

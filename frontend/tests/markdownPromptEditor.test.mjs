@@ -151,13 +151,7 @@ test("build workspace reuses the Figma navigation and hides the old footer", () 
     /<CreateAgentHeader[\s\S]*?onBack=\{onBack\}[\s\S]*?onDebug=\{onDebug\}[\s\S]*?onDeploy=\{onDeploy\}[\s\S]*?debugMode=\{debugMode\}/,
   );
   assert.doesNotMatch(createSource, /WORKSPACE_TITLES/);
-  assert.match(createSource, /\{ id: "build", label: "架构" \}/);
-  assert.match(createSource, /\{ id: "validate", label: "调试" \}/);
-  assert.doesNotMatch(createSource, /\{ id: "environment", label: "环境" \}/);
-  assert.match(createSource, /\{ id: "publish", label: "发布" \}/);
-  assert.match(createSource, /function WorkspaceLifecycleFooter/);
-  assert.match(createSource, /\{workspaceMode === "publish" && <WorkspaceLifecycleFooter/);
-  assert.match(createSource, /id="cw-publish-primary-action"/);
+  assert.doesNotMatch(createSource, /WorkspaceLifecycleFooter|cw-publish-primary-action/);
 });
 
 test("build workspace uses a continuous dotted canvas and compact configuration drawer", () => {
@@ -196,7 +190,7 @@ test("build-stage intelligent generation lives in the Figma chat drawer", () => 
   assert.match(createSource, /createGeneratedAgentConversation\(/);
   assert.match(createSource, /runGeneratedAgentConversationSSE\(/);
   assert.match(createSource, /eventType === "agent_draft"/);
-  assert.match(createSource, /\{workspaceMode === "publish" && <WorkspaceLifecycleFooter/);
+  assert.match(createSource, /\{workspaceMode === "publish" && \(/);
 });
 
 test("debug comparison configuration explains duplicate disabled actions", () => {
@@ -379,13 +373,13 @@ test("debug comparison keeps equal spacing above cards and composer", () => {
 
 test("leaving debug mode uses the shared Studio confirm dialog", () => {
   const confirmStart = createSource.indexOf("const confirmLeaveDebug = async () =>");
-  const environmentStart = createSource.indexOf("const openEnvironment = async", confirmStart);
-  assert.ok(confirmStart >= 0 && environmentStart > confirmStart);
+  const publishStart = createSource.indexOf("const openPublishPreview = async", confirmStart);
+  assert.ok(confirmStart >= 0 && publishStart > confirmStart);
   assert.match(createSource, /import \{ StudioConfirmDialog \} from "\.\.\/ui\/StudioConfirmDialog"/);
   assert.match(createSource, /const \[debugLeaveConfirmOpen, setDebugLeaveConfirmOpen\] = useState\(false\)/);
   assert.match(createSource, /debugLeaveConfirmResolverRef/);
   assert.doesNotMatch(
-    createSource.slice(confirmStart, environmentStart),
+    createSource.slice(confirmStart, publishStart),
     /window\.confirm/,
   );
   assert.match(
@@ -429,23 +423,13 @@ test("configuration checkboxes use Apps SDK UI controls", () => {
   assert.doesNotMatch(createSource, /type="checkbox"/);
 });
 
-test("build workspace has a validated primary path into optimization", () => {
+test("build workspace validates before entering debugging without an old footer", () => {
   assert.match(
     createSource,
-    /const openOptimization = async \(\) => \{[\s\S]*?if \(!requireCompleteDraft\(\)\)[\s\S]*?setWorkspaceMode\("optimize"\);/,
+    /const openValidation = \(\) => \{[\s\S]*?if \(!requireCompleteDraft\(\)\) return;[\s\S]*?setWorkspaceMode\("validate"\);/,
   );
-  assert.match(
-    createSource,
-    /function WorkspaceLifecycleFooter[\s\S]*?className="cw-workspace-nav-button is-primary"[\s\S]*?>[\s\S]*?下一步/,
-  );
-  assert.match(
-    createStyles,
-    /\.cw-workspace-nav-actions\s*\{[\s\S]*?grid-template-columns:\s*minmax\(120px, 1fr\) auto minmax\(120px, 1fr\)/,
-  );
-  assert.match(
-    createStyles,
-    /\.cw-workspace-nav-button\.is-primary\s*\{[\s\S]*?background:\s*hsl\(var\(--foreground\)\);[\s\S]*?color:\s*hsl\(var\(--background\)\);/,
-  );
+  assert.doesNotMatch(createSource, /WorkspaceLifecycleFooter|cw-workspace-nav-button/);
+  assert.doesNotMatch(createStyles, /\.cw-workspace-nav-actions|\.cw-workspace-nav-button/);
   assert.doesNotMatch(createSource, /className="cw-build-next/);
 });
 
@@ -480,7 +464,7 @@ test("container agents require child agents before debug or publish", () => {
   );
   assert.match(
     createSource,
-    /const sectionId =\s*problem\.problem === "缺少子 Agent" \? "type" : "basic"/,
+    /const sectionId = problem\.problem === "缺少子 Agent" \? "type" : "basic";/,
   );
   assert.match(
     createSource,
@@ -496,19 +480,15 @@ test("container agents require child agents before debug or publish", () => {
   );
   assert.match(
     createSource,
-    /const materializePublishRelease = async[\s\S]*?if \(!requireCompleteDraft\(\)\) \{[\s\S]*?setWorkspaceMode\("build"\);[\s\S]*?return;/,
-  );
-  assert.match(
-    createSource,
-    /if \(nextMode === "publish"\) \{[\s\S]*?await materializePublishRelease\(\);/,
+    /const openPublishPreview = async \([\s\S]*?if \(!requireCompleteDraft\(\)\) \{[\s\S]*?setWorkspaceMode\("build"\);[\s\S]*?return;/,
   );
 });
 
 test("debug workspace compares multiple configurations behind one shared input", () => {
-  assert.match(
-    createSource,
-    /function HarnessOptimizationWorkspace[\s\S]*?const checked = optimizations\.includes\(item\.id\)/,
-  );
+  assert.doesNotMatch(createSource, /label: "上下文优化"/);
+  assert.doesNotMatch(createSource, /label: "幻觉抑制"/);
+  assert.doesNotMatch(createSource, /HarnessOptimizationWorkspace/);
+  assert.doesNotMatch(createSource, /workspaceMode === "optimize"/);
   assert.doesNotMatch(createSource, /className="cw-optimization-panel"/);
   assert.match(
     createSource,
@@ -558,7 +538,11 @@ test("debug workspace compares multiple configurations behind one shared input",
   assert.match(createSource, /className="cw-ab-verdict"/);
   assert.match(
     createSource,
-    /function debugVariantChangeLabel[\s\S]*?normalizedOptimizations[\s\S]*?"优化选项"[\s\S]*?changes\.length/,
+    /function debugVariantChangeLabel[\s\S]*?"提示词"[\s\S]*?"模型"[\s\S]*?"描述"[\s\S]*?changes\.length/,
+  );
+  assert.doesNotMatch(
+    createSource,
+    /function debugVariantChangeLabel[\s\S]*?"优化选项"[\s\S]*?changes\.length/,
   );
   assert.doesNotMatch(
     createSource,
@@ -657,7 +641,7 @@ test("debug workspace motion preserves direction, column continuity, and reduced
   );
   assert.match(
     createSource,
-    /<AnimatePresence initial=\{false\} mode="wait" custom=\{viewDirection\}>[\s\S]*?key=\{enabled \? view : "disabled"\}[\s\S]*?variants=\{viewMotion\}/,
+    /<AnimatePresence initial=\{false\} mode="popLayout" custom=\{viewDirection\}>[\s\S]*?key=\{enabled \? view : "disabled"\}[\s\S]*?variants=\{viewMotion\}/,
   );
   assert.match(
     createSource,

@@ -153,13 +153,8 @@ test("uses this Studio release's integrated optimization metadata", () => {
   assert.doesNotMatch(customCreateSource, /getHarnessSidecarCatalog/);
   assert.doesNotMatch(customCreateSource, /resolveHarnessSidecarSelection/);
   assert.doesNotMatch(harnessOptionsSource, /sql_readonly\s*:/);
-  assert.match(customCreateSource, /function HarnessOptimizationWorkspace/);
-  assert.match(customCreateSource, /优化场景/);
-  assert.match(customCreateSource, /aria-label="优化场景"/);
-  assert.doesNotMatch(customCreateSource, /不启用|value="none"/);
-  assert.match(customCreateSource, /<strong>\{item\.displayName\}<\/strong>/);
-  assert.match(customCreateSource, /onProfileChange/);
-  assert.match(customCreateSource, /harnessProfileDefaultOptimizations/);
+  assert.match(customCreateSource, /selectedHarnessProfile\(draft\)/);
+  assert.match(customCreateSource, /selectedHarnessOptimizations\(draft\)/);
 });
 
 test("fails fast with a clear BytePlus Sidecar notice without blocking ordinary agents", () => {
@@ -170,16 +165,9 @@ test("fails fast with a clear BytePlus Sidecar notice without blocking ordinary 
   );
   assert.match(
     customCreateSource,
-    /providerDraft\.harnessSidecar\?\.enabled && harnessProviderNotice/,
+    /releaseProviderDraft\.harnessSidecar\?\.enabled[\s\S]*?harnessProviderNotice/,
   );
-  assert.match(
-    customCreateSource,
-    /selected && harnessProviderNotice[\s\S]*?setBuildErr\(harnessProviderNotice\)/,
-  );
-  assert.match(
-    customCreateSource,
-    /unavailableMessage=\{harnessProviderNotice\}/,
-  );
+  assert.doesNotMatch(customCreateSource, /setWorkspaceMode\("optimize"\)/);
 });
 
 test("derives Model Proxy dependencies from the selected optimization catalog", () => {
@@ -202,28 +190,18 @@ test("derives Model Proxy dependencies from the selected optimization catalog", 
   ]);
 });
 
-test("places the Harness optimization page immediately before environment setup", () => {
+test("does not restore the standalone Harness optimization workspace", () => {
   assert.match(
     customCreateSource,
-    /type WorkspaceMode =[\s\S]*?\| "validate"[\s\S]*?\| "optimize"[\s\S]*?\| "environment"[\s\S]*?\| "publish";/,
+    /type WorkspaceMode = "build" \| "validate" \| "publish";/,
   );
-  assert.match(
+  assert.doesNotMatch(
     customCreateSource,
-    /\{ id: "build", label: "架构" \},\s*\{ id: "validate", label: "调试" \},\s*\{ id: "optimize", label: "优化" \},\s*\{ id: "environment", label: "环境" \},\s*\{ id: "publish", label: "发布" \}/,
+    /function HarnessOptimizationWorkspace|workspaceMode === "optimize"/,
   );
-  assert.match(customCreateSource, /optimize:\s*"为您的智能体选择优化项"/);
-  assert.doesNotMatch(customCreateSource, /为您的智能体选择一些优化项/);
-  assert.ok(
-    customCreateSource.indexOf('{workspaceMode === "validate"') <
-      customCreateSource.indexOf('{workspaceMode === "optimize"'),
-  );
-  assert.ok(
-    customCreateSource.indexOf('{workspaceMode === "optimize"') <
-      customCreateSource.indexOf('{workspaceMode === "environment"'),
-  );
-  assert.match(
+  assert.doesNotMatch(
     customCreateSource,
-    /const handleWorkspaceChange = async[\s\S]*?nextMode === "optimize"[\s\S]*?openOptimization\(\)/,
+    /nextMode === "optimize"|openOptimization\(\)/,
   );
 });
 
@@ -262,15 +240,11 @@ test("materializes an ordinary project snapshot into one ops release draft", () 
   });
   assert.match(
     customCreateSource,
-    /const materializePublishRelease = async[\s\S]*?releaseDraftFromDebugVariant\(providerDraft, releaseVariant\)[\s\S]*?generateAgentProject\(codegenDraft\(releaseDraft\)\)[\s\S]*?setDraft\(releaseDraft\)[\s\S]*?setProject\(generated\)/,
+    /const openPublishPreview = async[\s\S]*?releaseDraftFromDebugVariant\(releaseProviderDraft, releaseVariant\)[\s\S]*?generateAgentProject\(codegenDraft\(releaseDraft\)\)[\s\S]*?setDraft\(releaseDraft\)[\s\S]*?setProject\(generated\)/,
   );
   assert.match(
     customCreateSource,
-    /const openOptimization = async[\s\S]*?setWorkspaceMode\("optimize"\)/,
-  );
-  assert.match(
-    customCreateSource,
-    /const handleWorkspaceChange = async[\s\S]*?nextMode === "publish"[\s\S]*?materializePublishRelease\(\)/,
+    /const handleWorkspaceChange = async[\s\S]*?nextMode === "publish"[\s\S]*?openPublishPreview\(\)/,
   );
   assert.doesNotMatch(
     customCreateSource,
@@ -298,10 +272,7 @@ test("preserves the ordinary zero-component release draft", () => {
 });
 
 test("carries the selected variant into debug generation and deployment", () => {
-  assert.match(
-    customCreateSource,
-    /const updateHarnessOptimization = \([\s\S]*?harnessSidecar: harnessIntentFromOptimizations\(/,
-  );
+  assert.match(customCreateSource, /selectedHarnessOptimizations\(draft\)/);
   assert.doesNotMatch(customCreateSource, /harnessSidecar: undefined/);
   assert.match(clientSource, /body: JSON\.stringify\(\{\s*draft,/);
   assert.match(clientSource, /harnessSidecar: opts\?\.harnessSidecar/);
@@ -325,21 +296,20 @@ test("marks a running variant stale when the draft optimization selection change
 });
 
 test("applies scenario defaults while allowing an empty custom selection", () => {
-  assert.match(
-    customCreateSource,
-    /const updateHarnessOptimizationProfile = \([\s\S]*?harnessProfileDefaultOptimizations\(profile\)/,
-  );
-  assert.doesNotMatch(customCreateSource, /!harnessOptimizationProfile/);
+  assert.deepEqual(harnessProfileDefaultOptimizations("custom"), []);
+  assert.deepEqual(harnessProfileDefaultOptimizations("ops"), [
+    "context_engine",
+    "verifier",
+    "long_run_control",
+    "mcp_resilience",
+  ]);
   assert.match(harnessOptionsSource, /不勾选时不启动 Sidecar/);
   assert.match(customCreateSource, /优化场景：\$\{harnessSidecarProfileLabel/);
   assert.match(customCreateSource, /harnessOptimizations\.map\(harnessSidecarOptionLabel\)/);
 });
 
-test("treats checkbox changes as metadata and defers checks to runtime actions", () => {
-  assert.match(
-    customCreateSource,
-    /const updateHarnessOptimization = \([\s\S]*?setDraft\(\(current\) =>/,
-  );
+test("defers Harness checks to runtime actions without the removed checkbox UI", () => {
+  assert.doesNotMatch(customCreateSource, /updateHarnessOptimization/);
   assert.doesNotMatch(customCreateSource, /resolveHarnessOptimizationPlan/);
   assert.doesNotMatch(customCreateSource, /harnessCatalogLoading/);
   assert.match(

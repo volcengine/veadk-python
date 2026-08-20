@@ -100,11 +100,41 @@ test("offers insertion on the first edge and free side connections", () => {
     source,
     /workflowEdge\("terminal-input", rootFlow\.entry, \{[\s\S]*?parentPath: \[\],[\s\S]*?index: 0,/,
   );
-  assert.match(source, /portID: `input-\$\{inputLocation\}`/);
-  assert.match(source, /portID: `input-\$\{secondaryInputLocation\}`/);
-  assert.match(source, /portID: `output-\$\{outputLocation\}`/);
-  assert.match(source, /portID: `output-\$\{secondaryOutputLocation\}`/);
+  assert.match(source, /const agentPortLocations = \["top", "right", "bottom", "left"\] as const/);
+  assert.match(source, /portID: `input-\$\{location\}`/);
+  assert.match(source, /portID: `output-\$\{location\}`/);
   assert.match(source, /twoWayConnection:\s*true/);
+  assert.match(
+    cssSource,
+    /data-port-entity-type="input"\]\[data-port-entity-id\$="-top"\][\s\S]*?transform:\s*translateX\(-6px\)/,
+  );
+  assert.match(
+    cssSource,
+    /data-port-entity-type="output"\]\[data-port-entity-id\$="-top"\][\s\S]*?transform:\s*translateX\(6px\)/,
+  );
+  assert.match(
+    cssSource,
+    /data-port-entity-type="input"\]\[data-port-entity-id\$="-left"\][\s\S]*?transform:\s*translateY\(-6px\)/,
+  );
+  assert.match(
+    cssSource,
+    /data-port-entity-type="output"\]\[data-port-entity-id\$="-left"\][\s\S]*?transform:\s*translateY\(6px\)/,
+  );
+});
+
+test("keeps the builder chat inside the narrow workspace", () => {
+  assert.match(
+    customCreateStyles,
+    /@media \(max-width: 860px\)[\s\S]*?\.cw-builder-chat-motion\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?width:\s*100%;/,
+  );
+  assert.match(
+    customCreateStyles,
+    /\.cw-open-chat-motion\s*\{[\s\S]*?z-index:\s*8;/,
+  );
+  assert.match(
+    customCreateStyles,
+    /\.cw-canvas-motion\s*\{[\s\S]*?position:\s*relative;[\s\S]*?z-index:\s*0;[\s\S]*?isolation:\s*isolate;/,
+  );
 });
 
 test("matches the Figma connector color, weight, orthogonal shape, and arrow style", () => {
