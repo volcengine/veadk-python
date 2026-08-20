@@ -1,6 +1,5 @@
 import "./styles.css";
 
-import React from "react";
 import ReactDOM from "react-dom/client";
 import { MotionConfig } from "motion/react";
 import { PhotoProvider } from "react-photo-view";
@@ -53,13 +52,12 @@ window.addEventListener("vite:preloadError", (event) => {
   return true;
 })() ||
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    {/* reducedMotion="user" makes all motion components honor the OS
-        prefers-reduced-motion setting (transforms/opacity are stilled). */}
-    <MotionConfig reducedMotion="user">
-      <PhotoProvider maskOpacity={0.9}>
-        <App />
-      </PhotoProvider>
-    </MotionConfig>
-  </React.StrictMode>,
+  // FlowGram creates its dependency-injection bindings during the initial
+  // render, so the application root must mount once instead of using the
+  // development-only StrictMode double mount.
+  <MotionConfig reducedMotion="user">
+    <PhotoProvider maskOpacity={0.9}>
+      <App />
+    </PhotoProvider>
+  </MotionConfig>,
 );
