@@ -490,7 +490,7 @@ test("deployed agent detail connects, refreshes the current Agent, then opens a 
   );
   assert.match(
     appSource,
-    /const refreshCurrentAgentAndStartNewChat[\s\S]*?setConnections\(loadConnections\(\)\)[\s\S]*?setAgentInfoRefreshKey[\s\S]*?setAppName\(id\)[\s\S]*?startNewChat\(\)/,
+    /const refreshCurrentAgentAndStartNewChat[\s\S]*?loadHydratedSessions\(id, userId\)[\s\S]*?getAgentInfo\(id\)[\s\S]*?setConnections\(nextConnections\)[\s\S]*?setAgentInfo\(nextAgentInfo\)[\s\S]*?setAppName\(id\)[\s\S]*?startNewChat\(\)/,
   );
   assert.match(appSource, /await refreshCurrentAgentAndStartNewChat\(agent\.id\)/);
   assert.match(appSource, /onTalkAgent=\{talkToWorkspaceAgent\}/);

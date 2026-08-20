@@ -49,6 +49,7 @@ import {
   getUiConfig,
   type AdkEvent,
   type AgentInfo,
+  type AutomaticEvaluationStatusesResponse,
   type AgentNode,
   type AgentTarget,
   type AgentFeedbackCase,
@@ -285,6 +286,12 @@ interface NewChatCapabilitiesState {
   skillCustomizationEnabled?: boolean;
 }
 
+interface PreparedAgentSelection {
+  agentId: string;
+  userId: string;
+  automaticEvaluationStatuses?: AutomaticEvaluationStatusesResponse;
+}
+
 async function probeNewChatCapabilities(
   agentId: string,
 ): Promise<NewChatCapabilitiesState> {
@@ -315,6 +322,29 @@ async function probeNewChatCapabilities(
     skillCustomizationEnabled:
       skillResult.status === "fulfilled" && skillResult.value.enabled,
   };
+}
+
+async function loadHydratedSessions(
+  appName: string,
+  userId: string,
+): Promise<AdkSession[]> {
+  const list = await listSessions(appName, userId);
+  const results = await Promise.allSettled(
+    list.map((session) =>
+      session.events?.length
+        ? Promise.resolve(session)
+        : getSession(appName, userId, session.id),
+    ),
+  );
+  const failed = results.find(
+    (result) =>
+      result.status === "rejected" &&
+      !/get session failed:\s*404\b/i.test(String(result.reason)),
+  );
+  if (failed?.status === "rejected") throw failed.reason;
+  return results.flatMap((result) =>
+    result.status === "fulfilled" ? [result.value] : [],
+  );
 }
 
 type CreateView = "custom" | "package" | "migration" | null;
@@ -1003,6 +1033,8 @@ export default function App() {
   const [sessionId, setSessionId] = useState("");
   const creatingSessionRef = useRef<Promise<string> | null>(null);
   const sessionRefreshRequestRef = useRef(0);
+  const agentSelectionPreparationRequestRef = useRef(0);
+  const preparedAgentSelectionRef = useRef<PreparedAgentSelection | null>(null);
   const [initializingSession, setInitializingSession] = useState(false);
   const [pendingTurns, setPendingTurns] = useState<Turn[]>([]);
   const [sandboxSession, setSandboxSession] =
@@ -2814,6 +2846,13 @@ export default function App() {
       setNewChatCapabilities({});
       return;
     }
+    const preparedSelection = preparedAgentSelectionRef.current;
+    if (
+      preparedSelection?.agentId === appName &&
+      preparedSelection.userId === userId
+    ) {
+      return;
+    }
     const cached = newChatCapabilitiesCacheRef.current.get(appName);
     if (cached) {
       setNewChatCapabilities(cached);
@@ -3165,6 +3204,14 @@ export default function App() {
     };
   }, [agentDetailTarget, appName, myAgents, userId, sessionId]);
   useEffect(() => {
+    const preparedSelection = preparedAgentSelectionRef.current;
+    if (
+      preparedSelection?.agentId === appName &&
+      preparedSelection.userId === userId
+    ) {
+      setCapabilitiesLoading(false);
+      return;
+    }
     let cancelled = false;
     setAgentInfo(null);
     setInvocation(emptyInvocation());
@@ -3233,6 +3280,38 @@ export default function App() {
         );
       }
 
+      function applyStatuses(response: AutomaticEvaluationStatusesResponse) {
+        const nextEvaluating = new Set(
+          response.items
+            .filter((status) => status.state === "running")
+            .map((status) => status.sessionId),
+        );
+        setEvaluatingSids((current) => {
+          if (
+            current.size === nextEvaluating.size &&
+            [...nextEvaluating].every((sid) => current.has(sid))
+          ) {
+            return current;
+          }
+          return nextEvaluating;
+        });
+
+        if (nextEvaluating.size > 0) {
+          schedulePoll(AUTO_EVALUATION_RUNNING_POLL_MS);
+          return;
+        }
+        const pendingDueTimes = response.items
+          .filter((status) => status.state === "pending")
+          .map((status) => Date.parse(status.dueAt))
+          .filter(Number.isFinite);
+        if (pendingDueTimes.length > 0) {
+          schedulePoll(Math.max(
+            AUTO_EVALUATION_MIN_PENDING_POLL_MS,
+            Math.min(...pendingDueTimes) - Date.now(),
+          ));
+        }
+      }
+
       async function poll() {
         const generation = ++requestGeneration;
         try {
@@ -3243,36 +3322,7 @@ export default function App() {
             userId,
           });
           if (disposed || generation !== requestGeneration) return;
-
-          const nextEvaluating = new Set(
-            response.items
-              .filter((status) => status.state === "running")
-              .map((status) => status.sessionId),
-          );
-          setEvaluatingSids((current) => {
-            if (
-              current.size === nextEvaluating.size &&
-              [...nextEvaluating].every((sid) => current.has(sid))
-            ) {
-              return current;
-            }
-            return nextEvaluating;
-          });
-
-          if (nextEvaluating.size > 0) {
-            schedulePoll(AUTO_EVALUATION_RUNNING_POLL_MS);
-            return;
-          }
-          const pendingDueTimes = response.items
-            .filter((status) => status.state === "pending")
-            .map((status) => Date.parse(status.dueAt))
-            .filter(Number.isFinite);
-          if (pendingDueTimes.length > 0) {
-            schedulePoll(Math.max(
-              AUTO_EVALUATION_MIN_PENDING_POLL_MS,
-              Math.min(...pendingDueTimes) - Date.now(),
-            ));
-          }
+          applyStatuses(response);
         } catch {
           if (!disposed && generation === requestGeneration) {
             schedulePoll(AUTO_EVALUATION_RETRY_POLL_MS);
@@ -3285,7 +3335,19 @@ export default function App() {
         void poll();
       };
       automaticEvaluationStatusRefreshRef.current = refresh;
-      refresh();
+      const preparedSelection = preparedAgentSelectionRef.current;
+      if (
+        preparedSelection?.agentId === appName &&
+        preparedSelection.userId === userId
+      ) {
+        if (preparedSelection.automaticEvaluationStatuses) {
+          applyStatuses(preparedSelection.automaticEvaluationStatuses);
+        } else {
+          schedulePoll(AUTO_EVALUATION_RETRY_POLL_MS);
+        }
+      } else {
+        refresh();
+      }
 
       return () => {
         disposed = true;
@@ -3299,6 +3361,13 @@ export default function App() {
     [appName, connections, userId],
   );
   // Abort the in-flight stream when the whole view unmounts.
+  useEffect(
+    () => () => {
+      agentSelectionPreparationRequestRef.current += 1;
+      preparedAgentSelectionRef.current = null;
+    },
+    [],
+  );
   useEffect(
     () => () => streamAbortsRef.current.forEach((c) => c.abort()),
     [],
@@ -3324,6 +3393,14 @@ export default function App() {
   // exists and we weren't on a create view); otherwise start a fresh chat.
   useEffect(() => {
     if (myAgents || agentDetailTarget || sandboxSession || !appName || !userId) {
+      return;
+    }
+    const preparedSelection = preparedAgentSelectionRef.current;
+    if (
+      preparedSelection?.agentId === appName &&
+      preparedSelection.userId === userId
+    ) {
+      preparedAgentSelectionRef.current = null;
       return;
     }
     let cancelled = false;
@@ -3368,37 +3445,26 @@ export default function App() {
     }
   }
 
+  function commitHydratedSessions(app: string, hydrated: AdkSession[]) {
+    setTokenUsageBySession((current) => {
+      const next = { ...current };
+      for (const session of hydrated) {
+        next[sessionUsageKey(app, session.id)] = aggregateTokenUsage(
+          session.events ?? [],
+        );
+      }
+      return next;
+    });
+    setSessions(hydrated);
+  }
+
   async function refreshSessions(app: string): Promise<AdkSession[]> {
     const request = sessionRefreshRequestRef.current + 1;
     sessionRefreshRequestRef.current = request;
     try {
-      const list = await listSessions(app, userId);
-      // Hydrate events so the sidebar can show a title per session.
-      const results = await Promise.allSettled(
-        list.map((s) =>
-          s.events?.length ? Promise.resolve(s) : getSession(app, userId, s.id),
-        ),
-      );
-      const failed = results.find(
-        (result) =>
-          result.status === "rejected" &&
-          !/get session failed:\s*404\b/i.test(String(result.reason)),
-      );
-      if (failed?.status === "rejected") throw failed.reason;
-      const hydrated = results.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-      );
+      const hydrated = await loadHydratedSessions(app, userId);
       if (sessionRefreshRequestRef.current !== request) return hydrated;
-      setTokenUsageBySession((current) => {
-        const next = { ...current };
-        for (const session of hydrated) {
-          next[sessionUsageKey(app, session.id)] = aggregateTokenUsage(
-            session.events ?? [],
-          );
-        }
-        return next;
-      });
-      setSessions(hydrated);
+      commitHydratedSessions(app, hydrated);
       return hydrated;
     } catch (e) {
       if (sessionRefreshRequestRef.current === request) setError(String(e));
@@ -5491,17 +5557,59 @@ export default function App() {
     if (errorMessage) throw new Error(errorMessage);
   };
 
-  // Refresh the selected Agent before leaving the current page, then open a
-  // fresh chat. Background streams keep persisting to their original sessions.
+  // Prepare every piece of first-paint Agent data before changing the visible
+  // selection. Background streams keep persisting to their original sessions.
   const refreshCurrentAgentAndStartNewChat = async (id: string) => {
-    setConnections(loadConnections());
-    let capabilities = newChatCapabilitiesCacheRef.current.get(id);
-    if (!capabilities) {
-      capabilities = await probeNewChatCapabilities(id);
-      newChatCapabilitiesCacheRef.current.set(id, capabilities);
-    }
+    const request = agentSelectionPreparationRequestRef.current + 1;
+    agentSelectionPreparationRequestRef.current = request;
+    const nextConnections = loadConnections();
+    const cachedCapabilities = newChatCapabilitiesCacheRef.current.get(id);
+    const evaluationTarget = automaticEvaluationTargetForSelection(
+      nextConnections,
+      id,
+    );
+    const [capabilities, hydratedSessions, nextAgentInfo, evaluationStatuses] =
+      await Promise.all([
+        cachedCapabilities
+          ? Promise.resolve(cachedCapabilities)
+          : probeNewChatCapabilities(id),
+        loadHydratedSessions(id, userId),
+        getAgentInfo(id).catch(() => null),
+        evaluationTarget
+          ? getAutomaticEvaluationStatuses({
+              runtimeId: evaluationTarget.runtimeId,
+              region: evaluationTarget.region,
+              appName: evaluationTarget.appName,
+              userId,
+            }).catch(() => undefined)
+          : Promise.resolve(undefined),
+      ]);
+    if (agentSelectionPreparationRequestRef.current !== request) return;
+
+    const selectionEffectsWillRerun =
+      id !== appName ||
+      myAgents ||
+      agentDetailTarget !== null ||
+      sandboxSession !== null;
+    preparedAgentSelectionRef.current = selectionEffectsWillRerun
+      ? {
+          agentId: id,
+          userId,
+          automaticEvaluationStatuses: evaluationStatuses,
+        }
+      : null;
+    sessionRefreshRequestRef.current += 1;
+    newChatCapabilitiesCacheRef.current.set(id, capabilities);
+    setConnections(nextConnections);
     setNewChatCapabilities(capabilities);
-    setAgentInfoRefreshKey((key) => key + 1);
+    commitHydratedSessions(id, hydratedSessions);
+    setAgentInfo(nextAgentInfo);
+    setCapabilitiesLoading(false);
+    setEvaluatingSids(new Set(
+      evaluationStatuses?.items
+        .filter((status) => status.state === "running")
+        .map((status) => status.sessionId) ?? [],
+    ));
     setAppName(id);
     exitAgentDetailContext();
     setFocusedDeploymentTaskId("");
