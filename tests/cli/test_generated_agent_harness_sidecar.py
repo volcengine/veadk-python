@@ -74,7 +74,7 @@ def test_selected_component_generates_extra_app_plugins_and_close_lifecycle(
     main_py = files["main.py"]
     agent_py = files["agents/sidecar_agent/agent.py"]
     assert "veadk-python[harness-sidecar]" in requirements
-    assert "agentkit-sdk-python==0.8.1" in requirements
+    assert "agentkit-sdk-python==0.8.4" in requirements
     assert "bytedance-agentkit-harness-sidecar" not in requirements
     assert "HarnessExtension.from_env()" in agent_py
     assert "plugins=harness_extension.plugins()" in agent_py
