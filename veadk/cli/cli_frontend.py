@@ -45,6 +45,10 @@ from pydantic import BaseModel, Field
 
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
+from veadk.cli.managed_sidecar_source import (
+    ManagedSidecarSourceError,
+    stage_managed_sidecar_veadk_source,
+)
 from veadk.cli.studio_model_catalog import (
     is_byteplus_model,
     is_provider_modelark_base_url,
@@ -103,8 +107,7 @@ _SENSITIVE_LOG_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
-        r"\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\."
-        r"[A-Za-z0-9_-]{10,}\b"
+        r"\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\." r"[A-Za-z0-9_-]{10,}\b"
     ),
 )
 _CP_BUILD_LOG_MAX_CHARS = 16000
@@ -117,6 +120,14 @@ _CP_PIPELINE_REUSED_RE = re.compile(r"Reusing pipeline by name:\s*(?P<name>.+)$"
 _CP_PIPELINE_CREATING_RE = re.compile(r"Creating new pipeline:\s*(?P<name>.+)$")
 _CP_PIPELINE_RUN_RE = re.compile(
     r"Pipeline triggered successfully,\s*run ID:\s*(?P<id>\S+)"
+)
+_CP_STRUCTURED_PIPELINE_RE = re.compile(
+    r"triggering build\s*\(pipeline=(?P<id>[^)\s]+)\)",
+    re.IGNORECASE,
+)
+_CP_STRUCTURED_RUN_RE = re.compile(
+    r"\brun id\s+(?P<id>[^;\s]+);\s*waiting",
+    re.IGNORECASE,
 )
 _RUNTIME_DESCRIPTION_MAX_BYTES = 255
 _RUNTIME_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -179,6 +190,39 @@ def _adapt_migration_model_envs(
     )
     if not legacy_model or legacy_is_other_provider:
         runtime_envs["MODEL_NAME"] = selected_model
+
+
+def _prepare_managed_sidecar_runtime_envs(
+    runtime_envs: dict[str, str],
+    provider: str,
+    sidecar_plan: Mapping[str, Any] | None,
+) -> str | None:
+    """Normalize and validate env required by a managed Sidecar revision."""
+
+    _adapt_migration_model_envs(runtime_envs, provider)
+    if any(
+        not runtime_envs.get(key, "").strip()
+        for key in (
+            "MODEL_AGENT_API_BASE",
+            "MODEL_AGENT_API_KEY",
+            "MODEL_AGENT_NAME",
+        )
+    ):
+        return (
+            "Harness Sidecar 需要完整的模型地址、API Key 和模型名称，"
+            "请返回模型配置后重新发布。"
+        )
+    runtime_envs.setdefault("MODEL_NAME", runtime_envs["MODEL_AGENT_NAME"])
+    effective_components = set(
+        sidecar_plan.get("effectiveComponents") or []
+        if isinstance(sidecar_plan, Mapping)
+        else []
+    )
+    if effective_components & {"mcp_resilience", "sql_readonly"} and any(
+        not runtime_envs.get(key, "").strip() for key in ("MCP_URLS", "MCP_API_KEY")
+    ):
+        return "已选择 MCP 稳定性治理，请在发布配置中填写 MCP_URLS 和 MCP_API_KEY。"
+    return None
 
 
 def _studio_storage_environment(
@@ -449,6 +493,10 @@ def _cp_metadata_from_reporter_message(message: object) -> dict[str, str]:
     if match := _CP_PIPELINE_CREATING_RE.search(text):
         return {"pipeline_name": match.group("name").strip()}
     if match := _CP_PIPELINE_RUN_RE.search(text):
+        return {"pipeline_run_id": match.group("id").strip()}
+    if match := _CP_STRUCTURED_PIPELINE_RE.search(text):
+        return {"pipeline_id": match.group("id").strip()}
+    if match := _CP_STRUCTURED_RUN_RE.search(text):
         return {"pipeline_run_id": match.group("id").strip()}
     return {}
 
@@ -2089,6 +2137,8 @@ def _run_frontend_server(
             "A2A_REGISTRY_ACCESS_KEY",
             "A2A_REGISTRY_SECRET_KEY",
             "A2A_REGISTRY_SESSION_TOKEN",
+            "MCP_URLS",
+            "MCP_API_KEY",
             *_STUDIO_STORAGE_ENV_KEYS,
         }
     )
@@ -2885,12 +2935,112 @@ def _run_frontend_server(
         _files_from_zip,
         materialize_selected_skills,
     )
+    from veadk.extensions.harness.sidecar import (
+        HarnessSidecarDependencyError,
+        agentkit_cli_executable,
+        get_studio_harness_sidecar_catalog,
+        normalize_studio_harness_intent,
+        resolve_studio_harness_sidecar_selection,
+        studio_harness_deployment_config,
+        studio_harness_runtime_env,
+    )
 
     _TEST_RUN_MAX_FILES = 300
     _TEST_RUN_MAX_FILE_BYTES = 256 * 1024
     _TEST_RUN_MAX_TOTAL_BYTES = 2 * 1024 * 1024
     _TEST_RUN_MAX_ACTIVE = 3
     _TEST_RUN_READY_TIMEOUT = 30.0
+
+    def _enabled_env_flag(name: str) -> bool:
+        value = os.getenv(name, "")
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    def _managed_sidecar_regions() -> list[str]:
+        return [
+            item.strip()
+            for item in os.getenv(
+                "VEADK_STUDIO_HARNESS_SIDECAR_REGIONS",
+                "",
+            ).split(",")
+            if item.strip()
+        ]
+
+    def _harness_sidecar_debug_capability() -> dict[str, Any]:
+        import platform
+
+        if not _enabled_env_flag("VEADK_STUDIO_HARNESS_SIDECAR_DEBUG_ENABLED"):
+            return {
+                "available": False,
+                "reason": "当前 Studio 环境未启用 Harness Sidecar 调试能力。",
+            }
+        supported_platform = (
+            sys.version_info[:2] == (3, 12)
+            and sys.platform.startswith("linux")
+            and platform.machine().lower() in {"x86_64", "amd64"}
+        )
+        if not supported_platform:
+            return {
+                "available": False,
+                "reason": (
+                    "Harness Sidecar 调试当前仅支持 CPython 3.12 / linux/amd64。"
+                ),
+            }
+        if not all(
+            os.getenv(name, "").strip()
+            for name in (
+                "HARNESS_SIDECAR_APIG_ENDPOINT",
+                "HARNESS_SIDECAR_APIG_API_KEY",
+            )
+        ):
+            return {
+                "available": False,
+                "reason": (
+                    "当前 Studio Runtime 尚未完成 Harness Sidecar APIG 自调用绑定。"
+                ),
+            }
+        return {"available": True, "reason": ""}
+
+    def _harness_sidecar_deployment_capability() -> dict[str, Any]:
+        regions = _managed_sidecar_regions()
+        try:
+            agentkit_cli_executable()
+            cli_available = True
+        except HarnessSidecarDependencyError:
+            cli_available = False
+        available = bool(
+            cli_available
+            and regions
+            and os.getenv("VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE", "").strip()
+        )
+        return {
+            "available": available,
+            "reason": (
+                ""
+                if available
+                else "当前 Studio 尚未配置受控 Harness Sidecar Runtime artifact。"
+            ),
+            "regions": regions,
+            "platform": "linux/amd64",
+            "pythonVersion": "3.12",
+            "maxInstances": 1,
+        }
+
+    @app.get("/web/harness-sidecar/catalog")
+    async def _get_harness_sidecar_catalog(request: Request):
+        _require_agent_management(request)
+        return get_studio_harness_sidecar_catalog()
+
+    @app.post("/web/harness-sidecar/resolve")
+    async def _resolve_harness_sidecar(request: Request):
+        _require_agent_management(request)
+        data = await request.json()
+        intent = data.get("intent") if isinstance(data, dict) else None
+        try:
+            return resolve_studio_harness_sidecar_selection(intent)
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except HarnessSidecarDependencyError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
 
     @dataclass
     class _GeneratedAgentTestRun:
@@ -2901,6 +3051,7 @@ def _run_frontend_server(
         process: subprocess.Popen
         expires_at: float
         owner_id: str
+        plan_hash: str = ""
 
     _test_runs: dict[str, _GeneratedAgentTestRun] = {}
     _test_runs_creating: dict[str, int] = {}
@@ -3497,12 +3648,353 @@ def _run_frontend_server(
             ),
         )
 
+    async def _wait_for_debug_harness_sidecar_ready(
+        base_url: str,
+        plan: Mapping[str, Any],
+    ) -> None:
+        """Verify the generated app and Runtime APIG expose the same active plan."""
+
+        import asyncio
+
+        expected_hash = str(plan.get("planHash") or "")
+        expected_components = {
+            str(item) for item in plan.get("effectiveComponents") or []
+        }
+        gateway_endpoint = os.environ["HARNESS_SIDECAR_APIG_ENDPOINT"].rstrip("/")
+        gateway_key = os.environ["HARNESS_SIDECAR_APIG_API_KEY"]
+        required_ports = [18787]
+        if "mcp_resilience" in expected_components:
+            required_ports.append(18788)
+        deadline = time.time() + _TEST_RUN_READY_TIMEOUT
+        last_stage = "application status"
+        async with httpx.AsyncClient(timeout=None) as client:
+            while time.time() < deadline:
+                try:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        break
+                    status_response = await client.get(
+                        f"{base_url}/web/harness-sidecar/status",
+                        timeout=min(3.0, remaining),
+                    )
+                    status_payload = status_response.json()
+                    if (
+                        status_response.status_code != 200
+                        or not isinstance(status_payload, Mapping)
+                        or status_payload.get("status") not in {"ready", "ok"}
+                        or status_payload.get("planHash") != expected_hash
+                        or not expected_components.issubset(
+                            {
+                                str(item)
+                                for item in status_payload.get(
+                                    "effectiveComponents", []
+                                )
+                            }
+                        )
+                    ):
+                        last_stage = "application active plan"
+                        await asyncio.sleep(0.25)
+                        continue
+                    gateway_ready = True
+                    for port in required_ports:
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            gateway_ready = False
+                            break
+                        gateway_response = await client.get(
+                            f"{gateway_endpoint}/healthz",
+                            headers={
+                                "Authorization": _agentkit_authorization_header(
+                                    gateway_key
+                                ),
+                                "X-Faas-Proxy-Port": str(port),
+                            },
+                            timeout=min(3.0, remaining),
+                        )
+                        if gateway_response.status_code != 200:
+                            gateway_ready = False
+                            last_stage = f"Runtime APIG port {port}"
+                            break
+                    if gateway_ready:
+                        return
+                except (httpx.HTTPError, TypeError, ValueError):
+                    last_stage = "Runtime APIG readiness"
+                await asyncio.sleep(0.25)
+        raise HTTPException(
+            status_code=504,
+            detail=f"Harness Sidecar 启动检查超时（{last_stage}）。",
+        )
+
     @app.post("/web/generated-agent-projects")
     async def _generate_agent_project(request: Request):
         _require_agent_management(request)
         data = await request.json()
         project = await _generate_project_from_request(data, debug=False)
         return project.model_dump()
+
+    @app.post("/web/github-delivery/source-sync")
+    async def _create_github_source_sync(request: Request):
+        """Push Studio-generated Agent source to the configured GitHub branch."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                create_github_cicd_pipeline,
+            )
+
+            return create_github_cicd_pipeline(
+                project=data.get("project") or {},
+                github_url=str(data.get("githubUrl") or ""),
+                github_token=str(data.get("githubToken") or ""),
+                base_branch=str(data.get("baseBranch") or "main"),
+                region=str(data.get("region") or "cn-beijing"),
+                cloud_provider=str(data.get("cloudProvider") or provider),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except Exception as error:
+            logger.exception("Failed to sync GitHub source")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(
+                    error,
+                    secrets=(str(data.get("githubToken") or ""),),
+                ),
+            ) from error
+
+    @app.post("/web/github-delivery/cicd-pipeline")
+    async def _create_github_delivery_cicd_pipeline(request: Request):
+        """Create or update the GitHub Actions workflow for Runtime delivery."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                create_github_delivery_cicd_pipeline,
+            )
+
+            return create_github_delivery_cicd_pipeline(
+                github_url=str(data.get("githubUrl") or ""),
+                github_token=str(data.get("githubToken") or ""),
+                base_branch=str(data.get("baseBranch") or "main"),
+                runtime_name=str(data.get("runtimeName") or ""),
+                runtime_id=str(data.get("runtimeId") or ""),
+                region=str(data.get("region") or "cn-beijing"),
+                cloud_provider=str(data.get("cloudProvider") or provider),
+                project_path=str(data.get("projectPath") or "."),
+                volcengine_access_key=str(data.get("volcengineAccessKey") or ""),
+                volcengine_secret_key=str(data.get("volcengineSecretKey") or ""),
+                volcengine_session_token=str(data.get("volcengineSessionToken") or ""),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except Exception as error:
+            logger.exception("Failed to create GitHub delivery CICD pipeline")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(
+                    error,
+                    secrets=(
+                        str(data.get("githubToken") or ""),
+                        str(data.get("volcengineAccessKey") or ""),
+                        str(data.get("volcengineSecretKey") or ""),
+                        str(data.get("volcengineSessionToken") or ""),
+                    ),
+                ),
+            ) from error
+
+    @app.post("/web/github-delivery/init-main")
+    async def _initialize_github_delivery_main(request: Request):
+        """Initialize target branch with Agent source and Runtime delivery workflow."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                initialize_github_delivery_main,
+            )
+
+            return initialize_github_delivery_main(
+                project=data.get("project") or {},
+                github_url=str(data.get("githubUrl") or ""),
+                github_token=str(data.get("githubToken") or ""),
+                base_branch=str(data.get("baseBranch") or "main"),
+                runtime_name=str(data.get("runtimeName") or ""),
+                runtime_id=str(data.get("runtimeId") or ""),
+                region=str(data.get("region") or "cn-beijing"),
+                cloud_provider=str(data.get("cloudProvider") or provider),
+                project_path=str(data.get("projectPath") or "."),
+                volcengine_access_key=str(data.get("volcengineAccessKey") or ""),
+                volcengine_secret_key=str(data.get("volcengineSecretKey") or ""),
+                volcengine_session_token=str(data.get("volcengineSessionToken") or ""),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except Exception as error:
+            logger.exception("Failed to initialize GitHub delivery main")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(
+                    error,
+                    secrets=(
+                        str(data.get("githubToken") or ""),
+                        str(data.get("volcengineAccessKey") or ""),
+                        str(data.get("volcengineSecretKey") or ""),
+                        str(data.get("volcengineSessionToken") or ""),
+                    ),
+                ),
+            ) from error
+
+    @app.post("/web/github-delivery/source-sync/cicd")
+    async def _attach_github_delivery_cicd_to_source_sync(request: Request):
+        """Attach Runtime delivery workflow to an existing source sync branch."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                attach_github_delivery_cicd_pipeline,
+            )
+
+            return attach_github_delivery_cicd_pipeline(
+                pipeline_id=str(data.get("pipelineId") or ""),
+                runtime_name=str(data.get("runtimeName") or ""),
+                runtime_id=str(data.get("runtimeId") or ""),
+                region=str(data.get("region") or "cn-beijing"),
+                cloud_provider=str(data.get("cloudProvider") or provider),
+                project_path=str(data.get("projectPath") or "."),
+                github_token=str(data.get("githubToken") or ""),
+                volcengine_access_key=str(data.get("volcengineAccessKey") or ""),
+                volcengine_secret_key=str(data.get("volcengineSecretKey") or ""),
+                volcengine_session_token=str(data.get("volcengineSessionToken") or ""),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except Exception as error:
+            logger.exception("Failed to attach GitHub delivery CICD pipeline")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(
+                    error,
+                    secrets=(
+                        str(data.get("githubToken") or ""),
+                        str(data.get("volcengineAccessKey") or ""),
+                        str(data.get("volcengineSecretKey") or ""),
+                        str(data.get("volcengineSessionToken") or ""),
+                    ),
+                ),
+            ) from error
+
+    @app.get("/web/github-delivery/versions")
+    async def _list_github_delivery_versions(
+        request: Request,
+        runtimeId: str = "",
+    ):
+        """Return GitHub delivery versions for a Runtime."""
+        _require_agent_management(request)
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                list_github_delivery_versions,
+            )
+
+            return list_github_delivery_versions(runtime_id=runtimeId)
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+
+    @app.post("/web/github-delivery/rollback-pr")
+    async def _create_github_delivery_rollback_pr(request: Request):
+        """Create a GitHub rollback PR for a Runtime-bound delivery branch."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                create_github_delivery_rollback_pr,
+            )
+
+            return create_github_delivery_rollback_pr(
+                runtime_id=str(data.get("runtimeId") or ""),
+                target_commit_sha=str(data.get("targetCommitSha") or ""),
+                github_token=str(data.get("githubToken") or ""),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except Exception as error:
+            logger.exception("Failed to create GitHub delivery rollback PR")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(
+                    error,
+                    secrets=(str(data.get("githubToken") or ""),),
+                ),
+            ) from error
+
+    @app.get("/web/github-cicd/runtime-binding")
+    async def _get_github_cicd_runtime_binding(
+        request: Request,
+        runtimeId: str = "",
+    ):
+        """Return the GitHub CI/CD binding for a Runtime, when present."""
+        _require_agent_management(request)
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                get_github_cicd_runtime_binding,
+            )
+
+            return get_github_cicd_runtime_binding(runtime_id=runtimeId)
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+
+    @app.post("/web/github-cicd/runtime-binding")
+    async def _bind_github_cicd_runtime(request: Request):
+        """Bind a GitHub CI/CD pipeline record to an AgentKit Runtime."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                bind_github_cicd_runtime,
+            )
+
+            return bind_github_cicd_runtime(
+                pipeline_id=str(data.get("pipelineId") or ""),
+                runtime_id=str(data.get("runtimeId") or ""),
+                region=str(data.get("region") or "cn-beijing"),
+                cloud_provider=str(data.get("cloudProvider") or provider),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+
+    @app.post("/web/github-cicd/runtime-sync")
+    async def _sync_github_cicd_runtime(request: Request):
+        """Sync current AgentProject files to the PR bound to a Runtime."""
+        _require_agent_management(request)
+        data = await request.json()
+        try:
+            from veadk.cli.github_cicd import (
+                GitHubCicdError,
+                sync_github_cicd_runtime,
+            )
+
+            return sync_github_cicd_runtime(
+                runtime_id=str(data.get("runtimeId") or ""),
+                project=data.get("project") or {},
+                github_token=str(data.get("githubToken") or ""),
+            )
+        except GitHubCicdError as error:
+            raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except Exception as error:
+            logger.exception("Failed to sync GitHub CI/CD pipeline")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(
+                    error,
+                    secrets=(str(data.get("githubToken") or ""),),
+                ),
+            ) from error
 
     @app.post("/web/generated-agent-drafts")
     async def _generate_agent_draft(request: Request):
@@ -3557,6 +4049,41 @@ def _run_frontend_server(
                 data,
                 debug=True,
             )
+            sidecar_env: dict[str, str] = {}
+            sidecar_plan: dict[str, Any] | None = None
+            if draft.harnessSidecar and draft.harnessSidecar.enabled:
+                capability = _harness_sidecar_debug_capability()
+                if not capability["available"]:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=capability["reason"],
+                    )
+                try:
+                    sidecar_env, sidecar_plan = studio_harness_runtime_env(
+                        draft.harnessSidecar,
+                        transport="apig_runtime_port",
+                    )
+                except (HarnessSidecarDependencyError, ValueError) as error:
+                    raise HTTPException(status_code=409, detail=str(error)) from error
+                sidecar_env.update(
+                    {
+                        "HARNESS_SIDECAR_APIG_ENDPOINT": os.environ[
+                            "HARNESS_SIDECAR_APIG_ENDPOINT"
+                        ],
+                        "HARNESS_SIDECAR_APIG_API_KEY": os.environ[
+                            "HARNESS_SIDECAR_APIG_API_KEY"
+                        ],
+                    }
+                )
+                requested_plan_hash = draft.harnessSidecar.planHash or ""
+                if (
+                    requested_plan_hash
+                    and requested_plan_hash != sidecar_plan["planHash"]
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Harness Sidecar 配置已更新，请重新解析后再启动调试。",
+                    )
             runtime_envs: dict[str, str] = {}
             runtime_id = str(data.get("runtimeId") or "").strip()
             if runtime_id:
@@ -3595,6 +4122,10 @@ def _run_frontend_server(
             ]
             runner_env = _safe_runner_env()
             runner_env.update(runtime_envs)
+            for key in list(runner_env):
+                if key.startswith("HARNESS_"):
+                    runner_env.pop(key)
+            runner_env.update(sidecar_env)
             runner_env.update(debug_runtime_env_from_draft(draft))
             selected_api_key_id = draft.deployment.modelApiKeyId.strip()
             selected_api_key_name = draft.deployment.modelApiKeyName.strip()
@@ -3640,6 +4171,8 @@ def _run_frontend_server(
                 stdout_path,
                 stderr_path,
             )
+            if sidecar_plan is not None:
+                await _wait_for_debug_harness_sidecar_ready(base_url, sidecar_plan)
 
             run_id = "tr_" + secrets.token_urlsafe(18)
             expires_at = time.time() + generated_agent_test_run_ttl
@@ -3651,6 +4184,7 @@ def _run_frontend_server(
                 process=proc,
                 expires_at=expires_at,
                 owner_id=owner_id,
+                plan_hash=(sidecar_plan or {}).get("planHash", ""),
             )
             with _test_runs_lock:
                 _test_runs[run_id] = run
@@ -3658,6 +4192,7 @@ def _run_frontend_server(
                 "runId": run_id,
                 "appName": app_name,
                 "expiresAt": int(expires_at),
+                "planHash": run.plan_hash,
             }
         except Exception as exc:
             if proc is not None:
@@ -4040,6 +4575,9 @@ def _run_frontend_server(
             raise HTTPException(status_code=404, detail="Deployment task not found")
 
         task["cancel_event"].set()
+        process = task.get("process")
+        if process is not None and process.poll() is None:
+            process.terminate()
         try:
             destroyed = _destroy_deploy_task_runtime(task)
         except Exception as e:
@@ -4051,6 +4589,66 @@ def _run_frontend_server(
             "destroyed": destroyed or bool(task.get("destroyed")),
         }
 
+    def _validate_harness_sidecar_project_files(
+        files: list[Any],
+        *,
+        enabled: bool,
+    ) -> None:
+        by_path = {
+            str(item.get("path") or ""): str(item.get("content") or "")
+            for item in files
+            if isinstance(item, dict)
+        }
+        all_source = "\n".join(by_path.values())
+        private_markers = (
+            "bytedance-agentkit-harness-sidecar",
+            "bytedance_agentkit_harness_sidecar",
+        )
+        if any(marker in all_source for marker in private_markers):
+            raise HTTPException(
+                status_code=422,
+                detail="生成项目不得包含 Harness Sidecar 私有 Runtime 包。",
+            )
+        requirements = by_path.get("requirements.txt", "")
+        agent_sources = "\n".join(
+            content
+            for path, content in by_path.items()
+            if path.startswith("agents/") and path.endswith("/agent.py")
+        )
+        app_source = by_path.get("app.py", "")
+        has_sidecar_source = any(
+            (
+                "veadk-python[harness-sidecar]" in requirements,
+                "HarnessExtension.from_env()" in agent_sources,
+                "plugins=harness_extension.plugins()" in agent_sources,
+                "harness_extension=harness_extension" in app_source,
+            )
+        )
+        if enabled and not all(
+            (
+                "veadk-python[harness-sidecar]" in requirements,
+                "HarnessExtension.from_env()" in agent_sources,
+                "plugins=harness_extension.plugins()" in agent_sources,
+                "harness_extension=harness_extension" in app_source,
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Harness Sidecar 配置与生成项目不一致，请重新生成发布快照。",
+            )
+        if not enabled and has_sidecar_source:
+            raise HTTPException(
+                status_code=409,
+                detail="普通 Runtime 配置与生成项目不一致，请重新生成发布快照。",
+            )
+
+    def _redact_managed_artifact_text(text: str, artifacts: list[str]) -> str:
+        redacted = str(text)
+        for artifact in artifacts:
+            if artifact:
+                redacted = redacted.replace(artifact, "<managed-sidecar-artifact>")
+        return redacted
+
     @app.post("/web/deploy-agentkit")
     async def _deploy_to_agentkit(request: Request):
         """Deploy to AgentKit, streaming per-stage progress as Server-Sent Events.
@@ -4060,9 +4658,10 @@ def _run_frontend_server(
         frames (phase = build|deploy|publish|evaluation); ends with a terminal
         `data: {done:true, success, agentName?, runtimeName?, url?, apikey?,
         runtimeId?, consoleUrl?, error?, phase?}` frame. `agentName` is the ADK
-        app name while `runtimeName` is the platform Runtime resource name. Uses
-        the AgentKit SDK in-process
-        (no CLI subprocess) and tags the runtime with the deploying user.
+        app name while `runtimeName` is the platform Runtime resource name.
+        Ordinary deployments keep the AgentKit Python SDK path. Managed Harness
+        Sidecar deployments use the configured AgentKit CLI structured release
+        path. Both paths tag the Runtime with the deploying user.
         """
         import tempfile
         import shutil
@@ -4151,15 +4750,65 @@ def _run_frontend_server(
                 status_code=400,
                 detail="Runtime minInstance cannot exceed maxInstance",
             )
-        needs_instance_update = not runtime_id and (
-            min_instance != 1 or max_instance != 5
+        try:
+            sidecar_intent = normalize_studio_harness_intent(data.get("harnessSidecar"))
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        sidecar_enabled = sidecar_intent.enabled
+        sidecar_cli_config: dict[str, Any] = {}
+        sidecar_plan: dict[str, Any] | None = None
+        sidecar_base_image = ""
+        sidecar_cli_runtime_env: dict[str, str] = {}
+        if sidecar_enabled:
+            capability = _harness_sidecar_deployment_capability()
+            if not capability["available"]:
+                raise HTTPException(status_code=409, detail=capability["reason"])
+            if provider != "volcengine":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Harness Sidecar 首期仅支持 Volcengine。",
+                )
+            if min_instance != 1 or max_instance != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Harness Sidecar 首期仅支持 Runtime 单实例 1～1。",
+                )
+            try:
+                sidecar_cli_config, sidecar_plan = studio_harness_deployment_config(
+                    sidecar_intent
+                )
+            except (HarnessSidecarDependencyError, ValueError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            if (
+                sidecar_intent.plan_hash
+                and sidecar_intent.plan_hash != sidecar_plan.get("planHash")
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Harness Sidecar 配置已更新，请重新解析后再部署。",
+                )
+            sidecar_base_image = os.getenv(
+                "VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE",
+                "",
+            ).strip()
+        _validate_harness_sidecar_project_files(files, enabled=sidecar_enabled)
+        needs_instance_update = (
+            not sidecar_enabled
+            and not runtime_id
+            and (min_instance != 1 or max_instance != 5)
         )
 
         region = config.get("region") or _default_cloud_region()
         project_name = config.get("projectName", "default")
+        if sidecar_enabled and region not in _managed_sidecar_regions():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Harness Sidecar 当前不支持地域 {region}。",
+            )
         try:
             from frontend.server.deployment_resources import (
                 DeploymentResourceService,
+                ManagedSidecarRegistryError,
                 agentkit_code_pipeline_resources,
                 deployment_resource_tags,
                 deployment_resources_from_tags,
@@ -4213,11 +4862,31 @@ def _run_frontend_server(
             except Exception as e:
                 logger.error("resolve update runtime failed: %s", e, exc_info=True)
                 raise HTTPException(status_code=502, detail=str(e)) from e
+        if sidecar_enabled:
+            try:
+                deployment_resource_config = await asyncio.to_thread(
+                    deployment_resource_service.anchor_managed_sidecar_registry,
+                    sidecar_base_image,
+                    deployment_resource_config,
+                )
+            except ManagedSidecarRegistryError as e:
+                raise HTTPException(status_code=409, detail=str(e)) from e
         runtime_authentication = (
             _existing_runtime_authentication(existing_runtime)
             if existing_runtime is not None
             else _user_pool_runtime_authentication(data.get("authentication"))
         )
+        if (
+            sidecar_enabled
+            and runtime_authentication.get("runtime_auth_type") != "key_auth"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Harness Sidecar 当前要求 Runtime 使用 API Key 鉴权，"
+                    "以完成 APIG 固定端口和 active plan 的发布验收。"
+                ),
+            )
         # Network config (advanced): optional VPC/private networking.
         # Shape: { mode: "public"|"private"|"both", vpc_id?, subnet_ids?, enable_shared_internet_access? }
         # When absent or mode=public, use the default public endpoint.
@@ -4399,6 +5068,23 @@ def _run_frontend_server(
                 ) from error
             raise
 
+        if sidecar_enabled:
+            try:
+                await asyncio.to_thread(
+                    stage_managed_sidecar_veadk_source,
+                    base,
+                )
+            except ManagedSidecarSourceError as error:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                logger.error(
+                    "prepare managed Sidecar VeADK source failed: %s",
+                    error,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="无法准备受管 Harness Sidecar 的 VeADK 公有源码快照。",
+                ) from error
+
         # Collect env vars from the deployer's environment to forward into the
         # created runtime. The AgentKit platform only injects what we pass here,
         # so we explicitly forward the VeADK/Volcengine/tool-related vars the
@@ -4441,8 +5127,20 @@ def _run_frontend_server(
                     "set MODEL_AGENT_API_KEY before deploying.",
                     e,
                 )
-        if migration_task_id:
+        if migration_task_id and not sidecar_enabled:
             _adapt_migration_model_envs(runtime_envs, provider)
+        if sidecar_enabled:
+            sidecar_env_error = _prepare_managed_sidecar_runtime_envs(
+                runtime_envs,
+                provider,
+                sidecar_plan,
+            )
+            if sidecar_env_error:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                raise HTTPException(
+                    status_code=409,
+                    detail=sidecar_env_error,
+                )
         if feishu_enabled:
             runtime_envs.update(
                 {
@@ -4456,7 +5154,15 @@ def _run_frontend_server(
             runtime_envs["DATABASE_VIKING_REGION"] = (
                 DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
             )
-
+        # Harness settings are platform-owned. Always remove a previous
+        # Sidecar deployment's values before either deployment path materializes
+        # the next Runtime environment. The CLI adds the authoritative resolved
+        # plan back only for Sidecar deployments.
+        runtime_envs = {
+            key: value
+            for key, value in runtime_envs.items()
+            if not key.startswith("HARNESS_")
+        }
         # TOS build-artifact buckets are region-scoped. The SDK default template
         # ("agentkit-platform-<account_id>") produces a single global name, which
         # collides once a bucket exists in cn-beijing and the user targets
@@ -4514,30 +5220,150 @@ def _run_frontend_server(
                 cloud_config["cr_instance_name"] = bucket_base
         cloud_config.update(deployment_resource_config)
 
-        agentkit_config = {
-            "common": {
-                "agent_name": trusted_agent_name,
-                "entry_point": entry_point,
+        deployment_runtime_name = (
+            str(getattr(existing_runtime, "name", "") or "").strip()
+            if existing_runtime is not None
+            else requested_runtime_name
+        ) or agent_name
+        sidecar_build_overrides: dict[str, Any] | None = None
+        agentkit_config: dict[str, Any] | None = None
+        if sidecar_enabled:
+            configured_runtime_name = os.getenv(
+                "VEADK_STUDIO_HARNESS_SIDECAR_RUNTIME_NAME",
+                "",
+            ).strip()
+            if existing_runtime is None and configured_runtime_name:
+                if not re.fullmatch(
+                    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?",
+                    configured_runtime_name,
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="受控 Harness Sidecar Runtime 名称不符合平台规则。",
+                    )
+                deployment_runtime_name = configured_runtime_name
+            sidecar_yaml_envs: dict[str, str] = {}
+            for index, (key, value) in enumerate(sorted(runtime_envs.items())):
+                placeholder = f"VEADK_STUDIO_RUNTIME_ENV_{index:04d}"
+                sidecar_yaml_envs[key] = "${" + placeholder + "}"
+                sidecar_cli_runtime_env[placeholder] = value
+            runtime_tags = {
+                "veadk:managed": "true",
+                **({"veadk:author": author} if author else {}),
+                **({"veadk:owner": owner_id} if owner_id else {}),
+                **deployment_resource_tag_values,
+            }
+            sidecar_runtime: dict[str, Any] = {
+                "region": region,
+                "project": project_name,
+                "min_instance": 1,
+                "max_instance": 1,
+                "max_concurrency": 20,
+                "tags": runtime_tags,
+            }
+            if runtime_network:
+                mode = str(runtime_network.get("mode") or "public").lower()
+                subnet_ids = [
+                    item.strip()
+                    for item in str(runtime_network.get("subnet_ids") or "").split(",")
+                    if item.strip()
+                ]
+                sidecar_runtime["network"] = {
+                    "enable_public_network": mode in {"public", "both"},
+                    "enable_private_network": mode in {"private", "both"},
+                    "vpc_id": runtime_network.get("vpc_id"),
+                    "subnet_ids": subnet_ids,
+                    "enable_shared_internet_access": bool(
+                        runtime_network.get("enable_shared_internet_access", True)
+                    ),
+                }
+            sidecar_agentkit_config = {
+                "name": deployment_runtime_name,
                 "description": _normalize_runtime_description(data.get("description")),
-                "python_version": "3.12",
-                "launch_type": "cloud",
-            },
-            "launch_types": {"cloud": cloud_config},
-        }
-        (base / "agentkit.yaml").write_text(
-            _yaml.dump(agentkit_config, allow_unicode=True), encoding="utf-8"
-        )
+                "cloud_provider": "volcengine",
+                "region": region,
+                "project": project_name,
+                "runtime": sidecar_runtime,
+                "harness_sidecar": sidecar_cli_config,
+                "envs": sidecar_yaml_envs,
+                "auth": {"type": "key_auth"},
+                "apmplus": True,
+                "dockerfile": ".agentkit/Dockerfile",
+                "infrastructure": {
+                    "container_registry": {
+                        "region": region,
+                        "project": project_name,
+                        "instance_name": deployment_resource_config.get(
+                            "cr_instance_name", "Auto"
+                        ),
+                        "namespace_name": deployment_resource_config.get(
+                            "cr_namespace_name", "agentkit"
+                        ),
+                        "repo_name": deployment_resource_config.get(
+                            "cr_repo_name", deployment_runtime_name
+                        ),
+                    },
+                    "tos": {
+                        "region": region,
+                        "project": project_name,
+                        "bucket_name": deployment_resource_config.get(
+                            "tos_bucket", "Auto"
+                        ),
+                        "object_prefix": "agentkit-builds",
+                    },
+                    "code_pipeline": {
+                        "workspace_name": deployment_resource_config.get(
+                            "cp_workspace_name"
+                        ),
+                        "workspace_id": deployment_resource_config.get(
+                            "cp_workspace_id"
+                        ),
+                        "pipeline_name": deployment_resource_config.get(
+                            "cp_pipeline_name"
+                        ),
+                        "pipeline_id": deployment_resource_config.get("cp_pipeline_id"),
+                    },
+                },
+            }
+            agentkit_dir = base / ".agentkit"
+            agentkit_dir.mkdir(parents=True, exist_ok=True)
+            (agentkit_dir / "agentkit.yaml").write_text(
+                _yaml.safe_dump(
+                    sidecar_agentkit_config,
+                    allow_unicode=True,
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+        else:
+            agentkit_config = {
+                "common": {
+                    "agent_name": trusted_agent_name,
+                    "entry_point": entry_point,
+                    "description": _normalize_runtime_description(
+                        data.get("description")
+                    ),
+                    "python_version": "3.12",
+                    "launch_type": "cloud",
+                },
+                "launch_types": {"cloud": cloud_config},
+            }
+            (base / "agentkit.yaml").write_text(
+                _yaml.dump(agentkit_config, allow_unicode=True), encoding="utf-8"
+            )
 
         task_state: dict[str, Any] = {
             "cancel_event": _threading.Event(),
             "runtime_id": runtime_id,
             "runtime_name": (
-                getattr(existing_runtime, "name", "") if existing_runtime else ""
+                deployment_runtime_name
+                if sidecar_enabled or existing_runtime is not None
+                else ""
             ),
             "region": region,
             "destroyed": False,
             "destroying": False,
-            "destroy_on_cancel": not bool(runtime_id),
+            "destroy_on_cancel": not bool(runtime_id) and not sidecar_enabled,
             "owner_id": owner_id,
             "cp_workspace_id": str(
                 (
@@ -4578,7 +5404,12 @@ def _run_frontend_server(
                 for attr in ("error", "error_code"):
                     value = getattr(obj, attr, None)
                     if value:
-                        parts.append(str(value))
+                        parts.append(
+                            _redact_managed_artifact_text(
+                                str(value),
+                                [sidecar_base_image],
+                            )
+                        )
             return "\n".join(parts)
 
         def _is_tos_request_expired(error_text: str) -> bool:
@@ -4830,7 +5661,12 @@ def _run_frontend_server(
                         pipeline_id=pipeline_id,
                         pipeline_run_id=pipeline_run_id,
                     )
-                    snapshot = _sanitize_build_log_snapshot(text)
+                    snapshot = _sanitize_build_log_snapshot(
+                        _redact_managed_artifact_text(
+                            text,
+                            [sidecar_base_image],
+                        )
+                    )
                     current_text = str(snapshot.get("text") or "")
                     if current_text and current_text != last_text:
                         last_text = current_text
@@ -4879,7 +5715,12 @@ def _run_frontend_server(
             thread.start()
 
         def _emit(level: str, message: str, pct=None):
-            message = str(message)
+            message = _redact_debug_text(
+                _redact_managed_artifact_text(
+                    str(message),
+                    [sidecar_base_image],
+                )
+            )
             _update_cp_metadata(message)
             state["phase"] = _classify(message)
             ev = {"level": level, "phase": state["phase"], "message": message}
@@ -4936,12 +5777,247 @@ def _run_frontend_server(
                 _emit("info", str(title))
                 excerpt = _extract_build_error_excerpt(lines, min(max_lines, 30))
                 if excerpt:
-                    state["build_error_excerpt"] = excerpt
-                    _emit("error", excerpt)
+                    safe_excerpt = _redact_managed_artifact_text(
+                        excerpt,
+                        [sidecar_base_image],
+                    )
+                    state["build_error_excerpt"] = safe_excerpt
+                    _emit("error", safe_excerpt)
 
         result_box: dict = {}
 
-        def _run():
+        def _finish_deploy_thread() -> None:
+            cp_log_stop_event.set()
+            cp_log_thread = task_state.get("cp_log_thread")
+            if (
+                cp_log_thread is not None
+                and cp_log_thread.is_alive()
+                and cp_log_thread is not _threading.current_thread()
+            ):
+                cp_log_thread.join(timeout=1.0)
+            with _deploy_tasks_lock:
+                _deploy_tasks.pop(task_id, None)
+            events.put(None)
+
+        def _run_cli() -> None:
+            """Run the authorized AgentKit CLI MR structured release once."""
+
+            with _deploy_lock:
+                try:
+                    cli_env = os.environ.copy()
+                    access_key, secret_key, session_token = _resolve_ve_credentials()
+                    cli_env["VOLCENGINE_ACCESS_KEY"] = access_key
+                    cli_env["VOLCENGINE_SECRET_KEY"] = secret_key
+                    cli_env["VOLCENGINE_REGION"] = region
+                    if session_token:
+                        cli_env["VOLCENGINE_SESSION_TOKEN"] = session_token
+                    else:
+                        cli_env.pop("VOLCENGINE_SESSION_TOKEN", None)
+                    cli_env["AGENTKIT_HARNESS_SIDECAR_BASE_IMAGE"] = sidecar_base_image
+                    if not runtime_id:
+                        cli_env["AGENTKIT_HARNESS_SIDECAR_REQUIRE_ABSENT"] = "true"
+                    cli_env.update(sidecar_cli_runtime_env)
+                    process = subprocess.Popen(
+                        [agentkit_cli_executable(), "release", "--json"],
+                        cwd=base,
+                        env=cli_env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                    )
+                    with _deploy_tasks_lock:
+                        task_state["process"] = process
+                    cli_result: dict[str, Any] | None = None
+                    assert process.stdout is not None
+                    for raw_line in process.stdout:
+                        if task_state["cancel_event"].is_set():
+                            process.terminate()
+                            break
+                        safe_line = _redact_debug_text(
+                            _redact_managed_artifact_text(
+                                raw_line.strip(),
+                                [sidecar_base_image],
+                            )
+                        )
+                        if not safe_line:
+                            continue
+                        try:
+                            payload = _json.loads(safe_line)
+                        except (TypeError, ValueError) as error:
+                            raise RuntimeError(
+                                "AgentKit CLI 返回了无效的结构化部署事件。"
+                            ) from error
+                        if not isinstance(payload, dict):
+                            raise RuntimeError(
+                                "AgentKit CLI 返回了无效的结构化部署事件。"
+                            )
+                        event_type = payload.get("type")
+                        if event_type == "runtime":
+                            resolved_runtime_id = str(
+                                payload.get("runtimeId") or ""
+                            ).strip()
+                            if resolved_runtime_id:
+                                with _deploy_tasks_lock:
+                                    task_state["runtime_id"] = resolved_runtime_id
+                                    task_state["runtime_name"] = str(
+                                        payload.get("runtimeName")
+                                        or deployment_runtime_name
+                                    )
+                            continue
+                        if event_type == "progress":
+                            phase = str(payload.get("phase") or "deploy")
+                            state["phase"] = phase
+                            message = str(payload.get("message") or "")
+                            _update_cp_metadata(message)
+                            event: dict[str, Any] = {
+                                "level": str(payload.get("level") or "info"),
+                                "phase": phase,
+                                "message": message,
+                            }
+                            if payload.get("pct") is not None:
+                                event["pct"] = payload["pct"]
+                            runtime_name = str(
+                                payload.get("runtimeName")
+                                or task_state.get("runtime_name")
+                                or deployment_runtime_name
+                            )
+                            if runtime_name:
+                                event["runtimeName"] = runtime_name
+                            events.put(event)
+                            continue
+                        if event_type == "result":
+                            cli_result = payload
+                    return_code = process.wait(timeout=30)
+                    with _deploy_tasks_lock:
+                        task_state["process"] = None
+                    if task_state["cancel_event"].is_set():
+                        raise RuntimeError("Deployment cancelled")
+                    if cli_result is None:
+                        raise RuntimeError("AgentKit CLI 部署结束但未返回最终结果。")
+                    if return_code != 0 or not cli_result.get("success"):
+                        raise RuntimeError(
+                            str(cli_result.get("error") or "AgentKit CLI 部署失败")
+                        )
+                    result_box["cli_result"] = cli_result
+                except Exception as error:
+                    safe_error = _redact_debug_text(
+                        _redact_managed_artifact_text(
+                            str(error),
+                            [sidecar_base_image],
+                        )
+                    )
+                    logger.error("AgentKit CLI structured deployment failed")
+                    result_box["error"] = safe_error or "AgentKit CLI 部署失败"
+                finally:
+                    process = task_state.get("process")
+                    if process is not None and process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=5)
+                    _finish_deploy_thread()
+
+        def _verify_sdk_sidecar_release(result: Any) -> None:
+            if not sidecar_enabled or sidecar_plan is None:
+                return
+            import time as _time
+
+            import requests
+
+            deploy_result = getattr(result, "deploy_result", None)
+            metadata = (
+                deploy_result.metadata
+                if deploy_result is not None and deploy_result.metadata
+                else {}
+            )
+            deployed_runtime_id = str(
+                metadata.get("runtime_id") or task_state.get("runtime_id") or ""
+            )
+            if not deployed_runtime_id:
+                raise RuntimeError("Sidecar 发布成功但未返回 Runtime ID")
+            _rt_conn_cache.pop((region, deployed_runtime_id), None)
+            runtime_detail = _get_runtime(deployed_runtime_id, region)
+            if getattr(runtime_detail, "status", "") != "Ready":
+                raise RuntimeError("Sidecar Runtime 尚未达到 Ready")
+            if (
+                getattr(runtime_detail, "min_instance", None) != 1
+                or getattr(runtime_detail, "max_instance", None) != 1
+            ):
+                raise RuntimeError("Sidecar Runtime 必须保持单实例 1～1")
+            endpoint, api_key, auth_type, _network_type = _resolve_runtime_conn(
+                deployed_runtime_id,
+                region,
+                runtime_detail,
+            )
+            if auth_type != "key_auth":
+                raise RuntimeError("Sidecar Runtime 必须使用 API Key 鉴权")
+            expected_hash = str(sidecar_plan.get("planHash") or "")
+            expected_components = {
+                str(item) for item in sidecar_plan.get("effectiveComponents") or []
+            }
+            required_ports = [18787]
+            if "mcp_resilience" in expected_components:
+                required_ports.append(18788)
+            deadline = _time.monotonic() + 120.0
+            headers = {"Authorization": _agentkit_authorization_header(api_key)}
+
+            def _get(url: str, request_headers: Mapping[str, str]):
+                remaining = deadline - _time.monotonic()
+                if remaining <= 0:
+                    raise requests.Timeout("Sidecar readiness deadline exceeded")
+                return requests.get(
+                    url,
+                    headers=dict(request_headers),
+                    timeout=min(5.0, remaining),
+                )
+
+            while _time.monotonic() < deadline:
+                try:
+                    status_response = _get(
+                        f"{endpoint.rstrip('/')}/web/harness-sidecar/status",
+                        headers,
+                    )
+                    status_payload = status_response.json()
+                    active_plan = (
+                        status_response.status_code == 200
+                        and isinstance(status_payload, Mapping)
+                        and status_payload.get("status") in {"ready", "ok"}
+                        and status_payload.get("planHash") == expected_hash
+                        and expected_components.issubset(
+                            {
+                                str(item)
+                                for item in status_payload.get(
+                                    "effectiveComponents", []
+                                )
+                            }
+                        )
+                    )
+                    ports_ready = active_plan
+                    if active_plan:
+                        for port in required_ports:
+                            port_response = _get(
+                                f"{endpoint.rstrip('/')}/healthz",
+                                {
+                                    **headers,
+                                    "X-Faas-Proxy-Port": str(port),
+                                },
+                            )
+                            if port_response.status_code != 200:
+                                ports_ready = False
+                                break
+                    if ports_ready:
+                        return
+                except (requests.RequestException, TypeError, ValueError):
+                    pass
+                _time.sleep(min(1.0, max(0.0, deadline - _time.monotonic())))
+            raise RuntimeError(
+                "Sidecar Runtime active plan 或 APIG 固定端口未在时限内就绪"
+            )
+
+        def _run_sdk():
             from agentkit.toolkit import sdk
             from agentkit.toolkit.models import PreflightMode
 
@@ -4952,6 +6028,11 @@ def _run_frontend_server(
                 orig_create = None
                 orig_update = None
                 try:
+                    sdk_agentkit_config = agentkit_config
+                    if sdk_agentkit_config is None:
+                        raise RuntimeError(
+                            "AgentKit SDK deployment config is unavailable"
+                        )
                     from agentkit.sdk.runtime.client import (
                         AgentkitRuntimeClient as rt_client,
                     )
@@ -5033,38 +6114,146 @@ def _run_frontend_server(
                     return
 
                 try:
-                    result = None
-                    for attempt in range(1, 3):
-                        state["build_error_excerpt"] = ""
-                        if attempt > 1:
-                            state["phase"] = "build"
+                    import copy
+
+                    def _launch_config(config: dict[str, Any]):
+                        config_path = base / "agentkit.yaml"
+                        persisted_config = config
+                        in_memory_config = None
+                        if sidecar_enabled:
+                            persisted_config = copy.deepcopy(config)
+                            persisted_config["launch_types"]["cloud"][
+                                "runtime_envs"
+                            ] = {}
+                            in_memory_config = copy.deepcopy(config)
+                            in_memory_config.update(sidecar_build_overrides or {})
+                        config_path.write_text(
+                            _yaml.dump(persisted_config, allow_unicode=True),
+                            encoding="utf-8",
+                        )
+                        launch_result = None
+                        for attempt in range(1, 3):
+                            state["build_error_excerpt"] = ""
+                            if attempt > 1:
+                                state["phase"] = "build"
+                                _emit(
+                                    "warning",
+                                    (
+                                        "TOS 临时下载签名已过期，"
+                                        "正在重新打包上传并重试部署 "
+                                        f"({attempt}/2)..."
+                                    ),
+                                )
+                            with (
+                                _agentkit_sdk_credential_env(),
+                                agentkit_code_pipeline_resources(
+                                    deployment_resource_config
+                                ),
+                            ):
+                                launch_result = sdk.launch(
+                                    config_file=str(config_path),
+                                    config_dict=in_memory_config,
+                                    platform=(
+                                        "linux/amd64" if sidecar_enabled else "auto"
+                                    ),
+                                    preflight_mode=PreflightMode.WARN,
+                                    reporter=_QReporter(),
+                                )
+                            if getattr(launch_result, "success", False):
+                                break
+                            error_text = _result_error_text(launch_result)
+                            if attempt >= 2 or not _is_tos_request_expired(error_text):
+                                break
                             _emit(
                                 "warning",
                                 (
-                                    "TOS 临时下载签名已过期，正在重新打包上传并重试部署 "
-                                    f"({attempt}/2)..."
+                                    "云构建使用的 TOS 源码包签名超过 900 秒有效期，"
+                                    "自动重试一次。"
                                 ),
                             )
-                        with (
-                            _agentkit_sdk_credential_env(),
-                            agentkit_code_pipeline_resources(
-                                deployment_resource_config
-                            ),
-                        ):
-                            result = sdk.launch(
-                                config_file=str(base / "agentkit.yaml"),
-                                preflight_mode=PreflightMode.WARN,
-                                reporter=_QReporter(),
-                            )
-                        if getattr(result, "success", False):
-                            break
-                        error_text = _result_error_text(result)
-                        if attempt >= 2 or not _is_tos_request_expired(error_text):
-                            break
+                        return launch_result
+
+                    if sidecar_enabled and existing_runtime is None:
+                        bootstrap_config = copy.deepcopy(sdk_agentkit_config)
+                        bootstrap_cloud = bootstrap_config["launch_types"]["cloud"]
+                        bootstrap_cloud["runtime_envs"] = {
+                            key: value
+                            for key, value in bootstrap_cloud["runtime_envs"].items()
+                            if not key.startswith("HARNESS_")
+                        }
                         _emit(
-                            "warning",
-                            "云构建使用的 TOS 源码包签名超过 900 秒有效期，自动重试一次。",
+                            "info",
+                            "正在创建 Sidecar Runtime 并建立 APIG 自调用绑定。",
                         )
+                        result = _launch_config(bootstrap_config)
+                        if getattr(result, "success", False):
+                            bootstrap_deploy = getattr(result, "deploy_result", None)
+                            bootstrap_metadata = (
+                                bootstrap_deploy.metadata
+                                if bootstrap_deploy is not None
+                                and bootstrap_deploy.metadata
+                                else {}
+                            )
+                            created_runtime_id = str(
+                                task_state.get("runtime_id")
+                                or bootstrap_metadata.get("runtime_id")
+                                or ""
+                            )
+                            if not created_runtime_id:
+                                raise RuntimeError(
+                                    "Runtime 创建成功，但未返回 Runtime ID"
+                                )
+                            with _deploy_tasks_lock:
+                                task_state["runtime_id"] = created_runtime_id
+                            _rt_conn_cache.pop((region, created_runtime_id), None)
+                            runtime_detail = _get_runtime(created_runtime_id, region)
+                            (
+                                runtime_endpoint,
+                                runtime_api_key,
+                                runtime_auth_type,
+                                _runtime_network_type,
+                            ) = _resolve_runtime_conn(
+                                created_runtime_id,
+                                region,
+                                runtime_detail,
+                            )
+                            if runtime_auth_type != "key_auth":
+                                raise RuntimeError(
+                                    "Harness Sidecar Runtime 必须使用 API Key 鉴权"
+                                )
+                            final_config = copy.deepcopy(sdk_agentkit_config)
+                            final_cloud = final_config["launch_types"]["cloud"]
+                            final_cloud.update(
+                                {
+                                    "runtime_id": created_runtime_id,
+                                    "runtime_name": (
+                                        getattr(runtime_detail, "name", "")
+                                        or deployment_runtime_name
+                                    ),
+                                    "runtime_role_name": (
+                                        getattr(runtime_detail, "role_name", "")
+                                        or "Auto"
+                                    ),
+                                    "image_tag": (
+                                        "veadk-v"
+                                        f"{(getattr(runtime_detail, 'current_version_number', 0) or 0) + 1}"
+                                    ),
+                                }
+                            )
+                            final_cloud["runtime_envs"].update(
+                                {
+                                    "HARNESS_SIDECAR_APIG_ENDPOINT": runtime_endpoint,
+                                    "HARNESS_SIDECAR_APIG_API_KEY": runtime_api_key,
+                                }
+                            )
+                            state["phase"] = "update"
+                            _emit(
+                                "info",
+                                "APIG 自调用绑定已建立，正在发布最终 Sidecar 配置。",
+                            )
+                            result = _launch_config(final_config)
+                    else:
+                        result = _launch_config(sdk_agentkit_config)
                     if (
                         result is not None
                         and getattr(result, "success", False)
@@ -5090,10 +6279,16 @@ def _run_frontend_server(
                             f"Runtime 实例数已调整为 {min_instance}～{max_instance}",
                             100,
                         )
+                    if result is not None and getattr(result, "success", False):
+                        _verify_sdk_sidecar_release(result)
                     result_box["result"] = result
                 except Exception as e:
-                    logger.error(f"AgentKit launch error: {e}", exc_info=True)
-                    result_box["error"] = _safe_exception_detail(e)
+                    safe_error = _redact_managed_artifact_text(
+                        _safe_exception_detail(e),
+                        [sidecar_base_image],
+                    )
+                    logger.error("AgentKit SDK launch failed: %s", safe_error)
+                    result_box["error"] = safe_error
                 finally:
                     if rt_client is not None and orig_create is not None:
                         rt_client.create_runtime = orig_create
@@ -5108,17 +6303,7 @@ def _run_frontend_server(
                                 e,
                                 exc_info=True,
                             )
-                    cp_log_stop_event.set()
-                    cp_log_thread = task_state.get("cp_log_thread")
-                    if (
-                        cp_log_thread is not None
-                        and cp_log_thread.is_alive()
-                        and cp_log_thread is not _threading.current_thread()
-                    ):
-                        cp_log_thread.join(timeout=1.0)
-                    with _deploy_tasks_lock:
-                        _deploy_tasks.pop(task_id, None)
-                    events.put(None)  # sentinel: launch finished
+                    _finish_deploy_thread()
 
         with _deploy_tasks_lock:
             if task_id in _deploy_tasks:
@@ -5128,7 +6313,10 @@ def _run_frontend_server(
                 )
             _deploy_tasks[task_id] = task_state
 
-        _threading.Thread(target=_run, daemon=True).start()
+        _threading.Thread(
+            target=_run_cli if sidecar_enabled else _run_sdk,
+            daemon=True,
+        ).start()
 
         async def _stream():
             loop = asyncio.get_event_loop()
@@ -5150,13 +6338,90 @@ def _run_frontend_server(
                         }
                     )
                 else:
-                    res = result_box.get("result")
-                    dr = getattr(res, "deploy_result", None) if res else None
-                    if res is not None and getattr(res, "success", False):
-                        meta = (dr.metadata if (dr and dr.metadata) else {}) or {}
+                    deployment_meta: dict[str, Any] | None = None
+                    cli_result = result_box.get("cli_result")
+                    if isinstance(cli_result, dict):
+                        deployed_runtime_id = str(
+                            cli_result.get("runtimeId")
+                            or task_state.get("runtime_id")
+                            or runtime_id
+                        )
+                        try:
+                            _rt_conn_cache.pop((region, deployed_runtime_id), None)
+                            runtime_detail = _get_runtime(deployed_runtime_id, region)
+                            (
+                                endpoint,
+                                runtime_api_key,
+                                auth_type,
+                                _network_type,
+                            ) = _resolve_runtime_conn(
+                                deployed_runtime_id,
+                                region,
+                                runtime_detail,
+                            )
+                            if auth_type != "key_auth":
+                                raise RuntimeError(
+                                    "Harness Sidecar Runtime 必须使用 API Key 鉴权。"
+                                )
+                            deployment_meta = {
+                                "runtime_id": deployed_runtime_id,
+                                "runtime_name": str(
+                                    cli_result.get("runtimeName")
+                                    or task_state.get("runtime_name")
+                                    or deployment_runtime_name
+                                ),
+                                "runtime_apikey": runtime_api_key,
+                                "endpoint_url": endpoint,
+                                "version": cli_result.get("version"),
+                            }
+                        except Exception as error:
+                            final.update(
+                                {
+                                    "success": False,
+                                    "error": _redact_debug_text(str(error)),
+                                    "phase": "publish",
+                                }
+                            )
+                    else:
+                        res = result_box.get("result")
+                        dr = getattr(res, "deploy_result", None) if res else None
+                        if res is not None and getattr(res, "success", False):
+                            meta = (dr.metadata if (dr and dr.metadata) else {}) or {}
+                            deployment_meta = {
+                                "runtime_id": str(meta.get("runtime_id") or runtime_id),
+                                "runtime_name": str(
+                                    meta.get("runtime_name")
+                                    or task_state.get("runtime_name")
+                                    or agent_name
+                                ),
+                                "runtime_apikey": meta.get("runtime_apikey", ""),
+                                "endpoint_url": (
+                                    getattr(dr, "endpoint_url", None) if dr else None
+                                ),
+                            }
+                        else:
+                            err = getattr(res, "error", None) if res else None
+                            err_text = (
+                                _result_error_text(res)
+                                if res is not None
+                                else str(err or "Deployment failed")
+                            )
+                            final.update(
+                                {
+                                    "success": False,
+                                    "error": _error_with_build_excerpt(err_text)
+                                    or err
+                                    or "Deployment failed",
+                                    "phase": state["phase"],
+                                }
+                            )
+                    if deployment_meta is not None:
+                        deployed_runtime_id = str(
+                            deployment_meta.get("runtime_id") or runtime_id
+                        )
                         runtime_name = str(
                             task_state.get("runtime_name")
-                            or meta.get("runtime_name")
+                            or deployment_meta.get("runtime_name")
                             or agent_name
                         )
                         final.update(
@@ -5164,15 +6429,16 @@ def _run_frontend_server(
                                 "success": True,
                                 "agentName": agent_name,
                                 "runtimeName": runtime_name,
-                                "url": getattr(dr, "endpoint_url", None)
-                                if dr
-                                else None,
-                                "apikey": meta.get("runtime_apikey", ""),
-                                "runtimeId": meta.get("runtime_id", ""),
+                                "url": deployment_meta.get("endpoint_url"),
+                                "apikey": deployment_meta.get(
+                                    "runtime_apikey",
+                                    "",
+                                ),
+                                "runtimeId": deployed_runtime_id,
                                 "feishuChannel": {
                                     "enabled": True,
                                     "transport": "ws",
-                                    "runtimeId": meta.get("runtime_id", ""),
+                                    "runtimeId": deployed_runtime_id,
                                 }
                                 if feishu_enabled
                                 else None,
@@ -5239,14 +6505,16 @@ def _run_frontend_server(
                                     f"{_json.dumps(evaluation_warning, ensure_ascii=False)}"
                                     "\n\n"
                                 )
-                        if runtime_id:
-                            _rt_conn_cache.pop((region, runtime_id), None)
+                        if deployed_runtime_id:
+                            _rt_conn_cache.pop((region, deployed_runtime_id), None)
                         try:
                             refreshed_runtime = _get_runtime(
-                                str(meta.get("runtime_id") or runtime_id),
+                                deployed_runtime_id,
                                 region,
                             )
-                            final["version"] = getattr(
+                            final["version"] = deployment_meta.get(
+                                "version"
+                            ) or getattr(
                                 refreshed_runtime,
                                 "current_version_number",
                                 None,
@@ -5255,22 +6523,6 @@ def _run_frontend_server(
                             logger.warning(
                                 "read deployed runtime version failed: %s", e
                             )
-                    else:
-                        err = getattr(res, "error", None) if res else None
-                        err_text = (
-                            _result_error_text(res)
-                            if res is not None
-                            else str(err or "Deployment failed")
-                        )
-                        final.update(
-                            {
-                                "success": False,
-                                "error": _error_with_build_excerpt(err_text)
-                                or err
-                                or "Deployment failed",
-                                "phase": state["phase"],
-                            }
-                        )
                 yield f"data: {_json.dumps(final, ensure_ascii=False)}\n\n"
             finally:
                 shutil.rmtree(temp_dir, ignore_errors=True)

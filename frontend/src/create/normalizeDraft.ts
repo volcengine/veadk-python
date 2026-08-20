@@ -4,6 +4,9 @@ import {
   type AgentDraft,
   type CloudCliToolId,
   type CustomTool,
+  type HarnessSidecarIntent,
+  type HarnessSidecarOptionId,
+  type HarnessSidecarProfileId,
   type SelectedSkill,
 } from "./types";
 import { createBuiltinToolsForProvider, DEFAULT_KB_BACKEND } from "./veadkCatalog";
@@ -38,6 +41,17 @@ const CLOUD_CLI_TOOL_IDS = new Set<CloudCliToolId>([
   "github-cli",
   "pandoc",
 ]);
+const HARNESS_SIDECAR_OPTION_IDS: HarnessSidecarOptionId[] = [
+  "context_engine",
+  "compressor",
+  "verifier",
+  "long_run_control",
+  "mcp_resilience",
+];
+const HARNESS_SIDECAR_PROFILE_IDS = new Set<HarnessSidecarProfileId>([
+  "default",
+  "ops",
+]);
 
 function asString(v: unknown, fallback = ""): string {
   return typeof v === "string" ? v : fallback;
@@ -45,6 +59,13 @@ function asString(v: unknown, fallback = ""): string {
 
 function asBool(v: unknown): boolean {
   return v === true;
+}
+
+function asHarnessSidecarProfile(v: unknown): HarnessSidecarProfileId {
+  return typeof v === "string" &&
+    HARNESS_SIDECAR_PROFILE_IDS.has(v as HarnessSidecarProfileId)
+    ? (v as HarnessSidecarProfileId)
+    : "default";
 }
 
 function asStringArray(v: unknown): string[] {
@@ -111,6 +132,29 @@ function asA2aRegistry(v: unknown): A2aRegistryConfig {
     registryRegion: asString(o.registryRegion),
     registryEndpoint: asString(o.registryEndpoint),
   };
+}
+
+function asHarnessSidecarIntent(v: unknown): HarnessSidecarIntent | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const raw = v as Record<string, unknown>;
+  const rawOverrides = (
+    raw.componentOverrides && typeof raw.componentOverrides === "object"
+      ? raw.componentOverrides
+      : {}
+  ) as Record<string, unknown>;
+  const componentOverrides = Object.fromEntries(
+    HARNESS_SIDECAR_OPTION_IDS.map((id) => [id, rawOverrides[id] === true]),
+  ) as Record<HarnessSidecarOptionId, boolean>;
+  const intent: HarnessSidecarIntent = {
+    enabled: Object.values(componentOverrides).some(Boolean),
+    profile: asHarnessSidecarProfile(raw.profile),
+    componentOverrides,
+  };
+  const catalogVersion = asString(raw.catalogVersion).trim();
+  const planHash = asString(raw.planHash).trim();
+  if (catalogVersion) intent.catalogVersion = catalogVersion;
+  if (planHash) intent.planHash = planHash;
+  return intent;
 }
 
 function parseSubAgents(
@@ -321,6 +365,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
         ? { dockerfile: cloudEnvironment.dockerfile }
         : {}),
     },
+    harnessSidecar: asHarnessSidecarIntent(o.harnessSidecar),
     subAgents: parseSubAgents(o.subAgents, cloudProvider),
     selectedSkills: parseSelectedSkills(o),
   };

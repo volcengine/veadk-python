@@ -312,7 +312,7 @@ export function Sidebar({
   userInfo,
   onLogout,
 }: SidebarProps) {
-  // Agent creation still lives outside the main navigation.
+  // Agent creation remains outside the main navigation.
   void onQuickCreate;
   void onAddAgent;
   // Per-module feature gates; a missing flag defaults to shown.

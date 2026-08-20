@@ -1428,6 +1428,10 @@ body {
   background: hsl(var(--secondary));
 }
 .turn--assistant .bubble { max-width: 100%; }
+.turn--assistant .bubble:has(.visualization-card) {
+  width: 100%;
+  min-width: 0;
+}
 
 /* ---------- markdown (used by both user + assistant message bodies) ---------- */
 .md { font-size: 14.5px; line-height: 1.65; }
@@ -1486,6 +1490,101 @@ body {
   padding: 0;
   border-radius: 0;
   font-size: 12.5px;
+}
+.visualization-card {
+  width: 100%;
+  min-width: 0;
+  margin: 0 0 0.7em;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--muted) / 0.55);
+}
+.visualization-card__toolbar {
+  display: flex;
+  min-height: 40px;
+  padding: 8px 10px;
+  align-items: center;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.visualization-card__tabs {
+  flex: 0 0 auto;
+  font-size: inherit;
+  font-weight: inherit;
+}
+.visualization-card__body {
+  min-width: 0;
+  background: hsl(var(--panel));
+}
+.md .visualization-card__code {
+  min-height: 96px;
+  max-height: 360px;
+  margin: 0;
+  padding: 14px 16px;
+  overflow: auto;
+  border-radius: 0;
+  background: hsl(var(--muted) / 0.35);
+}
+.mermaid-diagram {
+  display: flex;
+  width: 100%;
+  min-height: 120px;
+  padding: 16px;
+  align-items: center;
+  justify-content: center;
+  overflow-x: auto;
+}
+.mermaid-diagram svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+.mermaid-diagram--loading {
+  color: hsl(var(--muted-foreground));
+  font-size: 12.5px;
+}
+.mermaid-diagram--error {
+  min-height: 0;
+  justify-content: flex-start;
+}
+.mermaid-diagram__error {
+  margin: 0;
+  color: hsl(var(--destructive));
+  font-size: 12.5px;
+}
+.echarts-diagram {
+  position: relative;
+  width: 100%;
+  height: 320px;
+  min-height: 240px;
+}
+.echarts-diagram__canvas {
+  width: 100%;
+  height: 100%;
+}
+.echarts-diagram__state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: hsl(var(--muted-foreground));
+  font-size: 12.5px;
+}
+.echarts-diagram--error {
+  height: auto;
+  min-height: 0;
+  padding: 16px;
+}
+.echarts-diagram__error {
+  margin: 0;
+  color: hsl(var(--destructive));
+  font-size: 12.5px;
+}
+@media (max-width: 640px) {
+  .echarts-diagram {
+    height: 280px;
+  }
 }
 .md table {
   width: 100%;

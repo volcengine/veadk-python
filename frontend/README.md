@@ -148,17 +148,22 @@ server that `veadk frontend` launches — no separate backend.
   instead of credentials. Long descriptions, names, component summaries, IDs,
   and environment values stay inside the scrollable panel.
 - **Custom-agent workbench**: configure an agent with a rich Markdown
-  system-prompt editor (including heading and list shortcuts), then debug with
-  expandable, copyable runner error details, per-result Trace inspection, and
-  review. The lifecycle follows Architecture, Debug, Environment, and Publish.
-  The Environment step can optionally add the official Lark CLI and GitHub CLI
-  to the cloud runtime. Selecting either tool generates an inspectable
-  provider-specific Dockerfile with pinned releases, amd64/arm64 assets, and
-  SHA-256 verification. Advanced configuration can edit that Dockerfile
-  directly or restore the provider-specific generated version; selecting
-  neither and leaving the Dockerfile unchanged keeps AgentKit's default image
-  build. Credentials are never written into the generated Dockerfile.
-  In-progress drafts are stored only in the current browser and scoped
+  system-prompt editor (including heading and list shortcuts), choose Harness
+  Sidecar optimizations, then debug with expandable, copyable runner error
+  details and per-result Trace inspection. The workbench order is `架构` →
+  `优化` → `调试` → `环境` → `发布`. On the optimization page, `自定义`
+  appears first and starts with no components, while `运维场景` applies the
+  `ops` component combination. Component checkboxes remain editable and an empty
+  selection keeps Sidecar disabled. The Environment step can optionally add the
+  official Lark CLI, GitHub CLI, and Pandoc to the cloud runtime. Selecting a
+  tool generates an inspectable provider-specific Dockerfile with pinned
+  releases, amd64/arm64 assets, and SHA-256 verification. Advanced configuration
+  can edit that Dockerfile directly or restore the generated version; selecting
+  no tool and leaving the Dockerfile unchanged keeps AgentKit's default image
+  build. Credentials are never written into the generated Dockerfile. Published
+  Agent details display the saved Sidecar scenario and selected components as
+  read-only information. In-progress drafts are stored only in the current
+  browser and scoped
   to the signed-in user. MCP tokens are converted to Runtime environment
   variables: generated source retains only the `${ENV_NAME}` reference, while
   YAML and browser drafts preserve the corresponding environment value.
@@ -244,6 +249,61 @@ Local Studio reads transient and snapshot Tool IDs from
 all six Tools when their IDs are omitted; the three snapshot Tool names end in
 `_snapshot`. The matching `--sandbox-chat-*-tool-id` and
 `--sandbox-chat-*-snapshot-tool-id` options select existing Tools instead.
+
+## Mermaid diagrams in model messages
+
+Agents can render diagrams in conversation replies by returning standard
+Markdown fenced code blocks with the `mermaid` language tag. No tool call or
+custom JSON envelope is required. Studio uses the official Mermaid renderer,
+so the same contract covers flowcharts, line charts, pie charts, and the other
+diagram types supported by the installed Mermaid version.
+
+````markdown
+```mermaid
+flowchart LR
+  Request --> Agent --> Response
+```
+
+```mermaid
+xychart-beta
+  title "Requests"
+  x-axis [Jan, Feb, Mar]
+  y-axis "Count" 0 --> 100
+  line [24, 58, 91]
+```
+
+```mermaid
+pie showData
+  title Traffic sources
+  "Direct" : 42
+  "Search" : 58
+```
+````
+
+Studio keeps the Mermaid source visible while a response is streaming and
+renders it after the message completes. Users can switch each diagram between
+its preview and original Mermaid code. If a definition is invalid, Studio shows
+an error while keeping the original source available in the code view.
+
+For interactive data charts, agents can return an ECharts option as JSON or
+JSON5 in an `echarts` fenced block. The singular `echart` tag and case variants
+such as `ECharts` are accepted as aliases. The common `option = { ... };`
+wrapper is also accepted. ECharts linear and radial gradient constructors are
+converted to their equivalent data objects without execution. Other functions
+and executable JavaScript are not part of this data-only contract. Tooltip
+content is forced to ECharts rich-text rendering.
+
+````markdown
+```echarts
+{
+  "tooltip": { "trigger": "axis" },
+  "legend": { "data": ["Requests"] },
+  "xAxis": { "type": "category", "data": ["Jan", "Feb", "Mar"] },
+  "yAxis": { "type": "value" },
+  "series": [{ "name": "Requests", "type": "line", "data": [24, 58, 91] }]
+}
+```
+````
 
 ## Development specification
 

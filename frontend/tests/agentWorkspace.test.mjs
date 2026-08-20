@@ -114,6 +114,23 @@ test("agent details show capability badges and deployment state before the flow"
   assert.ok(
     workspaceSource.indexOf("<h3>部署配置</h3>") < workspaceSource.indexOf("<strong>执行流程</strong>"),
   );
+  assert.ok(
+    workspaceSource.indexOf("<strong>执行流程</strong>") < workspaceSource.indexOf("<strong>详细信息</strong>"),
+  );
+  assert.ok(
+    workspaceSource.indexOf("<strong>详细信息</strong>") < workspaceSource.indexOf("<h3>已选择的优化项</h3>"),
+  );
+  assert.match(
+    workspaceSource,
+    /const publishedHarnessSidecar =[\s\S]*?selectedAgentInfo\?\.draft\?\.harnessSidecar \?\?[\s\S]*?harnessIntentFromRuntimeEnvs\(runtimeDetail\?\.envs\)/,
+  );
+  assert.match(workspaceSource, /aria-label="已选择的优化项"/);
+  assert.doesNotMatch(workspaceSource, /<h3>Harness Sidecar<\/h3>/);
+  assert.match(workspaceSource, /<dt>配置状态<\/dt>[\s\S]*?已启用[\s\S]*?未启用[\s\S]*?未记录/);
+  assert.match(workspaceSource, /<dt>优化场景<\/dt>[\s\S]*?harnessSidecarProfileLabel/);
+  assert.match(workspaceSource, /<dt>已选优化项<\/dt>[\s\S]*?publishedHarnessOptimizations\.map/);
+  assert.match(workspaceSource, /发布时选择的智能体优化项。/);
+  assert.doesNotMatch(workspaceSource, /发布时选择的智能体优化项，只读展示。/);
   assert.match(workspaceSource, /status\.toLowerCase\(\) === "ready"[\s\S]*?className="aw-status-dot"/);
   assert.match(workspaceStyles, /\.aw-readonly-config dd\.is-ready\s*\{[\s\S]*?color:\s*hsl\(142 62% 30%\)/);
   assert.match(workspaceSource, /const executionFlowKey = selectedAgentInfo/);
@@ -141,11 +158,11 @@ test("agent details show capability badges and deployment state before the flow"
 test("agent details expose detected integration methods without inventing unavailable endpoints", () => {
   assert.match(
     workspaceSource,
-    /type AgentSection = "basic" \| "usage" \| "evaluations" \| "optimizations" \| "integrations"/,
+    /type AgentSection = "basic" \| "usage" \| "evaluations" \| "optimizations" \| "integrations" \| "versions"/,
   );
   assert.match(
     workspaceSource,
-    /\{ id: "basic", label: "基本信息" \},\s*\{ id: "usage", label: "用量统计" \},\s*\{ id: "evaluations", label: "评测集" \},\s*\{ id: "optimizations", label: "优化项" \},\s*\{ id: "integrations", label: "接入方法" \}/,
+    /\{ id: "basic", label: "基本信息" \},\s*\{ id: "usage", label: "用量统计" \},\s*\{ id: "evaluations", label: "评测集" \},\s*\{ id: "optimizations", label: "优化项" \},\s*\{ id: "integrations", label: "接入方法" \},\s*\{ id: "versions", label: "版本" \}/,
   );
   assert.match(workspaceSource, /role="tablist"/);
   assert.match(workspaceSource, /role="tab"/);
@@ -269,6 +286,26 @@ test("runtime-backed Agent details load and paginate usage without stale respons
   assert.match(workspaceStyles, /\.aw-usage-pagination button:disabled/);
 });
 
+test("agent details show GitHub delivery versions and rollback actions", () => {
+  assert.match(clientSource, /export interface GithubDeliveryVersion/);
+  assert.match(clientSource, /export async function getGithubDeliveryVersions/);
+  assert.match(clientSource, /export async function createGithubDeliveryRollbackPr/);
+  assert.match(workspaceSource, /getGithubDeliveryVersions/);
+  assert.match(workspaceSource, /createGithubDeliveryRollbackPr/);
+  assert.match(workspaceSource, /const \[githubVersions, setGithubVersions\]/);
+  assert.match(workspaceSource, /section === "versions"/);
+  assert.match(workspaceSource, /GitHub 交付版本/);
+  assert.match(workspaceSource, /源码已合入 main/);
+  assert.match(workspaceSource, /PR 链接/);
+  assert.match(workspaceSource, /提交人/);
+  assert.match(workspaceSource, /发布状态/);
+  assert.match(workspaceSource, /回退事件/);
+  assert.match(workspaceSource, /回退到此版本/);
+  assert.match(workspaceSource, /未挂载 GitHub 时仅展示 Studio 当前版本/);
+  assert.match(workspaceStyles, /\.aw-version-list/);
+  assert.match(workspaceStyles, /\.aw-version-actions/);
+});
+
 test("workspace uses cached runtime data and prefetches likely next views", () => {
   assert.match(clientSource, /const RUNTIME_METADATA_CACHE_TTL_MS = 5 \* 60 \* 1000/);
   assert.match(clientSource, /const FEEDBACK_CASES_CACHE_TTL_MS = 60 \* 1000/);
@@ -294,7 +331,7 @@ test("workspace uses cached runtime data and prefetches likely next views", () =
   assert.match(workspaceSource, /for \(const agent of listedAgents\.slice\(0, 8\)\)/);
   assert.match(workspaceSource, /prefetchRuntimeDetail\(agent\.runtimeId, region\)/);
   assert.match(workspaceSource, /prefetchRuntimeAgentInfo\(agent\.runtimeId, region, agent\.runtimeApp \?\? ""\)/);
-  assert.match(workspaceSource, /prefetchAgentFeedbackCases\(\{/);
+  assert.doesNotMatch(workspaceSource, /prefetchAgentFeedbackCases\(\{/);
 });
 
 test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => {
@@ -364,7 +401,12 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /const mergeBuildFailureLog = \(message: string\): DeployBuildLogSnapshot \| undefined =>/);
   assert.match(projectPreviewSource, /"----- 构建失败 -----"[\s\S]*?latestBuildLog = mergeDeployBuildLog\(latestBuildLog/);
   assert.match(projectPreviewSource, /latestPhase = s\.phase/);
-  assert.match(projectPreviewSource, /label: "部署失败",\s*message,\s*\.\.\.\(buildLog/);
+  assert.match(
+    projectPreviewSource,
+    /label: "部署失败"[\s\S]*?message: failedInBuild[\s\S]*?\.\.\.\(buildLog/,
+  );
+  assert.match(projectPreviewSource, /const failedInGithub = latestPhase === "github" && Boolean\(latestGithubLog\)/);
+  assert.match(projectPreviewSource, /failedInBuild[\s\S]*?"构建镜像失败，详见构建日志。"[\s\S]*?failedInGithub[\s\S]*?"挂载 GitHub 持续交付失败，详见 GitHub 日志。"/);
   assert.match(
     projectPreviewSource,
     /await onDeploymentComplete\?\.\(result\)[\s\S]*?catch \(error\)[\s\S]*?error instanceof RuntimeProbeError[\s\S]*?status: "success"[\s\S]*?label: "部署完成，暂未连接"[\s\S]*?message: error\.message/,
@@ -410,6 +452,9 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   );
   assert.match(workspaceStyles, /\.aw-deploy-progress-actions\s*\{/);
   assert.match(workspaceSource, /const BUILD_STEP_INDEX = DEPLOYMENT_STEPS\.findIndex/);
+  assert.match(workspaceSource, /const GITHUB_DELIVERY_STEP =/);
+  assert.match(workspaceSource, /task\.githubDelivery[\s\S]*?GITHUB_DELIVERY_STEP[\s\S]*?DEPLOYMENT_STEPS\[DEPLOYMENT_STEPS\.length - 1\]/);
+  assert.match(workspaceSource, /phase:\s*"github"[\s\S]*?label:\s*"挂载 GitHub 持续交付"/);
   assert.match(workspaceSource, /const shouldAutoExpand = Boolean\([\s\S]*?deploymentStepIndex\(task\) === BUILD_STEP_INDEX/);
   assert.match(workspaceSource, /useState\(shouldAutoExpand\)/);
   assert.match(workspaceSource, /setExpanded\(shouldAutoExpand\)/);
@@ -420,6 +465,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(workspaceSource, /className="aw-deploy-log-empty">\{pendingMessage\}/);
   assert.match(workspaceSource, /hasLogText[\s\S]*?\? <pre ref=\{logTextRef\}>\{visibleText\}<\/pre>[\s\S]*?: <div className="aw-deploy-log-empty">\{pendingMessage\}<\/div>/);
   assert.match(workspaceSource, /step\.phase === "build" && task\.buildLog[\s\S]*?className="aw-deploy-step-log"[\s\S]*?<DeploymentBuildLog task=\{task\} \/>/);
+  assert.match(workspaceSource, /step\.phase === "github" && task\.githubLog[\s\S]*?className="aw-deploy-step-log"[\s\S]*?<DeploymentGithubLog task=\{task\} \/>/);
   assert.doesNotMatch(workspaceSource, /<\/ol>\s*<DeploymentBuildLog task=\{task\} \/>/);
   assert.match(workspaceStyles, /\.aw-deploy-step-log\s*\{[\s\S]*?margin-top:\s*10px;/);
   assert.match(workspaceStyles, /\.aw-deploy-log-empty\s*\{/);
@@ -490,7 +536,7 @@ test("deployed agent detail connects, refreshes the current Agent, then opens a 
   );
   assert.match(
     appSource,
-    /const refreshCurrentAgentAndStartNewChat[\s\S]*?setConnections\(loadConnections\(\)\)[\s\S]*?setAgentInfoRefreshKey[\s\S]*?setAppName\(id\)[\s\S]*?startNewChat\(\)/,
+    /const refreshCurrentAgentAndStartNewChat[\s\S]*?loadHydratedSessions\(id, userId\)[\s\S]*?getAgentInfo\(id\)[\s\S]*?setConnections\(nextConnections\)[\s\S]*?setAgentInfo\(nextAgentInfo\)[\s\S]*?setAppName\(id\)[\s\S]*?startNewChat\(\)/,
   );
   assert.match(appSource, /await refreshCurrentAgentAndStartNewChat\(agent\.id\)/);
   assert.match(appSource, /onTalkAgent=\{talkToWorkspaceAgent\}/);
@@ -768,6 +814,22 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(clientSource, /export function clearMessageFeedbackCache/);
   assert.match(clientSource, /\/web\/evaluation\/feedback-cases\?\$\{query\.toString\(\)\}/);
   assert.match(clientSource, /\/web\/evaluation\/feedback-cases\/delete/);
+  assert.match(
+    clientSource,
+    /function selectedRuntimeRegionCandidates\(region\?: string\)[\s\S]*?return explicit \? \[explicit\] : runtimeRegionCandidates\(\)/,
+  );
+  assert.match(
+    clientSource,
+    /getAgentFeedbackCases[\s\S]*?for \(const region of selectedRuntimeRegionCandidates\(args\.region\)\)/,
+  );
+  assert.match(
+    clientSource,
+    /getAutomaticEvaluationStatuses[\s\S]*?for \(const region of selectedRuntimeRegionCandidates\(args\.region\)\)/,
+  );
+  assert.match(
+    clientSource,
+    /getAgentOptimizations[\s\S]*?for \(const region of selectedRuntimeRegionCandidates\(args\.region\)\)/,
+  );
   assert.match(workspaceSource, /getAgentFeedbackCases\(\{/);
   assert.match(workspaceSource, /deleteAgentFeedbackCases\(\{/);
   assert.match(

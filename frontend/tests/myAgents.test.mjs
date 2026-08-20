@@ -45,6 +45,11 @@ test("shows only the Agent navigation in the sidebar", () => {
   assert.match(appSource, /myAgents && !showManageAgents \? \([\s\S]*?<MyAgents/);
 });
 
+test("keeps Agent creation out of the sidebar navigation", () => {
+  assert.doesNotMatch(sidebarSource, /new-chat--add-agent/);
+  assert.doesNotMatch(sidebarSource, /aria-label="添加智能体"/);
+});
+
 test("shows the requested title, search, and agent type pills", () => {
   assert.match(pageSource, /<h1>智能体<\/h1>/);
   assert.doesNotMatch(pageSource, /Runtime 地域|regionMenuOpen/);

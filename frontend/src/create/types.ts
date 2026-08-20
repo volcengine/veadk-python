@@ -91,6 +91,23 @@ export interface CloudEnvironmentConfig {
   dockerfile?: string;
 }
 
+export type HarnessSidecarOptionId =
+  | "context_engine"
+  | "compressor"
+  | "verifier"
+  | "long_run_control"
+  | "mcp_resilience";
+
+export type HarnessSidecarProfileId = "default" | "ops";
+
+export interface HarnessSidecarIntent {
+  enabled: boolean;
+  profile: HarnessSidecarProfileId;
+  componentOverrides: Record<HarnessSidecarOptionId, boolean>;
+  catalogVersion?: string;
+  planHash?: string;
+}
+
 /** A draft VeADK agent configuration produced by a creation flow. */
 export interface AgentDraft {
   name: string;
@@ -161,6 +178,8 @@ export interface AgentDraft {
   deployment?: DeploymentConfig;
   /** Optional command-line tools installed into the cloud runtime image. */
   cloudEnvironment?: CloudEnvironmentConfig;
+  /** Root Runtime-level Harness Sidecar selection. Never set on sub-Agents. */
+  harnessSidecar?: HarnessSidecarIntent;
 }
 
 // Pre-filled defaults so description / system prompt / model are never empty

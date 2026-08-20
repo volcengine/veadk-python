@@ -35,10 +35,14 @@ test("deployment sends the selected Runtime instance range", () => {
   assert.match(clientSource, /maxInstance: opts\?\.maxInstance/);
 });
 
-test("renders editable Runtime instance inputs with memory-aware defaults", () => {
+test("renders Runtime instance inputs with memory-aware and Sidecar-safe defaults", () => {
   assert.match(
     projectPreviewSource,
-    /useState\([\s\S]*?inMemorySession \? "1" : "5"[\s\S]*?\)/,
+    /const \[minInstance, setMinInstance\] = useState\("1"\)/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /const \[maxInstance, setMaxInstance\] = useState\([\s\S]*?inMemorySession \|\| sidecarEnabled \? "1" : "5"/,
   );
   assert.match(
     projectPreviewSource,
@@ -50,7 +54,11 @@ test("renders editable Runtime instance inputs with memory-aware defaults", () =
   );
   assert.match(
     projectPreviewSource,
-    /inMemorySession && \([\s\S]*?className="pp-instance-note"[\s\S]*?为避免多实例间会话丢失，推荐将 Runtime 固定为 1～1/,
+    /disabled=\{deploying \|\| sidecarEnabled\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /inMemorySession \|\| sidecarEnabled[\s\S]*?className="pp-instance-note"[\s\S]*?Harness Sidecar 首期仅支持单实例，Runtime 固定为 1～1[\s\S]*?为避免多实例间会话丢失，推荐将 Runtime 固定为 1～1/,
   );
   assert.match(
     projectPreviewStyles,
@@ -61,11 +69,15 @@ test("renders editable Runtime instance inputs with memory-aware defaults", () =
 test("renders the Runtime update progress step conditionally", () => {
   assert.match(
     projectPreviewSource,
-    /needsInstanceUpdate[\s\S]*?\[\.\.\.baseDeploymentSteps, INSTANCE_UPDATE_STEP\][\s\S]*?: baseDeploymentSteps[\s\S]*?createEvaluationSets/,
+    /deploymentStepsWithInstanceUpdate = needsInstanceUpdate[\s\S]*?\[\.\.\.baseDeploymentSteps, INSTANCE_UPDATE_STEP\][\s\S]*?: baseDeploymentSteps[\s\S]*?deploymentStepsBeforeGithub = effectiveCreateEvaluationSets[\s\S]*?EVALUATION_SET_STEP[\s\S]*?pendingGithubCicd[\s\S]*?GITHUB_SYNC_STEP/,
   );
   assert.match(
     workspaceSource,
-    /task\.instanceRange[\s\S]*?instanceUpdateStep\(task\.instanceRange\)[\s\S]*?: DEPLOYMENT_STEPS/,
+    /if \(task\.instanceRange\) steps\.push\(instanceUpdateStep\(task\.instanceRange\)\)/,
+  );
+  assert.match(
+    workspaceSource,
+    /if \(task\.instanceRange\)[\s\S]*?if \(task\.createEvaluationSets\) steps\.push\(EVALUATION_SET_STEP\);[\s\S]*?if \(task\.githubDelivery\) steps\.push\(GITHUB_DELIVERY_STEP\)[\s\S]*?steps\.push\(DEPLOYMENT_STEPS\[DEPLOYMENT_STEPS\.length - 1\]\)/,
   );
   assert.match(
     workspaceSource,

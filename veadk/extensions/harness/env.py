@@ -18,21 +18,10 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from google.adk.plugins import BasePlugin
-
-from veadk.extensions.harness.plugins import build_harness_plugins
-from veadk.extensions.harness.modules.final_response_verifier import (
-    FinalResponseVerifierConfig,
-)
-from veadk.extensions.harness.modules.invocation_context import (
-    HarnessInvocationContextConfig,
-)
-from veadk.extensions.harness.modules.tool_result_compactor import (
-    ToolResultCompactorConfig,
-)
-from veadk.extensions.harness.stores import JsonlHarnessStore
+if TYPE_CHECKING:
+    from google.adk.plugins import BasePlugin
 
 
 def harness_enabled_from_env(env: Mapping[str, str] | None = None) -> bool:
@@ -50,6 +39,18 @@ def build_harness_plugins_from_env(
     values = env or os.environ
     if not harness_enabled_from_env(values):
         return []
+    from veadk.extensions.harness.modules.final_response_verifier import (
+        FinalResponseVerifierConfig,
+    )
+    from veadk.extensions.harness.modules.invocation_context import (
+        HarnessInvocationContextConfig,
+    )
+    from veadk.extensions.harness.modules.tool_result_compactor import (
+        ToolResultCompactorConfig,
+    )
+    from veadk.extensions.harness.plugins import build_harness_plugins
+    from veadk.extensions.harness.stores import JsonlHarnessStore
+
     components = (
         values.get("HARNESS_ENHANCE_COMPONENTS")
         or values.get("HARNESS_COMPONENTS")

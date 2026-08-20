@@ -22,18 +22,19 @@ import {
 } from "lucide-react";
 import {
   deleteAgentFeedbackCases,
+  createGithubDeliveryRollbackPr,
   getCachedAgentFeedbackCases,
   getCachedRuntimeAgentInfo,
   getCachedRuntimeDetail,
   getAgentUsage,
   getAgentFeedbackCases,
   getAgentOptimizations,
+  getGithubDeliveryVersions,
   getRuntimeAgentInfo,
   getRuntimeDetail,
   getRuntimeUpdateCapability,
   probeRuntimeA2a,
   probeRuntimeApps,
-  prefetchAgentFeedbackCases,
   prefetchRuntimeAgentInfo,
   prefetchRuntimeDetail,
   revealRuntimeApiKey,
@@ -47,6 +48,8 @@ import {
   type AgentOptimizationModule,
   type AgentOptimizationPriority,
   type AgentUsageResponse,
+  type GithubDeliveryVersionsResult,
+  type GithubDeliveryVersion,
   type RuntimeA2aIntegration,
   RuntimeProbeError,
   type RuntimeDetail,
@@ -58,6 +61,12 @@ import {
   modelNameFromRuntime,
   runtimeAgentDraftFromCloud,
 } from "../create/runtimeModelName";
+import {
+  HARNESS_SIDECAR_OPTION_IDS,
+  harnessIntentFromRuntimeEnvs,
+  harnessSidecarOptionLabel,
+  harnessSidecarProfileLabel,
+} from "../create/harnessSidecarOptions";
 import type { AgentDraft } from "../create/types";
 import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
@@ -69,7 +78,7 @@ import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./AgentWorkspace.css";
 
 type WorkspaceView = "library" | "evaluation";
-type AgentSection = "basic" | "usage" | "evaluations" | "optimizations" | "integrations";
+type AgentSection = "basic" | "usage" | "evaluations" | "optimizations" | "integrations" | "versions";
 type IntegrationProtocol = "api-server" | "a2a";
 type EvaluationSection = "config" | "history";
 type CaseKind = "good" | "bad";
@@ -245,6 +254,7 @@ const AGENT_SECTIONS: Array<{ id: AgentSection; label: string }> = [
   { id: "evaluations", label: "评测集" },
   { id: "optimizations", label: "优化项" },
   { id: "integrations", label: "接入方法" },
+  { id: "versions", label: "版本" },
 ];
 
 const AGENT_USAGE_PAGE_SIZE = 20;
@@ -312,6 +322,19 @@ function authTypeLabel(authType?: RuntimeDetail["authType"]): string {
   if (authType === "custom_jwt") return "OAuth / JWT";
   if (authType === "none") return "无需鉴权";
   return "暂无";
+}
+
+function githubRuntimeStatusLabel(status?: string): string {
+  if (status === "published") return "已发布";
+  if (status === "publishing") return "发布中";
+  if (status === "failed") return "发布失败";
+  if (status === "pending") return "等待发布";
+  return "未知";
+}
+
+function githubVersionTitle(version: GithubDeliveryVersion): string {
+  if (version.changeType === "rollback") return "回退事件";
+  return version.version;
 }
 
 function pythonString(value: string): string {
@@ -647,6 +670,11 @@ const EVALUATION_SET_STEP = {
   label: "创建评测集",
   description: "自动创建 Good Case 和 Bad Case 评测集",
 } as const;
+const GITHUB_DELIVERY_STEP = {
+  phase: "github",
+  label: "挂载 GitHub 持续交付",
+  description: "初始化目标分支与 GitHub Actions workflow",
+} as const;
 function instanceUpdateStep(range: { min: number; max: number }) {
   return {
     phase: "update",
@@ -656,21 +684,19 @@ function instanceUpdateStep(range: { min: number; max: number }) {
 }
 const BUILD_STEP_INDEX = DEPLOYMENT_STEPS.findIndex((step) => step.phase === "build");
 
-function deploymentSteps(task: DeploymentTaskUpdate) {
-  const steps = task.instanceRange
-    ? [
-        ...DEPLOYMENT_STEPS.slice(0, -1),
-        instanceUpdateStep(task.instanceRange),
-        DEPLOYMENT_STEPS[DEPLOYMENT_STEPS.length - 1],
-      ]
-    : DEPLOYMENT_STEPS;
-  return task.createEvaluationSets
-    ? [
-        ...steps.slice(0, -1),
-        EVALUATION_SET_STEP,
-        steps[steps.length - 1],
-      ]
-    : steps;
+function deploymentSteps(task: DeploymentTaskUpdate): Array<{
+  phase: string;
+  label: string;
+  description: string;
+}> {
+  const steps: Array<{ phase: string; label: string; description: string }> = [
+    ...DEPLOYMENT_STEPS.slice(0, -1),
+  ];
+  if (task.instanceRange) steps.push(instanceUpdateStep(task.instanceRange));
+  if (task.createEvaluationSets) steps.push(EVALUATION_SET_STEP);
+  if (task.githubDelivery) steps.push(GITHUB_DELIVERY_STEP);
+  steps.push(DEPLOYMENT_STEPS[DEPLOYMENT_STEPS.length - 1]);
+  return steps;
 }
 
 function deploymentStepIndex(task: DeploymentTaskUpdate): number {
@@ -682,6 +708,7 @@ function deploymentStepIndex(task: DeploymentTaskUpdate): number {
     部署: "deploy",
     发布: "publish",
     创建评测集: "evaluation",
+    "挂载 GitHub 持续交付": "github",
     部署完成: "complete",
   } as Record<string, string>)[task.label];
   const index = steps.findIndex((step) => step.phase === phase);
@@ -702,26 +729,37 @@ function formatBuildLogTime(updatedAt: number): string {
   }
 }
 
-function DeploymentBuildLog({ task }: { task: DeploymentTaskUpdate }) {
-  const log = task.buildLog;
+type DeploymentLogSnapshot = NonNullable<DeploymentTaskUpdate["buildLog"]>;
+
+function DeploymentStepLog({
+  log,
+  autoExpand,
+  title,
+  ariaLabel,
+  copyLabel,
+  defaultPendingMessage,
+}: {
+  log?: DeploymentLogSnapshot;
+  autoExpand: boolean;
+  title: string;
+  ariaLabel: string;
+  copyLabel: string;
+  defaultPendingMessage: string;
+}) {
   const logTextRef = useRef<HTMLPreElement | null>(null);
-  const shouldAutoExpand = Boolean(
-    log?.status !== "complete"
-    && (task.status === "running" || task.status === "error")
-    && deploymentStepIndex(task) === BUILD_STEP_INDEX,
-  );
+  const shouldAutoExpand = Boolean(log?.status !== "complete" && autoExpand);
   const [expanded, setExpanded] = useState(shouldAutoExpand);
   const [copied, setCopied] = useState(false);
   const hasLogText = Boolean(log?.text || log?.error);
   const text = log?.text || log?.error || "";
   const lines = text.split("\n");
   const visibleText = expanded ? text : lines.slice(-36).join("\n");
-  const pendingMessage = log?.pendingMessage || "正在等待构建日志…";
+  const pendingMessage = log?.pendingMessage || defaultPendingMessage;
 
   useEffect(() => {
     if (!log) return;
     setExpanded(shouldAutoExpand);
-  }, [task.id, log?.status, shouldAutoExpand]);
+  }, [log?.status, shouldAutoExpand]);
 
   useEffect(() => {
     if (!expanded || !hasLogText) return;
@@ -765,11 +803,11 @@ function DeploymentBuildLog({ task }: { task: DeploymentTaskUpdate }) {
   return (
     <section
       className={`aw-deploy-log is-${log.status}${expanded ? "" : " is-collapsed"}`}
-      aria-label="构建日志"
+      aria-label={ariaLabel}
     >
       <header>
         <div>
-          <strong>构建日志</strong>
+          <strong>{title}</strong>
           <span>{meta}</span>
         </div>
         <div className="aw-deploy-log-actions">
@@ -785,8 +823,8 @@ function DeploymentBuildLog({ task }: { task: DeploymentTaskUpdate }) {
             <button
               type="button"
               onClick={() => void copyLog()}
-              aria-label={copied ? "已复制构建日志" : "复制构建日志"}
-              title={copied ? "已复制" : "复制构建日志"}
+              aria-label={copied ? `已复制${copyLabel}` : `复制${copyLabel}`}
+              title={copied ? "已复制" : `复制${copyLabel}`}
             >
               {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
               <span>{copied ? "已复制" : "复制"}</span>
@@ -800,6 +838,40 @@ function DeploymentBuildLog({ task }: { task: DeploymentTaskUpdate }) {
           : <div className="aw-deploy-log-empty">{pendingMessage}</div>
       )}
     </section>
+  );
+}
+
+function DeploymentBuildLog({ task }: { task: DeploymentTaskUpdate }) {
+  return (
+    <DeploymentStepLog
+      log={task.buildLog}
+      autoExpand={Boolean(
+        task.buildLog?.status !== "complete"
+        && (task.status === "running" || task.status === "error")
+        && deploymentStepIndex(task) === BUILD_STEP_INDEX,
+      )}
+      title="构建日志"
+      ariaLabel="构建日志"
+      copyLabel="构建日志"
+      defaultPendingMessage="正在等待构建日志…"
+    />
+  );
+}
+
+function DeploymentGithubLog({ task }: { task: DeploymentTaskUpdate }) {
+  return (
+    <DeploymentStepLog
+      log={task.githubLog}
+      autoExpand={Boolean(
+        task.githubLog?.status !== "complete"
+        && (task.status === "running" || task.status === "error")
+        && task.phase === "github",
+      )}
+      title="GitHub 挂载日志"
+      ariaLabel="GitHub 持续交付挂载日志"
+      copyLabel="GitHub 挂载日志"
+      defaultPendingMessage="正在等待 GitHub 挂载日志…"
+    />
   );
 }
 
@@ -887,6 +959,11 @@ function DeploymentProgressCard({
                 {step.phase === "build" && task.buildLog && (
                   <div className="aw-deploy-step-log">
                     <DeploymentBuildLog task={task} />
+                  </div>
+                )}
+                {step.phase === "github" && task.githubLog && (
+                  <div className="aw-deploy-step-log">
+                    <DeploymentGithubLog task={task} />
                   </div>
                 )}
               </div>
@@ -990,6 +1067,11 @@ export function AgentWorkspace({
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [apiKeyLoading, setApiKeyLoading] = useState(false);
   const [apiKeyError, setApiKeyError] = useState("");
+  const [githubVersions, setGithubVersions] =
+    useState<GithubDeliveryVersionsResult | null>(null);
+  const [githubVersionsLoading, setGithubVersionsLoading] = useState(false);
+  const [githubVersionsError, setGithubVersionsError] = useState("");
+  const [rollbackCommit, setRollbackCommit] = useState("");
   const [updateCapability, setUpdateCapability] = useState<{
     requestKey: string;
     value: RuntimeUpdateCapability;
@@ -1311,6 +1393,14 @@ export function AgentWorkspace({
       selectedUpdateCapability?.agent,
     ],
   );
+  const publishedHarnessSidecar =
+    selectedAgentInfo?.draft?.harnessSidecar ??
+    harnessIntentFromRuntimeEnvs(runtimeDetail?.envs);
+  const publishedHarnessOptimizations = publishedHarnessSidecar
+    ? HARNESS_SIDECAR_OPTION_IDS.filter(
+        (id) => publishedHarnessSidecar.componentOverrides[id],
+      )
+    : [];
   const updateBlockedReason = selectedDraft
     ? canCreate ? "" : "当前账号没有新建 Agent 的权限。"
     : !canUpdate
@@ -1453,34 +1543,8 @@ export function AgentWorkspace({
       const region = agent.region ?? "cn-beijing";
       prefetchRuntimeDetail(agent.runtimeId, region);
       prefetchRuntimeAgentInfo(agent.runtimeId, region, agent.runtimeApp ?? "");
-      void getRuntimeAgentInfo(agent.runtimeId, region, agent.runtimeApp ?? "")
-        .then((info) => {
-          const appName = info.appName || agent.app;
-          if (!appName) return;
-          prefetchAgentFeedbackCases({
-            runtimeId: agent.runtimeId ?? "",
-            region,
-            appName,
-            pageSize: 100,
-          });
-        })
-        .catch(() => {});
     }
   }, [listedAgents]);
-
-  useEffect(() => {
-    if (!selectedAgent?.runtimeId || !selectedAgentAppName) return;
-    prefetchAgentFeedbackCases({
-      runtimeId: selectedAgent.runtimeId,
-      region: selectedAgent.region ?? "cn-beijing",
-      appName: selectedAgentAppName,
-      pageSize: 100,
-    });
-  }, [
-    selectedAgentAppName,
-    selectedAgent?.region,
-    selectedAgent?.runtimeId,
-  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1720,6 +1784,36 @@ export function AgentWorkspace({
   useEffect(() => {
     let cancelled = false;
     const runtimeId = selectedAgent?.runtimeId ?? "";
+    setGithubVersionsError("");
+    if (section !== "versions" || !runtimeId) {
+      setGithubVersionsLoading(false);
+      if (!runtimeId) setGithubVersions(null);
+      return;
+    }
+    setGithubVersionsLoading(true);
+    void getGithubDeliveryVersions(runtimeId)
+      .then((value) => {
+        if (!cancelled) setGithubVersions(value);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setGithubVersions(null);
+          setGithubVersionsError(
+            error instanceof Error ? error.message : "读取 GitHub 版本失败。",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setGithubVersionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [section, selectedAgent?.currentVersion, selectedAgent?.runtimeId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const runtimeId = selectedAgent?.runtimeId ?? "";
     const region = selectedAgent?.region ?? "cn-beijing";
     const requestKey = `${region}:${runtimeId}`;
     setIntegrationError("");
@@ -1823,6 +1917,28 @@ export function AgentWorkspace({
     selectedAgent?.region,
     selectedAgent?.runtimeId,
   ]);
+
+  async function createRollbackPr(version: GithubDeliveryVersion) {
+    const runtimeId = selectedAgent?.runtimeId ?? "";
+    const commitSha = version.commitSha ?? "";
+    if (!runtimeId || !commitSha || rollbackCommit) return;
+    setRollbackCommit(commitSha);
+    setGithubVersionsError("");
+    try {
+      await createGithubDeliveryRollbackPr({
+        runtimeId,
+        targetCommitSha: commitSha,
+      });
+      const refreshed = await getGithubDeliveryVersions(runtimeId);
+      setGithubVersions(refreshed);
+    } catch (error) {
+      setGithubVersionsError(
+        error instanceof Error ? error.message : "回退版本失败。",
+      );
+    } finally {
+      setRollbackCommit("");
+    }
+  }
 
   useEffect(() => {
     const caseIds = new Set(feedbackCases.map((item) => item.id));
@@ -2811,6 +2927,51 @@ export function AgentWorkspace({
                       </div>
                     </dl>
                   </section>
+                  <section
+                    className="aw-sidecar-panel aw-settings-card"
+                    aria-label="已选择的优化项"
+                  >
+                    <div className="aw-section-head">
+                      <div>
+                        <h3>已选择的优化项</h3>
+                        <p>发布时选择的智能体优化项。</p>
+                      </div>
+                    </div>
+                    <dl className="aw-readonly-config">
+                      <div>
+                        <dt>配置状态</dt>
+                        <dd className={publishedHarnessSidecar?.enabled ? "is-ready" : undefined}>
+                          {publishedHarnessSidecar
+                            ? publishedHarnessSidecar.enabled
+                              ? <><span className="aw-status-dot" />已启用</>
+                              : "未启用"
+                            : "未记录"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>优化场景</dt>
+                        <dd>
+                          {publishedHarnessSidecar
+                            ? harnessSidecarProfileLabel(publishedHarnessSidecar.profile)
+                            : "旧版本未保存此配置"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>已选优化项</dt>
+                        <dd className="aw-fact-badges">
+                          {!publishedHarnessSidecar
+                            ? "旧版本未保存此配置"
+                            : publishedHarnessOptimizations.length
+                              ? publishedHarnessOptimizations.map((optionId) => (
+                                  <span key={optionId}>
+                                    {harnessSidecarOptionLabel(optionId)}
+                                  </span>
+                                ))
+                              : "未选择"}
+                        </dd>
+                      </div>
+                    </dl>
+                  </section>
                 </div>
               )}
               {section === "usage" && selectedAgent?.runtimeId && (
@@ -2926,6 +3087,141 @@ export function AgentWorkspace({
                         </nav>
                       )}
                     </>
+                  )}
+                </section>
+              )}
+              {section === "versions" && (
+                <section className="aw-version-stack">
+                  <div className="aw-integration-intro">
+                    <h3>GitHub 交付版本</h3>
+                    <p>
+                      {githubVersions?.cicd?.enabled
+                        ? "展示当前 Runtime 绑定 GitHub 后由 Studio 记录的版本与 PR。"
+                        : "未挂载 GitHub 时仅展示 Studio 当前版本。"}
+                    </p>
+                  </div>
+                  {githubVersionsLoading && (
+                    <div className="aw-case-empty">正在读取版本…</div>
+                  )}
+                  {githubVersionsError && (
+                    <div className="aw-integration-error" role="alert">
+                      <span>{githubVersionsError}</span>
+                      {selectedAgent?.runtimeId && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void getGithubDeliveryVersions(
+                              selectedAgent.runtimeId ?? "",
+                            ).then(setGithubVersions)
+                          }
+                        >
+                          重试
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {!githubVersionsLoading && !githubVersionsError && (
+                    <div className="aw-version-list">
+                      {githubVersions?.githubSyncError && (
+                        <div className="aw-integration-error" role="alert">
+                          <span>{githubVersions.githubSyncError}</span>
+                        </div>
+                      )}
+                      {githubVersions?.latestSourceRuntimeStatus
+                        && githubVersions.latestSourceRuntimeStatus !== "published"
+                        && githubVersions.versions[0]?.commitSha
+                        && githubVersions.versions[0].commitSha
+                          !== githubVersions.currentCommitSha && (
+                          <div className="aw-integration-notice" role="status">
+                            <span>
+                              源码已合入 main，Runtime 仍在
+                              {githubRuntimeStatusLabel(
+                                githubVersions.latestSourceRuntimeStatus,
+                              )}
+                              ；当前线上版本保持在最近一次发布成功的版本。
+                            </span>
+                          </div>
+                        )}
+                      {githubVersions?.versions.length ? (
+                        githubVersions.versions.map((version) => {
+                          const commitSha = version.commitSha ?? "";
+                          const runtimeStatus = version.runtimeStatus ?? version.status;
+                          const isRollbackEvent = version.changeType === "rollback";
+                          const canRollback =
+                            Boolean(githubVersions.cicd?.enabled) &&
+                            Boolean(commitSha) &&
+                            !isRollbackEvent &&
+                            commitSha !== githubVersions.currentCommitSha;
+                          return (
+                            <article
+                              className="aw-version-row"
+                              key={`${version.version}-${commitSha || version.createdAt}`}
+                            >
+                              <div>
+                                <strong>{githubVersionTitle(version)}</strong>
+                                <small>{version.createdAt || "暂无时间"}</small>
+                              </div>
+                              <div>
+                                <span>PR 链接</span>
+                                {version.pullRequestUrl ? (
+                                  <a
+                                    href={version.pullRequestUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                  >
+                                    查看 PR
+                                  </a>
+                                ) : (
+                                  <em>无 PR</em>
+                                )}
+                              </div>
+                              <div>
+                                <span>提交人</span>
+                                <em>{version.author || "Studio"}</em>
+                              </div>
+                              <div>
+                                <span>发布状态</span>
+                                <em>{githubRuntimeStatusLabel(runtimeStatus)}</em>
+                              </div>
+                              <div className="aw-version-actions">
+                                <button
+                                  type="button"
+                                  disabled={
+                                    !canRollback || rollbackCommit === commitSha
+                                  }
+                                  onClick={() => void createRollbackPr(version)}
+                                >
+                                  {rollbackCommit === commitSha
+                                    ? "回退中…"
+                                    : "回退到此版本"}
+                                </button>
+                                {version.workflowRunUrl && (
+                                  <a
+                                    href={version.workflowRunUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                  >
+                                    查看发布
+                                  </a>
+                                )}
+                              </div>
+                            </article>
+                          );
+                        })
+                      ) : (
+                        <article className="aw-version-row">
+                          <div>
+                            <strong>
+                              {displayCurrentVersion != null
+                                ? `v${displayCurrentVersion}`
+                                : "暂无版本"}
+                            </strong>
+                            <small>{runtimeDetail?.updatedAt || "暂无时间"}</small>
+                          </div>
+                          <p>未挂载 GitHub 时仅展示 Studio 当前版本。</p>
+                        </article>
+                      )}
+                    </div>
                   )}
                 </section>
               )}

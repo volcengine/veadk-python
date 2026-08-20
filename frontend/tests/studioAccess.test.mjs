@@ -38,6 +38,7 @@ test("Agent workspace creation and update actions obey Studio access", () => {
   assert.doesNotMatch(sidebarSource, /access\.capabilities\.createAgents && show\("addAgent"\)/);
   assert.doesNotMatch(sidebarSource, /access\.capabilities\.manageAgents && show\("manageAgents"\)/);
   assert.doesNotMatch(sidebarSource, /onManageAgents/);
+  assert.match(appSource, /<MyAgents[\s\S]*?canCreate=\{canCreateAgents\}/);
   assert.match(appSource, /const visibleCreateView = canCreateAgents \? createView : null/);
   assert.match(appSource, /const showManageAgents = manageAgents/);
   assert.match(appSource, /if \(!access\.capabilities\.manageAgents\) setManageAgents\(false\)/);

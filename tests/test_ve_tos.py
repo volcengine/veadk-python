@@ -86,6 +86,7 @@ def test_ve_tos_database_region_wins_over_region_env(monkeypatch, fake_tos):
 def test_tos_config_uses_region_env_fallback_and_updates_endpoint(monkeypatch):
     from veadk.configs.database_configs import TOSConfig
 
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
     monkeypatch.setenv("CLOUD_PROVIDER", "volces")
     monkeypatch.delenv("DATABASE_TOS_REGION", raising=False)
     monkeypatch.delenv("DATABASE_TOS_ENDPOINT", raising=False)
@@ -119,6 +120,7 @@ def test_related_database_configs_use_region_env_fallback(monkeypatch):
         VikingKnowledgebaseConfig,
     )
 
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
     monkeypatch.setenv("CLOUD_PROVIDER", "volces")
     for env_name in [
         "DATABASE_VIKING_REGION",

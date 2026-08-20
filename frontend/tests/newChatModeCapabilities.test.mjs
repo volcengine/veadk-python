@@ -50,7 +50,7 @@ test("loads built-in Sandbox, Skill, and Harness capabilities independently", ()
   );
   assert.match(
     appSource,
-    /const refreshCurrentAgentAndStartNewChat[\s\S]*?await probeNewChatCapabilities\(id\)[\s\S]*?setAppName\(id\)[\s\S]*?startNewChat\(\)/,
+    /const refreshCurrentAgentAndStartNewChat[\s\S]*?probeNewChatCapabilities\(id\)[\s\S]*?loadHydratedSessions\(id, userId\)[\s\S]*?setNewChatCapabilities\(capabilities\)[\s\S]*?setAppName\(id\)[\s\S]*?startNewChat\(\)/,
   );
   assert.match(appSource, /newChatCapabilitiesCacheRef/);
 });

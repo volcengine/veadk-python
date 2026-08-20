@@ -61,6 +61,10 @@ test("new deployments use a unique editable Runtime name and check it before con
     /const requestedRuntimeName = effectiveRuntimeName\.trim\(\)/,
   );
   assert.match(projectPreviewSource, /runtimeName: requestedRuntimeName/);
+  assert.match(
+    customCreateSource,
+    /runtimeName: options\?\.runtimeName \?\? deploymentRuntimeName/,
+  );
   assert.match(customCreateSource, /resolveRuntimeName\([\s\S]*?draft\.name/);
   assert.match(customCreateSource, /deploymentRuntimeNameCustomized=/);
   assert.match(customCreateSource, /onDeploymentRuntimeNameChange=/);
