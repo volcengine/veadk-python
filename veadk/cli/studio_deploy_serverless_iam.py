@@ -173,9 +173,8 @@ def ensure_serverless_application_role(
         service.set_session_token(session_token)
 
     if _get_role(service) is not None:
-        if provider == "byteplus":
-            _ensure_custom_policy(service)
-            _sync_existing_role_policies(service)
+        _ensure_custom_policy(service)
+        _sync_existing_role_policies(service)
         logger.info(f"IAM role {ROLE_NAME} is ready.")
         return False
 
