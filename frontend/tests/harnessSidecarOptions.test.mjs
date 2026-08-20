@@ -202,20 +202,24 @@ test("derives Model Proxy dependencies from the selected optimization catalog", 
   ]);
 });
 
-test("places the Harness optimization page second, before debugging", () => {
+test("places the Harness optimization page immediately before environment setup", () => {
   assert.match(
     customCreateSource,
-    /type WorkspaceMode =[\s\S]*?\| "optimize"[\s\S]*?\| "validate"[\s\S]*?\| "publish";/,
+    /type WorkspaceMode =[\s\S]*?\| "validate"[\s\S]*?\| "optimize"[\s\S]*?\| "environment"[\s\S]*?\| "publish";/,
   );
   assert.match(
     customCreateSource,
-    /\{ id: "build", label: "架构" \},\s*\{ id: "optimize", label: "优化" \},\s*\{ id: "validate", label: "调试" \},\s*\{ id: "environment", label: "环境" \},\s*\{ id: "publish", label: "发布" \}/,
+    /\{ id: "build", label: "架构" \},\s*\{ id: "validate", label: "调试" \},\s*\{ id: "optimize", label: "优化" \},\s*\{ id: "environment", label: "环境" \},\s*\{ id: "publish", label: "发布" \}/,
   );
   assert.match(customCreateSource, /optimize:\s*"为您的智能体选择优化项"/);
   assert.doesNotMatch(customCreateSource, /为您的智能体选择一些优化项/);
   assert.ok(
+    customCreateSource.indexOf('{workspaceMode === "validate"') <
+      customCreateSource.indexOf('{workspaceMode === "optimize"'),
+  );
+  assert.ok(
     customCreateSource.indexOf('{workspaceMode === "optimize"') <
-      customCreateSource.indexOf('{workspaceMode === "validate"'),
+      customCreateSource.indexOf('{workspaceMode === "environment"'),
   );
   assert.match(
     customCreateSource,
