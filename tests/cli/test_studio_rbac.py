@@ -34,6 +34,7 @@ from veadk.cli.cli_frontend import (
     _create_runtime_with_description_fallback,
     _is_malformed_runtime_description_error,
     _normalize_runtime_description,
+    _prepare_managed_sidecar_runtime_envs,
     _run_frontend_server,
     studio,
 )
@@ -151,6 +152,25 @@ def test_migration_model_defaults_follow_studio_provider(
         "MODEL_AGENT_API_BASE": expected_base,
         "MODEL_NAME": expected_name,
     }
+
+
+def test_managed_sidecar_runtime_envs_fail_before_build_without_mcp_upstream() -> None:
+    runtime_envs = {
+        "MODEL_AGENT_API_BASE": "https://ark.cn-beijing.volces.com/api/v3",
+        "MODEL_AGENT_API_KEY": "model-key-from-test-fixture",
+    }
+
+    error = _prepare_managed_sidecar_runtime_envs(
+        runtime_envs,
+        "volcengine",
+        {"effectiveComponents": ["context_engine", "mcp_resilience"]},
+    )
+
+    assert error == (
+        "已选择 MCP 稳定性治理，请在发布配置中填写 MCP_URLS 和 MCP_API_KEY。"
+    )
+    assert runtime_envs["MODEL_AGENT_NAME"]
+    assert runtime_envs["MODEL_NAME"] == runtime_envs["MODEL_AGENT_NAME"]
 
 
 def test_migration_model_defaults_preserve_custom_endpoint() -> None:
@@ -3055,6 +3075,8 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         SimpleNamespace(key="MODEL_AGENT_API_KEY_ID", value="old-key-id"),
         SimpleNamespace(key="MODEL_AGENT_API_KEY_NAME", value="old-key-name"),
         SimpleNamespace(key="VEADK_DISABLE_EXPIRE_AT", value="true"),
+        SimpleNamespace(key="HARNESS_SIDECAR_ENABLED", value="true"),
+        SimpleNamespace(key="HARNESS_SIDECAR_EXPECTED_PLAN_HASH", value="sha256:old"),
     ]
     captured_config: dict[str, Any] = {}
     get_calls = 0
@@ -3257,6 +3279,8 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert resolved_model_keys[0]["api_key_name"] == "new-key-name"
     assert resolved_model_keys[0]["cloud_provider"] == provider
     assert "VEADK_DISABLE_EXPIRE_AT" not in cloud["runtime_envs"]
+    assert not any(key.startswith("HARNESS_") for key in cloud["runtime_envs"])
+    assert "VEADK_DISABLE_EXPIRE_AT" not in cloud["runtime_envs"]
     assert "runtime_network" not in cloud
     if has_resource_tags:
         assert cloud["tos_bucket"] == "tagged-bucket"
@@ -3452,6 +3476,342 @@ def test_new_deployment_rejects_invalid_instance_range(
 
     assert response.status_code == 400
     assert response.json()["detail"] == detail
+
+
+def test_sidecar_deployment_uses_agentkit_cli_structured_release(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+    from veadk.config import veadk_environments
+    from veadk.extensions.harness import sidecar
+
+    managed_base = "internal.invalid/managed/sidecar:test-only"
+    agent_name = "ve_jvm_sidecar_prd_v1"
+    runtime_name = "ve-jvm-sidecar-prd-v1"
+    captured: dict[str, Any] = {}
+    runtime = _runtime_with_public_endpoint(_runtime("runtime-sidecar", "developer"))
+    runtime.current_version_number = 3
+
+    monkeypatch.setenv(
+        "VEADK_STUDIO_HARNESS_SIDECAR_REGIONS",
+        "cn-shanghai",
+    )
+    monkeypatch.setenv(
+        "VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE",
+        managed_base,
+    )
+    monkeypatch.setattr(sidecar, "agentkit_cli_executable", lambda: "/fake/agentkit")
+    monkeypatch.setattr(
+        sidecar,
+        "studio_harness_deployment_config",
+        lambda _intent: (
+            {
+                "enabled": True,
+                "profile": "default",
+                "catalog_version": "2026.07.1",
+                "component_overrides": {
+                    "context_engine": True,
+                    "compressor": False,
+                    "verifier": False,
+                    "long_run_control": False,
+                    "mcp_resilience": True,
+                },
+            },
+            {"planHash": "sha256:test-plan"},
+        ),
+    )
+    monkeypatch.setitem(
+        veadk_environments,
+        "MCP_URLS",
+        "https://mcp.example.test/v1",
+    )
+    monkeypatch.setitem(
+        veadk_environments,
+        "MCP_API_KEY",
+        "platform-mcp-key-test-fixture",
+    )
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: runtime,
+    )
+    monkeypatch.setattr(
+        "frontend.server.deployment_resources.DeploymentResourceService.anchor_managed_sidecar_registry",
+        lambda _self, _base_image, config: {
+            **config,
+            "cr_instance_name": "managed-registry",
+            "cr_namespace_name": "managed",
+        },
+    )
+
+    class FakeProcess:
+        def __init__(self, command: list[str], **kwargs: Any) -> None:
+            captured["command"] = command
+            deployment_root = Path(kwargs["cwd"])
+            captured["config"] = yaml.safe_load(
+                (deployment_root / ".agentkit" / "agentkit.yaml").read_text()
+            )
+            captured["managed_source_present"] = (
+                deployment_root / "veadk/extensions/harness/sidecar.py"
+            ).is_file()
+            captured["requirements"] = (deployment_root / "requirements.txt").read_text(
+                encoding="utf-8"
+            )
+            captured["managed_base_in_env"] = (
+                kwargs["env"].get("AGENTKIT_HARNESS_SIDECAR_BASE_IMAGE") == managed_base
+            )
+            captured["create_only"] = (
+                kwargs["env"].get("AGENTKIT_HARNESS_SIDECAR_REQUIRE_ABSENT") == "true"
+            )
+            captured["cli_env"] = kwargs["env"]
+            self.returncode: int | None = None
+            self.stdout = iter(
+                [
+                    json.dumps(
+                        {
+                            "type": "progress",
+                            "phase": "build",
+                            "level": "info",
+                            "message": "building",
+                        }
+                    )
+                    + "\n",
+                    json.dumps(
+                        {
+                            "type": "runtime",
+                            "runtimeId": "runtime-sidecar",
+                            "runtimeName": runtime_name,
+                        }
+                    )
+                    + "\n",
+                    json.dumps(
+                        {
+                            "type": "result",
+                            "success": True,
+                            "runtimeId": "runtime-sidecar",
+                            "runtimeName": runtime_name,
+                            "endpoint": "https://runtime.example.com",
+                            "version": 3,
+                        }
+                    )
+                    + "\n",
+                ]
+            )
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.returncode = 0
+            return 0
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = -15
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr(
+        "agentkit.toolkit.sdk.launch",
+        lambda **_kwargs: pytest.fail("Sidecar deployment must not call Python SDK"),
+    )
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    monkeypatch.setattr("subprocess.Popen", FakeProcess)
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": agent_name,
+                "runtimeName": runtime_name,
+                "minInstance": 1,
+                "maxInstance": 1,
+                "createEvaluationSets": False,
+                "envs": [
+                    {"key": "CUSTOM_SECRET", "value": "runtime-only-value"},
+                    {
+                        "key": "MODEL_AGENT_API_BASE",
+                        "value": "https://ark.cn-beijing.volces.com/api/v3",
+                    },
+                    {
+                        "key": "MODEL_AGENT_API_KEY",
+                        "value": "model-key-from-test-fixture",
+                    },
+                    {"key": "MODEL_AGENT_NAME", "value": "test-model"},
+                ],
+                "harnessSidecar": {
+                    "componentOverrides": {"context_engine": True},
+                    "planHash": "sha256:test-plan",
+                },
+                "files": [
+                    {
+                        "path": "requirements.txt",
+                        "content": "veadk-python[harness-sidecar]\n",
+                    },
+                    {
+                        "path": f"agents/{agent_name}/agent.py",
+                        "content": (
+                            "harness_extension = HarnessExtension.from_env()\n"
+                            "app = App(plugins=harness_extension.plugins())\n"
+                        ),
+                    },
+                    {
+                        "path": "app.py",
+                        "content": (
+                            "app = create_agentkit_app(\n"
+                            "    harness_extension=harness_extension,\n"
+                            ")\n"
+                        ),
+                    },
+                ],
+                "config": {"region": "cn-shanghai", "projectName": "default"},
+            },
+        ) as response:
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert frames[-1]["runtimeId"] == "runtime-sidecar"
+    assert frames[-1]["agentName"] == agent_name
+    assert frames[-1]["runtimeName"] == runtime_name
+    assert captured["command"] == ["/fake/agentkit", "release", "--json"]
+    assert captured["managed_base_in_env"] is True
+    assert captured["create_only"] is True
+    assert captured["managed_source_present"] is True
+    assert "veadk-python[" not in captured["requirements"]
+    assert "agentkit-sdk-python==0.8.1" in captured["requirements"]
+    assert captured["config"]["name"] == runtime_name
+    assert captured["config"]["harness_sidecar"]["component_overrides"] == {
+        "context_engine": True,
+        "compressor": False,
+        "verifier": False,
+        "long_run_control": False,
+        "mcp_resilience": True,
+    }
+    assert captured["config"]["runtime"]["min_instance"] == 1
+    assert captured["config"]["runtime"]["max_instance"] == 1
+    assert captured["config"]["runtime"]["tags"]["veadk:managed"] == "true"
+    assert captured["config"]["infrastructure"]["container_registry"] == {
+        "region": "cn-shanghai",
+        "project": "default",
+        "instance_name": "managed-registry",
+        "namespace_name": "managed",
+        "repo_name": runtime_name,
+    }
+    assert managed_base not in json.dumps(captured["config"])
+    persisted_runtime_value = captured["config"]["envs"]["CUSTOM_SECRET"]
+    assert persisted_runtime_value.startswith("${VEADK_STUDIO_RUNTIME_ENV_")
+    placeholder = persisted_runtime_value.removeprefix("${").removesuffix("}")
+    assert captured["cli_env"][placeholder] == "runtime-only-value"
+    for key, expected in (
+        ("MCP_URLS", "https://mcp.example.test/v1"),
+        ("MCP_API_KEY", "platform-mcp-key-test-fixture"),
+    ):
+        persisted_value = captured["config"]["envs"][key]
+        assert persisted_value.startswith("${VEADK_STUDIO_RUNTIME_ENV_")
+        placeholder = persisted_value.removeprefix("${").removesuffix("}")
+        assert captured["cli_env"][placeholder] == expected
+    assert "runtime-only-value" not in json.dumps(captured["config"])
+    assert "platform-mcp-key-test-fixture" not in json.dumps(captured["config"])
+
+
+def test_sidecar_deployment_rejects_cr_conflict_before_build(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from frontend.server.deployment_resources import ManagedSidecarRegistryError
+    from veadk.extensions.harness import sidecar
+
+    monkeypatch.setenv(
+        "VEADK_STUDIO_HARNESS_SIDECAR_REGIONS",
+        "cn-shanghai",
+    )
+    monkeypatch.setenv(
+        "VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE",
+        "private.invalid/sidecar/runtime:test-only",
+    )
+    monkeypatch.setattr(sidecar, "agentkit_cli_executable", lambda: "/fake/agentkit")
+    monkeypatch.setattr(
+        sidecar,
+        "studio_harness_deployment_config",
+        lambda _intent: (
+            {"enabled": True, "profile": "default"},
+            {"planHash": "sha256:test-plan"},
+        ),
+    )
+
+    def reject_registry_conflict(
+        _self: Any,
+        _base_image: str,
+        _config: dict[str, str],
+    ) -> dict[str, str]:
+        raise ManagedSidecarRegistryError(
+            "所选 CR 与受控 Harness Sidecar 基础镜像不在同一实例和命名空间，"
+            "请改用自动创建 CR 或选择匹配资源。"
+        )
+
+    monkeypatch.setattr(
+        "frontend.server.deployment_resources.DeploymentResourceService.anchor_managed_sidecar_registry",
+        reject_registry_conflict,
+    )
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda *_args, **_kwargs: pytest.fail(
+            "CR conflict must fail before starting AgentKit CLI"
+        ),
+    )
+
+    response = TestClient(app).post(
+        "/web/deploy-agentkit",
+        headers={"X-VeADK-Local-User": "developer"},
+        json={
+            "name": "sidecar-conflict",
+            "minInstance": 1,
+            "maxInstance": 1,
+            "harnessSidecar": {
+                "componentOverrides": {"context_engine": True},
+                "planHash": "sha256:test-plan",
+            },
+            "files": [
+                {
+                    "path": "requirements.txt",
+                    "content": "veadk-python[harness-sidecar]\n",
+                },
+                {
+                    "path": "agents/sidecar_conflict/agent.py",
+                    "content": (
+                        "harness_extension = HarnessExtension.from_env()\n"
+                        "app = App(plugins=harness_extension.plugins())\n"
+                    ),
+                },
+                {
+                    "path": "app.py",
+                    "content": (
+                        "app = create_agentkit_app(\n"
+                        "    harness_extension=harness_extension,\n"
+                        ")\n"
+                    ),
+                },
+            ],
+            "config": {"region": "cn-shanghai", "projectName": "default"},
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": (
+            "所选 CR 与受控 Harness Sidecar 基础镜像不在同一实例和命名空间，"
+            "请改用自动创建 CR 或选择匹配资源。"
+        )
+    }
 
 
 def test_single_instance_update_failure_fails_the_deployment_at_update_phase(

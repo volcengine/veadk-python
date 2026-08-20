@@ -114,3 +114,9 @@ def test_cp_metadata_from_reporter_message_extracts_pipeline_and_run_ids() -> No
     assert _cp_metadata_from_reporter_message(
         "Pipeline triggered successfully, run ID: pr-456"
     ) == {"pipeline_run_id": "pr-456"}
+    assert _cp_metadata_from_reporter_message(
+        "triggering build (pipeline=pipe-sidecar-cache)"
+    ) == {"pipeline_id": "pipe-sidecar-cache"}
+    assert _cp_metadata_from_reporter_message("run id run-sidecar-cache; waiting…") == {
+        "pipeline_run_id": "run-sidecar-cache"
+    }

@@ -1,0 +1,309 @@
+import { describe, expect, it } from "vitest";
+import {
+  HARNESS_SIDECAR_OPTION_IDS,
+  HARNESS_SIDECAR_OPTIONS,
+  HARNESS_SIDECAR_PROFILES,
+  harnessIntentFromOptimizations,
+  harnessIntentFromRuntimeEnvs,
+  harnessProfileDefaultOptimizations,
+  harnessSidecarProviderNotice,
+  harnessSidecarProfileLabel,
+  harnessSidecarOptionLabel,
+  releaseDraftFromDebugVariant,
+  selectedHarnessModelProxyOptimizations,
+  selectedHarnessProfile,
+  selectedHarnessOptimizations,
+} from "../src/create/harnessSidecarOptions";
+import { emptyDraft } from "../src/create/types";
+
+describe("Studio Harness Sidecar metadata options", () => {
+  it("keeps BytePlus ordinary deployment available while rejecting Sidecar selection", () => {
+    expect(harnessSidecarProviderNotice("volcengine")).toBeNull();
+    expect(harnessSidecarProviderNotice("byteplus")).toContain(
+      "BytePlus 账号暂不支持 Harness Sidecar 优化项",
+    );
+  });
+
+  it("publishes the five capabilities integrated by this Studio release", () => {
+    expect(HARNESS_SIDECAR_OPTION_IDS).toEqual([
+      "context_engine",
+      "compressor",
+      "verifier",
+      "long_run_control",
+      "mcp_resilience",
+    ]);
+    expect(HARNESS_SIDECAR_OPTIONS.map((item) => item.displayName)).toEqual([
+      "上下文治理",
+      "上下文与结果压缩",
+      "回答校验与修复",
+      "Goal任务控制",
+      "MCP 稳定性治理",
+    ]);
+    expect(HARNESS_SIDECAR_OPTIONS.at(-1)?.description).toContain(
+      "默认包含 SQL 只读保护",
+    );
+  });
+
+  it("publishes custom first and the concrete ops scenario after it", () => {
+    expect(HARNESS_SIDECAR_PROFILES.map((profile) => profile.id)).toEqual([
+      "default",
+      "ops",
+    ]);
+    expect(HARNESS_SIDECAR_PROFILES.map((profile) => profile.displayName)).toEqual([
+      "自定义",
+      "运维场景",
+    ]);
+    expect(harnessProfileDefaultOptimizations("default")).toEqual([]);
+    expect(harnessProfileDefaultOptimizations("ops")).toEqual([
+      "context_engine",
+      "verifier",
+      "long_run_control",
+      "mcp_resilience",
+    ]);
+    expect(HARNESS_SIDECAR_PROFILES.at(-1)?.autoAddedComponents).toEqual([
+      "sql_readonly",
+    ]);
+    expect(
+      harnessProfileDefaultOptimizations(
+        "unsupported" as Parameters<
+          typeof harnessProfileDefaultOptimizations
+        >[0],
+      ),
+    ).toEqual([]);
+  });
+
+  it("turns a selection into metadata without runtime identity", () => {
+    expect(harnessIntentFromOptimizations(["verifier"])).toEqual({
+      enabled: true,
+      profile: "default",
+      componentOverrides: {
+        context_engine: false,
+        compressor: false,
+        verifier: true,
+        long_run_control: false,
+        mcp_resilience: false,
+      },
+    });
+  });
+
+  it("keeps the empty selection disabled", () => {
+    expect(harnessIntentFromOptimizations([])).toMatchObject({
+      enabled: false,
+    });
+  });
+
+  it("restores the ops profile without enabling compression by default", () => {
+    const intent = harnessIntentFromRuntimeEnvs([
+      { key: "HARNESS_SIDECAR_ENABLED", value: "true" },
+      { key: "HARNESS_PROFILE", value: "ops" },
+      { key: "HARNESS_MODEL_PROXY_ENABLED", value: "true" },
+      { key: "HARNESS_MCP_GATEWAY_ENABLED", value: "true" },
+    ]);
+
+    expect(intent).toEqual(
+      harnessIntentFromOptimizations(
+        harnessProfileDefaultOptimizations("ops"),
+        "ops",
+      ),
+    );
+  });
+
+  it("preserves an existing ops Runtime's explicit compressor selection", () => {
+    const intent = harnessIntentFromRuntimeEnvs([
+      { key: "HARNESS_SIDECAR_ENABLED", value: "true" },
+      { key: "HARNESS_PROFILE", value: "ops" },
+      {
+        key: "HARNESS_SIDECAR_COMPONENT_OVERRIDES",
+        value: JSON.stringify({
+          context_engine: true,
+          compressor: true,
+          verifier: true,
+          long_run_control: true,
+          mcp_resilience: true,
+        }),
+      },
+    ]);
+
+    expect(intent).toEqual(
+      harnessIntentFromOptimizations(
+        [
+          "context_engine",
+          "compressor",
+          "verifier",
+          "long_run_control",
+          "mcp_resilience",
+        ],
+        "ops",
+      ),
+    );
+  });
+
+  it("restores custom model and MCP optimizations from explicit Runtime flags", () => {
+    expect(
+      harnessIntentFromRuntimeEnvs([
+        { key: "HARNESS_SIDECAR_ENABLED", value: "yes" },
+        { key: "HARNESS_PROFILE", value: "default" },
+        { key: "HARNESS_MODEL_PROXY_ENABLED", value: "on" },
+        { key: "HARNESS_MCP_GATEWAY_ENABLED", value: "1" },
+      ]),
+    ).toEqual(
+      harnessIntentFromOptimizations([
+        "context_engine",
+        "compressor",
+        "verifier",
+        "long_run_control",
+        "mcp_resilience",
+      ]),
+    );
+  });
+
+  it("prefers exact custom component overrides over broad Runtime proxy flags", () => {
+    const intent = harnessIntentFromRuntimeEnvs([
+      { key: "HARNESS_SIDECAR_ENABLED", value: "true" },
+      { key: "HARNESS_PROFILE", value: "default" },
+      {
+        key: "HARNESS_SIDECAR_COMPONENT_OVERRIDES",
+        value: JSON.stringify({ verifier: true, mcp_resilience: false }),
+      },
+      { key: "HARNESS_MODEL_PROXY_ENABLED", value: "true" },
+      { key: "HARNESS_MCP_GATEWAY_ENABLED", value: "true" },
+    ]);
+
+    expect(intent).toEqual(harnessIntentFromOptimizations(["verifier"]));
+  });
+
+  it.each(["not-json", "[]", "null"])(
+    "falls back to explicit proxy flags for unusable overrides: %s",
+    (overrides) => {
+      const intent = harnessIntentFromRuntimeEnvs([
+        { key: "HARNESS_SIDECAR_ENABLED", value: "true" },
+        { key: "HARNESS_SIDECAR_COMPONENT_OVERRIDES", value: overrides },
+        { key: "HARNESS_MODEL_PROXY_ENABLED", value: "false" },
+        { key: "HARNESS_MCP_GATEWAY_ENABLED", value: "false" },
+      ]);
+
+      expect(intent).toEqual({
+        ...harnessIntentFromOptimizations([]),
+        enabled: true,
+      });
+    },
+  );
+
+  it("keeps an explicitly disabled Runtime recorded as disabled", () => {
+    expect(
+      harnessIntentFromRuntimeEnvs([
+        { key: "HARNESS_SIDECAR_ENABLED", value: "false" },
+        { key: "HARNESS_PROFILE", value: "ops" },
+        { key: "HARNESS_MODEL_PROXY_ENABLED", value: "true" },
+        { key: "HARNESS_MCP_GATEWAY_ENABLED", value: "true" },
+      ]),
+    ).toEqual(harnessIntentFromOptimizations([], "ops"));
+  });
+
+  it("does not infer Sidecar state without its explicit Runtime marker", () => {
+    expect(
+      harnessIntentFromRuntimeEnvs([
+        { key: "HARNESS_PROFILE", value: "ops" },
+        { key: "HARNESS_MODEL_PROXY_ENABLED", value: "true" },
+      ]),
+    ).toBeNull();
+    expect(harnessIntentFromRuntimeEnvs(undefined)).toBeNull();
+  });
+
+  it("preserves the selected profile in public intent metadata", () => {
+    expect(
+      harnessIntentFromOptimizations(
+        harnessProfileDefaultOptimizations("ops"),
+        "ops",
+      ),
+    ).toMatchObject({
+      enabled: true,
+      profile: "ops",
+      componentOverrides: { compressor: false, mcp_resilience: true },
+    });
+  });
+
+  it("materializes ordinary and ops release drafts with model fallback", () => {
+    const ordinaryDraft = {
+      ...emptyDraft(),
+      modelName: "ordinary-model",
+      description: "ordinary description",
+      instruction: "ordinary instruction",
+    };
+    const ordinaryRelease = releaseDraftFromDebugVariant(ordinaryDraft, {
+      modelName: "",
+      description: ordinaryDraft.description,
+      instruction: ordinaryDraft.instruction,
+    });
+    expect(ordinaryRelease.modelName).toBe("ordinary-model");
+    expect(ordinaryRelease.harnessSidecar).toBeUndefined();
+
+    const opsDraft = {
+      ...ordinaryDraft,
+      harnessSidecar: harnessIntentFromOptimizations(
+        harnessProfileDefaultOptimizations("ops"),
+        "ops",
+      ),
+    };
+    const opsRelease = releaseDraftFromDebugVariant(opsDraft, {
+      modelName: "ops-model",
+      description: "ops description",
+      instruction: "ops instruction",
+    });
+    expect(opsRelease).toMatchObject({
+      modelName: "ops-model",
+      description: "ops description",
+      instruction: "ops instruction",
+      harnessSidecar: {
+        enabled: true,
+        profile: "ops",
+        componentOverrides: { compressor: false, mcp_resilience: true },
+      },
+    });
+  });
+
+  it("derives selected options from Draft metadata", () => {
+    expect(selectedHarnessOptimizations(emptyDraft())).toEqual([]);
+    expect(selectedHarnessProfile(emptyDraft())).toBe("default");
+    expect(
+      selectedHarnessOptimizations({
+        ...emptyDraft(),
+        harnessSidecar: harnessIntentFromOptimizations([
+          "compressor",
+          "mcp_resilience",
+        ]),
+      }),
+    ).toEqual(["compressor", "mcp_resilience"]);
+    expect(
+      selectedHarnessProfile({
+        ...emptyDraft(),
+        harnessSidecar: harnessIntentFromOptimizations(
+          harnessProfileDefaultOptimizations("ops"),
+          "ops",
+        ),
+      }),
+    ).toBe("ops");
+  });
+
+  it("derives the selected Model Proxy optimization dependencies", () => {
+    expect(
+      selectedHarnessModelProxyOptimizations({
+        ...emptyDraft(),
+        harnessSidecar: harnessIntentFromOptimizations([
+          "context_engine",
+          "verifier",
+          "mcp_resilience",
+        ]),
+      }),
+    ).toEqual(["context_engine", "verifier"]);
+    expect(selectedHarnessModelProxyOptimizations(emptyDraft())).toEqual([]);
+  });
+
+  it("maps known labels and preserves unknown runtime-only ids", () => {
+    expect(harnessSidecarProfileLabel("default")).toBe("自定义");
+    expect(harnessSidecarProfileLabel("ops")).toBe("运维场景");
+    expect(harnessSidecarProfileLabel("unknown")).toBe("unknown");
+    expect(harnessSidecarOptionLabel("long_run_control")).toBe("Goal任务控制");
+    expect(harnessSidecarOptionLabel("sql_readonly")).toBe("sql_readonly");
+  });
+});

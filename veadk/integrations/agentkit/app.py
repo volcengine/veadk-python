@@ -22,7 +22,7 @@ import json
 import os
 import threading
 import traceback
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -36,7 +36,7 @@ from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 from google.adk.agents.run_config import StreamingMode
 from google.adk.apps.app import App
-from google.adk.cli.adk_web_server import RunAgentRequest
+from google.adk.cli.api_server import RunAgentRequest
 from google.adk.runners import Runner as AdkRunner
 from google.adk.utils.context_utils import Aclosing
 from google.genai import types
@@ -56,7 +56,7 @@ from veadk.integrations.agentkit.session_capabilities import (
 from veadk.memory.short_term_memory import ShortTermMemory
 
 if TYPE_CHECKING:
-    from agentkit.identity import RuntimeIdentity
+    from agentkit.identity import RuntimeIdentity  # pyright: ignore[reportMissingImports]
 
     from veadk.runner import Runner
 
@@ -406,6 +406,39 @@ def _configure_feishu_lifecycle(
     app.router.lifespan_context = lifespan
 
 
+def _configure_harness_extension_lifecycle(
+    app: FastAPI,
+    harness_extension: Any,
+) -> None:
+    """Expose a safe status route and close the managed extension on shutdown."""
+
+    status_payload = getattr(harness_extension, "sidecar_status_payload", None)
+    close = getattr(harness_extension, "close", None)
+    if not callable(status_payload) or not callable(close):
+        raise TypeError(
+            "harness_extension must provide sidecar_status_payload() and close()"
+        )
+
+    @app.get("/web/harness-sidecar/status")
+    def harness_sidecar_status() -> dict[str, Any]:
+        payload = status_payload()
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("Harness Sidecar status must be an object")
+        return {str(key): value for key, value in payload.items()}
+
+    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(fastapi_app: FastAPI):
+        async with original_lifespan(fastapi_app):
+            try:
+                yield
+            finally:
+                close()
+
+    app.router.lifespan_context = lifespan
+
+
 def _add_introspection_routes(
     app: FastAPI,
     root_agent: BaseAgent,
@@ -512,6 +545,7 @@ def _prioritize_platform_routes(app: FastAPI) -> None:
         "/web/agent-info/{app_name}",
         "/web/agent-graph",
         "/web/search",
+        "/web/harness-sidecar/status",
         "/harness/capabilities/tools",
         "/harness/skills/spaces",
         "/harness/skills/spaces/{space_id}/skills",
@@ -584,15 +618,23 @@ def _dynamic_runner(
     app_name: str,
     root_agent: BaseAgent,
     prompt: str,
+    plugins: Iterable[Any] = (),
 ) -> AdkRunner:
     if services.session_service is None:
         raise RuntimeError("ADK session service is unavailable")
     run_agent = _spawn_dynamic_a2a_agent(root_agent, prompt)
-    agent_app = App(
-        name=app_name,
-        root_agent=run_agent,
-        plugins=[FrontendInvocationPlugin()],
-    )
+    if plugins:
+        agent_app = App(
+            name=app_name,
+            root_agent=run_agent,
+            plugins=_runtime_plugins(plugins),
+        )
+    else:
+        agent_app = App(
+            name=app_name,
+            root_agent=run_agent,
+            plugins=[FrontendInvocationPlugin()],
+        )
     return AdkRunner(
         app=agent_app,
         artifact_service=services.artifact_service,
@@ -601,6 +643,13 @@ def _dynamic_runner(
         credential_service=services.credential_service,
         auto_create_session=services.auto_create_session,
     )
+
+
+def _runtime_plugins(plugins: Iterable[Any]) -> list[Any]:
+    resolved = list(plugins)
+    if not any(isinstance(plugin, FrontendInvocationPlugin) for plugin in resolved):
+        resolved.append(FrontendInvocationPlugin())
+    return resolved
 
 
 def _resolve_run_app_name(
@@ -663,6 +712,7 @@ async def _invoke_text(request: Request) -> str:
 def _configure_dynamic_a2a_routes(
     app: FastAPI,
     root_agent: BaseAgent,
+    plugins: Iterable[Any] = (),
 ) -> None:
     if getattr(app.state, _DYNAMIC_A2A_ROUTES_ENABLED_STATE_KEY, False):
         return
@@ -683,6 +733,7 @@ def _configure_dynamic_a2a_routes(
             app_name=app_name,
             root_agent=root_agent,
             prompt=_content_text(req.new_message),
+            plugins=plugins,
         )
         custom_metadata = _run_request_custom_metadata(req)
         run_config = (
@@ -732,6 +783,7 @@ def _configure_dynamic_a2a_routes(
             app_name=app_name,
             root_agent=root_agent,
             prompt=_content_text(req.new_message),
+            plugins=plugins,
         )
         stream_mode = StreamingMode.SSE if req.streaming else StreamingMode.NONE
         custom_metadata = _run_request_custom_metadata(req)
@@ -817,6 +869,7 @@ def _configure_dynamic_a2a_routes(
             app_name=app_name,
             root_agent=root_agent,
             prompt=prompt,
+            plugins=plugins,
         )
 
         async def event_generator():
@@ -860,6 +913,7 @@ def _configure_dynamic_a2a_routes(
 def _configure_session_capability_routes(
     app: FastAPI,
     root_agent: BaseAgent,
+    plugins: Iterable[Any] = (),
 ) -> None:
     services = _RuntimeServices(app)
     if services.session_service is None:
@@ -890,10 +944,13 @@ def _configure_session_capability_routes(
             ) from exc
 
         _add_dynamic_a2a_agent_tools(run_agent, _content_text(req.new_message))
+        session_service = services.session_service
+        if session_service is None:
+            raise HTTPException(status_code=501, detail="Session service unavailable")
         runner = AdkRunner(
-            app=App(name=app_name, root_agent=run_agent, plugins=[]),
+            app=App(name=app_name, root_agent=run_agent, plugins=list(plugins)),
             artifact_service=services.artifact_service,
-            session_service=services.session_service,
+            session_service=session_service,
             memory_service=services.memory_service,
             credential_service=services.credential_service,
             auto_create_session=services.auto_create_session,
@@ -1049,12 +1106,14 @@ def configure_multi_app_session_capability_routes(
 
 
 def create_agentkit_app(
-    root_agent: BaseAgent,
+    root_agent: BaseAgent | None = None,
     display_names: Mapping[str, str] | None = None,
     *,
+    app: App | None = None,
     agent_draft: Mapping[str, Any] | None = None,
     enable_feishu: bool = False,
     identity: RuntimeIdentity | None = None,
+    harness_extension: Any | None = None,
 ) -> FastAPI:
     """Create an AgentKit-compatible FastAPI app for ``root_agent``.
 
@@ -1063,27 +1122,40 @@ def create_agentkit_app(
     optional Feishu channel lifecycle.
 
     Args:
-        root_agent: Root ADK agent served by AgentKit.
+        root_agent: Root ADK agent served by AgentKit. Mutually exclusive with
+            ``app``.
         display_names: User-facing names keyed by technical agent name.
+        app: Optional ADK App whose plugins must be preserved by every runner.
         agent_draft: Optional sanitized builder draft for read-only editing metadata.
         enable_feishu: Whether to start the Feishu channel with credentials from
             ``FEISHU_APP_ID`` and ``FEISHU_APP_SECRET``.
         identity: Optional AgentKit Runtime identity boundary. When supplied,
             AgentKit verifies and binds the inbound user identity before VeADK
             Agent or Tool code runs.
+        harness_extension: Optional managed Harness Extension. Its status route
+            is mounted and it is closed during application shutdown.
 
     Returns:
         The configured FastAPI application.
     """
+    adk_app = app
+    if adk_app is not None and root_agent is not None:
+        raise TypeError("Only one of 'root_agent' or 'app' can be provided")
+    if adk_app is not None:
+        root_agent = adk_app.root_agent
+    if root_agent is None:
+        raise TypeError("Either 'root_agent' or 'app' must be provided")
     names = dict(display_names or {})
+    app_plugins = list(getattr(adk_app, "plugins", None) or [])
     short_term_memory = getattr(root_agent, "short_term_memory", None)
     if short_term_memory is None:
         short_term_memory = ShortTermMemory(backend="local")
 
-    agent_server_kwargs: dict[str, Any] = {
-        "agent": root_agent,
-        "short_term_memory": short_term_memory,
-    }
+    agent_server_kwargs: dict[str, Any] = {"short_term_memory": short_term_memory}
+    if adk_app is not None:
+        agent_server_kwargs["app"] = adk_app
+    else:
+        agent_server_kwargs["agent"] = root_agent
     if identity is not None:
         if not _agentkit_supports_runtime_identity():
             raise RuntimeError(_RUNTIME_IDENTITY_REQUIREMENT)
@@ -1092,17 +1164,19 @@ def create_agentkit_app(
         # keeps every business and introspection route identity-bound.
         agent_server_kwargs["identity_health_routes"] = ("/ping",)
     agent_server = AgentkitAgentServerApp(**agent_server_kwargs)
-    app = cast(FastAPI, agent_server.app)
-    setattr(app.state, _SERVER_STATE_KEY, agent_server)
-    _configure_dynamic_a2a_routes(app, root_agent)
-    _configure_session_capability_routes(app, root_agent)
+    fastapi_app = cast(FastAPI, agent_server.app)
+    setattr(fastapi_app.state, _SERVER_STATE_KEY, agent_server)
+    _configure_dynamic_a2a_routes(fastapi_app, root_agent, app_plugins)
+    _configure_session_capability_routes(fastapi_app, root_agent, app_plugins)
 
     if enable_feishu:
-        _configure_feishu_lifecycle(app, root_agent, short_term_memory)
-    _add_introspection_routes(app, root_agent, names, agent_draft)
-    _mount_webui(app)
-    _prioritize_platform_routes(app)
-    return app
+        _configure_feishu_lifecycle(fastapi_app, root_agent, short_term_memory)
+    if harness_extension is not None:
+        _configure_harness_extension_lifecycle(fastapi_app, harness_extension)
+    _add_introspection_routes(fastapi_app, root_agent, names, agent_draft)
+    _mount_webui(fastapi_app)
+    _prioritize_platform_routes(fastapi_app)
+    return fastapi_app
 
 
 def run_agentkit_app(
