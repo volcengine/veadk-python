@@ -43,16 +43,65 @@ def _iam_error(code: str, message: str) -> Exception:
 def test_existing_role_is_reused(monkeypatch: pytest.MonkeyPatch) -> None:
     service = MagicMock()
     service.get_role.return_value = {"Result": {"Role": {"RoleName": ROLE_NAME}}}
+    service.get_policy.return_value = {
+        "Result": {"Policy": {"PolicyName": CUSTOM_POLICY_NAME}}
+    }
+    service.list_attached_role_policies.return_value = {
+        "Result": {
+            "AttachedPolicyMetadata": [
+                {"PolicyName": CUSTOM_POLICY_NAME},
+                *[{"PolicyName": policy_name} for policy_name in SYSTEM_POLICIES],
+            ]
+        }
+    }
     _install_iam_service(monkeypatch, service)
 
     created = ensure_serverless_application_role("ak", "sk")
 
     assert created is False
     service.set_session_token.assert_not_called()
-    service.get_policy.assert_not_called()
+    service.get_policy.assert_called_once()
+    service.list_attached_role_policies.assert_called_once_with({"RoleName": ROLE_NAME})
     service.create_policy.assert_not_called()
     service.create_role.assert_not_called()
     service.attach_role_policy.assert_not_called()
+
+
+def test_volcengine_existing_role_syncs_missing_policies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MagicMock()
+    service.get_role.return_value = {"Result": {"Role": {"RoleName": ROLE_NAME}}}
+    service.get_policy.return_value = {
+        "Result": {"Policy": {"PolicyName": CUSTOM_POLICY_NAME}}
+    }
+    service.list_attached_role_policies.return_value = {
+        "Result": {
+            "AttachedPolicyMetadata": [
+                {"PolicyName": CUSTOM_POLICY_NAME},
+                *[
+                    {"PolicyName": policy_name}
+                    for policy_name in SYSTEM_POLICIES
+                    if policy_name != "APIGFullAccess"
+                ],
+            ]
+        }
+    }
+    service.attach_role_policy.return_value = {"Result": {}}
+    _install_iam_service(monkeypatch, service)
+
+    created = ensure_serverless_application_role("ak", "sk")
+
+    assert created is False
+    service.set_host.assert_not_called()
+    service.set_scheme.assert_not_called()
+    service.attach_role_policy.assert_called_once_with(
+        {
+            "RoleName": ROLE_NAME,
+            "PolicyName": "APIGFullAccess",
+            "PolicyType": "System",
+        }
+    )
 
 
 def test_byteplus_existing_role_setup_uses_byteplus_iam_host_and_syncs_policies(
@@ -81,6 +130,17 @@ def test_serverless_role_uses_session_token(
 ) -> None:
     service = MagicMock()
     service.get_role.return_value = {"Result": {"Role": {"RoleName": ROLE_NAME}}}
+    service.get_policy.return_value = {
+        "Result": {"Policy": {"PolicyName": CUSTOM_POLICY_NAME}}
+    }
+    service.list_attached_role_policies.return_value = {
+        "Result": {
+            "AttachedPolicyMetadata": [
+                {"PolicyName": CUSTOM_POLICY_NAME},
+                *[{"PolicyName": policy_name} for policy_name in SYSTEM_POLICIES],
+            ]
+        }
+    }
     _install_iam_service(monkeypatch, service)
 
     ensure_serverless_application_role("ak", "sk", session_token="sts-token")
