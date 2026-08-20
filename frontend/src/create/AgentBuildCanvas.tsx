@@ -77,11 +77,11 @@ const PATTERN_COPY: Record<AgentType, { label: string }> = {
   a2a: { label: "远程智能体" },
 };
 
-const NODE_WIDTH = 260;
-const NODE_HEIGHT = 151;
-const COMPACT_NODE_HEIGHT = 111;
-const READ_ONLY_NODE_HEIGHT = 151;
-const READ_ONLY_COMPACT_NODE_HEIGHT = 111;
+const NODE_WIDTH = 216;
+const NODE_HEIGHT = 141;
+const COMPACT_NODE_HEIGHT = 104;
+const READ_ONLY_NODE_HEIGHT = 141;
+const READ_ONLY_COMPACT_NODE_HEIGHT = 104;
 const TERMINAL_WIDTH = 120;
 const TERMINAL_HEIGHT = 52;
 const FIGMA_FLOW_LINE_LENGTH = 69;
@@ -487,8 +487,8 @@ function AgentCardContent({
 }) {
   const type = data.pattern ?? "llm";
   const showModelCapabilities = showsModelCapabilities(type);
-  return (
-    <div className={`abc-agent-card is-${type}`} onClick={onSelect}>
+  const content = (
+    <>
       <div className="abc-agent-card-head">
         <span className="abc-agent-card-mark" title={PATTERN_COPY[type].label}>
           <CanvasAgentTypeIcon type={type} />
@@ -522,7 +522,19 @@ function AgentCardContent({
           </span>
         </div>
       )}
-    </div>
+    </>
+  );
+  return onSelect ? (
+    <button
+      type="button"
+      className={`abc-agent-card is-${type}`}
+      aria-label={`配置 ${data.title}`}
+      onClick={onSelect}
+    >
+      {content}
+    </button>
+  ) : (
+    <div className={`abc-agent-card is-${type}`}>{content}</div>
   );
 }
 

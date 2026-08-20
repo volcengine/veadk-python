@@ -193,20 +193,21 @@ test("keeps vertical and horizontal ports aligned with the requested layout", ()
 test("keeps the Figma Agent card DOM and visual dimensions", () => {
   assert.match(source, /function AgentCardContent/);
   assert.match(source, /className=\{`abc-agent-card is-\$\{type\}`\}/);
+  assert.match(source, /aria-label=\{`配置 \$\{data\.title\}`\}/);
   assert.match(source, /className="abc-agent-card-head"/);
   assert.match(source, /className="abc-agent-card-main"/);
   assert.match(source, /className="abc-agent-card-stats"/);
   assert.match(
     cssSource,
-    /\.abc-agent-card\s*\{[\s\S]*?--abc-agent-card-tone:\s*#e8ebf9;[\s\S]*?width:\s*260px;[\s\S]*?height:\s*100%;[\s\S]*?gap:\s*10px;[\s\S]*?padding:\s*12px;[\s\S]*?border:\s*1px solid transparent;[\s\S]*?border-radius:\s*12px;[\s\S]*?background:\s*#fff;/,
+    /\.abc-agent-card\s*\{[\s\S]*?--abc-agent-card-tone:\s*#e8ebf9;[\s\S]*?width:\s*216px;[\s\S]*?height:\s*100%;[\s\S]*?gap:\s*8px;[\s\S]*?padding:\s*8px;[\s\S]*?border:\s*2px solid transparent;[\s\S]*?border-radius:\s*12px;[\s\S]*?background:\s*#fff;[\s\S]*?box-shadow:\s*inset 0 0 0 1px var\(--abc-agent-card-tone\);/,
   );
   assert.match(
     cssSource,
-    /\.abc-agent-card-head\s*\{[\s\S]*?flex:\s*0 0 36px;[\s\S]*?gap:\s*8px;[\s\S]*?background:\s*transparent;/,
+    /\.abc-agent-card-head\s*\{[\s\S]*?flex:\s*0 0 40px;[\s\S]*?gap:\s*6px;[\s\S]*?background:\s*var\(--abc-agent-card-tone\);/,
   );
   assert.match(
     cssSource,
-    /\.abc-agent-card-head strong\s*\{[\s\S]*?font-size:\s*14px;[\s\S]*?font-weight:\s*500;[\s\S]*?line-height:\s*22px;/,
+    /\.abc-agent-card-head strong\s*\{[\s\S]*?font-size:\s*14px;[\s\S]*?font-weight:\s*500;[\s\S]*?line-height:\s*18px;/,
   );
   assert.match(
     cssSource,
@@ -220,8 +221,8 @@ test("keeps selected nodes stable without changing their geometry", () => {
     cssSource.match(
       /\.abc-node\.is-selected > \.abc-agent-card\s*\{[^}]*\}/,
     )?.[0] ?? "";
-  assert.match(selectionRule, /border-color:\s*#0c0d0e/);
-  assert.match(selectionRule, /box-shadow:\s*0 0 0 4px rgb\(0 0 0 \/ 16%\)/);
+  assert.match(selectionRule, /border-color:\s*var\(--abc-agent-card-tone\)/);
+  assert.match(selectionRule, /box-shadow:\s*0 4px 12px rgb\(16 16 19 \/ 10%\)/);
   assert.doesNotMatch(selectionRule, /transform|translate|margin|padding/);
 });
 
@@ -309,6 +310,14 @@ test("uses the existing Figma canvas surface and FlowGram editor", () => {
     /\.abc-flowgram-editor \.gedit-playground\s*\{[\s\S]*?background:\s*transparent !important;/,
   );
   assert.match(
+    cssSource,
+    /\.abc-flowgram-editor \.gedit-playground::\-webkit-scrollbar\s*\{[\s\S]*?display:\s*none;/,
+  );
+  assert.match(
+    cssSource,
+    /\.abc-flowgram-editor \.gedit-playground-scroll-right,[\s\S]*?\.gedit-playground-scroll-bottom-block\s*\{[\s\S]*?display:\s*none !important;/,
+  );
+  assert.match(
     customCreateStyles,
     /\.cw-canvas-motion > \.abc-root\s*\{[\s\S]*?background:\s*transparent;/,
   );
@@ -366,6 +375,16 @@ test("keeps existing chat and configuration panel contracts", () => {
   assert.match(
     customCreateStyles,
     /\.cw-detail-scroll\s*\{[\s\S]*?padding:\s*24px;/,
+  );
+  assert.match(customCreateSource, /const BUILDER_PANEL_SECONDS = 0\.24/);
+  assert.match(customCreateSource, /const BUILDER_PANEL_EASE = \[0\.4, 0, 0\.2, 1\] as const/);
+  assert.match(
+    customCreateSource,
+    /key="builder-chat"[\s\S]*?clipPath: "inset\(0 100% 0 0 round 16px\)"[\s\S]*?duration: reduceMotion \? 0 : BUILDER_PANEL_SECONDS[\s\S]*?ease: BUILDER_PANEL_EASE/,
+  );
+  assert.match(
+    customCreateSource,
+    /key="builder-config"[\s\S]*?clipPath: "inset\(0 0 0 100% round 16px\)"[\s\S]*?duration: reduceMotion \? 0 : BUILDER_PANEL_SECONDS[\s\S]*?ease: BUILDER_PANEL_EASE/,
   );
 });
 

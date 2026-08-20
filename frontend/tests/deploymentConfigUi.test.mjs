@@ -257,11 +257,11 @@ test("uses a flipping Feishu channel card instead of a switch", () => {
   );
   assert.match(
     projectPreviewStyles,
-    /\.pp-channel-card\s*\{[\s\S]*?width:\s*clamp\(154px, 33\.333%, 236px\);[\s\S]*?height:\s*112px;/,
+    /\.pp-channel-card\s*\{[\s\S]*?grid-template-rows:\s*112px;[\s\S]*?width:\s*clamp\(154px, 33\.333%, 236px\);/,
   );
   assert.match(
     projectPreviewStyles,
-    /\.pp-channel-card\.is-flipped\s*\{[\s\S]*?height:\s*176px/,
+    /\.pp-channel-card\.is-flipped\s*\{[\s\S]*?grid-template-rows:\s*176px/,
   );
 
   assert.doesNotMatch(projectPreviewSource, /<select[\s\S]*?aria-label="部署区域"/);
@@ -277,6 +277,29 @@ test("uses a flipping Feishu channel card instead of a switch", () => {
   assert.match(
     projectPreviewStyles,
     /\.pp-channel-remove\s*\{[\s\S]*?background:\s*hsl\(var\(--destructive\) \/ 0\.07\);[\s\S]*?color:\s*hsl\(0 46% 36%\);/,
+  );
+});
+
+test("matches Agent configuration typography and reduced-motion behavior", () => {
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-form-field > label,[\s\S]*?font-size:\s*13px;[\s\S]*?font-weight:\s*400;/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.pp-channel-card,[\s\S]*?transition:\s*none;[\s\S]*?\.spin\s*\{[\s\S]*?animation:\s*none;/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-channel-card\s*\{[\s\S]*?grid-template-rows:\s*112px;[\s\S]*?transition:\s*grid-template-rows 180ms ease;/,
+  );
+  assert.doesNotMatch(
+    projectPreviewStyles,
+    /\.pp-channel-card\s*\{[\s\S]*?transition:\s*height/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /@media \(max-width: 1000px\)[\s\S]*?\.pp-root\.is-deploy\.is-embedded \.pp-config-head\s*\{[\s\S]*?padding-inline:\s*20px;/,
   );
 });
 

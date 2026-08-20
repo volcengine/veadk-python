@@ -687,7 +687,15 @@ test("debug workspace motion preserves direction, column continuity, and reduced
   );
   assert.match(
     createSource,
-    /const workspaceViewMotion = \{[\s\S]*?WORKSPACE_VIEW_ENTER_SECONDS[\s\S]*?WORKSPACE_VIEW_EXIT_SECONDS/,
+    /const columnMotion = \(index: number\)[\s\S]*?duration: reduceMotion \? 0 : DEBUG_COLUMN_ENTER_SECONDS[\s\S]*?duration: reduceMotion \? 0 : DEBUG_COLUMN_EXIT_SECONDS/,
+  );
+  assert.match(
+    createSource,
+    /const workspaceViewMotion = \{[\s\S]*?duration: reduceMotion \? 0 : WORKSPACE_VIEW_ENTER_SECONDS[\s\S]*?duration: reduceMotion \? 0 : WORKSPACE_VIEW_EXIT_SECONDS/,
+  );
+  assert.match(
+    createSource,
+    /className="cw-validation-canvas-content"[\s\S]*?duration: reduceMotion \? 0 : DEBUG_COLUMN_ENTER_SECONDS/,
   );
   assert.match(
     createSource,
@@ -827,7 +835,7 @@ test("leaving debug confirms and cleans every temporary environment", () => {
   assert.match(createSource, /if \(!\(await confirmLeaveDebug\(\)\)\) return;/);
 });
 
-test("chat drawer reveals from a fixed icon anchor while configuration slides in", () => {
+test("chat and configuration drawers use mirrored anchored reveals", () => {
   assert.match(createSource, /const reduceMotion = useReducedMotion\(\)/);
   assert.match(
     createSource,
@@ -839,7 +847,7 @@ test("chat drawer reveals from a fixed icon anchor while configuration slides in
   assert.doesNotMatch(chatMotion, /\bx:/);
   assert.match(
     createSource,
-    /className="cw-builder-chat-motion"[\s\S]*?clipPath: "inset\(0 100% 0 0 round 16px\)"[\s\S]*?animate=\{\{[\s\S]*?opacity: 1,[\s\S]*?clipPath: "inset\(0 0% 0 0 round 16px\)"[\s\S]*?exit=\{\{[\s\S]*?opacity: 0,[\s\S]*?clipPath: reduceMotion[\s\S]*?"inset\(0 100% 0 0 round 16px\)"[\s\S]*?pointerEvents: "none",[\s\S]*?duration: reduceMotion \? 0 : 0\.2,[\s\S]*?ease: \[0\.22, 1, 0\.36, 1\]/,
+    /className="cw-builder-chat-motion"[\s\S]*?clipPath: "inset\(0 100% 0 0 round 16px\)"[\s\S]*?animate=\{\{[\s\S]*?opacity: 1,[\s\S]*?clipPath: "inset\(0 0% 0 0 round 16px\)"[\s\S]*?exit=\{\{[\s\S]*?opacity: 0,[\s\S]*?clipPath: reduceMotion[\s\S]*?"inset\(0 100% 0 0 round 16px\)"[\s\S]*?pointerEvents: "none",[\s\S]*?duration: reduceMotion \? 0 : BUILDER_PANEL_SECONDS,[\s\S]*?ease: BUILDER_PANEL_EASE/,
   );
   assert.match(
     createSource,
@@ -855,14 +863,14 @@ test("chat drawer reveals from a fixed icon anchor while configuration slides in
   );
 });
 
-test("configuration drawer slides without leaving an interactive layout slot", () => {
+test("configuration drawer mirrors chat without leaving an interactive layout slot", () => {
   assert.match(
     createSource,
     /<AnimatePresence initial=\{false\} mode="popLayout">[\s\S]*?key="builder-config"[\s\S]*?className=\{`cw-detail is-\$\{configTab\}`\}/,
   );
   assert.match(
     createSource,
-    /key="builder-config"[\s\S]*?initial=\{reduceMotion \? false : \{ opacity: 0, x: 18 \}\}[\s\S]*?animate=\{\{ opacity: 1, x: 0 \}\}[\s\S]*?exit=\{\{[\s\S]*?opacity: 0,[\s\S]*?x: reduceMotion \? 0 : 18,[\s\S]*?pointerEvents: "none",[\s\S]*?duration: reduceMotion \? 0 : 0\.2,[\s\S]*?ease: \[0\.22, 1, 0\.36, 1\]/,
+    /key="builder-config"[\s\S]*?clipPath: "inset\(0 0 0 100% round 16px\)"[\s\S]*?animate=\{\{[\s\S]*?opacity: 1,[\s\S]*?clipPath: "inset\(0 0 0 0% round 16px\)"[\s\S]*?exit=\{\{[\s\S]*?opacity: 0,[\s\S]*?clipPath: reduceMotion[\s\S]*?"inset\(0 0 0 100% round 16px\)"[\s\S]*?pointerEvents: "none",[\s\S]*?duration: reduceMotion \? 0 : BUILDER_PANEL_SECONDS,[\s\S]*?ease: BUILDER_PANEL_EASE/,
   );
   assert.doesNotMatch(
     createSource,

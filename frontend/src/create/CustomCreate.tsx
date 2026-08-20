@@ -2583,6 +2583,8 @@ const DEBUG_COLUMN_STAGGER_SECONDS = 0.035;
 const DEBUG_MOTION_EASE = [0.22, 1, 0.36, 1] as const;
 const WORKSPACE_VIEW_ENTER_SECONDS = 0.22;
 const WORKSPACE_VIEW_EXIT_SECONDS = 0.14;
+const BUILDER_PANEL_SECONDS = 0.24;
+const BUILDER_PANEL_EASE = [0.4, 0, 0.2, 1] as const;
 const DEBUG_SUGGESTED_QUESTIONS = [
   "请用一句话介绍你能帮我完成哪些任务",
   "帮我处理一个典型任务，并说明关键步骤",
@@ -2702,7 +2704,7 @@ function DebugComparisonWorkspace({
       x: 0,
       scale: 1,
       transition: {
-        duration: reduceMotion ? 0.08 : DEBUG_COLUMN_ENTER_SECONDS,
+        duration: reduceMotion ? 0 : DEBUG_COLUMN_ENTER_SECONDS,
         delay: reduceMotion ? 0 : index * DEBUG_COLUMN_STAGGER_SECONDS,
         ease: DEBUG_MOTION_EASE,
       },
@@ -2712,7 +2714,7 @@ function DebugComparisonWorkspace({
       x: reduceMotion ? 0 : 8,
       scale: reduceMotion ? 1 : 0.985,
       transition: {
-        duration: reduceMotion ? 0.06 : DEBUG_COLUMN_EXIT_SECONDS,
+        duration: reduceMotion ? 0 : DEBUG_COLUMN_EXIT_SECONDS,
         ease: DEBUG_MOTION_EASE,
       },
     },
@@ -3302,7 +3304,7 @@ export function CustomCreate({
       opacity: 1,
       x: 0,
       transition: {
-        duration: reduceMotion ? 0.08 : WORKSPACE_VIEW_ENTER_SECONDS,
+        duration: reduceMotion ? 0 : WORKSPACE_VIEW_ENTER_SECONDS,
         ease: DEBUG_MOTION_EASE,
       },
     },
@@ -3310,7 +3312,7 @@ export function CustomCreate({
       opacity: 0,
       x: reduceMotion ? 0 : -8,
       transition: {
-        duration: reduceMotion ? 0.06 : WORKSPACE_VIEW_EXIT_SECONDS,
+        duration: reduceMotion ? 0 : WORKSPACE_VIEW_EXIT_SECONDS,
         ease: DEBUG_MOTION_EASE,
       },
     },
@@ -4691,8 +4693,8 @@ export function CustomCreate({
                       pointerEvents: "none",
                     }}
                     transition={{
-                      duration: reduceMotion ? 0 : 0.2,
-                      ease: [0.22, 1, 0.36, 1],
+                      duration: reduceMotion ? 0 : BUILDER_PANEL_SECONDS,
+                      ease: BUILDER_PANEL_EASE,
                     }}
                   >
                     <AgentBuilderChatPanel
@@ -4736,8 +4738,8 @@ export function CustomCreate({
                 layout={reduceMotion ? false : "position"}
                 transition={{
                   layout: {
-                    duration: reduceMotion ? 0 : 0.2,
-                    ease: [0.22, 1, 0.36, 1],
+                    duration: reduceMotion ? 0 : BUILDER_PANEL_SECONDS,
+                    ease: BUILDER_PANEL_EASE,
                   },
                 }}
               >
@@ -4760,16 +4762,28 @@ export function CustomCreate({
               <motion.div
                 key="builder-config"
                 className={`cw-detail is-${configTab}`}
-                initial={reduceMotion ? false : { opacity: 0, x: 18 }}
-                animate={{ opacity: 1, x: 0 }}
+                initial={
+                  reduceMotion
+                    ? false
+                    : {
+                        opacity: 0,
+                        clipPath: "inset(0 0 0 100% round 16px)",
+                      }
+                }
+                animate={{
+                  opacity: 1,
+                  clipPath: "inset(0 0 0 0% round 16px)",
+                }}
                 exit={{
                   opacity: 0,
-                  x: reduceMotion ? 0 : 18,
+                  clipPath: reduceMotion
+                    ? "inset(0 0 0 0% round 16px)"
+                    : "inset(0 0 0 100% round 16px)",
                   pointerEvents: "none",
                 }}
                 transition={{
-                  duration: reduceMotion ? 0 : 0.2,
-                  ease: [0.22, 1, 0.36, 1],
+                  duration: reduceMotion ? 0 : BUILDER_PANEL_SECONDS,
+                  ease: BUILDER_PANEL_EASE,
                 }}
               >
                 <header className="cw-detail-header">
@@ -5676,7 +5690,7 @@ export function CustomCreate({
                 initial={reduceMotion ? false : { opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{
-                  duration: reduceMotion ? 0.08 : DEBUG_COLUMN_ENTER_SECONDS,
+                  duration: reduceMotion ? 0 : DEBUG_COLUMN_ENTER_SECONDS,
                   delay: reduceMotion ? 0 : DEBUG_VIEW_EXIT_SECONDS / 2,
                   ease: DEBUG_MOTION_EASE,
                 }}

@@ -409,7 +409,7 @@
     (var(--cw-workbench-toolbar-height) - var(--cw-builder-header-action-height)) / 2
   );
   --cw-builder-chat-width: 420px;
-  --cw-builder-chat-header-height: 58px;
+  --cw-builder-chat-header-height: 68px;
   --cw-builder-chat-header-padding-inline: 20px;
   --cw-builder-chat-icon-size: 20px;
   --cw-builder-chat-trigger-size: 48px;
@@ -633,6 +633,7 @@
   border-radius: 16px;
   background: #f9f9f9;
   box-shadow: none;
+  will-change: clip-path, opacity;
 }
 .cw-detail-header {
   height: 68px;
