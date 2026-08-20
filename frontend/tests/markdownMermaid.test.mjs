@@ -18,6 +18,10 @@ const echartsSource = readFileSync(
 );
 const echartsOptionUrl = new URL("../src/ui/echartsOption.ts", import.meta.url);
 const echartsOptionSource = readFileSync(echartsOptionUrl, "utf8");
+const visualizationLanguageUrl = new URL(
+  "../src/ui/visualizationLanguage.ts",
+  import.meta.url,
+);
 const visualizationPanelSource = readFileSync(
   new URL("../src/ui/VisualizationPanel.tsx", import.meta.url),
   "utf8",
@@ -118,7 +122,8 @@ test("ECharts fences use a lazy, interactive, data-only renderer", () => {
   assert.equal(packageJson.dependencies.echarts, "6.1.0");
   assert.equal(packageJson.dependencies.json5, "2.2.3");
   assert.equal(echartsPackage.license, "Apache-2.0");
-  assert.match(markdownSource, /language === "echarts"/);
+  assert.match(markdownSource, /normalizeVisualizationLanguage/);
+  assert.match(markdownSource, /language === "mermaid" \|\| language === "echarts"/);
   assert.match(echartsSource, /import\("echarts"\)/);
   assert.match(echartsSource, /parseEChartsOption/);
   assert.match(echartsOptionSource, /JSON5\.parse/);
@@ -126,6 +131,27 @@ test("ECharts fences use a lazy, interactive, data-only renderer", () => {
   assert.match(echartsOptionSource, /renderMode:\s*"richText"/);
   assert.match(echartsSource, /new ResizeObserver/);
   assert.doesNotMatch(`${echartsSource}\n${echartsOptionSource}`, /\beval\s*\(|new Function/);
+});
+
+test("visualization fence aliases are case-insensitive", async () => {
+  const { build } = await import("esbuild");
+  const result = await build({
+    entryPoints: [fileURLToPath(visualizationLanguageUrl)],
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    write: false,
+  });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`;
+  const { normalizeVisualizationLanguage } = await import(moduleUrl);
+
+  for (const alias of ["echart", "EChart", "ECHART", "echarts", "ECharts", "ECHARTS"]) {
+    assert.equal(normalizeVisualizationLanguage(alias), "echarts");
+  }
+  for (const alias of ["mermaid", "Mermaid", "MERMAID"]) {
+    assert.equal(normalizeVisualizationLanguage(alias), "mermaid");
+  }
+  assert.equal(normalizeVisualizationLanguage("javascript"), undefined);
 });
 
 test("JSON5 accepts common ECharts examples without enabling JavaScript", async () => {

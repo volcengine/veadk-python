@@ -9,6 +9,7 @@ import "highlight.js/styles/github.css";
 import { EChartsDiagram } from "./EChartsDiagram";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { VisualizationPanel } from "./VisualizationPanel";
+import { normalizeVisualizationLanguage } from "./visualizationLanguage";
 
 interface VideoData {
   src: string;
@@ -32,7 +33,7 @@ function codeBlockLanguage(node: ReactNode): string | undefined {
   const languageClass = child.props.className
     ?.split(/\s+/)
     .find((className) => className.startsWith("language-"));
-  return languageClass?.slice("language-".length);
+  return normalizeVisualizationLanguage(languageClass?.slice("language-".length));
 }
 
 function isVideoUrl(url: string): boolean {

@@ -281,11 +281,12 @@ its preview and original Mermaid code. If a definition is invalid, Studio shows
 an error while keeping the original source available in the code view.
 
 For interactive data charts, agents can return an ECharts option as JSON or
-JSON5 in an `echarts` fenced block. The common `option = { ... };` wrapper is
-also accepted. ECharts linear and radial gradient constructors are converted
-to their equivalent data objects without execution. Other functions and
-executable JavaScript are not part of this data-only contract. Tooltip content
-is forced to ECharts rich-text rendering.
+JSON5 in an `echarts` fenced block. The singular `echart` tag and case variants
+such as `ECharts` are accepted as aliases. The common `option = { ... };`
+wrapper is also accepted. ECharts linear and radial gradient constructors are
+converted to their equivalent data objects without execution. Other functions
+and executable JavaScript are not part of this data-only contract. Tooltip
+content is forced to ECharts rich-text rendering.
 
 ````markdown
 ```echarts
