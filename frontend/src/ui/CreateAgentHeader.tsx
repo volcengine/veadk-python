@@ -74,11 +74,12 @@ export function CreateAgentHeader({
               size="sm"
               pill={false}
               className="create-agent-header-debug-action is-add"
+              aria-label="添加对照"
               disabled={comparisonDisabled}
               onClick={onAddComparison}
             >
               <CreateAddIcon />
-              添加对照
+              <span className="create-agent-header-action-label">添加对照</span>
             </Button>
             <Button
               type="button"
@@ -87,10 +88,11 @@ export function CreateAgentHeader({
               size="sm"
               pill={false}
               className="create-agent-header-debug-action"
+              aria-label="退出调试"
               onClick={onExitDebug}
             >
               <CreateCloseIcon />
-              退出调试
+              <span className="create-agent-header-action-label">退出调试</span>
             </Button>
           </>
         ) : (

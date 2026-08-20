@@ -321,14 +321,22 @@ test("baseline debug config defaults to the first configured Agent model", () =>
   );
 });
 
-test("debug starts with one baseline and adds the comparison only on demand", () => {
+test("debug starts with one baseline and preserves comparisons across workspace changes", () => {
   assert.match(
     createSource,
     /const \[debugVariants, setDebugVariants\][\s\S]*?return \[[\s\S]*?id: "baseline"[\s\S]*?\];/,
   );
   assert.match(
     createSource,
-    /const openValidation = \(\) => \{[\s\S]*?current[\s\S]*?\.filter\(\(variant\) => variant\.id === "baseline"\)[\s\S]*?setSelectedVariantId\("baseline"\)[\s\S]*?debugVariantSequenceRef\.current = 1/,
+    /const openValidation = \(\) => \{[\s\S]*?setDebugVariants\(\(current\) =>[\s\S]*?current\.map\(\(variant\) =>[\s\S]*?variant\.id === "baseline"/,
+  );
+  assert.doesNotMatch(
+    createSource,
+    /const openValidation = \(\) => \{[\s\S]*?\.filter\(\(variant\) => variant\.id === "baseline"\)/,
+  );
+  assert.doesNotMatch(
+    createSource,
+    /const openValidation = \(\) => \{[\s\S]*?debugVariantSequenceRef\.current = 1/,
   );
   assert.match(
     createSource,
@@ -509,7 +517,7 @@ test("debug workspace compares multiple configurations behind one shared input",
   assert.match(createSource, /type DebugWorkspaceView = "intro" \| "config" \| "results"/);
   assert.match(
     createSource,
-    /function debugWorkspaceView[\s\S]*?variant\.configOpen[\s\S]*?variant\.phase === "error" \|\| variant\.messages\.length > 0[\s\S]*?return "intro"/,
+    /function debugWorkspaceView[\s\S]*?variant\.configOpen[\s\S]*?variants\.length > 1 \|\|[\s\S]*?variant\.phase === "error" \|\| variant\.messages\.length > 0[\s\S]*?return "intro"/,
   );
   assert.match(createSource, /className="cw-debug-intro"/);
   assert.match(createSource, /className="cw-ab-config-grid"/);
@@ -590,6 +598,18 @@ test("debug workspace compares multiple configurations behind one shared input",
   );
   assert.match(
     createStyles,
+    /\.cw-validation-canvas-content > \.abc-root\s*\{[\s\S]*?min-width:\s*0;/,
+  );
+  assert.match(
+    createStyles,
+    /@media \(max-width: 700px\)[\s\S]*?\.cw-ab-config-grid,\s*\.cw-ab-results-grid\s*\{[\s\S]*?flex-direction:\s*column;[\s\S]*?overflow-y:\s*auto;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-ab-result-column\s*\{[\s\S]*?flex:\s*1 0 50%;[\s\S]*?min-height:\s*220px;/,
+  );
+  assert.match(
+    createStyles,
     /\.cw-ab-workspace\.is-intro\s*\{[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\) auto;/,
   );
   assert.match(
@@ -657,7 +677,7 @@ test("debug workspace motion preserves direction, column continuity, and reduced
   );
   assert.match(
     createSource,
-    /layout: reduceMotion \? false : \("position" as const\)/,
+    /layout: reduceMotion \? false : true/,
   );
 
   const viewEnter = Number(
@@ -680,6 +700,14 @@ test("debug workspace motion preserves direction, column continuity, and reduced
   assert.match(
     createSource,
     /duration: reduceMotion \? 0 : DEBUG_VIEW_ENTER_SECONDS[\s\S]*?duration: reduceMotion \? 0 : DEBUG_VIEW_EXIT_SECONDS/,
+  );
+  assert.match(
+    createSource,
+    /const workspaceViewMotion = \{[\s\S]*?WORKSPACE_VIEW_ENTER_SECONDS[\s\S]*?WORKSPACE_VIEW_EXIT_SECONDS/,
+  );
+  assert.match(
+    createSource,
+    /<AnimatePresence initial=\{false\} mode="popLayout">[\s\S]*?key="build-workspace"[\s\S]*?key="validate-workspace"[\s\S]*?key="publish-workspace"/,
   );
 });
 

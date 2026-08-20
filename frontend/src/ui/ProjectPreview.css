@@ -421,19 +421,22 @@
   border-right: 1px solid hsl(var(--border) / 0.72);
 }
 
-.pp-root.is-deploy.is-embedded .pp-release-preview.is-embedded {
+.pp-root.is-deploy.is-embedded .pp-release-overview.is-embedded-canvas {
   position: relative;
-  width: 100%;
   height: 100%;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0;
-  padding: 0;
 }
 
-.pp-root.is-deploy.is-embedded .pp-flow-thumbnail {
+.pp-root.is-deploy.is-embedded .pp-release-overview.is-embedded-canvas > .abc-root {
+  width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
   border: 0;
-  border-radius: 0;
+}
+
+.pp-root.is-deploy.is-embedded .pp-release-overview.is-embedded-canvas > .abc-root .abc-canvas {
+  min-height: 0;
 }
 
 .pp-root.is-deploy.is-embedded .pp-artifact-actions.is-rail {
@@ -600,11 +603,6 @@
   gap: 12px;
   margin: 0 auto;
   padding: 8px 0 12px;
-}
-
-.pp-release-preview.is-embedded {
-  grid-template-columns: minmax(0, 1fr) 132px;
-  align-items: stretch;
 }
 
 .pp-flow-thumbnail {
@@ -2725,6 +2723,29 @@
     padding-inline: 8px;
     font-size: 12px;
     white-space: nowrap;
+  }
+}
+
+@media (max-width: 560px) {
+  .pp-root.is-deploy.is-embedded .pp-artifact-actions.is-rail {
+    left: auto;
+    right: 12px;
+    top: 12px;
+    width: 40px;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .pp-root.is-deploy.is-embedded .pp-artifact-actions.is-rail .pp-secondary,
+  .pp-root.is-deploy.is-embedded .pp-artifact-actions.is-rail .code-browser-trigger {
+    width: 32px;
+    min-width: 32px;
+    min-height: 32px;
+    flex: 0 0 32px;
+    gap: 0;
+    padding: 0;
+    font-size: 0;
   }
 }
 

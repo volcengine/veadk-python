@@ -2189,13 +2189,16 @@ export function ProjectPreview({
 
       <div className="pp-body">
         {onDeploy && !deploymentPrimaryPane && (
-          <section className="pp-release-overview" aria-label="发布概览">
-            <div className={`pp-release-preview${embedded ? " is-embedded" : ""}`}>
-              <div className="pp-flow-thumbnail">
+          <section
+            className={`pp-release-overview${embedded ? " is-embedded-canvas" : ""}`}
+            aria-label="发布概览"
+          >
+            {embedded ? (
+              <>
                 {agentDraft && (
                   <AgentBuildCanvas
                     draft={agentDraft}
-                    direction="horizontal"
+                    direction="vertical"
                     selectedPath={[]}
                     onSelect={ignoreCanvasAction}
                     onAdd={ignoreCanvasAction}
@@ -2205,18 +2208,34 @@ export function ProjectPreview({
                     interactivePreview
                   />
                 )}
-                <button
-                  type="button"
-                  className="pp-flow-expand"
-                  onClick={() => setFlowPreviewOpen(true)}
-                  aria-label="放大查看执行流程"
-                  title="放大查看"
-                >
-                  <Maximize2 aria-hidden />
-                </button>
-              </div>
-              {embedded && artifactActions}
-              {!embedded && (
+                {artifactActions}
+              </>
+            ) : (
+              <div className="pp-release-preview">
+                <div className="pp-flow-thumbnail">
+                  {agentDraft && (
+                    <AgentBuildCanvas
+                      draft={agentDraft}
+                      direction="horizontal"
+                      selectedPath={[]}
+                      onSelect={ignoreCanvasAction}
+                      onAdd={ignoreCanvasAction}
+                      onInsert={ignoreCanvasAction}
+                      onDelete={ignoreCanvasAction}
+                      readOnly
+                      interactivePreview
+                    />
+                  )}
+                  <button
+                    type="button"
+                    className="pp-flow-expand"
+                    onClick={() => setFlowPreviewOpen(true)}
+                    aria-label="放大查看执行流程"
+                    title="放大查看"
+                  >
+                    <Maximize2 aria-hidden />
+                  </button>
+                </div>
                 <div className="pp-release-info">
                 <div className="pp-release-card-head">Agent 概览</div>
                 <div className="pp-release-info-body">
@@ -2294,8 +2313,8 @@ export function ProjectPreview({
                   {artifactActions}
                 </div>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </section>
         )}
         <div className="pp-files-area">

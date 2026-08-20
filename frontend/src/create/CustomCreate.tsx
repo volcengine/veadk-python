@@ -2606,6 +2606,8 @@ const DEBUG_COLUMN_ENTER_SECONDS = 0.18;
 const DEBUG_COLUMN_EXIT_SECONDS = 0.1;
 const DEBUG_COLUMN_STAGGER_SECONDS = 0.035;
 const DEBUG_MOTION_EASE = [0.22, 1, 0.36, 1] as const;
+const WORKSPACE_VIEW_ENTER_SECONDS = 0.22;
+const WORKSPACE_VIEW_EXIT_SECONDS = 0.14;
 const DEBUG_SUGGESTED_QUESTIONS = [
   "请用一句话介绍你能帮我完成哪些任务",
   "帮我处理一个典型任务，并说明关键步骤",
@@ -2615,6 +2617,7 @@ const DEBUG_SUGGESTED_QUESTIONS = [
 function debugWorkspaceView(variants: DebugVariant[]): DebugWorkspaceView {
   if (variants.some((variant) => variant.configOpen)) return "config";
   if (
+    variants.length > 1 ||
     variants.some(
       (variant) => variant.phase === "error" || variant.messages.length > 0,
     )
@@ -2717,13 +2720,14 @@ function DebugComparisonWorkspace({
         ? "minmax(0, 1fr) 44px"
         : "minmax(0, 1fr) 136px";
   const columnMotion = (index: number) => ({
-    layout: reduceMotion ? false : ("position" as const),
+    layout: reduceMotion ? false : true,
     initial: reduceMotion ? { opacity: 0 } : { opacity: 0, x: 12 },
     animate: {
       opacity: 1,
       x: 0,
+      scale: 1,
       transition: {
-        duration: reduceMotion ? 0 : DEBUG_COLUMN_ENTER_SECONDS,
+        duration: reduceMotion ? 0.08 : DEBUG_COLUMN_ENTER_SECONDS,
         delay: reduceMotion ? 0 : index * DEBUG_COLUMN_STAGGER_SECONDS,
         ease: DEBUG_MOTION_EASE,
       },
@@ -2731,8 +2735,9 @@ function DebugComparisonWorkspace({
     exit: {
       opacity: 0,
       x: reduceMotion ? 0 : 8,
+      scale: reduceMotion ? 1 : 0.985,
       transition: {
-        duration: reduceMotion ? 0 : DEBUG_COLUMN_EXIT_SECONDS,
+        duration: reduceMotion ? 0.06 : DEBUG_COLUMN_EXIT_SECONDS,
         ease: DEBUG_MOTION_EASE,
       },
     },
@@ -2805,6 +2810,7 @@ function DebugComparisonWorkspace({
           exit="exit"
           style={{
             gridRow: "1 / -1",
+            gridColumn: "1",
             minWidth: 0,
             minHeight: 0,
             display: "grid",
@@ -3487,6 +3493,28 @@ export function CustomCreate({
   void onCreate; // outcome is the in-pane project preview, not a navigation
   void onDiscard; // the discard action is intentionally hidden in this flow
   const reduceMotion = useReducedMotion();
+  const workspaceViewMotion = {
+    initial: {
+      opacity: 0,
+      x: reduceMotion ? 0 : 12,
+    },
+    animate: {
+      opacity: 1,
+      x: 0,
+      transition: {
+        duration: reduceMotion ? 0.08 : WORKSPACE_VIEW_ENTER_SECONDS,
+        ease: DEBUG_MOTION_EASE,
+      },
+    },
+    exit: {
+      opacity: 0,
+      x: reduceMotion ? 0 : -8,
+      transition: {
+        duration: reduceMotion ? 0.06 : WORKSPACE_VIEW_EXIT_SECONDS,
+        ease: DEBUG_MOTION_EASE,
+      },
+    },
+  };
   const [initialState] = useState<CustomCreateInitialState>(() =>
     customCreateInitialState(
       initialDraft ?? emptyDraft(cloudProvider),
@@ -4713,23 +4741,19 @@ export function CustomCreate({
   const openValidation = () => {
     if (!requireCompleteDraft()) return;
     setDebugVariants((current) =>
-      current
-        .filter((variant) => variant.id === "baseline")
-        .map((variant) =>
-          variant.id === "baseline" && !debugRunsRef.current.has(variant.id)
-            ? {
-                ...variant,
-                modelName: baselineModelEditedRef.current
-                  ? variant.modelName
-                  : defaultDebugModelName(providerDraft),
-                description: providerDraft.description,
-                instruction: providerDraft.instruction,
-              }
-            : variant,
-        ),
+      current.map((variant) =>
+        variant.id === "baseline" && !debugRunsRef.current.has(variant.id)
+          ? {
+              ...variant,
+              modelName: baselineModelEditedRef.current
+                ? variant.modelName
+                : defaultDebugModelName(providerDraft),
+              description: providerDraft.description,
+              instruction: providerDraft.instruction,
+            }
+          : variant,
+      ),
     );
-    setSelectedVariantId("baseline");
-    debugVariantSequenceRef.current = 1;
     setWorkspaceMode("validate");
   };
 
@@ -4882,8 +4906,13 @@ export function CustomCreate({
         />
       )}
       <main className="cw-workspace-main" id="cw-workspace-main">
+        <AnimatePresence initial={false} mode="popLayout">
         {workspaceMode === "build" && (
-          <div className="cw-build-workspace">
+          <motion.div
+            key="build-workspace"
+            className="cw-build-workspace cw-workspace-view"
+            {...workspaceViewMotion}
+          >
             <div className="cw-editor">
               <AnimatePresence initial={false} mode="popLayout">
                 {builderPanel === "chat" ? (
@@ -5861,12 +5890,14 @@ export function CustomCreate({
               </AnimatePresence>
               {/* cw-detail */}
             </div>
-          </div>
+          </motion.div>
         )}
 
         {workspaceMode === "validate" && (
-          <div
-            className={`cw-validation-workspace is-${debugWorkspaceView(debugVariants)}`}
+          <motion.div
+            key="validate-workspace"
+            className={`cw-validation-workspace cw-workspace-view is-${debugWorkspaceView(debugVariants)}`}
+            {...workspaceViewMotion}
             style={
               {
                 "--cw-validation-content-width": `${Math.max(
@@ -5876,20 +5907,51 @@ export function CustomCreate({
               } as CSSProperties
             }
           >
-            <div className="cw-validation-canvas" aria-label="Agent 画布预览">
-              <AgentBuildCanvas
-                draft={draft}
-                direction="vertical"
-                selectedPath={safePath}
-                onSelect={setSelectedPath}
-                onAdd={() => {}}
-                onInsert={() => {}}
-                onDelete={() => {}}
-                readOnly
-                interactivePreview
-              />
-            </div>
-            <div className="cw-validation-content">
+            <motion.div
+              className="cw-validation-canvas"
+              aria-label="Agent 画布预览"
+              layout={reduceMotion ? false : "position"}
+              transition={{
+                layout: {
+                  duration: DEBUG_VIEW_ENTER_SECONDS,
+                  ease: DEBUG_MOTION_EASE,
+                },
+              }}
+            >
+              <motion.div
+                key={`validation-canvas-${debugVariants.length}`}
+                className="cw-validation-canvas-content"
+                initial={reduceMotion ? false : { opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{
+                  duration: reduceMotion ? 0.08 : DEBUG_COLUMN_ENTER_SECONDS,
+                  delay: reduceMotion ? 0 : DEBUG_VIEW_EXIT_SECONDS / 2,
+                  ease: DEBUG_MOTION_EASE,
+                }}
+              >
+                <AgentBuildCanvas
+                  draft={draft}
+                  direction="vertical"
+                  selectedPath={safePath}
+                  onSelect={setSelectedPath}
+                  onAdd={() => {}}
+                  onInsert={() => {}}
+                  onDelete={() => {}}
+                  readOnly
+                  interactivePreview
+                />
+              </motion.div>
+            </motion.div>
+            <motion.div
+              className="cw-validation-content"
+              layout={reduceMotion ? false : "position"}
+              transition={{
+                layout: {
+                  duration: DEBUG_VIEW_ENTER_SECONDS,
+                  ease: DEBUG_MOTION_EASE,
+                },
+              }}
+            >
               <DebugComparisonWorkspace
                 enabled={debugEnabled}
                 disabledReason={debugDisabledReason}
@@ -5922,12 +5984,16 @@ export function CustomCreate({
                 onConfigChange={updateDebugVariantConfig}
                 onOpenTrace={openDebugTrace}
               />
-            </div>
-          </div>
+            </motion.div>
+          </motion.div>
         )}
 
         {workspaceMode === "publish" && (
-          <div className="cw-preview-body">
+          <motion.div
+            key="publish-workspace"
+            className="cw-preview-body cw-workspace-view"
+            {...workspaceViewMotion}
+          >
             {project ? (
               <ProjectPreview
                 embedded
@@ -6061,8 +6127,9 @@ export function CustomCreate({
                 <span>校验 Agent 结构并准备部署快照…</span>
               </div>
             )}
-          </div>
+          </motion.div>
         )}
+        </AnimatePresence>
       </main>
       {workspaceMode === "publish" && <WorkspaceLifecycleFooter
         mode={workspaceMode}

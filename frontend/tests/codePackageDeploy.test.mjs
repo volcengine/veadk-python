@@ -177,6 +177,16 @@ test("matches the Figma create-agent landing geometry", () => {
   assert.doesNotMatch(createAgentHeaderStyles, /create-agent-header-preview/);
   assert.match(createAgentHeaderSource, /添加对照/);
   assert.match(createAgentHeaderSource, /退出调试/);
+  assert.match(createAgentHeaderSource, /aria-label="添加对照"/);
+  assert.match(createAgentHeaderSource, /aria-label="退出调试"/);
+  assert.match(
+    createAgentHeaderSource,
+    /className="create-agent-header-action-label">添加对照<\/span>/,
+  );
+  assert.match(
+    createAgentHeaderStyles,
+    /@media \(max-width: 700px\)[\s\S]*?\.create-agent-header-debug-action \.create-agent-header-action-label\s*\{[\s\S]*?display:\s*none;/,
+  );
   assert.doesNotMatch(createAgentHeaderSource, /CreateShareIcon|collaborator/);
   assert.match(addAgentMenuStyles, /--create-canvas:\s*#f0f0f0/);
   assert.match(addAgentMenuStyles, /background-size:\s*18px 18px/);

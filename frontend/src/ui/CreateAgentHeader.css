@@ -161,6 +161,21 @@
 }
 
 @media (max-width: 700px) {
+  .create-agent-header {
+    padding-inline: 12px;
+  }
+
+  .create-agent-header.is-debug-results {
+    width: 100%;
+    margin-inline: 0;
+  }
+
+  .create-agent-header-start {
+    width: auto;
+    min-width: 0;
+    font-size: 16px;
+  }
+
   .create-agent-header-action.is-code,
   .create-agent-header-action:not(.is-deploy) {
     display: none;
@@ -168,5 +183,20 @@
 
   .create-agent-header-actions {
     width: auto;
+  }
+
+  .create-agent-header.is-debug-preview .create-agent-header-actions,
+  .create-agent-header.is-debug-results .create-agent-header-actions {
+    gap: 4px;
+  }
+
+  .create-agent-header-debug-action {
+    --button-gutter: 8px;
+
+    min-width: 32px;
+  }
+
+  .create-agent-header-debug-action .create-agent-header-action-label {
+    display: none;
   }
 }

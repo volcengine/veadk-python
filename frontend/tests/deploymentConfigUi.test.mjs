@@ -64,14 +64,29 @@ test("offers code execution with its sandbox configuration", () => {
   );
 });
 
-test("reuses the build canvas as a read-only expandable deployment preview", () => {
+test("reuses the build canvas as a full embedded canvas and expandable standalone preview", () => {
+  const embeddedBranchStart = projectPreviewSource.indexOf("{embedded ? (");
+  const standaloneBranchStart = projectPreviewSource.indexOf(
+    ") : (",
+    embeddedBranchStart,
+  );
+  const embeddedBranch = projectPreviewSource.slice(
+    embeddedBranchStart,
+    standaloneBranchStart,
+  );
+  assert.notEqual(embeddedBranchStart, -1);
+  assert.notEqual(standaloneBranchStart, -1);
   assert.match(
     projectPreviewSource,
     /import \{ AgentBuildCanvas \} from "\.\.\/create\/AgentBuildCanvas"/,
   );
   assert.match(
     projectPreviewSource,
-    /className="pp-flow-thumbnail"[\s\S]*?<AgentBuildCanvas[\s\S]*?readOnly/,
+    /embedded \? \([\s\S]*?<AgentBuildCanvas[\s\S]*?direction="vertical"[\s\S]*?readOnly[\s\S]*?\{artifactActions\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /: \([\s\S]*?className="pp-flow-thumbnail"[\s\S]*?<AgentBuildCanvas[\s\S]*?direction="horizontal"[\s\S]*?readOnly/,
   );
   assert.match(
     projectPreviewSource,
@@ -96,6 +111,7 @@ test("reuses the build canvas as a read-only expandable deployment preview", () 
     projectPreviewSource,
     /className="pp-flow-expand"[\s\S]*?aria-label="放大查看执行流程"[\s\S]*?<Maximize2 aria-hidden \/>/,
   );
+  assert.doesNotMatch(embeddedBranch, /className="pp-flow-(?:thumbnail|expand)"/);
   assert.doesNotMatch(projectPreviewSource, /<span>放大查看<\/span>/);
   assert.match(
     projectPreviewStyles,
@@ -104,7 +120,7 @@ test("reuses the build canvas as a read-only expandable deployment preview", () 
   assert.match(projectPreviewSource, /className="pp-release-card-head">Agent 概览/);
   assert.match(
     projectPreviewSource,
-    /\{!embedded && \(\s*<div className="pp-release-info">/,
+    /: \([\s\S]*?<div className="pp-release-preview">[\s\S]*?<div className="pp-release-info">/,
   );
 });
 

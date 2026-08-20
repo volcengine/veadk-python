@@ -844,8 +844,14 @@ test("materializes A2A registry defaults for deployment env", () => {
 
 test("summarizes the Agent above the deployment configuration", () => {
   assert.match(customCreateSource, /agentDraft=\{draft\}/);
-  assert.match(projectPreviewSource, /className="pp-flow-thumbnail"/);
-  assert.match(projectPreviewSource, /<AgentBuildCanvas[\s\S]*?readOnly/);
+  assert.match(
+    projectPreviewSource,
+    /className={`pp-release-overview\$\{embedded \? " is-embedded-canvas" : ""\}`}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /embedded \? \([\s\S]*?<AgentBuildCanvas[\s\S]*?direction="vertical"[\s\S]*?readOnly/,
+  );
   assert.match(projectPreviewSource, /Agent 数量/);
   assert.match(projectPreviewSource, />\s*导出 YAML\s*</);
   assert.match(projectPreviewSource, /<ProjectCodeBrowser[\s\S]*?pp-artifact-source/);
@@ -874,15 +880,22 @@ test("keeps root project files visible before expanded folders", () => {
 test("keeps artifact actions beside the embedded publish canvas", () => {
   assert.match(
     projectPreviewSource,
-    /className={`pp-release-preview\$\{embedded \? " is-embedded" : ""\}`}/,
+    /className={`pp-release-overview\$\{embedded \? " is-embedded-canvas" : ""\}`}/,
   );
-  assert.match(projectPreviewSource, /\{embedded && artifactActions\}/);
+  assert.match(
+    projectPreviewSource,
+    /embedded \? \([\s\S]*?direction="vertical"[\s\S]*?\{artifactActions\}[\s\S]*?: \(/,
+  );
   assert.match(projectPreviewSource, />\s*导出 YAML\s*</);
   assert.match(projectPreviewSource, /label="查看源代码"/);
   assert.match(projectPreviewSource, />\s*下载源代码\s*</);
   assert.match(
     projectPreviewStyles,
-    /\.pp-release-preview\.is-embedded\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) 132px/,
+    /\.pp-root\.is-deploy\.is-embedded \.pp-release-overview\.is-embedded-canvas > \.abc-root\s*\{[\s\S]*?width:\s*100%;[\s\S]*?height:\s*100%;/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /@media \(max-width: 560px\)[\s\S]*?\.pp-artifact-actions\.is-rail\s*\{[\s\S]*?width:\s*40px;[\s\S]*?flex-direction:\s*column;[\s\S]*?font-size:\s*0;/,
   );
   assert.match(
     projectPreviewStyles,
