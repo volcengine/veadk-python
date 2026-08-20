@@ -259,6 +259,7 @@ def test_runtime_env_uses_resolved_plan_without_private_artifact_data(
     assert captured["component_overrides"]["sql_readonly"] is False
     assert captured["profile_arg"] == "default"
     assert env["HARNESS_SIDECAR_EXPECTED_PLAN_HASH"] == "sha256:runtime-plan"
+    assert "AGENTKIT_HARNESS_RUNTIME_COMMAND" not in env
     assert plan["planHash"] == "sha256:runtime-plan"
     assert "artifact" not in str(env).lower()
 
@@ -307,7 +308,7 @@ def test_deployment_config_keeps_only_public_intent_and_checks_plan_hash(
         )
 
 
-def test_compressor_selection_uses_sidecar_heuristic_provider(
+def test_compressor_selection_uses_sidecar_headroom_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
@@ -337,9 +338,13 @@ def test_compressor_selection_uses_sidecar_heuristic_provider(
         transport="local",
     )
 
-    assert deployment["model_proxy"] == {"compression_provider": "heuristic"}
-    assert captured["model_proxy"]["compression_provider"] == "heuristic"
-    assert runtime_env["HARNESS_MODEL_COMPRESSION_PROVIDER"] == "heuristic"
+    assert deployment["model_proxy"] == {"compression_provider": "headroom"}
+    assert captured["model_proxy"]["compression_provider"] == "headroom"
+    assert runtime_env["HARNESS_MODEL_COMPRESSION_PROVIDER"] == "headroom"
+    assert runtime_env["AGENTKIT_HARNESS_RUNTIME_COMMAND"] == (
+        "/opt/agentkit-headroom/bin/agentkit-harness-sidecar-runtime"
+    )
+    assert "HARNESS_HEADROOM_BASE_URL" not in runtime_env
 
 
 def test_disabled_selection_never_loads_runtime_integration(

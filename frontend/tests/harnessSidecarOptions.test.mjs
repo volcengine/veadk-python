@@ -251,7 +251,7 @@ test("materializes an ordinary project snapshot into one ops release draft", () 
   assert.equal(releaseDraft.harnessSidecar.profile, "ops");
   assert.deepEqual(releaseDraft.harnessSidecar.componentOverrides, {
     context_engine: true,
-    compressor: true,
+    compressor: false,
     verifier: true,
     long_run_control: true,
     mcp_resilience: true,

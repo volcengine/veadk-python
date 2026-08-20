@@ -56,7 +56,6 @@ describe("Studio Harness Sidecar metadata options", () => {
     expect(harnessProfileDefaultOptimizations("default")).toEqual([]);
     expect(harnessProfileDefaultOptimizations("ops")).toEqual([
       "context_engine",
-      "compressor",
       "verifier",
       "long_run_control",
       "mcp_resilience",
@@ -93,7 +92,7 @@ describe("Studio Harness Sidecar metadata options", () => {
     });
   });
 
-  it("restores the ops profile and all five visible optimizations from Runtime envs", () => {
+  it("restores the ops profile without enabling compression by default", () => {
     const intent = harnessIntentFromRuntimeEnvs([
       { key: "HARNESS_SIDECAR_ENABLED", value: "true" },
       { key: "HARNESS_PROFILE", value: "ops" },
@@ -104,6 +103,36 @@ describe("Studio Harness Sidecar metadata options", () => {
     expect(intent).toEqual(
       harnessIntentFromOptimizations(
         harnessProfileDefaultOptimizations("ops"),
+        "ops",
+      ),
+    );
+  });
+
+  it("preserves an existing ops Runtime's explicit compressor selection", () => {
+    const intent = harnessIntentFromRuntimeEnvs([
+      { key: "HARNESS_SIDECAR_ENABLED", value: "true" },
+      { key: "HARNESS_PROFILE", value: "ops" },
+      {
+        key: "HARNESS_SIDECAR_COMPONENT_OVERRIDES",
+        value: JSON.stringify({
+          context_engine: true,
+          compressor: true,
+          verifier: true,
+          long_run_control: true,
+          mcp_resilience: true,
+        }),
+      },
+    ]);
+
+    expect(intent).toEqual(
+      harnessIntentFromOptimizations(
+        [
+          "context_engine",
+          "compressor",
+          "verifier",
+          "long_run_control",
+          "mcp_resilience",
+        ],
         "ops",
       ),
     );
@@ -190,7 +219,7 @@ describe("Studio Harness Sidecar metadata options", () => {
     ).toMatchObject({
       enabled: true,
       profile: "ops",
-      componentOverrides: { mcp_resilience: true },
+      componentOverrides: { compressor: false, mcp_resilience: true },
     });
   });
 
@@ -228,7 +257,7 @@ describe("Studio Harness Sidecar metadata options", () => {
       harnessSidecar: {
         enabled: true,
         profile: "ops",
-        componentOverrides: { mcp_resilience: true },
+        componentOverrides: { compressor: false, mcp_resilience: true },
       },
     });
   });

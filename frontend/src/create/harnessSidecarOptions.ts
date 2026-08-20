@@ -108,7 +108,6 @@ export const HARNESS_SIDECAR_PROFILES: readonly HarnessSidecarProfile[] = [
     description: "适用于运维诊断、数据库、日志和监控 MCP。",
     defaultComponents: [
       "context_engine",
-      "compressor",
       "verifier",
       "long_run_control",
       "mcp_resilience",
@@ -176,6 +175,18 @@ export function harnessIntentFromRuntimeEnvs(
   if (!runtimeEnvEnabled(enabledValue)) {
     return harnessIntentFromOptimizations([], profile);
   }
+  const exactOverrides = runtimeComponentOverrides(
+    values.get("HARNESS_SIDECAR_COMPONENT_OVERRIDES"),
+  );
+  if (exactOverrides) {
+    return {
+      ...harnessIntentFromOptimizations(
+        HARNESS_SIDECAR_OPTION_IDS.filter((id) => exactOverrides[id] === true),
+        profile,
+      ),
+      enabled: true,
+    };
+  }
   if (profile === "ops") {
     return harnessIntentFromOptimizations(
       harnessProfileDefaultOptimizations(profile),
@@ -183,19 +194,14 @@ export function harnessIntentFromRuntimeEnvs(
     );
   }
 
-  const exactOverrides = runtimeComponentOverrides(
-    values.get("HARNESS_SIDECAR_COMPONENT_OVERRIDES"),
-  );
-  const selected = exactOverrides
-    ? HARNESS_SIDECAR_OPTION_IDS.filter((id) => exactOverrides[id] === true)
-    : [
-        ...(runtimeEnvEnabled(values.get("HARNESS_MODEL_PROXY_ENABLED"))
-          ? HARNESS_MODEL_PROXY_OPTION_IDS
-          : []),
-        ...(runtimeEnvEnabled(values.get("HARNESS_MCP_GATEWAY_ENABLED"))
-          ? ["mcp_resilience" as const]
-          : []),
-      ];
+  const selected = [
+    ...(runtimeEnvEnabled(values.get("HARNESS_MODEL_PROXY_ENABLED"))
+      ? HARNESS_MODEL_PROXY_OPTION_IDS
+      : []),
+    ...(runtimeEnvEnabled(values.get("HARNESS_MCP_GATEWAY_ENABLED"))
+      ? ["mcp_resilience" as const]
+      : []),
+  ];
   return {
     ...harnessIntentFromOptimizations(selected, profile),
     enabled: true,

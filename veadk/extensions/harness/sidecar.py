@@ -82,8 +82,11 @@ _INCOMPATIBLE_IMAGE_MESSAGE = (
     "Use a Sidecar-enabled managed Runtime image."
 )
 _AGENTKIT_CLI_ENV = "VEADK_AGENTKIT_CLI"
-_SIDECAR_COMPRESSION_PROVIDER = "heuristic"
+_SIDECAR_COMPRESSION_PROVIDER = "headroom"
 _SIDECAR_NO_COMPRESSION_PROVIDER = "noop"
+_SIDECAR_HEADROOM_RUNTIME_COMMAND = (
+    "/opt/agentkit-headroom/bin/agentkit-harness-sidecar-runtime"
+)
 
 
 class HarnessSidecarDependencyError(RuntimeError):
@@ -398,6 +401,11 @@ def studio_harness_runtime_env(
         config,
         profile=intent.profile,
     )
+    if config["model_proxy"]["compression_provider"] == "headroom":
+        # Runtime control-plane environment can supersede the image's inherited
+        # ENV. Select the managed wrapper explicitly so direct local Headroom
+        # never falls back to the application interpreter or to noop.
+        env["AGENTKIT_HARNESS_RUNTIME_COMMAND"] = _SIDECAR_HEADROOM_RUNTIME_COMMAND
     env["HARNESS_SIDECAR_EXPECTED_PLAN_HASH"] = str(plan.get("plan_hash") or "")
     return env, _studio_plan_payload(intent, plan)
 
