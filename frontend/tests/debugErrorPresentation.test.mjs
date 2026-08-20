@@ -72,11 +72,11 @@ test("creation and deployment keep friendly context and the original error", () 
   assert.match(clientSource, /原始响应：\\n\$\{text\}/);
   assert.match(
     projectPreviewSource,
-    /label: "部署失败",\s*message,\s*\.\.\.\(buildLog/,
+    /label: "部署失败"[\s\S]*?message: failedInBuild[\s\S]*?\.\.\.\(buildLog/,
   );
-  assert.doesNotMatch(
+  assert.match(
     projectPreviewSource,
-    /message: failedInBuild \? "构建镜像失败，详见构建日志。" : message/,
+    /failedInBuild[\s\S]*?"构建镜像失败，详见构建日志。"[\s\S]*?failedInGithub[\s\S]*?"挂载 GitHub 持续交付失败，详见 GitHub 日志。"[\s\S]*?: message/,
   );
 });
 

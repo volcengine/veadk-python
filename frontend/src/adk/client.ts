@@ -2250,8 +2250,75 @@ export async function listIdentityUserPools(
   });
 }
 
+export interface GithubCicdPipelineResult {
+  pipelineId?: string;
+  status?: string;
+  phase?: string;
+  updatedAt?: string;
+  runtimeId?: string;
+  region?: string;
+  cloudProvider?: CloudProvider;
+  github?: {
+    owner?: string;
+    repo?: string;
+    baseBranch?: string;
+    branch?: string;
+    commitSha?: string;
+    pullRequestUrl?: string;
+    pullRequestNumber?: number;
+  };
+  cicd?: {
+    enabled?: boolean;
+    workflowPath?: string;
+    projectPath?: string;
+  };
+}
+
+export interface GithubDeliveryVersion {
+  version: string;
+  createdAt?: string;
+  source?: string;
+  changeType?: "source" | "rollback" | string;
+  description?: string;
+  commitSha?: string;
+  targetCommitSha?: string;
+  rollbackTargetCommitSha?: string;
+  branch?: string;
+  pullRequestUrl?: string;
+  pullRequestNumber?: number;
+  author?: string;
+  status?: string;
+  runtimeStatus?: "published" | "publishing" | "failed" | "unknown" | string;
+  workflowRunUrl?: string;
+}
+
+export interface GithubDeliveryVersionsResult {
+  runtimeId: string;
+  currentCommitSha?: string;
+  runtimeStatus?: string;
+  latestSourceRuntimeStatus?: string;
+  github?: GithubCicdPipelineResult["github"];
+  cicd?: GithubCicdPipelineResult["cicd"];
+  githubSyncError?: string;
+  versions: GithubDeliveryVersion[];
+}
+
+export interface GithubDeliveryRollbackResult {
+  runtimeId: string;
+  status: string;
+  github?: GithubCicdPipelineResult["github"];
+  version?: GithubDeliveryVersion;
+}
+
+export interface GithubCicdPipelineErrorDetail {
+  message: string;
+  phase?: string;
+  runtimeId?: string;
+  logPath?: string;
+}
+
 export interface DeployBuildLogSnapshot {
-  source: "code-pipeline";
+  source: "code-pipeline" | "github-delivery";
   status: "running" | "complete" | "error";
   text: string;
   lineCount: number;
@@ -2286,6 +2353,262 @@ interface DeployFrame extends Partial<DeployAgentkitResult> {
 }
 
 const deploymentControllers = new Map<string, AbortController>();
+
+function parseGithubCicdErrorDetail(detail: unknown): GithubCicdPipelineErrorDetail | null {
+  if (typeof detail === "string") return detail ? { message: detail } : null;
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return null;
+  const record = detail as Record<string, unknown>;
+  const message =
+    typeof record.message === "string"
+      ? record.message
+      : typeof record.error === "string"
+        ? record.error
+        : "";
+  if (!message) return null;
+  return {
+    message,
+    phase: typeof record.phase === "string" ? record.phase : undefined,
+    runtimeId: typeof record.runtimeId === "string" ? record.runtimeId : undefined,
+    logPath: typeof record.logPath === "string" ? record.logPath : undefined,
+  };
+}
+
+export class GithubCicdPipelineError extends Error {
+  constructor(readonly detail: GithubCicdPipelineErrorDetail) {
+    super(detail.message);
+    this.name = "GithubCicdPipelineError";
+  }
+}
+
+async function githubCicdErrorFromResponse(
+  res: Response,
+): Promise<GithubCicdPipelineError> {
+  const text = await res.text().catch(() => "");
+  if (text) {
+    try {
+      const data = JSON.parse(text) as { detail?: unknown; error?: unknown };
+      const detail = parseGithubCicdErrorDetail(data.detail ?? data.error);
+      if (detail) return new GithubCicdPipelineError(detail);
+    } catch {
+      return new GithubCicdPipelineError({ message: text });
+    }
+  }
+  return new GithubCicdPipelineError({ message: `同步 GitHub 代码失败 (${res.status})` });
+}
+
+export async function createGithubCicdPipeline(params: {
+  project: { name: string; files: { path: string; content: string }[] };
+  githubUrl: string;
+  githubToken: string;
+  baseBranch: string;
+  region: string;
+  cloudProvider: CloudProvider;
+}): Promise<GithubCicdPipelineResult> {
+  const res = await apiFetch(
+    "/web/github-delivery/source-sync",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: params.project,
+        githubUrl: params.githubUrl,
+        githubToken: params.githubToken,
+        baseBranch: params.baseBranch,
+        region: params.region,
+        cloudProvider: params.cloudProvider,
+      }),
+    },
+    {},
+    0,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubCicdPipelineResult>;
+}
+
+export async function createGithubDeliveryCicdPipeline(params: {
+  githubUrl: string;
+  githubToken: string;
+  baseBranch: string;
+  runtimeName: string;
+  runtimeId: string;
+  region: string;
+  cloudProvider: CloudProvider;
+  projectPath?: string;
+  volcengineAccessKey: string;
+  volcengineSecretKey: string;
+  volcengineSessionToken?: string;
+}): Promise<GithubCicdPipelineResult> {
+  const res = await apiFetch(
+    "/web/github-delivery/cicd-pipeline",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        githubUrl: params.githubUrl,
+        githubToken: params.githubToken,
+        baseBranch: params.baseBranch,
+        runtimeName: params.runtimeName,
+        runtimeId: params.runtimeId,
+        region: params.region,
+        cloudProvider: params.cloudProvider,
+        projectPath: params.projectPath ?? ".",
+        volcengineAccessKey: params.volcengineAccessKey,
+        volcengineSecretKey: params.volcengineSecretKey,
+        volcengineSessionToken: params.volcengineSessionToken ?? "",
+      }),
+    },
+    {},
+    0,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubCicdPipelineResult>;
+}
+
+export async function initializeGithubDeliveryMain(params: {
+  project: { name: string; files: { path: string; content: string }[] };
+  githubUrl: string;
+  githubToken: string;
+  baseBranch: string;
+  runtimeName: string;
+  runtimeId: string;
+  region: string;
+  cloudProvider: CloudProvider;
+  projectPath?: string;
+  volcengineAccessKey: string;
+  volcengineSecretKey: string;
+  volcengineSessionToken?: string;
+}): Promise<GithubCicdPipelineResult> {
+  const res = await apiFetch(
+    "/web/github-delivery/init-main",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: params.project,
+        githubUrl: params.githubUrl,
+        githubToken: params.githubToken,
+        baseBranch: params.baseBranch,
+        runtimeName: params.runtimeName,
+        runtimeId: params.runtimeId,
+        region: params.region,
+        cloudProvider: params.cloudProvider,
+        projectPath: params.projectPath ?? ".",
+        volcengineAccessKey: params.volcengineAccessKey,
+        volcengineSecretKey: params.volcengineSecretKey,
+        volcengineSessionToken: params.volcengineSessionToken ?? "",
+      }),
+    },
+    {},
+    0,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubCicdPipelineResult>;
+}
+
+export async function attachGithubDeliveryCicdToSourceSync(params: {
+  pipelineId: string;
+  runtimeName: string;
+  runtimeId: string;
+  region: string;
+  cloudProvider: CloudProvider;
+  projectPath?: string;
+  volcengineAccessKey: string;
+  volcengineSecretKey: string;
+  volcengineSessionToken?: string;
+}): Promise<GithubCicdPipelineResult> {
+  const res = await apiFetch(
+    "/web/github-delivery/source-sync/cicd",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pipelineId: params.pipelineId,
+        runtimeName: params.runtimeName,
+        runtimeId: params.runtimeId,
+        region: params.region,
+        cloudProvider: params.cloudProvider,
+        projectPath: params.projectPath ?? ".",
+        volcengineAccessKey: params.volcengineAccessKey,
+        volcengineSecretKey: params.volcengineSecretKey,
+        volcengineSessionToken: params.volcengineSessionToken ?? "",
+      }),
+    },
+    {},
+    0,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubCicdPipelineResult>;
+}
+
+export async function getGithubCicdRuntimeBinding(
+  runtimeId: string,
+): Promise<GithubCicdPipelineResult | null> {
+  const res = await apiFetch(
+    `/web/github-cicd/runtime-binding?runtimeId=${encodeURIComponent(runtimeId)}`,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  const data = (await res.json()) as GithubCicdPipelineResult;
+  return data.pipelineId ? data : null;
+}
+
+export async function getGithubDeliveryVersions(
+  runtimeId: string,
+): Promise<GithubDeliveryVersionsResult> {
+  const res = await apiFetch(
+    `/web/github-delivery/versions?runtimeId=${encodeURIComponent(runtimeId)}`,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubDeliveryVersionsResult>;
+}
+
+export async function createGithubDeliveryRollbackPr(params: {
+  runtimeId: string;
+  targetCommitSha: string;
+}): Promise<GithubDeliveryRollbackResult> {
+  const res = await apiFetch("/web/github-delivery/rollback-pr", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubDeliveryRollbackResult>;
+}
+
+export async function bindGithubCicdRuntime(params: {
+  pipelineId: string;
+  runtimeId: string;
+  region: string;
+  cloudProvider: CloudProvider;
+}): Promise<GithubCicdPipelineResult> {
+  const res = await apiFetch("/web/github-cicd/runtime-binding", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubCicdPipelineResult>;
+}
+
+export async function syncGithubCicdRuntime(params: {
+  runtimeId: string;
+  project: { name: string; files: { path: string; content: string }[] };
+}): Promise<GithubCicdPipelineResult> {
+  const res = await apiFetch(
+    "/web/github-cicd/runtime-sync",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtimeId: params.runtimeId,
+        project: params.project,
+      }),
+    },
+    {},
+    0,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubCicdPipelineResult>;
+}
 
 /** Deploy to AgentKit, consuming the server's SSE progress stream. `onStage`
  *  is called for each build/deploy/publish step; resolves with the connection

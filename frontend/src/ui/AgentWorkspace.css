@@ -1369,6 +1369,19 @@
   font: inherit;
 }
 
+.aw-integration-notice {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 10px 12px;
+  border: 1px solid hsl(42 72% 74% / 0.45);
+  border-radius: 8px;
+  background: hsl(42 92% 96%);
+  color: hsl(42 72% 32%);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
 .aw-canvas-card,
 .aw-details-card {
   min-width: 0;
@@ -1854,6 +1867,109 @@
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.aw-version-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.aw-version-list {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+}
+
+.aw-version-row {
+  display: grid;
+  grid-template-columns:
+    minmax(120px, 1fr) minmax(104px, 0.9fr) minmax(96px, 0.7fr)
+    minmax(86px, 0.6fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 13px 16px;
+  border-top: 1px solid hsl(var(--border) / 0.72);
+  background: hsl(var(--panel));
+  font-size: 12px;
+}
+
+.aw-version-row:first-child {
+  border-top: 0;
+}
+
+.aw-version-row > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.aw-version-row strong {
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-version-row small,
+.aw-version-row span {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.aw-version-row em {
+  overflow: hidden;
+  color: hsl(var(--foreground) / 0.82);
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-version-row p {
+  grid-column: 2 / -1;
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+}
+
+.aw-version-row a {
+  color: hsl(var(--foreground));
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.aw-version-row a:hover {
+  text-decoration: underline;
+}
+
+.aw-version-actions {
+  align-items: flex-end;
+}
+
+.aw-version-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.aw-version-actions button:hover:not(:disabled) {
+  background: hsl(var(--muted) / 0.55);
+}
+
+.aw-version-actions button:disabled {
+  cursor: not-allowed;
+  color: hsl(var(--muted-foreground));
+  opacity: 0.62;
 }
 
 .aw-status-dot {
