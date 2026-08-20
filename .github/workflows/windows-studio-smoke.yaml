@@ -44,8 +44,16 @@ permissions:
 
 jobs:
   studio-open-smoke:
-    runs-on: windows-2025
+    name: studio-open-smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-2022
+          - windows-2025
 
     env:
       NO_COLOR: "1"
@@ -224,6 +232,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-studio-smoke-logs
+          name: windows-studio-smoke-logs-${{ matrix.os }}
           path: artifacts/windows-studio-smoke
           retention-days: 7
