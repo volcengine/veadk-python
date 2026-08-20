@@ -30,6 +30,7 @@ import { AgentKitPromoCard } from "./AgentKitPromoCard";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
 import defaultSiteLogo from "../assets/logo.svg";
 import byteplusLogo from "../assets/byteplus.svg";
+import "./Sidebar.css";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 
@@ -38,6 +39,7 @@ export type SidebarPage =
   | "agents"
   | "library"
   | "applications"
+  | "cronjobs"
   | "search"
   | "feedback"
   | null;
@@ -101,6 +103,25 @@ function ApplicationsIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function ScheduledTasksIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <circle cx="12" cy="12" r="8.25" />
+      <path d="M12 7.6v4.7l3.1 1.8" />
+      <path d="M7.2 2.9 5.3 4.8M16.8 2.9l1.9 1.9" />
+    </svg>
+  );
+}
+
 export interface SidebarProps {
   branding: SiteBranding;
   cloudProvider: "volcengine" | "byteplus";
@@ -124,6 +145,7 @@ export interface SidebarProps {
   onAddAgent: () => void;
   onMyAgents: () => void;
   onApplications: () => void;
+  onCronJobs: () => void;
   onSystemInfo: () => void;
   onIssueFeedback: () => void;
   onPickSession: (id: string) => void;
@@ -305,6 +327,7 @@ export function Sidebar({
   onAddAgent,
   onMyAgents,
   onApplications,
+  onCronJobs,
   onSystemInfo,
   onIssueFeedback,
   onPickSession,
@@ -451,6 +474,18 @@ export function Sidebar({
           <ApplicationsIcon className="icon" />
           <span className="sidebar-nav-label">自动化</span>
           <span className="sidebar-beta-badge">Beta</span>
+        </button>
+        <button
+          className={`new-chat new-chat--cronjobs${
+            activePage === "cronjobs" ? " is-active" : ""
+          }`}
+          onClick={onCronJobs}
+          aria-label="定时任务"
+          aria-current={activePage === "cronjobs" ? "page" : undefined}
+          title="定时任务"
+        >
+          <ScheduledTasksIcon className="icon" />
+          <span className="sidebar-nav-label">定时任务</span>
         </button>
       </div>
 

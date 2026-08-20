@@ -6659,6 +6659,18 @@ a.search-result { text-decoration: none; color: inherit; }
   line-height: 1.65;
 }
 
+.studio-confirm-body .studio-confirm-error {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: hsl(var(--destructive) / 0.08);
+  color: hsl(var(--destructive));
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .studio-confirm-actions {
   display: flex;
   justify-content: flex-end;

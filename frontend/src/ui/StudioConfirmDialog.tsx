@@ -12,6 +12,7 @@ type StudioConfirmVariant = "warning" | "danger";
 interface StudioConfirmDialogProps {
   title: string;
   description: ReactNode;
+  error?: ReactNode;
   confirmLabel: string;
   cancelLabel?: string;
   closeLabel?: string;
@@ -60,6 +61,7 @@ function ConfirmCloseIcon(props: SVGProps<SVGSVGElement>) {
 export function StudioConfirmDialog({
   title,
   description,
+  error,
   confirmLabel,
   cancelLabel = "取消",
   closeLabel = "关闭确认框",
@@ -136,6 +138,7 @@ export function StudioConfirmDialog({
         </header>
         <div className="studio-confirm-body">
           <p id={descriptionId}>{description}</p>
+          {error ? <p className="studio-confirm-error" role="alert">{error}</p> : null}
         </div>
         <footer className="studio-confirm-actions">
           <button

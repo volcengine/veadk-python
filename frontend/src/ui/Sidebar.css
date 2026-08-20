@@ -1,0 +1,8 @@
+.new-chat--cronjobs > .icon {
+  flex: 0 0 18px;
+  stroke-width: 1.75;
+}
+
+.new-chat--cronjobs.is-active > .icon {
+  color: hsl(var(--foreground));
+}

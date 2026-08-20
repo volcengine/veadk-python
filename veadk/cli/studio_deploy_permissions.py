@@ -161,6 +161,11 @@ _AUTO_SANDBOX_PERMISSIONS = (
 
 _VEFAAS_PERMISSIONS = (
     _permission(
+        "vefaas:ListFunctions",
+        "查找 Studio 与定时任务调度函数",
+        "Find Studio and cronjob scheduler functions",
+    ),
+    _permission(
         "vefaas:CreateFunction",
         "创建 Studio VeFaaS 函数",
         "Create the Studio VeFaaS function",
@@ -196,6 +201,11 @@ _VEFAAS_PERMISSIONS = (
         "Read failed Studio application release logs",
     ),
     _permission(
+        "vefaas:GetFunction",
+        "读取定时任务调度函数配置",
+        "Read the cronjob scheduler function configuration",
+    ),
+    _permission(
         "vefaas:UpdateFunction",
         "更新 Studio 函数环境变量",
         "Update Studio function environment variables",
@@ -207,6 +217,21 @@ _VEFAAS_PERMISSIONS = (
         "vefaas:GetReleaseStatus",
         "查询 Studio 函数发布状态",
         "Check the Studio function release status",
+    ),
+    _permission(
+        "vefaas:ListTriggers",
+        "查找定时任务分钟触发器",
+        "Find the cronjob minute timer",
+    ),
+    _permission(
+        "vefaas:CreateTimer",
+        "创建定时任务分钟触发器",
+        "Create the cronjob minute timer",
+    ),
+    _permission(
+        "vefaas:UpdateTimer",
+        "更新定时任务分钟触发器",
+        "Update the cronjob minute timer",
     ),
 )
 

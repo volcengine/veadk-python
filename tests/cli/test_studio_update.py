@@ -38,6 +38,32 @@ from veadk.integrations.ve_faas.ve_faas import VeFaaS
 _PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 
 
+@pytest.fixture
+def scheduler_deploy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[dict[str, object]]:
+    calls: list[dict[str, object]] = []
+
+    def _deploy(service: object, **kwargs: object) -> tuple[str, str, str]:
+        environment_overrides = kwargs.get("environment_overrides")
+        calls.append(
+            {
+                "service": service,
+                **kwargs,
+                "environment_overrides": dict(
+                    cast(dict[str, object], environment_overrides)
+                ),
+            }
+        )
+        return "scheduler-function", "scheduler-timer", "studio-app"
+
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler_for_studio_update",
+        _deploy,
+    )
+    return calls
+
+
 def _target(
     *,
     region: str = "cn-beijing",
@@ -105,6 +131,16 @@ def test_stage_wheel_source_includes_studio_python_backend(tmp_path: Path) -> No
     (source_root / "frontend" / "server" / "routes.py").write_text(
         "ROUTES = []\n", encoding="utf-8"
     )
+    (source_root / "frontend" / "service" / "studio_scheduler").mkdir(parents=True)
+    (source_root / "frontend" / "service" / "__init__.py").write_text(
+        "", encoding="utf-8"
+    )
+    (
+        source_root / "frontend" / "service" / "studio_scheduler" / "__init__.py"
+    ).write_text("", encoding="utf-8")
+    (source_root / "frontend" / "service" / "studio_scheduler" / "app.py").write_text(
+        "HANDLER = True\n", encoding="utf-8"
+    )
     for filename in ("pyproject.toml", "README.md", "LICENSE"):
         (source_root / filename).write_text("", encoding="utf-8")
     frontend_assets = tmp_path / "assets"
@@ -118,6 +154,9 @@ def test_stage_wheel_source_includes_studio_python_backend(tmp_path: Path) -> No
     assert (wheel_source / "frontend" / "server" / "routes.py").read_text() == (
         "ROUTES = []\n"
     )
+    assert (
+        wheel_source / "frontend" / "service" / "studio_scheduler" / "app.py"
+    ).read_text() == "HANDLER = True\n"
 
 
 def test_find_studio_deployments_searches_regions_and_filters_project(
@@ -345,6 +384,7 @@ def test_load_deployed_site_logo_retries_timeout_and_suggests_override(
 def test_studio_update_preserves_branding_and_updates_existing_ids(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
 ) -> None:
     target = _target()
     logo = SiteLogo(content=_PNG, media_type="image/png", extension="png")
@@ -438,6 +478,18 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert update["function_id"] == "function-app-id"
     assert update["environment_overrides"] == {
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
+        "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
+        "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
+    }
+    assert len(scheduler_deploy) == 1
+    scheduler_call = scheduler_deploy[0]
+    assert scheduler_call["service"].__class__ is _FakeVeFaaS
+    assert scheduler_call["studio_function_id"] == "function-app-id"
+    assert scheduler_call["package_root"] == Path(str(update["path"]))
+    assert scheduler_call["provider"] == "volcengine"
+    assert scheduler_call["project"] == "default"
+    assert scheduler_call["environment_overrides"] == {
+        "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
     }
 
@@ -445,6 +497,7 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
 def test_studio_update_supports_byteplus_provider(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
 ) -> None:
     target = _target(region="ap-southeast-1")
     captured: dict[str, object] = {}
@@ -559,8 +612,10 @@ def test_studio_update_supports_byteplus_provider(
         "AGENTKIT_CLOUD_PROVIDER": "byteplus",
         "BYTEPLUS_REGION": "ap-southeast-1",
         "DATABASE_VIKING_REGION": "cn-hongkong",
+        "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
     }
+    assert len(scheduler_deploy) == 1
 
 
 def test_studio_update_rejects_ambiguous_name_before_build(
@@ -665,6 +720,7 @@ def test_studio_update_surfaces_compact_discovery_error(
 def test_studio_update_explicit_branding_overrides_cloud_values(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
 ) -> None:
     target = _target()
     logo_path = tmp_path / "logo.png"
@@ -749,13 +805,16 @@ def test_studio_update_explicit_branding_overrides_cloud_values(
     assert update["environment_overrides"] == {
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_SITE_TITLE": "新标题",
+        "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
     }
+    assert len(scheduler_deploy) == 1
 
 
 def test_studio_update_only_overrides_explicit_sandbox_tool_id(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
 ) -> None:
     target = _target()
     captured: dict[str, object] = {}
@@ -819,13 +878,16 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
         "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool-new",
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool-new",
         "SANDBOX_DEV": "dev-tool-new",
+        "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
     }
+    assert len(scheduler_deploy) == 1
 
 
 def test_volcengine_studio_update_repairs_missing_snapshot_tools_and_oauth_callback(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
 ) -> None:
     target = _target()
     captured: dict[str, object] = {}
@@ -990,8 +1052,10 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools_and_oauth_callb
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
         "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",
+        "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
     }
+    assert len(scheduler_deploy) == 1
 
 
 @pytest.mark.parametrize("dev_tool_id", [None, "replacement-dev-tool"])
@@ -999,6 +1063,7 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     dev_tool_id: str | None,
+    scheduler_deploy: list[dict[str, object]],
 ) -> None:
     target = _target(region="ap-southeast-1")
     captured: dict[str, object] = {}
@@ -1135,6 +1200,8 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     assert overrides["SANDBOX_DEV"] == expected_dev_tool_id
     assert overrides["CLOUD_PROVIDER"] == "byteplus"
     assert overrides["VEADK_STUDIO_ACCOUNT_ID"] == "3001037806"
+    assert overrides["VEADK_STUDIO_CRONJOB_SCHEDULER_BASE"] == "studio-app"
+    assert len(scheduler_deploy) == 1
 
 
 def test_update_application_code_bundle_merges_only_explicit_environment(

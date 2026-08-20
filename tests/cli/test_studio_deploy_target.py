@@ -86,10 +86,15 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda **_: None,
     )
     monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler",
+        lambda *_args, **_kwargs: ("scheduler-function", "scheduler-timer"),
+    )
+    monkeypatch.setattr(
         "frontend.server.storage.provisioning.resolve_studio_storage_for_deploy",
         lambda **kwargs: SimpleNamespace(
             bucket="veadk-studio-2100123456",
             region=kwargs["region"],
+            endpoint=f"tos-{kwargs['region']}.volces.com",
             object_host=(
                 f"veadk-studio-2100123456.tos-{kwargs['region']}."
                 + (
