@@ -28,7 +28,7 @@ _REMOVED_DISTRIBUTIONS = {
     "agentkit-harness-sidecar-integration",
     "veadk-python",
 }
-_MANAGED_SDK_REQUIREMENT = "agentkit-sdk-python==0.8.1"
+_MANAGED_SDK_REQUIREMENT = "agentkit-sdk-python==0.8.4"
 _IGNORED_PARTS = {".git", "__pycache__"}
 _IGNORED_SUFFIXES = {".pyc", ".pyo"}
 _BLOCKED_SUFFIXES = {".key", ".p12", ".pem", ".pfx"}

@@ -60,23 +60,23 @@ def test_rewrite_uses_source_snapshot_and_pins_public_sdk() -> None:
     assert "veadk-python" in rewritten.splitlines()[0]
     assert "veadk-python[" not in rewritten
     assert "agentkit-harness-sidecar-integration" not in rewritten
-    assert rewritten.splitlines()[1] == "agentkit-sdk-python==0.8.1"
-    assert rewritten.splitlines().count("agentkit-sdk-python==0.8.1") == 1
+    assert rewritten.splitlines()[1] == "agentkit-sdk-python==0.8.4"
+    assert rewritten.splitlines().count("agentkit-sdk-python==0.8.4") == 1
     assert "google-adk>=1.34.0" in rewritten
 
 
 def test_rewrite_preserves_comments_and_rejects_missing_veadk() -> None:
     with pytest.raises(ManagedSidecarSourceError, match="requirement_missing"):
         rewrite_managed_sidecar_requirements(
-            "# keep\n@local-reference\nagentkit-sdk-python==0.8.1\n"
+            "# keep\n@local-reference\nagentkit-sdk-python==0.8.4\n"
         )
 
     rewritten = rewrite_managed_sidecar_requirements(
         "# keep\nveadk-python[harness-sidecar]\n"
-        "agentkit-sdk-python>=0.8\nagentkit_sdk_python==0.8.1\n"
+        "agentkit-sdk-python>=0.8\nagentkit_sdk_python==0.8.4\n"
     )
     assert "# keep" in rewritten
-    assert rewritten.splitlines().count("agentkit-sdk-python==0.8.1") == 1
+    assert rewritten.splitlines().count("agentkit-sdk-python==0.8.4") == 1
 
 
 def test_stage_copies_only_safe_runtime_source_and_rewrites_requirements(
@@ -106,7 +106,7 @@ def test_stage_copies_only_safe_runtime_source_and_rewrites_requirements(
     assert not (project / "veadk/__pycache__").exists()
     assert not (project / "veadk/.env.local").exists()
     requirements = (project / "requirements.txt").read_text(encoding="utf-8")
-    assert requirements.splitlines().count("agentkit-sdk-python==0.8.1") == 1
+    assert requirements.splitlines().count("agentkit-sdk-python==0.8.4") == 1
     assert "veadk-python[" not in requirements
 
 

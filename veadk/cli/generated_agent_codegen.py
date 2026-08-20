@@ -922,7 +922,7 @@ def render_requirements(extras: set[str], include_feishu_channel: bool) -> str:
     extras_str = f"[{','.join(unique_extras)}]" if unique_extras else ""
     minimum_version = "1.1.1" if "harness-sidecar" in all_extras else "1.0.5"
     pkg = f"veadk-python{extras_str}>={minimum_version}"
-    packages = [pkg, "agentkit-sdk-python==0.8.1", "google-adk", "starlette<1.0.0"]
+    packages = [pkg, "agentkit-sdk-python==0.8.4", "google-adk", "starlette<1.0.0"]
     return "\n".join(packages) + "\n"
 
 

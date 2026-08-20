@@ -3686,7 +3686,7 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
     assert captured["create_only"] is True
     assert captured["managed_source_present"] is True
     assert "veadk-python[" not in captured["requirements"]
-    assert "agentkit-sdk-python==0.8.1" in captured["requirements"]
+    assert "agentkit-sdk-python==0.8.4" in captured["requirements"]
     assert captured["config"]["name"] == runtime_name
     assert captured["config"]["harness_sidecar"]["component_overrides"] == {
         "context_engine": True,
