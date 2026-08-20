@@ -2820,8 +2820,8 @@ type DebugPhase = "idle" | "starting" | "ready" | "sending" | "error";
 
 type WorkspaceMode =
   | "build"
-  | "optimize"
   | "validate"
+  | "optimize"
   | "environment"
   | "publish";
 interface DebugMessage {
@@ -3552,16 +3552,16 @@ const WORKSPACE_MODES: Array<{
   label: string;
 }> = [
   { id: "build", label: "架构" },
-  { id: "optimize", label: "优化" },
   { id: "validate", label: "调试" },
+  { id: "optimize", label: "优化" },
   { id: "environment", label: "环境" },
   { id: "publish", label: "发布" },
 ];
 
 const WORKSPACE_TITLES: Record<WorkspaceMode, string> = {
   build: "个性化您的智能体架构",
-  optimize: "为您的智能体选择优化项",
   validate: "调试您的智能体",
+  optimize: "为您的智能体选择优化项",
   environment: "配置云上环境",
   publish: "准备好部署您的智能体",
 };
@@ -4704,12 +4704,12 @@ export function CustomCreate({
       await materializePublishRelease();
       return;
     }
-    if (nextMode === "optimize") {
-      await openOptimization();
-      return;
-    }
     if (nextMode === "validate") {
       openValidation();
+      return;
+    }
+    if (nextMode === "optimize") {
+      await openOptimization();
       return;
     }
     if (nextMode === "environment") {
@@ -5665,16 +5665,6 @@ export function CustomCreate({
           </div>
         )}
 
-        {workspaceMode === "optimize" && (
-          <HarnessOptimizationWorkspace
-            profile={harnessOptimizationProfile}
-            optimizations={harnessOptimizations}
-            unavailableMessage={harnessProviderNotice}
-            onProfileChange={updateHarnessOptimizationProfile}
-            onOptimizationChange={updateHarnessOptimization}
-          />
-        )}
-
         {workspaceMode === "validate" && (
           <div className="cw-validation-workspace">
             <div className="cw-validation-content">
@@ -5701,6 +5691,16 @@ export function CustomCreate({
               />
             </div>
           </div>
+        )}
+
+        {workspaceMode === "optimize" && (
+          <HarnessOptimizationWorkspace
+            profile={harnessOptimizationProfile}
+            optimizations={harnessOptimizations}
+            unavailableMessage={harnessProviderNotice}
+            onProfileChange={updateHarnessOptimizationProfile}
+            onOptimizationChange={updateHarnessOptimization}
+          />
         )}
 
         {workspaceMode === "environment" && (
