@@ -11,7 +11,7 @@ test("proxies the session trace API in development", () => {
   assert.match(source, /["']\/dev["']\s*:\s*localApiProxy\(\)/);
 });
 
-test("proxies session capability APIs in development", () => {
+test("proxies Runtime harness APIs in development", () => {
   assert.match(source, /["']\/harness["']\s*:\s*localApiProxy\(\)/);
 });
 

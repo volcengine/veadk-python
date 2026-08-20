@@ -2,10 +2,9 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Maximize2, X } from "lucide-react";
 import type {
-  AddSessionCapability,
   AgentInfo,
   AgentNode,
-  SessionCapabilities,
+  StudioBffTool,
 } from "../adk/client";
 import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
 import {
@@ -14,10 +13,9 @@ import {
 } from "../create/runtimeModelName";
 import { emptyDraft, type AgentDraft } from "../create/types";
 import {
-  sessionToolLabel,
-  SkillCapabilityDialog,
-  ToolCapabilityDialog,
-} from "./SessionCapabilityDialogs";
+  studioToolLabel,
+  StudioToolDialog,
+} from "./StudioToolDialog";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 
 function totalNodes(node: AgentNode): number {
@@ -107,12 +105,12 @@ interface AgentInfoPanelProps {
   seenAgents: Set<string>;
   execPath?: string[];
   variant?: "rail" | "drawer";
-  capabilities?: SessionCapabilities | null;
-  capabilityLoading?: boolean;
-  capabilityMutating?: boolean;
-  builtinTools?: string[];
-  onAddCapability?: (capability: AddSessionCapability) => Promise<boolean>;
-  onRemoveCapability?: (capabilityId: string) => void;
+  studioTools?: StudioBffTool[];
+  selectedStudioToolIds?: readonly string[];
+  studioToolsLoading?: boolean;
+  studioToolsDisabled?: boolean;
+  studioToolsUnavailableReason?: string;
+  onStudioToolsChange?: (selectedIds: string[]) => void;
 }
 
 /** Agent metadata and optional multi-Agent topology shown in the conversation's
@@ -123,14 +121,14 @@ export function AgentInfoPanel({
   info,
   loading,
   variant = "rail",
-  capabilities = null,
-  capabilityLoading = false,
-  capabilityMutating = false,
-  builtinTools = [],
-  onAddCapability,
-  onRemoveCapability,
+  studioTools = [],
+  selectedStudioToolIds = [],
+  studioToolsLoading = false,
+  studioToolsDisabled = false,
+  studioToolsUnavailableReason = "",
+  onStudioToolsChange,
 }: AgentInfoPanelProps) {
-  const [dialog, setDialog] = useState<"tool" | "skill" | null>(null);
+  const [dialog, setDialog] = useState<"tool" | null>(null);
   const [canvasExpanded, setCanvasExpanded] = useState(false);
   const expandCanvasRef = useRef<HTMLButtonElement>(null);
   const closeCanvas = () => {
@@ -180,20 +178,25 @@ export function AgentInfoPanel({
       children: [],
     },
   );
-  const tools = capabilities?.tools ?? uniqueValues(info.tools).map((name) => ({
+  const baseTools = uniqueValues(info.tools).map((name) => ({
     id: `base:tool:${name}`,
-    kind: "tool" as const,
     name,
+    label: studioToolLabel(name),
     custom: false,
   }));
-  const skills = capabilities?.skills ?? uniqueSkills(info.skills).map((skill) => ({
-    id: `base:skill:${skill.name}`,
-    kind: "skill" as const,
-    name: skill.name,
-    description: skill.description,
-    custom: false,
-  }));
-  const canCustomize = Boolean(capabilities && onAddCapability && onRemoveCapability);
+  const baseToolNames = new Set(baseTools.map((tool) => tool.name));
+  const selectedIds = new Set(selectedStudioToolIds);
+  const selectedStudioTools = studioTools
+    .filter((tool) => selectedIds.has(tool.id) && !baseToolNames.has(tool.id))
+    .map((tool) => ({
+      id: `studio:tool:${tool.id}`,
+      name: tool.id,
+      label: tool.name,
+      custom: true,
+    }));
+  const tools = [...baseTools, ...selectedStudioTools];
+  const skills = uniqueSkills(info.skills);
+  const canCustomize = Boolean(onStudioToolsChange);
   const canvasDraft = graphNodeToCanvasDraft(graph);
   const renderCanvas = (key: string) => (
     <AgentBuildCanvas
@@ -248,10 +251,10 @@ export function AgentInfoPanel({
                   <div key={tool.id} className="topo-tool" title={tool.name}>
                     <span className="topo-capability-title">
                       <span className="topo-capability-copy">
-                        <span className="topo-capability-name">{sessionToolLabel(tool.name)}</span>
+                        <span className="topo-capability-name">{tool.label}</span>
                         <code>{tool.name}</code>
                       </span>
-                      {tool.custom && <span className="topo-custom-badge">自定义</span>}
+                      {tool.custom && <span className="topo-custom-badge">Studio BFF</span>}
                     </span>
                     {tool.custom && (
                       <button
@@ -259,8 +262,10 @@ export function AgentInfoPanel({
                         className="topo-remove-capability"
                         aria-label={`移除工具 ${tool.name}`}
                         title="移除"
-                        disabled={capabilityMutating}
-                        onClick={() => onRemoveCapability?.(tool.id)}
+                        disabled={studioToolsDisabled}
+                        onClick={() => onStudioToolsChange?.(
+                          selectedStudioToolIds.filter((id) => id !== tool.name),
+                        )}
                       >
                         ×
                       </button>
@@ -277,12 +282,12 @@ export function AgentInfoPanel({
               <button
                 type="button"
                 className="topo-capability-add-slot"
-                aria-label="添加内置工具"
-                disabled={capabilityLoading || capabilityMutating}
+                aria-label="添加 Studio 工具"
+                disabled={studioToolsDisabled}
                 onClick={() => setDialog("tool")}
               >
                 <span aria-hidden="true">＋</span>
-                <span>在此对话中添加工具</span>
+              <span>在此对话中添加 Studio 工具</span>
               </button>
             </div>
           )}
@@ -311,19 +316,6 @@ export function AgentInfoPanel({
                   >
                     <div className="topo-skill-title">
                       <span className="topo-skill-name">{skill.name}</span>
-                      {skill.custom && <span className="topo-custom-badge">自定义</span>}
-                      {skill.custom && (
-                        <button
-                          type="button"
-                          className="topo-remove-capability"
-                          aria-label={`移除技能 ${skill.name}`}
-                          title="移除"
-                          disabled={capabilityMutating}
-                          onClick={() => onRemoveCapability?.(skill.id)}
-                        >
-                          ×
-                        </button>
-                      )}
                     </div>
                     {skill.description && (
                       <span className="topo-skill-description">
@@ -337,20 +329,6 @@ export function AgentInfoPanel({
               <div className="topo-empty">未配置</div>
             )}
           </div>
-          {canCustomize && (
-            <div className="topo-capability-add-dock">
-              <button
-                type="button"
-                className="topo-capability-add-slot"
-                aria-label="添加技能"
-                disabled={capabilityLoading || capabilityMutating}
-                onClick={() => setDialog("skill")}
-              >
-                <span aria-hidden="true">＋</span>
-                <span>在此对话中添加技能</span>
-              </button>
-            </div>
-          )}
         </section>
 
         <section className="topo-module-card topo-topology" aria-label="Agent 画布">
@@ -372,23 +350,15 @@ export function AgentInfoPanel({
           </div>
         </section>
       </div>
-      {dialog === "tool" && onAddCapability && (
-        <ToolCapabilityDialog
+      {dialog === "tool" && onStudioToolsChange && (
+        <StudioToolDialog
           agentName={info.name}
-          tools={builtinTools}
-          selectedNames={tools.map((tool) => tool.name)}
-          mutating={capabilityMutating}
-          onAdd={onAddCapability}
-          onClose={() => setDialog(null)}
-        />
-      )}
-      {dialog === "skill" && onAddCapability && (
-        <SkillCapabilityDialog
-          appName={appName}
-          agentName={info.name}
-          selectedNames={skills.map((skill) => skill.name)}
-          mutating={capabilityMutating}
-          onAdd={onAddCapability}
+          tools={studioTools.filter((tool) => !baseToolNames.has(tool.id))}
+          selectedIds={selectedStudioToolIds}
+          loading={studioToolsLoading}
+          disabled={studioToolsDisabled}
+          unavailableReason={studioToolsUnavailableReason}
+          onChange={onStudioToolsChange}
           onClose={() => setDialog(null)}
         />
       )}
@@ -448,12 +418,12 @@ export function AgentInfoDrawer({
   activeAgent,
   seenAgents,
   execPath,
-  capabilities,
-  capabilityLoading,
-  capabilityMutating,
-  builtinTools,
-  onAddCapability,
-  onRemoveCapability,
+  studioTools,
+  selectedStudioToolIds,
+  studioToolsLoading,
+  studioToolsDisabled,
+  studioToolsUnavailableReason,
+  onStudioToolsChange,
   onClose,
   returnFocusRef,
 }: {
@@ -463,12 +433,12 @@ export function AgentInfoDrawer({
   activeAgent: string;
   seenAgents: Set<string>;
   execPath: string[];
-  capabilities?: SessionCapabilities | null;
-  capabilityLoading?: boolean;
-  capabilityMutating?: boolean;
-  builtinTools?: string[];
-  onAddCapability?: (capability: AddSessionCapability) => Promise<boolean>;
-  onRemoveCapability?: (capabilityId: string) => void;
+  studioTools?: StudioBffTool[];
+  selectedStudioToolIds?: readonly string[];
+  studioToolsLoading?: boolean;
+  studioToolsDisabled?: boolean;
+  studioToolsUnavailableReason?: string;
+  onStudioToolsChange?: (selectedIds: string[]) => void;
   onClose: () => void;
   returnFocusRef: RefObject<HTMLButtonElement>;
 }) {
@@ -521,12 +491,12 @@ export function AgentInfoDrawer({
               activeAgent={activeAgent}
               seenAgents={seenAgents}
               execPath={execPath}
-              capabilities={capabilities}
-              capabilityLoading={capabilityLoading}
-              capabilityMutating={capabilityMutating}
-              builtinTools={builtinTools}
-              onAddCapability={onAddCapability}
-              onRemoveCapability={onRemoveCapability}
+              studioTools={studioTools}
+              selectedStudioToolIds={selectedStudioToolIds}
+              studioToolsLoading={studioToolsLoading}
+              studioToolsDisabled={studioToolsDisabled}
+              studioToolsUnavailableReason={studioToolsUnavailableReason}
+              onStudioToolsChange={onStudioToolsChange}
               variant="drawer"
             />
           ) : (

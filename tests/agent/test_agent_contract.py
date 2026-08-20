@@ -36,6 +36,7 @@ _EXPECTED_DEFAULTS = {
     "enable_dynamic_load_skills": False,
     "enable_skills_checklist": False,
     "enable_tunnel": False,
+    "enable_bff_tools": False,
     "runtime": "adk",
 }
 

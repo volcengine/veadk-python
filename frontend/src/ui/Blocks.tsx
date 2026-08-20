@@ -527,6 +527,31 @@ function PlanBlock({
   );
 }
 
+interface StudioToolArtifact {
+  name: string;
+  contentUrl: string;
+}
+
+function studioToolArtifacts(response: unknown): StudioToolArtifact[] {
+  if (!response || typeof response !== "object") return [];
+  const record = response as Record<string, unknown>;
+  const nested = record.result;
+  let candidates: unknown[] = [];
+  if (Array.isArray(record.studio_artifacts)) {
+    candidates = record.studio_artifacts;
+  } else if (nested && typeof nested === "object") {
+    const nestedArtifacts = (nested as Record<string, unknown>).studio_artifacts;
+    if (Array.isArray(nestedArtifacts)) candidates = nestedArtifacts;
+  }
+  return candidates.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const artifact = candidate as Record<string, unknown>;
+    return typeof artifact.name === "string" && typeof artifact.contentUrl === "string"
+      ? [{ name: artifact.name, contentUrl: artifact.contentUrl }]
+      : [];
+  });
+}
+
 /** Tool-call row. Dedicated built-ins use their registered icon and Chinese
  *  status copy; other tools use a neutral repository-drawn tool icon. Both
  *  treatments share the same header and detail alignment. */
@@ -547,6 +572,7 @@ function ToolBlock({
   const label = name === A2UI_TOOL ? "渲染 UI" : name;
   const toolStatus = status ?? (done ? "completed" : "running");
   const builtinTool = toolStatus === "failed" ? undefined : getBuiltinToolDefinition(name);
+  const studioArtifacts = studioToolArtifacts(response);
   const respText =
     response == null
       ? null
@@ -604,6 +630,22 @@ function ToolBlock({
               <div className="tool-section">
                 <div className="tool-section-label">返回</div>
                 <pre className="tool-args tool-result">{truncated}</pre>
+              </div>
+            )}
+            {studioArtifacts.length > 0 && (
+              <div className="tool-section">
+                <div className="tool-section-label">产物</div>
+                <div className="studio-tool-artifacts">
+                  {studioArtifacts.map((artifact) => (
+                    <a
+                      key={`${artifact.contentUrl}:${artifact.name}`}
+                      href={artifact.contentUrl}
+                      download={artifact.name}
+                    >
+                      下载 {artifact.name}
+                    </a>
+                  ))}
+                </div>
               </div>
             )}
           </div>

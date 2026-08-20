@@ -80,7 +80,7 @@ class _FakeResponse:
         return self._payload
 
 
-def test_studio_findskill_route_uses_session_skillhub_search(
+def test_studio_findskill_route_uses_studio_skill_catalog(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     app = _create_frontend_app(
@@ -90,7 +90,7 @@ def test_studio_findskill_route_uses_session_skillhub_search(
         provider="byteplus",
     )
 
-    async def search_findskill(**kwargs: Any) -> dict[str, object]:
+    async def search_findskill(_catalog: object, **kwargs: Any) -> dict[str, object]:
         assert kwargs == {"query": "pdf", "page_number": 1, "page_size": 20}
         return {
             "items": [
@@ -110,7 +110,7 @@ def test_studio_findskill_route_uses_session_skillhub_search(
         }
 
     monkeypatch.setattr(
-        "veadk.integrations.agentkit.session_capabilities._search_findskill",
+        "frontend.server.studio_routes.skill_catalog.StudioSkillCatalog.search_findskill",
         search_findskill,
     )
 

@@ -4,6 +4,7 @@
 
 import {
   clearRemoteApps,
+  ensureRuntimeRouteChannel,
   fetchRemoteApps,
   probeRuntimeApps,
   registerRemoteApp,
@@ -146,6 +147,7 @@ async function connectRuntimeOnce(
         retryProbe: true,
       });
       if (probedApps && probedApps.length > 0) {
+        await ensureRuntimeRouteChannel(runtimeId, candidate);
         apps = probedApps;
         resolvedRegion = candidate;
         break;

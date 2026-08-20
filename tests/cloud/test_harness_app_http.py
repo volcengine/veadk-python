@@ -41,7 +41,7 @@ def test_harness_app_exposes_agent_info(monkeypatch):
         assert client.get("/web/agent-info/unknown").status_code == 404
 
 
-def test_harness_app_supports_session_capability_overrides(monkeypatch):
+def test_harness_app_mounts_bff_tool_host_without_legacy_overlay(monkeypatch):
     monkeypatch.setenv("MODEL_AGENT_API_KEY", "test-api-key")
     monkeypatch.setenv("MODEL_NAME", "test-model")
     monkeypatch.setenv("HARNESS_NAME", "test-harness")
@@ -61,35 +61,14 @@ def test_harness_app_supports_session_capability_overrides(monkeypatch):
             f"{session_id}/capabilities"
         )
 
-        initial = client.get(capabilities_path)
-        assert initial.status_code == 200
-        assert initial.json()["revision"] == 0
-
-        added = client.post(
-            capabilities_path,
-            json={
-                "kind": "tool",
-                "name": "get_city_weather",
-                "expected_revision": 0,
-            },
-        )
-        assert added.status_code == 200
-        assert added.json()["revision"] == 1
-        assert any(
-            item["id"] == "session:tool:get_city_weather" and item["custom"] is True
-            for item in added.json()["tools"]
-        )
-
-        removed = client.delete(
-            capabilities_path + "/session:tool:get_city_weather",
-            params={"expected_revision": 1},
-        )
-        assert removed.status_code == 200
-        assert removed.json()["revision"] == 2
-        assert not any(item["custom"] for item in removed.json()["tools"])
-
-        assert client.get("/harness/capabilities/tools").status_code == 200
-        assert any(
+        assert client.get(capabilities_path).status_code == 404
+        assert client.get("/harness/capabilities/tools").status_code == 404
+        assert client.get("/harness/studio-channel/v1/capabilities").json() == {
+            "enabled": True,
+            "protocol": "studio-tool-channel/1",
+            "transports": ["websocket", "http-sse"],
+        }
+        assert not any(
             getattr(route, "path", None) == "/harness/run_sse"
             for route in harness_module.app.router.routes
         )
