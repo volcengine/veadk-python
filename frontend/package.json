@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test": "node --test tests/*.test.mjs",
+    "test:webui-assets": "node scripts/verifyBuiltAssets.mjs",
     "test:visualizations": "node scripts/testVisualizationCompatibility.mjs",
     "preview": "vite preview"
   },
