@@ -1142,6 +1142,7 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
     tmp_path: Path,
 ) -> None:
     updated_requests: list[Any] = []
+    resource_requests: list[Any] = []
     service = object.__new__(VeFaaS)
     service.session_token = ""
     cast(Any, service).client = SimpleNamespace(
@@ -1152,6 +1153,7 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
             ]
         ),
         update_function=updated_requests.append,
+        update_function_resource=resource_requests.append,
     )
     monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
     monkeypatch.setattr(service, "_release_application", lambda _: "https://same")
@@ -1170,6 +1172,96 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
         "EXISTING": "kept",
         "VEADK_SITE_TITLE": "新标题",
     }
+    resource_request = resource_requests[0]
+    assert resource_request.function_id == "function-id"
+    assert resource_request.min_instance == 1
+    assert resource_request.max_instance is None
+    assert resource_request.reserved_frozen_instance is None
+
+
+def test_submit_application_code_bundle_sets_only_minimum_instance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    updated_requests: list[Any] = []
+    resource_requests: list[Any] = []
+    releases: list[str] = []
+    service = object.__new__(VeFaaS)
+    cast(Any, service).client = SimpleNamespace(
+        update_function=updated_requests.append,
+        update_function_resource=resource_requests.append,
+    )
+    monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
+    monkeypatch.setattr(service, "_start_application_release", releases.append)
+
+    minimum_instance_updated = service.submit_application_code_bundle_update(
+        application_id="app-id",
+        function_id="function-id",
+        path=str(tmp_path),
+    )
+
+    assert updated_requests[0].id == "function-id"
+    resource_request = resource_requests[0]
+    assert resource_request.function_id == "function-id"
+    assert resource_request.min_instance == 1
+    assert resource_request.max_instance is None
+    assert resource_request.reserved_frozen_instance is None
+    assert releases == ["app-id"]
+    assert minimum_instance_updated is True
+
+
+def test_submit_application_code_bundle_continues_without_resource_permission(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    releases: list[str] = []
+    service = object.__new__(VeFaaS)
+
+    def _permission_denied(_: Any) -> None:
+        raise RuntimeError("AccessDenied: vefaas:UpdateFunctionResource")
+
+    cast(Any, service).client = SimpleNamespace(
+        update_function=lambda _: None,
+        update_function_resource=_permission_denied,
+    )
+    monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
+    monkeypatch.setattr(service, "_start_application_release", releases.append)
+
+    minimum_instance_updated = service.submit_application_code_bundle_update(
+        application_id="app-id",
+        function_id="function-id",
+        path=str(tmp_path),
+    )
+
+    assert minimum_instance_updated is False
+    assert releases == ["app-id"]
+
+
+def test_submit_application_code_bundle_stops_on_other_resource_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    releases: list[str] = []
+    service = object.__new__(VeFaaS)
+
+    def _invalid_operation(_: Any) -> None:
+        raise RuntimeError("InvalidOperation")
+
+    cast(Any, service).client = SimpleNamespace(
+        update_function=lambda _: None,
+        update_function_resource=_invalid_operation,
+    )
+    monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
+    monkeypatch.setattr(service, "_start_application_release", releases.append)
+
+    with pytest.raises(RuntimeError, match="InvalidOperation"):
+        service.submit_application_code_bundle_update(
+            application_id="app-id",
+            function_id="function-id",
+            path=str(tmp_path),
+        )
+
+    assert releases == []
 
 
 def test_application_operations_use_deployment_region(
@@ -1452,6 +1544,7 @@ def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(
             ]
         ),
         update_function=updated_requests.append,
+        update_function_resource=lambda _: None,
     )
     monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
     monkeypatch.setattr(service, "_release_application", lambda _: "https://same")
@@ -1480,6 +1573,7 @@ def test_update_application_code_bundle_does_not_read_or_replace_environment(
     cast(Any, service).client = SimpleNamespace(
         get_function=lambda _: pytest.fail("environment should not be read"),
         update_function=updated_requests.append,
+        update_function_resource=lambda _: None,
     )
     monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
     monkeypatch.setattr(service, "_release_application", lambda _: "https://same")

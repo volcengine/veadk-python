@@ -410,12 +410,21 @@ class StudioSelfUpdater:
                         }
                     )
                 self._set_progress("submitting", "正在提交 VeFaaS Function 更新")
-                service.submit_application_code_bundle_update(
-                    application_id=self._settings.application_id,
-                    function_id=self._settings.function_id,
-                    path=str(package_dir),
-                    environment_overrides=environment_overrides,
+                minimum_instance_updated = (
+                    service.submit_application_code_bundle_update(
+                        application_id=self._settings.application_id,
+                        function_id=self._settings.function_id,
+                        path=str(package_dir),
+                        environment_overrides=environment_overrides,
+                    )
                 )
+                if minimum_instance_updated is False:
+                    self._diagnostic_lines.append(
+                        "warning: Function 角色缺少 "
+                        "vefaas:UpdateFunctionResource；本次 Studio 更新继续发布，"
+                        "但 MinInstance 保持原值。请执行一次 `veadk studio update` "
+                        "或在 IAM 中补充该权限。"
+                    )
             self._submitted_version = manifest.version
             self._set_progress("publishing", "已提交，正在等待新 Revision 发布")
             return manifest

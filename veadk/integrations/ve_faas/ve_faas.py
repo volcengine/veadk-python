@@ -115,6 +115,24 @@ def _release_revision_number(response: dict[str, Any]) -> int | None:
     return None
 
 
+def _is_permission_denied(error: BaseException) -> bool:
+    """Return whether a cloud error represents a missing IAM permission."""
+    status = getattr(error, "status", None) or getattr(error, "status_code", None)
+    if status == 403:
+        return True
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "accessdenied",
+            "access denied",
+            "forbidden",
+            "permission denied",
+            "unauthorized",
+        )
+    )
+
+
 class VeFaaS:
     def __init__(
         self,
@@ -478,9 +496,10 @@ class VeFaaS:
     ) -> str:
         """Replace an application's function bundle and release it.
 
-        Existing function settings are left untouched. When environment overrides
-        are provided, they are merged with the complete current environment before
-        updating the function.
+        Existing function settings are left untouched except that the minimum
+        instance count is set to one. When environment overrides are provided,
+        they are merged with the complete current environment before updating the
+        function.
 
         Args:
             application_id: Existing VeFaaS Application ID.
@@ -496,7 +515,9 @@ class VeFaaS:
             path=path,
             environment_overrides=environment_overrides,
         )
-        return self._release_application(application_id)
+        url = self._release_application(application_id)
+        self._set_function_min_instance(function_id)
+        return url
 
     def submit_application_code_bundle_update(
         self,
@@ -505,20 +526,28 @@ class VeFaaS:
         function_id: str,
         path: str,
         environment_overrides: dict[str, str] | None = None,
-    ) -> None:
+    ) -> bool:
         """Replace a function bundle and submit its Application release.
 
         Unlike :meth:`update_application_code_bundle`, this method does not wait for
         the new revision. It is intended for a function updating itself, because
         the current process may stop as soon as the control plane activates the
-        replacement revision.
+        replacement revision. Legacy Studio roles may not have permission to update
+        Function resources; in that case the release continues and ``False`` is
+        returned so the caller can surface a migration warning.
         """
         self._replace_application_code_bundle(
             function_id=function_id,
             path=path,
             environment_overrides=environment_overrides,
         )
+        # The Function is already deployed for an in-app update, so apply the
+        # resource setting before starting a release that may stop this process.
+        minimum_instance_updated = self._set_function_min_instance_if_permitted(
+            function_id
+        )
         self._start_application_release(application_id)
+        return minimum_instance_updated
 
     def _replace_application_code_bundle(
         self,
@@ -526,9 +555,12 @@ class VeFaaS:
         function_id: str,
         path: str,
         environment_overrides: dict[str, str] | None,
+        request_timeout: int | None = None,
     ) -> None:
         """Upload a bundle and update the Function without releasing it."""
         request_options: dict[str, Any] = {"id": function_id}
+        if request_timeout is not None:
+            request_options["request_timeout"] = request_timeout
         if environment_overrides:
             function = cast(
                 Any,
@@ -549,6 +581,34 @@ class VeFaaS:
         self.client.update_function(
             volcenginesdkvefaas.UpdateFunctionRequest(**request_options)
         )
+
+    def _set_function_min_instance(self, function_id: str) -> None:
+        """Set only a Function's minimum instance count.
+
+        ``MaxInstance`` and the remaining resource fields are intentionally
+        omitted so the cloud service preserves their existing values.
+        """
+        self.client.update_function_resource(
+            volcenginesdkvefaas.UpdateFunctionResourceRequest(
+                function_id=function_id,
+                min_instance=1,
+            )
+        )
+
+    def _set_function_min_instance_if_permitted(self, function_id: str) -> bool:
+        """Best-effort minimum-instance migration for in-app self-updates."""
+        try:
+            self._set_function_min_instance(function_id)
+        except Exception as error:
+            if not _is_permission_denied(error):
+                raise
+            logger.warning(
+                "Function role lacks vefaas:UpdateFunctionResource; continuing "
+                "the Studio self-update without changing MinInstance. Run "
+                "`veadk studio update` once or grant the permission manually."
+            )
+            return False
+        return True
 
     def _update_function_code(
         self,
@@ -624,17 +684,17 @@ class VeFaaS:
             else:
                 logger.warning("No requirements.txt found, using template default")
 
-            self._upload_and_mount_code(function_id, str(tmp_path / "src"))
-            self.client.update_function(
-                volcenginesdkvefaas.UpdateFunctionRequest(
-                    id=function_id,
-                    request_timeout=1800,  # Keep same timeout as deploy
-                )
+            self._replace_application_code_bundle(
+                function_id=function_id,
+                path=str(tmp_path / "src"),
+                environment_overrides=None,
+                request_timeout=1800,  # Keep same timeout as deploy
             )
             logger.info(
                 f"VeFaaS function {function_name} with ID {function_id} updated."
             )
             url = self._release_application(app_id)
+            self._set_function_min_instance(function_id)
             self.ensure_application_route_methods(app_id)
             logger.info(
                 f"VeFaaS application {application_name} with ID {app_id} released."
@@ -907,7 +967,6 @@ class VeFaaS:
             logger.info(
                 f"VeFaaS function {function_name} with ID {function_id} created."
             )
-
             logger.info(f"Start to create VeFaaS application {name}.")
             app_id = self._create_application(
                 name,
@@ -922,6 +981,7 @@ class VeFaaS:
             logger.info(f"VeFaaS application {name} with ID {app_id} created.")
             logger.info(f"Start to release VeFaaS application {app_id}.")
             url = self._release_application(app_id)
+            self._set_function_min_instance(function_id)
             self.ensure_application_route_methods(app_id)
             logger.info(f"VeFaaS application {name} with ID {app_id} released.")
         except Exception:

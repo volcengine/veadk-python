@@ -201,6 +201,11 @@ _VEFAAS_PERMISSIONS = (
         "Update Studio function environment variables",
     ),
     _permission(
+        "vefaas:UpdateFunctionResource",
+        "设置 Studio 函数最小实例数",
+        "Set the Studio function minimum instance count",
+    ),
+    _permission(
         "vefaas:Release", "重新发布 Studio 函数", "Release the updated Studio function"
     ),
     _permission(
