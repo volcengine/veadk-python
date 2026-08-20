@@ -1,0 +1,229 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Windows Studio Smoke Test
+
+on:
+  push:
+    branches:
+      - fix/windows-studio-smoke
+    paths:
+      - ".github/workflows/windows-studio-smoke.yaml"
+      - "frontend/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "veadk/**"
+  workflow_dispatch:
+    inputs:
+      repeat_count:
+        description: "How many times to start Studio"
+        required: false
+        default: "10"
+      base_port:
+        description: "First local port"
+        required: false
+        default: "8877"
+      python_version:
+        description: "Python version"
+        required: false
+        default: "3.10"
+
+permissions:
+  contents: read
+
+jobs:
+  studio-open-smoke:
+    runs-on: windows-2025
+    timeout-minutes: 60
+
+    env:
+      NO_COLOR: "1"
+      PYTHONIOENCODING: utf-8
+      PYTHONUNBUFFERED: "1"
+      SMOKE_BASE_PORT: ${{ github.event_name == 'workflow_dispatch' && inputs.base_port || '8877' }}
+      SMOKE_REPEAT_COUNT: ${{ github.event_name == 'workflow_dispatch' && inputs.repeat_count || '10' }}
+      VOLCENGINE_ACCESS_KEY: smoke
+      VOLCENGINE_SECRET_KEY: smoke
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ github.event_name == 'workflow_dispatch' && inputs.python_version || '3.10' }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          uv venv .venv
+          uv sync --all-extras
+          uv pip install -e .
+          .\.venv\Scripts\veadk.exe --version
+
+      - name: Start Studio repeatedly with --open
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $repeatCount = [int]$env:SMOKE_REPEAT_COUNT
+          $basePort = [int]$env:SMOKE_BASE_PORT
+          if ($repeatCount -lt 1) {
+            throw "SMOKE_REPEAT_COUNT must be at least 1."
+          }
+          if ($basePort -lt 1 -or $basePort -gt 65535) {
+            throw "SMOKE_BASE_PORT must be a valid TCP port."
+          }
+          if (($basePort + $repeatCount - 1) -gt 65535) {
+            throw "The requested port range exceeds 65535."
+          }
+
+          $rootLogDir = "artifacts\windows-studio-smoke"
+          $workspaceRoot = "artifacts\studio-smoke-workspace"
+          $agentDir = Join-Path $workspaceRoot "demo_agent"
+          New-Item -ItemType Directory -Force $rootLogDir | Out-Null
+          New-Item -ItemType Directory -Force $agentDir | Out-Null
+
+          @"
+          from veadk import Agent
+
+          root_agent = Agent(
+              name="demo_agent",
+              instruction="You are a smoke test agent.",
+          )
+          "@ | Set-Content -Path (Join-Path $agentDir "agent.py") -Encoding utf8
+
+          $veadk = (Resolve-Path ".\.venv\Scripts\veadk.exe").Path
+          $failedAttempts = @()
+          $summary = @()
+
+          function Invoke-StudioSmokeAttempt {
+            param(
+              [Parameter(Mandatory = $true)]
+              [int] $Attempt
+            )
+
+            $port = $basePort + $Attempt - 1
+            $baseUrl = "http://127.0.0.1:$port"
+            $attemptName = "{0:D2}" -f $Attempt
+            $attemptLogDir = Join-Path $rootLogDir "attempt-$attemptName"
+            New-Item -ItemType Directory -Force $attemptLogDir | Out-Null
+
+            $stdoutPath = Join-Path $attemptLogDir "studio.stdout.log"
+            $stderrPath = Join-Path $attemptLogDir "studio.stderr.log"
+            $resultPath = Join-Path $attemptLogDir "result.txt"
+            $process = $null
+
+            @(
+              "attempt=$Attempt"
+              "port=$port"
+              "url=$baseUrl"
+              "command=$veadk studio --agents-dir . --dev --port $port --open"
+            ) | Set-Content -Path (Join-Path $attemptLogDir "command.txt") -Encoding utf8
+
+            try {
+              $process = Start-Process `
+                -FilePath $veadk `
+                -WorkingDirectory $workspaceRoot `
+                -ArgumentList @("studio", "--agents-dir", ".", "--dev", "--port", "$port", "--open") `
+                -PassThru `
+                -RedirectStandardOutput $stdoutPath `
+                -RedirectStandardError $stderrPath
+
+              $deadline = (Get-Date).AddSeconds(90)
+              $ready = $false
+              $lastError = ""
+
+              while ((Get-Date) -lt $deadline) {
+                if ($process.HasExited) {
+                  throw "Studio exited before becoming ready. ExitCode=$($process.ExitCode)"
+                }
+
+                try {
+                  $response = Invoke-WebRequest `
+                    -UseBasicParsing `
+                    -Uri "$baseUrl/web/ui-config" `
+                    -TimeoutSec 5
+                  if ($response.StatusCode -eq 200) {
+                    $response.Content | Set-Content `
+                      -Path (Join-Path $attemptLogDir "ui-config.json") `
+                      -Encoding utf8
+                    $ready = $true
+                    break
+                  }
+                  $lastError = "HTTP status $($response.StatusCode)"
+                } catch {
+                  $lastError = $_.Exception.Message
+                }
+
+                Start-Sleep -Seconds 2
+              }
+
+              if (-not $ready) {
+                throw "Studio did not become ready at $baseUrl. Last error: $lastError"
+              }
+
+              Start-Sleep -Seconds 15
+
+              if ($process.HasExited) {
+                throw "Studio exited after becoming ready. ExitCode=$($process.ExitCode)"
+              }
+
+              Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/" -TimeoutSec 5 | Out-Null
+              "PASS: Studio stayed reachable at $baseUrl with --open." |
+                Set-Content -Path $resultPath -Encoding utf8
+            } finally {
+              if ($process -and -not $process.HasExited) {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                Wait-Process -Id $process.Id -Timeout 10 -ErrorAction SilentlyContinue
+              }
+            }
+          }
+
+          for ($attempt = 1; $attempt -le $repeatCount; $attempt++) {
+            Write-Host "Starting Studio smoke attempt $attempt/$repeatCount..."
+            try {
+              Invoke-StudioSmokeAttempt -Attempt $attempt
+              $summary += "attempt-$("{0:D2}" -f $attempt): PASS"
+            } catch {
+              $message = $_.Exception.Message
+              $failedAttempts += $attempt
+              $summary += "attempt-$("{0:D2}" -f $attempt): FAIL - $message"
+              $attemptLogDir = Join-Path $rootLogDir ("attempt-{0:D2}" -f $attempt)
+              New-Item -ItemType Directory -Force $attemptLogDir | Out-Null
+              "FAIL: $message" |
+                Set-Content -Path (Join-Path $attemptLogDir "result.txt") -Encoding utf8
+              Write-Error "Attempt $attempt failed: $message" -ErrorAction Continue
+            }
+          }
+
+          $summary | Set-Content -Path (Join-Path $rootLogDir "summary.txt") -Encoding utf8
+
+          if ($failedAttempts.Count -gt 0) {
+            throw "Windows Studio smoke failed attempts: $($failedAttempts -join ', ')"
+          }
+
+          Write-Host "Windows Studio smoke passed all $repeatCount attempts."
+
+      - name: Upload smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-studio-smoke-logs
+          path: artifacts/windows-studio-smoke
+          retention-days: 7
