@@ -2,6 +2,14 @@
 @import "@openai/apps-sdk-ui/css";
 @source "../node_modules/@openai/apps-sdk-ui";
 
+@font-face {
+  font-family: "Byte Sans";
+  src: url("./assets/fonts/ByteSans-Medium.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
 /* ChatGPT / OpenAI-style theme (shadcn palette), adapted from the janus
  * extension. Light, near-black text, system font stack, muted grays. */
 :root {
@@ -21,6 +29,10 @@
   --radius: 0.5rem;
   --canvas: 240 5% 97.3%; /* light neutral-gray window bg; main floats on top (LobeChat-style) */
   --panel: 0 0% 100%; /* the floating main panel */
+  --sidebar: 240 4.3% 94.7%; /* Figma sidebar surface (#f1f1f2) */
+  --sidebar-item-hover: 240 2.2% 90%; /* Figma navigation hover/active (#e5e5e6) */
+  --sidebar-foreground: 240 8.6% 6.9%; /* Figma primary sidebar text (#101013) */
+  --sidebar-section-title: 255 3.2% 48.6%; /* Figma tertiary sidebar text (#7a7880) */
   --feature-link: 208 100% 47.45%; /* new-feature entry accent (#0081F2) */
 
   color-scheme: light;
@@ -68,9 +80,8 @@ body {
 *::-webkit-scrollbar-corner { background: transparent; }
 
 /* ---------- layout ----------
- * One big rounded "window": the whole app (sidebar + main) is a single rounded
- * panel floating on the gray canvas, with the gray showing as a margin all
- * around (LobeChat-style). */
+ * The sidebar sits on the neutral canvas while the main workspace fills the
+ * remaining viewport height as a flush white surface. */
 .layout {
   display: flex;
   height: 100vh;
@@ -89,62 +100,60 @@ body {
 
 /* ---------- sidebar ---------- */
 .sidebar {
-  width: 236px;
+  width: 240px;
   height: 100%;
   min-height: 0;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: transparent; /* sits directly on the canvas; main floats beside it */
+  background: hsl(var(--sidebar));
   position: relative; /* anchors the slide-out agent selector to the right edge */
   transition: width 0.22s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .sidebar.is-collapsed {
   width: 56px;
 }
-@media (max-width: 860px) {
-  .sidebar {
-    width: 204px;
-  }
-}
 .sidebar-top {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 0 10px 8px;
+  padding: 0 8px;
 }
 .sidebar-brand-row {
-  height: 54px;
-  min-height: 54px;
+  height: 64px;
+  min-height: 64px;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 0 0 10px;
+  padding: 0 0 0 8px;
 }
 .sidebar:not(.is-collapsed) .sidebar-top {
-  padding-right: 0;
+  padding-inline: 8px;
 }
 .sidebar:not(.is-collapsed) .sidebar-brand-row {
-  padding-right: 10px;
+  padding-right: 0;
 }
 .brand {
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 6px;
   padding: 0;
   border: 0;
   background: transparent;
   color: inherit;
   cursor: pointer;
-  font-weight: 600;
-  font-size: 15px;
-  letter-spacing: -0.01em;
+  font-weight: 500;
+  font-size: 17px;
+  line-height: 1.4;
+  letter-spacing: 0;
   font-family: inherit;
   text-align: left;
 }
 .brand-title {
+  font-family:
+    "Byte Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -161,15 +170,17 @@ body {
   cursor: text;
 }
 .sidebar-collapse-toggle {
-  flex: 0 0 28px;
-  width: 28px;
-  height: 28px;
+  --sidebar-collapse-frame-stroke: #0c0d0e;
+  --sidebar-collapse-divider-fill: #80838a;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 999px;
   background: transparent;
   color: hsl(var(--muted-foreground));
   cursor: pointer;
@@ -180,8 +191,15 @@ body {
   color: hsl(var(--foreground));
 }
 .sidebar-collapse-toggle .icon {
-  width: 17px;
-  height: 17px;
+  width: 20px;
+  height: 20px;
+}
+.sidebar-panel-glyph__divider {
+  fill: var(--sidebar-collapse-divider-fill);
+  stroke: var(--sidebar-collapse-frame-stroke);
+}
+.sidebar-panel-glyph__frame {
+  stroke: var(--sidebar-collapse-frame-stroke);
 }
 .sidebar.is-collapsed .sidebar-brand-row {
   justify-content: center;
@@ -193,6 +211,18 @@ body {
 .brand-logo,
 .login-brand-logo {
   display: block;
+  object-fit: contain;
+}
+.brand-logo {
+  width: 22px;
+  min-width: 22px;
+  max-width: 22px;
+  height: 22px;
+  min-height: 22px;
+  max-height: 22px;
+  flex: 0 0 22px;
+}
+.login-brand-logo {
   width: 20px;
   min-width: 20px;
   max-width: 20px;
@@ -200,36 +230,42 @@ body {
   min-height: 20px;
   max-height: 20px;
   flex: 0 0 20px;
-  object-fit: contain;
 }
 /* ChatGPT-style row: transparent, hover gray */
+.sidebar-nav {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 .new-chat {
+  width: 100%;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   height: 36px;
   min-height: 36px;
-  padding: 8px 10px;
+  padding: 7px 10px;
   border: none;
   border-radius: 8px;
   background: none;
-  color: hsl(var(--foreground));
+  color: hsl(var(--sidebar-foreground));
   font: inherit;
   font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+  letter-spacing: 0;
   cursor: pointer;
   transition: background 0.12s;
 }
-.new-chat .icon { width: 18px; height: 18px; }
+.new-chat .icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
 .new-chat:hover,
-.new-chat.is-active { background: hsl(var(--foreground) / 0.05); }
-.new-chat--conversation > .icon {
-  transform-origin: center;
-}
-
-.new-chat--conversation:hover > .icon {
-  animation: sidebar-plus-return 650ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
+.new-chat.is-active { background: hsl(var(--sidebar-item-hover)); }
+.new-chat.is-active { font-weight: 500; }
 .sidebar-agent-face {
   overflow: visible;
 }
@@ -240,19 +276,12 @@ body {
   animation: sidebar-agent-blink 1s ease-in-out infinite;
 }
 
-@keyframes sidebar-plus-return {
-  0% { transform: rotate(0deg); }
-  48% { transform: rotate(48deg); }
-  100% { transform: rotate(0deg); }
-}
-
 @keyframes sidebar-agent-blink {
   0%, 42%, 58%, 100% { transform: scaleY(1); }
   50% { transform: scaleY(0.08); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .new-chat--conversation:hover > .icon,
   .sidebar-agent-face__eye {
     animation: none;
   }
@@ -322,7 +351,7 @@ body {
 /* The drawer positions two independent floating cards: the Runtime list and,
  * when requested, a tabbed information panel. */
 .agentsel {
-  --agentsel-available-width: calc(100vw - 250px);
+  --agentsel-available-width: calc(100vw - 254px);
   container-type: inline-size;
   position: absolute;
   left: 100%;
@@ -826,21 +855,25 @@ body {
 }
 .agentsel-more:hover { background: hsl(var(--accent)); color: hsl(var(--foreground)); }
 
-@media (max-width: 860px) {
-  .agentsel {
-    --agentsel-available-width: calc(100vw - 218px);
-  }
+.sidebar-history {
+  flex: 1;
+  min-height: 0;
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
 }
-
-.sidebar-history { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .history-head {
+  height: 32px;
+  min-height: 32px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 10px 6px 20px;
+  padding: 0 18px;
   font-size: 13px;
-  font-weight: 600;
-  color: hsl(var(--foreground));
+  font-weight: 400;
+  line-height: 22px;
+  letter-spacing: 0;
+  color: hsl(var(--sidebar-section-title));
 }
 .history-refresh {
   background: none; border: none; cursor: pointer; padding: 2px;
@@ -867,7 +900,7 @@ body {
   background: transparent;
   color: hsl(var(--foreground));
 }
-.history-list { flex: 1; overflow-y: auto; padding: 4px 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+.history-list { flex: 1; overflow-y: auto; padding: 0 8px 12px; display: flex; flex-direction: column; gap: 4px; }
 .history-empty { padding: 16px 8px; font-size: 13px; color: hsl(var(--muted-foreground)); text-align: center; }
 .history-error {
   margin: 4px 0 8px;
@@ -892,14 +925,17 @@ body {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 7px;
+  min-height: 36px;
+  gap: 8px;
   text-align: left;
-  padding: 9px 10px;
+  padding: 7px 10px;
   border: none;
   background: none;
   color: hsl(var(--foreground));
   font: inherit;
   font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
   cursor: pointer;
 }
 .history-title {
@@ -1064,11 +1100,11 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  margin: 10px;
+  margin: 0;
   background: hsl(var(--panel));
-  border: 1px solid hsl(var(--border));
-  border-radius: 12px;
-  overflow: hidden; /* clip inner scroll regions to the rounded corners */
+  border: 0;
+  border-radius: 0;
+  overflow: hidden;
 }
 .error {
   position: relative;

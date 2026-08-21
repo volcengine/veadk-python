@@ -35,7 +35,7 @@ test("shows only the Agent navigation in the sidebar", () => {
   assert.doesNotMatch(sidebarSource, /aria-label="智能体库"/);
   assert.match(
     sidebarSource,
-    /onClick=\{onMyAgents\}[\s\S]*?aria-label="智能体"[\s\S]*?<AgentFaceIcon \/>/,
+    /onClick=\{onMyAgents\}[\s\S]*?aria-label="智能体"[\s\S]*?<SidebarAgentIcon className="icon" \/>/,
   );
   assert.match(appSource, /const openMyAgentsPage = \(\) => \{/);
   assert.match(

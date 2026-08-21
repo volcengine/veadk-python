@@ -3026,7 +3026,7 @@ export default function App() {
     } else if (skillCenter) {
       documentTitleTarget = {
         kind: "page",
-        title: libraryPageTitle || "库",
+        title: libraryPageTitle || "资源库",
       };
     } else if (createView) {
       documentTitleTarget = {

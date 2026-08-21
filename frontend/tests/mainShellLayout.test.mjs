@@ -12,11 +12,14 @@ const stylesSource = readFileSync(
   "utf8",
 );
 
-test("the main shell renders content without a top navigation row", () => {
+test("the main shell renders a flush, full-height workspace without a top navigation row", () => {
   assert.match(appSource, /<section className="main-shell">\s*<main\s+className=/);
   assert.doesNotMatch(appSource, /<Navbar\b/);
   assert.match(stylesSource, /\.main-shell\s*\{[^}]*min-height:\s*0[^}]*display:\s*flex/);
-  assert.match(stylesSource, /\.main\s*\{[^}]*flex:\s*1[^}]*margin:\s*10px;/);
+  assert.match(
+    stylesSource,
+    /\.main\s*\{[^}]*flex:\s*1[^}]*margin:\s*0;[^}]*background:\s*hsl\(var\(--panel\)\);[^}]*border:\s*0;[^}]*border-radius:\s*0;/,
+  );
 });
 
 test("ProjectPreview keeps its inline toolbar when no portal host exists", () => {

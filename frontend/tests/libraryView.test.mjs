@@ -24,8 +24,8 @@ test("moves the Skill entry into the Library shell", () => {
     /new-chat--library\$\{[\s\S]*?activePage === "library" \? " is-active" : ""/,
   );
   assert.match(sidebarSource, /onClick=\{onLibrary\}/);
-  assert.match(sidebarSource, /aria-label="库"/);
-  assert.match(sidebarSource, />库<\/span>/);
+  assert.match(sidebarSource, /aria-label="资源库"/);
+  assert.match(sidebarSource, />资源库<\/span>/);
   assert.match(
     appSource,
     /const sidebarActivePage: SidebarPage =[\s\S]*?: skillCenter\s*\? "library"/,
@@ -34,7 +34,7 @@ test("moves the Skill entry into the Library shell", () => {
 });
 
 test("renders the three Library sections with Agent detail style tabs", () => {
-  assert.match(librarySource, /<h1>库<\/h1>/);
+  assert.match(librarySource, /<h1>资源库<\/h1>/);
   assert.match(librarySource, /<p>管理您的资源和产物<\/p>/);
   assert.match(librarySource, /id: "skills", label: "技能库"/);
   assert.match(librarySource, /id: "knowledge", label: "知识库"/);

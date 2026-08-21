@@ -1,5 +1,5 @@
 .layout {
-  --pp-sidebar-width: 236px;
+  --pp-sidebar-width: 240px;
 }
 
 .layout:has(.sidebar.is-collapsed) {
@@ -2539,14 +2539,6 @@
 }
 
 @media (max-width: 860px) {
-  .layout {
-    --pp-sidebar-width: 204px;
-  }
-
-  .layout:has(.sidebar.is-collapsed) {
-    --pp-sidebar-width: 56px;
-  }
-
   .pp-root.is-deploy {
     --pp-publish-content-width: min(88%, calc(100% - 36px));
   }

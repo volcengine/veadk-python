@@ -34,6 +34,10 @@ const stylesSource = readFileSync(
   new URL("../src/styles.css", import.meta.url),
   "utf8",
 );
+const sidebarIconsSource = readFileSync(
+  new URL("../src/ui/icons/SidebarIcons.tsx", import.meta.url),
+  "utf8",
+);
 const textShimmerSource = readFileSync(
   new URL("../src/ui/text-shimmer/TextShimmer.tsx", import.meta.url),
   "utf8",
@@ -73,11 +77,30 @@ test("applies configured branding to the UI, document title, and favicon", () =>
   assert.match(loginSource, /https:\/\/docs\.byteplus\.com\/en\/docs\/legal/);
   assert.match(loginSource, /cloudProvider: "volcengine" \| "byteplus"/);
   assert.match(loginSource, /target="_blank"/);
-  assert.match(stylesSource, /flex: 0 0 20px/);
+  assert.match(
+    stylesSource,
+    /\.brand-logo\s*\{[\s\S]*?width:\s*22px;[\s\S]*?height:\s*22px;[\s\S]*?flex:\s*0 0 22px;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.login-brand-logo\s*\{[\s\S]*?width:\s*20px;[\s\S]*?height:\s*20px;[\s\S]*?flex:\s*0 0 20px;/,
+  );
   assert.match(stylesSource, /object-fit: contain/);
   assert.match(
     stylesSource,
     /\.brand-logo,[\s\S]*?\.brand-title,[\s\S]*?\.brand\s*\{[\s\S]*?cursor:\s*pointer;/,
+  );
+  assert.match(
+    stylesSource,
+    /@font-face\s*\{[\s\S]*?font-family:\s*"Byte Sans";[\s\S]*?ByteSans-Medium\.ttf[\s\S]*?font-weight:\s*500;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.brand\s*\{[\s\S]*?font-size:\s*17px;[\s\S]*?line-height:\s*1\.4;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.brand-title\s*\{[\s\S]*?font-family:\s*"Byte Sans",\s*ui-sans-serif,/,
   );
   assert.match(
     stylesSource,
@@ -93,8 +116,15 @@ test("global sidebar can collapse to a compact icon rail", () => {
   assert.match(sidebarSource, /query\.addEventListener\("change", handleViewportChange\)/);
   assert.match(sidebarSource, /autoCollapsedRef\.current = false;\s*setCollapsed\(\(value\) => !value\)/);
   assert.match(sidebarSource, /aria-label=\{collapsed \? "展开侧边栏" : "收起侧边栏"\}/);
-  assert.match(stylesSource, /\.sidebar\s*\{[\s\S]*?width:\s*236px;/);
+  assert.match(
+    stylesSource,
+    /\.sidebar\s*\{[\s\S]*?width:\s*240px;[\s\S]*?background:\s*hsl\(var\(--sidebar\)\);/,
+  );
   assert.match(stylesSource, /\.sidebar\.is-collapsed\s*\{[\s\S]*?width:\s*56px;/);
+  assert.doesNotMatch(
+    stylesSource,
+    /@media \(max-width:\s*860px\)[\s\S]*?\.sidebar\s*\{[\s\S]*?width:\s*204px;/,
+  );
   assert.match(
     stylesSource,
     /\.sidebar\.is-collapsed \.sidebar-history\s*\{[\s\S]*?display:\s*none;/,
@@ -104,11 +134,45 @@ test("global sidebar can collapse to a compact icon rail", () => {
 test("expanded sidebar navigation keeps equal visual gutters beside the main panel", () => {
   assert.match(
     stylesSource,
-    /\.sidebar:not\(\.is-collapsed\) \.sidebar-top\s*\{[\s\S]*?padding-right:\s*0;/,
+    /\.sidebar:not\(\.is-collapsed\) \.sidebar-top\s*\{[\s\S]*?padding-inline:\s*8px;/,
   );
   assert.match(
     stylesSource,
-    /\.sidebar:not\(\.is-collapsed\) \.sidebar-brand-row\s*\{[\s\S]*?padding-right:\s*10px;/,
+    /\.sidebar:not\(\.is-collapsed\) \.sidebar-brand-row\s*\{[\s\S]*?padding-right:\s*0;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.new-chat\s*\{[\s\S]*?width:\s*100%;[\s\S]*?gap:\s*8px;[\s\S]*?padding:\s*7px 10px;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.new-chat:hover,[\s\S]*?\.new-chat\.is-active\s*\{\s*background:\s*hsl\(var\(--sidebar-item-hover\)\);/,
+  );
+});
+
+test("sidebar navigation uses the Figma-aligned custom icons", () => {
+  assert.match(sidebarSource, /<NewChatIcon className="icon" \/>/);
+  assert.match(sidebarSource, /<SidebarAgentIcon className="icon" \/>/);
+  assert.match(sidebarSource, /<ResourceLibraryIcon className="icon" \/>/);
+  assert.match(searchSource, /<SidebarSearchIcon className="icon" \/>/);
+  assert.match(sidebarSource, /<SidebarExpandIcon className="icon" \/>/);
+  assert.match(sidebarSource, /<SidebarCollapseIcon className="icon" \/>/);
+  assert.doesNotMatch(sidebarSource, /PanelLeftOpen|PanelLeftClose/);
+  assert.match(sidebarIconsSource, /export function SidebarCollapseIcon/);
+  assert.match(sidebarIconsSource, /export function SidebarExpandIcon/);
+  assert.match(sidebarIconsSource, /className="sidebar-panel-glyph__divider"/);
+  assert.match(sidebarIconsSource, /className="sidebar-panel-glyph__frame"/);
+  assert.match(
+    stylesSource,
+    /--sidebar-collapse-frame-stroke:\s*#0c0d0e;[\s\S]*?--sidebar-collapse-divider-fill:\s*#80838a;/,
+  );
+  assert.doesNotMatch(
+    stylesSource,
+    /new-chat--conversation:hover\s*>\s*\.icon|sidebar-plus-return/,
+  );
+  assert.match(
+    stylesSource,
+    /\.new-chat \.icon\s*\{[\s\S]*?width:\s*16px;[\s\S]*?height:\s*16px;[\s\S]*?flex:\s*0 0 16px;/,
   );
 });
 
@@ -146,7 +210,7 @@ test("sidebar persistently highlights only the current top-level page", () => {
   assert.match(appSource, /<Sidebar[\s\S]*?activePage=\{sidebarActivePage\}/);
   assert.match(
     stylesSource,
-    /\.new-chat:hover,\s*\.new-chat\.is-active\s*\{\s*background:\s*hsl\(var\(--foreground\) \/ 0\.05\);\s*\}/,
+    /\.new-chat:hover,\s*\.new-chat\.is-active\s*\{\s*background:\s*hsl\(var\(--sidebar-item-hover\)\);\s*\}/,
   );
 });
 
@@ -168,7 +232,7 @@ test("history header offers a borderless new-session action", () => {
   );
   assert.match(
     stylesSource,
-    /\.history-head\s*\{[\s\S]*?padding:\s*8px 10px 6px 20px;[\s\S]*?font-size:\s*13px;[\s\S]*?font-weight:\s*600;[\s\S]*?color:\s*hsl\(var\(--foreground\)\);/,
+    /\.history-head\s*\{[\s\S]*?height:\s*32px;[\s\S]*?padding:\s*0 18px;[\s\S]*?font-size:\s*13px;[\s\S]*?font-weight:\s*400;[\s\S]*?line-height:\s*22px;[\s\S]*?color:\s*hsl\(var\(--sidebar-section-title\)\);/,
   );
   assert.match(
     stylesSource,
@@ -176,14 +240,14 @@ test("history header offers a borderless new-session action", () => {
   );
 });
 
-test("main panel fills the shell with equal outer spacing and no global navbar", () => {
+test("main panel fills the shell edge to edge with no global navbar", () => {
   assert.match(
     stylesSource,
-    /\.sidebar-brand-row\s*\{[\s\S]*?height:\s*54px;[\s\S]*?min-height:\s*54px;[\s\S]*?padding:\s*0 0 0 10px;/,
+    /\.sidebar-brand-row\s*\{[\s\S]*?height:\s*64px;[\s\S]*?min-height:\s*64px;[\s\S]*?padding:\s*0 0 0 8px;/,
   );
   assert.match(
     stylesSource,
-    /\.main\s*\{[\s\S]*?flex:\s*1;[\s\S]*?margin:\s*10px;/,
+    /\.main\s*\{[\s\S]*?flex:\s*1;[\s\S]*?margin:\s*0;[\s\S]*?border:\s*0;[\s\S]*?border-radius:\s*0;/,
   );
   assert.doesNotMatch(appSource, /<Navbar\b/);
   assert.doesNotMatch(appSource, /<DeploymentTaskStatus\b/);

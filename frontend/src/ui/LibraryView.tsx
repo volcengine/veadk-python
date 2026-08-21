@@ -90,7 +90,7 @@ export function LibraryView({
   useEffect(() => {
     const activeTitle = activeTab === "skills"
       ? skillPageTitle
-      : LIBRARY_TABS.find((tab) => tab.id === activeTab)?.label || "库";
+      : LIBRARY_TABS.find((tab) => tab.id === activeTab)?.label || "资源库";
     onPageTitleChange?.(activeTitle);
   }, [activeTab, onPageTitleChange, skillPageTitle]);
 
@@ -151,12 +151,12 @@ export function LibraryView({
   };
 
   return (
-    <section className="library-view" aria-label="库">
+    <section className="library-view" aria-label="资源库">
       <header className="library-view__header">
-        <h1>库</h1>
+        <h1>资源库</h1>
         <p>管理您的资源和产物</p>
       </header>
-      <nav className="aw-agent-tabs library-tabs" aria-label="库分类" role="tablist">
+      <nav className="aw-agent-tabs library-tabs" aria-label="资源库分类" role="tablist">
         {LIBRARY_TABS.map((tab) => (
           <button
             type="button"

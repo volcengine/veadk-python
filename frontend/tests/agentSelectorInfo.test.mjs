@@ -237,8 +237,9 @@ test("the tabbed detail panel constrains long content and narrow viewports", () 
     stylesSource,
     /\.agentsel-env-v\s*\{[^}]*font-family:\s*inherit;/,
   );
+  assert.doesNotMatch(stylesSource, /--agentsel-available-width:\s*calc\(100vw - 218px\);/);
   assert.match(
     stylesSource,
-    /@media \(max-width:\s*860px\)[\s\S]*?\.agentsel\s*\{[\s\S]*?--agentsel-available-width:\s*calc\(100vw - 218px\);/,
+    /\.agentsel\s*\{[\s\S]*?--agentsel-available-width:\s*calc\(100vw - 254px\);/,
   );
 });

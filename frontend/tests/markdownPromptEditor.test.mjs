@@ -577,7 +577,7 @@ test("debug workspace compares multiple configurations behind one shared input",
 });
 
 test("narrow workbench keeps the canvas and configuration stacked without page scrolling", () => {
-  assert.match(
+  assert.doesNotMatch(
     appStyles,
     /@media \(max-width:\s*860px\)\s*\{[\s\S]*?\.sidebar\s*\{[\s\S]*?width:\s*204px;/,
   );

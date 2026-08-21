@@ -9,13 +9,11 @@ import {
   Info,
   LogOut,
   MoreHorizontal,
-  PanelLeftClose,
-  PanelLeftOpen,
   Plus,
   Trash2,
 } from "lucide-react";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
-import { BookOpen, Clock } from "@openai/apps-sdk-ui/components/Icon";
+import { Clock } from "@openai/apps-sdk-ui/components/Icon";
 import type {
   AdkSession,
   SiteBranding,
@@ -26,9 +24,15 @@ import type { SandboxSession, SandboxThreadSummary } from "../adk/sandbox";
 import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
-import { AgentFaceIcon } from "./AgentFaceIcon";
 import { AgentKitPromoCard } from "./AgentKitPromoCard";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
+import {
+  NewChatIcon,
+  ResourceLibraryIcon,
+  SidebarAgentIcon,
+  SidebarCollapseIcon,
+  SidebarExpandIcon,
+} from "./icons/SidebarIcons";
 import defaultSiteLogo from "../assets/logo.svg";
 import byteplusLogo from "../assets/byteplus.svg";
 import "./Sidebar.css";
@@ -397,86 +401,88 @@ export function Sidebar({
             title={collapsed ? "展开侧边栏" : "收起侧边栏"}
           >
             {collapsed ? (
-              <PanelLeftOpen className="icon" />
+              <SidebarExpandIcon className="icon" />
             ) : (
-              <PanelLeftClose className="icon" />
+              <SidebarCollapseIcon className="icon" />
             )}
           </button>
         </div>
-        {show("newChat") && (
+        <nav className="sidebar-nav" aria-label="主导航">
+          {show("newChat") && (
+            <button
+              className={`new-chat new-chat--conversation${
+                activePage === "new-chat" ? " is-active" : ""
+              }`}
+              onClick={onNewChat}
+              aria-label="新会话"
+              aria-current={activePage === "new-chat" ? "page" : undefined}
+              title="新会话"
+            >
+              <NewChatIcon className="icon" />
+              <span className="sidebar-nav-label">新会话</span>
+            </button>
+          )}
+          {show("search") && (
+            <SearchButton active={activePage === "search"} onClick={onSearch} />
+          )}
           <button
-            className={`new-chat new-chat--conversation${
-              activePage === "new-chat" ? " is-active" : ""
+            className={`new-chat new-chat--agents${
+              activePage === "agents" ? " is-active" : ""
             }`}
-            onClick={onNewChat}
-            aria-label="新会话"
-            aria-current={activePage === "new-chat" ? "page" : undefined}
-            title="新会话"
+            onClick={onMyAgents}
+            aria-label="智能体"
+            aria-current={activePage === "agents" ? "page" : undefined}
+            title="智能体"
           >
-            <Plus className="icon" />
-            <span className="sidebar-nav-label">新会话</span>
+            <SidebarAgentIcon className="icon" />
+            <span className="sidebar-nav-label">智能体</span>
           </button>
-        )}
-        <button
-          className={`new-chat new-chat--agents${
-            activePage === "agents" ? " is-active" : ""
-          }`}
-          onClick={onMyAgents}
-          aria-label="智能体"
-          aria-current={activePage === "agents" ? "page" : undefined}
-          title="智能体"
-        >
-          <AgentFaceIcon />
-          <span className="sidebar-nav-label">智能体</span>
-        </button>
-        <button
-          className={`new-chat new-chat--library${
-            activePage === "library" ? " is-active" : ""
-          }`}
-          onClick={onLibrary}
-          aria-label="库"
-          aria-current={activePage === "library" ? "page" : undefined}
-          title="库"
-        >
-          <BookOpen className="icon" />
-          <span className="sidebar-nav-label">库</span>
-        </button>
-        {show("search") && (
-          <SearchButton active={activePage === "search"} onClick={onSearch} />
-        )}
-        <button
-          className={`new-chat new-chat--cronjobs${
-            activePage === "cronjobs" ? " is-active" : ""
-          }`}
-          onClick={onCronJobs}
-          aria-label="定时任务"
-          aria-current={activePage === "cronjobs" ? "page" : undefined}
-          title="定时任务"
-        >
-          <Clock className="icon" />
-          <span className="sidebar-nav-label">定时任务</span>
-          <Badge
-            className="sidebar-cronjobs-beta"
-            color="discovery"
-            variant="soft"
-            size="sm"
-            pill
+          <button
+            className={`new-chat new-chat--library${
+              activePage === "library" ? " is-active" : ""
+            }`}
+            onClick={onLibrary}
+            aria-label="资源库"
+            aria-current={activePage === "library" ? "page" : undefined}
+            title="资源库"
           >
-            Beta
-          </Badge>
-        </button>
-        <button
-          className={`new-chat new-chat--applications${
-            activePage === "applications" ? " is-active" : ""
-          }`}
-          onClick={onApplications}
-          aria-label="自动化"
-          aria-current={activePage === "applications" ? "page" : undefined}
-          title="自动化"
-        >
-          <ApplicationsIcon className="icon" />
-          <span className="sidebar-nav-label">自动化</span>
-        </button>
+            <ResourceLibraryIcon className="icon" />
+            <span className="sidebar-nav-label">资源库</span>
+          </button>
+          <button
+            className={`new-chat new-chat--cronjobs${
+              activePage === "cronjobs" ? " is-active" : ""
+            }`}
+            onClick={onCronJobs}
+            aria-label="定时任务"
+            aria-current={activePage === "cronjobs" ? "page" : undefined}
+            title="定时任务"
+          >
+            <Clock className="icon" />
+            <span className="sidebar-nav-label">定时任务</span>
+            <Badge
+              className="sidebar-cronjobs-beta"
+              color="discovery"
+              variant="soft"
+              size="sm"
+              pill
+            >
+              Beta
+            </Badge>
+          </button>
+          <button
+            className={`new-chat new-chat--applications${
+              activePage === "applications" ? " is-active" : ""
+            }`}
+            onClick={onApplications}
+            aria-label="自动化"
+            aria-current={activePage === "applications" ? "page" : undefined}
+            title="自动化"
+          >
+            <ApplicationsIcon className="icon" />
+            <span className="sidebar-nav-label">自动化</span>
+          </button>
+        </nav>
       </div>
 
       {show("history") && (

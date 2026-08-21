@@ -31,7 +31,7 @@ const confirmSource = readFileSync(
 test("places Automation below scheduled tasks with a scheduled-task beta badge", () => {
   assert.match(sidebarSource, /\| "applications"\s*\| "cronjobs"/);
   assert.match(sidebarSource, /onCronJobs: \(\) => void/);
-  assert.match(sidebarSource, /import \{ BookOpen, Clock \} from "@openai\/apps-sdk-ui\/components\/Icon"/);
+  assert.match(sidebarSource, /import \{ Clock \} from "@openai\/apps-sdk-ui\/components\/Icon"/);
   assert.doesNotMatch(sidebarSource, /function ScheduledTasksIcon/);
   const automationIndex = sidebarSource.indexOf('aria-label="自动化"');
   const cronJobsIndex = sidebarSource.indexOf('aria-label="定时任务"');
