@@ -63,11 +63,7 @@ def _endpoint_url(endpoint: str, path: str, *, websocket: bool = False) -> str:
 
 
 def _headers(authorization: str) -> dict[str, str]:
-    headers = {"Authorization": authorization} if authorization else {}
-    channel_token = os.getenv("VEADK_STUDIO_CHANNEL_TOKEN", "").strip()
-    if channel_token:
-        headers["X-VeADK-Studio-Channel-Token"] = channel_token
-    return headers
+    return {"Authorization": authorization} if authorization else {}
 
 
 async def runtime_supports_bff_routes(

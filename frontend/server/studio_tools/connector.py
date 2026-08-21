@@ -484,9 +484,6 @@ async def open_studio_tool_run(
     headers: dict[str, str] = {}
     if authorization:
         headers["Authorization"] = authorization
-    channel_token = os.getenv("VEADK_STUDIO_CHANNEL_TOKEN", "").strip()
-    if channel_token:
-        headers["X-VeADK-Studio-Channel-Token"] = channel_token
 
     studio_instance_id = os.getenv("VEADK_STUDIO_INSTANCE_ID", "").strip()
     if not studio_instance_id:

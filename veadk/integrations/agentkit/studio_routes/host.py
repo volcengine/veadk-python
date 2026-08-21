@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
 import os
 import re
@@ -402,12 +401,6 @@ def _native_route_keys(app: FastAPI) -> set[tuple[str, str]]:
     return keys
 
 
-def _has_valid_token(headers: Any) -> bool:
-    required_token = os.getenv("VEADK_STUDIO_CHANNEL_TOKEN", "").strip()
-    presented_token = headers.get("x-veadk-studio-channel-token", "")
-    return not required_token or hmac.compare_digest(required_token, presented_token)
-
-
 def mount_studio_route_host(*, app: FastAPI, enabled: bool = False) -> StudioRouteHost:
     """Mount the Runtime half of Studio's persistent reverse-route channel."""
 
@@ -449,9 +442,6 @@ def mount_studio_route_host(*, app: FastAPI, enabled: bool = False) -> StudioRou
 
     @app.websocket(ROUTE_CHANNEL_PATH)
     async def studio_route_channel(websocket: WebSocket) -> None:
-        if not _has_valid_token(websocket.headers):
-            await websocket.close(code=4403, reason="invalid Studio channel token")
-            return
         await websocket.accept()
         connection: _StudioRouteConnection | None = None
         try:
@@ -483,8 +473,6 @@ def mount_studio_route_host(*, app: FastAPI, enabled: bool = False) -> StudioRou
 
     @app.post(ROUTE_HTTP_CHANNEL_PATH)
     async def studio_route_http_channel(request: Request) -> StreamingResponse:
-        if not _has_valid_token(request.headers):
-            raise HTTPException(status_code=403, detail="invalid Studio channel token")
         try:
             body = await request.json()
         except ValueError as error:
@@ -559,8 +547,6 @@ def mount_studio_route_host(*, app: FastAPI, enabled: bool = False) -> StudioRou
         channel_id: str,
         request: Request,
     ) -> dict[str, bool]:
-        if not _has_valid_token(request.headers):
-            raise HTTPException(status_code=403, detail="invalid Studio channel token")
         async with http_connections_lock:
             connection = http_connections.get(channel_id)
         if connection is None:

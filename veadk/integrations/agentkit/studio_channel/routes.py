@@ -17,9 +17,7 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
-import os
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -348,19 +346,8 @@ def mount_studio_channel_routes(
     http_connections: dict[str, _StudioChannelConnection] = {}
     http_connections_lock = asyncio.Lock()
 
-    def _has_valid_token(headers: Any) -> bool:
-        required_token = os.getenv("VEADK_STUDIO_CHANNEL_TOKEN", "").strip()
-        presented_token = headers.get("x-veadk-studio-channel-token", "")
-        return not required_token or hmac.compare_digest(
-            required_token, presented_token
-        )
-
     @app.websocket(path)
     async def studio_tool_channel(websocket: WebSocket) -> None:
-        if not _has_valid_token(websocket.headers):
-            await websocket.close(code=4403, reason="invalid Studio channel token")
-            return
-
         await websocket.accept()
         connection: _StudioChannelConnection | None = None
         try:
@@ -397,8 +384,6 @@ def mount_studio_channel_routes(
     async def studio_tool_http_run(request: Request) -> StreamingResponse:
         """Open an SSE downlink when an API gateway cannot proxy WebSockets."""
 
-        if not _has_valid_token(request.headers):
-            raise HTTPException(status_code=403, detail="invalid Studio channel token")
         try:
             body = await request.json()
         except ValueError as error:
@@ -499,8 +484,6 @@ def mount_studio_channel_routes(
     ) -> dict[str, bool]:
         """Accept tool results and cancellation for one HTTP fallback run."""
 
-        if not _has_valid_token(request.headers):
-            raise HTTPException(status_code=403, detail="invalid Studio channel token")
         async with http_connections_lock:
             connection = http_connections.get(channel_id)
         if connection is None:

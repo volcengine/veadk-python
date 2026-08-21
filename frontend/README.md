@@ -286,10 +286,10 @@ available after execution moves out of Runtime.
 
 Set `VEADK_STUDIO_TOOL_MODULE` to an importable module that exports
 `register_tools(registry)` to add BFF tools; Studio rebuilds the registry at
-startup, so restart Studio after changing that module. For application-level
-channel authentication, give both Studio and Runtime the same
-`VEADK_STUDIO_CHANNEL_TOKEN`. Runtime API-key or Identity authorization is still
-forwarded during the WebSocket handshake.
+startup, so restart Studio after changing that module. Studio forwards the
+Runtime API-key or Identity authorization on capability discovery, WebSocket
+handshakes, and HTTP/SSE fallback requests; the AgentKit ingress remains the
+authentication boundary for these channels.
 
 A deployable Runtime agent and launch scripts live in the
 [local reverse-tool example](../.agents/local/studio/A_BFF_tool_for_runtime/examples/README.md).

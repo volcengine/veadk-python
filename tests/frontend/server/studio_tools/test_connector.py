@@ -241,7 +241,6 @@ async def test_connector_treats_missing_capability_as_disabled(
 async def test_connector_runs_and_executes_tool_over_one_websocket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("VEADK_STUDIO_CHANNEL_TOKEN", "channel-token")
     websocket = _FakeWebSocket()
     connect_calls: list[tuple[str, dict[str, Any]]] = []
 
@@ -277,7 +276,6 @@ async def test_connector_runs_and_executes_tool_over_one_websocket(
     )
     assert connect_calls[0][1]["additional_headers"] == {
         "Authorization": "Bearer runtime-key",
-        "X-VeADK-Studio-Channel-Token": "channel-token",
     }
     tool_result = next(item for item in websocket.sent if item["type"] == "tool.result")
     assert tool_result["status"] == "success"
