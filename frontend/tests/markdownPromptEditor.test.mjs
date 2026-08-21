@@ -776,7 +776,7 @@ test("MCP tools stay directly visible and align with their field label", () => {
   assert.doesNotMatch(createSource, /moreToolTypesOpen|更多类型工具/);
   assert.match(
     createSource,
-    /className="cw-field cw-mcp-field"[\s\S]*?<label className="cw-label">MCP 工具<\/label>[\s\S]*?<McpToolEditor/,
+    /className="cw-field cw-mcp-field"[\s\S]*?<label className="cw-label cw-form-section-title">\s*MCP 工具\s*<\/label>[\s\S]*?<McpToolEditor/,
   );
   assert.match(
     createStyles,
@@ -794,12 +794,33 @@ test("capability sections share one dashed divider and spacing rhythm", () => {
     /className="cw-capability-memory-group"[\s\S]*?title="短期记忆"[\s\S]*?className="cw-capability-memory-group"[\s\S]*?title="长期记忆"/,
   );
   assert.match(
+    createSource,
+    /className="cw-label cw-form-section-title">\s*内置工具[\s\S]*?className="cw-label cw-form-section-title">\s*MCP 工具[\s\S]*?className="cw-label cw-form-section-title">\s*技能/,
+  );
+  assert.match(
+    createSource,
+    /title="知识库"[\s\S]*?sectionTitle[\s\S]*?title="短期记忆"[\s\S]*?sectionTitle[\s\S]*?title="长期记忆"[\s\S]*?sectionTitle/,
+  );
+  assert.match(
     createStyles,
     /--cw-capability-section-space:\s*24px;[\s\S]*?--cw-capability-section-divider:\s*1px dashed hsl\(var\(--border\) \/ 0\.72\);/,
   );
   assert.match(
     createStyles,
     /\.cw-section-skills,[\s\S]*?\.cw-section-knowledge,[\s\S]*?\.cw-section-memory,[\s\S]*?\.cw-capabilities-form[\s\S]*?> \.cw-field[\s\S]*?\+ \.cw-field,[\s\S]*?\.cw-capability-memory-group[\s\S]*?\+ \.cw-capability-memory-group\s*\{[\s\S]*?margin-top:\s*var\(--cw-capability-section-space\);[\s\S]*?padding-top:\s*var\(--cw-capability-section-space\);[\s\S]*?border-top:\s*var\(--cw-capability-section-divider\) !important;/,
+  );
+  assert.match(createSource, /<span className="cw-switch-knob" \/>/);
+  assert.doesNotMatch(
+    createSource,
+    /<motion\.span\s+className="cw-switch-knob"/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-switch-knob\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?transform:\s*translateX\(0\);[\s\S]*?transition:\s*transform 0\.18s ease-out;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-toggle\.is-on \.cw-switch-knob\s*\{[\s\S]*?transform:\s*translateX\(var\(--cw-switch-knob-travel\)\);/,
   );
 });
 

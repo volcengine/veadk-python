@@ -1819,12 +1819,14 @@ function Toggle({
   title,
   desc,
   showDescription = false,
+  sectionTitle = false,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   title: string;
   desc: string;
   showDescription?: boolean;
+  sectionTitle?: boolean;
   icon: typeof Bot;
 }) {
   return (
@@ -1835,15 +1837,15 @@ function Toggle({
       aria-pressed={checked}
     >
       <span className="cw-toggle-text">
-        <span className="cw-toggle-title">{title}</span>
+        <span
+          className={`cw-toggle-title${sectionTitle ? " cw-form-section-title" : ""}`}
+        >
+          {title}
+        </span>
         {showDescription && <span className="cw-toggle-help">{desc}</span>}
       </span>
       <span className="cw-switch" aria-hidden>
-        <motion.span
-          className="cw-switch-knob"
-          layout
-          transition={{ type: "spring", stiffness: 520, damping: 34 }}
-        />
+        <span className="cw-switch-knob" />
       </span>
     </button>
   );
@@ -5306,7 +5308,9 @@ export function CustomCreate({
                             <Section meta={metaOf("tools")}>
                               <div className="cw-form cw-capabilities-form">
                                 <div className="cw-field">
-                                  <label className="cw-label">内置工具</label>
+                                  <label className="cw-label cw-form-section-title">
+                                    内置工具
+                                  </label>
                                   <span className="cw-help">
                                     勾选 VeADK 提供的内置能力，生成时会自动补全
                                     import 与所需环境变量。
@@ -5355,7 +5359,9 @@ export function CustomCreate({
                                   </AnimatePresence>
                                 </div>
                                 <div className="cw-field cw-mcp-field">
-                                  <label className="cw-label">MCP 工具</label>
+                                  <label className="cw-label cw-form-section-title">
+                                    MCP 工具
+                                  </label>
                                   <McpToolEditor
                                     tools={mcpTools}
                                     onChange={(next) =>
@@ -5369,7 +5375,9 @@ export function CustomCreate({
                             <Section meta={metaOf("skills")}>
                               <div className="cw-form cw-capabilities-form">
                                 <div className="cw-field cw-skill-field">
-                                  <label className="cw-label">技能</label>
+                                  <label className="cw-label cw-form-section-title">
+                                    技能
+                                  </label>
                                   <SkillsSourceTabs
                                     selected={selectedSkills}
                                     onChange={(next) =>
@@ -5388,6 +5396,7 @@ export function CustomCreate({
                                   onChange={(v) => patch({ knowledgebase: v })}
                                   title="知识库"
                                   desc="启用外部知识检索（RAG），让 Agent 基于你的资料作答。"
+                                  sectionTitle
                                   icon={Database}
                                 />
                                 {node.knowledgebase && (
@@ -5511,6 +5520,7 @@ export function CustomCreate({
                                       title="短期记忆"
                                       desc="存储单会话上下文"
                                       showDescription
+                                      sectionTitle
                                       icon={Layers}
                                     />
                                     {node.memory.shortTerm && (
@@ -5560,6 +5570,7 @@ export function CustomCreate({
                                       title="长期记忆"
                                       desc="存储跨会话上下文，通常使用向量化检索"
                                       showDescription
+                                      sectionTitle
                                       icon={Database}
                                     />
                                     {node.memory.longTerm && (
