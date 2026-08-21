@@ -199,6 +199,9 @@ def web(
     )
 
     patch_adkwebserver_disable_openapi()
+    from veadk.utils.patches import patch_adk_build_graph_serialization
+
+    patch_adk_build_graph_serialization()
 
     from google.adk.cli.cli_tools_click import cli_web
 
