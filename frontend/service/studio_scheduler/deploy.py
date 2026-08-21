@@ -193,6 +193,7 @@ def _stage_package(package_root: Path, destination: Path) -> None:
         "frontend.service.studio_scheduler.http_app:app "
         '--host 0.0.0.0 --port "${_FAAS_RUNTIME_PORT:-8000}"\n',
         encoding="utf-8",
+        newline="\n",
     )
     run_script.chmod(0o755)
 
