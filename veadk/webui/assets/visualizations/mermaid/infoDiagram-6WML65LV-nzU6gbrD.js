@@ -1,6 +1,0 @@
-<<<<<<<< HEAD:veadk/webui/assets/visualizations/mermaid/infoDiagram-6WML65LV-CfvY495v.js
-import{a as e,at as s,aQ as o,B as i}from"./mermaid.core-CL8812F7.js";import{p as g}from"./cynefin-OW5HDTMX-CA1b7PpC.js";import"../../app/index-BPxtKV7r.js";var p={parse:e(async r=>{const a=await g("info",r);s.debug(a)},"parse")},v={version:"11.16.1"},d=e(()=>v.version,"getVersion"),m={getVersion:d},c=e((r,a,n)=>{s.debug(`rendering info diagram
-========
-import{a as e,at as s,aQ as o,B as i}from"./mermaid.core-BBqtd3yq.js";import{p as g}from"./cynefin-OW5HDTMX-iZy7oznz.js";import"../../app/index-vzaEE6dr.js";var p={parse:e(async r=>{const a=await g("info",r);s.debug(a)},"parse")},v={version:"11.16.1"},d=e(()=>v.version,"getVersion"),m={getVersion:d},c=e((r,a,n)=>{s.debug(`rendering info diagram
->>>>>>>> 3ce35407 (feat(studio): add first-party Studio tool extensions):veadk/webui/assets/visualizations/mermaid/infoDiagram-6WML65LV-nzU6gbrD.js
-`+r);const t=o(a);i(t,100,400,!0),t.append("g").append("text").attr("x",100).attr("y",40).attr("class","version").attr("font-size",32).style("text-anchor","middle").text(`v${n}`)},"draw"),f={draw:c},b={parser:p,db:m,renderer:f};export{b as diagram};
