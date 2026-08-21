@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -72,10 +73,80 @@ _NODE_ARCHIVE_SHA256 = {
     "arm64": "140aee84be6774f5fb3f404be72adbe8420b523f824de82daeb5ab218dab7b18",
     "x64": "325c0f1261e0c61bcae369a1274028e9cfb7ab7949c05512c5b1e630f7e80e12",
 }
+_CGROUP_MEMORY_LIMIT_PATHS = (
+    Path("/sys/fs/cgroup/memory.max"),
+    Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+)
+_NODE_HEAP_MEMORY_RATIO = 0.75
+_DEFAULT_NODE_HEAP_MB = 4096
 
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str, str], None]
+
+
+def _physical_memory_bytes() -> int | None:
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        page_count = os.sysconf("SC_PHYS_PAGES")
+    except (OSError, ValueError):
+        return None
+    if page_size <= 0 or page_count <= 0:
+        return None
+    return page_size * page_count
+
+
+def _memory_limit_bytes(
+    *,
+    cgroup_paths: tuple[Path, ...] = _CGROUP_MEMORY_LIMIT_PATHS,
+    physical_memory: int | None = None,
+) -> int | None:
+    if physical_memory is None:
+        physical_memory = _physical_memory_bytes()
+    candidates = [physical_memory] if physical_memory and physical_memory > 0 else []
+    for path in cgroup_paths:
+        try:
+            raw_limit = path.read_text(encoding="utf-8").strip()
+            cgroup_limit = int(raw_limit)
+        except (FileNotFoundError, OSError, ValueError):
+            continue
+        if cgroup_limit <= 0:
+            continue
+        # Cgroup v1 represents an unlimited value with a number close to 2^63.
+        if physical_memory and cgroup_limit > physical_memory:
+            continue
+        candidates.append(cgroup_limit)
+    return min(candidates) if candidates else None
+
+
+def _node_heap_limit_mb(memory_limit: int | None = None) -> int:
+    if memory_limit is None:
+        memory_limit = _memory_limit_bytes()
+    if memory_limit is None:
+        return _DEFAULT_NODE_HEAP_MB
+    return max(128, int(memory_limit * _NODE_HEAP_MEMORY_RATIO / (1024 * 1024)))
+
+
+def _node_options(existing: str, heap_limit_mb: int) -> str:
+    try:
+        options = shlex.split(existing)
+    except ValueError:
+        options = []
+    filtered: list[str] = []
+    skip_value = False
+    for option in options:
+        if skip_value:
+            skip_value = False
+            continue
+        normalized = option.replace("_", "-")
+        if normalized == "--max-old-space-size":
+            skip_value = True
+            continue
+        if normalized.startswith("--max-old-space-size="):
+            continue
+        filtered.append(option)
+    filtered.append(f"--max-old-space-size={heap_limit_mb}")
+    return shlex.join(filtered)
 
 
 class ReleaseBuilder(Protocol):
@@ -559,6 +630,10 @@ class StudioReleaseBuilder:
             raise RuntimeError("Prepared Studio dependency wheels are missing.")
         command.extend(("--dependency-wheels", str(dependency_wheels)))
         env = os.environ.copy()
+        env["NODE_OPTIONS"] = _node_options(
+            env.get("NODE_OPTIONS", ""),
+            _node_heap_limit_mb(),
+        )
         path_entries = [str(uv.parent)]
         if node_bin is not None:
             path_entries.insert(0, str(node_bin))
