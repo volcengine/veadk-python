@@ -260,6 +260,10 @@ def test_message_feedback_writes_dataset_and_session_state(
                 "comment": annotation_comment,
             },
         )
+        workspace = client.get(
+            "/web/scenario-evaluation/workspace?agentId=agent",
+            headers={"X-VeADK-Local-User": "user-1"},
+        )
 
     assert response.status_code == 200
     assert response.json()["rating"] == "good"
@@ -267,6 +271,25 @@ def test_message_feedback_writes_dataset_and_session_state(
     assert response.json()["evaluationItemId"] == "item-1"
     assert response.json()["evaluationSetName"] == (f"{expected_agent_name}_good_case")
     assert response.json()["statePersistence"] == "browser"
+    assert workspace.status_code == 200
+    feedback_candidate = workspace.json()["feedbackCandidates"][0]
+    assert feedback_candidate["decision"] == "pending"
+    assert feedback_candidate["source"] == {
+        "agentId": "agent",
+        "agentVersion": "runtime-1",
+        "runtimeId": "runtime-1",
+        "appName": "agent",
+        "userId": "user-1",
+        "sessionId": "session-1",
+        "messageId": "assistant-event",
+        "invocationId": "invocation-1",
+        "runId": "invocation-1",
+        "traceRef": "trace:runtime-1/session-1/invocation-1",
+        "input": "问题",
+        "output": "回答",
+        "rating": "good",
+        "comment": annotation_comment,
+    }
     assert [call["action"] for call in openapi_calls] == [
         "ListEvaluationSets",
         "ListEvaluationSets",
@@ -289,6 +312,102 @@ def test_message_feedback_writes_dataset_and_session_state(
     field_data = create_item_payload["Items"][0]["Turns"][0]["FieldDataList"]
     fields = {field["Key"]: field["Content"]["Text"] for field in field_data}
     assert fields["feedback_comment"] == annotation_comment
+
+
+def test_studio_feedback_reports_unavailable_governed_storage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("VEADK_STUDIO_TOS_BUCKET", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_TOS_REGION", raising=False)
+    app = _create_frontend_app(monkeypatch, tmp_path, studio=True)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                project_name="support",
+                tags=[],
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example",
+                        network_type="public",
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-key"),
+                    custom_jwt_authorizer=None,
+                ),
+            )
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        async def __aenter__(self) -> "_FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            del args
+
+        async def request(self, method: str, url: str, **kwargs: Any) -> _FakeResponse:
+            del kwargs
+            if method == "GET" and "/sessions/session-1" in url:
+                return _FakeResponse(
+                    {
+                        "id": "session-1",
+                        "state": {},
+                        "events": [
+                            {
+                                "id": "user-event",
+                                "author": "user",
+                                "content": {"parts": [{"text": "问题"}]},
+                            },
+                            {
+                                "id": "assistant-event",
+                                "author": "agent",
+                                "invocationId": "invocation-1",
+                                "content": {"parts": [{"text": "回答"}]},
+                            },
+                        ],
+                    }
+                )
+            if method == "GET" and "/web/agent-info/agent" in url:
+                return _FakeResponse({"name": "agent"})
+            raise AssertionError((method, url))
+
+        async def post(self, url: str, **kwargs: Any) -> _FakeResponse:
+            raise AssertionError((url, kwargs))
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/evaluation/feedback",
+            headers={"X-VeADK-Local-User": "user-1"},
+            json={
+                "runtimeId": "runtime-1",
+                "region": "cn-beijing",
+                "appName": "agent",
+                "userId": "user-1",
+                "sessionId": "session-1",
+                "eventId": "assistant-event",
+                "rating": "bad",
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "code": "unavailable",
+        "message": "管理员未配置持久化存储",
+    }
 
 
 def test_message_feedback_byteplus_is_noop(

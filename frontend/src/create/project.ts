@@ -9,4 +9,5 @@ export interface ProjectFile {
 export interface AgentProject {
   name: string;
   files: ProjectFile[];
+  attestation?: string;
 }
