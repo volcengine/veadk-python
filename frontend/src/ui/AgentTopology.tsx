@@ -254,7 +254,7 @@ export function AgentInfoPanel({
                         <span className="topo-capability-name">{tool.label}</span>
                         <code>{tool.name}</code>
                       </span>
-                      {tool.custom && <span className="topo-custom-badge">Studio BFF</span>}
+                      {tool.custom && <span className="topo-custom-badge">Studio Tool</span>}
                     </span>
                     {tool.custom && (
                       <button

@@ -250,7 +250,7 @@ def build_studio_tool_registry(
     *,
     media_service: MediaService | None = None,
 ) -> StudioToolRegistry:
-    """Build the registry selected by server-owned Studio configuration."""
+    """Build the complete Studio BFF tool registry."""
 
     registry = StudioToolRegistry()
     from frontend.server.studio_tools.veadk_builtin_tools import (
@@ -258,6 +258,11 @@ def build_studio_tool_registry(
     )
 
     register_veadk_builtin_tools(registry, media_service=media_service)
+    from frontend.server.studio_tools.extensions import (
+        register_studio_tool_extensions,
+    )
+
+    register_studio_tool_extensions(registry)
     module_name = os.getenv("VEADK_STUDIO_TOOL_MODULE", "").strip()
     if module_name:
         module = importlib.import_module(module_name)

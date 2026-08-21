@@ -181,10 +181,10 @@ test("keeps capability section titles text-only", () => {
   assert.match(railSource, /import \{ Maximize2, X \} from "lucide-react"/);
 });
 
-test("mixes selected Studio BFF tools into the existing tool list", () => {
+test("mixes selected Studio tools into the existing tool list", () => {
   assert.match(railSource, /const selectedStudioTools = studioTools/);
   assert.match(railSource, /selectedIds\.has\(tool\.id\)/);
-  assert.match(railSource, /tool\.custom && <span className="topo-custom-badge">Studio BFF<\/span>/);
+  assert.match(railSource, /tool\.custom && <span className="topo-custom-badge">Studio Tool<\/span>/);
   assert.match(railSource, /tool\.custom && \([\s\S]*?topo-remove-capability/);
   assert.doesNotMatch(railSource, /skill\.custom/);
   assert.match(appSource, /studioTools=\{studioToolCapabilities\?\.tools \?\? \[\]\}/);

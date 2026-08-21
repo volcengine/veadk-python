@@ -284,12 +284,16 @@ their `builtin:` bindings remain unchanged. The BFF supplies the ADK
 generated ADK artifacts through Studio media storage so downloads remain
 available after execution moves out of Runtime.
 
-Set `VEADK_STUDIO_TOOL_MODULE` to an importable module that exports
-`register_tools(registry)` to add BFF tools; Studio rebuilds the registry at
-startup, so restart Studio after changing that module. Studio forwards the
-Runtime API-key or Identity authorization on capability discovery, WebSocket
-handshakes, and HTTP/SSE fallback requests; the AgentKit ingress remains the
-authentication boundary for these channels.
+Studio-owned tools that don't belong in VeADK's built-in catalog live in
+`frontend/server/studio_tools/extensions`. Studio discovers every public Python
+module in that directory at startup and calls its `register_tools(registry)`
+function. Adding one of these tools requires no environment variable or Runtime
+change; restart Studio after changing the module. `current_time.py` is the
+minimal working example for future Studio-only tools.
+
+Studio forwards the Runtime API-key or Identity authorization on capability
+discovery, WebSocket handshakes, and HTTP/SSE fallback requests; the AgentKit
+ingress remains the authentication boundary for these channels.
 
 A deployable Runtime agent and launch scripts live in the
 [local reverse-tool example](../.agents/local/studio/A_BFF_tool_for_runtime/examples/README.md).

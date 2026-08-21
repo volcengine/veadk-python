@@ -255,7 +255,10 @@ def test_runtime_tool_capabilities_expose_safe_local_metadata(
     body = response.json()
     assert body["enabled"] is True
     assert body["supported"] is True
-    assert {item["id"] for item in body["tools"]} == set(list_builtin_tools())
+    assert {item["id"] for item in body["tools"]} == {
+        *list_builtin_tools(),
+        "current_time",
+    }
     assert all("input_schema" not in item for item in body["tools"])
 
 
