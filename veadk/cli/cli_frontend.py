@@ -7432,6 +7432,61 @@ def _run_frontend_server(
             _authorize_agent_usage,
         )
 
+        from frontend.server.website_integration import (
+            create_service as create_website_integration_service,
+        )
+        from frontend.server.website_integration import (
+            mount_routes as mount_website_integration_routes,
+        )
+        from frontend.server.website_integration.models import WebsiteIntegration
+        from frontend.server.website_integration.runtime import (
+            invoke_agentkit_runtime,
+        )
+
+        website_integration_service = create_website_integration_service(
+            provider=provider,
+            resolve_credentials=_resolve_ve_credentials,
+            signing_key=_knowledge_signing_key(),
+        )
+        app.state.website_integrations = website_integration_service
+
+        def _website_integration_owner(request: Request) -> str:
+            principal = _require_agent_management(request)
+            return principal.owner_id if principal is not None else "local"
+
+        def _authorize_website_integration_runtime(
+            request: Request,
+            runtime_id: str,
+            region: str,
+        ) -> Any:
+            _require_agent_management(request)
+            return _authorized_runtime(
+                request,
+                runtime_id,
+                _coerce_cloud_region(region),
+                coded_access_error=True,
+            )
+
+        async def _invoke_website_integration_runtime(
+            integration: WebsiteIntegration,
+            payload: dict[str, Any],
+        ):
+            return await invoke_agentkit_runtime(
+                integration,
+                payload,
+                get_runtime=_get_runtime,
+                resolve_connection=_resolve_runtime_conn,
+                build_headers=_build_agentkit_proxy_headers,
+            )
+
+        mount_website_integration_routes(
+            app,
+            website_integration_service,
+            owner_id=_website_integration_owner,
+            authorize_runtime=_authorize_website_integration_runtime,
+            invoke_runtime=_invoke_website_integration_runtime,
+        )
+
     @app.api_route(
         "/web/runtime-proxy/{runtime_id}/{path:path}",
         methods=["GET", "HEAD", "POST", "PATCH", "DELETE"],
@@ -7830,6 +7885,9 @@ def _run_frontend_server(
                     "/",
                     "/index.html",
                     "/favicon.ico",
+                    "/website-integration.js",
+                    "/embed/session",
+                    "/embed/run_sse",
                     "/web/auth-config",
                     "/web/site-logo",
                     "/web/sandbox/codex-project-handoff/sessions",

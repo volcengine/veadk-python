@@ -38,6 +38,17 @@ function CodingAgentsIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function WebsiteIntegrationIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 36 36" fill="none" aria-hidden="true" {...props}>
+      <rect x="3.5" y="5" width="22" height="18" rx="4" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M4.5 10h20M9 7.5h.1M12 7.5h.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M18 18.5c0-3 2.5-5.5 5.5-5.5h3c3 0 5.5 2.5 5.5 5.5v5c0 3-2.5 5.5-5.5 5.5H25l-4 3v-3.6a5.5 5.5 0 0 1-3-4.9v-5Z" fill="hsl(var(--background))" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M22 19.5h6M22 23h4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function Applications({ onOpen }: ApplicationsProps) {
   const [activeCategory, setActiveCategory] = useState("development");
   const [query, setQuery] = useState("");
@@ -118,6 +129,8 @@ export function Applications({ onOpen }: ApplicationsProps) {
                       />
                     ) : application.icon === "coding-agents" ? (
                       <CodingAgentsIcon className="application-card-icon" />
+                    ) : application.icon === "website-integration" ? (
+                      <WebsiteIntegrationIcon className="application-card-icon" />
                     ) : (
                       <GitHubLogo className="application-card-icon" />
                     )}

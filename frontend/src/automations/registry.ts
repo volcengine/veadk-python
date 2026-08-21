@@ -3,6 +3,7 @@ import { feishuBotAutomation } from "./feishuBot";
 import { pullRequestReviewAutomation } from "./pullRequestReview";
 import { runtimeDeliveryAutomation } from "./runtimeDelivery";
 import { templateProjectAutomation } from "./templateProject";
+import { websiteIntegrationAutomation } from "./websiteIntegration";
 import type {
   AutomationCategoryId,
   AutomationDefinition,
@@ -24,6 +25,7 @@ export const AUTOMATIONS: readonly AutomationDefinition[] = [
   runtimeDeliveryAutomation,
   pullRequestReviewAutomation,
   feishuBotAutomation,
+  websiteIntegrationAutomation,
 ];
 
 const AUTOMATION_BY_ID = new Map(
