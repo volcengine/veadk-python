@@ -6,7 +6,7 @@
   "description": "VeADK A2UI web UI — renders agent-driven UI over the ADK API server.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && vite build --config vite.website-integration.config.ts",
+    "build": "node scripts/build.mjs",
     "test": "node --test tests/*.test.mjs",
     "test:webui-assets": "node scripts/verifyBuiltAssets.mjs",
     "test:visualizations": "node scripts/testVisualizationCompatibility.mjs",
