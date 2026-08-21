@@ -87,6 +87,9 @@ def test_stage_copies_only_safe_runtime_source_and_rewrites_requirements(
     cache = package / "__pycache__"
     cache.mkdir()
     (cache / "module.pyc").write_bytes(b"compiled")
+    webui = package / "webui"
+    webui.mkdir()
+    (webui / "bundle.js").write_bytes(b"browser-only")
     (package / ".env.local").write_text("SECRET=ignored\n", encoding="utf-8")
     project = tmp_path / "project"
     project.mkdir()
@@ -104,6 +107,7 @@ def test_stage_copies_only_safe_runtime_source_and_rewrites_requirements(
     assert snapshot.total_bytes > 0
     assert (project / "veadk/extensions/harness/sidecar.py").is_file()
     assert not (project / "veadk/__pycache__").exists()
+    assert not (project / "veadk/webui").exists()
     assert not (project / "veadk/.env.local").exists()
     requirements = (project / "requirements.txt").read_text(encoding="utf-8")
     assert requirements.splitlines().count("agentkit-sdk-python==0.8.4") == 1

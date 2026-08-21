@@ -61,6 +61,9 @@ export default defineConfig({
       "/debug": localApiProxy(),
       "/dev": localApiProxy(),
       "/oauth2": localApiProxy(),
+      // Embed authorization depends on the customer's browser Origin, so this
+      // proxy intentionally preserves Origin instead of using localApiProxy().
+      "/embed": { target: API_TARGET },
       "/web": localApiProxy(),
       "/skillhub": {
         target: SKILLHUB_TARGET,

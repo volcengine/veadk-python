@@ -62,6 +62,30 @@ const feishuDeploymentSource = readFileSync(
   new URL("../src/automations/feishu/deployment.ts", import.meta.url),
   "utf8",
 );
+const websiteIntegrationSource = readFileSync(
+  new URL("../src/automations/website-integration/WebsiteIntegration.tsx", import.meta.url),
+  "utf8",
+);
+const websiteIntegrationApiSource = readFileSync(
+  new URL("../src/adk/websiteIntegration.ts", import.meta.url),
+  "utf8",
+);
+const websiteIntegrationLoaderSource = readFileSync(
+  new URL("../public/website-integration.js", import.meta.url),
+  "utf8",
+);
+const websiteIntegrationWidgetSource = readFileSync(
+  new URL("../src/website-integration/WebsiteChatWidget.tsx", import.meta.url),
+  "utf8",
+);
+const websiteIntegrationEntrySource = readFileSync(
+  new URL("../src/website-integration/main.tsx", import.meta.url),
+  "utf8",
+);
+const websiteIntegrationStyles = readFileSync(
+  new URL("../src/website-integration/website-integration.css", import.meta.url),
+  "utf8",
+);
 const sidebarSource = readFileSync(
   new URL("../src/ui/Sidebar.tsx", import.meta.url),
   "utf8",
@@ -242,4 +266,38 @@ test("Feishu detail deploys a new basic Runtime from customer credentials", () =
   assert.match(feishuStyles, /\.feishu-region-menu \{[\s\S]*?top: calc\(100% \+ 6px\)/);
   assert.match(feishuStyles, /\.feishu-region-option \{[\s\S]*?min-height: 34px/);
   assert.doesNotMatch(feishuStyles, /font-family:\s*(?:monospace|[^;]*Mono)/i);
+});
+
+test("Website integration creates an Origin-bound embed token and chat loader", () => {
+  assert.match(registrySource, /websiteIntegrationAutomation/);
+  assert.match(appSource, /applicationsView === "website-integration"/);
+  assert.match(appSource, /<WebsiteIntegration/);
+  assert.match(websiteIntegrationSource, /<h1>网站集成<\/h1>/);
+  assert.match(websiteIntegrationSource, /添加网站/);
+  assert.match(websiteIntegrationSource, /AgentKit Runtime/);
+  assert.match(websiteIntegrationSource, /引入方法/);
+  assert.match(websiteIntegrationSource, /CopyButton/);
+  assert.match(websiteIntegrationSource, /getRuntimes/);
+  assert.match(websiteIntegrationSource, /probeRuntimeApps/);
+  assert.doesNotMatch(websiteIntegrationSource, /localStorage|sessionStorage|重启/);
+  assert.match(websiteIntegrationApiSource, /\/web\/website-integrations/);
+  assert.doesNotMatch(websiteIntegrationApiSource, /localStorage|sessionStorage/);
+  assert.match(websiteIntegrationLoaderSource, /data-token/);
+  assert.match(websiteIntegrationWidgetSource, /\/embed\/session/);
+  assert.match(websiteIntegrationWidgetSource, /\/embed\/run_sse/);
+  assert.match(websiteIntegrationWidgetSource, /<Blocks/);
+  assert.match(websiteIntegrationWidgetSource, /<Markdown/);
+  assert.match(websiteIntegrationWidgetSource, /CompactComposer/);
+  assert.match(websiteIntegrationWidgetSource, /\/web\/site-logo/);
+  assert.match(websiteIntegrationWidgetSource, /window\.addEventListener\("pointermove"/);
+  assert.match(websiteIntegrationWidgetSource, /window\.addEventListener\("pointerup"/);
+  assert.match(websiteIntegrationWidgetSource, /window\.addEventListener\("pointercancel"/);
+  assert.doesNotMatch(websiteIntegrationWidgetSource, /setPointerCapture/);
+  assert.match(websiteIntegrationWidgetSource, /suppressClickRef/);
+  assert.match(websiteIntegrationEntrySource, /attachShadow/);
+  assert.match(websiteIntegrationEntrySource, /builtin-tools\.css\?inline/);
+  assert.match(websiteIntegrationEntrySource, /text-shimmer\.css\?inline/);
+  assert.match(websiteIntegrationStyles, /\.website-widget\s*\{[\s\S]*?text-align: left;/);
+  assert.match(websiteIntegrationStyles, /\.website-widget__launcher\s*\{[\s\S]*?touch-action: none;/);
+  assert.match(websiteIntegrationStyles, /\.website-widget__launcher-logo\s*\{[\s\S]*?filter: brightness\(0\) invert\(1\);/);
 });
