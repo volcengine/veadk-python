@@ -1096,7 +1096,7 @@ test("remote Agent configures only the AgentKit center", () => {
   );
   assert.match(
     createSource,
-    /\{!a2a && \(\s*<>[\s\S]*?<label className="cw-label" htmlFor="cw-agent-name">\s*名称/,
+    /\{!a2a && \(\s*<>[\s\S]*?<label[\s\S]*?className="cw-label cw-form-section-title"[\s\S]*?htmlFor="cw-agent-name"[\s\S]*?>\s*名称/,
   );
   assert.match(
     createSource,

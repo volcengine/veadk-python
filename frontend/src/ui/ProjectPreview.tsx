@@ -2430,8 +2430,7 @@ export function ProjectPreview({
                   disabled={
                     deploying ||
                     feishuUpdating ||
-                    deployDisabled ||
-                    !!deployDisabledReason
+                    deployDisabled
                   }
                 />
                 </>

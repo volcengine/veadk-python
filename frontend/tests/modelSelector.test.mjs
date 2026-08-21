@@ -47,6 +47,11 @@ test("model configuration switches between ModelArk and custom fields", () => {
     customCreateSource,
     /className="cw-form-section-title cw-model-section-title"/,
   );
+  assert.equal(
+    customCreateSource.match(/className="cw-label cw-form-section-title"/g)
+      ?.length,
+    3,
+  );
   assert.match(
     customCreateStyles,
     /\.cw-detail\.is-basic \.cw-section:nth-child\(3\) \.cw-model-form \{ order: 2; \}/,

@@ -391,9 +391,13 @@ test("keeps existing chat and configuration panel contracts", () => {
 test("keeps concise labels and capability visibility in selected-node form", () => {
   assert.match(
     customCreateSource,
-    /<label className="cw-label" htmlFor="cw-agent-name">\s*名称/,
+    /className="cw-label cw-form-section-title"\s*htmlFor="cw-agent-name"[\s\S]*?>\s*名称/,
   );
   assert.match(customCreateSource, /\{isRootAgent \? "描述" : "智能体描述"\}/);
+  assert.match(
+    customCreateSource,
+    /className="cw-label cw-form-section-title"[\s\S]*?系统提示词<span className="cw-req">\*<\/span>/,
+  );
   assert.doesNotMatch(customCreateSource, /"步骤名称"|"任务说明"/);
   assert.match(
     customCreateSource,

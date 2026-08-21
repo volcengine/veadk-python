@@ -4896,7 +4896,10 @@ export function CustomCreate({
                             {!a2a && (
                               <>
                                 <div className="cw-field cw-model-config-row cw-basic-name-field">
-                                  <label className="cw-label" htmlFor="cw-agent-name">
+                                  <label
+                                    className="cw-label cw-form-section-title"
+                                    htmlFor="cw-agent-name"
+                                  >
                                     名称
                                     <span className="cw-req">*</span>
                                   </label>
@@ -4934,7 +4937,7 @@ export function CustomCreate({
                                 </div>
                                 <div className="cw-field cw-model-config-row cw-basic-description-field">
                                   <label
-                                    className="cw-label"
+                                    className="cw-label cw-form-section-title"
                                     htmlFor="cw-agent-description"
                                   >
                                     {isRootAgent ? "描述" : "智能体描述"}
@@ -5100,7 +5103,7 @@ export function CustomCreate({
                                 className="cw-field cw-model-config-row cw-basic-prompt-field"
                                 data-validation-field="instruction"
                               >
-                                <label className="cw-label">
+                                <label className="cw-label cw-form-section-title">
                                   系统提示词<span className="cw-req">*</span>
                                 </label>
                                 <Suspense
