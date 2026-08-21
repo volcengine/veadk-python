@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from types import SimpleNamespace
@@ -77,12 +78,16 @@ class _FakeTos:
             key
             for object_bucket, key in self.objects
             if object_bucket == bucket and key.startswith(prefix)
-        )
+        )[:max_keys]
         return SimpleNamespace(
             contents=[SimpleNamespace(key=key) for key in keys],
             is_truncated=False,
             next_continuation_token=None,
         )
+
+    def delete_object(self, *, bucket: str, key: str) -> None:
+        with self._lock:
+            self.objects.pop((bucket, key), None)
 
 
 @pytest.mark.asyncio
@@ -126,6 +131,32 @@ async def test_due_pointer_cas_advances_revision_for_the_same_occurrence() -> No
     assert await repository.put_due(updated) is True
     assert await repository.put_due(original) is False
     assert await repository.list_due(minute) == [updated]
+
+
+@pytest.mark.asyncio
+async def test_ready_queue_is_durable_bounded_and_deletable() -> None:
+    client = _FakeTos()
+    repository = TosSchedulerRepository(bucket="studio", client_factory=lambda: client)
+    minute = datetime(2026, 8, 20, 10, 35, tzinfo=timezone.utc)
+    pointers = [
+        DuePointer(
+            user_id=f"owner-{index}",
+            job_id=f"job-{index}",
+            revision=1,
+            scheduled_at=minute,
+        )
+        for index in range(3)
+    ]
+    for pointer in pointers:
+        assert await repository.put_ready(pointer) is True
+        assert await repository.put_ready(pointer) is False
+
+    first_page = await repository.list_ready(2)
+    assert len(first_page) == 2
+    assert client.listed_prefixes[-1] == "veadk-studio/v1/scheduler/cronjobs/ready/"
+
+    await repository.delete_ready(first_page[0])
+    assert len(await repository.list_ready(10)) == 2
 
 
 @pytest.mark.asyncio
@@ -208,3 +239,43 @@ async def test_cancel_request_is_a_durable_idempotent_cas_update() -> None:
 
     assert first is not None and first.cancel_requested is True
     assert second == first
+
+
+@pytest.mark.asyncio
+async def test_terminal_run_cannot_be_overwritten_by_a_late_worker() -> None:
+    client = _FakeTos()
+    repository = TosSchedulerRepository(bucket="studio", client_factory=lambda: client)
+    now = datetime(2026, 8, 20, 10, 35, tzinfo=timezone.utc)
+    running = ScheduledRun(
+        user_id="owner",
+        job_id="job",
+        run_id="run",
+        revision=1,
+        scheduled_at=now,
+        session_id="run",
+        state="running",
+        created_at=now,
+        updated_at=now,
+    )
+    await repository.create_run(running)
+    failed = await repository.update_run(
+        replace(
+            running,
+            state="failed",
+            error="lease expired",
+            completed_at=now + timedelta(minutes=1),
+        )
+    )
+
+    late = await repository.update_run(
+        replace(
+            running,
+            state="succeeded",
+            output="late response",
+            completed_at=now + timedelta(minutes=2),
+        )
+    )
+
+    assert late == failed
+    assert late.state == "failed"
+    assert late.output == ""

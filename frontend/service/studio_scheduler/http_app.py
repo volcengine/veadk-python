@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI
 
 from .app import create_dispatcher
+from .models import DispatchSummary
 
 app = FastAPI(title="VeADK Studio cronjob scheduler", docs_url=None, redoc_url=None)
 
@@ -30,11 +31,10 @@ async def healthz() -> dict[str, bool]:
     return {"ok": True}
 
 
-@app.post("/")
-async def dispatch_current_minute() -> dict[str, int]:
-    summary = await create_dispatcher().dispatch_minute(datetime.now(timezone.utc))
+def _summary(summary: DispatchSummary) -> dict[str, int]:
     return {
         "scanned": summary.scanned,
+        "queued": summary.queued,
         "started": summary.started,
         "stale": summary.stale,
         "skipped": summary.skipped,
@@ -42,4 +42,30 @@ async def dispatch_current_minute() -> dict[str, int]:
     }
 
 
-__all__ = ["app", "dispatch_current_minute", "healthz"]
+async def dispatch_current_minute() -> dict[str, int]:
+    summary = await create_dispatcher().dispatch_minute(datetime.now(timezone.utc))
+    return _summary(summary)
+
+
+async def execute_ready_runs() -> dict[str, int]:
+    summary = await create_dispatcher().execute_ready()
+    return _summary(summary)
+
+
+@app.post("/")
+async def handle_timer(event: dict[str, object] | None = None) -> dict[str, int]:
+    phase = str((event or {}).get("phase") or "scan")
+    if phase == "scan":
+        return await dispatch_current_minute()
+    if phase == "execute":
+        return await execute_ready_runs()
+    raise ValueError(f"Unsupported scheduler phase: {phase}")
+
+
+__all__ = [
+    "app",
+    "dispatch_current_minute",
+    "execute_ready_runs",
+    "handle_timer",
+    "healthz",
+]

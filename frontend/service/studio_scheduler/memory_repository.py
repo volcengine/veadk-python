@@ -29,6 +29,7 @@ class InMemorySchedulerRepository:
     def __init__(self) -> None:
         self.jobs: dict[tuple[str, str], CronJob] = {}
         self.due: dict[tuple[str, str, datetime], DuePointer] = {}
+        self.ready: dict[str, DuePointer] = {}
         self.runs: dict[tuple[str, str, str], ScheduledRun] = {}
         self.locks: dict[tuple[str, str], JobLock] = {}
         self._mutex = asyncio.Lock()
@@ -47,6 +48,32 @@ class InMemorySchedulerRepository:
                 ),
                 key=lambda pointer: (pointer.user_id, pointer.job_id),
             )
+
+    async def put_ready(self, pointer: DuePointer) -> bool:
+        run_id = self._run_id(pointer)
+        async with self._mutex:
+            existing = self.ready.get(run_id)
+            if existing is not None and existing != pointer:
+                raise ValueError("Ready pointer already exists with different data")
+            self.ready[run_id] = pointer
+            return existing is None
+
+    async def list_ready(self, limit: int) -> list[DuePointer]:
+        if limit < 1:
+            raise ValueError("Ready pointer limit must be positive")
+        async with self._mutex:
+            return sorted(
+                self.ready.values(),
+                key=lambda pointer: (
+                    pointer.scheduled_at,
+                    pointer.user_id,
+                    pointer.job_id,
+                ),
+            )[:limit]
+
+    async def delete_ready(self, pointer: DuePointer) -> None:
+        async with self._mutex:
+            self.ready.pop(self._run_id(pointer), None)
 
     async def get_job(self, user_id: str, job_id: str) -> CronJob | None:
         async with self._mutex:
@@ -122,9 +149,18 @@ class InMemorySchedulerRepository:
         key = (run.user_id, run.job_id, run.run_id)
         async with self._mutex:
             existing = self.runs[key]
+            if existing.state in {"succeeded", "failed", "cancelled", "skipped"}:
+                return existing
             merged = replace(
                 run,
                 cancel_requested=run.cancel_requested or existing.cancel_requested,
+                acknowledged=run.acknowledged or existing.acknowledged,
+                session_id=(
+                    existing.session_id
+                    if existing.acknowledged and existing.session_id
+                    else run.session_id
+                ),
+                started_at=run.started_at or existing.started_at,
             )
             self.runs[key] = merged
             return merged
@@ -155,3 +191,9 @@ class InMemorySchedulerRepository:
             )
             self.runs[key] = updated
             return updated
+
+    @staticmethod
+    def _run_id(pointer: DuePointer) -> str:
+        from .models import deterministic_run_id
+
+        return deterministic_run_id(pointer)

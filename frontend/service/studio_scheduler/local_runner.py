@@ -33,6 +33,8 @@ Sleeper = Callable[[float], Awaitable[None]]
 class MinuteDispatcher(Protocol):
     async def dispatch_minute(self, now: datetime) -> DispatchSummary: ...
 
+    async def execute_ready(self, now: datetime | None = None) -> DispatchSummary: ...
+
 
 async def run_local_scheduler(
     dispatcher: MinuteDispatcher,
@@ -40,20 +42,40 @@ async def run_local_scheduler(
     clock: Clock | None = None,
     sleep: Sleeper = asyncio.sleep,
 ) -> None:
-    """Dispatch each observed UTC minute once until the task is cancelled."""
+    """Run independent minute scanning and durable-ready execution loops."""
     get_now = clock or (lambda: datetime.now(timezone.utc))
-    last_dispatched: datetime | None = None
-    while True:
-        now = get_now()
-        if now.tzinfo is None or now.utcoffset() is None:
-            raise ValueError("local scheduler clock must include a timezone")
-        minute = now.astimezone(timezone.utc).replace(second=0, microsecond=0)
-        if minute != last_dispatched:
-            last_dispatched = minute
+
+    async def scan_loop() -> None:
+        last_dispatched: datetime | None = None
+        while True:
+            now = get_now()
+            if now.tzinfo is None or now.utcoffset() is None:
+                raise ValueError("local scheduler clock must include a timezone")
+            minute = now.astimezone(timezone.utc).replace(second=0, microsecond=0)
+            if minute != last_dispatched:
+                last_dispatched = minute
+                try:
+                    summary = await dispatcher.dispatch_minute(minute)
+                    logger.debug(
+                        "Local Studio scheduler scanned=%s queued=%s failed=%s",
+                        summary.scanned,
+                        summary.queued,
+                        summary.failed,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Local Studio scheduler failed for %s", minute)
+            next_minute = minute + timedelta(minutes=1)
+            delay = max(0.01, (next_minute - get_now()).total_seconds())
+            await sleep(delay)
+
+    async def worker_loop() -> None:
+        while True:
             try:
-                summary = await dispatcher.dispatch_minute(minute)
+                summary = await dispatcher.execute_ready()
                 logger.debug(
-                    "Local Studio scheduler scanned=%s started=%s failed=%s",
+                    "Local Studio worker scanned=%s started=%s failed=%s",
                     summary.scanned,
                     summary.started,
                     summary.failed,
@@ -61,10 +83,10 @@ async def run_local_scheduler(
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("Local Studio scheduler failed for %s", minute)
-        next_minute = minute + timedelta(minutes=1)
-        delay = max(0.01, (next_minute - get_now()).total_seconds())
-        await sleep(delay)
+                logger.exception("Local Studio worker failed")
+            await sleep(1.0)
+
+    await asyncio.gather(scan_loop(), worker_loop())
 
 
 __all__ = ["run_local_scheduler"]

@@ -87,7 +87,12 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(
         "frontend.service.studio_scheduler.deploy.deploy_scheduler",
-        lambda *_args, **_kwargs: ("scheduler-function", "scheduler-timer"),
+        lambda *_args, **_kwargs: (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+        ),
     )
     monkeypatch.setattr(
         "frontend.server.storage.provisioning.resolve_studio_storage_for_deploy",

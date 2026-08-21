@@ -34,6 +34,9 @@ async def test_local_scheduler_dispatches_current_minute_then_waits_for_boundary
             dispatched.append(now)
             return DispatchSummary()
 
+        async def execute_ready(self, now: datetime | None = None) -> DispatchSummary:
+            return DispatchSummary()
+
     async def stop_after_wait(delay: float) -> None:
         delays.append(delay)
         raise asyncio.CancelledError
@@ -46,4 +49,4 @@ async def test_local_scheduler_dispatches_current_minute_then_waits_for_boundary
         )
 
     assert dispatched == [now.replace(second=0)]
-    assert delays == [18.0]
+    assert sorted(delays) == [1.0, 18.0]

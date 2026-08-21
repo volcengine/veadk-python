@@ -266,10 +266,16 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
 
     def _deploy_scheduler_for_update(
         service: Any, **kwargs: Any
-    ) -> tuple[str, str, str]:
+    ) -> tuple[str, str, str, str, str]:
         captured["scheduler_service"] = service
         captured["scheduler_update"] = kwargs
-        return "scheduler-function", "scheduler-timer", "studio-app"
+        return (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+            "studio-app",
+        )
 
     monkeypatch.setattr(
         "frontend.service.studio_scheduler.deploy.deploy_scheduler_for_studio_update",
@@ -379,7 +385,13 @@ def test_submit_latest_reports_missing_vefaas_permissions(
     )
     monkeypatch.setattr(
         "frontend.service.studio_scheduler.deploy.deploy_scheduler_for_studio_update",
-        lambda *_args, **_kwargs: ("scheduler-function", "scheduler-timer", "studio"),
+        lambda *_args, **_kwargs: (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+            "studio",
+        ),
     )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
 
@@ -1121,7 +1133,13 @@ def test_retry_clears_previous_failure_diagnostics(
     )
     monkeypatch.setattr(
         "frontend.service.studio_scheduler.deploy.deploy_scheduler_for_studio_update",
-        lambda *_args, **_kwargs: ("scheduler-function", "scheduler-timer", "studio"),
+        lambda *_args, **_kwargs: (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+            "studio",
+        ),
     )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
 

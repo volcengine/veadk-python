@@ -27,7 +27,8 @@ from typing import Any
 
 from .diagnostics import sanitize_diagnostic
 
-_TIMER_NAME = "veadk-studio-cronjobs-minute"
+_SCAN_TIMER_NAME = "veadk-studio-cronjobs-minute"
+_WORKER_TIMER_NAME = "veadk-studio-cronjobs-worker-minute"
 _MINUTE_CRONTAB = "* * * * *"
 
 
@@ -38,6 +39,13 @@ def scheduler_function_name(studio_application_name: str) -> str:
     return f"{normalized[: 64 - len(suffix)].rstrip('-')}{suffix}"
 
 
+def scheduler_worker_function_name(studio_application_name: str) -> str:
+    """Return the stable name of the async Runtime execution worker."""
+    normalized = studio_application_name.strip().replace("_", "-")
+    suffix = "-cronjobs-worker"
+    return f"{normalized[: 64 - len(suffix)].rstrip('-')}{suffix}"
+
+
 def deploy_scheduler(
     service: Any,
     *,
@@ -45,9 +53,10 @@ def deploy_scheduler(
     package_root: Path,
     role_trn: str,
     environment: dict[str, str],
-) -> tuple[str, str]:
-    """Create/update the scheduler Function and its idempotent minute trigger."""
+) -> tuple[str, str, str, str]:
+    """Create/update independent scan and async-worker Functions and timers."""
     function_name = scheduler_function_name(studio_application_name)
+    worker_name = scheduler_worker_function_name(studio_application_name)
     with tempfile.TemporaryDirectory(prefix="studio_cronjob_scheduler_") as tmp:
         deployment_root = Path(tmp)
         _stage_package(package_root, deployment_root)
@@ -68,8 +77,40 @@ def deploy_scheduler(
             )
         _install_dependencies(service, function_id)
         _release_function(service, function_id)
-        timer_id = _ensure_minute_timer(service, function_id)
-    return function_id, timer_id
+        timer_id = _ensure_minute_timer(
+            service,
+            function_id,
+            name=_SCAN_TIMER_NAME,
+            phase="scan",
+            enable_concurrency=False,
+        )
+
+        worker_function_id = _find_function_id(service, worker_name)
+        if worker_function_id:
+            _require_async_worker(service, worker_function_id, worker_name)
+            service._replace_application_code_bundle(
+                function_id=worker_function_id,
+                path=str(deployment_root),
+                environment_overrides=environment,
+            )
+        else:
+            worker_function_id = _create_async_worker_function(
+                service,
+                function_name=worker_name,
+                deployment_root=deployment_root,
+                role_trn=role_trn,
+                environment=environment,
+            )
+        _install_dependencies(service, worker_function_id)
+        _release_function(service, worker_function_id)
+        worker_timer_id = _ensure_minute_timer(
+            service,
+            worker_function_id,
+            name=_WORKER_TIMER_NAME,
+            phase="execute",
+            enable_concurrency=True,
+        )
+    return function_id, timer_id, worker_function_id, worker_timer_id
 
 
 def deploy_scheduler_for_studio_update(
@@ -80,7 +121,7 @@ def deploy_scheduler_for_studio_update(
     provider: str,
     project: str,
     environment_overrides: dict[str, str],
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str, str]:
     """Update the scheduler from the same bundle used by Studio self-update."""
     from volcenginesdkvefaas import GetFunctionRequest
 
@@ -108,7 +149,7 @@ def deploy_scheduler_for_studio_update(
     )
     if not scheduler_base:
         raise ValueError("Studio Function name is unavailable for scheduler deployment")
-    function_id, timer_id = deploy_scheduler(
+    function_id, timer_id, worker_function_id, worker_timer_id = deploy_scheduler(
         service,
         studio_application_name=scheduler_base,
         package_root=package_root,
@@ -124,7 +165,13 @@ def deploy_scheduler_for_studio_update(
             "VEADK_STUDIO_PROJECT": project,
         },
     )
-    return function_id, timer_id, scheduler_base
+    return (
+        function_id,
+        timer_id,
+        worker_function_id,
+        worker_timer_id,
+        scheduler_base,
+    )
 
 
 def _stage_package(package_root: Path, destination: Path) -> None:
@@ -178,6 +225,62 @@ def _create_function(
             os.environ.pop("IAM_ROLE", None)
         else:
             os.environ["IAM_ROLE"] = original_role
+
+
+def _create_async_worker_function(
+    service: Any,
+    *,
+    function_name: str,
+    deployment_root: Path,
+    role_trn: str,
+    environment: dict[str, str],
+) -> str:
+    from volcenginesdkvefaas import (
+        AsyncTaskConfigForCreateFunctionInput,
+        CreateFunctionRequest,
+        EnvForCreateFunctionInput,
+        TagForCreateFunctionInput,
+    )
+
+    response = service.client.create_function(
+        CreateFunctionRequest(
+            command="./run.sh",
+            name=function_name,
+            description="VeADK Studio scheduled-task execution worker",
+            tags=[TagForCreateFunctionInput(key="provider", value="veadk")],
+            runtime="native-python3.12/v1",
+            request_timeout=10800,
+            max_concurrency=1,
+            envs=[
+                EnvForCreateFunctionInput(key=key, value=value)
+                for key, value in environment.items()
+            ],
+            memory_mb=2048,
+            role=role_trn,
+            project_name=getattr(service, "project_name", None),
+            async_task_config=AsyncTaskConfigForCreateFunctionInput(
+                enable_async_task=True,
+                max_retry=0,
+            ),
+        )
+    )
+    function_id = str(getattr(response, "id", "") or "")
+    if not function_id:
+        raise RuntimeError("VeFaaS did not return an id for the scheduler worker")
+    service._upload_and_mount_code(function_id, str(deployment_root))
+    return function_id
+
+
+def _require_async_worker(service: Any, function_id: str, function_name: str) -> None:
+    from volcenginesdkvefaas import GetFunctionRequest
+
+    function = service.client.get_function(GetFunctionRequest(id=function_id))
+    config = getattr(function, "async_task_config", None)
+    if not bool(getattr(config, "enable_async_task", False)):
+        raise RuntimeError(
+            f"Existing scheduler worker {function_name} is not async-enabled; "
+            "delete that Function and deploy Studio again"
+        )
 
 
 def _find_function_id(service: Any, function_name: str) -> str:
@@ -277,7 +380,14 @@ def _install_dependencies(service: Any, function_id: str) -> None:
     raise RuntimeError("Scheduler dependency installation did not finish in 10 minutes")
 
 
-def _ensure_minute_timer(service: Any, function_id: str) -> str:
+def _ensure_minute_timer(
+    service: Any,
+    function_id: str,
+    *,
+    name: str,
+    phase: str,
+    enable_concurrency: bool,
+) -> str:
     from volcenginesdkvefaas import (
         CreateTimerRequest,
         ListTriggersRequest,
@@ -291,27 +401,28 @@ def _ensure_minute_timer(service: Any, function_id: str) -> str:
     matches = [
         item
         for item in triggers
-        if str(getattr(item, "name", "")) == _TIMER_NAME
+        if str(getattr(item, "name", "")) == name
         and str(getattr(item, "type", "")).lower() == "timer"
     ]
     if len(matches) > 1:
-        raise RuntimeError(f"Multiple VeFaaS timers are named {_TIMER_NAME}")
+        raise RuntimeError(f"Multiple VeFaaS timers are named {name}")
     common = {
         "function_id": function_id,
         "crontab": _MINUTE_CRONTAB,
-        "description": "Wake the VeADK Studio cronjob dispatcher every minute",
-        "enable_concurrency": True,
+        "description": f"Wake the VeADK Studio cronjob {phase} phase every minute",
+        "enable_concurrency": enable_concurrency,
         "enabled": True,
-        "payload": json.dumps({"source": "veadk-studio-cronjobs"}),
+        "payload": json.dumps(
+            {"source": "veadk-studio-cronjobs", "phase": phase},
+            separators=(",", ":"),
+        ),
         "retries": 0,
     }
     if matches:
         timer_id = str(getattr(matches[0], "id", "") or "")
         service.client.update_timer(UpdateTimerRequest(id=timer_id, **common))
         return timer_id
-    created = service.client.create_timer(
-        CreateTimerRequest(name=_TIMER_NAME, **common)
-    )
+    created = service.client.create_timer(CreateTimerRequest(name=name, **common))
     return str(getattr(created, "id", "") or "")
 
 
@@ -319,4 +430,5 @@ __all__ = [
     "deploy_scheduler",
     "deploy_scheduler_for_studio_update",
     "scheduler_function_name",
+    "scheduler_worker_function_name",
 ]

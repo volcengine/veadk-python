@@ -42,6 +42,8 @@ class SchedulerSettings:
     storage_endpoint: str
     replica_id: str
     pre_ack_attempts: int = 2
+    ready_batch_size: int = 500
+    execution_concurrency: int = 8
 
     def __post_init__(self) -> None:
         if self.provider not in {"volcengine", "byteplus"}:
@@ -58,6 +60,8 @@ class SchedulerSettings:
             raise ValueError("Scheduler storage and replica settings are required")
         if self.pre_ack_attempts < 1:
             raise ValueError("Scheduler retry attempts must be positive")
+        if self.ready_batch_size < 1 or self.execution_concurrency < 1:
+            raise ValueError("Scheduler queue limits must be positive")
 
     @classmethod
     def from_env(cls, source: Mapping[str, str] | None = None) -> SchedulerSettings:
@@ -88,6 +92,12 @@ class SchedulerSettings:
             pre_ack_attempts=int(
                 str(environment.get("STUDIO_CRONJOB_PRE_ACK_ATTEMPTS") or "2")
             ),
+            ready_batch_size=int(
+                str(environment.get("STUDIO_CRONJOB_READY_BATCH_SIZE") or "500")
+            ),
+            execution_concurrency=int(
+                str(environment.get("STUDIO_CRONJOB_EXECUTION_CONCURRENCY") or "8")
+            ),
         )
 
 
@@ -114,6 +124,8 @@ def create_dispatcher(
         executor,
         replica_id=resolved.replica_id,
         pre_ack_attempts=resolved.pre_ack_attempts,
+        ready_batch_size=resolved.ready_batch_size,
+        execution_concurrency=resolved.execution_concurrency,
     )
 
 

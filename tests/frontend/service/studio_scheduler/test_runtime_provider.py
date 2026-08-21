@@ -60,10 +60,14 @@ class _Control:
     def __init__(self, *, cancel_after: int = 10_000) -> None:
         self.calls = 0
         self.cancel_after = cancel_after
+        self.acknowledged_session_id = ""
 
     async def is_cancel_requested(self) -> bool:
         self.calls += 1
         return self.calls >= self.cancel_after
+
+    async def mark_acknowledged(self, session_id: str) -> None:
+        self.acknowledged_session_id = session_id
 
 
 @pytest.mark.asyncio

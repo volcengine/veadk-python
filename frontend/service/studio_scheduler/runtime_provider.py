@@ -314,6 +314,7 @@ class AgentKitRuntimeProvider:
                 acknowledged=False,
                 secrets=(connection.api_key,),
             )
+            await control.mark_acknowledged(session_id)
             return await self._read_sse(
                 response,
                 control,

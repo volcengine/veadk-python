@@ -444,19 +444,6 @@ export function Sidebar({
           <SearchButton active={activePage === "search"} onClick={onSearch} />
         )}
         <button
-          className={`new-chat new-chat--applications${
-            activePage === "applications" ? " is-active" : ""
-          }`}
-          onClick={onApplications}
-          aria-label="自动化"
-          aria-current={activePage === "applications" ? "page" : undefined}
-          title="自动化"
-        >
-          <ApplicationsIcon className="icon" />
-          <span className="sidebar-nav-label">自动化</span>
-          <span className="sidebar-beta-badge">Beta</span>
-        </button>
-        <button
           className={`new-chat new-chat--cronjobs${
             activePage === "cronjobs" ? " is-active" : ""
           }`}
@@ -467,6 +454,18 @@ export function Sidebar({
         >
           <Clock className="icon" />
           <span className="sidebar-nav-label">定时任务</span>
+        </button>
+        <button
+          className={`new-chat new-chat--applications${
+            activePage === "applications" ? " is-active" : ""
+          }`}
+          onClick={onApplications}
+          aria-label="自动化"
+          aria-current={activePage === "applications" ? "page" : undefined}
+          title="自动化"
+        >
+          <ApplicationsIcon className="icon" />
+          <span className="sidebar-nav-label">自动化</span>
         </button>
       </div>
 

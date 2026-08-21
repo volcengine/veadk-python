@@ -11063,7 +11063,12 @@ def frontend_deploy(
 
         click.echo("Deploying the Studio cronjob scheduler and minute timer…")
         try:
-            scheduler_function_id, scheduler_timer_id = deploy_scheduler(
+            (
+                scheduler_function_id,
+                scheduler_timer_id,
+                scheduler_worker_function_id,
+                scheduler_worker_timer_id,
+            ) = deploy_scheduler(
                 getattr(engine, "_vefaas_service", None),
                 studio_application_name=vefaas_app_name,
                 package_root=Path(tmp),
@@ -11089,7 +11094,9 @@ def frontend_deploy(
             ) from error
         click.echo(
             "Studio cronjob scheduler ready: "
-            f"function={scheduler_function_id}, timer={scheduler_timer_id}"
+            f"scanner={scheduler_function_id}, scanner_timer={scheduler_timer_id}, "
+            f"worker={scheduler_worker_function_id}, "
+            f"worker_timer={scheduler_worker_timer_id}"
         )
 
         # 6) Disable local account flows so Studio can only be entered through
@@ -11915,7 +11922,7 @@ def frontend_update(
 
         click.echo("Updating the Studio cronjob scheduler and minute timer…")
         try:
-            _, _, scheduler_base = deploy_scheduler_for_studio_update(
+            _, _, _, _, scheduler_base = deploy_scheduler_for_studio_update(
                 service,
                 studio_function_id=target.function_id,
                 package_root=package_dir,

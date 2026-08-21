@@ -140,12 +140,15 @@ async def test_management_to_due_dispatch_history_and_delete_flow() -> None:
             assert await control.is_cancel_requested() is False
             return ExecutionResult(output="Summary ready", runtime_version="7")
 
-    summary = await Dispatcher(
+    dispatcher = Dispatcher(
         scheduler_repository,
         _Executor(),
         replica_id="local-e2e",
-    ).dispatch_minute(now + timedelta(minutes=1))
+    )
+    scan_summary = await dispatcher.dispatch_minute(now + timedelta(minutes=1))
+    summary = await dispatcher.execute_ready(now + timedelta(minutes=1))
 
+    assert scan_summary.queued == 1
     assert summary.started == 1
     runs = await service.list_runs(identity, job.id)
     assert [(run.status, run.output, run.runtime_version) for run in runs] == [

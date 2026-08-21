@@ -28,7 +28,7 @@ const confirmSource = readFileSync(
   "utf8",
 );
 
-test("adds the scheduled tasks destination after Automation with the Apps SDK clock icon", () => {
+test("places Automation below scheduled tasks without a beta badge", () => {
   assert.match(sidebarSource, /\| "applications"\s*\| "cronjobs"/);
   assert.match(sidebarSource, /onCronJobs: \(\) => void/);
   assert.match(sidebarSource, /import \{ BookOpen, Clock \} from "@openai\/apps-sdk-ui\/components\/Icon"/);
@@ -36,7 +36,8 @@ test("adds the scheduled tasks destination after Automation with the Apps SDK cl
   const automationIndex = sidebarSource.indexOf('aria-label="自动化"');
   const cronJobsIndex = sidebarSource.indexOf('aria-label="定时任务"');
   assert.equal(automationIndex >= 0, true);
-  assert.equal(automationIndex < cronJobsIndex, true);
+  assert.equal(cronJobsIndex < automationIndex, true);
+  assert.doesNotMatch(sidebarSource, /sidebar-beta-badge|>Beta</);
   assert.match(appSource, /onCronJobs=\{\(\) => requestIntelligentNavigation\(openCronJobsPage\)\}/);
   assert.match(appSource, /cronJobsView \? \(\s*<CronJobs cloudProvider=\{cloudProvider\}/);
 });
@@ -102,7 +103,7 @@ test("uses Apps SDK controls while keeping only domain layout and responsive sty
   assert.doesNotMatch(cronJobsStyles, /#[0-9a-f]{3,8}/i);
   assert.doesNotMatch(cronJobsStyles, /font-family:\s*(?:monospace|[^;]*Mono)/i);
   assert.doesNotMatch(cronJobsSource, /from "lucide-react"|emoji/i);
-  for (const component of ["Alert", "Badge", "Button", "EmptyMessage", "Input", "SegmentedControl", "Select", "ShimmerText", "Switch", "Textarea", "Tooltip"]) {
+  for (const component of ["Alert", "Badge", "Button", "EmptyMessage", "Indicator", "Input", "SegmentedControl", "Select", "Switch", "Textarea", "Tooltip"]) {
     assert.match(cronJobsSource, new RegExp(`@openai/apps-sdk-ui/components/${component}`));
   }
   assert.match(cronJobsSource, /@openai\/apps-sdk-ui\/components\/Icon/);

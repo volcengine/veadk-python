@@ -182,7 +182,12 @@ def test_studio_deploy_bundles_logo_and_optional_title(
     )
     monkeypatch.setattr(
         "frontend.service.studio_scheduler.deploy.deploy_scheduler",
-        lambda *_args, **_kwargs: ("scheduler-function", "scheduler-timer"),
+        lambda *_args, **_kwargs: (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+        ),
     )
 
     args = [

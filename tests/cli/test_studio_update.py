@@ -44,7 +44,7 @@ def scheduler_deploy(
 ) -> list[dict[str, object]]:
     calls: list[dict[str, object]] = []
 
-    def _deploy(service: object, **kwargs: object) -> tuple[str, str, str]:
+    def _deploy(service: object, **kwargs: object) -> tuple[str, str, str, str, str]:
         environment_overrides = kwargs.get("environment_overrides")
         calls.append(
             {
@@ -55,7 +55,13 @@ def scheduler_deploy(
                 ),
             }
         )
-        return "scheduler-function", "scheduler-timer", "studio-app"
+        return (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+            "studio-app",
+        )
 
     monkeypatch.setattr(
         "frontend.service.studio_scheduler.deploy.deploy_scheduler_for_studio_update",
@@ -940,8 +946,9 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools_and_oauth_callb
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_deploy_iam.ensure_default_frontend_role_policy",
-        lambda role, **kwargs: role_policy_syncs.append({"role": role, **kwargs})
-        or True,
+        lambda role, **kwargs: (
+            role_policy_syncs.append({"role": role, **kwargs}) or True
+        ),
     )
 
     class _FakeIdentityClient:
@@ -1118,8 +1125,9 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_deploy_iam.ensure_default_frontend_role_policy",
-        lambda role, **kwargs: role_policy_syncs.append({"role": role, **kwargs})
-        or True,
+        lambda role, **kwargs: (
+            role_policy_syncs.append({"role": role, **kwargs}) or True
+        ),
     )
 
     class _FakeVeFaaS:

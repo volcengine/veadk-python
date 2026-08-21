@@ -27,10 +27,19 @@ from .dispatcher import Dispatcher
 def make_handler(dispatcher: Dispatcher) -> Callable[[Any, Any], dict[str, int]]:
     """Build a synchronous cloud handler without retaining scheduling state."""
 
-    def handler(_event: Any, _context: Any) -> dict[str, int]:
-        summary = asyncio.run(dispatcher.dispatch_minute(datetime.now(timezone.utc)))
+    def handler(event: Any, _context: Any) -> dict[str, int]:
+        phase = str(event.get("phase") or "scan") if isinstance(event, dict) else "scan"
+        if phase == "execute":
+            summary = asyncio.run(dispatcher.execute_ready())
+        elif phase == "scan":
+            summary = asyncio.run(
+                dispatcher.dispatch_minute(datetime.now(timezone.utc))
+            )
+        else:
+            raise ValueError(f"Unsupported scheduler phase: {phase}")
         return {
             "scanned": summary.scanned,
+            "queued": summary.queued,
             "started": summary.started,
             "stale": summary.stale,
             "skipped": summary.skipped,

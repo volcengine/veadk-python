@@ -23,6 +23,7 @@ import pytest
 from frontend.service.studio_scheduler.dispatcher import Dispatcher
 from frontend.service.studio_scheduler.models import (
     CronJob,
+    DispatchSummary,
     DuePointer,
     ExecutionRequest,
     ExecutionResult,
@@ -68,6 +69,7 @@ def _pointer(*, revision: int = 3) -> DuePointer:
 class _Repository:
     def __init__(self, pointers: list[DuePointer], job: CronJob | None) -> None:
         self.pointers = pointers
+        self.ready: dict[str, DuePointer] = {}
         self.job = job
         self.runs: dict[str, ScheduledRun] = {}
         self.lock_run_id: str | None = None
@@ -81,6 +83,18 @@ class _Repository:
 
     async def get_job(self, user_id: str, job_id: str) -> CronJob | None:
         return self.job
+
+    async def put_ready(self, pointer: DuePointer) -> bool:
+        run_id = deterministic_run_id(pointer)
+        existing = self.ready.get(run_id)
+        self.ready[run_id] = pointer
+        return existing is None
+
+    async def list_ready(self, limit: int) -> list[DuePointer]:
+        return list(self.ready.values())[:limit]
+
+    async def delete_ready(self, pointer: DuePointer) -> None:
+        self.ready.pop(deterministic_run_id(pointer), None)
 
     async def acquire_lock(
         self,
@@ -115,6 +129,13 @@ class _Repository:
         existing = self.runs[run.run_id]
         if existing.cancel_requested:
             run = replace(run, cancel_requested=True)
+        if existing.acknowledged:
+            run = replace(
+                run,
+                acknowledged=True,
+                session_id=existing.session_id,
+                started_at=run.started_at or existing.started_at,
+            )
         self.runs[run.run_id] = run
         self.events.append(f"state:{run.state}")
         return run
@@ -125,6 +146,8 @@ class _Repository:
         return self.runs.get(run_id)
 
     async def put_due(self, pointer: DuePointer) -> bool:
+        if pointer in self.next_due:
+            return False
         self.next_due.append(pointer)
         self.events.append("next_due")
         return True
@@ -166,6 +189,14 @@ class _Executor:
         return outcome
 
 
+async def _scan_and_execute(
+    dispatcher: Dispatcher,
+) -> tuple[DispatchSummary, DispatchSummary]:
+    scan = await dispatcher.dispatch_minute(NOW)
+    execution = await dispatcher.execute_ready(NOW)
+    return scan, execution
+
+
 @pytest.mark.asyncio
 async def test_dispatcher_lists_only_the_current_minute_and_ignores_stale_jobs() -> (
     None
@@ -188,8 +219,9 @@ async def test_next_due_is_durable_before_the_runtime_is_invoked() -> None:
     executor.repository = repository
     dispatcher = Dispatcher(repository, executor, replica_id="replica-a")
 
-    summary = await dispatcher.dispatch_minute(NOW)
+    scan, summary = await _scan_and_execute(dispatcher)
 
+    assert scan.queued == 1
     assert summary.started == 1
     assert executor.called_after[0].index("next_due") < len(executor.called_after[0])
     assert repository.next_due == [
@@ -218,12 +250,14 @@ async def test_dispatcher_promotes_an_existing_queued_manual_run() -> None:
     repository.runs[queued.run_id] = queued
     executor = _Executor()
 
-    summary = await Dispatcher(
+    dispatcher = Dispatcher(
         repository,
         executor,
         replica_id="replica-a",
-    ).dispatch_minute(NOW)
+    )
+    scan, summary = await _scan_and_execute(dispatcher)
 
+    assert scan.queued == 1
     assert summary.started == 1
     assert repository.runs[queued.run_id].state == "succeeded"
     assert len(executor.requests) == 1
@@ -243,7 +277,7 @@ async def test_only_pre_ack_infrastructure_failures_are_retried() -> None:
         pre_ack_attempts=2,
     )
 
-    await dispatcher.dispatch_minute(NOW)
+    await _scan_and_execute(dispatcher)
 
     assert len(executor.requests) == 2
     run = next(iter(repository.runs.values()))
@@ -260,7 +294,7 @@ async def test_only_pre_ack_infrastructure_failures_are_retried() -> None:
         pre_ack_attempts=3,
     )
 
-    await dispatcher.dispatch_minute(NOW)
+    await _scan_and_execute(dispatcher)
 
     assert len(executor.requests) == 1
     assert next(iter(repository.runs.values())).state == "failed"
@@ -279,12 +313,13 @@ async def test_terminal_runtime_error_is_persisted_for_manual_retry() -> None:
         ]
     )
 
-    await Dispatcher(
+    dispatcher = Dispatcher(
         repository,
         executor,
         replica_id="replica-a",
         pre_ack_attempts=3,
-    ).dispatch_minute(NOW)
+    )
+    await _scan_and_execute(dispatcher)
 
     run = next(iter(repository.runs.values()))
     assert run.state == "failed"
@@ -295,11 +330,32 @@ async def test_terminal_runtime_error_is_persisted_for_manual_retry() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_acknowledgement_time_survives_terminal_result_write() -> None:
+    repository = _Repository([_pointer()], _job())
+
+    class _AcknowledgingExecutor(_Executor):
+        async def execute(
+            self, request: ExecutionRequest, control: CancellationControl
+        ) -> ExecutionResult:
+            await control.mark_acknowledged("remote-session")
+            return ExecutionResult(output="done", session_id="remote-session")
+
+    await _scan_and_execute(
+        Dispatcher(repository, _AcknowledgingExecutor(), replica_id="replica-a")
+    )
+
+    run = repository.runs[deterministic_run_id(_pointer())]
+    assert run.state == "succeeded"
+    assert run.started_at is not None
+    assert run.session_id == "remote-session"
+
+
+@pytest.mark.asyncio
 async def test_unknown_scheduler_error_is_stored_with_stage_and_redacted() -> None:
     repository = _Repository([_pointer()], _job())
     executor = _Executor([RuntimeError("TOS failed token=storage-secret")])
 
-    await Dispatcher(repository, executor, replica_id="replica-a").dispatch_minute(NOW)
+    await _scan_and_execute(Dispatcher(repository, executor, replica_id="replica-a"))
 
     run = next(iter(repository.runs.values()))
     assert run.state == "failed"
@@ -331,7 +387,7 @@ async def test_cancel_requested_is_persisted_and_stops_a_retry() -> None:
         pre_ack_attempts=3,
     )
 
-    await dispatcher.dispatch_minute(NOW)
+    await _scan_and_execute(dispatcher)
 
     run = next(iter(repository.runs.values()))
     assert run.cancel_requested is True
@@ -356,7 +412,44 @@ async def test_two_replicas_execute_the_same_due_pointer_once() -> None:
     first = Dispatcher(repository, executor, replica_id="replica-a")
     second = Dispatcher(repository, executor, replica_id="replica-b")
 
-    await asyncio.gather(first.dispatch_minute(NOW), second.dispatch_minute(NOW))
+    await first.dispatch_minute(NOW)
+    await asyncio.gather(first.execute_ready(NOW), second.execute_ready(NOW))
 
     assert len(executor.requests) == 1
     assert list(repository.runs) == [deterministic_run_id(_pointer())]
+    assert repository.ready == {}
+
+
+@pytest.mark.asyncio
+async def test_ready_pointer_is_retained_when_terminal_persistence_fails() -> None:
+    class _FailingRepository(_Repository):
+        async def update_run(self, run: ScheduledRun) -> ScheduledRun:
+            if run.state in {"succeeded", "failed", "cancelled", "skipped"}:
+                raise RuntimeError("TOS terminal write failed")
+            return await super().update_run(run)
+
+    repository = _FailingRepository([_pointer()], _job())
+    dispatcher = Dispatcher(repository, _Executor(), replica_id="replica-a")
+
+    await dispatcher.dispatch_minute(NOW)
+    summary = await dispatcher.execute_ready(NOW)
+
+    assert summary.failed == 1
+    assert list(repository.ready.values()) == [_pointer()]
+    assert repository.runs[deterministic_run_id(_pointer())].state == "preparing"
+
+
+@pytest.mark.asyncio
+async def test_stale_ready_pointer_terminalizes_queued_run_before_deletion() -> None:
+    repository = _Repository([_pointer()], _job())
+    dispatcher = Dispatcher(repository, _Executor(), replica_id="replica-a")
+    await dispatcher.dispatch_minute(NOW)
+    repository.job = _job(revision=4)
+
+    summary = await dispatcher.execute_ready(NOW)
+
+    run = repository.runs[deterministic_run_id(_pointer())]
+    assert summary.stale == 1
+    assert run.state == "skipped"
+    assert run.completed_at is not None
+    assert repository.ready == {}

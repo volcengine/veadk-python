@@ -10,6 +10,7 @@ import { Alert } from "@openai/apps-sdk-ui/components/Alert";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
+import { LoadingIndicator } from "@openai/apps-sdk-ui/components/Indicator";
 import {
   Agent,
   ArrowLeft,
@@ -29,7 +30,6 @@ import {
   Select,
   type Option,
 } from "@openai/apps-sdk-ui/components/Select";
-import { ShimmerText } from "@openai/apps-sdk-ui/components/ShimmerText";
 import { Switch } from "@openai/apps-sdk-ui/components/Switch";
 import { Textarea } from "@openai/apps-sdk-ui/components/Textarea";
 import { Tooltip } from "@openai/apps-sdk-ui/components/Tooltip";
@@ -62,6 +62,7 @@ import {
   formatCronJobDate,
   formatCronJobDuration,
 } from "./model";
+import { CronJobFinalAnswer } from "./CronJobFinalAnswer";
 import "./CronJobs.css";
 
 interface CronJobsProps {
@@ -528,12 +529,12 @@ function JobDetail({
         </section>
         <section className="cronjobs-history">
           <header><div><h2>执行历史</h2><p>每次运行均使用独立 Session，结果与错误会永久保留。</p></div><Tooltip compact content="刷新"><Button type="button" color="secondary" variant="ghost" size="lg" uniform pill={false} onClick={onRetryRuns} disabled={runsLoading} aria-label="刷新执行历史"><ArrowRotateCw /></Button></Tooltip></header>
-          {runsLoading && runs.length === 0 ? <div className="cronjobs-history-state"><ShimmerText as="span">正在加载执行历史</ShimmerText></div> : runsError ? <Alert className="cronjobs-history-alert" color="danger" variant="soft" title="无法加载执行历史" description={runsError} actions={<Button type="button" color="danger" variant="soft" size="sm" pill={false} onClick={onRetryRuns}>重试</Button>} /> : runs.length === 0 ? <EmptyMessage className="cronjobs-history-state" fill="none"><EmptyMessage.Icon><Clock /></EmptyMessage.Icon><EmptyMessage.Title>暂无执行记录</EmptyMessage.Title><EmptyMessage.Description>任务触发或立即执行后，记录会显示在这里。</EmptyMessage.Description></EmptyMessage> : (
+          {runsLoading && runs.length === 0 ? <div className="cronjobs-history-state cronjobs-loading" role="status" aria-live="polite"><LoadingIndicator size={20} /><span>正在加载执行历史…</span></div> : runsError ? <Alert className="cronjobs-history-alert" color="danger" variant="soft" title="无法加载执行历史" description={runsError} actions={<Button type="button" color="danger" variant="soft" size="sm" pill={false} onClick={onRetryRuns}>重试</Button>} /> : runs.length === 0 ? <EmptyMessage className="cronjobs-history-state" fill="none"><EmptyMessage.Icon><Clock /></EmptyMessage.Icon><EmptyMessage.Title>暂无执行记录</EmptyMessage.Title><EmptyMessage.Description>任务触发或立即执行后，记录会显示在这里。</EmptyMessage.Description></EmptyMessage> : (
             <div className="cronjobs-runs">
               {runs.map((run) => <article className="cronjobs-run" key={run.runId}>
                 <div className="cronjobs-run-main"><StatusBadge run={run} /><div><strong>{formatCronJobDate(run.startedAt || run.scheduledAt)}</strong><span>耗时 {formatCronJobDuration(run)}{run.runtimeVersion ? ` · Runtime v${run.runtimeVersion}` : ""}</span></div></div>
                 {run.sessionId ? <div className="cronjobs-run-meta"><span>Session</span><strong title={run.sessionId}>{run.sessionId}</strong></div> : null}
-                {run.output ? <div className="cronjobs-run-output"><span>最终回答</span><p>{run.output}</p></div> : null}
+                {run.output ? <div className="cronjobs-run-output"><span>最终回答</span><CronJobFinalAnswer output={run.output} /></div> : null}
                 {run.error ? <div className="cronjobs-run-output is-error"><span>错误详情</span><DeploymentErrorMessage message={run.error} className="cronjobs-run-error-detail" defaultExpanded={false} onRetry={run.status === "failed" ? onRetryRun : undefined} retryLabel="重新执行" /></div> : null}
                 {(run.status === "queued" || run.status === "running" || run.status === "retrying" || run.status === "pending") ? <Button type="button" className="cronjobs-run-cancel" color="danger" variant="soft" size="sm" pill={false} onClick={() => onCancel(run)} disabled={busy || Boolean(run.cancellationRequestedAt)} loading={Boolean(run.cancellationRequestedAt)}>{run.cancellationRequestedAt ? "终止中…" : run.status === "queued" ? "取消排队" : "终止执行"}</Button> : null}
               </article>)}
@@ -724,7 +725,7 @@ export function CronJobs({ cloudProvider }: CronJobsProps) {
       ) : null}
       {notice ? <div className="cronjobs-banner" role="status"><Alert color="info" variant="soft" description={notice} /></div> : null}
       <section className="cronjobs-content">
-        {loading && jobs.length === 0 ? <div className="cronjobs-loading"><ShimmerText as="span">正在加载定时任务</ShimmerText><div /><div /><div /></div> : error ? <EmptyMessage className="cronjobs-state" fill="none"><EmptyMessage.Icon color="danger"><Clock /></EmptyMessage.Icon><EmptyMessage.Title color="danger">无法加载定时任务</EmptyMessage.Title><EmptyMessage.Description>{error}</EmptyMessage.Description><EmptyMessage.ActionRow><Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={() => void load()}><ArrowRotateCw />重试</Button></EmptyMessage.ActionRow></EmptyMessage> : jobs.length === 0 ? <EmptyMessage className="cronjobs-state" fill="none"><EmptyMessage.Icon><Clock /></EmptyMessage.Icon><EmptyMessage.Title>还没有定时任务</EmptyMessage.Title><EmptyMessage.Description>创建任务后，系统会按计划调用选定的 Runtime Agent。</EmptyMessage.Description><EmptyMessage.ActionRow><Button type="button" color="primary" size="lg" pill={false} onClick={() => setDrawerJob(null)} disabled={runtimes.length === 0}><Plus />创建第一个任务</Button></EmptyMessage.ActionRow>{runtimes.length === 0 ? <EmptyMessage.Description>暂无可用的 Runtime Agent，请先部署并等待 Runtime 就绪。</EmptyMessage.Description> : null}</EmptyMessage> : <JobList jobs={jobs} busyAction={busyAction} onSelect={(job) => setSelectedId(job.jobId)} onEdit={(job) => setDrawerJob(job)} onToggle={toggle} onRun={runNow} />}
+        {loading && jobs.length === 0 ? <div className="cronjobs-loading" role="status" aria-live="polite"><LoadingIndicator size={20} /><span>正在加载定时任务…</span></div> : error ? <EmptyMessage className="cronjobs-state" fill="none"><EmptyMessage.Icon color="danger"><Clock /></EmptyMessage.Icon><EmptyMessage.Title color="danger">无法加载定时任务</EmptyMessage.Title><EmptyMessage.Description>{error}</EmptyMessage.Description><EmptyMessage.ActionRow><Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={() => void load()}><ArrowRotateCw />重试</Button></EmptyMessage.ActionRow></EmptyMessage> : jobs.length === 0 ? <EmptyMessage className="cronjobs-state" fill="none"><EmptyMessage.Icon><Clock /></EmptyMessage.Icon><EmptyMessage.Title>还没有定时任务</EmptyMessage.Title><EmptyMessage.Description>创建任务后，系统会按计划调用选定的 Runtime Agent。</EmptyMessage.Description><EmptyMessage.ActionRow><Button type="button" color="primary" size="lg" pill={false} onClick={() => setDrawerJob(null)} disabled={runtimes.length === 0}><Plus />创建第一个任务</Button></EmptyMessage.ActionRow>{runtimes.length === 0 ? <EmptyMessage.Description>暂无可用的 Runtime Agent，请先部署并等待 Runtime 就绪。</EmptyMessage.Description> : null}</EmptyMessage> : <JobList jobs={jobs} busyAction={busyAction} onSelect={(job) => setSelectedId(job.jobId)} onEdit={(job) => setDrawerJob(job)} onToggle={toggle} onRun={runNow} />}
       </section>
       {drawerJob !== undefined ? <Drawer job={drawerJob} runtimes={runtimes} cloudProvider={cloudProvider} busy={busyAction.endsWith(":save")} onClose={() => setDrawerJob(undefined)} onSubmit={submitDrawer} /> : null}
     </div>

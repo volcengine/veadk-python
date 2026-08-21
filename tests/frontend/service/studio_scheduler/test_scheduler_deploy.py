@@ -24,12 +24,14 @@ from frontend.service.studio_scheduler.deploy import (
     deploy_scheduler,
     deploy_scheduler_for_studio_update,
     scheduler_function_name,
+    scheduler_worker_function_name,
 )
 
 
 class _Client:
     def __init__(self) -> None:
-        self.created_timer: Any = None
+        self.created_timers: list[Any] = []
+        self.created_worker: Any = None
         self.events: list[str] = []
 
     def list_functions(self, _request: Any) -> Any:
@@ -51,8 +53,12 @@ class _Client:
         return SimpleNamespace(items=[])
 
     def create_timer(self, request: Any) -> Any:
-        self.created_timer = request
-        return SimpleNamespace(id="timer-1")
+        self.created_timers.append(request)
+        return SimpleNamespace(id=f"timer-{len(self.created_timers)}")
+
+    def create_function(self, request: Any) -> Any:
+        self.created_worker = request
+        return SimpleNamespace(id="worker-function-1")
 
 
 class _Service:
@@ -67,12 +73,16 @@ class _Service:
         self.created_bundle = bundle
         return _name, "function-1"
 
+    def _upload_and_mount_code(self, function_id: str, path: str) -> None:
+        assert function_id == "worker-function-1"
+        assert Path(path, "run.sh").is_file()
+
 
 def test_deploy_creates_separate_function_and_minute_timer(tmp_path: Path) -> None:
     (tmp_path / "requirements.txt").write_text("veadk-python\n", encoding="utf-8")
     service = _Service()
 
-    function_id, timer_id = deploy_scheduler(
+    function_id, timer_id, worker_function_id, worker_timer_id = deploy_scheduler(
         service,
         studio_application_name="studio_test",
         package_root=tmp_path,
@@ -82,19 +92,35 @@ def test_deploy_creates_separate_function_and_minute_timer(tmp_path: Path) -> No
 
     assert function_id == "function-1"
     assert timer_id == "timer-1"
-    assert service.client.created_timer.function_id == "function-1"
-    assert service.client.created_timer.crontab == "* * * * *"
-    assert service.client.created_timer.enable_concurrency is True
-    assert service.client.created_timer.retries == 0
-    assert service.client.events == ["install", "release"]
+    assert worker_function_id == "worker-function-1"
+    assert worker_timer_id == "timer-2"
+    scanner_timer, worker_timer = service.client.created_timers
+    assert scanner_timer.function_id == "function-1"
+    assert scanner_timer.crontab == "* * * * *"
+    assert scanner_timer.enable_concurrency is False
+    assert scanner_timer.payload == '{"source":"veadk-studio-cronjobs","phase":"scan"}'
+    assert worker_timer.function_id == "worker-function-1"
+    assert worker_timer.enable_concurrency is True
+    assert (
+        worker_timer.payload == '{"source":"veadk-studio-cronjobs","phase":"execute"}'
+    )
+    assert service.client.created_worker.request_timeout == 10800
+    assert service.client.created_worker.max_concurrency == 1
+    assert service.client.created_worker.async_task_config.enable_async_task is True
+    assert service.client.created_worker.async_task_config.max_retry == 0
+    assert service.client.events == ["install", "release", "install", "release"]
 
 
 def test_scheduler_function_name_is_safe_and_bounded() -> None:
     name = scheduler_function_name("studio_" + "a" * 100)
+    worker_name = scheduler_worker_function_name("studio_" + "a" * 100)
 
     assert "_" not in name
     assert name.endswith("-cronjobs")
     assert len(name) <= 64
+    assert "_" not in worker_name
+    assert worker_name.endswith("-cronjobs-worker")
+    assert len(worker_name) <= 64
 
 
 def test_self_update_reuses_studio_role_storage_and_stable_name(
@@ -122,10 +148,15 @@ def test_self_update_reuses_studio_role_storage_and_stable_name(
 
     service = SimpleNamespace(client=_UpdateClient())
 
-    def _deploy(service_arg: Any, **kwargs: Any) -> tuple[str, str]:
+    def _deploy(service_arg: Any, **kwargs: Any) -> tuple[str, str, str, str]:
         captured["service"] = service_arg
         captured.update(kwargs)
-        return "scheduler-function", "scheduler-timer"
+        return (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+        )
 
     monkeypatch.setattr(
         "frontend.service.studio_scheduler.deploy.deploy_scheduler",
@@ -147,6 +178,8 @@ def test_self_update_reuses_studio_role_storage_and_stable_name(
     assert result == (
         "scheduler-function",
         "scheduler-timer",
+        "worker-function",
+        "worker-timer",
         "stable-studio-app",
     )
     assert captured["service"] is service

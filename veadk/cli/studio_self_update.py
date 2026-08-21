@@ -417,7 +417,7 @@ class StudioSelfUpdater:
                     "scheduler",
                     "正在更新定时任务调度服务与分钟触发器",
                 )
-                _, _, scheduler_base = deploy_scheduler_for_studio_update(
+                _, _, _, _, scheduler_base = deploy_scheduler_for_studio_update(
                     service,
                     studio_function_id=self._settings.function_id,
                     package_root=package_dir,

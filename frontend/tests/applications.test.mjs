@@ -68,7 +68,7 @@ const sidebarSource = readFileSync(
 );
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
-test("adds the Automation destination with a repository-owned four-circle icon", () => {
+test("places Automation below scheduled tasks without a beta badge", () => {
   assert.match(
     sidebarSource,
     /SidebarPage\s*=\s*[\s\S]*?"new-chat"[\s\S]*?"agents"[\s\S]*?"applications"[\s\S]*?"search"[\s\S]*?"feedback"/,
@@ -78,11 +78,13 @@ test("adds the Automation destination with a repository-owned four-circle icon",
   assert.equal((sidebarSource.match(/<circle /g) ?? []).length >= 4, true);
   assert.match(sidebarSource, /aria-label="自动化"/);
   assert.match(sidebarSource, /<span className="sidebar-nav-label">自动化<\/span>/);
-  assert.match(sidebarSource, /<span className="sidebar-beta-badge">Beta<\/span>/);
+  assert.doesNotMatch(sidebarSource, /sidebar-beta-badge|>Beta</);
   const searchIndex = sidebarSource.indexOf("<SearchButton");
+  const cronJobsIndex = sidebarSource.indexOf('aria-label="定时任务"');
   const applicationsIndex = sidebarSource.indexOf('aria-label="自动化"');
   assert.equal(searchIndex >= 0, true);
-  assert.equal(searchIndex < applicationsIndex, true);
+  assert.equal(searchIndex < cronJobsIndex, true);
+  assert.equal(cronJobsIndex < applicationsIndex, true);
   assert.match(
     appSource,
     /onApplications=\{\(\) => requestIntelligentNavigation\(openApplicationsPage\)\}/,

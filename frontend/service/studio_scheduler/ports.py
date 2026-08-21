@@ -35,6 +35,10 @@ class CancellationControl(Protocol):
         """Return the durable cancellation flag for the current run."""
         ...
 
+    async def mark_acknowledged(self, session_id: str) -> None:
+        """Persist that Runtime accepted the request before reading its result."""
+        ...
+
 
 class RuntimeProvider(Protocol):
     """Cloud adapter that invokes Runtime using its own service identity."""
@@ -54,6 +58,12 @@ class RuntimeExecutor(Protocol):
 
 class SchedulerRepository(Protocol):
     async def list_due(self, minute: datetime) -> list[DuePointer]: ...
+
+    async def put_ready(self, pointer: DuePointer) -> bool: ...
+
+    async def list_ready(self, limit: int) -> list[DuePointer]: ...
+
+    async def delete_ready(self, pointer: DuePointer) -> None: ...
 
     async def get_job(self, user_id: str, job_id: str) -> CronJob | None: ...
 

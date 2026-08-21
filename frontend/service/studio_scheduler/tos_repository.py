@@ -34,6 +34,7 @@ from .models import (
     LockAttempt,
     ProviderName,
     ScheduledRun,
+    deterministic_run_id,
 )
 
 _MAX_JSON_BYTES = 1024 * 1024
@@ -70,6 +71,45 @@ class TosSchedulerRepository:
             DuePointer.from_dict(self._get_json(client, key)[0])
             for key in self._list_keys(client, prefix)
         ]
+
+    async def put_ready(self, pointer: DuePointer) -> bool:
+        return await asyncio.to_thread(self._put_ready, pointer)
+
+    def _put_ready(self, pointer: DuePointer) -> bool:
+        client = self._client_factory()
+        key = self._ready_key(pointer)
+        content = _json_bytes(pointer.to_dict())
+        try:
+            self._put(client, key, content, forbid_overwrite=True)
+            return True
+        except Exception as error:
+            if _status_code(error) not in {409, 412}:
+                raise
+        existing, _ = self._get_json(client, key)
+        if DuePointer.from_dict(existing) != pointer:
+            raise SchedulerStorageConflict(
+                f"Ready pointer already exists with different identity: {key}"
+            )
+        return False
+
+    async def list_ready(self, limit: int) -> list[DuePointer]:
+        if limit < 1:
+            raise ValueError("Ready pointer limit must be positive")
+        return await asyncio.to_thread(self._list_ready, limit)
+
+    def _list_ready(self, limit: int) -> list[DuePointer]:
+        client = self._client_factory()
+        return [
+            DuePointer.from_dict(self._get_json(client, key)[0])
+            for key in self._list_keys(client, self._ready_prefix(), limit=limit)
+        ]
+
+    async def delete_ready(self, pointer: DuePointer) -> None:
+        await asyncio.to_thread(self._delete_ready, pointer)
+
+    def _delete_ready(self, pointer: DuePointer) -> None:
+        client = self._client_factory()
+        client.delete_object(bucket=self._bucket, key=self._ready_key(pointer))
 
     async def get_job(self, user_id: str, job_id: str) -> CronJob | None:
         return await asyncio.to_thread(self._get_job, user_id, job_id)
@@ -285,9 +325,18 @@ class TosSchedulerRepository:
         for _ in range(_CAS_ATTEMPTS):
             payload, etag = self._get_json(client, key)
             existing = ScheduledRun.from_dict(payload)
+            if existing.state in {"succeeded", "failed", "cancelled", "skipped"}:
+                return existing
             merged = replace(
                 run,
                 cancel_requested=run.cancel_requested or existing.cancel_requested,
+                acknowledged=run.acknowledged or existing.acknowledged,
+                session_id=(
+                    existing.session_id
+                    if existing.acknowledged and existing.session_id
+                    else run.session_id
+                ),
+                started_at=run.started_at or existing.started_at,
             )
             try:
                 self._put(client, key, _json_bytes(merged.to_dict()), if_match=etag)
@@ -345,15 +394,20 @@ class TosSchedulerRepository:
                     raise
         raise SchedulerStorageConflict("Unable to cancel cron run after CAS retries")
 
-    def _list_keys(self, client: Any, prefix: str) -> list[str]:
+    def _list_keys(
+        self, client: Any, prefix: str, *, limit: int | None = None
+    ) -> list[str]:
         continuation_token = ""
         keys: list[str] = []
         while True:
+            remaining = 1000 if limit is None else min(1000, limit - len(keys))
+            if remaining <= 0:
+                return keys
             output = client.list_objects_type2(
                 bucket=self._bucket,
                 prefix=prefix,
                 continuation_token=continuation_token,
-                max_keys=1000,
+                max_keys=remaining,
             )
             keys.extend(
                 str(item.key)
@@ -361,6 +415,8 @@ class TosSchedulerRepository:
                 if str(getattr(item, "key", "")).endswith(".json")
             )
             if not getattr(output, "is_truncated", False):
+                return keys
+            if limit is not None and len(keys) >= limit:
                 return keys
             continuation_token = str(
                 getattr(output, "next_continuation_token", "") or ""
@@ -440,6 +496,18 @@ class TosSchedulerRepository:
         )
         name = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         return f"{cls._due_prefix(pointer.scheduled_at)}{name}.json"
+
+    @staticmethod
+    def _ready_prefix() -> str:
+        return f"{STUDIO_STORAGE_ROOT_PREFIX}/scheduler/cronjobs/ready/"
+
+    @classmethod
+    def _ready_key(cls, pointer: DuePointer) -> str:
+        stamp = pointer.scheduled_at.astimezone(timezone.utc)
+        return (
+            f"{cls._ready_prefix()}{stamp:%Y%m%d%H%M}/"
+            f"{deterministic_run_id(pointer)}.json"
+        )
 
 
 def _json_bytes(payload: dict[str, object]) -> bytes:

@@ -297,7 +297,12 @@ def test_studio_deploy_checks_serverless_role_with_custom_function_role(
     )
     monkeypatch.setattr(
         "frontend.service.studio_scheduler.deploy.deploy_scheduler",
-        lambda *_args, **_kwargs: ("scheduler-function", "scheduler-timer"),
+        lambda *_args, **_kwargs: (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+        ),
     )
 
     result = CliRunner().invoke(

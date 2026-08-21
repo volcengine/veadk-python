@@ -60,14 +60,17 @@ async def test_run_now_uses_the_same_due_publisher_and_local_dispatch_path() -> 
 
     executor = _LocalExecutor()
     queued_minute = now.replace(second=0) + timedelta(minutes=1)
-    summary = await Dispatcher(
+    dispatcher = Dispatcher(
         repository,
         executor,
         replica_id="local",
-    ).dispatch_minute(queued_minute)
+    )
+    scan_summary = await dispatcher.dispatch_minute(queued_minute)
+    summary = await dispatcher.execute_ready(queued_minute)
 
     assert next(iter(repository.due.values())).scheduled_at == queued_minute
     assert next(iter(repository.runs.values())).run_id == run_id
+    assert scan_summary.queued == 1
     assert summary.started == 1
     assert executor.calls == 1
 

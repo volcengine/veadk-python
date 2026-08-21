@@ -542,6 +542,7 @@ class TosCronjobRepository:
             "state": state,
             "createdAt": cls._iso(run.created_at or run.scheduled_at),
             "updatedAt": cls._iso(updated_at or run.scheduled_at),
+            "startedAt": cls._iso(run.started_at),
             "attempt": 0,
             "cancelRequested": run.cancellation_requested_at is not None,
             "acknowledged": run.status in {"running", "success"},
@@ -562,6 +563,7 @@ class TosCronjobRepository:
             "succeeded": "success",
         }.get(state, state)
         updated_at = payload.get("updatedAt")
+        started_at = payload.get("startedAt")
         return CronjobRun.model_validate(
             {
                 "runId": payload["runId"],
@@ -571,7 +573,8 @@ class TosCronjobRepository:
                 "status": status,
                 "scheduledAt": payload["scheduledAt"],
                 "createdAt": payload.get("createdAt"),
-                "startedAt": (updated_at if state in {"running", "retrying"} else None),
+                "startedAt": started_at
+                or (updated_at if state in {"running", "retrying"} else None),
                 "finishedAt": payload.get("completedAt"),
                 "cancellationRequestedAt": (
                     updated_at if payload.get("cancelRequested", False) else None

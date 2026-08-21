@@ -204,15 +204,15 @@ class CronJob:
     prompt: str
     runtime: RuntimeTarget
     schedule: Schedule
-    max_runtime_seconds: int = 3600
+    max_runtime_seconds: int = 1800
 
     def __post_init__(self) -> None:
         if not self.user_id or not self.job_id or not self.prompt.strip():
             raise ValueError("Cron job identity and prompt must not be empty")
         if self.revision < 1:
             raise ValueError("Cron job revision must be positive")
-        if not 60 <= self.max_runtime_seconds <= 86400:
-            raise ValueError("maxRuntimeSeconds must be between 60 and 86400")
+        if not 60 <= self.max_runtime_seconds <= 10800:
+            raise ValueError("maxRuntimeSeconds must be between 60 and 10800")
 
     @classmethod
     def from_dict(
@@ -249,7 +249,7 @@ class CronJob:
             runtime=RuntimeTarget.from_dict(runtime),
             schedule=Schedule.from_dict(schedule),
             max_runtime_seconds=_int(
-                data.get("maxRuntimeSeconds", data.get("max_runtime_seconds", 3600)),
+                data.get("maxRuntimeSeconds", data.get("max_runtime_seconds", 1800)),
                 "maxRuntimeSeconds",
             ),
         )
@@ -332,6 +332,7 @@ class ScheduledRun:
     state: RunState
     created_at: datetime
     updated_at: datetime
+    started_at: datetime | None = None
     attempt: int = 0
     cancel_requested: bool = False
     acknowledged: bool = False
@@ -356,6 +357,7 @@ class ScheduledRun:
         if state not in valid_states:
             raise ValueError(f"Unsupported run state: {state}")
         completed = data.get("completedAt", data.get("completed_at"))
+        started = data.get("startedAt", data.get("started_at"))
         return cls(
             user_id=str(_required(data, "userId", "user_id")),
             job_id=str(_required(data, "jobId", "job_id")),
@@ -372,6 +374,7 @@ class ScheduledRun:
             updated_at=_datetime(
                 _required(data, "updatedAt", "updated_at"), "updatedAt"
             ),
+            started_at=_datetime(started, "startedAt") if started else None,
             attempt=_int(data.get("attempt") or 0, "attempt"),
             cancel_requested=bool(
                 data.get("cancelRequested", data.get("cancel_requested", False))
@@ -396,6 +399,7 @@ class ScheduledRun:
             "state": self.state,
             "createdAt": _iso(self.created_at),
             "updatedAt": _iso(self.updated_at),
+            "startedAt": _iso(self.started_at),
             "attempt": self.attempt,
             "cancelRequested": self.cancel_requested,
             "acknowledged": self.acknowledged,
@@ -479,6 +483,7 @@ class RuntimeInvocationError(RuntimeError):
 @dataclass(frozen=True)
 class DispatchSummary:
     scanned: int = 0
+    queued: int = 0
     started: int = 0
     stale: int = 0
     skipped: int = 0

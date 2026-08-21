@@ -130,8 +130,13 @@
   color: hsl(var(--muted-foreground));
   text-align: center;
 }
-.cronjobs-loading { gap: 12px; }
-.cronjobs-loading > div { width: min(100%, 760px); height: 48px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--panel)); }
+.cronjobs-loading {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+}
 .cronjobs-banner { flex: 0 0 auto; margin-top: 16px; }
 .cronjobs-notice { position: absolute; z-index: 50; right: 32px; bottom: 24px; max-width: min(420px, calc(100% - 64px)); }
 
@@ -217,7 +222,10 @@
 .cronjobs-run-meta,
 .cronjobs-run-output { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .cronjobs-run-meta strong { font-size: 11px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cronjobs-run-output p { display: -webkit-box; margin: 0; overflow: hidden; color: hsl(var(--foreground)); font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.cronjobs-run-output-body { min-width: 0; }
+.cronjobs-run-output-body p { display: -webkit-box; margin: 0; overflow: hidden; color: hsl(var(--foreground)); font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.cronjobs-run-output-body.is-expanded p { display: block; overflow: visible; -webkit-line-clamp: unset; }
+.cronjobs-run-output-toggle { margin-top: 4px; }
 .cronjobs-run-output.is-error p { color: hsl(var(--destructive)); }
 .cronjobs-run-error-detail { color: hsl(var(--destructive)); }
 .cronjobs-run-error-detail.is-expanded .deploy-error-message-text {
