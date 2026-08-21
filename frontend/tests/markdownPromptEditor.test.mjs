@@ -75,6 +75,20 @@ test("system prompt lazily loads a focused Markdown editor", () => {
   assert.match(editorSource, /if \(!initialMarkdownNormalize\)/);
 });
 
+test("system prompt falls back to plain text when Markdown parsing fails", () => {
+  assert.match(editorSource, /plainTextFallback/);
+  assert.match(editorSource, /setPlainTextFallback\(true\)/);
+  assert.match(editorSource, /<textarea/);
+  assert.match(editorSource, /value=\{value\}/);
+  assert.match(editorSource, /onChange\(nextValue\)/);
+  assert.doesNotMatch(editorSource, /Markdown 内容暂时无法解析/);
+  assert.doesNotMatch(editorSource, /cw-markdown-fallback-error/);
+  assert.match(
+    createStyles,
+    /\.cw-markdown-fallback\s*\{[\s\S]*?min-height:\s*340px;[\s\S]*?max-height:\s*420px;[\s\S]*?overflow-y:\s*auto;/,
+  );
+});
+
 test("description remains a plain text field", () => {
   assert.match(
     createSource,

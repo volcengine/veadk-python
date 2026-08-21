@@ -53,7 +53,7 @@ export default function MarkdownPromptEditor({
 }) {
   const editorRef = useRef<MDXEditorMethods>(null);
   const lastPublishedValue = useRef(value);
-  const [parseError, setParseError] = useState("");
+  const [plainTextFallback, setPlainTextFallback] = useState(false);
   const plugins = useMemo(
     () => [
       headingsPlugin({ allowedHeadingLevels: [1, 2, 3] }),
@@ -77,11 +77,30 @@ export default function MarkdownPromptEditor({
 
   useEffect(() => {
     if (value !== lastPublishedValue.current) {
-      editorRef.current?.setMarkdown(value);
+      if (!plainTextFallback) {
+        editorRef.current?.setMarkdown(value);
+      }
       lastPublishedValue.current = value;
-      setParseError("");
     }
-  }, [value]);
+  }, [plainTextFallback, value]);
+
+  if (plainTextFallback) {
+    return (
+      <div>
+        <textarea
+          className={`cw-markdown-fallback${invalid ? " is-error" : ""}`}
+          value={value}
+          aria-invalid={invalid}
+          spellCheck={false}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            lastPublishedValue.current = nextValue;
+            onChange(nextValue);
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -97,18 +116,12 @@ export default function MarkdownPromptEditor({
         translation={translate}
         onChange={(markdown, initialMarkdownNormalize) => {
           lastPublishedValue.current = markdown;
-          setParseError("");
           if (!initialMarkdownNormalize) {
             onChange(markdown);
           }
         }}
-        onError={({ error }) => setParseError(error)}
+        onError={() => setPlainTextFallback(true)}
       />
-      {parseError && (
-        <span className="cw-markdown-error" role="alert">
-          Markdown 内容暂时无法解析，请检查未闭合的语法。
-        </span>
-      )}
     </div>
   );
 }
