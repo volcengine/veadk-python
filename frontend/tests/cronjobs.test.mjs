@@ -14,10 +14,6 @@ const modelSource = readFileSync(
   new URL("../src/cronjobs/model.ts", import.meta.url),
   "utf8",
 );
-const iconsSource = readFileSync(
-  new URL("../src/cronjobs/icons.tsx", import.meta.url),
-  "utf8",
-);
 const sidebarSource = readFileSync(
   new URL("../src/ui/Sidebar.tsx", import.meta.url),
   "utf8",
@@ -32,12 +28,11 @@ const confirmSource = readFileSync(
   "utf8",
 );
 
-test("adds the scheduled tasks destination after Automation with a repository-owned clock icon", () => {
+test("adds the scheduled tasks destination after Automation with the Apps SDK clock icon", () => {
   assert.match(sidebarSource, /\| "applications"\s*\| "cronjobs"/);
   assert.match(sidebarSource, /onCronJobs: \(\) => void/);
-  assert.match(sidebarSource, /function ScheduledTasksIcon/);
-  assert.match(sidebarSource, /strokeWidth="1\.75"/);
-  assert.match(sidebarSource, /<circle cx="12" cy="12" r="8\.25"/);
+  assert.match(sidebarSource, /import \{ BookOpen, Clock \} from "@openai\/apps-sdk-ui\/components\/Icon"/);
+  assert.doesNotMatch(sidebarSource, /function ScheduledTasksIcon/);
   const automationIndex = sidebarSource.indexOf('aria-label="自动化"');
   const cronJobsIndex = sidebarSource.indexOf('aria-label="定时任务"');
   assert.equal(automationIndex >= 0, true);
@@ -77,7 +72,7 @@ test("renders dense list, independent-session form, details, and full execution 
   assert.match(cronJobsSource, /任务已重新排队，将在一分钟内开始执行/);
   assert.match(cronJobsSource, /catch \(cause\) \{\s*setError\(/);
   assert.match(cronJobsSource, /error=\{confirmError\}/);
-  assert.match(confirmSource, /studio-confirm-error" role="alert"/);
+  assert.match(confirmSource, /<Alert className="studio-confirm-error" color="danger"/);
   assert.match(cronJobsSource, /drawerRef\.current\?\.querySelectorAll/);
   assert.match(cronJobsSource, /event\.key !== "Tab"/);
   assert.match(cronJobsSource, /const busyRef = useRef\(isBusy\)/);
@@ -94,7 +89,7 @@ test("renders dense list, independent-session form, details, and full execution 
   assert.match(cronJobsSource, /Runtime Agent 未返回可调用的 appName/);
 });
 
-test("keeps form, table, drawer, and responsive styling within the cronjobs domain", () => {
+test("uses Apps SDK controls while keeping only domain layout and responsive styling", () => {
   assert.match(cronJobsStyles, /\.cronjobs-table\s*\{/);
   assert.match(cronJobsStyles, /\.cronjobs-toolbar\s*\{[\s\S]*?justify-content: flex-end/);
   assert.match(cronJobsStyles, /min-width: 940px/);
@@ -103,12 +98,16 @@ test("keeps form, table, drawer, and responsive styling within the cronjobs doma
   assert.match(cronJobsStyles, /@media \(max-width: 520px\)/);
   assert.match(cronJobsSource, /data-label="下次执行"/);
   assert.match(cronJobsStyles, /\.cronjobs-table tbody \{ display: flex; flex-direction: column/);
-  assert.match(cronJobsStyles, /\.cronjobs-row-actions button \{ width: 44px; height: 44px/);
   assert.match(cronJobsStyles, /@media \(prefers-reduced-motion: reduce\)/);
   assert.doesNotMatch(cronJobsStyles, /#[0-9a-f]{3,8}/i);
   assert.doesNotMatch(cronJobsStyles, /font-family:\s*(?:monospace|[^;]*Mono)/i);
   assert.doesNotMatch(cronJobsSource, /from "lucide-react"|emoji/i);
-  assert.match(iconsSource, /viewBox="0 0 24 24"/);
+  for (const component of ["Alert", "Badge", "Button", "EmptyMessage", "Input", "SegmentedControl", "Select", "ShimmerText", "Switch", "Textarea", "Tooltip"]) {
+    assert.match(cronJobsSource, new RegExp(`@openai/apps-sdk-ui/components/${component}`));
+  }
+  assert.match(cronJobsSource, /@openai\/apps-sdk-ui\/components\/Icon/);
+  assert.doesNotMatch(cronJobsStyles, /\.cronjobs-button|\.cronjobs-icon-button/);
+  assert.doesNotMatch(cronJobsStyles, /\.cronjobs-field (?:input|select|textarea)/);
 });
 
 test("defines typed same-origin cronjob APIs for list, mutation, run history, and cancellation", () => {

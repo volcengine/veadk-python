@@ -14,7 +14,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { BookOpen } from "@openai/apps-sdk-ui/components/Icon";
+import { BookOpen, Clock } from "@openai/apps-sdk-ui/components/Icon";
 import type {
   AdkSession,
   SiteBranding,
@@ -99,25 +99,6 @@ function ApplicationsIcon(props: SVGProps<SVGSVGElement>) {
       <circle cx="17" cy="7" r="2.25" />
       <circle cx="7" cy="17" r="2.25" />
       <circle cx="17" cy="17" r="2.25" />
-    </svg>
-  );
-}
-
-function ScheduledTasksIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      {...props}
-    >
-      <circle cx="12" cy="12" r="8.25" />
-      <path d="M12 7.6v4.7l3.1 1.8" />
-      <path d="M7.2 2.9 5.3 4.8M16.8 2.9l1.9 1.9" />
     </svg>
   );
 }
@@ -484,7 +465,7 @@ export function Sidebar({
           aria-current={activePage === "cronjobs" ? "page" : undefined}
           title="定时任务"
         >
-          <ScheduledTasksIcon className="icon" />
+          <Clock className="icon" />
           <span className="sidebar-nav-label">定时任务</span>
         </button>
       </div>

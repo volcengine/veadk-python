@@ -46,41 +46,6 @@
   margin-top: 24px;
 }
 
-.cronjobs-button {
-  min-height: 36px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  box-sizing: border-box;
-  padding: 0 13px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 7px;
-  background: hsl(var(--panel));
-  color: hsl(var(--foreground));
-  cursor: pointer;
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 550;
-  white-space: nowrap;
-  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
-}
-
-.cronjobs-button svg { width: 16px; height: 16px; flex: 0 0 16px; }
-.cronjobs-button:hover:not(:disabled) { background: hsl(var(--muted)); border-color: hsl(var(--foreground) / 0.17); }
-.cronjobs-button.is-primary { border-color: hsl(var(--primary)); background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
-.cronjobs-button.is-primary:hover:not(:disabled) { border-color: hsl(var(--primary) / 0.88); background: hsl(var(--primary) / 0.88); }
-.cronjobs-button.is-danger-quiet { color: hsl(var(--destructive)); }
-.cronjobs-button.is-danger-quiet:hover:not(:disabled) { background: hsl(var(--destructive) / 0.08); border-color: hsl(var(--destructive) / 0.24); }
-.cronjobs-button:focus-visible,
-.cronjobs-icon-button:focus-visible,
-.cronjobs-row-actions button:focus-visible,
-.cronjobs-name-button:focus-visible,
-.cronjobs-run-cancel:focus-visible { outline: 2px solid hsl(var(--ring) / 0.35); outline-offset: 2px; }
-.cronjobs-button:disabled,
-.cronjobs-icon-button:disabled,
-.cronjobs-row-actions button:disabled { cursor: not-allowed; opacity: 0.46; }
-
 .cronjobs-content {
   flex: 1;
   min-height: 0;
@@ -146,59 +111,14 @@
 
 .cronjobs-name-button {
   max-width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: hsl(var(--foreground));
-  cursor: pointer;
-  font: inherit;
-  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.cronjobs-name-button:hover { text-decoration: underline; text-underline-offset: 3px; }
 .cronjobs-agent { min-width: 0; display: inline-flex; align-items: center; gap: 7px; max-width: 100%; color: hsl(var(--foreground)); overflow: hidden; text-overflow: ellipsis; }
 .cronjobs-agent svg { width: 16px; height: 16px; flex: 0 0 16px; color: hsl(var(--muted-foreground)); }
-.cronjobs-enabled,
-.cronjobs-disabled { display: inline-flex; align-items: center; min-height: 21px; padding: 0 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; }
-.cronjobs-enabled { background: hsl(145 55% 42% / 0.12); color: hsl(145 58% 28%); }
-.cronjobs-disabled { background: hsl(var(--muted)); color: hsl(var(--muted-foreground)); }
-
-.cronjobs-status { display: inline-flex; align-items: center; gap: 6px; color: hsl(var(--muted-foreground)); font-size: 11.5px; font-weight: 550; }
-.cronjobs-status > span { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: currentColor; }
-.cronjobs-status.is-queued,
-.cronjobs-status.is-pending,
-.cronjobs-status.is-running,
-.cronjobs-status.is-retrying { color: hsl(213 72% 43%); }
-.cronjobs-status.is-success { color: hsl(145 58% 31%); }
-.cronjobs-status.is-failed { color: hsl(var(--destructive)); }
-.cronjobs-status.is-cancelled,
-.cronjobs-status.is-skipped,
-.cronjobs-status.is-idle { color: hsl(var(--muted-foreground)); }
 
 .cronjobs-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
-.cronjobs-row-actions button,
-.cronjobs-icon-button {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
-  display: inline-grid;
-  place-items: center;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  cursor: pointer;
-  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease;
-}
-.cronjobs-row-actions button:hover:not(:disabled),
-.cronjobs-icon-button:hover:not(:disabled) { background: hsl(var(--muted)); color: hsl(var(--foreground)); }
-.cronjobs-row-actions svg,
-.cronjobs-icon-button svg { width: 16px; height: 16px; }
-.cronjobs-delete-action > span { display: none; }
-.cronjobs-icon-button.is-danger:hover:not(:disabled) { background: hsl(var(--destructive) / 0.08); color: hsl(var(--destructive)); }
 
 .cronjobs-loading,
 .cronjobs-state {
@@ -212,26 +132,8 @@
 }
 .cronjobs-loading { gap: 12px; }
 .cronjobs-loading > div { width: min(100%, 760px); height: 48px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--panel)); }
-.cronjobs-state > svg { width: 34px; height: 34px; margin-bottom: 12px; color: hsl(var(--muted-foreground)); }
-.cronjobs-state h2 { margin: 0; color: hsl(var(--foreground)); font-size: 15px; font-weight: 600; }
-.cronjobs-state p { max-width: 520px; margin: 7px 0 16px; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; }
-.cronjobs-state > span { margin-top: 12px; font-size: 11.5px; }
-.cronjobs-state.is-error > svg { color: hsl(var(--destructive)); }
-
-.cronjobs-banner,
-.cronjobs-notice {
-  flex: 0 0 auto;
-  margin-top: 16px;
-  padding: 9px 12px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 8px;
-  background: hsl(var(--panel));
-  color: hsl(var(--foreground));
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-}
-.cronjobs-notice { position: absolute; z-index: 50; right: 32px; bottom: 24px; max-width: min(420px, calc(100% - 64px)); box-shadow: 0 10px 30px hsl(var(--foreground) / 0.12); }
+.cronjobs-banner { flex: 0 0 auto; margin-top: 16px; }
+.cronjobs-notice { position: absolute; z-index: 50; right: 32px; bottom: 24px; max-width: min(420px, calc(100% - 64px)); }
 
 .cronjobs-drawer-backdrop {
   position: fixed;
@@ -269,78 +171,18 @@
 .cronjobs-field { min-width: 0; display: flex; flex-direction: column; gap: 7px; margin-bottom: 18px; }
 .cronjobs-field > span,
 .cronjobs-fieldset > legend { color: hsl(var(--foreground)); font-size: 12.5px; font-weight: 600; line-height: 1.45; }
-.cronjobs-field input,
-.cronjobs-field select,
-.cronjobs-field textarea {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  border: 1px solid hsl(var(--border));
-  border-radius: 7px;
-  outline: 0;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font: inherit;
-  font-size: 12.5px;
-  transition: border-color 150ms ease, box-shadow 150ms ease;
-}
-.cronjobs-field input,
-.cronjobs-field select { height: 36px; padding: 0 10px; }
-.cronjobs-field textarea { min-height: 116px; resize: vertical; padding: 10px 11px; line-height: 1.55; }
-.cronjobs-field input:focus,
-.cronjobs-field select:focus,
-.cronjobs-field textarea:focus { border-color: hsl(var(--ring) / 0.64); box-shadow: 0 0 0 2px hsl(var(--ring) / 0.11); }
-.cronjobs-field input:disabled,
-.cronjobs-field select:disabled { cursor: not-allowed; opacity: 0.55; }
 .cronjobs-field small { color: hsl(var(--muted-foreground)); font-size: 11px; line-height: 1.45; }
-.cronjobs-field textarea + small { text-align: right; }
+.cronjobs-character-count { text-align: right; }
 .cronjobs-fieldset { min-width: 0; margin: 0 0 18px; padding: 0; border: 0; }
 .cronjobs-fieldset > legend { margin-bottom: 9px; }
-.cronjobs-schedule-types { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 16px; padding: 4px; border: 1px solid hsl(var(--border)); border-radius: 10px; background: hsl(var(--secondary)); }
-.cronjobs-schedule-types label { min-width: 0; cursor: pointer; }
-.cronjobs-schedule-types input { position: absolute; opacity: 0; pointer-events: none; }
-.cronjobs-schedule-types span { min-height: 34px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 7px; color: hsl(var(--muted-foreground)); font-size: 12px; font-weight: 550; transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease; }
-.cronjobs-schedule-types label:hover span { color: hsl(var(--foreground)); background: hsl(var(--panel) / 0.5); }
-.cronjobs-schedule-types input:checked + span { border-color: hsl(var(--border)); background: hsl(var(--panel)); color: hsl(var(--foreground)); }
-.cronjobs-schedule-types input:focus-visible + span { outline: 2px solid hsl(var(--ring) / 0.3); outline-offset: 2px; }
+.cronjobs-schedule-types { margin-bottom: 16px; }
 .cronjobs-fieldset .cronjobs-field:last-child { margin-bottom: 0; }
 .cronjobs-inline-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.cronjobs-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 14px; border: 1px solid hsl(var(--border)); border-radius: 8px; cursor: pointer; }
+.cronjobs-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 0; }
 .cronjobs-switch-row > span { display: flex; flex-direction: column; gap: 3px; }
 .cronjobs-switch-row strong { font-size: 12.5px; font-weight: 600; }
 .cronjobs-switch-row small { color: hsl(var(--muted-foreground)); font-size: 11px; line-height: 1.4; }
-.cronjobs-switch-row input {
-  position: relative;
-  width: 34px;
-  height: 18px;
-  flex: 0 0 34px;
-  margin: 0;
-  border: 1px solid hsl(var(--border));
-  border-radius: 999px;
-  background: hsl(var(--muted));
-  appearance: none;
-  cursor: pointer;
-  transition: border-color 150ms ease, background-color 150ms ease;
-}
-.cronjobs-switch-row input::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: hsl(var(--panel));
-  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.2);
-  transition: transform 150ms ease;
-}
-.cronjobs-switch-row input:checked {
-  border-color: hsl(var(--primary));
-  background: hsl(var(--primary));
-}
-.cronjobs-switch-row input:checked::after { transform: translateX(16px); }
-.cronjobs-switch-row input:focus-visible { outline: 2px solid hsl(var(--ring) / 0.35); outline-offset: 2px; }
-.cronjobs-inline-error { margin-top: 14px; padding: 9px 11px; border-radius: 7px; background: hsl(var(--destructive) / 0.08); color: hsl(var(--destructive)); font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+.cronjobs-inline-error { margin-top: 14px; }
 .cronjobs-drawer-actions { flex: 0 0 auto; display: flex; justify-content: flex-end; gap: 8px; padding: 14px 24px; border-top: 1px solid hsl(var(--border)); background: hsl(var(--panel)); }
 
 .cronjobs-detail { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -385,15 +227,9 @@
   -webkit-line-clamp: unset;
 }
 .cronjobs-run-error-detail .deploy-error-message-actions { margin-top: 8px; }
-.cronjobs-run-error-detail .deploy-error-message-actions button:focus-visible { outline: 2px solid hsl(var(--ring) / 0.35); outline-offset: 2px; }
-.cronjobs-run-cancel { position: absolute; top: 12px; right: 14px; min-height: 28px; padding: 0 9px; border: 1px solid hsl(var(--destructive) / 0.24); border-radius: 6px; background: transparent; color: hsl(var(--destructive)); cursor: pointer; font: inherit; font-size: 11.5px; }
-.cronjobs-run-cancel:hover:not(:disabled) { background: hsl(var(--destructive) / 0.08); }
-.cronjobs-history-state { min-height: 190px; display: grid; place-items: center; align-content: center; padding: 20px; border: 1px solid hsl(var(--border)); border-radius: 12px; background: hsl(var(--panel)); color: hsl(var(--muted-foreground)); text-align: center; }
-.cronjobs-history-state > svg { width: 28px; height: 28px; margin-bottom: 10px; }
-.cronjobs-history-state p { margin: 0; color: hsl(var(--foreground)); font-size: 13px; font-weight: 550; }
-.cronjobs-history-state span { margin-top: 5px; font-size: 11.5px; }
-.cronjobs-history-state.is-error p { max-width: 600px; color: hsl(var(--destructive)); font-weight: 400; line-height: 1.55; white-space: pre-wrap; }
-.cronjobs-history-state button { margin-top: 12px; border: 0; background: transparent; color: hsl(var(--primary)); cursor: pointer; font: inherit; font-size: 12px; }
+.cronjobs-run-cancel { position: absolute; top: 12px; right: 14px; }
+.cronjobs-history-state { min-height: 190px; padding: 20px; }
+.cronjobs-history-alert { min-height: 120px; }
 
 @keyframes cronjobs-backdrop-in { from { opacity: 0; } }
 @keyframes cronjobs-drawer-in { from { transform: translateX(24px); opacity: 0.88; } }
@@ -410,7 +246,6 @@
   .cronjobs-page-head,
   .cronjobs-detail-head { align-items: stretch; flex-direction: column; gap: 16px; }
   .cronjobs-toolbar { min-height: 44px; margin-top: 16px; }
-  .cronjobs-toolbar .cronjobs-button { min-height: 44px; }
   .cronjobs-content { margin-top: 12px; padding-bottom: 20px; }
   .cronjobs-table-wrap { overflow-y: auto; border: 0; border-radius: 0; background: transparent; }
   .cronjobs-table { min-width: 0; display: block; font-size: 13px; }
@@ -470,18 +305,13 @@
   }
   .cronjobs-agent { color: hsl(var(--foreground)); white-space: nowrap; }
   .cronjobs-row-actions { gap: 8px; }
-  .cronjobs-row-actions button { width: 44px; height: 44px; flex-basis: 44px; }
   .cronjobs-detail-actions { justify-content: flex-start; flex-wrap: wrap; }
-  .cronjobs-detail-actions .cronjobs-button { min-height: 44px; flex: 1 1 auto; }
+  .cronjobs-detail-actions > * { flex: 1 1 auto; }
   .cronjobs-summary-grid > dl { grid-template-columns: 1fr; gap: 14px; }
   .cronjobs-run { grid-template-columns: 1fr; gap: 12px; }
   .cronjobs-run-meta { display: flex; }
-  .cronjobs-schedule-types { grid-template-columns: 1fr 1fr; }
-  .cronjobs-schedule-types span { min-height: 44px; }
   .cronjobs-drawer { height: 100dvh; }
-  .cronjobs-drawer .cronjobs-icon-button { width: 44px; height: 44px; flex-basis: 44px; }
   .cronjobs-drawer-actions { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
-  .cronjobs-drawer-actions .cronjobs-button { min-height: 44px; }
 }
 
 @media (max-width: 520px) {
@@ -491,20 +321,10 @@
   .cronjobs-drawer-actions { padding: 12px 16px; }
   .cronjobs-inline-fields { grid-template-columns: 1fr; gap: 0; }
   .cronjobs-detail-actions { display: grid; grid-template-columns: 1fr 1fr; }
-  .cronjobs-detail-actions .cronjobs-icon-button { width: 100%; height: 44px; }
-  .cronjobs-detail-actions .cronjobs-delete-action { display: inline-flex; gap: 7px; font-size: 12.5px; font-weight: 550; }
-  .cronjobs-detail-actions .cronjobs-delete-action > span { display: inline; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .cronjobs-drawer-backdrop,
   .cronjobs-drawer { animation: none; }
-  .cronjobs-button,
-  .cronjobs-icon-button,
-  .cronjobs-row-actions button,
-  .cronjobs-table tbody tr,
-  .cronjobs-field input,
-  .cronjobs-field select,
-  .cronjobs-field textarea,
-  .cronjobs-schedule-types span { transition: none; }
+  .cronjobs-table tbody tr { transition: none; }
 }
