@@ -11,7 +11,7 @@ const railSource = readFileSync(
   "utf8",
 );
 const capabilityDialogsSource = readFileSync(
-  new URL("../src/ui/SessionCapabilityDialogs.tsx", import.meta.url),
+  new URL("../src/ui/StudioToolDialog.tsx", import.meta.url),
   "utf8",
 );
 const clientSource = readFileSync(
@@ -181,41 +181,31 @@ test("keeps capability section titles text-only", () => {
   assert.match(railSource, /import \{ Maximize2, X \} from "lucide-react"/);
 });
 
-test("mixes session capabilities into the existing lists with custom badges", () => {
-  assert.match(railSource, /capabilities\?\.tools/);
-  assert.match(railSource, /capabilities\?\.skills/);
-  assert.match(railSource, /tool\.custom && <span className="topo-custom-badge">自定义<\/span>/);
-  assert.match(railSource, /skill\.custom && <span className="topo-custom-badge">自定义<\/span>/);
+test("mixes selected Studio tools into the existing tool list", () => {
+  assert.match(railSource, /const selectedStudioTools = studioTools/);
+  assert.match(railSource, /selectedIds\.has\(tool\.id\)/);
+  assert.match(railSource, /tool\.custom && <span className="topo-custom-badge">Studio Tool<\/span>/);
   assert.match(railSource, /tool\.custom && \([\s\S]*?topo-remove-capability/);
-  assert.match(railSource, /skill\.custom && \([\s\S]*?topo-remove-capability/);
-  assert.doesNotMatch(railSource, /本会话添加/);
-  assert.match(appSource, /getSessionCapabilities\(appName, userId, sessionId\)/);
-  assert.match(
-    appSource,
-    /sessionCapabilities:\s*requiresSessionCapabilityRunner\(sessionCapabilities\)/,
-  );
+  assert.doesNotMatch(railSource, /skill\.custom/);
+  assert.match(appSource, /studioTools=\{studioToolCapabilities\?\.tools \?\? \[\]\}/);
+  assert.match(appSource, /selectedStudioToolIds=\{selectedStudioToolIds\}/);
+  assert.doesNotMatch(appSource, /SessionCapabilities|sessionCapabilities/);
 });
 
-test("offers session-scoped tool and skill controls in the information rail", () => {
-  assert.match(railSource, /aria-label="添加内置工具"/);
-  assert.match(railSource, /aria-label="添加技能"/);
-  assert.match(railSource, /<span>在此对话中添加工具<\/span>/);
-  assert.match(railSource, /<span>在此对话中添加技能<\/span>/);
+test("offers only the Studio BFF tool control in the information rail", () => {
+  assert.match(railSource, /在此对话中添加 Studio 工具/);
+  assert.doesNotMatch(railSource, /aria-label="添加技能"/);
   assert.match(railSource, /className="topo-capability-add-slot"/);
-  assert.match(railSource, /<ToolCapabilityDialog/);
-  assert.match(railSource, /<SkillCapabilityDialog/);
-  assert.doesNotMatch(railSource, /placeholder="Skill Space ID"/);
-  assert.match(appSource, /<AgentInfoPanel[\s\S]*?capabilities=\{sessionCapabilities\}/);
+  assert.match(railSource, /<StudioToolDialog/);
+  assert.doesNotMatch(railSource, /<SkillCapabilityDialog/);
+  assert.match(appSource, /<AgentInfoPanel[\s\S]*?onStudioToolsChange=/);
   assert.doesNotMatch(appSource, /<AgentInfoDrawer\b/);
   assert.match(railStyles, /\.topo-custom-badge/);
   assert.match(
     railStyles,
     /\.topo-skill-name\s*\{[^}]*font-family:\s*-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;/,
   );
-  assert.match(
-    railStyles,
-    /\.session-skill-option-copy strong\s*\{[^}]*font-family:\s*-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;/,
-  );
+  assert.doesNotMatch(railStyles, /\.session-skill-option-copy/);
   assert.match(railStyles, /\.topo-capability-add-slot/);
   assert.match(
     railStyles,
@@ -223,7 +213,7 @@ test("offers session-scoped tool and skill controls in the information rail", ()
   );
   assert.equal(
     (railSource.match(/className="topo-capability-add-dock"/g) ?? []).length,
-    2,
+    1,
   );
   assert.match(
     railStyles,
@@ -232,51 +222,19 @@ test("offers session-scoped tool and skill controls in the information rail", ()
   assert.match(railStyles, /\.topo-remove-capability/);
 });
 
-test("uses searchable dialogs for public Skill Hub and AgentKit Skill Center", () => {
+test("uses a searchable Studio BFF tool dialog without dynamic Skills", () => {
   assert.match(capabilityDialogsSource, /get_city_weather: "城市天气查询"/);
   assert.match(capabilityDialogsSource, /get_location_weather: "位置天气查询"/);
-  assert.ok(
-    capabilityDialogsSource.includes('return description.replace(/[。.]+$/, "");'),
-  );
-  assert.match(capabilityDialogsSource, /title="添加内置工具"/);
-  assert.match(capabilityDialogsSource, /label="搜索内置工具"/);
-  assert.match(capabilityDialogsSource, /title="添加技能"/);
-  assert.match(capabilityDialogsSource, /role="tablist" aria-label="技能来源"/);
-  assert.match(capabilityDialogsSource, />\s*Skill Hub\s*<span>公域<\/span>/);
-  assert.match(capabilityDialogsSource, /AgentKit Skill 中心/);
-  assert.match(capabilityDialogsSource, /searchSessionPublicSkills\(appName, publicQuery\.trim\(\)\)/);
-  assert.match(capabilityDialogsSource, /skillSourceId: `findskill:\$\{skill\.slug\}`/);
-  assert.match(clientSource, /\/harness\/skills\/findskill/);
-  assert.match(capabilityDialogsSource, /listSkillSpaces\(\)/);
-  assert.match(
-    capabilityDialogsSource,
-    /listSkillsInSpace\(selectedSpace\.id, selectedSpace\.region\)/,
-  );
-  assert.doesNotMatch(capabilityDialogsSource, /listSessionSkillSpaces/);
-  assert.doesNotMatch(capabilityDialogsSource, /listSessionSkillsInSpace/);
+  assert.match(capabilityDialogsSource, />添加 Studio 工具<\/h2>/);
+  assert.match(capabilityDialogsSource, /aria-label="搜索 Studio 工具"/);
+  assert.match(capabilityDialogsSource, /Runtime 无需预装/);
+  assert.match(capabilityDialogsSource, /onChange\(\[\.\.\.next\]\)/);
+  assert.doesNotMatch(capabilityDialogsSource, /Skill Hub|SkillCapabilityDialog/);
+  assert.doesNotMatch(clientSource, /SessionCapabilities|sessionCapabilitiesPath/);
   assert.match(skillspaceClientSource, /"\/web\/skill-spaces\?region=all"/);
-  assert.match(capabilityDialogsSource, /label="搜索 Skill Space"/);
-  assert.match(capabilityDialogsSource, /label="搜索 AgentKit 技能"/);
-  assert.match(capabilityDialogsSource, /skillSourceId: selectedSpace\.id/);
-  assert.match(capabilityDialogsSource, /name: skill\.skillName/);
-  assert.match(stylesSource, /\.session-skill-browser\s*\{[\s\S]*?grid-template-columns:/);
-  assert.match(stylesSource, /\.session-capability-dialog-layer\s*\{[\s\S]*?z-index:\s*110;/);
+  assert.match(stylesSource, /\.studio-tool-dialog-layer\s*\{[\s\S]*?z-index:\s*110;/);
   assert.match(
     stylesSource,
-    /\.session-capability-dialog\.is-wide\s*\{[^}]*height:\s*min\(720px, calc\(100dvh - 48px\)\);/,
-  );
-  assert.doesNotMatch(capabilityDialogsSource, /SkillCapabilityIcon|SkillSpaceIcon/);
-  assert.match(capabilityDialogsSource, /session-capability-dialog-head\$\{icon \? "" : " is-iconless"\}/);
-  assert.doesNotMatch(
-    stylesSource,
-    /\.session-public-skill-head\s*\{[^}]*border-bottom:/,
-  );
-  assert.doesNotMatch(
-    stylesSource,
-    /\.session-skill-pane-head\s*\{[^}]*border-bottom:/,
-  );
-  assert.match(
-    stylesSource,
-    /\.session-capability-search\s*\{[\s\S]*?flex:\s*0 0 40px;[\s\S]*?height:\s*40px;[\s\S]*?border-radius:\s*6px;/,
+    /\.studio-tool-search\s*\{[\s\S]*?flex:\s*0 0 40px;[\s\S]*?height:\s*40px;[\s\S]*?border-radius:\s*6px;/,
   );
 });

@@ -282,7 +282,7 @@ async def test_browser_info_rewrites_cdp_and_removes_private_urls() -> None:
     assert client.closed is True
 
 
-def test_proxy_requires_the_session_capability_cookie(
+def test_proxy_requires_the_sandbox_capability_cookie(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()

@@ -428,7 +428,7 @@ test("defers conversation data-plane requests until leaving the Agent list", () 
   );
   assert.match(
     appSource,
-    /if \(myAgents \|\| agentDetailTarget \|\| !appName \|\| !userId \|\| !sessionId\)[\s\S]*?getSessionCapabilities/,
+    /authStatus !== "authenticated" \|\|[\s\S]*?myAgents \|\|[\s\S]*?agentDetailTarget \|\|[\s\S]*?!studioToolRuntime[\s\S]*?getRuntimeStudioToolCapabilities/,
   );
   assert.match(
     appSource,

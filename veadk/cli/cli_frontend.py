@@ -1379,6 +1379,52 @@ def _run_frontend_server(
         web=False,  # we serve our own UI, not the bundled ADK dev UI
     )
 
+    from contextlib import asynccontextmanager
+
+    from frontend.server.studio_routes import (
+        StudioRouteChannelManager,
+        build_studio_route_registry,
+    )
+    from frontend.server.studio_tools import build_studio_tool_registry
+    from veadk.multimodal.service import MediaService
+    from veadk.multimodal.storage import create_media_storage
+
+    media_service = MediaService(create_media_storage())
+    studio_tool_registry = build_studio_tool_registry(media_service=media_service)
+    app.state.studio_tool_registry = studio_tool_registry
+    if studio_tool_registry.enabled:
+        logger.info(
+            "Studio reverse tool channel enabled tools=%s revision=%s",
+            [item["name"] for item in studio_tool_registry.manifests()],
+            studio_tool_registry.revision,
+        )
+
+    studio_route_registry = build_studio_route_registry(provider=provider)
+    studio_route_channels = StudioRouteChannelManager(studio_route_registry)
+    app.state.studio_route_registry = studio_route_registry
+    app.state.studio_route_channels = studio_route_channels
+    if studio_route_registry.enabled:
+        logger.info(
+            "Studio reverse route channel enabled routes=%s revision=%s",
+            [
+                f"{item['method']} {item['path']}"
+                for item in studio_route_registry.manifests()
+            ],
+            studio_route_registry.revision,
+        )
+
+    route_channel_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def _studio_route_channel_lifespan(current_app: Any):
+        async with route_channel_lifespan(current_app):
+            try:
+                yield
+            finally:
+                await studio_route_channels.close()
+
+    app.router.lifespan_context = _studio_route_channel_lifespan
+
     # Studio's production bundle includes large CSS assets. Compress them at
     # the application boundary so cloud API gateways do not have to stream the
     # uncompressed response to every browser. Starlette automatically skips
@@ -1409,12 +1455,6 @@ def _run_frontend_server(
             break
     if adk_server is None:
         raise RuntimeError("Unable to access the ADK API server services")
-
-    from veadk.integrations.agentkit.app import (
-        configure_multi_app_session_capability_routes,
-    )
-
-    configure_multi_app_session_capability_routes(app, adk_server)
 
     # ``web=False`` deliberately keeps ADK's full development API disabled,
     # but the VeADK trace drawer needs this one read-only endpoint. Register a
@@ -1463,12 +1503,9 @@ def _run_frontend_server(
         runtime_belongs_to,
     )
     from veadk.multimodal.api import mount_media_routes
-    from veadk.multimodal.service import MediaService
-    from veadk.multimodal.storage import create_media_storage
     from veadk.multimodal.transport import resolve_runtime_media
 
     _agent_loader = AgentLoader(agents_dir)
-    media_service = MediaService(create_media_storage())
     mount_media_routes(app, media_service)
 
     # Generated-agent debug is intentionally feature-complete in both local and
@@ -2843,13 +2880,13 @@ def _run_frontend_server(
         page_number: int = Query(default=1, ge=1),
         page_size: int = Query(default=20, ge=1, le=50),
     ) -> dict[str, Any]:
-        """Expose the same public Skill Hub search contract used by chat skills."""
+        """Expose the public Skill Hub search contract used by Agent creation."""
         try:
-            from veadk.integrations.agentkit.session_capabilities import (
-                _search_findskill,
+            from frontend.server.studio_routes.skill_catalog import (
+                StudioSkillCatalog,
             )
 
-            return await _search_findskill(
+            return await StudioSkillCatalog(provider).search_findskill(
                 query=query,
                 page_number=page_number,
                 page_size=page_size,
@@ -7352,11 +7389,108 @@ def _run_frontend_server(
             dict(request.headers), apikey, validated_authorization
         )
 
+    @app.get("/web/runtime-tool-channel/{runtime_id}/capabilities")
+    async def _runtime_tool_channel_capabilities(runtime_id: str, request: Request):
+        """Return local BFF tools and whether this Runtime accepts them."""
+
+        region = _coerce_cloud_region(request.query_params.get("region"))
+        try:
+            runtime = _authorized_runtime(
+                request,
+                runtime_id,
+                region,
+                coded_access_error=True,
+            )
+            endpoint, apikey, auth_type, _ = _resolve_runtime_conn(
+                runtime_id,
+                region,
+                runtime,
+            )
+            headers = _runtime_request_headers(
+                request,
+                apikey=apikey,
+                auth_type=auth_type,
+            )
+            supported = False
+            if studio_tool_registry.enabled:
+                from frontend.server.studio_tools import runtime_supports_bff_tools
+
+                supported = await runtime_supports_bff_tools(
+                    endpoint=endpoint,
+                    authorization=headers.get("Authorization", ""),
+                )
+        except HTTPException:
+            raise
+        except Exception as error:  # noqa: BLE001 - capability boundary
+            logger.exception(
+                "Studio tool capability query failed runtime_id=%s region=%s",
+                runtime_id,
+                region,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="studio_tool_capability_query_error",
+            ) from error
+        return {
+            "enabled": studio_tool_registry.enabled,
+            "supported": supported,
+            "tools": studio_tool_registry.public_items(),
+        }
+
+    @app.post("/web/runtime-route-channel/{runtime_id}/connect")
+    async def _connect_runtime_route_channel(runtime_id: str, request: Request):
+        """Ensure the local BFF is the active dynamic-route provider."""
+
+        region = _coerce_cloud_region(request.query_params.get("region"))
+        try:
+            runtime = _authorized_runtime(
+                request,
+                runtime_id,
+                region,
+                coded_access_error=True,
+            )
+            endpoint, apikey, auth_type, _ = _resolve_runtime_conn(
+                runtime_id,
+                region,
+                runtime,
+            )
+            headers = _runtime_request_headers(
+                request,
+                apikey=apikey,
+                auth_type=auth_type,
+            )
+            supported = await studio_route_channels.ensure_connected(
+                runtime_id=runtime_id,
+                endpoint=endpoint,
+                authorization=headers.get("Authorization", ""),
+            )
+        except HTTPException:
+            raise
+        except Exception as error:  # noqa: BLE001 - reverse-channel boundary
+            logger.exception(
+                "Studio route channel connection failed runtime_id=%s region=%s",
+                runtime_id,
+                region,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="studio_route_channel_connect_error",
+            ) from error
+        return {
+            "enabled": studio_route_registry.enabled,
+            "supported": supported,
+            "connected": supported and studio_route_channels.connected(runtime_id),
+            "catalogRevision": (
+                studio_route_registry.revision
+                if studio_route_registry.enabled
+                else None
+            ),
+        }
+
     evaluation_automation: EvaluationAutomationService | None = None
     agent_usage_service: Any | None = None
     if studio:
         from contextlib import asynccontextmanager, suppress
-
         from frontend.server.agent_usage import (
             create_service as create_agent_usage_service,
         )
@@ -7531,7 +7665,14 @@ def _run_frontend_server(
         ):
             raise HTTPException(status_code=400, detail="invalid method override")
         upstream_method = method_override or request.method
-        region = _coerce_cloud_region(request.query_params.get("region"))
+        # `_runtime_region` selects the Runtime and is never forwarded. Keep
+        # accepting `region` for older Studio bundles, where it was a proxy-only
+        # parameter. New bundles leave `region` available to upstream APIs such
+        # as the Skill Catalog endpoints.
+        proxy_region = request.query_params.get("_runtime_region")
+        region = _coerce_cloud_region(
+            proxy_region or request.query_params.get("region")
+        )
         try:
             runtime = _authorized_runtime(
                 request,
@@ -7551,10 +7692,13 @@ def _run_frontend_server(
             raise HTTPException(status_code=502, detail=str(e))
 
         # Drop Studio-only query params; keep any real API query params.
+        studio_query_params = {"probe_retry", "_method", "_runtime_region"}
+        if proxy_region is None:
+            studio_query_params.add("region")
         qs = {
             k: v
             for k, v in request.query_params.items()
-            if k not in {"region", "probe_retry", "_method"}
+            if k not in studio_query_params
         }
         target = f"{endpoint.rstrip('/')}/{path}"
         target_host = _runtime_endpoint_host(target)
@@ -7580,8 +7724,10 @@ def _run_frontend_server(
         body = await request.body()
         run_sse_activity: RunSseActivity | None = None
         run_sse_principal: StudioPrincipal | None = None
+        run_sse_payload: dict[str, Any] | None = None
+        studio_tool_catalog: Any | None = None
         usage_invocation_id = ""
-        if request.method == "POST" and path in {"run_sse", "harness/run_sse"}:
+        if request.method == "POST" and path == "run_sse":
             try:
                 payload = json.loads(body)
             except json.JSONDecodeError as error:
@@ -7592,8 +7738,25 @@ def _run_frontend_server(
                 raise HTTPException(
                     status_code=400, detail="run_sse request body must be an object"
                 )
+            selected_tool_ids: list[str] = []
+            if "platform_tools" in payload:
+                raw_tool_ids = payload.pop("platform_tools")
+                if not isinstance(raw_tool_ids, list) or any(
+                    not isinstance(tool_id, str) or not tool_id.strip()
+                    for tool_id in raw_tool_ids
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="platform_tools must be a list of non-empty tool IDs",
+                    )
+                selected_tool_ids = [tool_id.strip() for tool_id in raw_tool_ids]
+            try:
+                studio_tool_catalog = studio_tool_registry.snapshot(selected_tool_ids)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
             try:
                 payload = await resolve_runtime_media(payload, media_service)
+                run_sse_payload = payload
                 body = json.dumps(payload).encode("utf-8")
             except FileNotFoundError as error:
                 raise HTTPException(
@@ -7636,6 +7799,127 @@ def _run_frontend_server(
                         evaluation_automation.session_started(run_sse_activity)
 
         from fastapi.responses import StreamingResponse
+
+        observation = (
+            RunSseObservation(run_sse_activity)
+            if run_sse_activity is not None
+            else None
+        )
+
+        def _run_sse_completed(activity: RunSseActivity) -> None:
+            if evaluation_automation is not None:
+                evaluation_automation.session_completed(activity)
+            if agent_usage_service is None or run_sse_principal is None:
+                return
+            try:
+                agent_usage_service.record_success(
+                    invocation_id=usage_invocation_id,
+                    runtime_id=runtime_id,
+                    app_name=activity.app_name,
+                    user_id=run_sse_principal.owner_id,
+                    display_name=run_sse_principal.display_name,
+                )
+            except Exception:
+                logger.exception(
+                    "agent usage record failed runtime_id=%s app_name=%s",
+                    runtime_id,
+                    activity.app_name,
+                )
+
+        if (
+            studio_tool_catalog is not None
+            and studio_tool_catalog.enabled
+            and run_sse_payload is not None
+            and request.method == "POST"
+            and path == "run_sse"
+        ):
+            from frontend.server.studio_tools import (
+                StudioChannelError,
+                open_studio_tool_run,
+                runtime_supports_bff_tools,
+            )
+
+            try:
+                bff_tools_enabled = await runtime_supports_bff_tools(
+                    endpoint=endpoint,
+                    authorization=headers.get("Authorization", ""),
+                )
+                studio_run = (
+                    await open_studio_tool_run(
+                        endpoint=endpoint,
+                        authorization=headers.get("Authorization", ""),
+                        runtime_id=runtime_id,
+                        payload=run_sse_payload,
+                        catalog=studio_tool_catalog,
+                    )
+                    if bff_tools_enabled
+                    else None
+                )
+            except StudioChannelError as error:
+                logger.warning(
+                    "Studio tool channel connection failed runtime_id=%s "
+                    "target_host=%s error=%s",
+                    runtime_id,
+                    target_host,
+                    error,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"studio_tool_channel_connect_error: {error}",
+                ) from error
+            except Exception as error:  # noqa: BLE001 - WebSocket boundary
+                logger.exception(
+                    "Studio tool channel connection failed runtime_id=%s "
+                    "target_host=%s",
+                    runtime_id,
+                    target_host,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail="studio_tool_channel_connect_error",
+                ) from error
+
+            if studio_run is None:
+                logger.info(
+                    "runtime does not support BFF tools; using plain run_sse "
+                    "runtime_id=%s target_host=%s",
+                    runtime_id,
+                    target_host,
+                )
+            else:
+
+                async def _studio_channel_body():
+                    source = studio_run.stream()
+                    try:
+                        if observation is None:
+                            async for chunk in source:
+                                yield chunk
+                        else:
+                            async for chunk in observed_sse_stream(
+                                source,
+                                observation,
+                                _run_sse_completed,
+                            ):
+                                yield chunk
+                    except StudioChannelError as error:
+                        logger.warning(
+                            "Studio tool channel stream failed runtime_id=%s error=%s",
+                            runtime_id,
+                            error,
+                        )
+                        yield (
+                            "data: "
+                            + json.dumps(
+                                {"error": f"Studio tool channel failed: {error}"}
+                            )
+                            + "\n\n"
+                        ).encode("utf-8")
+
+                return StreamingResponse(
+                    _studio_channel_body(),
+                    status_code=200,
+                    media_type="text/event-stream",
+                )
 
         is_retryable_read = _runtime_proxy_is_retryable_read(upstream_method)
         max_attempts = _runtime_proxy_attempts(
@@ -7768,32 +8052,6 @@ def _run_frontend_server(
                 status_code=upstream.status_code,
                 media_type=media,
             )
-
-        observation = (
-            RunSseObservation(run_sse_activity)
-            if run_sse_activity is not None
-            else None
-        )
-
-        def _run_sse_completed(activity: RunSseActivity) -> None:
-            if evaluation_automation is not None:
-                evaluation_automation.session_completed(activity)
-            if agent_usage_service is None or run_sse_principal is None:
-                return
-            try:
-                agent_usage_service.record_success(
-                    invocation_id=usage_invocation_id,
-                    runtime_id=runtime_id,
-                    app_name=activity.app_name,
-                    user_id=run_sse_principal.owner_id,
-                    display_name=run_sse_principal.display_name,
-                )
-            except Exception:
-                logger.exception(
-                    "agent usage record failed runtime_id=%s app_name=%s",
-                    runtime_id,
-                    activity.app_name,
-                )
 
         async def _body():
             try:

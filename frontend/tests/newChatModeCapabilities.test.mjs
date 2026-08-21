@@ -16,7 +16,7 @@ const capabilitySource = readFileSync(
   "utf8",
 );
 
-test("loads built-in Sandbox, Skill, and Harness capabilities independently", () => {
+test("loads built-in Sandbox, Skill, and Studio BFF capabilities independently", () => {
   assert.match(capabilitySource, /\/web\/sandbox\/capabilities/);
   assert.match(capabilitySource, /\/web\/\$\{kind\}\/capabilities/);
   assert.match(capabilitySource, /export async function getSandboxCapability/);
@@ -27,17 +27,10 @@ test("loads built-in Sandbox, Skill, and Harness capabilities independently", ()
   assert.match(appSource, /getSandboxAgentCapability\("deepseek-harness"\)/);
   assert.match(appSource, /getSkillWorkbenchCapability/);
   assert.match(appSource, /Promise\.allSettled/);
-  assert.match(appSource, /listSessionBuiltinTools\(agentId\)/);
-  assert.match(
-    appSource,
-    /harnessEnabled:\s*!!agentId && harnessResult\.status === "fulfilled"/,
-  );
+  assert.match(appSource, /getRuntimeStudioToolCapabilities/);
+  assert.match(appSource, /studioToolCapabilities\?\.tools\.map\(\(tool\) => tool\.id\)/);
   assert.match(appSource, /newChatCapabilities\.agentId === appName/);
-  assert.match(
-    appSource,
-    /agentId \? listSessionBuiltinTools\(agentId\) : Promise\.resolve<string\[\]>\(\[\]\)/,
-    "an empty Agent selection still checks global modes without probing Harness",
-  );
+  assert.doesNotMatch(appSource, /listSessionBuiltinTools|harnessResult/);
   assert.match(appSource, /ready:\s*true/);
   assert.match(appSource, /正在检查 Agent 能力/);
   assert.match(appSource, /temporaryEnabled/);

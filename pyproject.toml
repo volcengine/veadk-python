@@ -52,6 +52,7 @@ dependencies = [
     "PyYAML>=6.0.2",
     "tos>=2.8.4", # For TOS storage and Viking DB
     "httpx>=0.27,<1", # Secure server-side webpage fetching for Studio knowledge imports
+    "jsonschema>=4.23,<5", # Validate Studio BFF dynamic-tool arguments
     "trafilatura>=2.0,<2.1", # Extract webpage main content as Markdown for knowledge imports
 ]
 

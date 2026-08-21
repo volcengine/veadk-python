@@ -242,6 +242,88 @@ Temporary Sandbox state is process-local. Run Studio with one server worker, or
 configure session affinity so create, message, and delete requests from the same
 browser reach the same instance.
 
+## Studio BFF reverse tools
+
+Studio can expose local or intranet-only tools to a compatible AgentKit Runtime
+without giving the Studio BFF a public address. For each remote `run_sse`
+request, the BFF first tries an outbound WSS connection to
+`/harness/studio-channel/v1`. If the public gateway doesn't support WebSocket
+Upgrade, it automatically falls back to a streaming HTTP/SSE downlink plus HTTP
+tool-result posts. It publishes the current tool catalog, executes `tool.call`
+messages locally, and returns `tool.result` without exposing a BFF endpoint. The
+Runtime sees ordinary tools, but receives neither the executor implementation nor
+its credentials. The HTTP fallback currently requires exactly one Runtime
+instance so its stream and result posts reach the same process.
+
+Build the Runtime app with
+`create_agentkit_app(..., enable_studio_tools=True)` to mount one generic
+`StudioExternalToolset`. It contains no concrete executor and is hidden from
+Agent introspection. During a Studio-channel run, an async-local immutable
+snapshot supplies only the tools selected for that run; ordinary `/run_sse`
+requests see an empty snapshot. With the option disabled (the default), the
+Runtime advertises `enabled=false` and does not mount the Toolset or Tool Channel
+execution endpoints. The enabled host is the stable Runtime compatibility layer
+for future BFF-owned tools, so a new plan or goal tool does not need a matching
+executor in the deployed Agent.
+
+For a compatible remote Runtime, the existing Agent information rail exposes
+**在此对话中添加 Studio 工具** below the Agent's static tools. New chats start
+with every Studio tool disabled; an existing session keeps its selection in the
+current browser process between turns. The browser sends an explicit
+`platform_tools` list on each Runtime run, and an empty or omitted list uses the
+ordinary `/run_sse` path. The BFF validates the submitted IDs and freezes an
+immutable catalog-and-executor snapshot for that run, so simultaneous users and
+sessions cannot add tools to one another. Tool code and credentials stay in the
+BFF, while selected tool results are returned to the cloud Agent through the
+reverse channel.
+
+Studio always registers the canonical functions from
+`veadk/tools/builtin_tools` in its BFF catalog; the implementation files and
+their `builtin:` bindings remain unchanged. The BFF supplies the ADK
+`ToolContext`, keeps state isolated by Runtime/app/user/session, and publishes
+generated ADK artifacts through Studio media storage so downloads remain
+available after execution moves out of Runtime.
+
+Studio-owned tools that don't belong in VeADK's built-in catalog live in
+`frontend/server/studio_tools/extensions`. Studio discovers every public Python
+module in that directory at startup and calls its `register_tools(registry)`
+function. Adding one of these tools requires no environment variable or Runtime
+change; restart Studio after changing the module. `current_time.py` is the
+minimal working example for future Studio-only tools.
+
+Studio forwards the Runtime API-key or Identity authorization on capability
+discovery, WebSocket handshakes, and HTTP/SSE fallback requests; the AgentKit
+ingress remains the authentication boundary for these channels.
+
+A deployable Runtime agent and launch scripts live in the
+[local reverse-tool example](../.agents/local/studio/A_BFF_tool_for_runtime/examples/README.md).
+
+## Studio BFF dynamic routes
+
+A compatible Runtime can also expose Studio-owned HTTP routes without loading
+their Python handlers. Build the Runtime app with
+`create_agentkit_app(..., enable_studio_routes=True)` and start Studio with
+`VEADK_STUDIO_ROUTE_CHANNEL=skill-catalog` (`demo` remains a compatibility
+alias). After Studio connects the Runtime, the BFF keeps a separate persistent
+reverse-route channel and publishes these Studio-owned, read-only routes:
+
+- `GET /harness/skills/findskill`
+- `GET /harness/skills/spaces`
+- `GET /harness/skills/spaces/{space_id}/skills`
+
+Runtimes without the dynamic-route opt-in keep their native Skill catalog
+handlers. Opted-in Runtimes leave those three read-only query handlers to Studio.
+The segment-template request contract is protocol v2, so a Runtime using the
+older route-channel protocol must be updated once before accepting this catalog.
+
+Requests still enter through the Runtime URL. Its dynamic dispatcher emits
+`route.call`, the local BFF executes the handler, and `route.result` becomes the
+Runtime HTTP response. WSS is preferred; unsupported gateways automatically use
+a long-lived HTTP/SSE downlink plus HTTP result posts. The current implementation
+is currently single-instance: both the persistent stream and arbitrary route
+requests must reach the same Runtime process. A disconnected BFF leaves known
+Studio-owned routes unavailable with HTTP 503; Agent runs remain available.
+
 Local Studio reads transient and snapshot Tool IDs from
 `SANDBOX_CHAT_CODEX`/`SANDBOX_CHAT_CODEX_SNAPSHOT`,
 `SANDBOX_CHAT_OPENCLAW`/`SANDBOX_CHAT_OPENCLAW_SNAPSHOT`, and

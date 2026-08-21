@@ -992,6 +992,7 @@ def _render_app_py(
             "",
             "_app_options = {",
             f'    "enable_feishu": {feishu_channel_enabled!r},',
+            '    "enable_studio_tools": True,',
             "}",
             'if "agent_draft" in signature(create_agentkit_app).parameters:',
             '    _app_options["agent_draft"] = AGENT_DRAFT',

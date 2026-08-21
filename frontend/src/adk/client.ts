@@ -418,7 +418,9 @@ async function apiFetch(
     };
     if (ep.runtimeId) {
       const runtimeParams = new URLSearchParams();
-      if (ep.region) runtimeParams.set("region", ep.region);
+      // Keep the proxy's control-plane region separate from API query params.
+      // Skill Catalog endpoints also use `region` for their own filtering.
+      if (ep.region) runtimeParams.set("_runtime_region", ep.region);
       if (ep.retryProbe) runtimeParams.set("probe_retry", "connect");
       if (runtimeMethodOverride) runtimeParams.set("_method", "DELETE");
       const rq = runtimeParams.toString()
@@ -1418,204 +1420,6 @@ export interface AgentInfo {
   draft?: AgentDraft;
 }
 
-export interface SessionCapabilityItem {
-  id: string;
-  kind: "tool" | "skill";
-  name: string;
-  custom: boolean;
-  description?: string;
-  skillSourceId?: string;
-  version?: string;
-}
-
-export interface SessionCapabilities {
-  schemaVersion: number;
-  revision: number;
-  tools: SessionCapabilityItem[];
-  skills: SessionCapabilityItem[];
-}
-
-export interface AddSessionCapability {
-  kind: "tool" | "skill";
-  name: string;
-  skillSourceId?: string;
-  description?: string;
-  version?: string;
-}
-
-export interface SessionSkillSpace {
-  id: string;
-  name: string;
-  description: string;
-  status: string;
-  region?: string;
-  projectName?: string;
-  skillCount?: number;
-}
-
-export interface SessionSkillCatalogItem {
-  skillId: string;
-  skillName: string;
-  skillDescription: string;
-  version: string;
-  skillStatus: string;
-}
-
-export interface SessionPublicSkill {
-  slug: string;
-  name: string;
-  description: string;
-  sourceType: string;
-  sourceRepo: string;
-  downloadCount: number;
-  evaluationScore: number;
-  version: string;
-  updatedAt: string;
-}
-
-export interface SessionPublicSkillSearchResult {
-  items: SessionPublicSkill[];
-  totalCount: number;
-}
-
-function normalizeSessionCapabilities(payload: Record<string, unknown>): SessionCapabilities {
-  const normalizeItem = (item: Record<string, unknown>): SessionCapabilityItem => ({
-    id: String(item.id ?? ""),
-    kind: item.kind === "skill" ? "skill" : "tool",
-    name: String(item.name ?? ""),
-    custom: item.custom === true,
-    description: typeof item.description === "string" ? item.description : undefined,
-    skillSourceId: typeof item.skill_source_id === "string" ? item.skill_source_id : undefined,
-    version: typeof item.version === "string" ? item.version : undefined,
-  });
-  return {
-    schemaVersion: Number(payload.schema_version ?? 1),
-    revision: Number(payload.revision ?? 0),
-    tools: Array.isArray(payload.tools)
-      ? payload.tools.map((item) => normalizeItem(item as Record<string, unknown>))
-      : [],
-    skills: Array.isArray(payload.skills)
-      ? payload.skills.map((item) => normalizeItem(item as Record<string, unknown>))
-      : [],
-  };
-}
-
-function sessionCapabilitiesPath(
-  app: string,
-  userId: string,
-  sessionId: string,
-): string {
-  return `/harness/apps/${encodeURIComponent(app)}/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/capabilities`;
-}
-
-export async function getSessionCapabilities(
-  appName: string,
-  userId: string,
-  sessionId: string,
-): Promise<SessionCapabilities> {
-  const { app, ep } = resolve(appName);
-  const res = await apiFetch(sessionCapabilitiesPath(app, userId, sessionId), {}, ep);
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "读取会话能力失败"));
-  return normalizeSessionCapabilities(await res.json());
-}
-
-export async function listSessionBuiltinTools(appName: string): Promise<string[]> {
-  const { ep } = resolve(appName);
-  const res = await apiFetch("/harness/capabilities/tools", {}, ep);
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "读取内置工具失败"));
-  const payload = (await res.json()) as { tools?: { name?: string }[] };
-  return (payload.tools ?? [])
-    .map((tool) => tool.name?.trim() ?? "")
-    .filter(Boolean);
-}
-
-export async function listSessionSkillSpaces(
-  appName: string,
-): Promise<SessionSkillSpace[]> {
-  const { ep } = resolve(appName);
-  const res = await apiFetch("/harness/skills/spaces?region=all", {}, ep);
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "读取 Skill Space 失败"));
-  const payload = (await res.json()) as { items?: SessionSkillSpace[] };
-  return payload.items ?? [];
-}
-
-export async function listSessionSkillsInSpace(
-  appName: string,
-  spaceId: string,
-  region?: string,
-): Promise<SessionSkillCatalogItem[]> {
-  const { ep } = resolve(appName);
-  const params = new URLSearchParams({ region: region || "cn-beijing" });
-  const path = `/harness/skills/spaces/${encodeURIComponent(spaceId)}/skills?${params.toString()}`;
-  const res = await apiFetch(path, {}, ep);
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "读取 Skill 列表失败"));
-  const payload = (await res.json()) as { items?: SessionSkillCatalogItem[] };
-  return payload.items ?? [];
-}
-
-export async function searchSessionPublicSkills(
-  appName: string,
-  query: string,
-  pageNumber = 1,
-  pageSize = 20,
-): Promise<SessionPublicSkillSearchResult> {
-  const { ep } = resolve(appName);
-  const params = new URLSearchParams({
-    query,
-    page_number: String(pageNumber),
-    page_size: String(pageSize),
-  });
-  const res = await apiFetch(`/harness/skills/findskill?${params.toString()}`, {}, ep);
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "搜索 Skill Hub 失败"));
-  const payload = (await res.json()) as Partial<SessionPublicSkillSearchResult>;
-  return {
-    items: payload.items ?? [],
-    totalCount: Number(payload.totalCount ?? 0),
-  };
-}
-
-export async function addSessionCapability(
-  appName: string,
-  userId: string,
-  sessionId: string,
-  capability: AddSessionCapability,
-  expectedRevision: number,
-): Promise<SessionCapabilities> {
-  const { app, ep } = resolve(appName);
-  const res = await apiFetch(
-    sessionCapabilitiesPath(app, userId, sessionId),
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        kind: capability.kind,
-        name: capability.name,
-        skill_source_id: capability.skillSourceId,
-        description: capability.description,
-        version: capability.version,
-        expected_revision: expectedRevision,
-      }),
-    },
-    ep,
-  );
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "添加会话能力失败"));
-  return normalizeSessionCapabilities(await res.json());
-}
-
-export async function removeSessionCapability(
-  appName: string,
-  userId: string,
-  sessionId: string,
-  capabilityId: string,
-  expectedRevision: number,
-): Promise<SessionCapabilities> {
-  const { app, ep } = resolve(appName);
-  const path = `${sessionCapabilitiesPath(app, userId, sessionId)}/${encodeURIComponent(capabilityId)}?expected_revision=${expectedRevision}`;
-  const res = await apiFetch(path, { method: "DELETE" }, ep);
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "移除会话能力失败"));
-  return normalizeSessionCapabilities(await res.json());
-}
-
 async function fetchAgentInfo(
   app: string,
   ep: AdkEndpoint,
@@ -1823,13 +1627,13 @@ export interface RunArgs {
   text: string;
   attachments?: Attachment[];
   invocation?: FrontendInvocation;
+  /** Complete set of local BFF tool IDs selected for this run. */
+  platformTools?: readonly string[];
   /** Function responses to send instead of/alongside text — used to resume a
    *  long-running call (e.g. answering ADK's `adk_request_credential`). */
   functionResponses?: { id: string; name: string; response: unknown }[];
   /** Abort the stream (e.g. when the user switches to another session). */
   signal?: AbortSignal;
-  /** Use the session-aware harness runner when the server exposes it. */
-  sessionCapabilities?: boolean;
 }
 
 /** Stream agent events for one user turn. */
@@ -1840,9 +1644,9 @@ export async function* runSSE({
   text,
   attachments = [],
   invocation,
+  platformTools,
   functionResponses = [],
   signal,
-  sessionCapabilities = false,
 }: RunArgs): AsyncGenerator<AdkEvent, void, unknown> {
   const { app, ep } = resolve(appName);
   const attachmentParts = attachments.flatMap<Record<string, unknown>>((a) => {
@@ -1888,7 +1692,7 @@ export async function* runSSE({
     };
   }
   const res = await apiFetch(
-    sessionCapabilities ? `/harness/run_sse` : `/run_sse`,
+    "/run_sse",
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1898,6 +1702,9 @@ export async function* runSSE({
         session_id: sessionId,
         new_message: { role: "user", parts },
         streaming: true,
+        ...(platformTools !== undefined
+          ? { platform_tools: [...platformTools] }
+          : {}),
         custom_metadata: invocationMetadata
           ? { veadkInvocation: invocationMetadata }
           : undefined,
@@ -3394,6 +3201,66 @@ export async function probeRuntimeApps(
     }
     return null;
   }
+}
+
+export interface RuntimeRouteChannelStatus {
+  enabled: boolean;
+  supported: boolean;
+  connected: boolean;
+  catalogRevision: string | null;
+}
+
+export interface StudioBffTool {
+  id: string;
+  name: string;
+  description: string;
+  riskLevel: string;
+}
+
+export interface RuntimeStudioToolCapabilities {
+  enabled: boolean;
+  supported: boolean;
+  tools: StudioBffTool[];
+}
+
+/** List BFF-local tools without exposing their schemas or local executors. */
+export async function getRuntimeStudioToolCapabilities(
+  runtimeId: string,
+  region: string,
+): Promise<RuntimeStudioToolCapabilities> {
+  const params = new URLSearchParams({ region });
+  const res = await apiFetch(
+    `/web/runtime-tool-channel/${encodeURIComponent(runtimeId)}/capabilities?${params.toString()}`,
+  );
+  if (!res.ok) {
+    throw new RuntimeProbeError(
+      await httpErrorMessage(res, "读取本地工具失败"),
+      false,
+      true,
+    );
+  }
+  return (await res.json()) as RuntimeStudioToolCapabilities;
+}
+
+/** Ask the local Studio BFF to keep a persistent reverse-route channel to the
+ *  Runtime. A Runtime without the generic route host is a supported no-op. */
+export async function ensureRuntimeRouteChannel(
+  runtimeId: string,
+  region: string,
+): Promise<RuntimeRouteChannelStatus> {
+  const params = new URLSearchParams({ region });
+  const res = await apiFetch(
+    `/web/runtime-route-channel/${encodeURIComponent(runtimeId)}/connect?${params.toString()}`,
+    { method: "POST" },
+  );
+  if (!res.ok) {
+    throw new RuntimeProbeError(
+      await httpErrorMessage(res, "连接 Studio 动态路由失败"),
+      false,
+      true,
+    );
+  }
+  return (await res.json()) as RuntimeRouteChannelStatus;
 }
 
 export interface RuntimeA2aIntegration {

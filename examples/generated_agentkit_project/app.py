@@ -19,6 +19,7 @@ app = create_agentkit_app(
     root_agent,
     AGENT_DISPLAY_NAMES,
     enable_feishu=False,
+    enable_studio_tools=True,
 )
 
 if __name__ == "__main__":

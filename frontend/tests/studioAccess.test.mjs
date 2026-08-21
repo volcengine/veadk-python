@@ -70,6 +70,12 @@ test("runtime selection obeys the server-granted scope", () => {
   assert.doesNotMatch(clientSource, /new URLSearchParams\(\{\s*author,/);
 });
 
+test("runtime proxy region does not consume upstream API region filters", () => {
+  assert.match(clientSource, /runtimeParams\.set\("_runtime_region", ep\.region\)/);
+  assert.match(cliFrontendSource, /proxy_region = request\.query_params\.get\("_runtime_region"\)/);
+  assert.match(cliFrontendSource, /if proxy_region is None:[\s\S]*?studio_query_params\.add\("region"\)/);
+});
+
 test("only administrators and developers receive Agent deployment controls", () => {
   assert.match(appSource, /<MyAgents[\s\S]*?canCreate=\{canCreateAgents\}/);
   assert.match(

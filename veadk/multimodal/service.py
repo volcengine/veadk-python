@@ -31,6 +31,7 @@ from .storage import MediaStorage
 SUPPORTED_MIME_TYPES = frozenset(
     {
         "application/pdf",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "image/gif",
         "image/jpeg",
         "image/png",

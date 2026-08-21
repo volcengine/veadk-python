@@ -91,8 +91,15 @@ from veadk import Agent
 from veadk.integrations.agentkit import create_agentkit_app
 
 root_agent = Agent(name="customer_support")
-app = create_agentkit_app(root_agent)
+app = create_agentkit_app(
+    root_agent,
+    enable_studio_tools=True,
+)
 ```
+
+Studio-owned dynamic tools and HTTP routes are separate Runtime capabilities.
+Enable them explicitly with `enable_studio_tools=True` and
+`enable_studio_routes=True`; both default to disabled.
 
 See [`examples/generated_agentkit_project`](examples/generated_agentkit_project)
 for a complete generated project.

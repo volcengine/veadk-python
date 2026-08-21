@@ -48,6 +48,11 @@ test("runtime connection probing is shared with the Agent selector", () => {
   assert.match(connectionsSource, /runtimeRegionCandidates,/);
   assert.match(connectionsSource, /for \(const candidate of runtimeRegionCandidates\(region\)\)/);
   assert.match(connectionsSource, /probeRuntimeApps\(runtimeId, candidate,[\s\S]*?retryProbe: true/);
+  assert.match(connectionsSource, /ensureRuntimeRouteChannel\(runtimeId, candidate\)/);
+  assert.match(
+    clientSource,
+    /\/web\/runtime-route-channel\/\$\{encodeURIComponent\(runtimeId\)\}\/connect/,
+  );
   assert.match(connectionsSource, /resolvedRegion = candidate/);
   assert.match(connectionsSource, /addRuntimeConnection\(/);
   assert.match(connectionsSource, /resolvedRegion,[\s\S]*?apps,[\s\S]*?labels/);

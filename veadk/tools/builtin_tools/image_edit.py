@@ -32,13 +32,24 @@ from veadk.version import VERSION
 
 logger = get_logger(__name__)
 
-client = Ark(
-    api_key=getenv(
-        "MODEL_EDIT_API_KEY",
-        getenv("MODEL_AGENT_API_KEY", settings.model.api_key),
-    ),
-    base_url=getenv("MODEL_EDIT_API_BASE", DEFAULT_IMAGE_EDIT_MODEL_API_BASE),
-)
+
+def _get_api_key() -> str:
+    """Resolve credentials only when the tool is actually executed."""
+
+    edit_api_key = getenv("MODEL_EDIT_API_KEY", "", allow_false_values=True)
+    if edit_api_key:
+        return edit_api_key
+    agent_api_key = getenv("MODEL_AGENT_API_KEY", "", allow_false_values=True)
+    if agent_api_key:
+        return agent_api_key
+    return settings.model.api_key
+
+
+def _get_client() -> Ark:
+    return Ark(
+        api_key=_get_api_key(),
+        base_url=getenv("MODEL_EDIT_API_BASE", DEFAULT_IMAGE_EDIT_MODEL_API_BASE),
+    )
 
 
 async def image_edit(
@@ -103,6 +114,7 @@ async def image_edit(
     logger.debug(
         f"Using model: {getenv('MODEL_EDIT_NAME', DEFAULT_IMAGE_EDIT_MODEL_NAME)}"
     )
+    client = _get_client()
     success_list = []
     error_list = []
     logger.debug(f"image_edit params: {params}")
