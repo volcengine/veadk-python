@@ -158,11 +158,11 @@ test("agent details show capability badges and deployment state before the flow"
 test("agent details expose detected integration methods without inventing unavailable endpoints", () => {
   assert.match(
     workspaceSource,
-    /type AgentSection = "basic" \| "usage" \| "evaluations" \| "optimizations" \| "integrations" \| "versions"/,
+    /type AgentSection =[\s\S]*?\| "basic"[\s\S]*?\| "usage"[\s\S]*?\| "evaluations"[\s\S]*?\| "scenarioEvaluation"[\s\S]*?\| "optimizations"[\s\S]*?\| "integrations"[\s\S]*?\| "versions"/,
   );
   assert.match(
     workspaceSource,
-    /\{ id: "basic", label: "基本信息" \},\s*\{ id: "usage", label: "用量统计" \},\s*\{ id: "evaluations", label: "评测集" \},\s*\{ id: "optimizations", label: "优化项" \},\s*\{ id: "integrations", label: "接入方法" \},\s*\{ id: "versions", label: "版本" \}/,
+    /\{ id: "basic", label: "基本信息" \},\s*\{ id: "usage", label: "用量统计" \},\s*\{ id: "evaluations", label: "评测集" \},\s*\{ id: "scenarioEvaluation", label: "场景评测" \},\s*\{ id: "optimizations", label: "优化项" \},\s*\{ id: "integrations", label: "接入方法" \},\s*\{ id: "versions", label: "版本" \}/,
   );
   assert.match(workspaceSource, /role="tablist"/);
   assert.match(workspaceSource, /role="tab"/);
@@ -612,6 +612,7 @@ test("runtime updates use the Agent selected in management instead of the active
     /runtimeId,[\s\S]*?region,[\s\S]*?appName: selectedAgentAppName,[\s\S]*?signal/,
   );
   assert.match(workspaceSource, /onUpdateAgent: \(capability: RuntimeUpdateCapability\) => void/);
+  assert.match(workspaceSource, /onEditDraft\?\.\(selectedAgentUpdateDraft\)/);
   assert.match(workspaceSource, /onUpdateAgent\(selectedUpdateCapability\)/);
   assert.match(clientSource, /appName:\s*opts\?\.appName/);
   assert.match(customCreateSource, /appName:\s*deploymentTarget\?\.appName/);
@@ -957,8 +958,9 @@ test("agent detail exposes optimization recommendations between evaluations and 
   assert.match(workspaceStyles, /\.aw-priority\.is-low/);
 });
 
-test("evaluation tab remains the PR 748 placeholder until the real feature lands", () => {
-  assert.match(workspaceSource, /view === "evaluation"/);
-  assert.match(workspaceSource, /aw-evaluation-glass/);
-  assert.match(workspaceSource, /敬请期待/);
+test("agent details expose the real scenario evaluation workspace", () => {
+  assert.match(workspaceSource, /ScenarioEvaluationWorkspace/);
+  assert.match(workspaceSource, /section === "scenarioEvaluation"/);
+  assert.match(workspaceSource, /agentId=\{selectedAgentAppName\}/);
+  assert.doesNotMatch(workspaceSource, /DEFAULT_EVALUATION_GROUPS/);
 });

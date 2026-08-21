@@ -182,15 +182,18 @@ test("legacy Runtime graph uses cloud values and defaults for unavailable fields
   assert.equal(restored.tracing, false);
 });
 
-test("Runtime update entry passes only cloud capability to the update handler", () => {
-  const clickStart = workspaceSource.indexOf("onClick={() =>\n                      selectedDraft");
-  const clickEnd = workspaceSource.indexOf("                    }\n                  >", clickStart);
-  assert.ok(clickStart >= 0 && clickEnd > clickStart);
-  const clickHandler = workspaceSource.slice(clickStart, clickEnd);
+test("Runtime update entries reuse drafts before hydrating cloud capability", () => {
+  const handlerStart = workspaceSource.indexOf("const openSelectedAgentUpdate = () => {");
+  const handlerEnd = workspaceSource.indexOf("\n  return (", handlerStart);
+  assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
+  const handler = workspaceSource.slice(handlerStart, handlerEnd);
 
-  assert.match(clickHandler, /onUpdateAgent\(selectedUpdateCapability\)/);
-  assert.doesNotMatch(clickHandler, /onUpdateAgent\(draft,/);
-  assert.doesNotMatch(clickHandler, /selectedAgentUpdateDraft[\s\S]*?onEditDraft/);
+  assert.match(handler, /onEditDraft\?\.\(selectedDraft\)/);
+  assert.match(handler, /onEditDraft\?\.\(selectedAgentUpdateDraft\)/);
+  assert.match(handler, /onUpdateAgent\(selectedUpdateCapability\)/);
+  assert.doesNotMatch(handler, /onUpdateAgent\(draft,/);
+  assert.match(workspaceSource, /onOpenAgentUpdate=\{openSelectedAgentUpdate\}/);
+  assert.match(workspaceSource, /onClick=\{openSelectedAgentUpdate\}/);
 });
 
 test("Runtime update hydration starts from cloud configuration without local draft values", () => {

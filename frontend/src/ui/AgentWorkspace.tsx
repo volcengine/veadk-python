@@ -70,6 +70,7 @@ import {
 import type { AgentDraft } from "../create/types";
 import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
+import { ScenarioEvaluationWorkspace } from "../evaluation/ScenarioEvaluationWorkspace";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
 import { Markdown } from "./Markdown";
 import { PageBackButton } from "./PageBackButton";
@@ -78,7 +79,14 @@ import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./AgentWorkspace.css";
 
 type WorkspaceView = "library" | "evaluation";
-type AgentSection = "basic" | "usage" | "evaluations" | "optimizations" | "integrations" | "versions";
+type AgentSection =
+  | "basic"
+  | "usage"
+  | "evaluations"
+  | "scenarioEvaluation"
+  | "optimizations"
+  | "integrations"
+  | "versions";
 type IntegrationProtocol = "api-server" | "a2a";
 type EvaluationSection = "config" | "history";
 type CaseKind = "good" | "bad";
@@ -220,38 +228,11 @@ const DEFAULT_CASES: AgentCase[] = [
   },
 ];
 
-const DEFAULT_EVALUATION_GROUPS: EvaluationGroup[] = [
-  {
-    id: "eval-regression",
-    name: "核心能力回归",
-    agentIds: [],
-    caseSet: "核心回归集",
-    evaluator: "综合质量评估器",
-    metrics: ["回答质量", "工具调用"],
-    concurrency: "4",
-    history: [
-      { id: "run-1", createdAt: "今天 10:32", score: 88, status: "completed" },
-      { id: "run-2", createdAt: "昨天 16:08", score: 84, status: "completed" },
-    ],
-  },
-  {
-    id: "eval-safety",
-    name: "安全与幻觉检查",
-    agentIds: [],
-    caseSet: "安全边界集",
-    evaluator: "事实一致性评估器",
-    metrics: ["事实准确性", "拒答合理性"],
-    concurrency: "2",
-    history: [
-      { id: "run-3", createdAt: "7 月 25 日 14:20", score: 91, status: "completed" },
-    ],
-  },
-];
-
 const AGENT_SECTIONS: Array<{ id: AgentSection; label: string }> = [
   { id: "basic", label: "基本信息" },
   { id: "usage", label: "用量统计" },
   { id: "evaluations", label: "评测集" },
+  { id: "scenarioEvaluation", label: "场景评测" },
   { id: "optimizations", label: "优化项" },
   { id: "integrations", label: "接入方法" },
   { id: "versions", label: "版本" },
@@ -1125,7 +1106,7 @@ export function AgentWorkspace({
   const updateCapabilityRequestRef = useRef(0);
   const apiKeyRequestRef = useRef(0);
   const agentUsageRequestRef = useRef(0);
-  const [evaluationGroups, setEvaluationGroups] = useState(DEFAULT_EVALUATION_GROUPS);
+  const [evaluationGroups, setEvaluationGroups] = useState<EvaluationGroup[]>([]);
   const [activeEvaluationGroupId, setActiveEvaluationGroupId] = useState("");
 
   useEffect(() => {
@@ -2342,6 +2323,20 @@ export function AgentWorkspace({
     });
   };
 
+  const openSelectedAgentUpdate = () => {
+    if (selectedDraft) {
+      onEditDraft?.(selectedDraft);
+      return;
+    }
+    if (selectedAgentUpdateDraft) {
+      onEditDraft?.(selectedAgentUpdateDraft);
+      return;
+    }
+    if (selectedUpdateCapability) {
+      onUpdateAgent(selectedUpdateCapability);
+    }
+  };
+
   return (
     <>
     <div className={`aw-root${detailOnly ? " is-detail-only" : ""}`}>
@@ -3534,6 +3529,14 @@ export function AgentWorkspace({
                   </div>
                 </section>
               )}
+              {section === "scenarioEvaluation" && selectedAgentAppName && (
+                <ScenarioEvaluationWorkspace
+                  agentId={selectedAgentAppName}
+                  onOpenAgentUpdate={openSelectedAgentUpdate}
+                  updateUnavailableReason={updateBlockedReason}
+                  updateLoading={updateCapabilityLoading}
+                />
+              )}
               {section === "optimizations" && (
                 <section className="aw-optimizations">
                   <div className="aw-optimization-intro">
@@ -3588,13 +3591,7 @@ export function AgentWorkspace({
                     disabled={Boolean(updateBlockedReason)}
                     aria-busy={updateCapabilityLoading || undefined}
                     aria-describedby={updateBlockedReason ? updateReasonId : undefined}
-                    onClick={() =>
-                      selectedDraft
-                        ? onEditDraft?.(selectedDraft)
-                        : selectedUpdateCapability
-                          ? onUpdateAgent(selectedUpdateCapability)
-                          : undefined
-                    }
+                    onClick={openSelectedAgentUpdate}
                   >
                     {updateCapabilityLoading ? (
                       <>

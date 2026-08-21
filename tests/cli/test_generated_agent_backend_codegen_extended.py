@@ -1081,6 +1081,7 @@ def test_generated_project_and_debug_run_api_lifecycle(
         )
         assert project_response.status_code == 200
         project = project_response.json()
+        assert project["attestation"].startswith("v1.")
 
         old_shape_response = client.post(
             "/web/generated-agent-test-runs",
@@ -1323,6 +1324,7 @@ def test_generated_agent_debug_omits_stdio_mcp_on_remote_bind(
             json={"draft": draft},
         )
         assert project_response.status_code == 200
+        assert project_response.json()["attestation"] == ""
         project_agent_py = next(
             file["content"]
             for file in project_response.json()["files"]
@@ -1622,17 +1624,6 @@ def test_frontend_deploy_forwards_a2a_registry_runtime_env_keys() -> None:
     assert '"REGISTRY_ENDPOINT",' in source
     assert '"REGISTRY_TOP_K",' in source
     assert '"A2A_REGISTRY_ACCESS_KEY",' in source
-
-
-def test_generated_agent_test_run_limit_is_owner_scoped() -> None:
-    source = Path("veadk/cli/cli_frontend.py").read_text()
-
-    assert "_test_runs_creating: dict[str, int]" in source
-    assert 'owner_id = principal.owner_id if principal else ""' in source
-    assert "active_count = sum(" in source
-    assert "1 for run in _test_runs.values() if run.owner_id == owner_id" in source
-    assert "_test_runs_creating.get(owner_id, 0)" in source
-    assert "owner_id=owner_id" in source
 
 
 def test_generated_agent_test_runner_enables_dynamic_a2a_helper() -> None:

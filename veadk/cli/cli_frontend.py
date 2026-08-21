@@ -2961,15 +2961,10 @@ def _run_frontend_server(
     # This replaces the old in-process temp-agent loader. Generated Python code
     # is only loaded by a short-lived subprocess runner.
     import atexit
-    import importlib.util
     import secrets
-    import shutil
-    import socket
     import subprocess
     import threading as _test_threading
     import time
-    from dataclasses import dataclass
-    from pathlib import Path as PathlibPath
     from urllib.parse import quote
     from pydantic import ValidationError
 
@@ -3011,10 +3006,6 @@ def _run_frontend_server(
         studio_harness_runtime_env,
     )
 
-    _TEST_RUN_MAX_FILES = 300
-    _TEST_RUN_MAX_FILE_BYTES = 256 * 1024
-    _TEST_RUN_MAX_TOTAL_BYTES = 2 * 1024 * 1024
-    _TEST_RUN_MAX_ACTIVE = 3
     _TEST_RUN_READY_TIMEOUT = 30.0
 
     def _enabled_env_flag(name: str) -> bool:
@@ -3108,49 +3099,18 @@ def _run_frontend_server(
         except HarnessSidecarDependencyError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
-    @dataclass
-    class _GeneratedAgentTestRun:
-        run_id: str
-        app_name: str
-        temp_dir: str
-        base_url: str
-        process: subprocess.Popen
-        expires_at: float
-        owner_id: str
-        plan_hash: str = ""
+    from veadk.cli.generated_agent_runtime import (
+        GeneratedAgentRuntimeError,
+        GeneratedAgentRuntimeHandle,
+        GeneratedAgentRuntimeManager,
+        GeneratedProjectAttestor,
+    )
 
-    _test_runs: dict[str, _GeneratedAgentTestRun] = {}
-    _test_runs_creating: dict[str, int] = {}
-    _test_runs_lock = _test_threading.Lock()
-
-    def _terminate_test_run(run: _GeneratedAgentTestRun) -> None:
-        if run.process.poll() is None:
-            run.process.terminate()
-            try:
-                run.process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                run.process.kill()
-                run.process.wait(timeout=3)
-        shutil.rmtree(run.temp_dir, ignore_errors=True)
-
-    def _cleanup_expired_test_runs() -> None:
-        now = time.time()
-        expired: list[_GeneratedAgentTestRun] = []
-        with _test_runs_lock:
-            for run_id, run in list(_test_runs.items()):
-                if run.expires_at <= now or run.process.poll() is not None:
-                    expired.append(_test_runs.pop(run_id))
-        for run in expired:
-            _terminate_test_run(run)
-
-    def _cleanup_all_test_runs() -> None:
-        with _test_runs_lock:
-            runs = list(_test_runs.values())
-            _test_runs.clear()
-        for run in runs:
-            _terminate_test_run(run)
-
-    atexit.register(_cleanup_all_test_runs)
+    _generated_agent_runtimes = GeneratedAgentRuntimeManager(
+        ttl_seconds=max(60, generated_agent_test_run_ttl),
+        redact=_redact_debug_text,
+    )
+    atexit.register(_generated_agent_runtimes.close_all)
 
     _cleanup_interval = min(30, max(5, generated_agent_test_run_ttl // 2))
 
@@ -3158,7 +3118,7 @@ def _run_frontend_server(
         while True:
             time.sleep(_cleanup_interval)
             try:
-                _cleanup_expired_test_runs()
+                _generated_agent_runtimes.cleanup_expired()
             except Exception as e:
                 logger.warning(f"Generated-agent test-run cleanup failed: {e}")
 
@@ -3171,18 +3131,16 @@ def _run_frontend_server(
     def _get_test_run(
         run_id: str,
         request: Request,
-    ) -> _GeneratedAgentTestRun:
-        _cleanup_expired_test_runs()
-        with _test_runs_lock:
-            run = _test_runs.get(run_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail="test run not found")
+    ) -> GeneratedAgentRuntimeHandle:
         principal = _require_agent_management(request)
-        if _request_role(request) != StudioRole.ADMIN and (
-            principal is None or run.owner_id != principal.owner_id
-        ):
+        try:
+            return _generated_agent_runtimes.require_access(
+                run_id,
+                owner_id=principal.owner_id if principal else "",
+                is_admin=_request_role(request) == StudioRole.ADMIN,
+            )
+        except GeneratedAgentRuntimeError:
             raise HTTPException(status_code=404, detail="test run not found")
-        return run
 
     def _safe_runner_env() -> dict[str, str]:
         """Whitelisted environment for the child runner.
@@ -3257,6 +3215,40 @@ def _run_frontend_server(
         )
         return env
 
+    def _scenario_evaluation_base_env() -> dict[str, str]:
+        """Return a credential-free environment for Candidate execution."""
+
+        source = _safe_runner_env()
+        allowed = {
+            "OTEL_SDK_DISABLED",
+            "VEADK_DISABLE_EXPIRE_AT",
+            "ENABLE_APMPLUS",
+            "ENABLE_COZELOOP",
+            "ENABLE_TLS",
+            "MODEL_AGENT_API_BASE",
+            "MODEL_AGENT_BASE_URL",
+            "MODEL_AGENT_NAME",
+            "MODEL_AGENT_PROVIDER",
+            "MODEL_AGENT_API_KEY_NAME",
+            "CLOUD_PROVIDER",
+            "AGENTKIT_CLOUD_PROVIDER",
+            "PATH",
+            "VIRTUAL_ENV",
+            "PYTHONPATH",
+            "NO_PROXY",
+        }
+        return {key: value for key, value in source.items() if key in allowed}
+
+    def _scenario_evaluation_reference_env() -> dict[str, str]:
+        """Expose only credentials explicitly provisioned for evaluation runs."""
+
+        prefix = "VEADK_SCENARIO_EVALUATION_ENV_"
+        return {
+            key.removeprefix(prefix): value
+            for key, value in os.environ.items()
+            if key.startswith(prefix) and key.removeprefix(prefix) and value
+        }
+
     _DEBUG_PROTECTED_MODEL_ENV_KEYS = frozenset(
         {
             "ARK_API_KEY",
@@ -3270,33 +3262,6 @@ def _run_frontend_server(
     def _is_debug_protected_model_env(key: str) -> bool:
         """Keep Runtime env from replacing the Studio model credential bundle."""
         return key.startswith("MODEL_AGENT_") or key in _DEBUG_PROTECTED_MODEL_ENV_KEYS
-
-    def _read_runner_log_tail(path: PathlibPath, max_chars: int = 6000) -> str:
-        try:
-            with path.open("rb") as f:
-                f.seek(0, os.SEEK_END)
-                size = f.tell()
-                f.seek(max(0, size - max_chars * 4))
-                text = f.read().decode("utf-8", "replace")
-        except OSError:
-            return ""
-        return _redact_debug_text(text[-max_chars:].strip())
-
-    def _runner_log_detail(
-        prefix: str,
-        stdout_path: PathlibPath,
-        stderr_path: PathlibPath,
-    ) -> str:
-        parts = [prefix]
-        stderr_tail = _read_runner_log_tail(stderr_path)
-        stdout_tail = _read_runner_log_tail(stdout_path)
-        if stderr_tail:
-            parts.append(f"stderr:\n{stderr_tail}")
-        if stdout_tail:
-            parts.append(f"stdout:\n{stdout_tail}")
-        if len(parts) == 1:
-            parts.append("No runner logs were captured.")
-        return "\n\n".join(parts)
 
     def _unexpected_debug_error_detail(prefix: str, exc: Exception) -> str:
         """Log an unexpected error and return a safe, traceable UI summary."""
@@ -3313,26 +3278,6 @@ def _run_frontend_server(
             f"异常类型：{type(exc).__name__}\n"
             "详细信息已记录在 Studio 服务端日志中。"
         )
-
-    def _test_run_log_detail(run: _GeneratedAgentTestRun, prefix: str) -> str:
-        temp_dir = PathlibPath(run.temp_dir)
-        return _runner_log_detail(
-            prefix,
-            temp_dir / "runner.stdout.log",
-            temp_dir / "runner.stderr.log",
-        )
-
-    def _runner_response_error_detail(
-        run: _GeneratedAgentTestRun,
-        operation: str,
-        status_code: int,
-        response_text: str,
-    ) -> str:
-        response_detail = _redact_debug_text(response_text.strip())
-        prefix = f"{operation}失败（临时运行环境返回 HTTP {status_code}）"
-        if response_detail and response_detail.lower() != "internal server error":
-            prefix += f"\n响应：{response_detail[:2000]}"
-        return _test_run_log_detail(run, prefix)
 
     def _http_policy_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=400, detail=str(exc))
@@ -3586,134 +3531,6 @@ def _run_frontend_server(
         )
         return project
 
-    def _write_generated_project(project: GeneratedProject, temp_dir: str) -> str:
-        if not project.name:
-            raise HTTPException(status_code=400, detail="Agent name is required")
-        files = project.files
-        if not files:
-            raise HTTPException(status_code=400, detail="No files provided")
-        if len(files) > _TEST_RUN_MAX_FILES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Too many files ({len(files)} > {_TEST_RUN_MAX_FILES})",
-            )
-
-        base = PathlibPath(temp_dir).resolve()
-        total = 0
-        for item in files:
-            file_path = item.path
-            content = item.content
-            if not isinstance(file_path, str) or not file_path.strip():
-                raise HTTPException(status_code=400, detail="Invalid file path")
-            if not isinstance(content, str):
-                raise HTTPException(
-                    status_code=400, detail=f"Invalid content: {file_path}"
-                )
-            encoded = content.encode("utf-8")
-            if len(encoded) > _TEST_RUN_MAX_FILE_BYTES:
-                raise HTTPException(
-                    status_code=400, detail=f"File too large: {file_path}"
-                )
-            total += len(encoded)
-            if total > _TEST_RUN_MAX_TOTAL_BYTES:
-                raise HTTPException(status_code=400, detail="Project is too large")
-
-            path_obj = PathlibPath(file_path)
-            if path_obj.is_absolute() or "\x00" in file_path:
-                raise HTTPException(
-                    status_code=400, detail=f"Illegal file path: {file_path}"
-                )
-            if any(part in ("", ".", "..") for part in path_obj.parts):
-                raise HTTPException(
-                    status_code=400, detail=f"Illegal file path: {file_path}"
-                )
-
-            full = (base / file_path).resolve()
-            if not full.is_relative_to(base):
-                raise HTTPException(
-                    status_code=400, detail=f"Illegal file path: {file_path}"
-                )
-            full.parent.mkdir(parents=True, exist_ok=True)
-            full.write_text(content, encoding="utf-8")
-
-        agents_dir = base / "agents"
-        apps = (
-            sorted(
-                p.name
-                for p in agents_dir.iterdir()
-                if p.is_dir() and (p / "agent.py").is_file()
-            )
-            if agents_dir.is_dir()
-            else []
-        )
-        if project.name in apps:
-            app_name = project.name
-        elif len(apps) == 1:
-            app_name = apps[0]
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="Generated project must contain exactly one agents/<name>/agent.py",
-            )
-
-        # ADK imports an app as ``<app_name>.agent``. Names such as ``abc``
-        # collide with already-importable Python modules and are then reported
-        # by ADK as if the generated root_agent did not exist.
-        try:
-            conflicts_with_module = importlib.util.find_spec(app_name) is not None
-        except (ImportError, AttributeError, ValueError):
-            conflicts_with_module = app_name in sys.modules
-        if conflicts_with_module:
-            debug_app_name = f"veadk_debug_{app_name}"
-            (agents_dir / app_name).rename(agents_dir / debug_app_name)
-            return debug_app_name
-        return app_name
-
-    def _free_local_port() -> int:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", 0))
-            return int(s.getsockname()[1])
-
-    async def _wait_for_runner_ready(
-        base_url: str,
-        app_name: str,
-        proc: subprocess.Popen,
-        stdout_path: PathlibPath,
-        stderr_path: PathlibPath,
-    ) -> None:
-        import asyncio
-
-        deadline = time.time() + _TEST_RUN_READY_TIMEOUT
-        last_error = ""
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            while time.time() < deadline:
-                if proc.poll() is not None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=_runner_log_detail(
-                            "Debug runner exited before becoming ready "
-                            f"(exit code {proc.returncode}).",
-                            stdout_path,
-                            stderr_path,
-                        ),
-                    )
-                try:
-                    res = await client.get(f"{base_url}/list-apps")
-                    if res.status_code == 200 and app_name in (res.json() or []):
-                        return
-                    last_error = f"list-apps returned {res.status_code}"
-                except Exception as e:
-                    last_error = str(e)
-                await asyncio.sleep(0.25)
-        raise HTTPException(
-            status_code=504,
-            detail=_runner_log_detail(
-                f"Debug runner did not become ready: {last_error}",
-                stdout_path,
-                stderr_path,
-            ),
-        )
-
     async def _wait_for_debug_harness_sidecar_ready(
         base_url: str,
         plan: Mapping[str, Any],
@@ -3793,10 +3610,31 @@ def _run_frontend_server(
 
     @app.post("/web/generated-agent-projects")
     async def _generate_agent_project(request: Request):
-        _require_agent_management(request)
+        principal = _require_agent_management(request)
         data = await request.json()
-        project = await _generate_project_from_request(data, debug=False)
-        return project.model_dump()
+        project, draft = await _generate_project_and_draft_from_request(
+            data,
+            debug=False,
+        )
+        owner_id = principal.owner_id if principal is not None else "local"
+        attestation = ""
+        try:
+            validate_debug_policy(
+                draft,
+                allow_local_runtime_resources=False,
+                managed_cloud_provider=provider,
+            )
+        except DebugPolicyError:
+            pass
+        else:
+            attestation = _generated_project_attestor.attest(
+                project,
+                owner_id=owner_id,
+            )
+        return {
+            **project.model_dump(),
+            "attestation": attestation,
+        }
 
     @app.post("/web/github-delivery/source-sync")
     async def _create_github_source_sync(request: Request):
@@ -4034,32 +3872,284 @@ def _run_frontend_server(
         except GitHubCicdError as error:
             raise HTTPException(status_code=400, detail=error.to_response()) from error
 
+    _github_publish_tasks: set[asyncio.Task[None]] = set()
+
     @app.post("/web/github-cicd/runtime-sync")
     async def _sync_github_cicd_runtime(request: Request):
         """Sync current AgentProject files to the PR bound to a Runtime."""
         _require_agent_management(request)
         data = await request.json()
+        publish_intent_id = str(data.get("publishIntentId") or "").strip()
+        publish_agent_id = str(data.get("agentId") or "").strip()
+        governed_publish_fields = (publish_intent_id, publish_agent_id)
+        if any(governed_publish_fields) and not all(governed_publish_fields):
+            raise HTTPException(
+                status_code=400,
+                detail=("publishIntentId and agentId must be provided together"),
+            )
+        publish_actor = _scenario_actor(request) if publish_intent_id else None
+        project = data.get("project") or {}
+        inferred_publish_agent_id = publish_agent_id
+        gate_actor = publish_actor or _scenario_actor(request)
+        await _require_scenario_publish_intent(
+            actor=gate_actor,
+            agent_id=inferred_publish_agent_id,
+            intent_id=publish_intent_id,
+            files=(project.get("files") or ()) if isinstance(project, Mapping) else (),
+        )
+        publish_started = False
+        publish_runtime_region = "cn-beijing"
+        publish_runtime_version = 0
+        publish_deployment_ref = (
+            f"github-runtime:{str(data.get('runtimeId') or '').strip()}"
+        )
+
+        async def _record_failed_github_publish(error_message: str) -> None:
+            if not publish_started or publish_actor is None:
+                return
+            try:
+                await scenario_evaluation.publisher.record_failed(
+                    publish_actor,
+                    agent_id=publish_agent_id,
+                    intent_id=publish_intent_id,
+                    deployment_ref=publish_deployment_ref,
+                    error_message=error_message or "GitHub source sync failed",
+                )
+            except (ScenarioEvaluationError, ScenarioRecordConflict):
+                logger.exception("Failed to record governed GitHub publication failure")
+
         try:
             from veadk.cli.github_cicd import (
                 GitHubCicdError,
+                get_github_cicd_runtime_binding,
                 sync_github_cicd_runtime,
             )
 
-            return sync_github_cicd_runtime(
+            binding = get_github_cicd_runtime_binding(
+                runtime_id=str(data.get("runtimeId") or ""),
+            )
+            binding_cicd = binding.get("cicd") if isinstance(binding, Mapping) else None
+            if (
+                isinstance(binding_cicd, Mapping)
+                and binding_cicd.get("enabled")
+                and not publish_intent_id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "已启用持续交付的 Runtime 必须从场景评测发布确认继续，"
+                        "不能绕过发布门禁。"
+                    ),
+                )
+
+            if publish_intent_id:
+                if not isinstance(binding_cicd, Mapping) or not binding_cicd.get(
+                    "enabled"
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Governed GitHub publication requires an enabled "
+                            "continuous-delivery binding"
+                        ),
+                    )
+                publish_runtime_region = str(binding.get("region") or "cn-beijing")
+                governed_runtime = await asyncio.to_thread(
+                    _authorized_runtime,
+                    request,
+                    str(data.get("runtimeId") or ""),
+                    publish_runtime_region,
+                )
+                governed_agent_id = str(
+                    getattr(governed_runtime, "name", "") or data.get("runtimeId") or ""
+                ).strip()
+                if publish_agent_id != governed_agent_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Publish intent Agent does not match the target Runtime."
+                        ),
+                    )
+                publish_runtime_version = int(
+                    getattr(governed_runtime, "current_version_number", 0) or 0
+                )
+                project_files = (
+                    project.get("files") if isinstance(project, Mapping) else None
+                )
+                try:
+                    deployment_files = tuple(
+                        CandidateProjectFile.model_validate(item)
+                        for item in (project_files or [])
+                    )
+                    await scenario_evaluation.publisher.validate_deployment_source(
+                        publish_actor,
+                        agent_id=publish_agent_id,
+                        intent_id=publish_intent_id,
+                        files=deployment_files,
+                        deployment_profile=_scenario_github_deployment_profile(
+                            data,
+                            binding,
+                        ),
+                    )
+                    await scenario_evaluation.publisher.record_started(
+                        publish_actor,
+                        agent_id=publish_agent_id,
+                        intent_id=publish_intent_id,
+                    )
+                    publish_started = True
+                except (TypeError, ValueError) as error:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Governed deployment files are invalid",
+                    ) from error
+
+            result = sync_github_cicd_runtime(
                 runtime_id=str(data.get("runtimeId") or ""),
                 project=data.get("project") or {},
                 github_token=str(data.get("githubToken") or ""),
             )
+            if publish_intent_id:
+                result_cicd = (
+                    result.get("cicd") if isinstance(result, Mapping) else None
+                )
+                if not isinstance(result_cicd, Mapping) or not result_cicd.get(
+                    "enabled"
+                ):
+                    await _record_failed_github_publish(
+                        "GitHub continuous delivery became unavailable during publication"
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "GitHub continuous delivery became unavailable during "
+                            "publication"
+                        ),
+                    )
+                github = result.get("github")
+                commit_sha = (
+                    str(github.get("commitSha") or "").strip()
+                    if isinstance(github, Mapping)
+                    else ""
+                )
+                publish_deployment_ref = (
+                    f"github-commit:{commit_sha}"
+                    if commit_sha
+                    else publish_deployment_ref
+                )
+                await scenario_evaluation.publisher.record_submitted(
+                    publish_actor,
+                    agent_id=publish_agent_id,
+                    intent_id=publish_intent_id,
+                    deployment_ref=publish_deployment_ref,
+                )
+                result = dict(result)
+                result["publishIntentId"] = publish_intent_id
+                result["publishStatus"] = "submitted"
+
+                async def _await_github_runtime_publication() -> None:
+                    from veadk.cli.github_cicd import list_github_delivery_versions
+
+                    timeout_seconds = max(
+                        30,
+                        int(
+                            os.getenv(
+                                "VEADK_STUDIO_GITHUB_PUBLISH_TIMEOUT_SECONDS",
+                                "900",
+                            )
+                        ),
+                    )
+                    poll_seconds = max(
+                        1,
+                        int(
+                            os.getenv(
+                                "VEADK_STUDIO_GITHUB_PUBLISH_POLL_SECONDS",
+                                "5",
+                            )
+                        ),
+                    )
+                    deadline = monotonic() + timeout_seconds
+                    try:
+                        while monotonic() < deadline:
+                            versions_result = await asyncio.to_thread(
+                                list_github_delivery_versions,
+                                runtime_id=str(data.get("runtimeId") or ""),
+                            )
+                            version = next(
+                                (
+                                    item
+                                    for item in versions_result.get("versions", [])
+                                    if str(item.get("commitSha") or "") == commit_sha
+                                ),
+                                None,
+                            )
+                            runtime_status = str(
+                                (version or {}).get("runtimeStatus") or ""
+                            )
+                            if runtime_status == "failed":
+                                await _record_failed_github_publish(
+                                    "GitHub Actions failed to publish the Runtime"
+                                )
+                                return
+                            if runtime_status == "published":
+                                runtime = await asyncio.to_thread(
+                                    _authorized_runtime,
+                                    request,
+                                    str(data.get("runtimeId") or ""),
+                                    publish_runtime_region,
+                                )
+                                current_version = int(
+                                    getattr(runtime, "current_version_number", 0) or 0
+                                )
+                                if (
+                                    str(getattr(runtime, "status", "") or "") == "Ready"
+                                    and current_version > publish_runtime_version
+                                ):
+                                    await scenario_evaluation.publisher.finalize_succeeded(
+                                        publish_actor,
+                                        agent_id=publish_agent_id,
+                                        intent_id=publish_intent_id,
+                                        deployment_ref=publish_deployment_ref,
+                                    )
+                                    return
+                            await asyncio.sleep(poll_seconds)
+                        await _record_failed_github_publish(
+                            "Timed out waiting for GitHub Actions and Runtime readiness"
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as error:
+                        logger.exception(
+                            "Failed to reconcile governed GitHub publication"
+                        )
+                        await _record_failed_github_publish(
+                            _safe_exception_detail(error)
+                        )
+
+                publish_task = asyncio.create_task(
+                    _await_github_runtime_publication(),
+                    name=f"github-publish-{publish_intent_id}",
+                )
+                _github_publish_tasks.add(publish_task)
+                publish_task.add_done_callback(_github_publish_tasks.discard)
+            return result
         except GitHubCicdError as error:
+            await _record_failed_github_publish(str(error))
             raise HTTPException(status_code=400, detail=error.to_response()) from error
+        except (ScenarioEvaluationError, ScenarioRecordConflict) as error:
+            await _record_failed_github_publish(str(error))
+            raise _scenario_http_exception(error) from error
+        except HTTPException:
+            raise
         except Exception as error:
+            safe_error = _safe_exception_detail(
+                error,
+                secrets=(str(data.get("githubToken") or ""),),
+            )
+            await _record_failed_github_publish(safe_error)
             logger.exception("Failed to sync GitHub CI/CD pipeline")
             raise HTTPException(
                 status_code=502,
-                detail=_safe_exception_detail(
-                    error,
-                    secrets=(str(data.get("githubToken") or ""),),
-                ),
+                detail=safe_error,
             ) from error
 
     @app.post("/web/generated-agent-drafts")
@@ -4088,28 +4178,7 @@ def _run_frontend_server(
     async def _create_generated_agent_test_run(request: Request):
         principal = _require_agent_management(request)
         owner_id = principal.owner_id if principal else ""
-        _cleanup_expired_test_runs()
         data = await request.json()
-
-        reserved = False
-        with _test_runs_lock:
-            active_count = sum(
-                1 for run in _test_runs.values() if run.owner_id == owner_id
-            ) + _test_runs_creating.get(owner_id, 0)
-            if active_count >= _TEST_RUN_MAX_ACTIVE:
-                raise HTTPException(
-                    status_code=429,
-                    detail=(
-                        "调试环境并发数已达上限 "
-                        f"({active_count}/{_TEST_RUN_MAX_ACTIVE})，"
-                        "请稍后重试或关闭不再使用的调试页面。"
-                    ),
-                )
-            _test_runs_creating[owner_id] = _test_runs_creating.get(owner_id, 0) + 1
-            reserved = True
-
-        temp_dir = ""
-        proc = None
         try:
             project, draft = await _generate_project_and_draft_from_request(
                 data,
@@ -4169,23 +4238,6 @@ def _run_frontend_server(
                     if getattr(item, "key", None)
                     and not _is_debug_protected_model_env(str(item.key))
                 }
-            temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
-            app_name = _write_generated_project(project, temp_dir)
-            port = _free_local_port()
-            base_url = f"http://127.0.0.1:{port}"
-            stdout_path = PathlibPath(temp_dir) / "runner.stdout.log"
-            stderr_path = PathlibPath(temp_dir) / "runner.stderr.log"
-            cmd = [
-                sys.executable,
-                "-m",
-                "veadk.cli.generated_agent_test_runner",
-                "--agents-dir",
-                str(PathlibPath(temp_dir) / "agents"),
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(port),
-            ]
             runner_env = _safe_runner_env()
             runner_env.update(runtime_envs)
             for key in list(runner_env):
@@ -4221,55 +4273,35 @@ def _run_frontend_server(
             runner_env.pop("MODEL_AGENT_BASE_URL", None)
             runner_env["CLOUD_PROVIDER"] = provider
             runner_env["AGENTKIT_CLOUD_PROVIDER"] = provider
-            with stdout_path.open("w", encoding="utf-8") as stdout_file:
-                with stderr_path.open("w", encoding="utf-8") as stderr_file:
-                    proc = subprocess.Popen(
-                        cmd,
-                        cwd=temp_dir,
-                        env=runner_env,
-                        stdout=stdout_file,
-                        stderr=stderr_file,
-                    )
-            await _wait_for_runner_ready(
-                base_url,
-                app_name,
-                proc,
-                stdout_path,
-                stderr_path,
-            )
-            if sidecar_plan is not None:
-                await _wait_for_debug_harness_sidecar_ready(base_url, sidecar_plan)
-
-            run_id = "tr_" + secrets.token_urlsafe(18)
-            expires_at = time.time() + generated_agent_test_run_ttl
-            run = _GeneratedAgentTestRun(
-                run_id=run_id,
-                app_name=app_name,
-                temp_dir=temp_dir,
-                base_url=base_url,
-                process=proc,
-                expires_at=expires_at,
+            run = await _generated_agent_runtimes.create(
+                project,
+                environment=runner_env,
                 owner_id=owner_id,
                 plan_hash=(sidecar_plan or {}).get("planHash", ""),
             )
-            with _test_runs_lock:
-                _test_runs[run_id] = run
+            if sidecar_plan is not None:
+                try:
+                    await _wait_for_debug_harness_sidecar_ready(
+                        _generated_agent_runtimes.base_url(run),
+                        sidecar_plan,
+                    )
+                except BaseException:
+                    await _generated_agent_runtimes.close(run)
+                    raise
             return {
-                "runId": run_id,
-                "appName": app_name,
-                "expiresAt": int(expires_at),
+                "runId": run.runtime_id,
+                "appName": run.app_name,
+                "expiresAt": int(run.expires_at),
                 "planHash": run.plan_hash,
             }
         except Exception as exc:
-            if proc is not None:
-                _terminate_test_run(
-                    _GeneratedAgentTestRun("", "", temp_dir, "", proc, 0, "")
-                )
-            else:
-                if temp_dir:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
             if isinstance(exc, HTTPException):
                 raise
+            if isinstance(exc, GeneratedAgentRuntimeError):
+                raise HTTPException(
+                    status_code=exc.status_code,
+                    detail=exc.detail,
+                ) from exc
             raise HTTPException(
                 status_code=500,
                 detail=_unexpected_debug_error_detail(
@@ -4277,60 +4309,23 @@ def _run_frontend_server(
                     exc,
                 ),
             ) from exc
-        finally:
-            if reserved:
-                with _test_runs_lock:
-                    creating_count = max(
-                        0,
-                        _test_runs_creating.get(owner_id, 0) - 1,
-                    )
-                    if creating_count:
-                        _test_runs_creating[owner_id] = creating_count
-                    else:
-                        _test_runs_creating.pop(owner_id, None)
 
     @app.post("/web/generated-agent-test-runs/{run_id}/sessions")
     async def _create_generated_agent_test_session(run_id: str, request: Request):
         run = _get_test_run(run_id, request)
         data = await request.json()
         user_id = (data.get("userId") or "test_user").strip() or "test_user"
-        url = (
-            f"{run.base_url}/apps/{run.app_name}/users/"
-            f"{quote(user_id, safe='')}/sessions"
-        )
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.post(url, json={})
-        except httpx.HTTPError as exc:
-            detail = _unexpected_debug_error_detail(
-                "连接临时运行环境以创建会话时失败",
-                exc,
+            session_id = await _generated_agent_runtimes.create_session(
+                run,
+                user_id=user_id,
             )
+        except GeneratedAgentRuntimeError as exc:
             raise HTTPException(
-                status_code=502,
-                detail=_test_run_log_detail(run, detail),
+                status_code=exc.status_code,
+                detail=exc.detail,
             ) from exc
-        if res.status_code >= 400:
-            raise HTTPException(
-                status_code=res.status_code,
-                detail=_runner_response_error_detail(
-                    run,
-                    "创建调试会话",
-                    res.status_code,
-                    res.text,
-                ),
-            )
-        try:
-            return res.json()
-        except ValueError as exc:
-            detail = _unexpected_debug_error_detail(
-                "解析临时运行环境的会话响应时失败",
-                exc,
-            )
-            raise HTTPException(
-                status_code=502,
-                detail=_test_run_log_detail(run, detail),
-            ) from exc
+        return {"id": session_id}
 
     @app.post("/web/generated-agent-test-runs/{run_id}/run_sse")
     async def _run_generated_agent_test_sse(run_id: str, request: Request):
@@ -4340,49 +4335,24 @@ def _run_frontend_server(
         payload = await request.json()
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="Invalid run_sse payload")
-        payload["app_name"] = run.app_name
 
         async def _stream():
             try:
-                async with httpx.AsyncClient(timeout=None) as client:
-                    async with client.stream(
-                        "POST",
-                        f"{run.base_url}/run_sse",
-                        json=payload,
-                        timeout=None,
-                    ) as res:
-                        if res.status_code >= 400:
-                            text = (await res.aread()).decode("utf-8", "replace")
-                            detail = _runner_response_error_detail(
-                                run,
-                                "调试对话",
-                                res.status_code,
-                                text,
-                            )
-                            logger.warning(
-                                "test-run run_sse %s (%s): %s",
-                                res.status_code,
-                                run.base_url,
-                                detail[:500],
-                            )
-                            err = json.dumps(
-                                {
-                                    "error": detail,
-                                    "status_code": res.status_code,
-                                },
-                                ensure_ascii=False,
-                            )
-                            yield f"data: {err}\n\n"
-                            return
-                        async for chunk in res.aiter_bytes():
-                            yield chunk
-            except httpx.HTTPError as exc:
-                detail = _unexpected_debug_error_detail(
-                    "连接临时运行环境进行调试对话时失败",
-                    exc,
+                async for event in _generated_agent_runtimes.stream(run, payload):
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            event,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        + "\n\n"
+                    )
+            except GeneratedAgentRuntimeError as exc:
+                err = json.dumps(
+                    {"error": exc.detail, "status_code": exc.status_code},
+                    ensure_ascii=False,
                 )
-                detail = _test_run_log_detail(run, detail)
-                err = json.dumps({"error": detail}, ensure_ascii=False)
                 yield f"data: {err}\n\n"
 
         return StreamingResponse(_stream(), media_type="text/event-stream")
@@ -4394,54 +4364,23 @@ def _run_frontend_server(
         request: Request,
     ):
         run = _get_test_run(run_id, request)
-        url = (
-            f"{run.base_url}/dev/apps/{quote(run.app_name, safe='')}"
-            f"/debug/trace/session/{quote(session_id, safe='')}"
-        )
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.get(url)
-        except httpx.HTTPError as exc:
-            detail = _unexpected_debug_error_detail(
-                "连接临时运行环境以读取调用链路时失败",
-                exc,
-            )
-            raise HTTPException(
-                status_code=502,
-                detail=_test_run_log_detail(run, detail),
-            ) from exc
-        if res.status_code >= 400:
-            raise HTTPException(
-                status_code=res.status_code,
-                detail=_runner_response_error_detail(
+            return list(
+                await _generated_agent_runtimes.trace(
                     run,
-                    "读取调用链路",
-                    res.status_code,
-                    res.text,
-                ),
+                    session_id=session_id,
+                )
             )
-        try:
-            spans = res.json()
-        except ValueError as exc:
-            detail = _unexpected_debug_error_detail(
-                "解析临时运行环境的调用链路响应时失败",
-                exc,
-            )
+        except GeneratedAgentRuntimeError as exc:
             raise HTTPException(
-                status_code=502,
-                detail=_test_run_log_detail(run, detail),
+                status_code=exc.status_code,
+                detail=exc.detail,
             ) from exc
-        if not isinstance(spans, list):
-            raise HTTPException(status_code=502, detail="调用链路响应格式无效")
-        return spans
 
     @app.delete("/web/generated-agent-test-runs/{run_id}")
     async def _delete_generated_agent_test_run(run_id: str, request: Request):
-        _get_test_run(run_id, request)
-        with _test_runs_lock:
-            run = _test_runs.pop(run_id, None)
-        if run is not None:
-            _terminate_test_run(run)
+        run = _get_test_run(run_id, request)
+        await _generated_agent_runtimes.close(run)
         return {"success": True}
 
     import threading as _threading
@@ -4758,12 +4697,59 @@ def _run_frontend_server(
             raise HTTPException(status_code=400, detail="Invalid deployment source")
         trusted_intelligent_source = source.get("kind") == "intelligentDevelopment"
         config = data.get("config", {})
+        region = config.get("region") or _default_cloud_region()
         task_id = str(data.get("taskId") or f"deploy-{id(request)}").strip()
+        publish_intent_id = str(data.get("publishIntentId") or "").strip()
+        publish_agent_id = str(data.get("agentId") or "").strip()
+        governed_publish_fields = (publish_intent_id, publish_agent_id)
+        if any(governed_publish_fields) and not all(governed_publish_fields):
+            raise HTTPException(
+                status_code=400,
+                detail=("publishIntentId and agentId must be provided together"),
+            )
+        publish_actor = _scenario_actor(request) if publish_intent_id else None
         create_evaluation_sets = data.get("createEvaluationSets", True)
         author = principal.display_name if principal else ""
         owner_id = principal.owner_id if principal else ""
         if not agent_name:
             raise HTTPException(status_code=400, detail="Agent name is required")
+        gate_actor = publish_actor or _scenario_actor(request)
+        governed_agent_id = requested_runtime_name or agent_name
+        governed_runtime = None
+        if runtime_id:
+            try:
+                governed_runtime = _authorized_runtime(
+                    request,
+                    runtime_id,
+                    region,
+                    coded_access_error=True,
+                )
+            except HTTPException:
+                raise
+            except Exception as error:
+                if is_agentkit_resource_not_found(error):
+                    raise HTTPException(
+                        status_code=404,
+                        detail="runtime_not_found",
+                    ) from error
+                raise HTTPException(
+                    status_code=502,
+                    detail="runtime_lookup_failed",
+                ) from error
+            governed_agent_id = str(
+                getattr(governed_runtime, "name", "") or runtime_id
+            ).strip()
+            if publish_agent_id and publish_agent_id != governed_agent_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Publish intent Agent does not match the target Runtime.",
+                )
+        await _require_scenario_publish_intent(
+            actor=gate_actor,
+            agent_id=publish_agent_id or governed_agent_id,
+            intent_id=publish_intent_id,
+            files=files,
+        )
         if trusted_intelligent_source and (
             len(agent_name) < 4
             or len(agent_name) > 64
@@ -4789,6 +4775,28 @@ def _run_frontend_server(
                 )
         elif not files:
             raise HTTPException(status_code=400, detail="No files provided")
+        if publish_intent_id:
+            try:
+                deployment_files = tuple(
+                    CandidateProjectFile.model_validate(item) for item in files
+                )
+                await scenario_evaluation.publisher.validate_deployment_source(
+                    publish_actor,
+                    agent_id=publish_agent_id,
+                    intent_id=publish_intent_id,
+                    files=deployment_files,
+                    deployment_profile=_scenario_direct_deployment_profile(
+                        data,
+                        provider,
+                    ),
+                )
+            except (TypeError, ValueError) as error:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Governed deployment files are invalid",
+                ) from error
+            except (ScenarioEvaluationError, ScenarioRecordConflict) as error:
+                raise _scenario_http_exception(error) from error
         if not isinstance(create_evaluation_sets, bool):
             raise HTTPException(
                 status_code=400,
@@ -4864,7 +4872,6 @@ def _run_frontend_server(
             and (min_instance != 1 or max_instance != 5)
         )
 
-        region = config.get("region") or _default_cloud_region()
         project_name = config.get("projectName", "default")
         if sidecar_enabled and region not in _managed_sidecar_regions():
             raise HTTPException(
@@ -4909,6 +4916,7 @@ def _run_frontend_server(
                     runtime_id=runtime_id,
                     region=region,
                     app_name=str(data.get("appName") or agent_name).strip(),
+                    runtime=governed_runtime,
                 )
                 if not update_capability["canUpdate"]:
                     raise HTTPException(
@@ -5418,6 +5426,27 @@ def _run_frontend_server(
                 _yaml.dump(agentkit_config, allow_unicode=True), encoding="utf-8"
             )
 
+        with _deploy_tasks_lock:
+            task_already_exists = task_id in _deploy_tasks
+        if task_already_exists:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=409,
+                detail="Deployment task already exists",
+            )
+
+        publish_event_loop = asyncio.get_running_loop()
+        if publish_intent_id:
+            try:
+                await scenario_evaluation.publisher.record_started(
+                    publish_actor,
+                    agent_id=publish_agent_id,
+                    intent_id=publish_intent_id,
+                )
+            except (ScenarioEvaluationError, ScenarioRecordConflict) as error:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                raise _scenario_http_exception(error) from error
+
         task_state: dict[str, Any] = {
             "cancel_event": _threading.Event(),
             "runtime_id": runtime_id,
@@ -5504,6 +5533,57 @@ def _run_frontend_server(
             if not excerpt or excerpt in error_text:
                 return error_text
             return f"{error_text}\n\n构建日志关键错误：\n{excerpt}"
+
+        def _deployment_reference(result: Any) -> str:
+            deploy_result = getattr(result, "deploy_result", None) if result else None
+            metadata = (
+                getattr(deploy_result, "metadata", None) if deploy_result else None
+            ) or {}
+            return str(
+                metadata.get("runtime_id") or task_state.get("runtime_id") or task_id
+            )
+
+        async def _persist_publish_outcome(
+            result: Any,
+            deployment_error: str,
+        ) -> None:
+            if not publish_intent_id:
+                return
+            if publish_actor is None:
+                raise RuntimeError("Governed publication actor is unavailable")
+            bind_repository_owner(
+                publish_actor.owner_id,
+                is_admin=publish_actor.role is StudioRole.ADMIN,
+                identifiers=frozenset(publish_actor.identifiers),
+            )
+            deployment_ref = _deployment_reference(result)
+            if result is not None and getattr(result, "success", False):
+                await scenario_evaluation.publisher.finalize_succeeded(
+                    publish_actor,
+                    agent_id=publish_agent_id,
+                    intent_id=publish_intent_id,
+                    deployment_ref=deployment_ref,
+                )
+                return
+            await scenario_evaluation.publisher.record_failed(
+                publish_actor,
+                agent_id=publish_agent_id,
+                intent_id=publish_intent_id,
+                deployment_ref=deployment_ref,
+                error_message=deployment_error or "Deployment failed",
+            )
+
+        def _record_publish_outcome(
+            result: Any,
+            deployment_error: str,
+        ) -> None:
+            if not publish_intent_id:
+                return
+            future = asyncio.run_coroutine_threadsafe(
+                _persist_publish_outcome(result, deployment_error),
+                publish_event_loop,
+            )
+            future.result(timeout=30)
 
         def _classify(message: str) -> str:
             """Map a reporter message to a deploy phase, monotonically.
@@ -6176,7 +6256,17 @@ def _run_frontend_server(
                     rt_client.update_runtime = _apmplus_update
                 except Exception as e:
                     logger.error("Could not prepare Runtime ownership tags: %s", e)
-                    result_box["error"] = _safe_exception_detail(e)
+                    deployment_error = _safe_exception_detail(e)
+                    result_box["error"] = deployment_error
+                    try:
+                        _record_publish_outcome(None, deployment_error)
+                    except Exception as publish_error:  # noqa: BLE001
+                        result_box["governed_publish_error"] = _safe_exception_detail(
+                            publish_error
+                        )
+                    with _deploy_tasks_lock:
+                        _deploy_tasks.pop(task_id, None)
+                    events.put(None)
                     return
 
                 try:
@@ -6356,6 +6446,32 @@ def _run_frontend_server(
                     logger.error("AgentKit SDK launch failed: %s", safe_error)
                     result_box["error"] = safe_error
                 finally:
+                    publish_result = result_box.get("result")
+                    deployment_error = str(result_box.get("error") or "")
+                    if task_state["cancel_event"].is_set():
+                        publish_result = None
+                        deployment_error = deployment_error or "Deployment cancelled"
+                    elif publish_result is not None and not getattr(
+                        publish_result, "success", False
+                    ):
+                        deployment_error = (
+                            _result_error_text(publish_result)
+                            or deployment_error
+                            or "Deployment failed"
+                        )
+                    try:
+                        _record_publish_outcome(
+                            publish_result,
+                            deployment_error,
+                        )
+                    except Exception as publish_error:  # noqa: BLE001
+                        safe_publish_error = _safe_exception_detail(publish_error)
+                        result_box["governed_publish_error"] = safe_publish_error
+                        logger.error(
+                            "Persist governed publish outcome failed: %s",
+                            safe_publish_error,
+                            exc_info=True,
+                        )
                     if rt_client is not None and orig_create is not None:
                         rt_client.create_runtime = orig_create
                     if rt_client is not None and orig_update is not None:
@@ -6589,6 +6705,29 @@ def _run_frontend_server(
                             logger.warning(
                                 "read deployed runtime version failed: %s", e
                             )
+                if publish_intent_id:
+                    final["publishIntentId"] = publish_intent_id
+                governed_publish_error = str(
+                    result_box.get("governed_publish_error") or ""
+                )
+                if governed_publish_error:
+                    if final.get("success"):
+                        final.update(
+                            {
+                                "success": False,
+                                "phase": "publish",
+                                "error": (
+                                    "Runtime 已部署，但发布结果审计失败："
+                                    f"{governed_publish_error}"
+                                ),
+                            }
+                        )
+                    else:
+                        current_error = str(final.get("error") or "Deployment failed")
+                        final["error"] = (
+                            f"{current_error}\n\n发布失败审计记录失败："
+                            f"{governed_publish_error}"
+                        )
                 yield f"data: {_json.dumps(final, ensure_ascii=False)}\n\n"
             finally:
                 shutil.rmtree(temp_dir, ignore_errors=True)
@@ -6942,7 +7081,7 @@ def _run_frontend_server(
         region: str = "",
     ):
         """Check one candidate name without exposing other Runtime details."""
-        _require_agent_management(request)
+        principal = _require_agent_management(request)
         normalized_name = name.strip()
         validation_error = _runtime_name_validation_error(normalized_name)
         if validation_error:
@@ -6980,7 +7119,16 @@ def _run_frontend_server(
                 detail="暂时无法检查 Runtime 名称，请稍后重试。",
             ) from error
         response.headers["Cache-Control"] = "no-store"
-        return {"available": available}
+        result_payload: dict[str, object] = {"available": available}
+        if available:
+            result_payload["identityAttestation"] = (
+                _generated_project_attestor.attest_identity(
+                    owner_id=principal.owner_id if principal is not None else "local",
+                    agent_id=normalized_name,
+                    region=normalized_region,
+                )
+            )
+        return result_payload
 
     @app.get("/web/runtimes")
     async def _web_runtimes(
@@ -7486,6 +7634,375 @@ def _run_frontend_server(
                 else None
             ),
         }
+
+    from frontend.server.scenario_evaluation.composition import (
+        create_components as create_scenario_evaluation_components,
+    )
+    from frontend.server.scenario_evaluation.errors import (
+        ScenarioEvaluationRunning,
+        ScenarioEvaluationError,
+        ScenarioForbidden,
+        ScenarioInvalidTransition,
+        ScenarioNotFound,
+        ScenarioUnavailable,
+    )
+    from frontend.server.scenario_evaluation.models import (
+        CandidateProjectFile,
+        CandidateVersion,
+        FeedbackSource,
+        ScenarioActor,
+        ScenarioRecordType,
+    )
+    from frontend.server.scenario_evaluation.routes import (
+        mount_routes as mount_scenario_evaluation_routes,
+    )
+    from frontend.server.scenario_evaluation.repository import ScenarioRecordConflict
+    from frontend.server.scenario_evaluation.repository import bind_repository_owner
+    from frontend.server.scenario_evaluation.runtime import (
+        AllowlistedCredentialReferenceResolver,
+    )
+
+    _scenario_evaluation_runtimes = GeneratedAgentRuntimeManager(
+        ttl_seconds=4 * 60 * 60,
+        max_active_per_owner=2,
+        stream_timeout_seconds=10 * 60,
+        redact=_redact_debug_text,
+    )
+
+    def _scenario_attestation_secrets() -> tuple[bytes, ...]:
+        configured = tuple(
+            item.strip().encode("utf-8")
+            for item in os.getenv(
+                "VEADK_STUDIO_SCENARIO_ATTESTATION_KEYS",
+                "",
+            ).split(",")
+            if item.strip()
+        )
+        seeds = configured or (_knowledge_signing_key(),)
+        return tuple(
+            hashlib.sha256(b"veadk-scenario-attestation-v1\0" + item).digest()
+            for item in seeds
+        )
+
+    _scenario_secrets = _scenario_attestation_secrets()
+    _generated_project_attestor = GeneratedProjectAttestor(
+        secret=_scenario_secrets[0],
+        verification_secrets=_scenario_secrets[1:],
+    )
+    app.state.generated_project_attestor = _generated_project_attestor
+    atexit.register(_scenario_evaluation_runtimes.close_all)
+
+    scenario_evaluation = create_scenario_evaluation_components(
+        studio=studio,
+        provider=provider,
+        generated_runtime_manager=_scenario_evaluation_runtimes,
+        credential_resolver=AllowlistedCredentialReferenceResolver(
+            environment=_scenario_evaluation_reference_env,
+            ark_api_key_resolver=lambda key_id: _resolve_ark_model_api_key(
+                api_key_id=key_id
+            ),
+        ),
+        base_environment=_scenario_evaluation_base_env,
+        resolve_storage_credentials=_resolve_ve_credentials,
+        owner_scoped=True,
+        project_attestation_verifier=lambda project, owner_id, attestation: (
+            _generated_project_attestor.verify(
+                project,
+                owner_id=owner_id,
+                attestation=attestation,
+            )
+        ),
+        agent_identity_verifier=lambda actor, agent_id, profile, attestation: (
+            _verify_scenario_agent_identity(
+                actor,
+                agent_id,
+                profile,
+                attestation,
+            )
+        ),
+        agent_access_verifier=lambda agent_id, identifiers, is_admin, evidence: (
+            _verify_existing_scenario_agent_access(
+                agent_id,
+                identifiers,
+                is_admin,
+                evidence,
+            )
+        ),
+    )
+
+    async def _require_scenario_publish_intent(
+        *,
+        actor: ScenarioActor,
+        agent_id: str,
+        intent_id: str,
+        files: Iterable[object] = (),
+    ) -> None:
+        """Prevent a known Candidate from bypassing its release gate."""
+
+        if intent_id:
+            return
+        try:
+            candidates = (
+                await scenario_evaluation.service.list_models(
+                    agent_id=agent_id,
+                    record_type=ScenarioRecordType.CANDIDATE_VERSION,
+                    model_type=CandidateVersion,
+                    latest_by_asset=False,
+                )
+                if agent_id
+                else ()
+            )
+            governed_source = False
+            try:
+                source_files = tuple(
+                    CandidateProjectFile.model_validate(item) for item in files
+                )
+                if source_files:
+                    governed_source = (
+                        await scenario_evaluation.service.has_candidate_source(
+                            owner_id=actor.owner_id,
+                            files=source_files,
+                        )
+                    )
+            except (ScenarioForbidden, ValueError, TypeError):
+                # A matching source owned by another user must not leak across
+                # ACL boundaries. Invalid deploy input is rejected downstream.
+                governed_source = False
+        except ScenarioUnavailable:
+            # Scenario evaluation is an optional Studio capability. When its
+            # persistent store is not configured, preserve the existing deploy
+            # path instead of turning the optional release gate into an outage.
+            return
+        if candidates or governed_source:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "该 Agent 已生成待测版本，请从场景评测发布确认继续，"
+                    "不能绕过发布门禁。"
+                ),
+            )
+
+    async def _verify_scenario_agent_identity(
+        actor: ScenarioActor,
+        agent_id: str,
+        profile: Mapping[str, object],
+        attestation: str,
+    ) -> None:
+        runtime_id = str(profile.get("runtimeId") or "").strip()
+        region = _coerce_cloud_region(str(profile.get("region") or ""))
+        if runtime_id:
+            runtime = await asyncio.to_thread(_get_runtime, runtime_id, region)
+            tags = _runtime_tags(runtime)
+            owner = str(tags.get("veadk:owner") or "").strip().casefold()
+            if actor.role is not StudioRole.ADMIN and (
+                not owner or owner not in actor.identifiers
+            ):
+                raise ScenarioForbidden(
+                    "Only the Runtime owner or an admin may create its Candidate."
+                )
+            runtime_name = str(getattr(runtime, "name", "") or "").strip()
+            if not runtime_name or runtime_name != agent_id:
+                raise GeneratedAgentRuntimeError(
+                    422,
+                    "Formal evaluation Agent does not match the target Runtime.",
+                )
+            return
+        _generated_project_attestor.verify_identity(
+            owner_id=actor.owner_id,
+            agent_id=agent_id,
+            region=region,
+            attestation=attestation,
+        )
+
+    async def _verify_existing_scenario_agent_access(
+        agent_id: str,
+        identifiers: frozenset[str],
+        is_admin: bool,
+        verified_evidence: bool,
+    ) -> bool:
+        """Verify the first scenario write against an existing cloud Runtime."""
+
+        if verified_evidence and agent_id.startswith(
+            ("_candidate-source:", "_candidate-transaction:")
+        ):
+            return True
+        try:
+            from agentkit.sdk.runtime import types as _rt
+            from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+            ak, sk, token = _resolve_ve_credentials()
+            for region in _runtime_regions(provider, "all"):
+                client = AgentkitRuntimeClient(
+                    access_key=ak,
+                    secret_key=sk,
+                    session_token=token or "",
+                    region=region,
+                )
+                runtime_filter = _rt.FiltersItemForListRuntimes.model_validate(
+                    {"Name": "Name", "Values": [agent_id]}
+                )
+                result = await asyncio.to_thread(
+                    client.list_runtimes,
+                    _rt.ListRuntimesRequest(
+                        max_results=1,
+                        filters=[runtime_filter],
+                    ),
+                )
+                for runtime in result.agent_kit_runtimes or []:
+                    if str(getattr(runtime, "name", "") or "") != agent_id:
+                        continue
+                    if is_admin:
+                        return True
+                    owner = (
+                        str(_runtime_tags(runtime).get("veadk:owner") or "")
+                        .strip()
+                        .casefold()
+                    )
+                    if owner and owner in identifiers:
+                        return True
+                    return False
+            # A new Runtime identity proof is checked again here, immediately
+            # before the repository's atomic first-owner append. It is valid
+            # only while no cloud Runtime has claimed that name.
+            return verified_evidence
+        except Exception as error:
+            logger.warning("verify scenario Agent access failed: %s", error)
+            raise ScenarioUnavailable(
+                "暂时无法验证 Agent 管理权限，请稍后重试。"
+            ) from error
+
+    def _scenario_direct_deployment_profile(
+        data: Mapping[str, Any],
+        cloud_provider: str,
+    ) -> dict[str, object]:
+        config = data.get("config")
+        config = config if isinstance(config, Mapping) else {}
+        runtime_id = str(data.get("runtimeId") or "")
+        authentication = data.get("authentication")
+        authentication = (
+            dict(authentication) if isinstance(authentication, Mapping) else {}
+        )
+        if runtime_id:
+            authentication = {"type": "existing"}
+        network = config.get("network")
+        if isinstance(network, Mapping):
+            normalized_network: dict[str, object] = {
+                "mode": str(network.get("mode") or "public"),
+                "vpcId": str(network.get("vpc_id") or ""),
+                "subnetIds": str(network.get("subnet_ids") or ""),
+                "enableSharedInternetAccess": bool(
+                    network.get("enable_shared_internet_access")
+                ),
+            }
+        else:
+            normalized_network = {"mode": "public"}
+        resources = data.get("resources")
+        if not runtime_id and not isinstance(resources, Mapping):
+            resources = {
+                "tos": {"mode": "auto"},
+                "cr": {"mode": "auto"},
+                "codePipeline": {"mode": "auto"},
+            }
+        environment_names = sorted(
+            {
+                str(item.get("key") or "").strip()
+                for item in (data.get("envs") or [])
+                if isinstance(item, Mapping) and str(item.get("key") or "").strip()
+            }
+        )
+        return {
+            "cloudProvider": cloud_provider,
+            "region": str(config.get("region") or "cn-beijing"),
+            "runtimeId": runtime_id,
+            "runtimeName": str(data.get("runtimeName") or "").strip(),
+            "sessionStorage": str(data.get("sessionStorage") or "persistent"),
+            "minInstance": int(data.get("minInstance") or 1),
+            "maxInstance": int(data.get("maxInstance") or 5),
+            "authentication": authentication,
+            "network": normalized_network,
+            "resources": None if runtime_id else dict(resources),
+            "harnessSidecar": data.get("harnessSidecar") or None,
+            "environmentNames": environment_names,
+            "createEvaluationSets": bool(data.get("createEvaluationSets", True)),
+        }
+
+    def _scenario_github_deployment_profile(
+        data: Mapping[str, Any],
+        binding: Mapping[str, Any],
+    ) -> dict[str, object]:
+        profile = data.get("deploymentProfile")
+        if not isinstance(profile, Mapping):
+            raise HTTPException(
+                status_code=400,
+                detail="Governed GitHub publication requires deploymentProfile",
+            )
+        normalized = dict(profile)
+        if str(normalized.get("runtimeId") or "") != str(data.get("runtimeId") or ""):
+            raise HTTPException(
+                status_code=409,
+                detail="GitHub Runtime does not match the frozen Candidate.",
+            )
+        binding_region = str(binding.get("region") or "cn-beijing")
+        if str(normalized.get("region") or "") != binding_region:
+            raise HTTPException(
+                status_code=409,
+                detail="GitHub region does not match the frozen Candidate.",
+            )
+        return normalized
+
+    def _scenario_actor(request: Request) -> ScenarioActor:
+        principal = _require_agent_management(request)
+        role = _request_role(request)
+        if principal is None:
+            actor = ScenarioActor(
+                owner_id="local",
+                display_name="local",
+                role=role,
+                identifiers=("local",),
+            )
+        else:
+            actor = ScenarioActor(
+                owner_id=principal.owner_id,
+                display_name=principal.display_name or principal.owner_id,
+                role=role,
+                identifiers=tuple(sorted(principal.identifiers)),
+            )
+        bind_repository_owner(
+            actor.owner_id,
+            is_admin=actor.role is StudioRole.ADMIN,
+            identifiers=frozenset(actor.identifiers),
+        )
+        return actor
+
+    def _scenario_http_exception(error: Exception) -> HTTPException:
+        if isinstance(error, ScenarioForbidden):
+            status_code, code = 403, "forbidden"
+        elif isinstance(error, ScenarioNotFound):
+            status_code, code = 404, "not_found"
+        elif isinstance(error, ScenarioEvaluationRunning):
+            status_code, code = 409, "evaluation_running"
+        elif isinstance(error, ScenarioRecordConflict):
+            status_code, code = 409, "conflict"
+        elif isinstance(error, ScenarioInvalidTransition):
+            status_code, code = 422, "invalid_transition"
+        elif isinstance(error, ScenarioUnavailable):
+            status_code, code = 503, "unavailable"
+        else:
+            status_code, code = 422, "scenario_evaluation_error"
+        return HTTPException(
+            status_code=status_code,
+            detail={"code": code, "message": str(error)},
+        )
+
+    app.state.scenario_evaluation = scenario_evaluation
+    mount_scenario_evaluation_routes(
+        app,
+        service=scenario_evaluation.service,
+        run_manager=scenario_evaluation.run_manager,
+        publisher=scenario_evaluation.publisher,
+        actor_resolver=_scenario_actor,
+        evidence_evaluator=scenario_evaluation.evidence_evaluator,
+    )
 
     evaluation_automation: EvaluationAutomationService | None = None
     agent_usage_service: Any | None = None
@@ -8590,32 +9107,34 @@ def _run_frontend_server(
         runtime_id: str,
         region: str,
         app_name: str | None = None,
+        runtime: Any | None = None,
     ) -> tuple[dict[str, Any], Any]:
-        try:
-            runtime = _authorized_runtime(
-                request,
-                runtime_id,
-                region,
-                coded_access_error=True,
-            )
-        except HTTPException:
-            raise
-        except Exception as error:
-            if is_agentkit_resource_not_found(error):
+        if runtime is None:
+            try:
+                runtime = _authorized_runtime(
+                    request,
+                    runtime_id,
+                    region,
+                    coded_access_error=True,
+                )
+            except HTTPException:
+                raise
+            except Exception as error:
+                if is_agentkit_resource_not_found(error):
+                    raise HTTPException(
+                        status_code=404,
+                        detail="runtime_not_found",
+                    ) from error
+                logger.error(
+                    "resolve runtime update capability failed runtime_id=%s region=%s",
+                    runtime_id,
+                    region,
+                    exc_info=True,
+                )
                 raise HTTPException(
-                    status_code=404,
-                    detail="runtime_not_found",
+                    status_code=502,
+                    detail="runtime_lookup_failed",
                 ) from error
-            logger.error(
-                "resolve runtime update capability failed runtime_id=%s region=%s",
-                runtime_id,
-                region,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=502,
-                detail="runtime_lookup_failed",
-            ) from error
 
         runtime_payload = _runtime_update_payload(runtime, region)
 
@@ -8861,6 +9380,37 @@ def _run_frontend_server(
                 agent_name=agent_name,
                 user_id=feedback.user_id,
             )
+            if feedback.rating is not None:
+                try:
+                    await scenario_evaluation.service.create_feedback_candidate(
+                        _scenario_actor(request),
+                        FeedbackSource(
+                            agent_id=feedback.app_name,
+                            agent_version=str(
+                                agent_info.get("version")
+                                or getattr(runtime, "version", "")
+                                or feedback.runtime_id
+                            ),
+                            runtime_id=feedback.runtime_id,
+                            app_name=feedback.app_name,
+                            user_id=feedback.user_id,
+                            session_id=sample.session_id,
+                            message_id=sample.message_id,
+                            invocation_id=sample.invocation_id or "unavailable",
+                            run_id=sample.invocation_id or sample.message_id,
+                            trace_ref=(
+                                f"trace:{feedback.runtime_id}/"
+                                f"{sample.session_id}/"
+                                f"{sample.invocation_id or sample.message_id}"
+                            ),
+                            input=sample.input,
+                            output=sample.output,
+                            rating=feedback.rating,
+                            comment=feedback.comment,
+                        ),
+                    )
+                except ScenarioEvaluationError as error:
+                    raise _scenario_http_exception(error) from error
             state_key = feedback_state_key(feedback.event_id)
             session_state = session.get("state")
             previous_value = (
