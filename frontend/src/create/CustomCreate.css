@@ -3277,6 +3277,33 @@
   border-color: hsl(var(--destructive) / 0.6);
   box-shadow: 0 0 0 3px hsl(var(--destructive) / 0.1);
 }
+.cw-markdown-fallback {
+  width: 100%;
+  min-height: 340px;
+  max-height: 420px;
+  resize: vertical;
+  overflow-y: auto;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  padding: 18px 20px 28px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.7;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+}
+.cw-markdown-fallback:focus {
+  outline: none;
+  border-color: hsl(var(--ring) / 0.45);
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12);
+}
+.cw-markdown-fallback.is-error {
+  border-color: hsl(var(--destructive) / 0.6);
+  box-shadow: 0 0 0 3px hsl(var(--destructive) / 0.1);
+}
 .cw-markdown-toolbar {
   flex-shrink: 0;
   min-height: 40px;
