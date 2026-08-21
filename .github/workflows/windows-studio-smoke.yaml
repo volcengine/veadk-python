@@ -75,6 +75,11 @@ jobs:
           uv pip install -e .
           .\.venv\Scripts\veadk.exe --version
 
+      - name: Run Studio deploy --from-source package check
+        shell: pwsh
+        run: |
+          uv run python -m pytest -q tests/cli/test_studio_deploy_target.py::test_studio_deploy_from_source_writes_lf_run_script
+
       - name: Start Studio repeatedly with --open
         shell: pwsh
         run: |
