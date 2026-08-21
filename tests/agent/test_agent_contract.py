@@ -68,6 +68,10 @@ def test_expected_fields_present():
     assert not missing, f"Agent lost expected fields: {missing}"
 
 
+def test_bff_tool_host_is_not_an_agent_field():
+    assert "enable_bff_tools" not in Agent.model_fields
+
+
 def test_field_defaults():
     fields = dict(Agent.model_fields)
     for name, expected in _EXPECTED_DEFAULTS.items():

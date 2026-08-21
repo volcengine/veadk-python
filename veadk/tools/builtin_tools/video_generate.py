@@ -32,10 +32,6 @@ logger = get_logger(__name__)
 
 tracer = trace.get_tracer("veadk.video_generate")
 
-API_KEY = getenv(
-    "MODEL_VIDEO_API_KEY",
-    getenv("MODEL_AGENT_API_KEY", settings.model.api_key),
-)
 API_BASE = getenv("MODEL_VIDEO_API_BASE", DEFAULT_VIDEO_MODEL_API_BASE).rstrip("/")
 
 
@@ -119,10 +115,22 @@ def _build_content(prompt: str, config: VideoGenerationConfig) -> list:
     return content
 
 
+def _get_api_key() -> str:
+    """Resolve credentials only when a video request is sent."""
+
+    video_api_key = getenv("MODEL_VIDEO_API_KEY", "", allow_false_values=True)
+    if video_api_key:
+        return video_api_key
+    agent_api_key = getenv("MODEL_AGENT_API_KEY", "", allow_false_values=True)
+    if agent_api_key:
+        return agent_api_key
+    return settings.model.api_key
+
+
 def _get_headers() -> dict:
     return {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {_get_api_key()}",
         "veadk-source": "veadk",
         "veadk-version": VERSION,
         "User-Agent": f"VeADK/{VERSION}",

@@ -27,6 +27,7 @@ from google.adk.plugins.base_plugin import BasePlugin
 import veadk
 import veadk.integrations.agentkit.app as agentkit_app
 from veadk.cli.frontend_invocation import FrontendInvocationPlugin
+from veadk.integrations.agentkit.studio_channel import StudioExternalToolset
 
 
 class _FakeAgentServer:
@@ -202,6 +203,86 @@ def test_create_agentkit_app_keeps_legacy_agentkit_compatible_without_identity(
     app = agentkit_app.create_agentkit_app(_root_agent())
 
     assert isinstance(app, FastAPI)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_create_agentkit_app_uses_runtime_bff_tool_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+) -> None:
+    class SessionAgentServer(_FakeAgentServer):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.session_service = object()
+
+    monkeypatch.setattr(agentkit_app, "AgentkitAgentServerApp", SessionAgentServer)
+    root_agent = _root_agent()
+
+    app = agentkit_app.create_agentkit_app(
+        root_agent,
+        enable_studio_tools=enabled,
+    )
+    client = TestClient(app)
+    capability = client.get("/harness/studio-channel/v1/capabilities")
+
+    assert capability.status_code == 200
+    assert capability.json() == {
+        "enabled": enabled,
+        "protocol": "studio-tool-channel/1",
+        "transports": ["websocket", "http-sse"] if enabled else [],
+    }
+    rpc_paths = {
+        route.path
+        for route in app.routes
+        if hasattr(route, "path")
+        and route.path != "/harness/studio-channel/v1/capabilities"
+    }
+    assert ("/harness/studio-channel/v1/http-runs" in rpc_paths) is enabled
+
+    studio_toolsets = [
+        tool for tool in root_agent.tools if isinstance(tool, StudioExternalToolset)
+    ]
+    assert bool(studio_toolsets) is enabled
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_create_agentkit_app_uses_runtime_bff_route_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+) -> None:
+    class SessionAgentServer(_FakeAgentServer):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.session_service = object()
+
+    monkeypatch.setattr(agentkit_app, "AgentkitAgentServerApp", SessionAgentServer)
+    app = agentkit_app.create_agentkit_app(
+        _root_agent(),
+        enable_studio_routes=enabled,
+    )
+
+    capability = TestClient(app).get("/__studio/routes/v1/capabilities")
+
+    assert capability.status_code == 200
+    assert capability.json() == {
+        "enabled": enabled,
+        "protocol": "studio-route-channel/2",
+        "transports": ["websocket", "http-sse"] if enabled else [],
+        "route_modes": ["exact", "segment-template"] if enabled else [],
+    }
+    paths = {
+        getattr(candidate, "path", "")
+        for route in app.routes
+        for candidate in (
+            route,
+            *getattr(getattr(route, "original_router", None), "routes", ()),
+        )
+    }
+    assert "/harness/skills/findskill" not in paths
+    assert "/harness/skills/spaces" not in paths
+    assert "/harness/skills/spaces/{space_id}/skills" not in paths
+    assert "/harness/capabilities/tools" not in paths
+    assert "/harness/run_sse" not in paths
 
 
 def test_create_agentkit_app_requires_new_agentkit_only_when_identity_is_used(

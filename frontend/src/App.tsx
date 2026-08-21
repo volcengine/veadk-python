@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import { motion } from "motion/react";
 import {
-  addSessionCapability,
   clearMessageFeedbackCache,
   createSession,
   DEFAULT_STUDIO_ACCESS,
@@ -31,15 +30,13 @@ import {
   getAgentInfo,
   getAutomaticEvaluationStatuses,
   getSessionTrace,
-  getSessionCapabilities,
   getSession,
   getStudioAccess,
+  getRuntimeStudioToolCapabilities,
   getRuntimes,
   listApps,
   listModelOptions,
-  listSessionBuiltinTools,
   listSessions,
-  removeSessionCapability,
   runSSE,
   refreshAgentFeedbackCases,
   submitIssueFeedback,
@@ -54,13 +51,12 @@ import {
   type AgentTarget,
   type AgentFeedbackCase,
   type AdkSession,
-  type AddSessionCapability,
   type Attachment,
   type FrontendInvocation,
   type CloudRuntime,
   type MessageFeedbackRating,
   type SiteBranding,
-  type SessionCapabilities,
+  type RuntimeStudioToolCapabilities,
   type StudioAccess,
   type UiConfig,
   type UiFeatures,
@@ -78,7 +74,6 @@ import {
   type IssueFeedbackIssue,
   type IssueFeedbackModule,
 } from "./adk/issueFeedback";
-import { requiresSessionCapabilityRunner } from "./adk/sessionCapabilities";
 import {
   applyEvent,
   emptyAcc,
@@ -280,8 +275,6 @@ function issueFeedbackModuleForPage(page: string): IssueFeedbackModule {
 interface NewChatCapabilitiesState {
   agentId?: string;
   ready?: boolean;
-  harnessEnabled?: boolean;
-  builtinTools?: string[];
   temporaryEnabled?: boolean;
   deepseekHarnessEnabled?: boolean;
   sandboxEndpointExportEnabled?: boolean;
@@ -301,18 +294,14 @@ async function probeNewChatCapabilities(
     sandboxResult,
     deepseekHarnessResult,
     skillResult,
-    harnessResult,
   ] = await Promise.allSettled([
     getSandboxCapability(),
     getSandboxAgentCapability("deepseek-harness"),
     getSkillWorkbenchCapability(),
-    agentId ? listSessionBuiltinTools(agentId) : Promise.resolve<string[]>([]),
   ]);
   return {
     agentId,
     ready: true,
-    harnessEnabled: !!agentId && harnessResult.status === "fulfilled",
-    builtinTools: harnessResult.status === "fulfilled" ? harnessResult.value : [],
     temporaryEnabled:
       sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
     deepseekHarnessEnabled:
@@ -384,6 +373,14 @@ const EMPTY_STRING_ARR: string[] = [];
 
 function emptyInvocation(): FrontendInvocation {
   return { skills: [] };
+}
+
+function studioToolSelectionKey(
+  appName: string,
+  userId: string,
+  sessionId: string,
+): string {
+  return `${appName}\u0000${userId}\u0000${sessionId}`;
 }
 
 async function loadSandboxThreadHistory(
@@ -1320,16 +1317,23 @@ export default function App() {
     newChatCapabilities.ready === true && newChatCapabilities.agentId === appName;
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [invocation, setInvocation] = useState<FrontendInvocation>(emptyInvocation);
+  const [studioToolCapabilities, setStudioToolCapabilities] =
+    useState<RuntimeStudioToolCapabilities | null>(null);
+  const [studioToolsLoading, setStudioToolsLoading] = useState(false);
+  const [studioToolsError, setStudioToolsError] = useState("");
+  const [draftStudioRuntime, setDraftStudioRuntime] = useState<{
+    appName: string;
+    runtimeId: string;
+    name: string;
+    region: string;
+  } | null>(null);
+  const [draftStudioToolIds, setDraftStudioToolIds] = useState<string[]>([]);
+  const [studioToolIdsBySession, setStudioToolIdsBySession] = useState<
+    Record<string, string[]>
+  >({});
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
   const [agentInfoRefreshKey, setAgentInfoRefreshKey] = useState(0);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
-  const [sessionCapabilities, setSessionCapabilities] =
-    useState<SessionCapabilities | null>(null);
-  const [sessionCapabilitiesLoading, setSessionCapabilitiesLoading] =
-    useState(false);
-  const [sessionBuiltinTools, setSessionBuiltinTools] = useState<string[]>([]);
-  const [sessionCapabilityMutating, setSessionCapabilityMutating] =
-    useState(false);
   const removedAttachmentIdsRef = useRef<Set<string>>(new Set());
   // Streaming state is PER SESSION so multiple sessions can stream at once
   // (each /run_sse is an independent request). `streamingSids` = which sessions
@@ -1694,7 +1698,6 @@ export default function App() {
   const busy = streamingSids.has(sessionId);
   const presentingStream = streamPresentationSids.has(sessionId);
   const conversationBusy = busy || initializingSession;
-  const sessionConfigurationBusy = !!sessionId && sessionCapabilitiesLoading;
   const activeConversationBusy = sandboxSession
     ? sandboxBusy
     : conversationBusy;
@@ -1831,8 +1834,11 @@ export default function App() {
         tools: [
           ...new Set([
             ...(rootCapabilityNode?.tools ?? agentInfo.tools),
-            ...(sessionCapabilities?.tools.map((tool) => tool.name) ?? []),
-            ...sessionBuiltinTools,
+            ...(sessionId
+              ? (studioToolIdsBySession[
+                  studioToolSelectionKey(appName, userId, sessionId)
+                ] ?? [])
+              : draftStudioToolIds),
           ]),
         ],
         skills: rootCapabilityNode?.skills ?? agentInfo.skills,
@@ -3179,37 +3185,6 @@ export default function App() {
     }
   }, [appName]);
   useEffect(() => {
-    let cancelled = false;
-    setSessionCapabilities(null);
-    setSessionBuiltinTools([]);
-    if (myAgents || agentDetailTarget || !appName || !userId || !sessionId) {
-      setSessionCapabilitiesLoading(false);
-      return;
-    }
-    setSessionCapabilitiesLoading(true);
-    getSessionCapabilities(appName, userId, sessionId)
-      .then((capabilities) => {
-        if (cancelled) return;
-        setSessionCapabilities(capabilities);
-        void listSessionBuiltinTools(appName)
-          .then((tools) => {
-            if (!cancelled) setSessionBuiltinTools(tools);
-          })
-          .catch(() => {
-            if (!cancelled) setSessionBuiltinTools([]);
-          });
-      })
-      .catch(() => {
-        if (!cancelled) setSessionCapabilities(null);
-      })
-      .finally(() => {
-        if (!cancelled) setSessionCapabilitiesLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [agentDetailTarget, appName, myAgents, userId, sessionId]);
-  useEffect(() => {
     const preparedSelection = preparedAgentSelectionRef.current;
     if (
       preparedSelection?.agentId === appName &&
@@ -4528,11 +4503,10 @@ export default function App() {
       : "";
     viewSidRef.current = "";
     setSessionId("");
-    setSessionCapabilities(null);
-    setSessionBuiltinTools([]);
     setInitializingSession(false);
     setPendingTurns([]);
     setInvocation(emptyInvocation());
+    setDraftStudioToolIds([]);
     discardDraftAttachments(attachments);
     setAttachments([]);
     if (abandonedSession) void abandonDraftSession(abandonedSession);
@@ -4619,8 +4593,6 @@ export default function App() {
     setNewChatMode("agent");
     setNewChatTask(null);
     setInvocation(emptyInvocation());
-    setSessionCapabilities(null);
-    setSessionBuiltinTools([]);
     setSessionId(id);
     // Already have this session's turns (it's cached, or streaming in the
     // background)? Show them instantly and let any live stream keep updating —
@@ -4773,48 +4745,6 @@ export default function App() {
     }
   }
 
-  async function addCapability(capability: AddSessionCapability): Promise<boolean> {
-    if (!appName || !userId || !sessionId || !sessionCapabilities) return false;
-    setSessionCapabilityMutating(true);
-    setError("");
-    try {
-      const updated = await addSessionCapability(
-        appName,
-        userId,
-        sessionId,
-        capability,
-        sessionCapabilities.revision,
-      );
-      setSessionCapabilities(updated);
-      return true;
-    } catch (e) {
-      setError(String(e));
-      return false;
-    } finally {
-      setSessionCapabilityMutating(false);
-    }
-  }
-
-  async function removeCapability(capabilityId: string) {
-    if (!appName || !userId || !sessionId || !sessionCapabilities) return;
-    setSessionCapabilityMutating(true);
-    setError("");
-    try {
-      const updated = await removeSessionCapability(
-        appName,
-        userId,
-        sessionId,
-        capabilityId,
-        sessionCapabilities.revision,
-      );
-      setSessionCapabilities(updated);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSessionCapabilityMutating(false);
-    }
-  }
-
   async function addFiles(files: FileList | File[]) {
     setError("");
     let sid: string;
@@ -4865,18 +4795,19 @@ export default function App() {
     atts: Attachment[] = [],
     selectedInvocation: FrontendInvocation = emptyInvocation(),
     messageSource: AgentMessageSource = "composer",
+    selectedPlatformTools?: readonly string[],
   ) {
     // `busy` here = the CURRENT session is already streaming (can't double-send
     // to it). Other sessions can stream concurrently.
     if (
       (!text.trim() && atts.length === 0) ||
       conversationBusy ||
-      sessionConfigurationBusy ||
       !appName ||
       !userId
     ) return;
     setError("");
     const createsSession = !sessionId;
+    let platformTools = [...(selectedPlatformTools ?? selectedStudioToolIds)];
     const sessionState = createsSession ? "new" : "existing";
     const trackRuntimeMessage = Boolean(currentRuntime);
     const messageOperation = currentRuntime
@@ -4936,31 +4867,15 @@ export default function App() {
       return;
     }
 
-    let runWithSessionCapabilities = requiresSessionCapabilityRunner(
-      sessionCapabilities,
-    );
     if (selectedTask) {
-      try {
-        let updated = await getSessionCapabilities(appName, userId, sid);
-        const optionalTools = NEW_CHAT_TASK_OPTIONAL_TOOLS[selectedTask].filter(
-          (toolName) => newChatCapabilities.builtinTools?.includes(toolName),
-        );
-        for (const toolName of [
-          ...NEW_CHAT_TASK_TOOLS[selectedTask],
-          ...optionalTools,
-        ]) {
-          if (updated.tools.some((tool) => tool.name === toolName)) continue;
-          updated = await addSessionCapability(
-              appName,
-              userId,
-              sid,
-              { kind: "tool", name: toolName },
-              updated.revision,
-            );
-        }
-        setSessionCapabilities(updated);
-        runWithSessionCapabilities = requiresSessionCapabilityRunner(updated);
-      } catch (e) {
+      const requiredTools = NEW_CHAT_TASK_TOOLS[selectedTask];
+      const agentTools = new Set(agentInfo?.tools ?? []);
+      const availableTools = new Set([
+        ...agentTools,
+        ...(currentRuntime ? availableStudioToolIds : []),
+      ]);
+      const missingTools = requiredTools.filter((tool) => !availableTools.has(tool));
+      if (missingTools.length > 0) {
         if (createsSession) {
           setPendingTurns([]);
           setInitializingSession(false);
@@ -4971,11 +4886,23 @@ export default function App() {
           messageOperation?.fail({
             sessionId: String(sid),
             failedPhase: "mount_task_capabilities",
-            ...classifyTelemetryError(e),
+            ...classifyTelemetryError(
+              `missing Studio tools: ${missingTools.join(", ")}`,
+            ),
           });
         }
-        setError(`任务能力挂载失败：${String(e)}`);
+        setError(`当前 Agent 缺少任务工具：${missingTools.join("、")}`);
         return;
+      }
+      if (currentRuntime) {
+        const optionalTools = NEW_CHAT_TASK_OPTIONAL_TOOLS[selectedTask].filter(
+          (toolName) => availableStudioToolIds.has(toolName) && !agentTools.has(toolName),
+        );
+        platformTools = [...new Set([
+          ...platformTools,
+          ...requiredTools.filter((toolName) => !agentTools.has(toolName)),
+          ...optionalTools,
+        ])];
       }
     }
 
@@ -4983,6 +4910,13 @@ export default function App() {
       createsSession ? optimisticTurns : [...current, ...optimisticTurns],
     );
     if (createsSession) {
+      if (currentRuntime) {
+        const key = studioToolSelectionKey(appName, userId, sid);
+        setStudioToolIdsBySession((current) => ({
+          ...current,
+          [key]: [...platformTools],
+        }));
+      }
       viewSidRef.current = sid;
       setSessionId(sid);
       setPendingTurns([]);
@@ -5016,8 +4950,8 @@ export default function App() {
         text,
         attachments: atts,
         invocation: selectedInvocation,
+        platformTools: currentRuntime ? platformTools : undefined,
         signal: ctrl.signal,
-        sessionCapabilities: runWithSessionCapabilities,
       })) {
         if (ctrl.signal.aborted) break;
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
@@ -5182,8 +5116,8 @@ export default function App() {
         functionResponses: [
           { id: block.callId, name: "adk_request_credential", response },
         ],
+        platformTools: currentRuntime ? selectedStudioToolIds : undefined,
         signal: ctrl.signal,
-        sessionCapabilities: requiresSessionCapabilityRunner(sessionCapabilities),
       })) {
         if (ctrl.signal.aborted) break;
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
@@ -5256,6 +5190,70 @@ export default function App() {
     }
   }
 
+  // Hooks must stay above the authentication returns below. Connection state
+  // may survive an auth transition, so discovery also waits for resolved access.
+  const currentConn = connections.find(
+    (connection) =>
+      connection.runtimeId &&
+      connection.apps.some(
+        (candidate) => remoteAppId(connection.id, candidate) === appName,
+      ),
+  );
+  const currentRuntime =
+    currentConn && currentConn.runtimeId && currentConn.region
+      ? {
+          runtimeId: currentConn.runtimeId,
+          name: currentConn.name,
+          region: currentConn.region,
+        }
+      : undefined;
+  const selectedDraftStudioRuntime =
+    draftStudioRuntime?.appName === appName ? draftStudioRuntime : undefined;
+  const studioToolRuntime = currentRuntime ?? selectedDraftStudioRuntime;
+
+  useEffect(() => {
+    let cancelled = false;
+    setStudioToolCapabilities(null);
+    setStudioToolsError("");
+    if (
+      authStatus !== "authenticated" ||
+      !access ||
+      myAgents ||
+      agentDetailTarget ||
+      !studioToolRuntime
+    ) {
+      setStudioToolsLoading(false);
+      return;
+    }
+    setStudioToolsLoading(true);
+    getRuntimeStudioToolCapabilities(
+      studioToolRuntime.runtimeId,
+      studioToolRuntime.region,
+    )
+      .then((capabilities) => {
+        if (!cancelled) setStudioToolCapabilities(capabilities);
+      })
+      .catch((cause) => {
+        if (cancelled) return;
+        setStudioToolsError(
+          cause instanceof Error ? cause.message : "读取本地工具失败",
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setStudioToolsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    access,
+    agentDetailTarget,
+    authStatus,
+    myAgents,
+    studioToolRuntime?.region,
+    studioToolRuntime?.runtimeId,
+  ]);
+
   if (authError) {
     return (
       <div className="boot boot-error">
@@ -5319,17 +5317,41 @@ export default function App() {
   const labelOf = (id: string) => agentEntries.find((e) => e.id === id)?.label ?? id;
   // The runtime backing the current selection (if it's a cloud runtime app) —
   // drives the picker's side detail panel.
-  const currentConn = connections.find(
-    (c) => c.runtimeId && c.apps.some((a) => remoteAppId(c.id, a) === appName),
+  const activeStudioToolSelectionKey = sessionId
+    ? studioToolSelectionKey(appName, userId, sessionId)
+    : "";
+  const storedStudioToolIds = sessionId
+    ? (studioToolIdsBySession[activeStudioToolSelectionKey] ?? [])
+    : draftStudioToolIds;
+  const availableStudioToolIds = new Set(
+    studioToolCapabilities?.tools
+      .map((tool) => tool.id)
+      .filter((toolId) => !agentInfo?.tools.includes(toolId)) ?? [],
   );
-  const currentRuntime =
-    currentConn && currentConn.runtimeId && currentConn.region
-      ? {
-          runtimeId: currentConn.runtimeId,
-          name: currentConn.name,
-          region: currentConn.region,
-        }
-      : undefined;
+  const selectedStudioToolIds = storedStudioToolIds.filter((toolId) =>
+    availableStudioToolIds.has(toolId),
+  );
+  const updateSelectedStudioToolIds = (selectedIds: string[]) => {
+    const next = [...new Set(selectedIds)].filter((toolId) =>
+      availableStudioToolIds.has(toolId),
+    );
+    if (!sessionId) {
+      setDraftStudioToolIds(next);
+      return;
+    }
+    setStudioToolIdsBySession((current) => ({
+      ...current,
+      [activeStudioToolSelectionKey]: next,
+    }));
+  };
+
+  const studioToolsUnavailableReason = studioToolsError
+    ? studioToolsError
+    : studioToolCapabilities && !studioToolCapabilities.enabled
+      ? "本地 Studio BFF 没有配置工具。"
+      : studioToolCapabilities && !studioToolCapabilities.supported
+        ? "当前 Runtime Agent 未开启 BFF 工具能力。"
+        : "";
   const connectedRuntimeId = currentRuntime?.runtimeId ?? "";
   const currentRuntimeAppName = currentConn
     ? currentConn.apps.find((app) =>
@@ -5683,7 +5705,11 @@ export default function App() {
 
   const connectMyAgent = async (
     agent: MyAgentCardData,
-    options: { rethrow?: boolean; source?: AgentConnectSource } = {},
+    options: {
+      rethrow?: boolean;
+      source?: AgentConnectSource;
+      onConnected?: (agentId: string) => void;
+    } = {},
   ) => {
     if (!agent.runtime) return;
     try {
@@ -5692,6 +5718,7 @@ export default function App() {
         options.source ?? "my_agents",
       );
       await refreshCurrentAgentAndStartNewChat(agentId);
+      options.onConnected?.(agentId);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       setError(message);
@@ -6224,7 +6251,13 @@ export default function App() {
                 const selectedInvocation = invocation;
                 setAttachments([]);
                 setInvocation(emptyInvocation());
-                send(text, atts, selectedInvocation);
+                send(
+                  text,
+                  atts,
+                  selectedInvocation,
+                  "composer",
+                  selectedStudioToolIds,
+                );
                 releaseAttachmentPreviews(atts);
               }}
               onStop={busy ? stopCurrentGeneration : undefined}
@@ -6279,30 +6312,48 @@ export default function App() {
                 newChatMode === "agent"
               }
               agentPickerDisabled={!userId || conversationBusy}
-              selectedRuntimeId={currentRuntime?.runtimeId}
+              selectedRuntimeId={studioToolRuntime?.runtimeId}
               runtimeScope={access.capabilities.runtimeScope}
               onSelectRuntime={async (runtime) => {
-                await connectMyAgent(
-                  {
-                    id: runtime.runtimeId,
-                    name: runtime.name,
-                    description: runtime.description?.trim() || "暂无描述",
-                    createdAt: runtime.createdAt ?? "",
-                    specificationLabel: "地域",
-                    specification: formatCloudRegion(
-                      runtime.region,
-                      cloudProvider,
-                    ),
-                    isMine: runtime.isMine,
-                    runtime: {
-                      runtimeId: runtime.runtimeId,
-                      region: runtime.region,
-                      currentVersion: runtime.currentVersion,
-                      canDelete: runtime.canDelete,
+                try {
+                  await connectMyAgent(
+                    {
+                      id: runtime.runtimeId,
+                      name: runtime.name,
+                      description: runtime.description?.trim() || "暂无描述",
+                      createdAt: runtime.createdAt ?? "",
+                      specificationLabel: "地域",
+                      specification: formatCloudRegion(
+                        runtime.region,
+                        cloudProvider,
+                      ),
+                      isMine: runtime.isMine,
+                      runtime: {
+                        runtimeId: runtime.runtimeId,
+                        region: runtime.region,
+                        currentVersion: runtime.currentVersion,
+                        canDelete: runtime.canDelete,
+                      },
                     },
-                  },
-                  { rethrow: true, source: "new_chat_picker" },
-                );
+                    {
+                      rethrow: true,
+                      source: "new_chat_picker",
+                      onConnected: (agentId) => {
+                        setDraftStudioRuntime({
+                          appName: agentId,
+                          runtimeId: runtime.runtimeId,
+                          name: runtime.name,
+                          region: runtime.region,
+                        });
+                      },
+                    },
+                  );
+                } catch (cause) {
+                  setDraftStudioRuntime((current) =>
+                    current?.runtimeId === runtime.runtimeId ? null : current,
+                  );
+                  throw cause;
+                }
               }}
               onSelectSandboxSession={(session) =>
                 openSandboxAgent(session, "new_chat_picker")
@@ -6320,9 +6371,12 @@ export default function App() {
                 newChatCapabilitiesReady &&
                 newChatCapabilities.deepseekHarnessEnabled
               }
-              harnessEnabled={newChatCapabilitiesReady && newChatCapabilities.harnessEnabled}
+              harnessEnabled={
+                studioToolCapabilities?.enabled === true &&
+                studioToolCapabilities.supported === true
+              }
               builtinTools={
-                newChatCapabilitiesReady ? newChatCapabilities.builtinTools : []
+                studioToolCapabilities?.tools.map((tool) => tool.id) ?? []
               }
               onModeChange={(mode) => {
                 if (mode === "temporary" && !newChatCapabilities.temporaryEnabled) return;
@@ -7223,12 +7277,14 @@ export default function App() {
                     activeAgent={activeAgent}
                     seenAgents={seenAgents}
                     execPath={execPath}
-                    capabilities={sessionCapabilities}
-                    capabilityLoading={sessionCapabilitiesLoading}
-                    capabilityMutating={sessionCapabilityMutating}
-                    builtinTools={sessionBuiltinTools}
-                    onAddCapability={addCapability}
-                    onRemoveCapability={(id) => void removeCapability(id)}
+                    studioTools={studioToolCapabilities?.tools ?? []}
+                    selectedStudioToolIds={selectedStudioToolIds}
+                    studioToolsLoading={studioToolsLoading}
+                    studioToolsDisabled={conversationBusy}
+                    studioToolsUnavailableReason={studioToolsUnavailableReason}
+                    onStudioToolsChange={
+                      studioToolRuntime ? updateSelectedStudioToolIds : undefined
+                    }
                   />
                 )}
                 <div className="conversation-composer-slot">

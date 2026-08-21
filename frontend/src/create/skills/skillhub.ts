@@ -1,6 +1,6 @@
 // Volcengine Skill Hub client (the backend behind findskill.com /
-// skills.volces.com). Search uses the same normalized Studio harness endpoint
-// as the in-chat skill picker. Downloads still use `/skillhub` because the
+// skills.volces.com). Search uses a normalized Studio harness endpoint for the
+// project-creation Skill picker. Downloads still use `/skillhub` because the
 // selected zip is unpacked client-side into the generated project:
 //   GET /harness/skills/findskill?query=<q>         -> { items: [...] }
 //   GET /skillhub/v1/skills/download/<slug>?namespace=<ns> -> application/zip

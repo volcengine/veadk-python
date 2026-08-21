@@ -37,19 +37,27 @@ logger = get_logger(__name__)
 
 tracer = trace.get_tracer("veadk")
 
-API_KEY = getenv(
-    "MODEL_IMAGE_API_KEY",
-    getenv("MODEL_AGENT_API_KEY", settings.model.api_key),
-)
 API_BASE = getenv("MODEL_IMAGE_API_BASE", DEFAULT_IMAGE_GENERATE_MODEL_API_BASE).rstrip(
     "/"
 )
 
 
+def _get_api_key() -> str:
+    """Resolve credentials only when an image request is sent."""
+
+    image_api_key = getenv("MODEL_IMAGE_API_KEY", "", allow_false_values=True)
+    if image_api_key:
+        return image_api_key
+    agent_api_key = getenv("MODEL_AGENT_API_KEY", "", allow_false_values=True)
+    if agent_api_key:
+        return agent_api_key
+    return settings.model.api_key
+
+
 def _get_headers() -> dict:
     return {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {_get_api_key()}",
         "veadk-source": "veadk",
         "veadk-version": VERSION,
         "User-Agent": f"VeADK/{VERSION}",

@@ -66,7 +66,7 @@ from veadk.cli.generated_agent_skills import (
 # These hashes lock the complete generated project contents, not just Python
 # syntax or selected snippets.
 _MINIMAL_FRONTEND_GOLDEN = {
-    "app.py": "3a5838b3c702202c0a26d8560e396e3c3c46e223b99e2e1d74eb434d653474df",
+    "app.py": "51b63df9386dbdd4623d31bd717b54c93399a7600000e4d9c2d2ab967a90bb46",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/demo_agent/agent.py": "3c28f3e63f185d1ee8402d58b62c8654cf18fe4180a1f348abaa63547d91446c",
     "agents/demo_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
@@ -77,7 +77,7 @@ _MINIMAL_FRONTEND_GOLDEN = {
 }
 
 _FULL_FRONTEND_GOLDEN = {
-    "app.py": "56183a125e505c543294356fc9c7662a5eedb3b8661070f6be1df9b579e35ed4",
+    "app.py": "13a372bdb2af6d87e8e93d2d9c265c140f5041ab6ada8b12ba3269484dfc8a25",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/full_agent/agent.py": "35560cfa5ea93955244482d727c8f8369599fa5b9560ba1f3804df7273e245ce",
     "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
@@ -257,6 +257,7 @@ def test_codegen_preserves_agent_display_names_for_topology() -> None:
     assert "create_agentkit_app(" in app_py
     assert "AGENT_DISPLAY_NAMES" in app_py
     assert "AGENT_DRAFT" in app_py
+    assert '"enable_studio_tools": True' in app_py
     assert '"agent_draft" in signature(create_agentkit_app).parameters' in app_py
     assert '_app_options["agent_draft"] = AGENT_DRAFT' in app_py
     assert '@app.get("/web/agent-info/{app_name}")' in app_py
