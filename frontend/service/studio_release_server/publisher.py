@@ -442,7 +442,11 @@ def build_studio_release(
             dependency_wheels,
             env,
         )
-        (package_dir / "run.sh").write_text(_studio_run_script(), encoding="utf-8")
+        (package_dir / "run.sh").write_text(
+            _studio_run_script(),
+            encoding="utf-8",
+            newline="\n",
+        )
         (package_dir / "requirements.txt").write_text(requirements, encoding="utf-8")
         bundle = output_dir / f"studio-bundle-{version}.zip"
         _zip_directory(package_dir, bundle)

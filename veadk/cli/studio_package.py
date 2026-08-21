@@ -117,7 +117,9 @@ def write_studio_package(
         f"site-logo.{site_logo.extension}" if site_logo is not None else None
     )
     (package_dir / "run.sh").write_text(
-        studio_run_script(logo_filename, provider=provider), encoding="utf-8"
+        studio_run_script(logo_filename, provider=provider),
+        encoding="utf-8",
+        newline="\n",
     )
     if site_logo is not None and logo_filename is not None:
         (package_dir / logo_filename).write_bytes(site_logo.content)

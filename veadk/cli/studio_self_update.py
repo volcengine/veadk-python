@@ -782,6 +782,7 @@ class StudioSelfUpdater:
         (package_dir / "run.sh").write_text(
             studio_run_script(filename, provider=self._settings.provider),
             encoding="utf-8",
+            newline="\n",
         )
         (package_dir / "run.sh").chmod(0o755)
 

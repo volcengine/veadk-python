@@ -1,2 +1,3 @@
 # Minified build artifacts can contain semantic whitespace inside template literals.
 veadk/webui/assets/*.js -whitespace
+*.sh text eol=lf
