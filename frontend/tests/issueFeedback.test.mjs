@@ -104,7 +104,7 @@ test("sidebar opens a platform feedback page with suggested issue pills", () => 
   assert.match(sidebarSource, /onIssueFeedback/);
   assert.match(sidebarSource, /系统信息[\s\S]*?问题反馈[\s\S]*?退出登录/);
   assert.match(sidebarSource, /<AgentKitPromoCard cloudProvider=\{cloudProvider\}/);
-  assert.doesNotMatch(sidebarSource, /sidebar-beta-badge|>Beta</);
+  assert.match(sidebarSource, /className="sidebar-cronjobs-beta"/);
   assert.match(appSource, /initialModule=\{issueFeedbackModuleForPage\(platformFeedbackOrigin\)\}/);
   assert.match(appSource, /source: "platform"/);
   assert.match(appSource, /module: feedback\.module/);

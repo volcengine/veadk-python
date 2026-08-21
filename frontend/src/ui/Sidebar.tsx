@@ -14,6 +14,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import { BookOpen, Clock } from "@openai/apps-sdk-ui/components/Icon";
 import type {
   AdkSession,
@@ -454,6 +455,15 @@ export function Sidebar({
         >
           <Clock className="icon" />
           <span className="sidebar-nav-label">定时任务</span>
+          <Badge
+            className="sidebar-cronjobs-beta"
+            color="discovery"
+            variant="soft"
+            size="sm"
+            pill
+          >
+            Beta
+          </Badge>
         </button>
         <button
           className={`new-chat new-chat--applications${

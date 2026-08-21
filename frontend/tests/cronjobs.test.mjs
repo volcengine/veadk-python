@@ -28,7 +28,7 @@ const confirmSource = readFileSync(
   "utf8",
 );
 
-test("places Automation below scheduled tasks without a beta badge", () => {
+test("places Automation below scheduled tasks with a scheduled-task beta badge", () => {
   assert.match(sidebarSource, /\| "applications"\s*\| "cronjobs"/);
   assert.match(sidebarSource, /onCronJobs: \(\) => void/);
   assert.match(sidebarSource, /import \{ BookOpen, Clock \} from "@openai\/apps-sdk-ui\/components\/Icon"/);
@@ -37,7 +37,14 @@ test("places Automation below scheduled tasks without a beta badge", () => {
   const cronJobsIndex = sidebarSource.indexOf('aria-label="定时任务"');
   assert.equal(automationIndex >= 0, true);
   assert.equal(cronJobsIndex < automationIndex, true);
-  assert.doesNotMatch(sidebarSource, /sidebar-beta-badge|>Beta</);
+  assert.match(
+    sidebarSource,
+    /aria-label="定时任务"[\s\S]*?<Badge[\s\S]*?className="sidebar-cronjobs-beta"[\s\S]*?>[\s\S]*?Beta[\s\S]*?<\/Badge>/,
+  );
+  assert.doesNotMatch(
+    sidebarSource,
+    /aria-label="自动化"[\s\S]*?sidebar-cronjobs-beta/,
+  );
   assert.match(appSource, /onCronJobs=\{\(\) => requestIntelligentNavigation\(openCronJobsPage\)\}/);
   assert.match(appSource, /cronJobsView \? \(\s*<CronJobs cloudProvider=\{cloudProvider\}/);
 });
