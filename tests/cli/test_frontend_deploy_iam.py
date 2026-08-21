@@ -267,6 +267,7 @@ def test_frontend_policy_allows_release_download() -> None:
     assert "iam:UpdatePolicy" not in actions
     assert "vefaas:CodeUploadCallback" in actions
     assert "vefaas:UpdateFunction" in actions
+    assert "vefaas:UpdateFunctionResource" in actions
     assert "vefaas:ReleaseApplication" in actions
 
 

@@ -196,6 +196,7 @@ FRONTEND_DEPLOY_POLICY: dict = {
                 "vefaas:ReleaseApplication",
                 "vefaas:SetSandboxTimeout",
                 "vefaas:UpdateFunction",
+                "vefaas:UpdateFunctionResource",
                 "vikingdb:GetKnowledgeBaseServiceInfo",
                 "vikingdb:GetMemorydbInstanceDetail",
                 "vikingdb:ListCollections",

@@ -231,13 +231,14 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
             captured["credentials"] = kwargs
             self.client = object()
 
-        def submit_application_code_bundle_update(self, **kwargs: Any) -> None:
+        def submit_application_code_bundle_update(self, **kwargs: Any) -> bool:
             package = Path(str(kwargs["path"]))
             assert "--provider byteplus" in (package / "run.sh").read_text(
                 encoding="utf-8"
             )
             assert (package / "requirements.txt").is_file()
             captured["update"] = kwargs
+            return False
 
     def _resources(**kwargs: Any) -> dict[str, str]:
         captured["resource_request"] = kwargs
@@ -301,6 +302,10 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     assert status["progressMessage"] == "已提交，正在等待新 Revision 发布"
     assert status["targetVersion"] == manifest.version
     assert status["startedAt"] > 0
+    assert any(
+        "vefaas:UpdateFunctionResource" in line and "MinInstance 保持原值" in line
+        for line in status["updateLogs"]
+    )
 
 
 def test_submit_latest_reports_missing_vefaas_permissions(
