@@ -15,15 +15,6 @@
 name: Windows Studio Smoke Test
 
 on:
-  push:
-    branches:
-      - fix/windows-studio-smoke
-    paths:
-      - ".github/workflows/windows-studio-smoke.yaml"
-      - "frontend/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - "veadk/**"
   workflow_dispatch:
     inputs:
       repeat_count:
