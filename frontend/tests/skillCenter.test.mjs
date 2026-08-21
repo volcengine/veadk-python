@@ -139,23 +139,27 @@ test("skill details render external markdown with raw HTML disabled", () => {
 });
 
 test("Library navigation replaces Skills immediately below agents", () => {
+  const search = sidebarSource.indexOf('{show("search")');
   const agents = sidebarSource.indexOf('className={`new-chat new-chat--agents');
   const library = sidebarSource.indexOf('className={`new-chat new-chat--library');
-  const search = sidebarSource.indexOf('{show("search")', library);
+  const cronJobs = sidebarSource.indexOf('aria-label="定时任务"', library);
 
-  assert.ok(agents >= 0 && library > agents);
-  assert.ok(search > library);
+  assert.ok(search >= 0 && agents > search);
+  assert.ok(library > agents && cronJobs > library);
   assert.match(
     sidebarSource,
-    /import \{ BookOpen, Clock \} from "@openai\/apps-sdk-ui\/components\/Icon";/,
+    /import \{ Clock \} from "@openai\/apps-sdk-ui\/components\/Icon";/,
   );
-  assert.doesNotMatch(sidebarSource, /function LibraryIcon/);
   assert.match(
-    sidebarSource.slice(agents, search),
-    /<BookOpen className="icon" \/>/,
+    sidebarSource,
+    /import \{[\s\S]*?NewChatIcon,[\s\S]*?ResourceLibraryIcon,[\s\S]*?SidebarAgentIcon,[\s\S]*?\} from "\.\/icons\/SidebarIcons";/,
   );
-  assert.doesNotMatch(sidebarSource.slice(agents, search), /sidebar-nav-slot/);
-  assert.match(sidebarSource.slice(agents, search), />库<\/span>/);
+  assert.match(
+    sidebarSource.slice(agents, cronJobs),
+    /<ResourceLibraryIcon className="icon" \/>/,
+  );
+  assert.doesNotMatch(sidebarSource.slice(agents, cronJobs), /sidebar-nav-slot/);
+  assert.match(sidebarSource.slice(agents, cronJobs), />资源库<\/span>/);
 });
 
 test("Skill workbench supports one to three independent model and style groups", () => {

@@ -33,9 +33,10 @@ test("knowledge and memory searches use the selected Agent endpoint", () => {
   assert.match(clientSource, /apiFetch\(`\/web\/search\?\$\{params\.toString\(\)\}`, \{\}, ep\)/);
 });
 
-test("sidebar and submit action share the restrained custom search icon", () => {
+test("sidebar uses the Figma search icon while submit keeps its restrained glyph", () => {
   assert.match(searchViewSource, /function SearchGlyph/);
-  assert.match(searchViewSource, /<SearchGlyph \/>/);
+  assert.match(searchViewSource, /import \{ SidebarSearchIcon \} from "\.\/icons\/SidebarIcons"/);
+  assert.match(searchViewSource, /<SidebarSearchIcon className="icon" \/>/);
   assert.match(searchViewSource, /<SearchGlyph className="icon" \/>/);
   assert.doesNotMatch(searchViewSource, /import \{[^}]*\bSearch\b[^}]*\} from "lucide-react"/s);
 });
