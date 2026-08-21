@@ -283,7 +283,9 @@ interface NewChatCapabilitiesState {
   harnessEnabled?: boolean;
   builtinTools?: string[];
   temporaryEnabled?: boolean;
+  temporaryUnavailableReason?: string;
   deepseekHarnessEnabled?: boolean;
+  deepseekHarnessUnavailableReason?: string;
   sandboxEndpointExportEnabled?: boolean;
   skillCustomizationEnabled?: boolean;
 }
@@ -315,9 +317,17 @@ async function probeNewChatCapabilities(
     builtinTools: harnessResult.status === "fulfilled" ? harnessResult.value : [],
     temporaryEnabled:
       sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
+    temporaryUnavailableReason:
+      sandboxResult.status === "fulfilled"
+        ? sandboxResult.value.reason
+        : "无法读取 Codex Sandbox 配置，请检查 Studio 服务。",
     deepseekHarnessEnabled:
       deepseekHarnessResult.status === "fulfilled" &&
       deepseekHarnessResult.value.enabled,
+    deepseekHarnessUnavailableReason:
+      deepseekHarnessResult.status === "fulfilled"
+        ? deepseekHarnessResult.value.reason
+        : "无法读取 DeepSeek Harness Sandbox 配置，请检查 Studio 服务。",
     sandboxEndpointExportEnabled:
       sandboxResult.status === "fulfilled" &&
       sandboxResult.value.endpointExportEnabled === true,
@@ -6316,9 +6326,19 @@ export default function App() {
               onSkillActionChange={setNewChatSkillAction}
               onSkillTargetChange={setNewChatSkillTarget}
               temporaryEnabled={newChatCapabilitiesReady && newChatCapabilities.temporaryEnabled}
+              temporaryUnavailableReason={
+                newChatCapabilitiesReady
+                  ? newChatCapabilities.temporaryUnavailableReason
+                  : "正在检查 Codex Sandbox 配置"
+              }
               deepseekHarnessEnabled={
                 newChatCapabilitiesReady &&
                 newChatCapabilities.deepseekHarnessEnabled
+              }
+              deepseekHarnessUnavailableReason={
+                newChatCapabilitiesReady
+                  ? newChatCapabilities.deepseekHarnessUnavailableReason
+                  : "正在检查 DeepSeek Harness Sandbox 配置"
               }
               harnessEnabled={newChatCapabilitiesReady && newChatCapabilities.harnessEnabled}
               builtinTools={

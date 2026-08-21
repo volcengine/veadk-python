@@ -68,6 +68,8 @@ test("renders dense list, independent-session form, details, and full execution 
   assert.match(modelSource, /cancelled: "已取消"/);
   assert.match(modelSource, /skipped: "已跳过"/);
   assert.match(cronJobsSource, /无法加载定时任务/);
+  assert.match(clientSource, /cronJobErrorMessage/);
+  assert.match(clientSource, /typeof detail === "string"/);
   assert.match(cronJobsSource, /还没有定时任务/);
   assert.match(cronJobsSource, /暂无执行记录/);
   assert.match(cronJobsSource, /终止本次执行/);
@@ -132,5 +134,6 @@ test("defines typed same-origin cronjob APIs for list, mutation, run history, an
   assert.match(clientSource, /export async function cancelCronJobRun/);
   assert.match(clientSource, /export async function deleteCronJob/);
   assert.match(clientSource, /`\/web\/cronjobs/);
+  assert.match(clientSource, /cronJobErrorMessage\(response, "加载定时任务失败"\)/);
   assert.doesNotMatch(cronJobsSource, /localStorage|sessionStorage/);
 });

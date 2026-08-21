@@ -192,39 +192,46 @@ export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
               </div>
             </div>
             <form className="website-integration-form" onSubmit={addIntegration}>
-              <label htmlFor="website-runtime">AgentKit Runtime</label>
-              <Select
-                id="website-runtime"
-                options={runtimeOptions}
-                value={selectedRuntime}
-                onChange={(option) => setSelectedRuntime(option.value)}
-                placeholder={loading ? "正在加载 Runtime" : "选择 Runtime"}
-                loading={loading}
-                disabled={loading || submitting || runtimeOptions.length === 0}
-                size="lg"
-                pill={false}
-                align="start"
-              />
-              <label htmlFor="website-domain">网站域名</label>
-              <Input
-                id="website-domain"
-                value={domain}
-                onChange={(event) => setDomain(event.target.value)}
-                placeholder="例如 xxxx.com 或 localhost:5173"
-                autoComplete="off"
-                disabled={submitting}
-                size="lg"
-              />
-              <Button
-                type="submit"
-                color="primary"
-                size="lg"
-                pill={false}
-                loading={submitting}
-                disabled={!domain.trim() || !selectedRuntime || loading}
-              >
-                {submitting ? "正在生成" : "生成 Token"}
-              </Button>
+              <div className="website-integration-field">
+                <label htmlFor="website-runtime">AgentKit Runtime</label>
+                <Select
+                  id="website-runtime"
+                  options={runtimeOptions}
+                  value={selectedRuntime}
+                  onChange={(option) => setSelectedRuntime(option.value)}
+                  placeholder={loading ? "正在加载 Runtime" : "选择 Runtime"}
+                  loading={loading}
+                  disabled={loading || submitting || runtimeOptions.length === 0}
+                  size="lg"
+                  pill={false}
+                  block
+                  align="start"
+                />
+              </div>
+              <div className="website-integration-field">
+                <label htmlFor="website-domain">网站域名</label>
+                <Input
+                  id="website-domain"
+                  value={domain}
+                  onChange={(event) => setDomain(event.target.value)}
+                  placeholder="例如 xxxx.com 或 localhost:5173"
+                  autoComplete="off"
+                  disabled={submitting}
+                  size="lg"
+                />
+              </div>
+              <div className="website-integration-form-action">
+                <Button
+                  type="submit"
+                  color="primary"
+                  size="lg"
+                  pill={false}
+                  loading={submitting}
+                  disabled={!domain.trim() || !selectedRuntime || loading}
+                >
+                  {submitting ? "正在生成" : "生成 Token"}
+                </Button>
+              </div>
             </form>
             {error ? <div className="website-integration-error" role="alert">{error}</div> : null}
           </section>

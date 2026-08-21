@@ -59,7 +59,9 @@ export interface NewChatModeSelectorProps {
   onChange: (value: NewChatMode) => void;
   disabled?: boolean;
   temporaryEnabled?: boolean;
+  temporaryUnavailableReason?: string;
   deepseekHarnessEnabled?: boolean;
+  deepseekHarnessUnavailableReason?: string;
 }
 
 function ModeIcon({ mode }: { mode: NewChatMode }) {
@@ -92,7 +94,9 @@ export function NewChatModeSelector({
   onChange,
   disabled = false,
   temporaryEnabled,
+  temporaryUnavailableReason,
   deepseekHarnessEnabled,
+  deepseekHarnessUnavailableReason,
 }: NewChatModeSelectorProps) {
   const [open, setOpen] = useState(false);
   const [builtinOpen, setBuiltinOpen] = useState(false);
@@ -125,8 +129,19 @@ export function NewChatModeSelector({
   function modeDescription(mode: ModeOption): string {
     const enabled = modeEnabled(mode);
     if (enabled === undefined) return "正在检查配置";
-    if (!enabled) return "管理员未配置";
+    if (!enabled) {
+      return [temporaryUnavailableReason, deepseekHarnessUnavailableReason]
+        .filter((reason): reason is string => Boolean(reason))
+        .join("；") || "管理员未配置可用的 Sandbox";
+    }
     return mode.description;
+  }
+
+  function builtinUnavailableReason(mode: NewChatMode): string {
+    if (mode === "temporary") {
+      return temporaryUnavailableReason || "管理员未配置 Codex Sandbox";
+    }
+    return deepseekHarnessUnavailableReason || "管理员未配置 DeepSeek Harness Sandbox";
   }
 
   useEffect(() => {
@@ -287,7 +302,7 @@ export function NewChatModeSelector({
                           ? "正在检查配置"
                           : enabled
                             ? agent.description
-                            : "管理员未配置"}
+                            : builtinUnavailableReason(agent.value)}
                       </span>
                     </span>
                   </button>

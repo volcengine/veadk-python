@@ -2265,7 +2265,9 @@ def test_sandbox_capabilities_report_configured_tool(
         "enabled": True,
         "reason": "",
         "persistentEnabled": False,
-        "persistentReason": "管理员未配置快照版 Tool",
+        "persistentReason": (
+            "管理员未配置 Codex 快照版 Sandbox（SANDBOX_CHAT_CODEX_SNAPSHOT）。"
+        ),
         "endpointExportEnabled": True,
     }
 
@@ -2304,9 +2306,11 @@ def test_sandbox_capabilities_report_admin_not_configured(
     assert response.status_code == 200
     assert response.json() == {
         "enabled": False,
-        "reason": "管理员未配置",
+        "reason": "管理员未配置 Codex Sandbox（SANDBOX_CHAT_CODEX）。",
         "persistentEnabled": False,
-        "persistentReason": "管理员未配置快照版 Tool",
+        "persistentReason": (
+            "管理员未配置 Codex 快照版 Sandbox（SANDBOX_CHAT_CODEX_SNAPSHOT）。"
+        ),
         "endpointExportEnabled": True,
     }
 
@@ -2320,8 +2324,11 @@ async def test_sandbox_start_requires_preconfigured_chat_tool(
     gateway = _FakeGateway()
     service = SandboxConversationService(gateway)
 
-    with pytest.raises(SandboxConfigurationError, match="管理员未配置"):
-        await service.create("alice")
+    with pytest.raises(
+        SandboxConfigurationError,
+        match="Codex Sandbox.*SANDBOX_CHAT_CODEX",
+    ):
+        await service.create("alice", persistent=False)
 
     assert gateway.created == 0
 

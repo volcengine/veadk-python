@@ -132,6 +132,11 @@ test("supports recovery, keyboard navigation, and focus return", () => {
     pickerSource.indexOf(": runtimes.length === 0 ?"),
   );
   assert.doesNotMatch(errorBranch, /<EmptyMessage/);
+  assert.match(
+    pickerStyles,
+    /@media \(max-width: 640px\)[\s\S]*?\.new-chat-agent-picker__menus\s*\{[\s\S]*?top:\s*auto;[\s\S]*?bottom:\s*calc\(100% \+ 7px\);/,
+    "mobile error menus open above the trigger so recovery controls stay visible",
+  );
 });
 
 test("opens on deliberate mouse hover and closes only after leaving the picker", () => {
@@ -153,6 +158,16 @@ test("opens on deliberate mouse hover and closes only after leaving the picker",
   assert.match(pickerSource, /window\.setTimeout\([\s\S]*?HOVER_CLOSE_DELAY_MS/);
   assert.match(pickerSource, /onClick=\{\(\) => open \? close\(\) : openPicker\(true\)\}/);
   assert.match(pickerSource, /event\.key === "ArrowDown" \|\| event\.key === "ArrowUp"/);
+  assert.match(
+    pickerSource,
+    /onMouseEnter=\{\(\) => \{\s*if \(window\.innerWidth > 640\) activateType\(index\)/,
+    "narrow layouts use explicit click selection so an upward-opening menu cannot switch under the pointer",
+  );
+  assert.match(
+    pickerStyles,
+    /@media \(max-width: 640px\)[\s\S]*?\.composer--new-chat \.composer-box:has\(\.new-chat-agent-picker__trigger\[aria-expanded="true"\]\)\s*\{[\s\S]*?z-index:\s*50;[\s\S]*?\.composer--new-chat \.new-chat-agent-picker\s*\{[\s\S]*?z-index:\s*50;/,
+    "mobile picker content stays above the new-chat heading and feature notice",
+  );
 });
 
 test("does not open the general Agent list until a type is deliberately chosen", () => {

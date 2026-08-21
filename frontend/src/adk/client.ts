@@ -3237,10 +3237,35 @@ function cronJobPath(jobId = ""): string {
   return `/web/cronjobs${jobId ? `/${encodeURIComponent(jobId)}` : ""}`;
 }
 
+async function cronJobErrorMessage(
+  response: Response,
+  fallback: string,
+): Promise<string> {
+  const context = `${fallback}（HTTP ${response.status}）`;
+  const text = await response.text().catch(() => "");
+  if (!text) return context;
+  try {
+    const payload = JSON.parse(text) as { detail?: unknown; error?: unknown };
+    const detail = payload.detail ?? payload.error;
+    if (typeof detail === "string" && detail.trim()) return detail.trim();
+    if (
+      detail &&
+      typeof detail === "object" &&
+      "message" in detail &&
+      typeof (detail as { message?: unknown }).message === "string"
+    ) {
+      return (detail as { message: string }).message.trim() || context;
+    }
+  } catch {
+    // The Studio fallback route may be served by an older deployment.
+  }
+  return context;
+}
+
 export async function listCronJobs(signal?: AbortSignal): Promise<CronJob[]> {
   const response = await apiFetch(cronJobPath(), { signal });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "加载定时任务失败"));
+    throw new Error(await cronJobErrorMessage(response, "加载定时任务失败"));
   }
   const data = (await response.json()) as CronJobListResponse | CronJob[];
   return Array.isArray(data) ? data : data.items ?? [];
@@ -3252,7 +3277,7 @@ export async function getCronJob(
 ): Promise<CronJob> {
   const response = await apiFetch(cronJobPath(jobId), { signal });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "加载定时任务详情失败"));
+    throw new Error(await cronJobErrorMessage(response, "加载定时任务详情失败"));
   }
   return (await response.json()) as CronJob;
 }
@@ -3264,7 +3289,7 @@ export async function createCronJob(input: CronJobInput): Promise<CronJob> {
     body: JSON.stringify(input),
   });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "创建定时任务失败"));
+    throw new Error(await cronJobErrorMessage(response, "创建定时任务失败"));
   }
   return (await response.json()) as CronJob;
 }
@@ -3279,7 +3304,7 @@ export async function updateCronJob(
     body: JSON.stringify(input),
   });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "更新定时任务失败"));
+    throw new Error(await cronJobErrorMessage(response, "更新定时任务失败"));
   }
   return (await response.json()) as CronJob;
 }
@@ -3294,7 +3319,7 @@ export async function setCronJobEnabled(
   });
   if (!response.ok) {
     throw new Error(
-      await httpErrorMessage(response, enabled ? "启用定时任务失败" : "暂停定时任务失败"),
+      await cronJobErrorMessage(response, enabled ? "启用定时任务失败" : "暂停定时任务失败"),
     );
   }
   return (await response.json()) as CronJob;
@@ -3303,7 +3328,7 @@ export async function setCronJobEnabled(
 export async function runCronJobNow(jobId: string): Promise<CronJobRun> {
   const response = await apiFetch(`${cronJobPath(jobId)}/run`, { method: "POST" });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "立即执行定时任务失败"));
+    throw new Error(await cronJobErrorMessage(response, "立即执行定时任务失败"));
   }
   return (await response.json()) as CronJobRun;
 }
@@ -3314,7 +3339,7 @@ export async function listCronJobRuns(
 ): Promise<CronJobRun[]> {
   const response = await apiFetch(`${cronJobPath(jobId)}/runs`, { signal });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "加载执行历史失败"));
+    throw new Error(await cronJobErrorMessage(response, "加载执行历史失败"));
   }
   const data = (await response.json()) as CronJobRunListResponse | CronJobRun[];
   return Array.isArray(data) ? data : data.items ?? [];
@@ -3329,7 +3354,7 @@ export async function cancelCronJobRun(
     { method: "POST" },
   );
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "终止执行失败"));
+    throw new Error(await cronJobErrorMessage(response, "终止执行失败"));
   }
   return (await response.json()) as CronJobRun;
 }
@@ -3337,7 +3362,7 @@ export async function cancelCronJobRun(
 export async function deleteCronJob(jobId: string): Promise<void> {
   const response = await apiFetch(cronJobPath(jobId), { method: "DELETE" });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "删除定时任务失败"));
+    throw new Error(await cronJobErrorMessage(response, "删除定时任务失败"));
   }
 }
 

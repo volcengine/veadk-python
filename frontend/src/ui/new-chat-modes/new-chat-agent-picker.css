@@ -198,7 +198,17 @@
 }
 
 @media (max-width: 640px) {
+  .composer--new-chat .composer-box:has(.new-chat-agent-picker__trigger[aria-expanded="true"]) {
+    z-index: 50;
+  }
+
+  .composer--new-chat .new-chat-agent-picker {
+    z-index: 50;
+  }
+
   .new-chat-agent-picker__menus {
+    top: auto;
+    bottom: calc(100% + 7px);
     width: min(320px, calc(100vw - 88px));
     max-height: min(420px, calc(100dvh - 168px));
     flex-direction: column;

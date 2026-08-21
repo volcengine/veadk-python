@@ -20,7 +20,7 @@ from .repository import (
     Stored,
     TosCronjobRepository,
 )
-from .routes import mount_routes
+from .routes import mount_routes, mount_storage_unavailable_routes
 from .schemas import (
     CreateCronjobRequest,
     Cronjob,
@@ -56,4 +56,5 @@ __all__ = [
     "TosCronjobRepository",
     "UpdateCronjobRequest",
     "mount_routes",
+    "mount_storage_unavailable_routes",
 ]

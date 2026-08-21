@@ -6611,6 +6611,9 @@ def _run_frontend_server(
         TosCronjobRepository,
     )
     from frontend.server.cronjobs import mount_routes as mount_cronjob_routes
+    from frontend.server.cronjobs import (
+        mount_storage_unavailable_routes as mount_cronjob_storage_unavailable_routes,
+    )
     from frontend.server.storage import StudioStorageConfig
     from frontend.server.storage.tos import create_tos_client_factory
     from frontend.service.studio_scheduler import (
@@ -6697,6 +6700,8 @@ def _run_frontend_server(
                 ),
                 replica_id=f"studio-local-{os.getpid()}",
             )
+    else:
+        mount_cronjob_storage_unavailable_routes(app)
 
     @app.get("/web/my-runtimes")
     async def _web_my_runtimes(request: Request, region: str = "all"):

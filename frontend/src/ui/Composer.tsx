@@ -159,7 +159,9 @@ export interface ComposerProps {
   onModeChange?: (value: NewChatMode) => void;
   onTaskChange?: (value: NewChatTask | null) => void;
   temporaryEnabled?: boolean;
+  temporaryUnavailableReason?: string;
   deepseekHarnessEnabled?: boolean;
+  deepseekHarnessUnavailableReason?: string;
   harnessEnabled?: boolean;
   builtinTools?: readonly string[];
   showAgentPicker?: boolean;
@@ -213,7 +215,9 @@ export function Composer({
   onModeChange,
   onTaskChange,
   temporaryEnabled,
+  temporaryUnavailableReason,
   deepseekHarnessEnabled,
+  deepseekHarnessUnavailableReason,
   harnessEnabled = false,
   builtinTools = [],
   showAgentPicker = false,
@@ -755,7 +759,9 @@ export function Composer({
             onChange={onModeChange}
             disabled={busy}
             temporaryEnabled={temporaryEnabled}
+            temporaryUnavailableReason={temporaryUnavailableReason}
             deepseekHarnessEnabled={deepseekHarnessEnabled}
+            deepseekHarnessUnavailableReason={deepseekHarnessUnavailableReason}
           />
         ) : null}
 
