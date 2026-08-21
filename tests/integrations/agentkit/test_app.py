@@ -27,6 +27,7 @@ from google.adk.plugins.base_plugin import BasePlugin
 import veadk
 import veadk.integrations.agentkit.app as agentkit_app
 from veadk.cli.frontend_invocation import FrontendInvocationPlugin
+from veadk.integrations.agentkit.studio_channel import StudioExternalToolset
 
 
 class _FakeAgentServer:
@@ -204,10 +205,10 @@ def test_create_agentkit_app_keeps_legacy_agentkit_compatible_without_identity(
     assert isinstance(app, FastAPI)
 
 
-@pytest.mark.parametrize("legacy_opt_in", [False, True])
-def test_create_agentkit_app_always_mounts_generic_bff_tool_host(
+@pytest.mark.parametrize("enabled", [False, True])
+def test_create_agentkit_app_uses_runtime_bff_tool_opt_in(
     monkeypatch: pytest.MonkeyPatch,
-    legacy_opt_in: bool,
+    enabled: bool,
 ) -> None:
     class SessionAgentServer(_FakeAgentServer):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -216,17 +217,19 @@ def test_create_agentkit_app_always_mounts_generic_bff_tool_host(
 
     monkeypatch.setattr(agentkit_app, "AgentkitAgentServerApp", SessionAgentServer)
     root_agent = _root_agent()
-    setattr(root_agent, "enable_bff_tools", legacy_opt_in)
 
-    app = agentkit_app.create_agentkit_app(root_agent)
+    app = agentkit_app.create_agentkit_app(
+        root_agent,
+        enable_studio_tools=enabled,
+    )
     client = TestClient(app)
     capability = client.get("/harness/studio-channel/v1/capabilities")
 
     assert capability.status_code == 200
     assert capability.json() == {
-        "enabled": True,
+        "enabled": enabled,
         "protocol": "studio-tool-channel/1",
-        "transports": ["websocket", "http-sse"],
+        "transports": ["websocket", "http-sse"] if enabled else [],
     }
     rpc_paths = {
         route.path
@@ -234,7 +237,12 @@ def test_create_agentkit_app_always_mounts_generic_bff_tool_host(
         if hasattr(route, "path")
         and route.path != "/harness/studio-channel/v1/capabilities"
     }
-    assert "/harness/studio-channel/v1/http-runs" in rpc_paths
+    assert ("/harness/studio-channel/v1/http-runs" in rpc_paths) is enabled
+
+    studio_toolsets = [
+        tool for tool in root_agent.tools if isinstance(tool, StudioExternalToolset)
+    ]
+    assert bool(studio_toolsets) is enabled
 
 
 @pytest.mark.parametrize("enabled", [False, True])

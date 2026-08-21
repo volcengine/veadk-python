@@ -35,6 +35,7 @@ app = create_agentkit_app(
     root_agent,
     {root_agent.name: "Basic Assistant"},
     enable_feishu=True,
+    enable_studio_tools=True,
 )
 
 

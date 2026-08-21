@@ -174,6 +174,7 @@ class HarnessApp:
         short_term_memory: ShortTermMemory,
         harness_name: str = "default",
         max_llm_calls: int | None = None,
+        enable_studio_tools: bool = False,
     ):
         self.agent = agent
         self.short_term_memory = short_term_memory
@@ -217,7 +218,11 @@ class HarnessApp:
         # it catches the well-known / RPC paths the ADK routes don't claim.
         self.app = self._server.get_fast_api_app(lifespan=lifespan)
         setattr(self.app.state, _ADK_SERVER_STATE_KEY, self._server)
-        _configure_studio_tool_routes(self.app, self.agent)
+        _configure_studio_tool_routes(
+            self.app,
+            self.agent,
+            enabled=enable_studio_tools,
+        )
         _add_introspection_routes(
             self.app,
             self.agent,

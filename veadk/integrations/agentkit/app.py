@@ -893,17 +893,23 @@ def _configure_studio_tool_routes(
     app: FastAPI,
     root_agent: BaseAgent,
     plugins: Iterable[Any] = (),
+    *,
+    enabled: bool,
 ) -> None:
-    """Mount the generic reverse-tool host independently of Session Capability."""
-
-    services = _RuntimeServices(app)
-    if services.session_service is None:
-        return
+    """Configure the Runtime-level Studio BFF tool host."""
 
     from veadk.integrations.agentkit.studio_channel import (
         StudioExternalToolset,
         mount_studio_channel_routes,
     )
+
+    if not enabled:
+        mount_studio_channel_routes(app=app, enabled=False)
+        return
+
+    services = _RuntimeServices(app)
+    if services.session_service is None:
+        return
 
     agent_tools = getattr(root_agent, "tools", None)
     if agent_tools is None:
@@ -961,6 +967,7 @@ def create_agentkit_app(
     app: App | None = None,
     agent_draft: Mapping[str, Any] | None = None,
     enable_feishu: bool = False,
+    enable_studio_tools: bool = False,
     enable_studio_routes: bool = False,
     identity: RuntimeIdentity | None = None,
     harness_extension: Any | None = None,
@@ -979,6 +986,10 @@ def create_agentkit_app(
         agent_draft: Optional sanitized builder draft for read-only editing metadata.
         enable_feishu: Whether to start the Feishu channel with credentials from
             ``FEISHU_APP_ID`` and ``FEISHU_APP_SECRET``.
+        enable_studio_tools: Whether to mount the generic Runtime host for
+            Studio BFF-owned dynamic tools. Tool manifests and executors remain
+            in the Studio BFF and are exposed only during explicitly selected
+            Studio-channel runs.
         enable_studio_routes: Whether to mount the generic Runtime host for
             Studio BFF-owned dynamic HTTP routes. Route handlers remain in the
             Studio BFF and are never loaded into the Runtime process. Enabled
@@ -1022,7 +1033,12 @@ def create_agentkit_app(
     fastapi_app = cast(FastAPI, agent_server.app)
     setattr(fastapi_app.state, _SERVER_STATE_KEY, agent_server)
     _configure_dynamic_a2a_routes(fastapi_app, root_agent, app_plugins)
-    _configure_studio_tool_routes(fastapi_app, root_agent, app_plugins)
+    _configure_studio_tool_routes(
+        fastapi_app,
+        root_agent,
+        app_plugins,
+        enabled=enable_studio_tools,
+    )
 
     if enable_feishu:
         _configure_feishu_lifecycle(fastapi_app, root_agent, short_term_memory)

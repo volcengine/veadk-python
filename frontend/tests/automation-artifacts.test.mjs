@@ -33,6 +33,7 @@ test("generates the basic Studio project and Runtime delivery workflow in fronte
   const files = buildBasicTemplateFiles("basic-agent");
   assert.match(files["app.py"], /create_agentkit_app\(/);
   assert.match(files["app.py"], /enable_feishu=True/);
+  assert.match(files["app.py"], /enable_studio_tools=True/);
   assert.match(files["app.py"], /run_agentkit_app\(app\)/);
   assert.doesNotMatch(files["app.py"], /AgentkitAgentServerApp/);
   assert.match(files["assistant/agent.py"], /root_agent = Agent\(/);

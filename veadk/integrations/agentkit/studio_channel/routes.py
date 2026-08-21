@@ -310,7 +310,7 @@ class _StudioChannelConnection:
 def mount_studio_channel_routes(
     *,
     app: FastAPI,
-    run_handler: StudioChannelRunHandler,
+    run_handler: StudioChannelRunHandler | None = None,
     reserved_tool_names: set[str] | None = None,
     path: str = DEFAULT_CHANNEL_PATH,
     enabled: bool = True,
@@ -341,6 +341,8 @@ def mount_studio_channel_routes(
     setattr(app.state, "_veadk_studio_channel_enabled", enabled)
     if not enabled:
         return
+    if run_handler is None:
+        raise ValueError("run_handler is required when Studio tools are enabled")
 
     reserved = set(reserved_tool_names or ())
     http_connections: dict[str, _StudioChannelConnection] = {}

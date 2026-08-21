@@ -23,8 +23,13 @@ from veadk.integrations.agentkit import create_agentkit_app
 app = create_agentkit_app(
     root_agent,
     AGENT_DISPLAY_NAMES,
+    enable_studio_tools=True,
 )
 ```
+
+`enable_studio_tools` and `enable_studio_routes` are independent Runtime-level
+opt-ins for Studio-owned dynamic tools and HTTP routes. Both default to `False`.
+The tool option replaces the former Agent-level `enable_bff_tools` field.
 
 The resulting service exposes AgentKit conversation APIs together with
 `/ping`, `/web/agent-info/{app_name}`, `/web/agent-graph`, `/web/search`, and

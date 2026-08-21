@@ -41,7 +41,7 @@ def test_harness_app_exposes_agent_info(monkeypatch):
         assert client.get("/web/agent-info/unknown").status_code == 404
 
 
-def test_harness_app_mounts_bff_tool_host_without_legacy_overlay(monkeypatch):
+def test_harness_app_disables_bff_tool_host_by_default(monkeypatch):
     monkeypatch.setenv("MODEL_AGENT_API_KEY", "test-api-key")
     monkeypatch.setenv("MODEL_NAME", "test-model")
     monkeypatch.setenv("HARNESS_NAME", "test-harness")
@@ -64,10 +64,14 @@ def test_harness_app_mounts_bff_tool_host_without_legacy_overlay(monkeypatch):
         assert client.get(capabilities_path).status_code == 404
         assert client.get("/harness/capabilities/tools").status_code == 404
         assert client.get("/harness/studio-channel/v1/capabilities").json() == {
-            "enabled": True,
+            "enabled": False,
             "protocol": "studio-tool-channel/1",
-            "transports": ["websocket", "http-sse"],
+            "transports": [],
         }
+        assert not any(
+            getattr(route, "path", None) == "/harness/studio-channel/v1/http-runs"
+            for route in harness_module.app.router.routes
+        )
         assert not any(
             getattr(route, "path", None) == "/harness/run_sse"
             for route in harness_module.app.router.routes

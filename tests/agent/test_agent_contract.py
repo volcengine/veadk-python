@@ -36,7 +36,6 @@ _EXPECTED_DEFAULTS = {
     "enable_dynamic_load_skills": False,
     "enable_skills_checklist": False,
     "enable_tunnel": False,
-    "enable_bff_tools": False,
     "runtime": "adk",
 }
 
@@ -67,6 +66,10 @@ def test_agent_is_pydantic_model():
 def test_expected_fields_present():
     missing = _EXPECTED_PRESENT - set(Agent.model_fields)
     assert not missing, f"Agent lost expected fields: {missing}"
+
+
+def test_bff_tool_host_is_not_an_agent_field():
+    assert "enable_bff_tools" not in Agent.model_fields
 
 
 def test_field_defaults():

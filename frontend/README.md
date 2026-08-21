@@ -255,12 +255,16 @@ Runtime sees ordinary tools, but receives neither the executor implementation no
 its credentials. The HTTP fallback currently requires exactly one Runtime
 instance so its stream and result posts reach the same process.
 
-`create_agentkit_app` mounts one generic `StudioExternalToolset` on the Runtime.
-It contains no concrete executor and is hidden from Agent introspection. During
-a Studio-channel run, an async-local immutable snapshot supplies only the tools
-selected for that run; ordinary `/run_sse` requests see an empty snapshot. This
-host is the stable Runtime compatibility layer for future BFF-owned tools, so a
-new plan or goal tool does not need a matching executor in the deployed Agent.
+Build the Runtime app with
+`create_agentkit_app(..., enable_studio_tools=True)` to mount one generic
+`StudioExternalToolset`. It contains no concrete executor and is hidden from
+Agent introspection. During a Studio-channel run, an async-local immutable
+snapshot supplies only the tools selected for that run; ordinary `/run_sse`
+requests see an empty snapshot. With the option disabled (the default), the
+Runtime advertises `enabled=false` and does not mount the Toolset or Tool Channel
+execution endpoints. The enabled host is the stable Runtime compatibility layer
+for future BFF-owned tools, so a new plan or goal tool does not need a matching
+executor in the deployed Agent.
 
 For a compatible remote Runtime, the existing Agent information rail exposes
 **在此对话中添加 Studio 工具** below the Agent's static tools. New chats start
