@@ -449,6 +449,11 @@ def test_builder_passes_only_publisher_runtime_environment(
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(release_builder.subprocess, "run", _run)
+    monkeypatch.setenv(
+        "NODE_OPTIONS",
+        "--trace-warnings --max-old-space-size=1024",
+    )
+    monkeypatch.setattr(release_builder, "_node_heap_limit_mb", lambda: 24_576)
     builder = StudioReleaseBuilder(_settings())
 
     builder._run_publisher(
@@ -465,9 +470,48 @@ def test_builder_passes_only_publisher_runtime_environment(
     assert "VEADK_STUDIO_APMPLUS_AID" not in captured["env"]
     assert "VEADK_STUDIO_APMPLUS_TOKEN" not in captured["env"]
     assert captured["env"]["VOLCENGINE_ACCESS_KEY"] == "release-ak"
+    assert captured["env"]["NODE_OPTIONS"] == (
+        "--trace-warnings --max-old-space-size=24576"
+    )
     assert captured["command"][1].endswith("studio_release_server/publisher.py")
     assert "veadk.cli.studio_release" not in captured["command"]
     assert str(tmp_path) not in captured["env"].get("PYTHONPATH", "").split(os.pathsep)
+
+
+def test_builder_sizes_node_heap_from_cgroup_memory(tmp_path: Path) -> None:
+    cgroup_v2 = tmp_path / "memory.max"
+    cgroup_v2.write_text(str(32 * 1024**3), encoding="utf-8")
+
+    memory_limit = release_builder._memory_limit_bytes(
+        cgroup_paths=(cgroup_v2,),
+        physical_memory=64 * 1024**3,
+    )
+
+    assert memory_limit == 32 * 1024**3
+    assert release_builder._node_heap_limit_mb(memory_limit) == 24_576
+
+
+def test_builder_ignores_unlimited_cgroup_memory(tmp_path: Path) -> None:
+    cgroup_v1 = tmp_path / "memory.limit_in_bytes"
+    cgroup_v1.write_text("9223372036854771712", encoding="utf-8")
+
+    memory_limit = release_builder._memory_limit_bytes(
+        cgroup_paths=(cgroup_v1,),
+        physical_memory=16 * 1024**3,
+    )
+
+    assert memory_limit == 16 * 1024**3
+    assert release_builder._node_heap_limit_mb(memory_limit) == 12_288
+
+
+def test_builder_replaces_node_heap_option_aliases() -> None:
+    assert (
+        release_builder._node_options(
+            "--max_old_space_size 1024 --trace-warnings",
+            8192,
+        )
+        == "--trace-warnings --max-old-space-size=8192"
+    )
 
 
 def test_standalone_publisher_starts_without_importing_veadk() -> None:
