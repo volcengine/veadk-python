@@ -222,18 +222,6 @@ body {
 .new-chat .icon { width: 18px; height: 18px; }
 .new-chat:hover,
 .new-chat.is-active { background: hsl(var(--foreground) / 0.05); }
-.sidebar-beta-badge {
-  flex: 0 0 auto;
-  padding: 1px 5px;
-  border: 1px solid hsl(39 88% 43% / 0.28);
-  border-radius: 999px;
-  background: hsl(47 96% 52% / 0.16);
-  color: hsl(39 91% 31%);
-  font-size: 9.5px;
-  font-weight: 600;
-  line-height: 1.3;
-}
-
 .new-chat--conversation > .icon {
   transform-origin: center;
 }
@@ -325,9 +313,6 @@ body {
   white-space: nowrap;
 }
 .sidebar.is-collapsed .sidebar-nav-label {
-  display: none;
-}
-.sidebar.is-collapsed .sidebar-beta-badge {
   display: none;
 }
 .sidebar.is-collapsed .sidebar-history {
@@ -4399,42 +4384,9 @@ body {
   margin-top: 6px;
 }
 
-.deploy-error-message-actions button {
-  width: 26px;
-  height: 26px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  opacity: 0.72;
-}
-
-.deploy-error-message-actions button:hover {
-  background: hsl(var(--foreground) / 0.07);
-  opacity: 1;
-}
-
-.deploy-error-message-actions button:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-
 .deploy-error-message-actions .deploy-error-retry {
-  width: auto;
-  gap: 5px;
   margin-right: auto;
-  padding: 0 8px;
-  font: inherit;
-  font-size: 11.5px;
-  font-weight: 600;
 }
-
-.deploy-error-message-actions svg { width: 14px; height: 14px; }
 
 .global-deploy-progress {
   height: 3px;
@@ -6592,18 +6544,12 @@ a.search-result { text-decoration: none; color: inherit; }
 }
 
 .studio-confirm-title-icon {
-  width: 30px;
-  height: 30px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  border-radius: 7px;
-  background: hsl(38 92% 50% / 0.12);
-  color: hsl(32 92% 38%);
 }
 
-.studio-confirm-title-icon svg,
-.studio-confirm-close svg {
+.studio-confirm-title-icon svg {
   width: 16px;
   height: 16px;
 }
@@ -6617,37 +6563,6 @@ a.search-result { text-decoration: none; color: inherit; }
   line-height: 1.35;
 }
 
-.studio-confirm-close {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  cursor: pointer;
-  transition: background 160ms ease, color 160ms ease;
-}
-
-.studio-confirm-close:hover:not(:disabled) {
-  background: hsl(var(--secondary));
-  color: hsl(var(--foreground));
-}
-
-.studio-confirm-close:focus-visible,
-.studio-confirm-actions button:focus-visible {
-  outline: 2px solid hsl(var(--primary) / 0.34);
-  outline-offset: 2px;
-}
-
-.studio-confirm-close:disabled {
-  cursor: not-allowed;
-  opacity: 0.48;
-}
-
 .studio-confirm-body {
   padding: 24px 20px;
 }
@@ -6659,6 +6574,10 @@ a.search-result { text-decoration: none; color: inherit; }
   line-height: 1.65;
 }
 
+.studio-confirm-body .studio-confirm-error {
+  margin-top: 10px;
+}
+
 .studio-confirm-actions {
   display: flex;
   justify-content: flex-end;
@@ -6667,57 +6586,16 @@ a.search-result { text-decoration: none; color: inherit; }
   border-top: 1px solid hsl(var(--border));
 }
 
-.studio-confirm-actions button {
+.studio-confirm-actions > * {
   min-width: 76px;
-  height: 34px;
-  padding: 0 14px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 8px;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.studio-confirm-actions button:hover:not(:disabled) {
-  background: hsl(var(--secondary));
-}
-
-.studio-confirm-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.studio-confirm-actions .studio-confirm-primary {
-  border-color: hsl(var(--primary));
-  background: hsl(var(--primary));
-  color: hsl(var(--primary-foreground));
-}
-
-.studio-confirm-actions .studio-confirm-primary:hover:not(:disabled) {
-  background: hsl(var(--primary) / 0.9);
 }
 
 .studio-confirm-dialog--warning .studio-confirm-title-icon {
-  background: hsl(38 92% 50% / 0.12);
   color: hsl(32 92% 38%);
 }
 
 .studio-confirm-dialog--danger .studio-confirm-title-icon {
-  background: hsl(var(--destructive) / 0.1);
   color: hsl(var(--destructive));
-}
-
-.studio-confirm-dialog--danger .studio-confirm-actions .studio-confirm-primary {
-  border-color: hsl(var(--destructive));
-  background: hsl(var(--destructive));
-  color: #fff;
-}
-
-.studio-confirm-dialog--danger .studio-confirm-actions .studio-confirm-primary:hover:not(:disabled) {
-  background: hsl(var(--destructive) / 0.9);
 }
 
 @keyframes studio-confirm-fade-in {

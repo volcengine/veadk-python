@@ -409,6 +409,25 @@ class StudioSelfUpdater:
                             "BYTEPLUS_REGION": self._settings.deployment_region,
                         }
                     )
+                from frontend.service.studio_scheduler.deploy import (
+                    deploy_scheduler_for_studio_update,
+                )
+
+                self._set_progress(
+                    "scheduler",
+                    "正在更新定时任务调度服务与分钟触发器",
+                )
+                _, _, _, _, scheduler_base = deploy_scheduler_for_studio_update(
+                    service,
+                    studio_function_id=self._settings.function_id,
+                    package_root=package_dir,
+                    provider=self._settings.provider,
+                    project=self._settings.project,
+                    environment_overrides=resource_environment,
+                )
+                environment_overrides["VEADK_STUDIO_CRONJOB_SCHEDULER_BASE"] = (
+                    scheduler_base
+                )
                 self._set_progress("submitting", "正在提交 VeFaaS Function 更新")
                 service.submit_application_code_bundle_update(
                     application_id=self._settings.application_id,

@@ -295,6 +295,15 @@ def test_studio_deploy_checks_serverless_role_with_custom_function_role(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
         lambda **_: None,
     )
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler",
+        lambda *_args, **_kwargs: (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+        ),
+    )
 
     result = CliRunner().invoke(
         studio,

@@ -3158,6 +3158,189 @@ export interface CloudRuntime {
   canDelete: boolean;
 }
 
+export type CronJobScheduleType = "once" | "daily" | "weekly" | "cron";
+
+export interface CronJobSchedule {
+  type: CronJobScheduleType;
+  timezone: string;
+  /** ISO local date-time for a one-time schedule. */
+  onceAt?: string;
+  /** HH:mm for daily and weekly schedules. */
+  time?: string;
+  /** 0 (Sunday) through 6 (Saturday), for weekly schedules. */
+  weekday?: number;
+  /** Five-field cron expression for custom schedules. */
+  cron?: string;
+}
+
+export type CronJobRunStatus =
+  | "queued"
+  | "pending"
+  | "running"
+  | "retrying"
+  | "success"
+  | "failed"
+  | "cancelled"
+  | "skipped";
+
+export interface CronJobRun {
+  runId: string;
+  jobId: string;
+  status: CronJobRunStatus;
+  scheduledAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  cancellationRequestedAt?: string;
+  sessionId?: string;
+  runtimeVersion?: string;
+  output?: string;
+  error?: string;
+  attempt?: number;
+}
+
+export interface CronJob {
+  jobId: string;
+  name: string;
+  runtimeId: string;
+  runtimeName: string;
+  agentName: string;
+  region: string;
+  prompt: string;
+  schedule: CronJobSchedule;
+  enabled: boolean;
+  nextRunAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  latestRun?: CronJobRun;
+}
+
+export interface CronJobInput {
+  name: string;
+  runtimeId: string;
+  runtimeName: string;
+  agentName: string;
+  region: string;
+  prompt: string;
+  schedule: CronJobSchedule;
+  enabled: boolean;
+}
+
+export interface CronJobListResponse {
+  items: CronJob[];
+}
+
+export interface CronJobRunListResponse {
+  items: CronJobRun[];
+}
+
+function cronJobPath(jobId = ""): string {
+  return `/web/cronjobs${jobId ? `/${encodeURIComponent(jobId)}` : ""}`;
+}
+
+export async function listCronJobs(signal?: AbortSignal): Promise<CronJob[]> {
+  const response = await apiFetch(cronJobPath(), { signal });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "加载定时任务失败"));
+  }
+  const data = (await response.json()) as CronJobListResponse | CronJob[];
+  return Array.isArray(data) ? data : data.items ?? [];
+}
+
+export async function getCronJob(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<CronJob> {
+  const response = await apiFetch(cronJobPath(jobId), { signal });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "加载定时任务详情失败"));
+  }
+  return (await response.json()) as CronJob;
+}
+
+export async function createCronJob(input: CronJobInput): Promise<CronJob> {
+  const response = await apiFetch(cronJobPath(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "创建定时任务失败"));
+  }
+  return (await response.json()) as CronJob;
+}
+
+export async function updateCronJob(
+  jobId: string,
+  input: CronJobInput,
+): Promise<CronJob> {
+  const response = await apiFetch(`${cronJobPath(jobId)}/update`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "更新定时任务失败"));
+  }
+  return (await response.json()) as CronJob;
+}
+
+export async function setCronJobEnabled(
+  jobId: string,
+  enabled: boolean,
+): Promise<CronJob> {
+  const action = enabled ? "enable" : "disable";
+  const response = await apiFetch(`${cronJobPath(jobId)}/${action}`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(
+      await httpErrorMessage(response, enabled ? "启用定时任务失败" : "暂停定时任务失败"),
+    );
+  }
+  return (await response.json()) as CronJob;
+}
+
+export async function runCronJobNow(jobId: string): Promise<CronJobRun> {
+  const response = await apiFetch(`${cronJobPath(jobId)}/run`, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "立即执行定时任务失败"));
+  }
+  return (await response.json()) as CronJobRun;
+}
+
+export async function listCronJobRuns(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<CronJobRun[]> {
+  const response = await apiFetch(`${cronJobPath(jobId)}/runs`, { signal });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "加载执行历史失败"));
+  }
+  const data = (await response.json()) as CronJobRunListResponse | CronJobRun[];
+  return Array.isArray(data) ? data : data.items ?? [];
+}
+
+export async function cancelCronJobRun(
+  jobId: string,
+  runId: string,
+): Promise<CronJobRun> {
+  const response = await apiFetch(
+    `${cronJobPath(jobId)}/runs/${encodeURIComponent(runId)}/cancel`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "终止执行失败"));
+  }
+  return (await response.json()) as CronJobRun;
+}
+
+export async function deleteCronJob(jobId: string): Promise<void> {
+  const response = await apiFetch(cronJobPath(jobId), { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "删除定时任务失败"));
+  }
+}
+
 /** One page of cloud runtimes plus the token to fetch the next page. */
 export interface RuntimePage {
   runtimes: CloudRuntime[];

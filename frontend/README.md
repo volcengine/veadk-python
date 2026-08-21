@@ -612,6 +612,37 @@ veadk studio deploy \
   --vefaas-app-name <app-name>
 ```
 
+## Scheduled tasks
+
+The `定时任务` workspace runs a fixed text prompt on a selected deployed Runtime
+Agent. Each occurrence creates an independent Agent session. Schedules support
+one-time, daily, weekly, and five-field Cron expressions with an IANA timezone.
+
+Definitions, locks, execution history, and results live in the private Studio
+TOS bucket under `veadk-studio/v1/users/{user_id}/cronjobs/{job_id}`. A derived
+minute index lives under `veadk-studio/v1/scheduler/cronjobs/due/{yyyyMMddHHmm}`
+so the scheduler never scans user namespaces.
+
+`veadk studio deploy` creates or updates two stateless VeFaaS functions. A
+scanner runs once per minute, copies the current due bucket into the durable
+`scheduler/cronjobs/ready/` queue, persists queued runs, and advances each
+schedule without waiting for Runtime execution. A separate asynchronous worker
+drains ready entries, invokes Runtime, and writes terminal results. The scanner,
+worker, and Studio BFF can therefore restart independently without losing work.
+
+Duplicate timer deliveries are deduplicated with immutable run IDs and TOS
+conditional writes; an ETag lock prevents concurrent executions of the same
+task across Studio replicas or worker instances. Ready entries are deleted only
+after a terminal result is persisted. The worker uses the function IAM role to
+read the Runtime's current endpoint and version. It does not store user tokens
+or AK/SK credentials.
+
+Manual runs are persisted with a `queued` status and placed in the next minute's
+due bucket, so they normally start within 60 seconds. This avoids losing a run
+when the current minute has already been scanned. When Studio is started with
+`veadk studio --vite`, the BFF starts independent local scan and execution
+loops; no separate local scheduler process is required.
+
 ## Agent usage statistics
 
 The `用量统计` tab on a deployed Agent records one invocation after a Studio

@@ -21,6 +21,7 @@ from frontend.server.studio_update_resources import (
     _provision_snapshot_tool,
     reconcile_studio_update_resources,
 )
+from veadk.utils.cloud_provider import CloudProvider
 
 
 def _client(
@@ -48,7 +49,7 @@ def _client(
 )
 def test_reconcile_does_not_mutate_the_function_role_policy(
     monkeypatch: pytest.MonkeyPatch,
-    provider: str,
+    provider: CloudProvider,
     region: str,
 ) -> None:
     monkeypatch.setattr(

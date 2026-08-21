@@ -739,8 +739,10 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   assert.match(workspaceSource, /<StudioConfirmDialog[\s\S]*?variant="danger"/);
   assert.match(workspaceSource, /closeLabel="关闭删除确认"/);
   assert.match(studioConfirmSource, /createPortal\(/);
-  assert.match(studioConfirmSource, /function ConfirmWarningIcon\(props: SVGProps<SVGSVGElement>\)/);
-  assert.match(studioConfirmSource, /function ConfirmCloseIcon\(props: SVGProps<SVGSVGElement>\)/);
+  assert.match(studioConfirmSource, /@openai\/apps-sdk-ui\/components\/Alert/);
+  assert.match(studioConfirmSource, /@openai\/apps-sdk-ui\/components\/Button/);
+  assert.match(studioConfirmSource, /import \{ Warning, X \} from "@openai\/apps-sdk-ui\/components\/Icon"/);
+  assert.doesNotMatch(studioConfirmSource, /function ConfirmWarningIcon|function ConfirmCloseIcon/);
   assert.doesNotMatch(
     workspaceSource.slice(0, workspaceSource.indexOf("} from \"lucide-react\"")),
     /\bAlertTriangle\b|^\s*X,\s*$/m,
@@ -785,8 +787,8 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
     appStyles,
     /\.studio-confirm-actions\s*\{[\s\S]*?padding:\s*12px 16px;[\s\S]*?border-top:\s*1px solid hsl\(var\(--border\)\)/,
   );
-  assert.match(appStyles, /\.studio-confirm-close:focus-visible/);
-  assert.match(appStyles, /\.studio-confirm-dialog--danger \.studio-confirm-actions \.studio-confirm-primary/);
+  assert.doesNotMatch(appStyles, /\.studio-confirm-close:focus-visible/);
+  assert.doesNotMatch(appStyles, /\.studio-confirm-dialog--danger \.studio-confirm-actions \.studio-confirm-primary/);
   assert.match(
     workspaceStyles,
     /\.aw-head-delete\.studio-update-action:hover:not\(:disabled\)[\s\S]*?color:\s*#fff;/,

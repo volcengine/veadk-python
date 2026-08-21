@@ -36,7 +36,7 @@ def test_default_studio_deploy_requires_all_reachable_actions() -> None:
     specs = _default_specs()
     actions = [spec.action for spec in specs]
 
-    assert len(actions) == 39
+    assert len(actions) == 44
     assert len(actions) == len(set(actions))
     assert "id:CreateUserPool" in actions
     assert "iam:UpdatePolicy" in actions
@@ -45,6 +45,9 @@ def test_default_studio_deploy_requires_all_reachable_actions() -> None:
     assert "apig:CreateGateway" in actions
     assert "apig:UpdateRoute" in actions
     assert "vefaas:CreateApplication" in actions
+    assert "vefaas:CreateTimer" in actions
+    assert "vefaas:ListTriggers" in actions
+    assert "vefaas:UpdateTimer" in actions
     assert "vefaas:DeleteApplication" in actions
 
 
@@ -244,7 +247,11 @@ def test_cli_stops_before_cloud_writes_when_permission_is_missing(
 
 
 def test_cli_precheck_only_exits_before_cloud_writes(monkeypatch) -> None:
+    required_count = 0
+
     def _precheck(*, specs, **_kwargs):
+        nonlocal required_count
+        required_count = len(specs)
         results = [
             permissions.PermissionResult(spec=spec, satisfied=True) for spec in specs
         ]
@@ -274,7 +281,7 @@ def test_cli_precheck_only_exits_before_cloud_writes(monkeypatch) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert "All 39 required IAM Actions are satisfied." in result.output
+    assert f"All {required_count} required IAM Actions are satisfied." in result.output
     assert "Pre-check only: no cloud resources were created." in result.output
 
 

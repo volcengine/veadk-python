@@ -14,7 +14,8 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { BookOpen } from "@openai/apps-sdk-ui/components/Icon";
+import { Badge } from "@openai/apps-sdk-ui/components/Badge";
+import { BookOpen, Clock } from "@openai/apps-sdk-ui/components/Icon";
 import type {
   AdkSession,
   SiteBranding,
@@ -30,6 +31,7 @@ import { AgentKitPromoCard } from "./AgentKitPromoCard";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
 import defaultSiteLogo from "../assets/logo.svg";
 import byteplusLogo from "../assets/byteplus.svg";
+import "./Sidebar.css";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 
@@ -38,6 +40,7 @@ export type SidebarPage =
   | "agents"
   | "library"
   | "applications"
+  | "cronjobs"
   | "search"
   | "feedback"
   | null;
@@ -124,6 +127,7 @@ export interface SidebarProps {
   onAddAgent: () => void;
   onMyAgents: () => void;
   onApplications: () => void;
+  onCronJobs: () => void;
   onSystemInfo: () => void;
   onIssueFeedback: () => void;
   onPickSession: (id: string) => void;
@@ -305,6 +309,7 @@ export function Sidebar({
   onAddAgent,
   onMyAgents,
   onApplications,
+  onCronJobs,
   onSystemInfo,
   onIssueFeedback,
   onPickSession,
@@ -440,6 +445,27 @@ export function Sidebar({
           <SearchButton active={activePage === "search"} onClick={onSearch} />
         )}
         <button
+          className={`new-chat new-chat--cronjobs${
+            activePage === "cronjobs" ? " is-active" : ""
+          }`}
+          onClick={onCronJobs}
+          aria-label="定时任务"
+          aria-current={activePage === "cronjobs" ? "page" : undefined}
+          title="定时任务"
+        >
+          <Clock className="icon" />
+          <span className="sidebar-nav-label">定时任务</span>
+          <Badge
+            className="sidebar-cronjobs-beta"
+            color="discovery"
+            variant="soft"
+            size="sm"
+            pill
+          >
+            Beta
+          </Badge>
+        </button>
+        <button
           className={`new-chat new-chat--applications${
             activePage === "applications" ? " is-active" : ""
           }`}
@@ -450,7 +476,6 @@ export function Sidebar({
         >
           <ApplicationsIcon className="icon" />
           <span className="sidebar-nav-label">自动化</span>
-          <span className="sidebar-beta-badge">Beta</span>
         </button>
       </div>
 

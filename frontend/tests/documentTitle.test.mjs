@@ -68,6 +68,7 @@ test("wires main and nested Studio surfaces into the browser title", () => {
   assert.match(appSource, /formatStudioDocumentTitle\(\s*siteBranding\.title/);
   assert.match(appSource, /activeSessionTitle === "新会话"[\s\S]*?kind: "home"/);
   assert.match(appSource, /getAutomation\(applicationsView\)\.name/);
+  assert.match(appSource, /cronJobsView[\s\S]*?kind: "page", title: "定时任务"/);
   assert.match(appSource, /onPageTitleChange=\{setLibraryPageTitle\}/);
   assert.match(appSource, /setLibraryPageTitle\("技能库"\)/);
   assert.match(
