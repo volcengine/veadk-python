@@ -89,6 +89,26 @@ import {
   type GithubCicdPipelineResult,
 } from "../adk/client";
 import {
+  buildProjectCandidateInput,
+  cancelFormalEvaluation,
+  createCandidateVersion,
+  deploymentProfileFingerprint,
+  getScenarioEvaluationWorkspace,
+  prepareScenarioPublish,
+  startFormalEvaluation,
+} from "../adk/scenarioEvaluation";
+import type {
+  CandidateVersion,
+  EvaluationRunVersion,
+  PublishPath,
+  PublishIntentVersion,
+  ScenarioEvaluationWorkspaceData,
+} from "../evaluation/types";
+import {
+  candidateArtifactFingerprint,
+  findMatchingCandidate,
+} from "../evaluation/candidateArtifact";
+import {
   beginAgentDeploy,
   beginAgentSourceDownload,
   classifyTelemetryError,
@@ -200,12 +220,35 @@ const HIDDEN_MODEL_API_KEY_REVEAL: ModelApiKeyRevealState = {
   error: "",
 };
 
+interface ScenarioCandidatePreparation {
+  fingerprint: string;
+  agentId: string;
+  candidate: CandidateVersion;
+  workspace: ScenarioEvaluationWorkspaceData;
+  deploymentProfile: Record<string, unknown>;
+  environmentFingerprint: string;
+}
+
 interface DeploymentConfirmDialogProps {
   open: boolean;
   isUpdate: boolean;
   title?: string;
   description?: string;
   confirmLabel?: string;
+  preparing: boolean;
+  error: string;
+  candidate: CandidateVersion | null;
+  run: EvaluationRunVersion | null;
+  path: PublishPath | "wait";
+  riskItems: string[];
+  policyAvailable: boolean;
+  acknowledged: boolean;
+  reason: string;
+  actionLoading: boolean;
+  onAcknowledgedChange: (value: boolean) => void;
+  onReasonChange: (value: string) => void;
+  onStartEvaluation: () => void;
+  onCancelEvaluation: () => void;
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -216,6 +259,20 @@ function DeploymentConfirmDialog({
   title,
   description,
   confirmLabel,
+  preparing,
+  error,
+  candidate,
+  run,
+  path,
+  riskItems,
+  policyAvailable,
+  acknowledged,
+  reason,
+  actionLoading,
+  onAcknowledgedChange,
+  onReasonChange,
+  onStartEvaluation,
+  onCancelEvaluation,
   onCancel,
   onConfirm,
 }: DeploymentConfirmDialogProps) {
@@ -237,6 +294,28 @@ function DeploymentConfirmDialog({
   }, [onCancel, open]);
 
   if (!open) return null;
+
+  const running = path === "wait";
+  const guarded = path === "skip" || path === "risk";
+  const recommendation = run?.recommendation?.value;
+  const recommendationLabel = recommendation === "recommend"
+    ? "建议发布"
+    : recommendation === "do_not_recommend"
+      ? "不建议发布"
+      : recommendation === "indeterminate"
+        ? "无法判断"
+        : run?.status === "cancelled"
+          ? "评测已取消"
+          : "未评测";
+  const pathLabel = path === "normal"
+    ? "普通发布"
+    : path === "risk"
+      ? "风险发布"
+      : path === "skip"
+        ? "跳过评测发布"
+        : "等待评测完成";
+  const confirmDisabled = preparing || actionLoading || running || !candidate
+    || (guarded && (!acknowledged || !reason.trim()));
 
   return createPortal(
     <div
@@ -274,14 +353,63 @@ function DeploymentConfirmDialog({
               ? "将更新并发布到当前云端 Runtime，过程可能需要几分钟。确定继续吗？"
               : "将创建新的云端 Runtime，部署过程可能需要几分钟。确定继续吗？")}
           </p>
+          <section className={`pp-confirm-quality is-${path}`} aria-label="待测版本发布质量">
+            <div><span>待测版本</span><strong>{candidate ? `v${candidate.version}` : "准备中"}</strong></div>
+            <div><span>质量结论</span><strong>{recommendationLabel}</strong></div>
+            <div><span>发布路径</span><strong>{pathLabel}</strong></div>
+            <div><span>对比基线</span><strong>{run?.baselineVersionId ? `线上版本 ${run.baselineVersionId}` : "首次发布绝对标准"}</strong></div>
+          </section>
+          {riskItems.length > 0 && (
+            <div className="pp-confirm-risks">
+              <strong>风险项</strong>
+              <ul>{riskItems.map((item) => <li key={item}>{item}</li>)}</ul>
+            </div>
+          )}
+          {!running && !recommendation && policyAvailable && (
+            <button
+              type="button"
+              className="pp-confirm-evaluate"
+              disabled={actionLoading || preparing}
+              onClick={onStartEvaluation}
+            >
+              先执行正式评测
+            </button>
+          )}
+          {guarded && (
+            <div className="pp-confirm-risk-reason">
+              <label>
+                <span>发布原因</span>
+                <textarea
+                  required
+                  value={reason}
+                  placeholder={path === "skip" ? "说明为什么本次跳过评测" : "说明接受风险并继续发布的原因"}
+                  onChange={(event) => onReasonChange(event.currentTarget.value)}
+                />
+              </label>
+              <label className="pp-confirm-acknowledgement">
+                <input type="checkbox" checked={acknowledged} onChange={(event) => onAcknowledgedChange(event.currentTarget.checked)} />
+                <span>二次确认：继续发布不会改写评测结果，也不会关闭失败样本。</span>
+              </label>
+            </div>
+          )}
+          {error && <div className="pp-confirm-error" role="alert">{error}</div>}
         </div>
         <footer className="pp-confirm-actions">
-          <button ref={cancelButtonRef} type="button" onClick={onCancel}>
-            取消
-          </button>
-          <button type="button" className="is-primary" onClick={onConfirm}>
-            {confirmLabel ?? (isUpdate ? "确定更新" : "确定部署")}
-          </button>
+          {running ? (
+            <>
+              <button ref={cancelButtonRef} type="button" disabled>等待评测完成</button>
+              <button type="button" onClick={onCancelEvaluation} disabled={actionLoading}>取消评测</button>
+            </>
+          ) : (
+            <>
+              <button ref={cancelButtonRef} type="button" onClick={onCancel}>取消</button>
+              <button type="button" className="is-primary" onClick={onConfirm} disabled={confirmDisabled}>
+                {preparing
+                  ? "正在准备…"
+                  : confirmLabel ?? (isUpdate ? "确定更新" : "确定部署")}
+              </button>
+            </>
+          )}
         </footer>
       </section>
     </div>,
@@ -555,6 +683,9 @@ export interface DeployOptions {
   maxInstance?: number;
   authentication?: DeployAuthentication;
   createEvaluationSets?: boolean;
+  scenarioPublishIntentId?: string;
+  scenarioAgentId?: string;
+  scenarioDeploymentProfile?: Record<string, unknown>;
   im?: {
     feishu?: {
       enabled: boolean;
@@ -879,6 +1010,15 @@ export function ProjectPreview({
   const [newPath, setNewPath] = useState("");
   const [deploying, setDeploying] = useState(false);
   const [deployConfirmOpen, setDeployConfirmOpen] = useState(false);
+  const [scenarioQuality, setScenarioQuality] =
+    useState<ScenarioCandidatePreparation | null>(null);
+  const [scenarioPreparing, setScenarioPreparing] = useState(false);
+  const [scenarioActionLoading, setScenarioActionLoading] = useState(false);
+  const [scenarioError, setScenarioError] = useState("");
+  const [scenarioAcknowledged, setScenarioAcknowledged] = useState(false);
+  const [scenarioPublishReason, setScenarioPublishReason] = useState("");
+  const scenarioCandidateRef = useRef<ScenarioCandidatePreparation | null>(null);
+  const scenarioPreparationSequenceRef = useRef(0);
   const [flowPreviewOpen, setFlowPreviewOpen] = useState(false);
   const [feishuUpdating, setFeishuUpdating] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
@@ -963,6 +1103,62 @@ export function ProjectPreview({
     (deploymentRuntimeId && githubCicdBinding?.pipelineId) || pendingGithubCicd
       ? [...deploymentStepsBeforeGithub, GITHUB_SYNC_STEP]
       : deploymentStepsBeforeGithub;
+  const scenarioRun = scenarioQuality
+    ? [...scenarioQuality.workspace.runs]
+        .filter((run) => run.candidateId === scenarioQuality.candidate.candidateId)
+        .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0] ?? null
+    : null;
+  const scenarioPolicy = scenarioRun
+    ? scenarioQuality?.workspace.policies.find(
+        (policy) => policy.policyVersionId === scenarioRun.policyVersionId,
+      ) ?? null
+    : scenarioQuality?.workspace.policies[scenarioQuality.workspace.policies.length - 1] ?? null;
+  const scenarioRunning = scenarioRun?.status === "queued" || scenarioRun?.status === "running";
+  const scenarioResolvedPath: PublishPath | "wait" = scenarioRunning
+    ? "wait"
+    : scenarioRun?.recommendation?.value === "recommend"
+      ? "normal"
+      : scenarioRun?.recommendation
+        ? "risk"
+        : "skip";
+  const scenarioRiskItems = [
+    ...(scenarioRun?.recommendation?.warningSceneVersionIds ?? []).map(
+      (sceneId) => `场景 ${sceneId} 存在警告`,
+    ),
+    ...(scenarioQuality?.workspace.badcases ?? [])
+      .filter((item) => item.status !== "closed")
+      .map((item) => `失败样本 ${item.caseId} 尚未关闭`),
+  ];
+  const scenarioAgentId = effectiveRuntimeName.trim();
+
+  function scenarioDeploymentProfile(): Record<string, unknown> {
+    return {
+      cloudProvider,
+      region: deployRegion,
+      runtimeId: deploymentRuntimeId ?? "",
+      runtimeName: effectiveRuntimeName.trim(),
+      sessionStorage: inMemorySession ? "in-memory" : "persistent",
+      minInstance: instanceRange.valid ? instanceRange.min : null,
+      maxInstance: instanceRange.valid ? instanceRange.max : null,
+      authentication: isRuntimeUpdate
+        ? { type: "existing" }
+        : authenticationType === "user_pool"
+          ? { type: "user_pool", userPoolUid }
+          : { type: "api_key" },
+      network: network
+        ? {
+            mode: network.mode,
+            vpcId: network.vpcId ?? "",
+            subnetIds: network.subnetIds ?? "",
+            enableSharedInternetAccess: Boolean(network.enableSharedInternetAccess),
+          }
+        : { mode: "public" },
+      resources: isRuntimeUpdate ? null : deployResources,
+      harnessSidecar: agentDraft?.harnessSidecar ?? null,
+      environmentNames: deployEnvVars().map((item) => item.key).sort(),
+      createEvaluationSets: effectiveCreateEvaluationSets,
+    };
+  }
 
   function clearModelApiKeyReveal() {
     modelApiKeyRevealAbortRef.current?.abort();
@@ -1188,6 +1384,27 @@ export function ProjectPreview({
     };
   }, [flowPreviewOpen]);
 
+  useEffect(() => {
+    if (!deployConfirmOpen || !scenarioRunning || !scenarioQuality) return;
+    const candidateId = scenarioQuality.candidate.candidateId;
+    const timer = window.setTimeout(() => {
+      void getScenarioEvaluationWorkspace(scenarioQuality.agentId)
+        .then((workspace) => {
+          const current = scenarioCandidateRef.current;
+          if (!mountedRef.current || current?.candidate.candidateId !== candidateId) return;
+          const next = { ...current, workspace };
+          scenarioCandidateRef.current = next;
+          setScenarioQuality(next);
+        })
+        .catch((caught: unknown) => {
+          if (mountedRef.current) {
+            setScenarioError(caught instanceof Error ? caught.message : String(caught));
+          }
+        });
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [deployConfirmOpen, scenarioQuality, scenarioRunning]);
+
   const tree = useMemo(() => {
     if (!project?.files || !Array.isArray(project.files)) {
       return { name: "", children: new Map() };
@@ -1390,11 +1607,18 @@ export function ProjectPreview({
   );
 
   async function requestDeploymentConfirmation() {
-    if (!onDeploy || deploying || runtimeNameChecking || deployDisabled) return;
+    if (
+      !onDeploy
+      || deploying
+      || runtimeNameChecking
+      || scenarioPreparing
+      || deployDisabled
+    ) return;
     if (runtimeNameError) {
       setDeployError(runtimeNameError);
       return;
     }
+    let agentIdentityAttestation = "";
     if (!isRuntimeUpdate) {
       const resourceError = deploymentResourcesError(deployResources);
       if (resourceError) {
@@ -1498,6 +1722,7 @@ export function ProjectPreview({
           setDeployError(message);
           return;
         }
+        agentIdentityAttestation = result.identityAttestation;
         setRuntimeNameConflict(null);
       } catch (error) {
         if (!mountedRef.current) return;
@@ -1507,7 +1732,102 @@ export function ProjectPreview({
         if (mountedRef.current) setRuntimeNameChecking(false);
       }
     }
-    setDeployConfirmOpen(true);
+    const sequence = scenarioPreparationSequenceRef.current + 1;
+    scenarioPreparationSequenceRef.current = sequence;
+    setScenarioPreparing(true);
+    setScenarioError("");
+    setDeployError(null);
+    try {
+      const deploymentProfile = scenarioDeploymentProfile();
+      const environmentFingerprint = await deploymentProfileFingerprint(deploymentProfile);
+      const input = await buildProjectCandidateInput(
+        scenarioAgentId,
+        project,
+        agentDraft,
+        deployEnvVars().map((item) => item.key),
+        deploymentProfile,
+        agentIdentityAttestation,
+      );
+      const fingerprint = candidateArtifactFingerprint(input.artifact);
+      const cached = scenarioCandidateRef.current;
+      let workspace = await getScenarioEvaluationWorkspace(scenarioAgentId);
+      let candidate = cached?.fingerprint === fingerprint && cached.agentId === scenarioAgentId
+        ? cached.candidate
+        : findMatchingCandidate(workspace.candidates, input.artifact);
+      if (!candidate) {
+        candidate = await createCandidateVersion(input);
+        workspace = await getScenarioEvaluationWorkspace(scenarioAgentId);
+      }
+      if (!mountedRef.current || sequence !== scenarioPreparationSequenceRef.current) return;
+      const preparation = {
+        fingerprint,
+        agentId: scenarioAgentId,
+        candidate,
+        workspace,
+        deploymentProfile,
+        environmentFingerprint,
+      };
+      scenarioCandidateRef.current = preparation;
+      setScenarioQuality(preparation);
+      setScenarioAcknowledged(false);
+      setScenarioPublishReason("");
+      setDeployConfirmOpen(true);
+    } catch (caught) {
+      if (sequence !== scenarioPreparationSequenceRef.current) return;
+      setDeployError(
+        `生成待测版本失败：${caught instanceof Error ? caught.message : String(caught)}`,
+      );
+    } finally {
+      if (sequence === scenarioPreparationSequenceRef.current) setScenarioPreparing(false);
+    }
+  }
+
+  async function refreshScenarioPreparation() {
+    const current = scenarioCandidateRef.current;
+    if (!current) return;
+    const workspace = await getScenarioEvaluationWorkspace(current.agentId);
+    const next = { ...current, workspace };
+    scenarioCandidateRef.current = next;
+    if (mountedRef.current) setScenarioQuality(next);
+  }
+
+  async function startScenarioEvaluation() {
+    const current = scenarioCandidateRef.current;
+    if (!current || !scenarioPolicy || scenarioActionLoading) return;
+    setScenarioActionLoading(true);
+    setScenarioError("");
+    try {
+      await startFormalEvaluation({
+        agentId: current.agentId,
+        candidateId: current.candidate.candidateId,
+        policyVersionId: scenarioPolicy.policyVersionId,
+        environmentFingerprint: current.environmentFingerprint,
+      });
+      await refreshScenarioPreparation();
+    } catch (caught) {
+      if (mountedRef.current) {
+        setScenarioError(caught instanceof Error ? caught.message : String(caught));
+      }
+    } finally {
+      if (mountedRef.current) setScenarioActionLoading(false);
+    }
+  }
+
+  async function cancelScenarioEvaluation() {
+    const current = scenarioCandidateRef.current;
+    if (!current || !scenarioRun || scenarioActionLoading) return;
+    setScenarioActionLoading(true);
+    setScenarioError("");
+    try {
+      await cancelFormalEvaluation(current.agentId, scenarioRun.evaluationId);
+      await refreshScenarioPreparation();
+    } catch (caught) {
+      if (mountedRef.current) {
+        setScenarioError(caught instanceof Error ? caught.message : String(caught));
+      }
+    } finally {
+      if (mountedRef.current) setScenarioActionLoading(false);
+    }
   }
 
   async function performDeployment() {
@@ -1521,6 +1841,41 @@ export function ProjectPreview({
       setDeployConfirmOpen(false);
       setDeployError(instanceRange.error);
       return;
+    }
+    const scenarioCurrent = scenarioCandidateRef.current;
+    if (!scenarioCurrent || scenarioResolvedPath === "wait") return;
+    const guardedScenarioPublish =
+      scenarioResolvedPath === "skip" || scenarioResolvedPath === "risk";
+    if (
+      guardedScenarioPublish &&
+      (!scenarioAcknowledged || !scenarioPublishReason.trim())
+    ) {
+      setScenarioError("跳过评测或风险发布需要二次确认并填写发布原因。");
+      return;
+    }
+    setScenarioPreparing(true);
+    setScenarioError("");
+    let intent: PublishIntentVersion;
+    try {
+      intent = await prepareScenarioPublish({
+        agentId: scenarioCurrent.agentId,
+        candidateId: scenarioCurrent.candidate.candidateId,
+        policyVersionId: scenarioPolicy?.policyVersionId ?? null,
+        environmentFingerprint: scenarioCurrent.environmentFingerprint,
+        secondConfirmation: scenarioAcknowledged,
+        reason: scenarioPublishReason.trim(),
+        idempotencyKey: `studio:${scenarioCurrent.candidate.candidateId}:${scenarioAcknowledged}:${scenarioPublishReason.trim()}`,
+      });
+      if (intent.path !== scenarioResolvedPath) {
+        setScenarioError(`服务端已将发布路径更新为 ${intent.path}，请重新确认。`);
+        await refreshScenarioPreparation();
+        return;
+      }
+    } catch (caught) {
+      setScenarioError(caught instanceof Error ? caught.message : String(caught));
+      return;
+    } finally {
+      setScenarioPreparing(false);
     }
     setDeployConfirmOpen(false);
     const envs = deployEnvVars();
@@ -1648,6 +2003,13 @@ export function ProjectPreview({
         const synced = await syncGithubCicdRuntime({
           runtimeId: deploymentRuntimeId,
           project,
+          ...(githubCicdBinding.cicd?.enabled
+            ? {
+                scenarioPublishIntentId: intent.intentId,
+                scenarioAgentId,
+                scenarioDeploymentProfile: scenarioCurrent.deploymentProfile,
+              }
+            : {}),
         });
         activeGithubBinding = synced;
         if (mountedRef.current) {
@@ -1734,6 +2096,9 @@ export function ProjectPreview({
               }
             : {}),
           createEvaluationSets: effectiveCreateEvaluationSets,
+          scenarioPublishIntentId: intent.intentId,
+          scenarioAgentId,
+          scenarioDeploymentProfile: scenarioCurrent.deploymentProfile,
           ...(feishuEnabled
             ? {
                 im: {
@@ -3352,6 +3717,20 @@ export function ProjectPreview({
         open={deployConfirmOpen}
         isUpdate={isRuntimeUpdate}
         {...deploymentConfirmation}
+        preparing={scenarioPreparing}
+        error={scenarioError}
+        candidate={scenarioQuality?.candidate ?? null}
+        run={scenarioRun}
+        path={scenarioResolvedPath}
+        riskItems={scenarioRiskItems}
+        policyAvailable={Boolean(scenarioPolicy)}
+        acknowledged={scenarioAcknowledged}
+        reason={scenarioPublishReason}
+        actionLoading={scenarioActionLoading}
+        onAcknowledgedChange={setScenarioAcknowledged}
+        onReasonChange={setScenarioPublishReason}
+        onStartEvaluation={() => void startScenarioEvaluation()}
+        onCancelEvaluation={() => void cancelScenarioEvaluation()}
         onCancel={cancelDeploymentConfirmation}
         onConfirm={() => void performDeployment()}
       />

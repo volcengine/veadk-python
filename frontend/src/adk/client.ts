@@ -1753,7 +1753,7 @@ export interface DeployAgentkitResult {
 export async function checkRuntimeNameAvailability(
   name: string,
   region: string,
-): Promise<{ available: boolean }> {
+): Promise<{ available: boolean; identityAttestation: string }> {
   const params = new URLSearchParams({ name, region });
   const res = await apiFetch(`/web/runtime-name-availability?${params.toString()}`, {
     cache: "no-store",
@@ -1761,11 +1761,20 @@ export async function checkRuntimeNameAvailability(
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, "检查 Runtime 名称失败"));
   }
-  const value = (await res.json()) as { available?: unknown };
+  const value = (await res.json()) as {
+    available?: unknown;
+    identityAttestation?: unknown;
+  };
   if (typeof value.available !== "boolean") {
     throw new Error("检查 Runtime 名称失败：服务返回格式错误");
   }
-  return { available: value.available };
+  const identityAttestation = typeof value.identityAttestation === "string"
+    ? value.identityAttestation
+    : "";
+  if (value.available && !identityAttestation) {
+    throw new Error("检查 Runtime 名称失败：服务未返回身份凭据");
+  }
+  return { available: value.available, identityAttestation };
 }
 
 export interface IntelligentDevelopmentDeploymentSource {
@@ -2399,6 +2408,9 @@ export async function bindGithubCicdRuntime(params: {
 export async function syncGithubCicdRuntime(params: {
   runtimeId: string;
   project: { name: string; files: { path: string; content: string }[] };
+  scenarioPublishIntentId?: string;
+  scenarioAgentId?: string;
+  scenarioDeploymentProfile?: Record<string, unknown>;
 }): Promise<GithubCicdPipelineResult> {
   const res = await apiFetch(
     "/web/github-cicd/runtime-sync",
@@ -2408,6 +2420,9 @@ export async function syncGithubCicdRuntime(params: {
       body: JSON.stringify({
         runtimeId: params.runtimeId,
         project: params.project,
+        publishIntentId: params.scenarioPublishIntentId,
+        agentId: params.scenarioAgentId,
+        deploymentProfile: params.scenarioDeploymentProfile,
       }),
     },
     {},
@@ -2443,6 +2458,9 @@ export async function deployAgentkitProject(
     minInstance?: number;
     maxInstance?: number;
     createEvaluationSets?: boolean;
+    scenarioPublishIntentId?: string;
+    scenarioAgentId?: string;
+    scenarioDeploymentProfile?: Record<string, unknown>;
     description?: string;
     authentication?: DeployAuthentication;
     onStage?: (s: DeployStage) => void;
@@ -2494,6 +2512,9 @@ export async function deployAgentkitProject(
           minInstance: opts?.minInstance,
           maxInstance: opts?.maxInstance,
           createEvaluationSets: opts?.createEvaluationSets,
+          publishIntentId: opts?.scenarioPublishIntentId,
+          agentId: opts?.scenarioAgentId,
+          deploymentProfile: opts?.scenarioDeploymentProfile,
           description: normalizeRuntimeDescription(opts?.description ?? ""),
           authentication: opts?.authentication,
           im: opts?.im,
