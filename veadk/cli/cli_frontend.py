@@ -10985,7 +10985,9 @@ def frontend_deploy(
     # 3) Build the function project (zip): run.sh launches the frontend server on
     #    the FaaS-assigned port; requirements.txt pulls veadk-python (ships the UI).
     requirements = (
-        f"veadk-python=={veadk_version}\n" if veadk_version else "veadk-python\n"
+        f"veadk-python[database]=={veadk_version}\n"
+        if veadk_version
+        else "veadk-python[database]\n"
     )
     # 3b) Resolve the serverless APIG gateway: use --gateway-name if given, else
     #     reuse an existing serverless gateway, creating one only if none exists.

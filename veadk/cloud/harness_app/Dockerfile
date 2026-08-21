@@ -18,9 +18,9 @@ WORKDIR /app
 
 # `[extensions]` pulls llama-index / redis / opensearch, required when the
 # KNOWLEDGEBASE_TYPE or LONG_TERM_MEMORY_TYPE env vars enable those components.
-# (Viking / MySQL / PostgreSQL backends are already in the base dependencies.)
+# `[database]` pulls optional database SDKs, including mem0ai for mem0 memory.
 RUN apt-get update && apt-get install -y --no-install-recommends git && \
-    pip3 install --no-cache-dir "veadk-python[extensions] @ git+https://github.com/volcengine/veadk-python.git" && \
+    pip3 install --no-cache-dir "veadk-python[database,extensions] @ git+https://github.com/volcengine/veadk-python.git" && \
     apt-get purge -y git && apt-get autoremove -y && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
