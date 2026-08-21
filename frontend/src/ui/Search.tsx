@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ExternalLink, Globe, Loader2, MessageSquare } from "lucide-react";
 import { search, type SearchResult, type SearchSource } from "../adk/search";
 import type { AgentInfo } from "../adk/client";
+import { SidebarSearchIcon } from "./icons/SidebarIcons";
 
 /** A deliberately quiet, hand-drawn search mark shared by navigation and submit. */
 function SearchGlyph({ className = "icon" }: { className?: string }) {
@@ -54,7 +55,7 @@ export function SearchButton({
       aria-current={active ? "page" : undefined}
       title="搜索"
     >
-      <SearchGlyph />
+      <SidebarSearchIcon className="icon" />
       <span className="sidebar-nav-label">搜索</span>
     </button>
   );
