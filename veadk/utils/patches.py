@@ -14,6 +14,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+import functools
 import sys
 from typing import Callable
 
@@ -169,6 +170,56 @@ def patch_tracer() -> None:
                     logger.debug(f"Patch {mod_name} {var_name} with VeADK tracer.")
 
 
+def _sanitize_adk_graph_value(value, field_name: str | None = None):
+    if field_name == "model":
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            model_id = value.get("model")
+            if model_id:
+                return str(model_id)
+        model_id = getattr(value, "model", None)
+        if model_id:
+            return str(model_id)
+
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {
+            str(k): _sanitize_adk_graph_value(v, str(k))
+            for k, v in value.items()
+            if k != "llm_client"
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_sanitize_adk_graph_value(item) for item in value]
+    return str(value)
+
+
+def patch_adk_build_graph_serialization() -> None:
+    """Keep ADK dev build_graph JSON free of runtime-only client objects."""
+    try:
+        from google.adk.cli.utils import graph_serialization
+
+        if getattr(
+            graph_serialization,
+            "_veadk_build_graph_serialization_patched",
+            False,
+        ):
+            return
+
+        original_serialize_agent = graph_serialization.serialize_agent
+
+        @functools.wraps(original_serialize_agent)
+        def veadk_serialize_agent(*args, **kwargs):
+            return _sanitize_adk_graph_value(original_serialize_agent(*args, **kwargs))
+
+        graph_serialization.serialize_agent = veadk_serialize_agent
+        graph_serialization._veadk_build_graph_serialization_patched = True
+        logger.debug("Patch ADK build_graph serialization for VeADK agents.")
+    except Exception as e:  # pragma: no cover - defensive across adk versions
+        logger.warning(f"Skip ADK build_graph serialization patch: {e}")
+
+
 # Substrings / exception type names that signal a dead MCP session (server
 # restart, scale-down, idle expiry) or a broken transport — all recoverable by
 # dropping the cached session and reconnecting.
@@ -205,7 +256,6 @@ def _retry_once_on_dead_mcp_session(func):
 
     Applies to any object exposing ``_mcp_session_manager`` (McpTool, McpToolset).
     """
-    import functools
 
     @functools.wraps(func)
     async def wrapper(self, *args, **kwargs):
