@@ -2257,3 +2257,72 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
         (expected_prefix or expected_common_requirements)
         + "./veadk_python-test-py3-none-any.whl\n"
     )
+
+
+def test_studio_deploy_from_source_writes_lf_run_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, bytes] = {}
+
+    class _FakeCloudAgentEngine:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def deploy(self, **kwargs: object) -> SimpleNamespace:
+            deploy_path = Path(str(kwargs["path"]))
+            captured["run_script"] = (deploy_path / "run.sh").read_bytes()
+            return SimpleNamespace(
+                vefaas_endpoint="",
+                vefaas_application_id="app-id",
+                vefaas_function_id="",
+            )
+
+    def _fake_build(command: list[str], check: bool) -> None:
+        assert check is True
+        output_dir = Path(command[-1])
+        (output_dir / "veadk_python-test-py3-none-any.whl").write_bytes(b"wheel")
+
+    monkeypatch.setattr(
+        "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_studio_identity_region",
+        lambda **kwargs: kwargs["deployment_region"],
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.configure_user_pool_for_idp_only",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.stage_studio_dependency_wheels",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/uv")
+    monkeypatch.setattr("subprocess.run", _fake_build)
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+            "--iam-role",
+            "trn:iam::role/test",
+            "--gateway-name",
+            "gateway",
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+            "--from-source",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["run_script"].startswith(b"#!/bin/bash\n")
+    assert b"\r\n" not in captured["run_script"]
+    assert b"/bin/bash\r" not in captured["run_script"]
