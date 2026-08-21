@@ -108,6 +108,7 @@ import { SystemInfo } from "./ui/SystemInfo";
 import { GitHubIntegration } from "./ui/GitHubIntegration";
 import { FeishuBotIntegration } from "./automations/feishu/FeishuBotIntegration";
 import { CodingAgentsIntegration } from "./automations/coding-agents/CodingAgentsIntegration";
+import { WebsiteIntegration } from "./automations/website-integration/WebsiteIntegration";
 import { SearchView } from "./ui/Search";
 import {
   formatStudioDocumentTitle,
@@ -6407,6 +6408,10 @@ export default function App() {
               />
             ) : applicationsView === "feishu" ? (
               <FeishuBotIntegration
+                onBack={() => setApplicationsView("catalog")}
+              />
+            ) : applicationsView === "website-integration" ? (
+              <WebsiteIntegration
                 onBack={() => setApplicationsView("catalog")}
               />
             ) : applicationsView && applicationsView !== "catalog" ? (
