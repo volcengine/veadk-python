@@ -222,4 +222,15 @@ def _stage_wheel_source(
         frontend_package / "server",
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
+    service_package = frontend_package / "service"
+    service_package.mkdir()
+    shutil.copy2(
+        source_root / "frontend" / "service" / "__init__.py",
+        service_package,
+    )
+    shutil.copytree(
+        source_root / "frontend" / "service" / "studio_scheduler",
+        service_package / "studio_scheduler",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
     shutil.copytree(frontend_assets, wheel_source / "veadk" / "webui")

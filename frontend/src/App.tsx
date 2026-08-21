@@ -102,6 +102,7 @@ import {
   type MyAgentCardData,
 } from "./ui/MyAgents";
 import { Applications, type ApplicationId } from "./ui/Applications";
+import { CronJobs } from "./cronjobs/CronJobs";
 import { getAutomation } from "./automations/registry";
 import { SystemInfo } from "./ui/SystemInfo";
 import { GitHubIntegration } from "./ui/GitHubIntegration";
@@ -358,6 +359,7 @@ type StudioPageId =
   | "library"
   | "search"
   | "applications"
+  | "cronjobs"
   | "agents"
   | "agent-detail"
   | "sandbox-agent-detail"
@@ -1991,6 +1993,7 @@ export default function App() {
   }, []);
   const [applicationsView, setApplicationsView] =
     useState<"catalog" | ApplicationId | null>(null);
+  const [cronJobsView, setCronJobsView] = useState(false);
   // A search result may belong to a different agent; remember it so the
   // agent-switch effect opens it instead of resetting to a fresh chat.
   const pendingOpenRef = useRef<{ app: string; sid: string } | null>(null);
@@ -2989,6 +2992,8 @@ export default function App() {
       documentTitleTarget = { kind: "page", title: "问题反馈" };
     } else if (systemInfo) {
       documentTitleTarget = { kind: "page", title: "系统信息" };
+    } else if (cronJobsView) {
+      documentTitleTarget = { kind: "page", title: "定时任务" };
     } else if (applicationsView) {
       documentTitleTarget = {
         kind: "page",
@@ -3637,6 +3642,7 @@ export default function App() {
     setMyAgents(false);
     setPageStack([]);
     setApplicationsView(null);
+    setCronJobsView(false);
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
   }
@@ -4559,6 +4565,7 @@ export default function App() {
     setMyAgents(false);
     setPageStack([]);
     setApplicationsView(null);
+    setCronJobsView(false);
     startNewChat();
   }
 
@@ -5752,6 +5759,7 @@ export default function App() {
     setMyAgents(true);
     setPageStack([]);
     setApplicationsView(null);
+    setCronJobsView(false);
     setError("");
   };
 
@@ -5771,7 +5779,29 @@ export default function App() {
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
     setPageStack([]);
+    setCronJobsView(false);
     setApplicationsView("catalog");
+    setError("");
+  };
+
+  const openCronJobsPage = () => {
+    setPlatformFeedbackOrigin(null);
+    if (sandboxSession) exitSandboxSession();
+    viewSidRef.current = "";
+    setSessionId("");
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setAgentDetailTarget(null);
+    setSandboxAgentDetailTarget(null);
+    setSandboxAgentWorkspace(null);
+    setMyAgents(false);
+    setPageStack([]);
+    setApplicationsView(null);
+    setCronJobsView(true);
     setError("");
   };
 
@@ -5832,37 +5862,41 @@ export default function App() {
         ? "feedback"
         : skillCenter
           ? "library"
-          : applicationsView
-            ? "applications"
-            : searchView
-              ? "search"
-              : sandboxAgentWorkspace
-                ? "sandbox-agent-workspace"
-                : myAgents || manageAgents
-                  ? "agents"
-                  : sandboxSession
-                    ? "sandbox"
-                    : sessionId
-                      ? "conversation"
-                      : createView || addAgent || addMenu
-                        ? "create"
-                        : "new-chat";
+          : cronJobsView
+            ? "cronjobs"
+            : applicationsView
+              ? "applications"
+              : searchView
+                ? "search"
+                : sandboxAgentWorkspace
+                  ? "sandbox-agent-workspace"
+                  : myAgents || manageAgents
+                    ? "agents"
+                    : sandboxSession
+                      ? "sandbox"
+                      : sessionId
+                        ? "conversation"
+                        : createView || addAgent || addMenu
+                          ? "create"
+                          : "new-chat";
 
   const sidebarActivePage: SidebarPage = systemInfo
     ? null
     : platformFeedbackOrigin !== null
       ? "feedback"
       : skillCenter
-      ? "library"
-        : applicationsView
-          ? "applications"
-          : searchView
-            ? "search"
-            : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
-              ? "agents"
-              : sessionId || sandboxSession || createView || skillCenter || addAgent || addMenu
-                ? null
-                : "new-chat";
+        ? "library"
+        : cronJobsView
+          ? "cronjobs"
+          : applicationsView
+            ? "applications"
+            : searchView
+              ? "search"
+              : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
+                ? "agents"
+                : sessionId || sandboxSession || createView || skillCenter || addAgent || addMenu
+                  ? null
+                  : "new-chat";
 
   return (
     <div className="layout">
@@ -5922,6 +5956,7 @@ export default function App() {
           setMyAgents(false);
           setPageStack([]);
           setApplicationsView(null);
+          setCronJobsView(false);
           setSearchView(true);
           setError("");
         })}
@@ -5944,6 +5979,7 @@ export default function App() {
           setMyAgents(false);
           setPageStack([]);
           setApplicationsView(null);
+          setCronJobsView(false);
           setCreateView(null);
           setImportedDraft(null);
           setNewRuntimeRegion(defaultCloudRegion(cloudProvider));
@@ -5963,6 +5999,7 @@ export default function App() {
           setMyAgents(false);
           setPageStack([]);
           setApplicationsView(null);
+          setCronJobsView(false);
           setSkillCenterLaunch(null);
           setLibraryTab("skills");
           setLibraryPageTitle("技能库");
@@ -5986,6 +6023,7 @@ export default function App() {
           setMyAgents(false);
           setPageStack([]);
           setApplicationsView(null);
+          setCronJobsView(false);
           setSessionId("");
           setAddMenu(false);
           setAddAgent(true);
@@ -5993,6 +6031,7 @@ export default function App() {
         })}
         onMyAgents={() => requestIntelligentNavigation(openMyAgentsPage)}
         onApplications={() => requestIntelligentNavigation(openApplicationsPage)}
+        onCronJobs={() => requestIntelligentNavigation(openCronJobsPage)}
         onSystemInfo={() => requestIntelligentNavigation(() => {
           pushStudioPage({
             page: "system-info",
@@ -6027,6 +6066,7 @@ export default function App() {
           setMyAgents(false);
           setPageStack([]);
           setApplicationsView(null);
+          setCronJobsView(false);
           setError("");
           pickSession(id);
         })}
@@ -6359,6 +6399,8 @@ export default function App() {
                 initialModule={issueFeedbackModuleForPage(platformFeedbackOrigin)}
                 onSubmit={submitPlatformIssueFeedback}
               />
+            ) : cronJobsView ? (
+              <CronJobs cloudProvider={cloudProvider} />
             ) : applicationsView === "coding-agents" ? (
               <CodingAgentsIntegration
                 onBack={() => setApplicationsView("catalog")}

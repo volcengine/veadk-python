@@ -147,7 +147,7 @@ test("Library navigation replaces Skills immediately below agents", () => {
   assert.ok(search > library);
   assert.match(
     sidebarSource,
-    /import \{ BookOpen \} from "@openai\/apps-sdk-ui\/components\/Icon";/,
+    /import \{ BookOpen, Clock \} from "@openai\/apps-sdk-ui\/components\/Icon";/,
   );
   assert.doesNotMatch(sidebarSource, /function LibraryIcon/);
   assert.match(

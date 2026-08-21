@@ -122,7 +122,13 @@ dev = [
 
 
 [tool.setuptools.packages.find]
-include = ["veadk*", "frontend", "frontend.server*"]
+include = [
+    "veadk*",
+    "frontend",
+    "frontend.server*",
+    "frontend.service",
+    "frontend.service.studio_scheduler*",
+]
 exclude = ["assets*", "ide*", "tests*"]
 
 [tool.setuptools]

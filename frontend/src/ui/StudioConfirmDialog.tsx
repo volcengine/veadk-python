@@ -2,16 +2,19 @@ import {
   useEffect,
   useId,
   useRef,
-  type SVGProps,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { Alert } from "@openai/apps-sdk-ui/components/Alert";
+import { Button } from "@openai/apps-sdk-ui/components/Button";
+import { Warning, X } from "@openai/apps-sdk-ui/components/Icon";
 
 type StudioConfirmVariant = "warning" | "danger";
 
 interface StudioConfirmDialogProps {
   title: string;
   description: ReactNode;
+  error?: ReactNode;
   confirmLabel: string;
   cancelLabel?: string;
   closeLabel?: string;
@@ -21,45 +24,10 @@ interface StudioConfirmDialogProps {
   onConfirm: () => void;
 }
 
-function ConfirmWarningIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      {...props}
-    >
-      <path d="M12 4.2 21 19H3L12 4.2Z" />
-      <path d="M12 9.4v4.2" />
-      <path d="M12 16.8h.01" />
-    </svg>
-  );
-}
-
-function ConfirmCloseIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      aria-hidden="true"
-      {...props}
-    >
-      <path d="m7 7 10 10" />
-      <path d="m17 7-10 10" />
-    </svg>
-  );
-}
-
 export function StudioConfirmDialog({
   title,
   description,
+  error,
   confirmLabel,
   cancelLabel = "取消",
   closeLabel = "关闭确认框",
@@ -120,40 +88,54 @@ export function StudioConfirmDialog({
         <header className="studio-confirm-head">
           <div className="studio-confirm-title-wrap">
             <span className="studio-confirm-title-icon" aria-hidden="true">
-              <ConfirmWarningIcon />
+              <Warning />
             </span>
             <h2 id={titleId}>{title}</h2>
           </div>
-          <button
+          <Button
             type="button"
             className="studio-confirm-close"
+            color="secondary"
+            variant="ghost"
+            size="lg"
+            uniform
+            pill={false}
             onClick={onCancel}
             disabled={busy}
             aria-label={closeLabel}
           >
-            <ConfirmCloseIcon />
-          </button>
+            <X />
+          </Button>
         </header>
         <div className="studio-confirm-body">
           <p id={descriptionId}>{description}</p>
+          {error ? <Alert className="studio-confirm-error" color="danger" variant="soft" description={error} /> : null}
         </div>
         <footer className="studio-confirm-actions">
-          <button
+          <Button
             ref={cancelButtonRef}
             type="button"
+            color="secondary"
+            variant="ghost"
+            size="lg"
+            pill={false}
             onClick={onCancel}
             disabled={busy}
           >
             {cancelLabel}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             className="studio-confirm-primary"
+            color={variant === "danger" ? "danger" : "primary"}
+            size="lg"
+            pill={false}
+            loading={busy}
             onClick={onConfirm}
             disabled={busy}
           >
             {confirmLabel}
-          </button>
+          </Button>
         </footer>
       </section>
     </div>,

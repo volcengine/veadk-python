@@ -6575,6 +6575,100 @@ def _run_frontend_server(
             raise HTTPException(status_code=404, detail="Runtime not found")
         return runtime
 
+    from frontend.server.cronjobs import (
+        CronjobAccessDenied,
+        CronjobIdentity,
+        CronjobService,
+        TosCronjobRepository,
+    )
+    from frontend.server.cronjobs import mount_routes as mount_cronjob_routes
+    from frontend.server.storage import StudioStorageConfig
+    from frontend.server.storage.tos import create_tos_client_factory
+    from frontend.service.studio_scheduler import (
+        AgentKitRuntimeConnectionResolver,
+        AgentKitRuntimeProvider,
+        Dispatcher,
+        DuePublisher,
+        ProviderRuntimeExecutor,
+        TosSchedulerRepository,
+        run_local_scheduler,
+    )
+    from frontend.service.studio_scheduler.runtime_provider import ServiceCredentials
+
+    class _StudioCronjobAccessPolicy:
+        def resolve_owner(
+            self,
+            identity: CronjobIdentity,
+            requested_owner_id: str | None,
+        ) -> str:
+            requested = (requested_owner_id or "").strip()
+            if not requested or requested == identity.owner_id:
+                return identity.owner_id
+            if identity.is_admin:
+                return requested
+            raise CronjobAccessDenied("无权访问其他用户的定时任务。")
+
+    def _cronjob_identity(request: Request) -> CronjobIdentity:
+        principal = _current_principal(request)
+        role = _request_role(request)
+        return CronjobIdentity(
+            ownerId=principal.owner_id if principal is not None else "local",
+            isAdmin=role == StudioRole.ADMIN,
+        )
+
+    cronjob_local_dispatcher: Dispatcher | None = None
+    cronjob_storage = StudioStorageConfig.from_env(provider)
+    if cronjob_storage.configured:
+        cronjob_tos_client_factory = create_tos_client_factory(
+            cronjob_storage,
+            _resolve_ve_credentials,
+        )
+        cronjob_scheduler_repository = TosSchedulerRepository(
+            bucket=cronjob_storage.bucket,
+            client_factory=cronjob_tos_client_factory,
+            provider=provider,
+        )
+        mount_cronjob_routes(
+            app,
+            CronjobService(
+                TosCronjobRepository(
+                    bucket=cronjob_storage.bucket,
+                    client_factory=cronjob_tos_client_factory,
+                ),
+                access_policy=_StudioCronjobAccessPolicy(),
+                due_publisher=DuePublisher(cronjob_scheduler_repository),
+            ),
+            _cronjob_identity,
+            lambda request, runtime_id, region: _authorized_runtime(
+                request,
+                runtime_id,
+                region,
+                coded_access_error=True,
+            ),
+        )
+        if studio and vite:
+
+            def _cronjob_service_credentials(
+                _provider: str,
+            ) -> ServiceCredentials:
+                access_key, secret_key, session_token = _resolve_ve_credentials()
+                return ServiceCredentials(
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    session_token=session_token or "",
+                )
+
+            runtime_resolver = AgentKitRuntimeConnectionResolver(
+                credentials_resolver=_cronjob_service_credentials,
+            )
+            cronjob_local_dispatcher = Dispatcher(
+                cronjob_scheduler_repository,
+                ProviderRuntimeExecutor(
+                    [AgentKitRuntimeProvider(provider, runtime_resolver)]
+                ),
+                replica_id=f"studio-local-{os.getpid()}",
+            )
+
     @app.get("/web/my-runtimes")
     async def _web_my_runtimes(request: Request, region: str = "all"):
         """List AgentKit runtimes created via this UI (tagged veadk:managed),
@@ -7271,6 +7365,7 @@ def _run_frontend_server(
         @asynccontextmanager
         async def _studio_services_lifespan(current_app: Any):
             codex_model_env_task: asyncio.Task[None] | None = None
+            cronjob_scheduler_task: asyncio.Task[None] | None = None
             async with original_lifespan(current_app):
                 if not getattr(
                     current_app.state,
@@ -7280,9 +7375,20 @@ def _run_frontend_server(
                     codex_model_env_task = asyncio.create_task(
                         _refresh_system_info_codex_model_env_states()
                     )
+                if cronjob_local_dispatcher is not None:
+                    cronjob_scheduler_task = asyncio.create_task(
+                        run_local_scheduler(cronjob_local_dispatcher)
+                    )
                 try:
                     yield
                 finally:
+                    if (
+                        cronjob_scheduler_task is not None
+                        and not cronjob_scheduler_task.done()
+                    ):
+                        cronjob_scheduler_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await cronjob_scheduler_task
                     if (
                         codex_model_env_task is not None
                         and not codex_model_env_task.done()
@@ -10929,6 +11035,7 @@ def frontend_deploy(
             release_environment = {
                 "OAUTH2_REDIRECT_URI": redirect_uri,
                 "VEADK_STUDIO_DEPLOY_ID": studio_deploy_id,
+                "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": vefaas_app_name,
                 "VEADK_STUDIO_USER_POOL_ID": veadk_environments[
                     "VEADK_STUDIO_USER_POOL_ID"
                 ],
@@ -10948,6 +11055,49 @@ def frontend_deploy(
                 function_id,
                 release_environment,
             )
+
+        # The scheduler is deliberately a separate stateless VeFaaS process.
+        # A fixed cloud timer wakes it once per minute; user schedules and all
+        # execution state remain in the shared TOS bucket.
+        from frontend.service.studio_scheduler.deploy import deploy_scheduler
+
+        click.echo("Deploying the Studio cronjob scheduler and minute timer…")
+        try:
+            (
+                scheduler_function_id,
+                scheduler_timer_id,
+                scheduler_worker_function_id,
+                scheduler_worker_timer_id,
+            ) = deploy_scheduler(
+                getattr(engine, "_vefaas_service", None),
+                studio_application_name=vefaas_app_name,
+                package_root=Path(tmp),
+                role_trn=role_trn,
+                environment={
+                    "CLOUD_PROVIDER": provider_id,
+                    "AGENTKIT_CLOUD_PROVIDER": provider_id,
+                    "VEADK_STUDIO_TOS_BUCKET": storage_config.bucket,
+                    "VEADK_STUDIO_TOS_REGION": storage_config.region,
+                    "VEADK_STUDIO_TOS_ENDPOINT": getattr(
+                        storage_config, "endpoint", ""
+                    ),
+                    "VEADK_STUDIO_PROJECT": project,
+                },
+            )
+        except Exception as error:
+            detail = _safe_exception_detail(
+                error,
+                secrets=(ak, sk, session_token),
+            )
+            raise click.ClickException(
+                f"Failed to deploy the Studio cronjob scheduler.\n{detail}"
+            ) from error
+        click.echo(
+            "Studio cronjob scheduler ready: "
+            f"scanner={scheduler_function_id}, scanner_timer={scheduler_timer_id}, "
+            f"worker={scheduler_worker_function_id}, "
+            f"worker_timer={scheduler_worker_timer_id}"
+        )
 
         # 6) Disable local account flows so Studio can only be entered through
         #    the configured identity provider.
@@ -11766,7 +11916,23 @@ def frontend_update(
                 ),
             }
         )
+        from frontend.service.studio_scheduler.deploy import (
+            deploy_scheduler_for_studio_update,
+        )
+
+        click.echo("Updating the Studio cronjob scheduler and minute timer…")
         try:
+            _, _, _, _, scheduler_base = deploy_scheduler_for_studio_update(
+                service,
+                studio_function_id=target.function_id,
+                package_root=package_dir,
+                provider=provider_id,
+                project=target.project,
+                environment_overrides=environment_overrides,
+            )
+            environment_overrides["VEADK_STUDIO_CRONJOB_SCHEDULER_BASE"] = (
+                scheduler_base
+            )
             url = service.update_application_code_bundle(
                 application_id=target.application_id,
                 function_id=target.function_id,

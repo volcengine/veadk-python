@@ -263,6 +263,24 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
         "frontend.server.studio_update_resources.reconcile_studio_update_resources",
         _resources,
     )
+
+    def _deploy_scheduler_for_update(
+        service: Any, **kwargs: Any
+    ) -> tuple[str, str, str, str, str]:
+        captured["scheduler_service"] = service
+        captured["scheduler_update"] = kwargs
+        return (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+            "studio-app",
+        )
+
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler_for_studio_update",
+        _deploy_scheduler_for_update,
+    )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
 
     assert updater.submit_latest() == manifest
@@ -285,6 +303,7 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
         "BYTEPLUS_REGION": "ap-southeast-1",
         "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
         "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
+        "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
         "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",
@@ -295,6 +314,18 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     assert resource_request["application_id"] == "application-id"
     assert resource_request["function_id"] == "function-id"
     assert resource_request["function_client"] is not None
+    scheduler_update = captured["scheduler_update"]
+    assert scheduler_update["studio_function_id"] == "function-id"
+    assert scheduler_update["package_root"].name == "package"
+    assert scheduler_update["provider"] == "byteplus"
+    assert scheduler_update["project"] == "default"
+    assert scheduler_update["environment_overrides"] == {
+        "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
+        "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
+        "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
+        "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
+        "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",
+    }
     status = updater.status()
     assert status["state"] == "updating"
     assert status["progressStage"] == "publishing"
@@ -351,6 +382,16 @@ def test_submit_latest_reports_missing_vefaas_permissions(
     monkeypatch.setattr(
         "frontend.server.studio_update_resources.reconcile_studio_update_resources",
         lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler_for_studio_update",
+        lambda *_args, **_kwargs: (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+            "studio",
+        ),
     )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
 
@@ -1089,6 +1130,16 @@ def test_retry_clears_previous_failure_diagnostics(
     monkeypatch.setattr(
         "frontend.server.studio_update_resources.reconcile_studio_update_resources",
         lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler_for_studio_update",
+        lambda *_args, **_kwargs: (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+            "studio",
+        ),
     )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
 
