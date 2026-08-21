@@ -26,9 +26,11 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+from veadk.cli import cli_frontend
 from veadk.cli.cli_frontend import (
     _build_agentkit_proxy_headers,
     _frontend_allow_origins,
+    _open_browser_when_ready,
     _run_frontend_server,
     _runtime_regions,
 )
@@ -98,6 +100,166 @@ def test_vite_allows_both_loopback_browser_origins() -> None:
         "http://127.0.0.1:5174",
     ]
     assert _frontend_allow_origins(vite=False) == []
+
+
+class _FakeHttpResponse:
+    def __init__(self, status: int = 200) -> None:
+        self.status = status
+
+    def __enter__(self) -> "_FakeHttpResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+def test_open_browser_waits_for_http_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[tuple[str, float]] = []
+    opened: list[str] = []
+
+    def _urlopen(request: Any, timeout: float) -> _FakeHttpResponse:
+        requests.append((request.full_url, timeout))
+        return _FakeHttpResponse(200)
+
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url) or True)
+
+    _open_browser_when_ready(
+        "http://127.0.0.1:8877",
+        "127.0.0.1",
+        8877,
+        timeout=1.0,
+    )
+
+    assert requests == [("http://127.0.0.1:8877/web/ui-config", 1.0)]
+    assert opened == ["http://127.0.0.1:8877"]
+
+
+def test_open_browser_falls_back_to_root_http_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[str] = []
+    opened: list[str] = []
+
+    def _urlopen(request: Any, timeout: float) -> _FakeHttpResponse:
+        del timeout
+        requests.append(request.full_url)
+        if request.full_url.endswith("/web/ui-config"):
+            return _FakeHttpResponse(503)
+        return _FakeHttpResponse(200)
+
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url) or True)
+
+    _open_browser_when_ready(
+        "http://127.0.0.1:8877",
+        "127.0.0.1",
+        8877,
+        timeout=1.0,
+    )
+
+    assert requests == [
+        "http://127.0.0.1:8877/web/ui-config",
+        "http://127.0.0.1:8877",
+    ]
+    assert opened == ["http://127.0.0.1:8877"]
+
+
+def test_open_browser_treats_http_client_error_as_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import urllib.error
+
+    opened: list[str] = []
+
+    def _urlopen(request: Any, timeout: float) -> _FakeHttpResponse:
+        del timeout
+        raise urllib.error.HTTPError(
+            request.full_url,
+            403,
+            "Forbidden",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url) or True)
+
+    _open_browser_when_ready(
+        "http://127.0.0.1:8877",
+        "127.0.0.1",
+        8877,
+        timeout=1.0,
+    )
+
+    assert opened == ["http://127.0.0.1:8877"]
+
+
+def test_open_browser_timeout_logs_manual_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import itertools
+    import urllib.error
+
+    warnings: list[str] = []
+    times = itertools.chain([100.0, 100.0, 100.6], itertools.repeat(100.6))
+
+    monkeypatch.setattr("time.time", lambda: next(times))
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            urllib.error.URLError("connection refused")
+        ),
+    )
+    monkeypatch.setattr("webbrowser.open", lambda _url: False)
+    monkeypatch.setattr(
+        cli_frontend.logger,
+        "warning",
+        lambda message: warnings.append(message),
+    )
+    monkeypatch.setattr(cli_frontend.logger, "info", lambda _message: None)
+
+    _open_browser_when_ready(
+        "http://127.0.0.1:8877",
+        "127.0.0.1",
+        8877,
+        timeout=0.5,
+    )
+
+    assert len(warnings) == 1
+    assert "Open http://127.0.0.1:8877 manually" in warnings[0]
+    assert "connection refused" in warnings[0]
+
+
+def test_open_browser_warns_when_browser_returns_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: _FakeHttpResponse(200),
+    )
+    monkeypatch.setattr("webbrowser.open", lambda _url: False)
+    monkeypatch.setattr(
+        cli_frontend.logger,
+        "warning",
+        lambda message: warnings.append(message),
+    )
+
+    _open_browser_when_ready(
+        "http://127.0.0.1:8877",
+        "127.0.0.1",
+        8877,
+        timeout=1.0,
+    )
+
+    assert warnings == [
+        "Could not open the browser automatically. Open http://127.0.0.1:8877 manually."
+    ]
 
 
 def test_runtime_regions_use_both_volcengine_regions() -> None:
