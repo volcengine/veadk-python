@@ -104,6 +104,11 @@ _SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS = {
     "openclaw": "SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
     "hermes": "SANDBOX_CHAT_HERMES_SNAPSHOT",
 }
+_SANDBOX_AGENT_LABELS = {
+    "deepseek-harness": "DeepSeek Harness Sandbox",
+    "openclaw": "OpenClaw Sandbox",
+    "hermes": "Hermes Sandbox",
+}
 _SANDBOX_CODEX_AGENT_KIND = "codex"
 _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 _SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
@@ -203,6 +208,14 @@ class SandboxCapacityError(SandboxError):
 
     code = "SANDBOX_CAPACITY_EXCEEDED"
     retryable = True
+
+
+def _missing_sandbox_configuration(
+    label: str,
+    environment_names: tuple[str, ...],
+) -> str:
+    environment = " 或 ".join(environment_names)
+    return f"管理员未配置 {label}（{environment}）。"
 
 
 def _require_session_access(
@@ -1496,9 +1509,23 @@ class SandboxConversationService:
         enabled = bool(tools.configured)
         return {
             "enabled": enabled,
-            "reason": "" if enabled else "管理员未配置",
+            "reason": (
+                ""
+                if enabled
+                else _missing_sandbox_configuration(
+                    "Codex Sandbox",
+                    (_SANDBOX_CHAT_TOOL_ENV,),
+                )
+            ),
             "persistentEnabled": bool(tools.persistent),
-            "persistentReason": "" if tools.persistent else "管理员未配置快照版 Tool",
+            "persistentReason": (
+                ""
+                if tools.persistent
+                else _missing_sandbox_configuration(
+                    "Codex 快照版 Sandbox",
+                    (_SANDBOX_CHAT_SNAPSHOT_TOOL_ENV,),
+                )
+            ),
             "endpointExportEnabled": _sandbox_endpoint_export_enabled(),
         }
 
@@ -1517,8 +1544,15 @@ class SandboxConversationService:
     def _tool_id(self, *, persistent: bool = False, required: bool = True) -> str:
         tool_id = self._tools().select(persistent)
         if required and not tool_id:
-            detail = "快照版 " if persistent else ""
-            raise SandboxConfigurationError(f"管理员未配置{detail}Sandbox Tool。")
+            label = "Codex 快照版 Sandbox" if persistent else "Codex Sandbox"
+            environment = (
+                _SANDBOX_CHAT_SNAPSHOT_TOOL_ENV
+                if persistent
+                else _SANDBOX_CHAT_TOOL_ENV
+            )
+            raise SandboxConfigurationError(
+                _missing_sandbox_configuration(label, (environment,))
+            )
         return tool_id
 
     async def _cloud_session(self, session_id: str) -> SandboxCloudSession:
@@ -2421,18 +2455,42 @@ class SandboxAgentSessionService:
     def _tool_id(self, *, persistent: bool = False, required: bool = True) -> str:
         tool_id = self._tools().select(persistent)
         if required and not tool_id:
-            detail = "快照版 " if persistent else ""
-            raise SandboxConfigurationError(f"管理员未配置{detail}Sandbox Tool。")
+            label = _SANDBOX_AGENT_LABELS[self.kind]
+            environment_names = (
+                (_SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS[self.kind],)
+                if persistent
+                else _SANDBOX_AGENT_TOOL_ENVS[self.kind]
+            )
+            if persistent:
+                label = f"{label.removesuffix(' Sandbox')} 快照版 Sandbox"
+            raise SandboxConfigurationError(
+                _missing_sandbox_configuration(label, environment_names)
+            )
         return tool_id
 
     def capabilities(self) -> dict[str, object]:
         tools = self._tools()
         enabled = bool(tools.configured)
+        label = _SANDBOX_AGENT_LABELS[self.kind]
         return {
             "enabled": enabled,
-            "reason": "" if enabled else "管理员未配置",
+            "reason": (
+                ""
+                if enabled
+                else _missing_sandbox_configuration(
+                    label,
+                    _SANDBOX_AGENT_TOOL_ENVS[self.kind],
+                )
+            ),
             "persistentEnabled": bool(tools.persistent),
-            "persistentReason": "" if tools.persistent else "管理员未配置快照版 Tool",
+            "persistentReason": (
+                ""
+                if tools.persistent
+                else _missing_sandbox_configuration(
+                    f"{label.removesuffix(' Sandbox')} 快照版 Sandbox",
+                    (_SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS[self.kind],),
+                )
+            ),
         }
 
     async def _cloud_session(self, session_id: str) -> SandboxCloudSession:

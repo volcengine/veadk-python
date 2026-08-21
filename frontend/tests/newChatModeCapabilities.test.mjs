@@ -41,7 +41,9 @@ test("loads built-in Sandbox, Skill, and Harness capabilities independently", ()
   assert.match(appSource, /ready:\s*true/);
   assert.match(appSource, /正在检查 Agent 能力/);
   assert.match(appSource, /temporaryEnabled/);
+  assert.match(appSource, /temporaryUnavailableReason/);
   assert.match(appSource, /deepseekHarnessEnabled/);
+  assert.match(appSource, /deepseekHarnessUnavailableReason/);
   assert.match(appSource, /skillCustomizationEnabled/);
   assert.doesNotMatch(appSource, /skillCreateEnabled/);
   assert.match(
@@ -57,12 +59,15 @@ test("loads built-in Sandbox, Skill, and Harness capabilities independently", ()
 
 test("disables built-in Agents until configured", () => {
   assert.match(composerSource, /temporaryEnabled\?: boolean/);
+  assert.match(composerSource, /temporaryUnavailableReason\?: string/);
   assert.match(composerSource, /temporaryEnabled=\{temporaryEnabled\}/);
   assert.match(composerSource, /deepseekHarnessEnabled\?: boolean/);
   assert.match(composerSource, /deepseekHarnessEnabled=\{deepseekHarnessEnabled\}/);
   assert.match(selectorSource, /temporaryEnabled\?: boolean/);
+  assert.match(selectorSource, /temporaryUnavailableReason\?: string/);
   assert.match(selectorSource, /deepseekHarnessEnabled\?: boolean/);
-  assert.match(selectorSource, /管理员未配置/);
+  assert.match(selectorSource, /管理员未配置 Codex Sandbox/);
+  assert.match(selectorSource, /管理员未配置 DeepSeek Harness Sandbox/);
   assert.match(selectorSource, /if \(temporaryEnabled === true \|\| deepseekHarnessEnabled === true\) return true/);
   assert.match(selectorSource, /return modeEnabled\(mode\) !== true/);
   assert.match(selectorSource, /if \(modeDisabled\(mode\)\) return/);

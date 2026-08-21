@@ -34,6 +34,7 @@ from frontend.server.cronjobs import (
     OwnerOnlyAccessPolicy,
     TosCronjobRepository,
     mount_routes,
+    mount_storage_unavailable_routes,
 )
 from frontend.server.cronjobs.schemas import (
     CreateCronjobRequest,
@@ -519,3 +520,41 @@ def test_models_forbid_unknown_fields_and_empty_patch() -> None:
     with pytest.raises(ValidationError, match="At least one"):
         UpdateCronjobRequest()
     assert CronjobRun.model_fields["session_id"].alias == "sessionId"
+
+
+def test_unmounted_storage_keeps_cronjob_routes_json_and_actionable() -> None:
+    app = FastAPI()
+    mount_storage_unavailable_routes(app)
+    http = TestClient(app)
+
+    for method, path in (
+        ("get", "/web/cronjobs"),
+        ("post", "/web/cronjobs/job-1/run"),
+    ):
+        response = getattr(http, method)(path)
+        assert response.status_code == 503
+        assert response.headers["content-type"].startswith("application/json")
+        detail = response.json()["detail"]
+        assert "未挂载 TOS 持久化存储" in detail
+        assert "VEADK_STUDIO_TOS_BUCKET" in detail
+        assert "VEADK_STUDIO_TOS_REGION" in detail
+
+
+def test_unreachable_tos_returns_actionable_storage_error() -> None:
+    class _UnavailableTosClient(_FakeTosClient):
+        def list_objects_type2(self, **_: Any) -> SimpleNamespace:
+            raise RuntimeError("connection refused")
+
+    app = FastAPI()
+    mount_routes(
+        app,
+        _service(_UnavailableTosClient()),
+        lambda request: CronjobIdentity(ownerId="owner"),
+    )
+    response = TestClient(app).get("/web/cronjobs")
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "无法连接定时任务使用的 TOS 持久化存储" in detail
+    assert "Bucket、Region、Endpoint、访问凭据和网络连通性" in detail
+    assert "connection refused" not in detail

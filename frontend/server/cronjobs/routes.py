@@ -40,6 +40,16 @@ from .service import (
 IdentityResolver = Callable[[Request], CronjobIdentity]
 RuntimeAuthorizer = Callable[[Request, str, str], Any]
 
+CRONJOB_STORAGE_NOT_CONFIGURED_MESSAGE = (
+    "定时任务不可用：Studio 未挂载 TOS 持久化存储。"
+    "请配置 VEADK_STUDIO_TOS_BUCKET 和 VEADK_STUDIO_TOS_REGION，"
+    "确认 Studio 有权访问该 Bucket，然后重新启动 Studio。"
+)
+CRONJOB_STORAGE_UNREACHABLE_MESSAGE = (
+    "无法连接定时任务使用的 TOS 持久化存储。"
+    "请联系管理员检查 TOS Bucket、Region、Endpoint、访问凭据和网络连通性。"
+)
+
 
 def mount_routes(
     app: Any,
@@ -203,6 +213,29 @@ def mount_routes(
         )
 
 
+def mount_storage_unavailable_routes(app: Any) -> None:
+    """Keep the cronjob API contract JSON-shaped when TOS is not mounted."""
+
+    async def unavailable() -> None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=CRONJOB_STORAGE_NOT_CONFIGURED_MESSAGE,
+        )
+
+    app.add_api_route(
+        "/web/cronjobs",
+        unavailable,
+        methods=["GET", "POST", "PATCH", "DELETE"],
+        include_in_schema=False,
+    )
+    app.add_api_route(
+        "/web/cronjobs/{path:path}",
+        unavailable,
+        methods=["GET", "POST", "PATCH", "DELETE"],
+        include_in_schema=False,
+    )
+
+
 async def _invoke(call: Callable[[], Any], *, list_response: bool = False) -> Any:
     try:
         result = await call()
@@ -224,9 +257,16 @@ def _raise_api_error(error: Exception) -> None:
     if isinstance(error, CronjobRunQueueUnavailable):
         raise HTTPException(status_code=503, detail=str(error)) from error
     raise HTTPException(
-        status_code=502,
-        detail="定时任务服务暂时不可用，请稍后重试。",
+        status_code=503,
+        detail=CRONJOB_STORAGE_UNREACHABLE_MESSAGE,
     ) from error
 
 
-__all__ = ["IdentityResolver", "RuntimeAuthorizer", "mount_routes"]
+__all__ = [
+    "CRONJOB_STORAGE_NOT_CONFIGURED_MESSAGE",
+    "CRONJOB_STORAGE_UNREACHABLE_MESSAGE",
+    "IdentityResolver",
+    "RuntimeAuthorizer",
+    "mount_routes",
+    "mount_storage_unavailable_routes",
+]

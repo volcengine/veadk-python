@@ -28,13 +28,12 @@
 .website-integration-section-heading h2 { margin: 0; font-size: 14px; font-weight: 650; line-height: 1.4; }
 .website-integration-section-heading > small { color: hsl(var(--muted-foreground)); font-size: 11px; }
 
-.website-integration-form { display: grid; grid-template-columns: minmax(200px, 1.2fr) minmax(220px, 1fr) auto; align-items: end; gap: 8px 12px; }
-.website-integration-form > label { color: hsl(var(--muted-foreground)); font-size: 12px; font-weight: 600; line-height: 1.4; }
-.website-integration-form > label:first-child { grid-column: 1; }
-.website-integration-form > label:nth-of-type(2) { grid-column: 2; }
-.website-integration-form > [id="website-runtime"] { grid-column: 1; grid-row: 2; }
-.website-integration-form > input { grid-column: 2; grid-row: 2; }
-.website-integration-form > button { grid-column: 3; grid-row: 2; min-width: 104px; }
+.website-integration-form { display: grid; grid-template-columns: minmax(240px, 1.2fr) minmax(240px, 1fr) auto; align-items: end; gap: 12px; }
+.website-integration-field { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.website-integration-field > label { color: hsl(var(--muted-foreground)); font-size: 12px; font-weight: 600; line-height: 1.4; }
+.website-integration-field > input { width: 100%; }
+.website-integration-form-action { display: flex; align-items: flex-end; }
+.website-integration-form-action > button { min-width: 104px; }
 .website-integration-error { margin-top: 12px; padding: 9px 11px; border: 1px solid hsl(var(--destructive) / 0.22); border-radius: 8px; background: hsl(var(--destructive) / 0.05); color: hsl(var(--destructive)); font-size: 12px; line-height: 1.5; }
 
 .website-integration-loading { min-height: 96px; display: grid; place-items: center; color: hsl(var(--muted-foreground)); font-size: 12.5px; }
@@ -61,13 +60,7 @@
 @media (max-width: 820px) {
   .website-integration-page { padding: 20px 18px 0; }
   .website-integration-form { grid-template-columns: minmax(0, 1fr); }
-  .website-integration-form > label,
-  .website-integration-form > label:first-child,
-  .website-integration-form > label:nth-of-type(2),
-  .website-integration-form > [id="website-runtime"],
-  .website-integration-form > input,
-  .website-integration-form > button { grid-column: 1; grid-row: auto; }
-  .website-integration-form > label:nth-of-type(2) { margin-top: 4px; }
+  .website-integration-form-action > button { width: 100%; }
   .website-integration-row { grid-template-columns: minmax(0, 1fr) auto; }
   .website-integration-token, .website-integration-created { display: none; }
   .website-integration-embed { grid-template-columns: minmax(0, 1fr); }

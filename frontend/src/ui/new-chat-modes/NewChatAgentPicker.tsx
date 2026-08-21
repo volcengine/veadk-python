@@ -422,7 +422,9 @@ export function NewChatAgentPicker({
                 aria-haspopup="menu"
                 aria-expanded={activeType === type.id}
                 className={`new-chat-agent-picker__type${keyboardNavigating && keyboardPanel === "types" && activeTypeIndex === index ? " is-keyboard-active" : ""}`}
-                onMouseEnter={() => activateType(index)}
+                onMouseEnter={() => {
+                  if (window.innerWidth > 640) activateType(index);
+                }}
                 onClick={() => {
                   activateType(index);
                   setKeyboardPanel("runtimes");

@@ -66,6 +66,10 @@ const websiteIntegrationSource = readFileSync(
   new URL("../src/automations/website-integration/WebsiteIntegration.tsx", import.meta.url),
   "utf8",
 );
+const websiteIntegrationPanelStyles = readFileSync(
+  new URL("../src/automations/website-integration/WebsiteIntegration.css", import.meta.url),
+  "utf8",
+);
 const websiteIntegrationApiSource = readFileSync(
   new URL("../src/adk/websiteIntegration.ts", import.meta.url),
   "utf8",
@@ -277,6 +281,12 @@ test("Website integration creates an Origin-bound embed token and chat loader", 
   assert.match(websiteIntegrationSource, /AgentKit Runtime/);
   assert.match(websiteIntegrationSource, /引入方法/);
   assert.match(websiteIntegrationSource, /CopyButton/);
+  assert.match(websiteIntegrationSource, /@openai\/apps-sdk-ui\/components\/Select/);
+  assert.match(websiteIntegrationSource, /@openai\/apps-sdk-ui\/components\/Input/);
+  assert.match(websiteIntegrationSource, /className="website-integration-field"[\s\S]*?<Select/);
+  assert.match(websiteIntegrationSource, /className="website-integration-field"[\s\S]*?<Input/);
+  assert.match(websiteIntegrationPanelStyles, /\.website-integration-field \{[^}]*display: flex;[^}]*flex-direction: column;/);
+  assert.doesNotMatch(websiteIntegrationPanelStyles, /\.website-integration-form > \[id="website-runtime"\]/);
   assert.match(websiteIntegrationSource, /getRuntimes/);
   assert.match(websiteIntegrationSource, /probeRuntimeApps/);
   assert.doesNotMatch(websiteIntegrationSource, /localStorage|sessionStorage|重启/);
