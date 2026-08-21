@@ -53,8 +53,7 @@ async function renderFinalAnswer(output, overflowed) {
   const dom = new JSDOM("<!doctype html><div id=\"root\"></div>", {
     pretendToBeVisual: true,
   });
-  const previousGlobals = new Map();
-  for (const name of [
+  const globalNames = [
     "window",
     "document",
     "navigator",
@@ -67,9 +66,11 @@ async function renderFinalAnswer(output, overflowed) {
     "cancelAnimationFrame",
     "ResizeObserver",
     "IS_REACT_ACT_ENVIRONMENT",
-  ]) {
-    previousGlobals.set(name, globalThis[name]);
-  }
+  ];
+  const previousGlobals = new Map(globalNames.map((name) => [
+    name,
+    Object.getOwnPropertyDescriptor(globalThis, name),
+  ]));
 
   class TestResizeObserver {
     constructor(callback) {
@@ -83,7 +84,7 @@ async function renderFinalAnswer(output, overflowed) {
     disconnect() {}
   }
 
-  Object.assign(globalThis, {
+  const testGlobals = {
     window: dom.window,
     document: dom.window.document,
     navigator: dom.window.navigator,
@@ -96,7 +97,15 @@ async function renderFinalAnswer(output, overflowed) {
     cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
     ResizeObserver: TestResizeObserver,
     IS_REACT_ACT_ENVIRONMENT: true,
-  });
+  };
+  for (const [name, value] of Object.entries(testGlobals)) {
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      enumerable: true,
+      value,
+      writable: true,
+    });
+  }
 
   Object.defineProperties(dom.window.HTMLParagraphElement.prototype, {
     clientHeight: { configurable: true, get: () => 52 },
@@ -119,9 +128,9 @@ async function renderFinalAnswer(output, overflowed) {
     cleanup: async () => {
       await act(async () => root.unmount());
       dom.window.close();
-      for (const [name, value] of previousGlobals) {
-        if (value === undefined) delete globalThis[name];
-        else globalThis[name] = value;
+      for (const [name, descriptor] of previousGlobals) {
+        if (descriptor === undefined) delete globalThis[name];
+        else Object.defineProperty(globalThis, name, descriptor);
       }
     },
   };
