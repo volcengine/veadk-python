@@ -756,33 +756,62 @@ def _resolve_frontend_dir(arg: str | None) -> Path:
 
 
 def _open_browser_when_ready(
-    url: str, host: str, port: int, timeout: float = 15.0
+    url: str, host: str, port: int, timeout: float = 30.0
 ) -> None:
-    """Open ``url`` in the default browser once the server accepts connections.
+    """Open ``url`` in the default browser once the server responds to HTTP.
 
-    Polls the TCP port (up to ``timeout`` seconds) so the tab lands on a ready
-    server rather than a connection error. Runs on a daemon thread; any failure
-    is logged and ignored — a browser that will not open must never block the
-    server from serving.
+    Polls the Studio HTTP endpoint (up to ``timeout`` seconds) so the tab lands
+    on a ready server rather than a connection error. Runs on a daemon thread;
+    any failure is logged and ignored — a browser that will not open must never
+    block the server from serving.
     """
-    import socket
     import time
+    import urllib.error
+    import urllib.request
     import webbrowser
 
+    ready_urls = (f"http://{host}:{port}/web/ui-config", url)
     deadline = time.time() + timeout
+    last_error = ""
+    logger.info(
+        "Waiting up to "
+        f"{timeout:.0f}s for Studio HTTP readiness before opening {url} "
+        f"(host={host}, port={port}, pid={os.getpid()})"
+    )
     while time.time() < deadline:
-        try:
-            with socket.create_connection((host, port), timeout=0.5):
-                break
-        except OSError:
-            time.sleep(0.25)
+        for ready_url in ready_urls:
+            try:
+                request = urllib.request.Request(ready_url, method="GET")
+                with urllib.request.urlopen(request, timeout=1.0) as response:
+                    status = getattr(response, "status", 200)
+                    if 200 <= status < 500:
+                        break
+                    last_error = f"{ready_url} returned HTTP {status}"
+            except urllib.error.HTTPError as error:
+                if 200 <= error.code < 500:
+                    break
+                last_error = f"{ready_url} returned HTTP {error.code}"
+            except (OSError, urllib.error.URLError) as error:
+                last_error = f"{ready_url}: {error}"
+        else:
+            time.sleep(0.5)
+            continue
+        break
     else:
-        logger.warning("Server not ready in time; skipped opening the browser.")
+        logger.warning(
+            "Server not ready in time; skipped opening the browser. "
+            f"Open {url} manually. Last error: {last_error or 'unknown'}"
+        )
         return
     try:
-        webbrowser.open(url)
+        if not webbrowser.open(url):
+            logger.warning(
+                f"Could not open the browser automatically. Open {url} manually."
+            )
     except Exception as e:  # noqa: BLE001 - opening a browser is best-effort
-        logger.warning(f"Could not open the browser automatically: {e}")
+        logger.warning(
+            f"Could not open the browser automatically: {e}. Open {url} manually."
+        )
 
 
 # Built-in provider presets so users only need to supply client id/secret.
