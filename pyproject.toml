@@ -7,7 +7,7 @@ name = "veadk-python"
 dynamic = ["version"]
 description = "Volcengine agent development kit, integrations with Volcengine cloud services."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 license = { file = "LICENSE" }
 authors = [
     {name = "Yaozheng Fang", email = "fangyozheng@gmail.com"},
