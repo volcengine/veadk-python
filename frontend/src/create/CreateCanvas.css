@@ -1,0 +1,263 @@
+.create-canvas {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 0;
+  background-color: hsl(var(--canvas));
+  background-image: radial-gradient(
+    circle,
+    hsl(var(--foreground) / 0.09) 0 1px,
+    transparent 1.15px
+  );
+  background-position: 8px 15px;
+  background-size: 18px 18px;
+}
+
+.create-canvas,
+.create-canvas *,
+.create-canvas *::before,
+.create-canvas *::after {
+  box-sizing: border-box;
+}
+
+.create-canvas__send:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+.create-canvas__hero {
+  position: absolute;
+  z-index: 1;
+  top: 349px;
+  left: 50%;
+  width: min(800px, calc(100% - 32px));
+  transform: translateX(-50%);
+}
+
+.create-canvas__hero-title {
+  height: 45px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.create-canvas__hero-title > svg {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  color: #101013;
+}
+
+.create-canvas__hero-title h2 {
+  margin: 0;
+  color: #101013;
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 45px;
+  letter-spacing: -0.01em;
+}
+
+.create-canvas__composer {
+  height: 54px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 24px;
+  padding: 0 16px 0 20px;
+  border: 1px solid rgba(31, 35, 41, 0.08);
+  border-radius: 16px;
+  background: #fff;
+}
+
+.create-canvas__composer:focus-within {
+  border-color: rgba(31, 35, 41, 0.18);
+}
+
+.create-canvas__composer textarea {
+  min-width: 0;
+  height: 22px;
+  flex: 1;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  color: #101013;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.create-canvas__composer textarea::placeholder {
+  color: #7a7880;
+  opacity: 1;
+}
+
+.create-canvas__send {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #101013;
+  color: #fff;
+  cursor: pointer;
+}
+
+.create-canvas__send:disabled {
+  background: rgba(0, 0, 0, 0.2);
+  cursor: default;
+}
+
+.create-canvas__send svg {
+  width: 20px;
+  height: 20px;
+}
+
+.create-canvas__shortcuts {
+  position: absolute;
+  left: 50%;
+  bottom: 49px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  width: min(800px, calc(100% - 32px));
+  transform: translateX(-50%);
+}
+
+.create-canvas__shortcut {
+  min-width: 0;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border: 0;
+  border-radius: 16px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  box-shadow: 0 0 2px hsl(var(--foreground) / 0.06);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition:
+    background-color 160ms ease-out,
+    box-shadow 160ms ease-out;
+}
+
+.create-canvas__shortcut:hover {
+  background: hsl(var(--background) / 0.94);
+  box-shadow: 0 4px 16px hsl(var(--foreground) / 0.08);
+}
+
+.create-canvas__shortcut:active {
+  background: hsl(var(--background) / 0.88);
+}
+
+.create-canvas__shortcut:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+.create-canvas__shortcut-icon {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 14px;
+  background: hsl(var(--canvas));
+}
+
+.create-canvas__shortcut-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.create-canvas__shortcut-copy {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.create-canvas__shortcut-title {
+  max-width: 100%;
+  overflow: hidden;
+  color: hsl(var(--sidebar-foreground));
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.create-canvas__shortcut-description {
+  max-width: 100%;
+  overflow: hidden;
+  color: hsl(var(--sidebar-section-title));
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 19.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .create-canvas__hero {
+    top: 112px;
+  }
+
+  .create-canvas__hero-title {
+    height: auto;
+    align-items: flex-start;
+  }
+
+  .create-canvas__hero-title > svg {
+    width: 30px;
+    height: 30px;
+    flex-basis: 30px;
+  }
+
+  .create-canvas__hero-title h2 {
+    font-size: 24px;
+    line-height: 32px;
+  }
+
+  .create-canvas__composer {
+    margin-top: 18px;
+  }
+
+  .create-canvas__shortcuts {
+    bottom: 16px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .create-canvas__shortcut {
+    height: 72px;
+    padding: 12px;
+  }
+
+  .create-canvas__shortcut-icon {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .create-canvas__shortcut {
+    transition: none;
+  }
+}

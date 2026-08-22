@@ -124,7 +124,8 @@ import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
 import { Composer } from "./ui/Composer";
 import { InvocationChips } from "./ui/InvocationChips";
 import { MediaGroup } from "./ui/Media";
-import { StackCards } from "./ui/AddAgentMenu";
+import { CreateCanvas } from "./create/CreateCanvas";
+import { CreateWorkspace } from "./create/CreateWorkspace";
 import {
   IntelligentCreate,
   type IntelligentPreparationStage,
@@ -339,7 +340,7 @@ async function loadHydratedSessions(
 }
 
 type CreateView = "custom" | "package" | "migration" | null;
-type AppView = CreateView | "intelligent";
+type AppView = CreateView | "intelligent" | "intelligent-workspace";
 type CustomCreateMode = "custom" | "yaml_import";
 type StudioPageId =
   | "new-chat"
@@ -470,7 +471,7 @@ function mentionableDescendants(node: AgentNode): AgentTarget[] {
 function loadView(): AppView {
   const v = typeof localStorage !== "undefined" ? localStorage.getItem(LS.view) : null;
   if (v === "intelligent") return v;
-  if (["menu", "custom", "template", "workflow"].includes(v ?? "")) {
+  if (["menu", "custom", "workflow"].includes(v ?? "")) {
     return "custom";
   }
   return v === "package" || v === "migration" ? v : null;
@@ -545,66 +546,6 @@ function telemetrySandboxStatus(
     default:
       return "unknown";
   }
-}
-
-/** Hand-drawn "from zero" mark: a blank Agent canvas ready to create. */
-function ScratchIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.45"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3.75" y="3.75" width="16.5" height="16.5" rx="3.25" />
-      <path d="M12 8.5v7M8.5 12h7" />
-      <path d="M6.75 6.75h1M16.25 17.25h1" opacity="0.6" />
-    </svg>
-  );
-}
-
-/** Hand-drawn code package mark: an archive with source inside. */
-function PackageIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.45"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3.5" y="5" width="17" height="14.75" rx="2.25" />
-      <path d="M3.5 9h17M9.25 12.25 7.1 14.4l2.15 2.15M14.75 12.25l2.15 2.15-2.15 2.15M12.8 11.85l-1.6 5.1" />
-    </svg>
-  );
-}
-
-/** Hand-drawn migration mark: an existing project moving into a new runtime. */
-function MigrationIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.45"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="2.75" y="5" width="6.5" height="14" rx="1.6" />
-      <path d="M5.25 8.5h1.5M5.25 11.5h1.5" />
-      <rect x="14.75" y="5" width="6.5" height="14" rx="1.6" />
-      <path d="M17.25 15.5h1.5M17.25 12.5h1.5M8.75 12h6.5m-2.5-2.5 2.5 2.5-2.5 2.5" />
-    </svg>
-  );
 }
 
 /** Hand-drawn "tracing / observability" icon (stacked spans). */
@@ -1927,6 +1868,7 @@ export default function App() {
     }
   };
   const [createView, setCreateView] = useState<AppView>(loadView);
+  const [intelligentInitialGoal, setIntelligentInitialGoal] = useState("");
   const [deploymentTasks, setDeploymentTasks] = useState<
     DeploymentTaskUpdate[]
   >([]);
@@ -3041,6 +2983,8 @@ export default function App() {
           ? runtimeUpdateTarget?.name
             ? `更新 ${runtimeUpdateTarget.name}`
             : "创建智能体"
+          : createView === "intelligent-workspace"
+            ? "创建智能体"
           : createView === "package"
             ? "从代码包添加"
             : "迁移智能体",
@@ -5931,6 +5875,7 @@ export default function App() {
       <Sidebar
         branding={siteBranding}
         cloudProvider={cloudProvider}
+        autoCollapse={Boolean(showAddMenu || visibleCreateView)}
         access={access}
         features={features}
         sessions={sessions}
@@ -6685,76 +6630,34 @@ export default function App() {
                 }}
               />
             ) : showAddMenu ? (
-              <StackCards
-                title="您想以哪种方式添加 Agent 来运行？"
-                sub="选择最适合你的方式，下一步即可开始"
-                cards={[
-                  {
-                    key: "scratch",
-                    icon: ScratchIcon,
-                    title: "从 0 快速创建",
-                    desc: "用智能 / 自定义 / 模板 / 工作流的方式从零创建一个 Agent。",
-                    onClick: () => {
-                      setAddMenu(false);
-                      setImportedDraft(null);
-                      setCustomCreateMode("custom");
-                      setRuntimeUpdateTarget(null);
-                      setFocusedDeploymentTaskId("");
-                      setFocusedWorkspaceAgentId("");
-                      setEditingDraftId(`draft-${Date.now().toString(36)}`);
-                      editingDraftBaselineRef.current = null;
-                      setCreateView("custom");
-                    },
-                  },
-                  {
-                    key: "intelligent",
-                    icon: ScratchIcon,
-                    title: "智能模式",
-                    desc: intelligentCapabilitiesError
-                      || intelligentCapabilities?.reason
-                      || "描述目标，按你的意图构建、调试并验证 Agent。",
-                    status: intelligentCapabilitiesLoading
-                      ? "能力检查中"
-                      : intelligentCapabilities?.enabled
-                        ? undefined
-                        : "暂不可用",
-                    disabled:
-                      intelligentCapabilitiesLoading ||
-                      intelligentCapabilities?.enabled !== true,
-                    onClick: () => {
-                      setAddMenu(false);
-                      setImportedDraft(null);
-                      setRuntimeUpdateTarget(null);
-                      setFocusedDeploymentTaskId("");
-                      setFocusedWorkspaceAgentId("");
-                      setEditingDraftId("");
-                      editingDraftBaselineRef.current = null;
-                      setCreateView("intelligent");
-                    },
-                  },
-                  {
-                    key: "package",
-                    icon: PackageIcon,
-                    title: "从代码包添加和部署",
-                    desc: "上传 Agent 项目压缩包，查看代码并直接部署到 AgentKit Runtime。",
-                    onClick: () => {
-                      setAddMenu(false);
-                      setImportedDraft(null);
-                      setCreateView("package");
-                    },
-                  },
-                  {
-                    key: "migration",
-                    icon: MigrationIcon,
-                    title: "从存量迁移",
-                    desc: "从您的 LangChain / Dify 等存量项目迁移至 AgentKit Runtime",
-                    onClick: () => {
-                      setAddMenu(false);
-                      setImportedDraft(null);
-                      setCreateView("migration");
-                    },
-                  },
-                ]}
+              <CreateCanvas
+                onBack={openMyAgentsPage}
+                onPromptSubmit={(prompt) => {
+                  setIntelligentInitialGoal(prompt);
+                  setAddMenu(false);
+                  setCreateView("intelligent-workspace");
+                }}
+                onBlank={() => {
+                  setAddMenu(false);
+                  setImportedDraft(null);
+                  setCustomCreateMode("custom");
+                  setRuntimeUpdateTarget(null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setEditingDraftId(`draft-${Date.now().toString(36)}`);
+                  editingDraftBaselineRef.current = null;
+                  setCreateView("custom");
+                }}
+                onUploadPackage={() => {
+                  setAddMenu(false);
+                  setImportedDraft(null);
+                  setCreateView("package");
+                }}
+                onMigration={() => {
+                  setAddMenu(false);
+                  setImportedDraft(null);
+                  setCreateView("migration");
+                }}
               />
             ) : searchView ? (
               <SearchView
@@ -6798,7 +6701,7 @@ export default function App() {
                 }}
                 onArtifactSourceOpen={openFromSearch}
               />
-            ) : visibleCreateView !== null && !["menu", "intelligent"].includes(visibleCreateView) && !hasCreds ? (
+            ) : visibleCreateView !== null && !["menu", "intelligent", "intelligent-workspace"].includes(visibleCreateView) && !hasCreds ? (
               <div
                 style={{
                   display: "flex",
@@ -6844,8 +6747,18 @@ export default function App() {
                 onDeploymentStarted={startDeployment}
                 onDeploymentComplete={finishDeployment}
               />
+            ) : visibleCreateView === "intelligent-workspace" ? (
+              <CreateWorkspace
+                cloudProvider={cloudProvider}
+                initialPrompt={intelligentInitialGoal}
+                onBack={() => {
+                  setCreateView(null);
+                  setAddMenu(true);
+                }}
+              />
             ) : visibleCreateView === "intelligent" ? (
               <IntelligentCreate
+                initialGoal={intelligentInitialGoal}
                 capabilities={intelligentCapabilities}
                 loading={intelligentCapabilitiesLoading}
                 preparationStage={intelligentPreparationStage}

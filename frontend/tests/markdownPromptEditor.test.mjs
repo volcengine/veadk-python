@@ -45,7 +45,6 @@ const configYamlSource = readFileSync(
 const generatedAgentConfigSources = [
   "../src/create/types.ts",
   "../src/create/normalizeDraft.ts",
-  "../src/create/TemplateCreate.tsx",
 ]
   .map((path) => readFileSync(new URL(path, import.meta.url), "utf8"))
   .concat(configYamlSource)

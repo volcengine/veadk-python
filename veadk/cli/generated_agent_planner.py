@@ -17,9 +17,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
+from google.adk.tools import ToolContext
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from veadk import Agent, Runner
@@ -33,6 +34,9 @@ PLANNER_MODEL_NAME = (
     else "doubao-seed-2-0-lite-260428"
 )
 DEFAULT_GENERATED_MODEL_NAME = DEFAULT_MODEL_AGENT_NAME
+GENERATED_AGENT_CONVERSATION_APP_NAME = "studio_agent_creation_assistant"
+GENERATED_AGENT_RESULT_STATE_KEY = "studio_generated_agent_result"
+GENERATED_AGENT_CONVERSATION_TIMEOUT_SECONDS = 240
 
 
 class GeneratedCustomToolPlan(BaseModel):
@@ -130,6 +134,18 @@ class GeneratedAgentDraftRequest(BaseModel):
     requirement: str = Field(min_length=4, max_length=8000)
 
 
+class GeneratedAgentConversationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    session_id: str = Field(
+        alias="sessionId",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    message: str = Field(min_length=1, max_length=8000)
+
+
 PLANNER_INSTRUCTION = f"""
 You convert a user's requirement into a complete recursive VeADK Agent plan.
 
@@ -158,6 +174,23 @@ Rules:
 - Enable tools only where the requirement needs them.
 - Do not invent instance IDs, URLs, credentials, MCP servers, or skill IDs.
   Put real resources that still need user input in unresolvedItems.
+""".strip()
+
+
+CONVERSATION_INSTRUCTION = """
+你是 AgentKit Studio 的智能体创建助手。你的首要职责是与用户自然对话，逐步理解他们
+希望创建或修改的 Agent，而不是把每句话都当成最终配置指令。
+
+规则：
+- 正常回答问候、解释、讨论和澄清问题，不要调用工具。
+- 当用户明确要求创建、生成或更新 Agent，并且需求已经足够具体时，调用
+  `generate_agent`。不要要求用户提供实现中可以合理推断的细枝末节。
+- 调用工具时，把本轮对话中已经确认的完整需求整理成一段自包含的 requirement，
+  不要只传用户最后一句话。
+- 工具返回后，用简短自然语言说明已经生成或更新了什么；不要向用户展示原始 JSON。
+- 如果工具返回 unresolvedItems，明确告诉用户还需要补充哪些真实资源或标识。
+- 所有回复都使用适合当前聊天面板直接展示的纯文本，不要输出 Markdown 标记。
+- 不要声称配置已经生成，除非本轮确实成功调用了 `generate_agent`。
 """.strip()
 
 
@@ -210,3 +243,97 @@ async def generate_agent_draft(requirement: str) -> dict:
         "summary": plan.summary,
         "unresolvedItems": plan.unresolvedItems,
     }
+
+
+async def generate_agent(requirement: str, tool_context: ToolContext) -> dict:
+    """Generate a validated Agent configuration from the consolidated requirement.
+
+    Call this tool only after the user's Agent requirements are sufficiently clear.
+    The requirement must include all relevant constraints learned in the conversation.
+    """
+
+    result = await generate_agent_draft(requirement)
+    stored_result = {
+        "generationId": uuid4().hex,
+        **result,
+    }
+    tool_context.state[GENERATED_AGENT_RESULT_STATE_KEY] = stored_result
+    return result
+
+
+def create_generated_agent_conversation_runner() -> Runner:
+    """Create the stateful main chat Agent used by Studio's creation workspace."""
+
+    assistant = Agent(
+        name=GENERATED_AGENT_CONVERSATION_APP_NAME,
+        description="Understands user needs and creates Agent configurations when ready.",
+        instruction=CONVERSATION_INSTRUCTION,
+        model_name=PLANNER_MODEL_NAME,
+        tools=[generate_agent],
+        enable_responses=True,
+        enable_responses_cache=False,
+    )
+    return Runner(
+        agent=assistant,
+        app_name=GENERATED_AGENT_CONVERSATION_APP_NAME,
+    )
+
+
+async def run_generated_agent_conversation(
+    runner: Runner,
+    *,
+    message: str,
+    user_id: str,
+    session_id: str,
+) -> dict[str, Any]:
+    """Run one conversational turn and return a newly generated draft, if any."""
+
+    previous_session = await runner.session_service.get_session(
+        app_name=GENERATED_AGENT_CONVERSATION_APP_NAME,
+        user_id=user_id,
+        session_id=session_id,
+    )
+    previous_generation_id = (
+        str(
+            previous_session.state.get(GENERATED_AGENT_RESULT_STATE_KEY, {}).get(
+                "generationId", ""
+            )
+        )
+        if previous_session
+        else ""
+    )
+
+    reply = await asyncio.wait_for(
+        runner.run(message, user_id=user_id, session_id=session_id),
+        timeout=GENERATED_AGENT_CONVERSATION_TIMEOUT_SECONDS,
+    )
+
+    current_session = await runner.session_service.get_session(
+        app_name=GENERATED_AGENT_CONVERSATION_APP_NAME,
+        user_id=user_id,
+        session_id=session_id,
+    )
+    stored_result = (
+        current_session.state.get(GENERATED_AGENT_RESULT_STATE_KEY)
+        if current_session
+        else None
+    )
+    generated_result = (
+        stored_result
+        if isinstance(stored_result, dict)
+        and stored_result.get("generationId") != previous_generation_id
+        else None
+    )
+
+    response: dict[str, Any] = {"reply": reply.strip()}
+    if generated_result:
+        response.update(
+            draft=generated_result.get("draft"),
+            summary=generated_result.get("summary", ""),
+            unresolvedItems=generated_result.get("unresolvedItems", []),
+        )
+        if not response["reply"]:
+            response["reply"] = str(response["summary"] or "Agent 配置已生成。")
+    elif not response["reply"]:
+        response["reply"] = "我还需要了解更多需求，请继续说明。"
+    return response

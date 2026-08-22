@@ -40,6 +40,15 @@ test("debug errors show the complete backend detail by default", () => {
   );
 });
 
+test("error copy action relies on the Apps SDK CopyButton icon only", () => {
+  assert.match(
+    errorComponentSource,
+    /<CopyButton[\s\S]*?aria-label="复制完整错误信息"[\s\S]*?\/>/,
+  );
+  assert.doesNotMatch(errorComponentSource, /\{\(\{ copied \}\)/);
+  assert.doesNotMatch(errorComponentSource, /\bCheck\b|\bCopy\b/);
+});
+
 test("creation and deployment keep friendly context and the original error", () => {
   assert.match(
     source,

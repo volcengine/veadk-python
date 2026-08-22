@@ -34,6 +34,7 @@ const PREPARATION_MESSAGES: Record<IntelligentPreparationStage, string> = {
 };
 
 export interface IntelligentCreateProps {
+  initialGoal?: string;
   capabilities: IntelligentDevelopmentCapabilities | null;
   loading: boolean;
   preparationStage: IntelligentPreparationStage | null;
@@ -44,6 +45,7 @@ export interface IntelligentCreateProps {
 }
 
 export function IntelligentCreate({
+  initialGoal = "",
   capabilities,
   loading,
   preparationStage,
@@ -52,7 +54,7 @@ export function IntelligentCreate({
   onCancel,
   onCreate,
 }: IntelligentCreateProps) {
-  const [goal, setGoal] = useState("");
+  const [goal, setGoal] = useState(initialGoal);
   const creating = preparationStage !== null;
   const unavailable = capabilities?.enabled !== true;
   const unavailableReason = loading

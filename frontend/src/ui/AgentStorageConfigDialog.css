@@ -1,0 +1,324 @@
+.agent-storage-dialog,
+.agent-storage-dialog *,
+.agent-storage-card,
+.agent-storage-card * {
+  box-sizing: border-box;
+}
+
+.agent-storage-dialog__backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(12, 13, 14, 0.76);
+}
+
+.agent-storage-dialog {
+  width: 520px;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid #eaedf1;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow:
+    0 20px 25px -3px rgba(16, 16, 19, 0.05),
+    0 8px 10px -2px rgba(16, 16, 19, 0.05);
+  color: #0c0d0e;
+  font-family:
+    "PingFang SC",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+.agent-storage-dialog:focus {
+  outline: none;
+}
+
+.agent-storage-dialog__header {
+  width: 100%;
+  height: 69px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 24px 24px 20px;
+}
+
+.agent-storage-dialog__header h2 {
+  margin: 0;
+  color: #0c0d0e;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.agent-storage-dialog__close {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  flex: 0 0 20px;
+  place-items: center;
+  margin: 2.5px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #0c0d0e;
+  cursor: pointer;
+}
+
+.agent-storage-dialog__close svg {
+  width: 20px;
+  height: 20px;
+}
+
+.agent-storage-dialog form {
+  margin: 0;
+}
+
+.agent-storage-dialog__content {
+  width: 100%;
+  min-height: 322px;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+  padding: 0 24px;
+}
+
+.agent-storage-dialog__options {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-storage-dialog__option {
+  position: relative;
+  width: 100%;
+  height: 70px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #e5e6eb;
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.agent-storage-dialog__option.is-selected {
+  border-color: #41464f;
+}
+
+.agent-storage-dialog__option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.agent-storage-dialog__option:focus-within {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+
+.agent-storage-dialog__option-icon-wrap,
+.agent-storage-card__icon-wrap {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  flex: 0 0 44px;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(243, 243, 243, 0.7);
+  color: #101013;
+}
+
+.agent-storage-dialog__option-icon,
+.agent-storage-card__icon {
+  width: 20px;
+  height: 20px;
+}
+
+.agent-storage-dialog__option-copy,
+.agent-storage-card__copy {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+}
+
+.agent-storage-dialog__option-copy strong,
+.agent-storage-card__copy strong {
+  max-width: 100%;
+  overflow: hidden;
+  color: #101013;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-storage-dialog__option-copy > span,
+.agent-storage-card__copy > span {
+  max-width: 100%;
+  overflow: hidden;
+  color: #7a7880;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-storage-dialog__radio {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  flex: 0 0 16px;
+  place-items: center;
+  border: 0.5px solid #b8b7c3;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.agent-storage-dialog__option.is-selected .agent-storage-dialog__radio {
+  border-color: #101013;
+  background: #101013;
+}
+
+.agent-storage-dialog__radio > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.agent-storage-dialog__database {
+  width: 100%;
+  height: 62px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-storage-dialog__database.is-hidden {
+  visibility: hidden;
+}
+
+.agent-storage-dialog__database label {
+  color: #42464e;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+  letter-spacing: 0.042px;
+}
+
+.agent-storage-dialog__select {
+  width: 100%;
+  height: 32px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.agent-storage-dialog__footer {
+  width: 100%;
+  height: 76px;
+  display: flex;
+  align-items: flex-start;
+  padding: 20px 24px 24px;
+}
+
+.agent-storage-dialog__actions {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.agent-storage-dialog__button {
+  width: 80px;
+  min-width: 80px;
+  height: 32px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.agent-storage-card {
+  width: 100%;
+  height: 70px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #e5e6eb;
+  border-radius: 12px;
+  background: #fff;
+  color: #101013;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-storage-card__edit {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: #383740;
+}
+
+.agent-storage-card:hover {
+  border-color: #d2d1db;
+}
+
+.agent-storage-card:focus-visible,
+.agent-storage-dialog__close:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+
+@media (max-width: 560px) {
+  .agent-storage-dialog__backdrop {
+    padding: 16px;
+  }
+
+  .agent-storage-dialog {
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+  }
+
+  .agent-storage-dialog__header,
+  .agent-storage-dialog__footer {
+    position: sticky;
+    z-index: 1;
+    background: #fff;
+  }
+
+  .agent-storage-dialog__header {
+    top: 0;
+  }
+
+  .agent-storage-dialog__footer {
+    bottom: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-storage-dialog__option,
+  .agent-storage-card {
+    transition: none;
+  }
+}
