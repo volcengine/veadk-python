@@ -1,0 +1,199 @@
+.agent-debug-config,
+.agent-debug-config__identity,
+.agent-debug-config__content,
+.agent-debug-config__fields,
+.agent-debug-config__field,
+.agent-debug-config__model-fields,
+.agent-debug-config__model-field,
+.agent-debug-config__label-row,
+.agent-debug-config__change,
+.agent-debug-config__actions,
+.agent-debug-config__confirm,
+.agent-debug-config__cancel {
+  box-sizing: border-box;
+}
+
+.agent-debug-config {
+  position: absolute;
+  inset: 60px 0 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  font-family: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.agent-debug-config__identity {
+  height: 68px;
+  flex: 0 0 68px;
+  display: flex;
+  align-items: center;
+  padding: 14px 24px;
+}
+
+.agent-debug-config__identity h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #0c0d0e;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-debug-config__content {
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: 20px 24px 72px;
+  overflow-y: auto;
+}
+
+.agent-debug-config__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.agent-debug-config__field {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  color: #42464e;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.agent-debug-config__model-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-debug-config__model-field {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  color: #42464e;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.agent-debug-config__label-row {
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.agent-debug-config__required {
+  color: #ee3f38;
+}
+
+.agent-debug-config__change {
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  border-radius: 40px;
+  background: rgb(254 238 149 / 50%);
+  color: #a27400;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 19.5px;
+}
+
+.agent-debug-config__control,
+.agent-debug-config__select-control {
+  width: 100%;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.agent-debug-config__description {
+  height: 80px;
+  min-height: 80px;
+  resize: none;
+}
+
+.agent-debug-config__system-prompt {
+  height: 240px;
+  min-height: 240px;
+  resize: none;
+}
+
+.agent-debug-config__select-control {
+  min-height: 32px;
+}
+
+.agent-debug-config__actions {
+  position: absolute;
+  right: 24px;
+  bottom: 28px;
+  left: 24px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.agent-debug-config__confirm,
+.agent-debug-config__cancel {
+  width: 80px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 5px 12px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.agent-debug-config__confirm {
+  border: 1px solid #101013;
+  background: #101013;
+  color: #fff;
+}
+
+.agent-debug-config__cancel {
+  border: 1px solid #b8b7c3;
+  background: #fff;
+  color: #101013;
+}
+
+.agent-debug-config__confirm:focus-visible,
+.agent-debug-config__cancel:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+@media (max-width: 900px) {
+  .agent-debug-config {
+    inset: 52px 0 0;
+  }
+
+  .agent-debug-config__identity {
+    height: 64px;
+    flex-basis: 64px;
+    padding: 12px 24px;
+  }
+
+  .agent-debug-config__content {
+    padding-top: 16px;
+  }
+}

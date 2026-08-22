@@ -27,6 +27,10 @@ const appSource = readFileSync(
   new URL("../src/App.tsx", import.meta.url),
   "utf8",
 );
+const createCanvasSource = readFileSync(
+  new URL("../src/create/CreateCanvas.tsx", import.meta.url),
+  "utf8",
+);
 
 test("exposes a typed migration API with bounded transfer requests", () => {
   assert.equal(existsSync(apiUrl), true);
@@ -59,13 +63,14 @@ test("enables the existing migration entry and renders its workspace", () => {
     /return v === "package" \|\| v === "migration" \? v : null/,
   );
   assert.match(
-    appSource,
-    /key: "migration"[\s\S]*?title: "从存量迁移"[\s\S]*?onClick: \(\) => \{[\s\S]*?setCreateView\("migration"\)/,
+    createCanvasSource,
+    /key: "migration"[\s\S]*?title: "存量迁移"[\s\S]*?onClick: onMigration/,
   );
   assert.doesNotMatch(
-    appSource,
+    createCanvasSource,
     /key: "migration"[\s\S]*?status: "敬请期待"[\s\S]*?disabled: true/,
   );
+  assert.match(appSource, /onMigration=\{\(\) => \{[\s\S]*?setCreateView\("migration"\)/);
   assert.match(appSource, /visibleCreateView === "migration"/);
   assert.match(appSource, /<MigrationWorkspace/);
 });

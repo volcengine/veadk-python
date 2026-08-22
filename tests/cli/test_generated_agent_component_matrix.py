@@ -175,6 +175,29 @@ def test_debug_runtime_forwards_active_component_env(
     assert result == {**DEFAULT_ARK_DEBUG_ENV, **expected_component_env}
 
 
+def test_debug_runtime_forwards_explicit_ark_api_key() -> None:
+    draft = AgentDraft(
+        name="ark-debug-agent",
+        deployment=DeploymentConfig(
+            envValues={"MODEL_AGENT_API_KEY": "configured-ark-key"}
+        ),
+    )
+
+    assert debug_runtime_env_from_draft(draft) == {
+        **DEFAULT_ARK_DEBUG_ENV,
+        "MODEL_AGENT_API_KEY": "configured-ark-key",
+    }
+
+
+def test_debug_runtime_does_not_materialize_empty_ark_api_key() -> None:
+    draft = AgentDraft(
+        name="ark-debug-agent",
+        deployment=DeploymentConfig(envValues={"MODEL_AGENT_API_KEY": ""}),
+    )
+
+    assert debug_runtime_env_from_draft(draft) == DEFAULT_ARK_DEBUG_ENV
+
+
 @pytest.mark.parametrize("exporter", TRACING_EXPORTERS, ids=lambda item: item.id)
 def test_debug_runtime_forwards_active_tracing_env_and_enable_flag(
     exporter: ExporterOption,

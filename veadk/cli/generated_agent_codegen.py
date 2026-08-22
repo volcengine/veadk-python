@@ -1572,6 +1572,7 @@ def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
 
     visit(draft)
     if uses_ark_model:
+        allowed_keys.add("MODEL_AGENT_API_KEY")
         model_env = {
             item.key: item.placeholder
             for item in model_env_for_provider(draft.cloudProvider)

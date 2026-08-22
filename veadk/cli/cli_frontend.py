@@ -2971,6 +2971,7 @@ def _run_frontend_server(
     from dataclasses import dataclass
     from pathlib import Path as PathlibPath
     from urllib.parse import quote
+
     from pydantic import ValidationError
 
     from veadk.cli.generated_agent_codegen import (
@@ -2983,19 +2984,22 @@ def _run_frontend_server(
         generate_project_from_draft,
         normalize_and_validate_draft,
     )
+    from veadk.cli.generated_agent_mcp import (
+        McpDebugConnectionError,
+        resolve_debug_mcp_endpoints,
+    )
+    from veadk.cli.generated_agent_planner import (
+        GeneratedAgentConversationRequest,
+        GeneratedAgentDraftRequest,
+        create_generated_agent_conversation_runner,
+        generate_agent_draft,
+        run_generated_agent_conversation,
+    )
     from veadk.cli.generated_agent_security import (
         DebugPolicyError,
         trusted_debug_model_api_base,
         validate_debug_policy,
         validate_project_policy,
-    )
-    from veadk.cli.generated_agent_planner import (
-        GeneratedAgentDraftRequest,
-        generate_agent_draft,
-    )
-    from veadk.cli.generated_agent_mcp import (
-        McpDebugConnectionError,
-        resolve_debug_mcp_endpoints,
     )
     from veadk.cli.generated_agent_skills import (
         _files_from_zip,
@@ -3016,6 +3020,15 @@ def _run_frontend_server(
     _TEST_RUN_MAX_TOTAL_BYTES = 2 * 1024 * 1024
     _TEST_RUN_MAX_ACTIVE = 3
     _TEST_RUN_READY_TIMEOUT = 30.0
+    generated_agent_conversation_runner: Any | None = None
+
+    def _get_generated_agent_conversation_runner():
+        nonlocal generated_agent_conversation_runner
+        if generated_agent_conversation_runner is None:
+            generated_agent_conversation_runner = (
+                create_generated_agent_conversation_runner()
+            )
+        return generated_agent_conversation_runner
 
     def _enabled_env_flag(name: str) -> bool:
         value = os.getenv(name, "")
@@ -4079,6 +4092,35 @@ def _run_frontend_server(
             ) from error
         except Exception as error:
             logger.exception("Failed to generate Agent draft from requirement")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(error),
+            ) from error
+
+    @app.post("/web/generated-agent-conversations")
+    async def _generated_agent_conversation(request: Request):
+        principal = _require_agent_management(request)
+        try:
+            payload = GeneratedAgentConversationRequest.model_validate(
+                await request.json()
+            )
+        except ValidationError as error:
+            raise HTTPException(status_code=422, detail=error.errors()) from error
+
+        try:
+            return await run_generated_agent_conversation(
+                _get_generated_agent_conversation_runner(),
+                message=payload.message,
+                user_id=principal.owner_id if principal else "local",
+                session_id=payload.session_id,
+            )
+        except TimeoutError as error:
+            raise HTTPException(
+                status_code=504,
+                detail="对话处理超时，请稍后重试。",
+            ) from error
+        except Exception as error:
+            logger.exception("Failed to run generated Agent conversation")
             raise HTTPException(
                 status_code=502,
                 detail=_safe_exception_detail(error),

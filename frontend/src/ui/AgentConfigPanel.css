@@ -1,0 +1,473 @@
+.agent-config-panel,
+.agent-config-panel__header,
+.agent-config-panel__identity,
+.agent-config-panel__icon,
+.agent-config-panel__close,
+.agent-config-panel__content,
+.agent-config-panel__tabs,
+.agent-config-panel__tab,
+.agent-config-panel__tab-content,
+.agent-config-panel__fields,
+.agent-config-panel__field,
+.agent-config-panel__description-field,
+.agent-config-panel__config-group,
+.agent-config-panel__config-fields,
+.agent-config-panel__stacked-field,
+.agent-config-panel__tools-field,
+.agent-config-panel__capability-stack,
+.agent-config-panel__capability-field,
+.agent-config-panel__capability-list,
+.agent-config-panel__capability-chip,
+.agent-config-panel__capability-add,
+.agent-config-panel__chip-remove,
+.agent-config-panel__storage-field,
+.agent-config-panel__storage-toggle-row,
+.agent-config-panel__tool-grid,
+.agent-config-panel__tool-column,
+.agent-config-panel__tool-checkbox {
+  box-sizing: border-box;
+}
+
+.agent-config-panel {
+  position: absolute;
+  z-index: 2;
+  top: 64px;
+  right: 8px;
+  bottom: 8px;
+  width: 420px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #f9f9f9;
+  color: #0c0d0e;
+  font-family:
+    "PingFang SC",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+.agent-config-panel__header {
+  width: 100%;
+  height: 68px;
+  flex: 0 0 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 24px;
+}
+
+.agent-config-panel__identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.agent-config-panel__icon {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+}
+
+.agent-config-panel__icon--root {
+  background: #e8ebf9;
+}
+
+.agent-config-panel__icon--sub {
+  background: #ddf2eb;
+}
+
+.agent-config-panel__icon svg {
+  width: 20px;
+  height: 20px;
+  overflow: visible;
+  fill: none;
+  stroke: #101013;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.agent-config-panel__icon--sub svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 1.33333px;
+}
+
+.agent-config-panel__identity h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #0c0d0e;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-config-panel__close {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #0c0d0e;
+  cursor: pointer;
+}
+
+.agent-config-panel__close svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.25px;
+  stroke-linecap: round;
+}
+
+.agent-config-panel__content {
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: 0 24px 20px;
+  overflow-y: auto;
+}
+
+.agent-config-panel__tabs {
+  width: 100%;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  border-bottom: 0.5px solid #d2d1e0;
+}
+
+.agent-config-panel__tab {
+  position: relative;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #7a7880;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.agent-config-panel__tab.is-active {
+  color: #101013;
+  font-weight: 500;
+}
+
+.agent-config-panel__tab.is-active::after {
+  position: absolute;
+  right: 0;
+  bottom: -0.5px;
+  left: 0;
+  height: 1.5px;
+  background: #101013;
+  content: "";
+}
+
+.agent-config-panel__tab-content {
+  width: 100%;
+  margin-top: 20px;
+}
+
+.agent-config-panel__fields {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.agent-config-panel__field {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 16px;
+}
+
+.agent-config-panel__description-field,
+.agent-config-panel__stacked-field {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-config-panel__field label,
+.agent-config-panel__description-field label,
+.agent-config-panel__stacked-field label,
+.agent-config-panel__field-label {
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.agent-config-panel__config-group {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-config-panel__config-group h3 {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.agent-config-panel__config-fields {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.agent-config-panel__tools-field {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-config-panel__capability-stack {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.agent-config-panel__capability-field {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-config-panel__storage-field {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-config-panel__storage-toggle-row {
+  width: 100%;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agent-config-panel__storage-toggle-row > div {
+  flex: 0 0 auto;
+}
+
+.agent-config-panel__capability-list {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: center;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-config-panel__capability-list--skills {
+  gap: 8px;
+}
+
+.agent-config-panel__capability-chip,
+.agent-config-panel__capability-add {
+  min-width: 0;
+  height: 26px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 2px 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+  letter-spacing: 0.003em;
+  white-space: nowrap;
+}
+
+.agent-config-panel__capability-chip--mcp,
+.agent-config-panel__capability-add {
+  gap: 4px;
+}
+
+.agent-config-panel__capability-chip--skill {
+  gap: 6px;
+  cursor: pointer;
+}
+
+.agent-config-panel__capability-add {
+  cursor: pointer;
+}
+
+.agent-config-panel__add-icon,
+.agent-config-panel__chip-icon,
+.agent-config-panel__chrome-icon,
+.agent-config-panel__chip-remove {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.agent-config-panel__add-icon {
+  fill: currentColor;
+}
+
+.agent-config-panel__capability-add > svg {
+  color: currentColor;
+}
+
+.agent-config-panel__chip-icon {
+  display: block;
+  object-fit: contain;
+}
+
+.agent-config-panel__chrome-icon {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border-radius: 50%;
+  background: conic-gradient(
+    from -30deg,
+    #db4437 0 33.333%,
+    #f4b400 0 66.666%,
+    #0f9d58 0 100%
+  );
+}
+
+.agent-config-panel__chrome-icon::before {
+  position: absolute;
+  inset: 4px;
+  border: 1px solid hsl(var(--panel));
+  border-radius: 50%;
+  background: #4285f4;
+  content: "";
+}
+
+.agent-config-panel__chip-remove {
+  display: inline-grid;
+  place-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: hsl(var(--foreground));
+  cursor: pointer;
+}
+
+.agent-config-panel__chip-remove > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.agent-config-panel__capability-chip--skill:hover,
+.agent-config-panel__capability-add:hover,
+.agent-config-panel__chip-remove:hover {
+  background: hsl(var(--muted));
+}
+
+.agent-config-panel__tool-grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 8px;
+}
+
+.agent-config-panel__tool-column {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  row-gap: 12px;
+}
+
+.agent-config-panel__tool-checkbox {
+  min-width: 0;
+  height: 22px;
+  align-items: center;
+}
+
+.agent-config-panel__tool-checkbox > button[role="checkbox"] {
+  top: 0;
+  width: 16px;
+  min-width: 16px;
+  max-width: 16px;
+  height: 16px;
+  border-width: 0.5px;
+  border-radius: 4px;
+}
+
+.agent-config-panel__tool-checkbox
+  > button[role="checkbox"][data-state="unchecked"] {
+  border-color: #b8b7c3;
+  background: #fff;
+}
+
+.agent-config-panel__tool-checkbox > label {
+  min-width: 0;
+  min-height: 22px;
+  padding-left: 8px;
+  color: #101013;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.agent-config-panel__control,
+.agent-config-panel__select-control {
+  width: 100%;
+  min-width: 0;
+}
+
+.agent-config-panel__close:focus-visible,
+.agent-config-panel__tab:focus-visible,
+.agent-config-panel__capability-chip--skill:focus-visible,
+.agent-config-panel__capability-add:focus-visible,
+.agent-config-panel__chip-remove:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .agent-config-panel {
+    left: 8px;
+    width: auto;
+  }
+}

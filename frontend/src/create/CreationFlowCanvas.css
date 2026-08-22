@@ -1,0 +1,525 @@
+.creation-flow {
+  position: absolute;
+  z-index: 1;
+  inset: 26px 0 0 432px;
+  overflow: hidden;
+  transition: left 200ms ease-out;
+}
+
+.create-workspace--chat-collapsed .creation-flow--create:not(.creation-flow--config-open) {
+  left: 69px;
+}
+
+.creation-flow,
+.creation-flow__terminal,
+.creation-flow__terminal-icon,
+.creation-flow__agent,
+.creation-flow__agent-header,
+.creation-flow__agent-icon,
+.creation-flow__agent-meta,
+.creation-flow__agent-meta > span,
+.creation-flow__edge-tool,
+.creation-flow__edge-add,
+.creation-flow__canvas-actions,
+.creation-flow__canvas-action {
+  box-sizing: border-box;
+}
+
+.creation-flow--config-open {
+  inset: 26px 428px 0 0;
+}
+
+.creation-flow--debug {
+  inset: 60px 480px 12px 12px;
+  border-radius: 16px;
+  background-color: #f0f0f0;
+  background-image: radial-gradient(circle, #cfd2d6 0 1px, transparent 1.1px);
+  background-position: 8px 15px;
+  background-size: 18px 18px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .creation-flow {
+    transition-duration: 0.01ms;
+  }
+}
+
+.creation-flow--debug-comparison {
+  right: 942px;
+}
+
+.creation-flow--debug .creation-flow__edge-tool {
+  display: none;
+}
+
+.creation-flow .react-flow,
+.creation-flow .react-flow__renderer,
+.creation-flow .react-flow__pane {
+  background: transparent;
+}
+
+.creation-flow .react-flow__pane {
+  cursor: grab;
+}
+
+.creation-flow .react-flow__pane:active {
+  cursor: grabbing;
+}
+
+.creation-flow .react-flow__node {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-family: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.creation-flow .react-flow__node-request,
+.creation-flow .react-flow__node-response {
+  width: 134px;
+  height: 60px;
+}
+
+.creation-flow .react-flow__node-agent {
+  width: 216px;
+  height: 141px;
+}
+
+.creation-flow--debug .react-flow__node-agent {
+  width: 214px;
+  height: 137px;
+}
+
+.creation-flow__terminal {
+  position: relative;
+  width: 134px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #fff;
+  color: #0c0d0e;
+}
+
+.creation-flow__terminal-icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+}
+
+.creation-flow__terminal--request .creation-flow__terminal-icon {
+  background: #f9eea2;
+}
+
+.creation-flow__terminal--response .creation-flow__terminal-icon {
+  background: #d2e6ff;
+}
+
+.creation-flow__terminal-icon svg {
+  width: 20px;
+  height: 20px;
+  overflow: visible;
+  fill: none;
+  stroke: #000;
+  stroke-width: 1.33333px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.creation-flow__terminal--response .creation-flow__terminal-icon svg {
+  stroke-width: 1.66667px;
+}
+
+.creation-flow__terminal-title {
+  min-width: 0;
+  color: #0c0d0e;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.creation-flow__agent {
+  position: relative;
+  width: 216px;
+  height: 141px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 8px;
+  overflow: visible;
+  border-radius: 12px;
+  background: #fff;
+  color: #101013;
+}
+
+.creation-flow__agent-header {
+  position: relative;
+  width: 100%;
+  height: 34px;
+  flex: 0 0 34px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.creation-flow__agent-header::before {
+  position: absolute;
+  z-index: 0;
+  inset: 1px 0;
+  border-radius: 6px;
+  content: "";
+}
+
+.creation-flow__agent--root .creation-flow__agent-header::before {
+  background: #e8ebf9;
+}
+
+.creation-flow__agent--sub .creation-flow__agent-header::before {
+  background: #ddf2eb;
+}
+
+.creation-flow__agent-header > * {
+  position: relative;
+  z-index: 1;
+}
+
+.creation-flow__agent-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  display: grid;
+  place-items: center;
+}
+
+.creation-flow__agent-icon svg {
+  width: 16px;
+  height: 16px;
+  overflow: visible;
+  fill: none;
+  stroke: #101013;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.creation-flow__agent--root .creation-flow__agent-icon {
+  width: 18px;
+  flex-basis: 18px;
+}
+
+.creation-flow__agent--root .creation-flow__agent-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.creation-flow__agent--sub .creation-flow__agent-icon svg {
+  width: 13.3333px;
+  height: 13.3333px;
+  stroke-width: 1.33333px;
+}
+
+.creation-flow__agent-title {
+  min-width: 0;
+  overflow: hidden;
+  color: #0c0d0e;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.creation-flow__agent-comparison-badge {
+  position: absolute;
+  top: 8px;
+  right: 4px;
+  width: 38px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  border-radius: 40px;
+  background: #feee95;
+  color: #a27400;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 19.5px;
+  white-space: nowrap;
+}
+
+.creation-flow--debug-comparison .creation-flow__agent--root .creation-flow__agent-title {
+  padding-right: 43px;
+}
+
+.creation-flow__agent-description {
+  position: relative;
+  width: 100%;
+  height: 55px;
+  flex: 0 0 55px;
+  display: -webkit-box;
+  margin: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  color: #383740;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.creation-flow__agent-meta {
+  position: relative;
+  width: fit-content;
+  height: 20px;
+  flex: 0 0 20px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+}
+
+.creation-flow__agent-meta > span {
+  width: 36px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-radius: 6px;
+  background: #f2f2f2;
+  color: #101013;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+}
+
+.creation-flow__agent-meta svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  fill: #101013;
+}
+
+.creation-flow__agent-meta-count {
+  width: 8px;
+  flex: 0 0 8px;
+}
+
+.creation-flow--debug .creation-flow__agent {
+  width: 214px;
+  height: 137px;
+  display: block;
+  padding: 0;
+}
+
+.creation-flow--debug .creation-flow__agent-header {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 198px;
+  padding: 6px 8px;
+}
+
+.creation-flow--debug .creation-flow__agent--root .creation-flow__agent-header {
+  height: 35px;
+}
+
+.creation-flow--debug .creation-flow__agent--sub .creation-flow__agent-header {
+  height: 38px;
+}
+
+.creation-flow--debug .creation-flow__agent-header::before {
+  inset: 0;
+}
+
+.creation-flow--debug .creation-flow__agent-description {
+  position: absolute;
+  top: 52px;
+  left: 17px;
+  width: 180px;
+  height: 54px;
+  padding: 0;
+}
+
+.creation-flow--debug .creation-flow__agent-meta {
+  display: none;
+}
+
+.creation-flow__agent.is-selected {
+  box-shadow:
+    inset 0 0 0 1px #000,
+    0 0 0 4px rgba(0, 0, 0, 0.16);
+}
+
+.creation-flow .creation-flow__port {
+  width: 6px;
+  min-width: 6px;
+  height: 6px;
+  min-height: 6px;
+  box-sizing: border-box;
+  border: 1px solid #c9cdd4;
+  background: #fff;
+  pointer-events: none;
+}
+
+.creation-flow .creation-flow__port--hidden {
+  opacity: 0;
+}
+
+.creation-flow__edge-visible,
+.creation-flow__edge-arrow {
+  fill: none;
+  stroke: #c9cdd4;
+  stroke-width: 1px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.creation-flow__edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 18px;
+  pointer-events: stroke;
+}
+
+.creation-flow__edge-tool {
+  position: absolute;
+  z-index: 1002;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  pointer-events: all;
+}
+
+.creation-flow__edge-add {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #c9cdd4;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 4px 12px rgba(16, 16, 19, 0.1);
+  color: #101013;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.82);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.creation-flow__edge-tool.is-visible .creation-flow__edge-add,
+.creation-flow__edge-tool:hover .creation-flow__edge-add,
+.creation-flow__edge-add:focus-visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.creation-flow__edge-add:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+.creation-flow__edge-add svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+}
+
+.creation-flow__canvas-actions {
+  position: absolute;
+  z-index: 2;
+  bottom: 16px;
+  left: calc(50% + 1px);
+  width: 174px;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+  padding: 10px 20px;
+  border: 1px solid #f2f2f5;
+  border-radius: 92px;
+  background: #fff;
+  box-shadow:
+    0 15px 35px -2px rgba(0, 0, 0, 0.05),
+    0 5px 15px rgba(0, 0, 0, 0.05);
+  transform: translateX(-50%);
+}
+
+.creation-flow__zoom-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.creation-flow__canvas-action {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.creation-flow__canvas-action img {
+  width: 18px;
+  height: 18px;
+}
+
+.creation-flow__layout-action img {
+  transform: rotate(-90deg);
+}
+
+.creation-flow__canvas-action:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+@media (hover: none) {
+  .creation-flow__edge-add {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+}
+
+@media (max-width: 900px) {
+  .creation-flow {
+    inset: 64px 0 0;
+  }
+
+  .creation-flow--config-open {
+    inset: 64px 0 0;
+  }
+
+  .creation-flow--debug {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .creation-flow__edge-add {
+    transition: none;
+  }
+}

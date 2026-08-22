@@ -6,6 +6,10 @@ const appSource = readFileSync(
   new URL("../src/App.tsx", import.meta.url),
   "utf8",
 );
+const createCanvasSource = readFileSync(
+  new URL("../src/create/CreateCanvas.tsx", import.meta.url),
+  "utf8",
+);
 const addAgentMenuSource = readFileSync(
   new URL("../src/ui/AddAgentMenu.tsx", import.meta.url),
   "utf8",
@@ -45,11 +49,11 @@ const zipSource = readFileSync(
 
 test("offers code package deployment beside scratch creation", () => {
   assert.match(
-    appSource,
-    /key: "package"[\s\S]*?title: "从代码包添加和部署"/,
+    createCanvasSource,
+    /key: "package"[\s\S]*?title: "上传代码包"[\s\S]*?onClick: onUploadPackage/,
   );
-  assert.match(appSource, /icon: PackageIcon/);
-  assert.doesNotMatch(appSource, /import \{ FileArchive \} from "lucide-react"/);
+  assert.match(createCanvasSource, /icon: UploadCodeIcon/);
+  assert.doesNotMatch(createCanvasSource, /from "lucide-react"/);
   assert.match(appSource, /import \{ CodePackageCreate \}/);
   assert.match(appSource, /visibleCreateView === "package"/);
 });
@@ -57,34 +61,35 @@ test("offers code package deployment beside scratch creation", () => {
 test("opens custom creation directly from scratch creation", () => {
   assert.match(
     appSource,
-    /key: "scratch"[\s\S]*?setCustomCreateMode\("custom"\)[\s\S]*?setCreateView\("custom"\)/,
+    /onBlank=\{\(\) => \{[\s\S]*?setCustomCreateMode\("custom"\)[\s\S]*?setCreateView\("custom"\)/,
   );
   assert.doesNotMatch(appSource, /import \{ QuickCreate/);
   assert.doesNotMatch(appSource, /visibleCreateView === "menu"/);
 });
 
-test("uses thin hand-drawn icons for all add-agent options", () => {
-  for (const iconName of ["ScratchIcon", "PackageIcon", "MigrationIcon"]) {
-    assert.match(
-      appSource,
-      new RegExp(`function ${iconName}\\([\\s\\S]*?strokeWidth="1\\.45"`),
-    );
-  }
+test("uses local design-specific icons for all add-agent options", () => {
   assert.match(
-    appSource,
-    /function ScratchIcon[\s\S]*?<rect[\s\S]*?<path d="M12 8\.5v7M8\.5 12h7"/,
+    createCanvasSource,
+    /function BlankCreateIcon[\s\S]*?strokeWidth="1\.3"/,
   );
+  assert.match(createCanvasSource, /function UploadCodeIcon[\s\S]*?fill="#101013"/);
+  assert.match(
+    createCanvasSource,
+    /function MigrationCubeIcon[\s\S]*?strokeWidth="1\.3"/,
+  );
+  assert.doesNotMatch(createCanvasSource, /from "lucide-react"/);
 });
 
 test("shows existing-project migration as an enabled option", () => {
   assert.match(
-    appSource,
-    /key: "migration"[\s\S]*?title: "从存量迁移"[\s\S]*?desc: "从您的 LangChain \/ Dify 等存量项目迁移至 AgentKit Runtime"[\s\S]*?setCreateView\("migration"\)/,
+    createCanvasSource,
+    /key: "migration"[\s\S]*?title: "存量迁移"[\s\S]*?description: "从 LangChain\/Dify 等迁移"[\s\S]*?onClick: onMigration/,
   );
   assert.doesNotMatch(
-    appSource,
+    createCanvasSource,
     /key: "migration"[\s\S]*?status: "敬请期待"[\s\S]*?disabled: true/,
   );
+  assert.match(appSource, /onMigration=\{\(\) => \{[\s\S]*?setCreateView\("migration"\)/);
   assert.match(addAgentMenuSource, /disabled=\{c\.disabled\}/);
   assert.match(
     addAgentMenuSource,

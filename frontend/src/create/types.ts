@@ -1,5 +1,5 @@
-// Shared types for the agent-creation modes (intelligent / custom / template /
-// workflow). Each mode assembles an AgentDraft and calls onCreate(draft).
+// Shared types for the agent-creation modes (intelligent / custom / workflow).
+// Each mode assembles an AgentDraft and calls onCreate(draft).
 
 export interface MemoryConfig {
   shortTerm: boolean;
@@ -134,7 +134,7 @@ export interface AgentDraft {
   modelName?: string;
   modelProvider?: string;
   modelApiBase?: string;
-  /** Free-text tool names (legacy; intelligent/template modes still use these). */
+  /** Free-text tool names retained for legacy and intelligent creation flows. */
   tools: string[];
   skills: string[];
   memory: MemoryConfig;
